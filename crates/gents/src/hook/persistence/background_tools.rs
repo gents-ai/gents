@@ -217,7 +217,7 @@ impl DefraSessionHook {
             background_tool_call_id.clone(),
             execution_tool_doc_id.clone(),
             cancellation_token.clone(),
-        );
+        )?;
         lifecycle.start_running().await?;
 
         let node = self.node.clone();

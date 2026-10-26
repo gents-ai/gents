@@ -2,7 +2,7 @@
 import type { WorkspacePermissionMode } from "./WorkspacePermissionMode.js";
 import type { WorkspacePermissionSupport } from "./WorkspacePermissionSupport.js";
 
-export type WorkspacePermissionsState = { "kind": "unsupportedRuntime" } | { "kind": "remoteUnavailable", support: WorkspacePermissionSupport | null, } | { "kind": "local", support: WorkspacePermissionSupport, mode: WorkspacePermissionMode | null, workspacePath: string,
+export type WorkspacePermissionsState = { "kind": "unsupportedRuntime" } | { "kind": "remoteUnavailable", support: WorkspacePermissionSupport | null, } | { "kind": "local", support: WorkspacePermissionSupport, mode: WorkspacePermissionMode | null, rememberedCommands: number, workspacePath: string,
 /**
  * Revisions cross JavaScript as decimal strings without rounding.
  */

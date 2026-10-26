@@ -166,6 +166,10 @@ pub(crate) fn runtime_contract_router(
         .route("/version", get(version_handler))
         .route("/healthz", get(healthz_handler))
         .route("/status", get(status_handler))
+        .route(
+            gents_protocol::serve_lifecycle::control::RUNTIME_CONTROL_PATH,
+            post(crate::http::runtime_control::runtime_control_handler),
+        )
         .route("/activation", get(activation_handler))
         .route("/enrollment/decisions", post(enrollment_decision_handler))
         .route("/enrollment/pending", post(enrollment_pending_handler))
@@ -901,6 +905,209 @@ mod tests {
             replicated_schema: Default::default(),
             serve_lifecycle: Default::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn runtime_control_binds_signed_observation_and_retires_only_the_operator_observed_build()
+    {
+        use gents::config_client::ConfigAccess;
+        use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
+        use gents_protocol::serve_lifecycle::control::{
+            RuntimeControlCommand, RuntimeControlDisposition, RuntimeControlReceipt,
+            RuntimeOperation, RUNTIME_CONTROL_PATH, RUNTIME_CONTROL_VERSION,
+        };
+        let temp = tempfile::tempdir().unwrap();
+        let paths = DesktopPaths::from_root(temp.path().join("operator"));
+        paths.ensure_root_dirs().await.unwrap();
+        let identity = Arc::new(PrincipalIdentity::load_or_create(&paths).await.unwrap());
+        let foreign_paths = DesktopPaths::from_root(temp.path().join("foreign"));
+        foreign_paths.ensure_root_dirs().await.unwrap();
+        let foreign = PrincipalIdentity::load_or_create(&foreign_paths)
+            .await
+            .unwrap();
+        let owner = identity.did().to_owned();
+        let node = Arc::new(
+            gents::defra_node::EmbeddedNode::builder()
+                .with_node_identity_did(&owner)
+                .with_node_acp_enabled()
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        ConfigAccess::transact_local_write(&node, None, "test.runtime_control.setup", |txn| {
+            let owner = &owner;
+            Box::pin(async move {
+                txn.execute_with_variables(
+                    "mutation($node: NodeMutationInputArg!, $backend: InferenceBackendMutationInputArg!) { create_Node(input: $node) { _docID } create_InferenceBackend(input: $backend) { _docID } }",
+                    &json!({
+                        "node": {"node_did": owner, "default_agent_id": "fixture", "enabled": true},
+                        "backend": {"node_did": owner, "backend_id": "fixture", "name": "Fixture",
+                            "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:9/v1",
+                            "auth": {"kind": "unauthenticated"}, "enabled": true, "probe_status": "healthy"},
+                    }),
+                ).await?;
+                Ok(())
+            })
+        }).await.unwrap();
+        let runtime = gents::Gents::builder()
+            .node(node.clone())
+            .identity(identity.clone())
+            .tool_ceiling(gents::ToolCeiling::meta_only())
+            .agent("fixture")
+            .backend_id("fixture")
+            .model_name("fixture")
+            .done()
+            .build()
+            .await
+            .unwrap();
+        let admission = runtime.service_admission();
+        let mut state = state();
+        state.node_did = owner.clone();
+        let lifecycle = state.serve_lifecycle.clone();
+        assert!(state.activation_runtime.set(runtime).is_ok());
+        let mut starting_state = state.clone();
+        starting_state.serve_lifecycle = Default::default();
+        let app = Router::new()
+            .route(
+                RUNTIME_CONTROL_PATH,
+                post(crate::http::runtime_control::runtime_control_handler),
+            )
+            .with_state(state)
+            .merge(
+                Router::new()
+                    .route(
+                        "/runtime/operator/starting",
+                        post(crate::http::runtime_control::runtime_control_handler),
+                    )
+                    .with_state(starting_state),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        }));
+        let client = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let url = format!("http://{addr}{RUNTIME_CONTROL_PATH}");
+        let graphql = format!("http://{addr}/api/v0/graphql");
+        let endpoint = GraphqlEndpoint::as_principal(&graphql, &owner);
+        let command = |operation| RuntimeControlCommand {
+            version: RUNTIME_CONTROL_VERSION,
+            node_did: owner.clone(),
+            nonce: uuid::Uuid::new_v4().to_string(),
+            issued_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            operation,
+        };
+        let observe = command(RuntimeOperation::Observe);
+        let response = client.post(&url).json(&observe).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let starting: RuntimeControlReceipt = response.json().await.unwrap();
+        gents::runtime_service::verify_control_receipt(&observe, &starting).unwrap();
+        assert_eq!(starting.disposition, RuntimeControlDisposition::Starting);
+        lifecycle.mark_ready();
+        let observe = command(RuntimeOperation::Observe);
+        let receipt: RuntimeControlReceipt = client
+            .post(&url)
+            .json(&observe)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        gents::runtime_service::verify_control_receipt(&observe, &receipt).unwrap();
+        assert_eq!(receipt.disposition, RuntimeControlDisposition::Observed);
+        let mut modified = receipt.clone();
+        modified.capabilities.insert("request_input".into(), 999);
+        assert!(gents::runtime_service::verify_control_receipt(&observe, &modified).is_err());
+        let other_challenge = command(RuntimeOperation::Observe);
+        assert!(
+            gents::runtime_service::verify_control_receipt(&other_challenge, &receipt).is_err()
+        );
+        let retire = command(RuntimeOperation::Retire {
+            expected_build: receipt.build.clone(),
+        });
+        assert!(gents::runtime_service::verify_control_receipt(&retire, &receipt).is_err());
+        let response = client.post(&url).json(&retire).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let response = client
+            .post(&url)
+            .bearer_auth("invalid")
+            .json(&retire)
+            .send()
+            .await
+            .unwrap();
+        assert!(response.status().is_client_error());
+        let foreign_endpoint = GraphqlEndpoint::as_principal(&graphql, foreign.did());
+        let response = foreign_endpoint
+            .authorize(client.post(&url))
+            .unwrap()
+            .json(&retire)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let mut other_node = retire.clone();
+        other_node.node_did = foreign.did().to_owned();
+        let response = endpoint
+            .authorize(client.post(&url))
+            .unwrap()
+            .json(&other_node)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let changed = command(RuntimeOperation::Retire {
+            expected_build: "0".repeat(64),
+        });
+        let refused: RuntimeControlReceipt = endpoint
+            .authorize(client.post(&url))
+            .unwrap()
+            .json(&changed)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        gents::runtime_service::verify_control_receipt(&changed, &refused).unwrap();
+        assert_eq!(refused.disposition, RuntimeControlDisposition::BuildChanged);
+        assert!(!admission.is_retiring().unwrap());
+
+        node.shutdown().await;
+        let response = endpoint
+            .authorize(client.post(format!("http://{addr}/runtime/operator/starting")))
+            .unwrap()
+            .json(&retire)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let accepted: RuntimeControlReceipt = response.json().await.unwrap();
+        gents::runtime_service::verify_control_receipt(&retire, &accepted).unwrap();
+        assert_eq!(accepted.disposition, RuntimeControlDisposition::Retiring);
+        assert_eq!(
+            accepted.lifecycle,
+            gents_protocol::serve_lifecycle::ServeLifecycle::Starting
+        );
+        assert!(admission.is_retiring().unwrap());
+        let repeated: RuntimeControlReceipt = endpoint
+            .authorize(client.post(&url))
+            .unwrap()
+            .json(&retire)
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        gents::runtime_service::verify_control_receipt(&retire, &repeated).unwrap();
+        assert_eq!(repeated.disposition, RuntimeControlDisposition::Stopping);
+        drop(server);
     }
 
     #[tokio::test]

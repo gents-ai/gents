@@ -5,17 +5,18 @@ mod commands;
 use gents_desktop_core::local_runtime::DesktopInitSummary;
 use ts_rs::TS;
 
+use crate::accounts::usage::{AccountUsageView, ProviderUsageReadRequest, UsageWindowView};
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::inference_setup::InferenceSetupState;
 use crate::tauri_commands::chat::RequestResendResultView;
 use crate::tauri_commands::inference_setup::{
-    AccountUsageView, ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest,
-    CodexLoginResult, CodexLoginUrl, GrokLoginRequest, GrokLoginResult, GrokLoginUrl,
+    ClaudeLoginRequest, ClaudeLoginResult, ClaudeLoginUrl, CodexLoginRequest, CodexLoginResult,
+    CodexLoginUrl, GrokLoginRequest, GrokLoginResult, GrokLoginUrl,
     InferenceBackendRecommendationRequest, InferenceDiscoveryFailure, InferenceDiscoveryRequest,
     InferenceDiscoveryResult, InferenceProbeRequest, InferenceProbeResult,
     InferenceRecommendationRequest, ProviderAccountDisconnectRequest, ProviderAccountRemoveRequest,
     ProviderAccountRenameRequest, ProviderAccountRetrySaveRequest, ProviderAccountView,
-    ProviderAccountsRequest, ProviderUsageReadRequest, SignInView, UsageWindowView,
+    ProviderAccountsRequest, SignInView,
 };
 use crate::tauri_commands::lifecycle::DesktopObserverMetrics;
 use crate::tauri_commands::workspace::WorkspaceListingView;
@@ -192,6 +193,10 @@ fn export_all(dir: &Path) -> Result<(), String> {
         gents_protocol::file_inventory::FileInventoryReadAction,
         gents_protocol::file_inventory::FileInventoryImage,
         gents_protocol::file_inventory::FileInventoryImageReference,
+        gents_protocol::serve_lifecycle::preparation::RuntimePreparationOutcome,
+        gents_protocol::serve_lifecycle::preparation::RuntimePreparationRefusal,
+        gents_protocol::serve_lifecycle::preparation::RuntimePreparationReport,
+        gents_protocol::serve_lifecycle::preparation::RuntimePreparationResult,
         gents_protocol::client_media::MediaCall,
         gents_protocol::client_media::MediaOperation,
         gents_protocol::client_media::MediaPcmClip,
@@ -203,6 +208,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         crate::host::speech::SpeechSynthesizeRequest,
         crate::host::permissions::WorkspacePermissionsRequest,
         crate::host::permissions::WorkspacePermissionsSaveRequest,
+        crate::host::permissions::WorkspacePermissionsForgetCommandsRequest,
         crate::host::permissions::WorkspacePermissionsState,
         crate::host::protocol::ClientMessage,
         crate::host::protocol::ClientCommand,
@@ -417,6 +423,15 @@ fn export_all(dir: &Path) -> Result<(), String> {
     );
     std::fs::write(dir.join("ClientHostProtocol.ts"), protocol)
         .map_err(|error| error.to_string())?;
+    let runtime_preparation = format!(
+        "// Generated from gents-protocol::serve_lifecycle::preparation. Do not edit.\n\nexport const RUNTIME_PREPARATION_VERSION = {};\n",
+        gents_protocol::serve_lifecycle::preparation::RUNTIME_PREPARATION_VERSION,
+    );
+    std::fs::write(
+        dir.join("RuntimePreparationProtocol.ts"),
+        runtime_preparation,
+    )
+    .map_err(|error| error.to_string())?;
     let media = format!(
         "// Generated from gents-protocol::client_media. Do not edit.\n\nexport const MEDIA_HOST_VERSION = {};\nexport const MEDIA_HOST_MAX_FRAME_BYTES = {};\nexport const MEDIA_HOST_MAX_PCM_BYTES = {};\nexport const MEDIA_HOST_MAX_SECONDS = {};\n",
         gents_protocol::client_media::VERSION,

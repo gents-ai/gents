@@ -11,6 +11,7 @@ pub(crate) mod mcp_pool;
 pub(crate) mod mcp_server;
 pub(crate) mod prometheus;
 pub(crate) mod router;
+pub(crate) mod runtime_control;
 pub(crate) mod self_view;
 pub(crate) mod sessions;
 pub(crate) mod version;

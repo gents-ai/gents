@@ -22,6 +22,14 @@ pub struct WorkspacePermissionsSaveRequest {
     pub mode: Mode,
 }
 
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkspacePermissionsForgetCommandsRequest {
+    pub scope: WorkspacePermissionsRequest,
+    pub expected_revision: String,
+    pub expected_workspace_path: String,
+}
+
 #[derive(Debug, Serialize, TS)]
 #[serde(
     tag = "kind",
@@ -36,6 +44,7 @@ pub enum WorkspacePermissionsState {
     Local {
         support: Support,
         mode: Option<Mode>,
+        remembered_commands: u32,
         workspace_path: String,
         /// Revisions cross JavaScript as decimal strings without rounding.
         revision: String,
@@ -52,6 +61,9 @@ struct LocalTarget {
 impl LocalTarget {
     fn view(self) -> WorkspacePermissionsState {
         WorkspacePermissionsState::Local {
+            remembered_commands: self.settings.as_ref().map_or(0, |settings| {
+                u32::try_from(settings.remembered_command_count()).unwrap_or(u32::MAX)
+            }),
             support: self.support,
             workspace_path: self.key.path.to_string_lossy().into_owned(),
             mode: self
@@ -153,6 +165,51 @@ pub(super) async fn save(
     .map_err(|error| super::backend_error(error.into()))?
     .map_err(super::backend_error)?;
     local.settings = Some(settings);
+    Ok(local.view())
+}
+
+pub(super) async fn forget_commands(
+    core: &ClientCore,
+    request: WorkspacePermissionsForgetCommandsRequest,
+) -> Result<WorkspacePermissionsState, BridgeError> {
+    let expected: u64 = request.expected_revision.parse().map_err(|_| {
+        BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            "Reload permissions before forgetting commands.",
+        )
+    })?;
+    if expected.to_string() != request.expected_revision {
+        return Err(BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            "Reload permissions before forgetting commands.",
+        ));
+    }
+    let Target::Local(mut local) = target(core, request.scope).await? else {
+        return Err(BridgeError::new(
+            BridgeErrorCode::Unsupported,
+            "This runtime cannot forget command permissions from the editor.",
+        ));
+    };
+    if !local.support.remembered_commands {
+        return Err(BridgeError::new(
+            BridgeErrorCode::Unsupported,
+            "Update the runtime before managing remembered commands.",
+        ));
+    }
+    if local.key.path != std::path::Path::new(&request.expected_workspace_path) {
+        return Err(BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            "The workspace changed. Reopen permissions.",
+        ));
+    }
+    let home = local.home.clone();
+    let key = local.key.clone();
+    local.settings = Some(
+        tokio::task::spawn_blocking(move || workspace::revoke_commands(&home, &key, expected))
+            .await
+            .map_err(|error| super::backend_error(error.into()))?
+            .map_err(super::backend_error)?,
+    );
     Ok(local.view())
 }
 
@@ -294,7 +351,7 @@ mod tests {
         Mock::given(method("GET")).and(path("/status"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "node_did":owner,"lifecycle":"ready",
-                "workspace_permissions":{"contractVersion":workspace::CONTRACT_VERSION,"workspaceSandbox":false}
+                "workspace_permissions":{"contractVersion":workspace::CONTRACT_VERSION,"workspaceSandbox":false,"rememberedCommands":true}
             }))).mount(&server).await;
         core.add_local_standard_peer_route_for_test(
             "Fixture",
@@ -404,6 +461,36 @@ mod tests {
             .await
             .is_err());
         }
+        for (revision, path) in [
+            ("+2", expected_path.as_str()),
+            ("1", expected_path.as_str()),
+            ("2", "/another/project"),
+        ] {
+            assert!(forget_commands(
+                &core,
+                WorkspacePermissionsForgetCommandsRequest {
+                    scope: scope.clone(),
+                    expected_revision: revision.into(),
+                    expected_workspace_path: path.into(),
+                }
+            )
+            .await
+            .is_err());
+        }
+        let forgotten = forget_commands(
+            &core,
+            WorkspacePermissionsForgetCommandsRequest {
+                scope: scope.clone(),
+                expected_revision: "2".into(),
+                expected_workspace_path: expected_path,
+            },
+        )
+        .await
+        .unwrap();
+        let forgotten = serde_json::to_value(forgotten).unwrap();
+        assert_eq!(forgotten["revision"], "3");
+        assert_eq!(forgotten["mode"], "ask");
+        assert_eq!(forgotten["rememberedCommands"], 0);
         assert!(!home.join("init.json").exists());
         core.shutdown().await.unwrap();
     }
@@ -420,6 +507,7 @@ mod tests {
         let support = Support {
             contract_version: workspace::CONTRACT_VERSION,
             workspace_sandbox: false,
+            remembered_commands: true,
         };
         let read = |request: &WorkspacePermissionsRequest, requester: &str| {
             serde_json::to_value(

@@ -3,7 +3,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
 
-import { AssistantMessageItem, UserMessageItem } from "./MessageItems.js";
+import {
+  AssistantMessageItem,
+  PendingUserTurnItem,
+  UserMessageItem,
+} from "./MessageItems.js";
 
 type Assistant = Extract<RenderedTimelineItem, { kind: "assistantMessage" }>;
 type User = Extract<RenderedTimelineItem, { kind: "userMessage" }>;
@@ -217,6 +221,31 @@ const goalMessage: User = {
   startedGoalId: "goal-1",
   reconstruction: { state: "ready" },
 };
+
+it("shows an applied opening marker while its transcript is still pending", () => {
+  const item: Extract<RenderedTimelineItem, { kind: "pendingUserTurn" }> = {
+    kind: "pendingUserTurn",
+    itemKey: "pending-opening",
+    requestId: "opening",
+    content: "Review the changes",
+    selectedSkillIds: [],
+    lifecycleState: "pending",
+    foldedIntoRequestId: null,
+    origin: null,
+    createdAt: null,
+    startedGoalId: "goal-1",
+  };
+  expect(
+    renderToStaticMarkup(createElement(PendingUserTurnItem, { item })),
+  ).toContain("Sent as goal");
+  expect(
+    renderToStaticMarkup(
+      createElement(PendingUserTurnItem, {
+        item: { ...item, startedGoalId: undefined },
+      }),
+    ),
+  ).not.toContain("Sent as goal");
+});
 
 it("preserves message actions alongside the saved goal attribution", () => {
   const html = renderToStaticMarkup(

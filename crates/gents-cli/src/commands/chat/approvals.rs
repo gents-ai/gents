@@ -7,6 +7,7 @@ use gents::plugin::approval::{self, Answer, Request};
 pub(super) fn parse_answer(line: &str) -> Answer {
     match line.trim().to_ascii_lowercase().as_str() {
         "o" | "once" | "y" | "yes" => Answer::Once,
+        "c" | "command" | "invocation" => Answer::AlwaysInvocation,
         "f" | "file" => Answer::AlwaysPath,
         "a" | "always" | "folder" => Answer::AlwaysFolder,
         _ => Answer::Deny,
@@ -71,6 +72,12 @@ pub(super) fn show_prompt(request: &Request) {
                 file.folder.display()
             );
         }
+    }
+    if request.allows_answer(Answer::AlwaysInvocation) {
+        let _ = write!(
+            output,
+            "  [c] remember this exact command until permissions change"
+        );
     }
     let _ = write!(output, "  [d] deny (default) > ");
     let _ = output.flush();

@@ -508,6 +508,21 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             !snapshot.prompt_assembly_service_tier_cases.is_empty(),
         ),
         (
+            "workspace_command_grant_answers",
+            "WorkspaceCommandGrantAnswers",
+            !snapshot.workspace_command_grant_answers.is_empty(),
+        ),
+        (
+            "workspace_command_grant_lookups",
+            "WorkspaceCommandGrantLookups",
+            !snapshot.workspace_command_grant_lookups.is_empty(),
+        ),
+        (
+            "workspace_command_grant_revocations",
+            "WorkspaceCommandGrantRevocations",
+            !snapshot.workspace_command_grant_revocations.is_empty(),
+        ),
+        (
             "workspace_permission_cases",
             "WorkspacePermissionCases",
             !snapshot.workspace_permission_cases.is_empty(),
@@ -1253,6 +1268,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     emitted.insert((
         "client_installation_compatibility_cases".into(),
         "ClientInstallationCompatibilityCases".into(),
+    ));
+    assert!(!snapshot.runtime_service_replacement_cases.is_empty());
+    emitted.insert((
+        "runtime_service_replacement_cases".into(),
+        "RuntimeServiceReplacementCases".into(),
     ));
     assert!(!snapshot.client_observation_scope_cases.is_empty());
     assert!(!snapshot.client_observation_admission_cases.is_empty());

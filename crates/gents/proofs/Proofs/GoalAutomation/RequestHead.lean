@@ -9,6 +9,16 @@ structure Scope where
   goal : Nat
   deriving DecidableEq, Repr
 
+/-- Classification supplied by the existing request lifecycle owner. Folding,
+replacement and removal retire authored queue inputs without ending the Goal's
+executing request. An explicit execution interrupt remains `execution`. -/
+inductive InputDisposition where
+  | execution
+  | folded
+  | replaced
+  | removed
+  deriving DecidableEq, Repr
+
 structure Row where
   purpose : RequestPurpose
   doc : Nat
@@ -22,6 +32,7 @@ structure Row where
   /-- Results of the existing receipt validator, evaluated only for matching edges. -/
   receiptValid : Bool
   deterministicIdentity : Bool
+  inputDisposition : InputDisposition := .execution
   deriving DecidableEq, Repr
 
 def inScope (s : Scope) (r : Row) : Bool :=
@@ -46,7 +57,7 @@ def superseded (s : Scope) (rows : List Row) (parent : Row) : Bool :=
 
 def select (s : Scope) (orderedRows : List Row) : Option Row :=
   let rows := orderedRows.filter (inScope s)
-  rows.find? fun row => !superseded s rows row
+  rows.find? fun row => row.inputDisposition == .execution && !superseded s rows row
 
 theorem title_arrival_preserves_head (s : Scope) (rows : List Row) (title : Row)
     (hp : title.purpose = .titleAudit) : select s (title :: rows) = select s rows := by
@@ -59,7 +70,14 @@ theorem selected_is_scoped_member (s : Scope) (rows : List Row) (head : Row)
 theorem selected_has_no_verified_child (s : Scope) (rows : List Row) (head : Row)
     (h : select s rows = some head) : superseded s (rows.filter (inScope s)) head = false := by
   have hp := List.find?_some h
-  simpa using hp
+  simp only [Bool.and_eq_true] at hp
+  simpa using hp.2
+
+theorem selected_owns_execution (s : Scope) (rows : List Row) (head : Row)
+    (h : select s rows = some head) : head.inputDisposition = .execution := by
+  have hp := List.find?_some h
+  simp only [Bool.and_eq_true, beq_iff_eq] at hp
+  exact hp.1
 
 theorem selected_is_normal (s : Scope) (rows : List Row) (head : Row)
     (h : select s rows = some head) : head.purpose = .normal := by
@@ -96,7 +114,8 @@ theorem foreign_child_has_no_authority (s : Scope) (parent child : Row)
 theorem canonical_order_among_heads (s : Scope) (rows : List Row) (head : Row)
     (h : select s rows = some head) :
     ∃ before after, rows.filter (inScope s) = before ++ head :: after ∧
-      ∀ row ∈ before, superseded s (rows.filter (inScope s)) row = true := by
+      ∀ row ∈ before, row.inputDisposition ≠ .execution ∨
+        superseded s (rows.filter (inScope s)) row = true := by
   have hf := List.find?_eq_some_iff_append.mp h
   obtain ⟨before, after, heq, hp⟩ := hf.2
   exact ⟨before, after, heq, by simpa using hp⟩

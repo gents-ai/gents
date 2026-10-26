@@ -3,6 +3,7 @@ use gents::oauth_credential::{list_oauth_credentials_on, OAuthCredential, SignIn
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 pub(crate) mod login;
+pub mod usage;
 #[derive(Debug, Clone, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderSignInRequest {

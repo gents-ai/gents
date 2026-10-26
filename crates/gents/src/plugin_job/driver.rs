@@ -926,6 +926,7 @@ struct RowFailures {
 /// one re-run, and at most four steps at once.
 pub struct JobDriver {
     runtime: JobRuntime,
+    service_admission: crate::runtime_service::RuntimeServiceAdmission,
     this: Weak<JobDriver>,
     in_flight: Mutex<RapidHashMap<String, Dirty>>,
     permits: Semaphore,
@@ -937,8 +938,16 @@ pub struct JobDriver {
 
 impl JobDriver {
     pub fn new(runtime: JobRuntime) -> Arc<Self> {
+        Self::with_service_admission(runtime, Default::default())
+    }
+
+    pub(crate) fn with_service_admission(
+        runtime: JobRuntime,
+        service_admission: crate::runtime_service::RuntimeServiceAdmission,
+    ) -> Arc<Self> {
         Arc::new_cyclic(|this| Self {
             runtime,
+            service_admission,
             this: this.clone(),
             in_flight: Mutex::new(RapidHashMap::new()),
             permits: Semaphore::new(4),
@@ -971,22 +980,30 @@ impl JobDriver {
             dirty.0 = true;
             return;
         }
+        let Ok(work) = self.service_admission.admit() else {
+            return;
+        };
         in_flight.insert(row_doc_id.to_owned(), Dirty::default());
         let driver = self.this.upgrade().expect("a driver is held by its Arc");
         let row_doc_id = row_doc_id.to_owned();
-        tokio::spawn(async move { driver.drive(&row_doc_id).await });
+        tokio::spawn(async move { driver.drive(&row_doc_id, work).await });
     }
 
     /// Runs one step of the row now and returns what it did. `None` when a
     /// step of the row is already in flight: that step re-runs once for this
     /// call, as for a wake.
     pub async fn step_now(&self, row_doc_id: &str) -> Option<Result<StepOutcome>> {
+        let work;
         {
             let mut in_flight = self.in_flight.lock().expect("in-flight rows lock");
             if let Some(dirty) = in_flight.get_mut(row_doc_id) {
                 dirty.0 = true;
                 return None;
             }
+            work = match self.service_admission.admit() {
+                Ok(work) => work,
+                Err(error) => return Some(Err(error.into())),
+            };
             in_flight.insert(row_doc_id.to_owned(), Dirty::default());
         }
         let (again, outcome) = self.step_once(row_doc_id).await;
@@ -1000,7 +1017,7 @@ impl JobDriver {
         if again || dirty {
             let driver = self.this.upgrade().expect("a driver is held by its Arc");
             let row_doc_id = row_doc_id.to_owned();
-            tokio::spawn(async move { driver.drive(&row_doc_id).await });
+            tokio::spawn(async move { driver.drive(&row_doc_id, work).await });
         } else {
             in_flight.remove(row_doc_id);
         }
@@ -1008,7 +1025,7 @@ impl JobDriver {
     }
 
     /// Steps the row until no wake or retry is left.
-    async fn drive(&self, row_doc_id: &str) {
+    async fn drive(&self, row_doc_id: &str, _work: crate::runtime_service::RuntimeServiceWork) {
         loop {
             let (again, _) = self.step_once(row_doc_id).await;
             let mut in_flight = self.in_flight.lock().expect("in-flight rows lock");

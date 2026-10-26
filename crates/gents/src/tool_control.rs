@@ -299,11 +299,13 @@ mod tests {
             let token = CancellationToken::new();
             reservations.insert(
                 id.clone(),
-                registry.reserve(
-                    id.clone(),
-                    lifecycle.doc_id().unwrap().to_owned(),
-                    token.clone(),
-                ),
+                registry
+                    .reserve(
+                        id.clone(),
+                        lifecycle.doc_id().unwrap().to_owned(),
+                        token.clone(),
+                    )
+                    .unwrap(),
             );
             tokens.insert(id, token);
         }

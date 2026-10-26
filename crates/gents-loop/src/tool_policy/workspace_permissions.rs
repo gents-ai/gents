@@ -42,6 +42,39 @@ pub enum ApprovalKind {
     FileMutation,
 }
 
+pub fn can_remember_command(kind: ApprovalKind, supported: bool) -> bool {
+    kind == ApprovalKind::Command && supported
+}
+
+pub fn has_command_grant<W, A>(grants: &[Grant<W, A>], expected: &Grant<W, A>) -> bool
+where
+    W: PartialEq,
+    A: PartialEq,
+{
+    grants.contains(expected)
+}
+
+pub fn revoke_command_grants<T>(
+    previous: &Preference<T>,
+    expected: u64,
+) -> Result<Selection<T>, SelectionError>
+where
+    T: Clone,
+{
+    if previous.revision != expected {
+        return Err(SelectionError::Stale);
+    }
+    let mut next = previous.clone();
+    next.revision = next
+        .revision
+        .checked_add(1)
+        .ok_or(SelectionError::RevisionExhausted)?;
+    Ok(Selection {
+        changed: true,
+        next,
+    })
+}
+
 pub fn answer_allowed(kind: ApprovalKind, remembered: bool) -> bool {
     kind == ApprovalKind::Filesystem || !remembered
 }
@@ -237,6 +270,28 @@ mod tests {
     struct Snapshot {
         workspace_permission_cases: Vec<Case>,
         workspace_permission_write_cases: Vec<WriteCase>,
+    }
+
+    #[test]
+    fn generated_command_grant_lookups() {
+        #[derive(Deserialize)]
+        struct Lookup {
+            grants: Vec<Grant<u64, u64>>,
+            expected: Grant<u64, u64>,
+            allowed: bool,
+        }
+        #[derive(Deserialize)]
+        struct Lookups {
+            workspace_command_grant_lookups: Vec<Lookup>,
+        }
+        let snapshot: Lookups = gents_lean_contract::load_contract_snapshot().unwrap();
+        assert_eq!(snapshot.workspace_command_grant_lookups.len(), 24);
+        for case in snapshot.workspace_command_grant_lookups {
+            assert_eq!(
+                has_command_grant(&case.grants, &case.expected),
+                case.allowed
+            );
+        }
     }
 
     #[test]

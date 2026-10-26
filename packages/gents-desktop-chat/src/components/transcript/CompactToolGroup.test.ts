@@ -186,7 +186,7 @@ describe("compact action summaries", () => {
       }),
     );
     expect(html.match(/class="tool-activity-row/g)).toHaveLength(3);
-    expect(html).toContain("16 failed");
+    expect(html).toContain("16 actions failed");
     expect(html.match(/data-change-anchor="empty-49"/g)).toHaveLength(1);
     expect(JSON.stringify(items)).toBe(original);
     const compacted = coalesceToolGroups(items);

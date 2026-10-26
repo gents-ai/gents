@@ -361,6 +361,7 @@ pub async fn steer_pending_message(
             &request.session_id,
             request.expected_request_doc_ids,
             &request.request_doc_id,
+            request.request_id.as_deref(),
         )
         .await?;
     Ok(super::super::types::PendingQueueEditResult {

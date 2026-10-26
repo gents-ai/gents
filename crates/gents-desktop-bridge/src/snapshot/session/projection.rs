@@ -223,6 +223,8 @@ fn canonical_tool_payload(
     (arguments, result, ready())
 }
 
+/// Live inspection uses the native tool-display limit; canonical segments retain
+/// the complete output for terminal inspection and retrieval.
 fn canonical_live_tool_output(
     tool: &AgentToolCallRow,
     request: Option<&AgentRequestRow>,
@@ -291,7 +293,14 @@ fn canonical_live_tool_output(
         .map(|stream| stream.text)
         .collect::<Vec<_>>()
         .join("");
-    (!text.is_empty()).then_some(text)
+    (!text.is_empty()).then(|| {
+        gents::truncation::truncate(
+            &text,
+            gents::truncation::TruncationMode::Tail,
+            &gents::truncation::TruncationLimits::default(),
+        )
+        .text
+    })
 }
 
 #[expect(
@@ -795,9 +804,26 @@ mod canonical_projection_tests {
             },
         };
         assert_eq!(
-            canonical_live_tool_output(&tool, Some(&request), &[], &[row], &[], &[], &[]),
+            canonical_live_tool_output(
+                &tool,
+                Some(&request),
+                &[],
+                std::slice::from_ref(&row),
+                &[],
+                &[],
+                &[]
+            ),
             Some("live text".to_string())
         );
+        let mut large = row;
+        large.segment.payload =
+            "λ🙂".repeat(gents::truncation::LIVE_STREAM_CAPACITY_BYTES) + " newest output";
+        large.segment.runs[0].bytes =
+            u32::try_from(large.segment.payload.len()).expect("payload byte length");
+        let tail = canonical_live_tool_output(&tool, Some(&request), &[], &[large], &[], &[], &[])
+            .expect("live tail");
+        assert!(tail.len() <= gents::truncation::LIVE_STREAM_CAPACITY_BYTES);
+        assert!(tail.ends_with(" newest output"));
     }
 
     #[test]
@@ -1604,11 +1630,7 @@ pub(super) fn project_transcript_rows(
             };
 
             MessageView {
-                started_goal_id: input_request
-                    .and_then(|request| request.input.as_ref())
-                    .and_then(|input| input.goal_assignment.as_ref())
-                    .filter(|assignment| assignment.root_request_doc_id.is_none())
-                    .map(|assignment| assignment.goal_id.clone()),
+                started_goal_id: None,
                 request_turn: row
                     .message
                     .request_doc_id

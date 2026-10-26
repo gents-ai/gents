@@ -30,6 +30,8 @@ use super::{request_matches_node, source_matches_node};
 mod command_denial;
 #[path = "session/context_projection.rs"]
 mod context_projection;
+#[path = "session/goal_provenance.rs"]
+pub(super) mod goal_provenance;
 #[path = "session/live_delta.rs"]
 mod live_delta;
 #[path = "session/pending_turn.rs"]
@@ -378,6 +380,16 @@ pub async fn build_session_snapshot_for_node_with_transcript(
             });
     }
     if let Some(snapshot) = snapshot.as_mut() {
+        goal_provenance::attach(
+            access,
+            request_projection.unwrap_or(&store.requests),
+            &transcript_store
+                .unwrap_or(store.as_ref())
+                .transcript_messages,
+            canonical_dependencies,
+            snapshot,
+        )
+        .await;
         fill_job_outcomes(core, snapshot).await;
         if let Some(context) = loaded_context {
             attach_last_request_context(

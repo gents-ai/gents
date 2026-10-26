@@ -20,8 +20,13 @@ struct Args {
     allow_keychain_prompts: bool,
     #[arg(long, conflicts_with_all = ["home", "serve", "stdio"])]
     describe: bool,
+    #[arg(long, hide = true, conflicts_with_all = ["home", "serve", "stdio", "editor_store", "allow_keychain_prompts", "describe"])]
+    editor_checkpoints: Option<PathBuf>,
+    #[arg(long, hide = true, conflicts_with_all = ["home", "serve", "stdio", "editor_store", "allow_keychain_prompts", "describe", "editor_checkpoints"])]
+    unlock_runtime_keys: Option<PathBuf>,
 }
 
+mod editor_checkpoints;
 #[cfg(any(unix, windows))]
 mod editor_store;
 #[cfg(any(unix, windows))]
@@ -38,6 +43,19 @@ fn main() -> Result<()> {
         return gents_server::run_cli_without_keychain_prompts();
     }
     let args = Args::parse();
+    if let Some(home) = &args.unlock_runtime_keys {
+        return tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(gents_server::unlock_runtime_keys(home));
+    }
+    if let Some(directory) = args.editor_checkpoints {
+        return editor_checkpoints::serve(
+            &directory,
+            std::io::stdin().lock(),
+            std::io::stdout().lock(),
+        );
+    }
     let attachment_process = !args.serve && !args.describe;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -69,7 +87,11 @@ async fn client_main(args: Args) -> Result<()> {
                 "arch": std::env::consts::ARCH,
                 "transportSupported": cfg!(any(unix, windows)),
                 "localRuntimeCli": true,
+                "runtimeKeyUnlock": true,
+                "runtimePreparationVersion": gents_protocol::serve_lifecycle::preparation::RUNTIME_PREPARATION_VERSION,
                 "editorStoreBootstrapVersion": protocol::EDITOR_STORE_BOOTSTRAP_VERSION,
+                "editorCheckpointVersion": editor_checkpoints::VERSION,
+                "editorCheckpointSupported": cfg!(unix),
             }),
         )?;
         output.write_all(b"\n")?;
