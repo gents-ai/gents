@@ -12,6 +12,9 @@ use super::r4c_private_support::{
 };
 use crate::support::test_db;
 
+#[path = "background_wait_wakes.rs"]
+mod background_wait_wakes;
+
 struct StaticTool {
     name: &'static str,
     result: &'static str,

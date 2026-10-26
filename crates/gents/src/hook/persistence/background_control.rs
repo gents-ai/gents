@@ -6,6 +6,27 @@ use futures::StreamExt;
 /// bounded durable observation without resubmitting or cancelling the process.
 const BACKGROUND_TOOL_RESCAN_INTERVAL: Duration = Duration::from_secs(5);
 
+fn background_change_relevant(
+    batch: &events::DocumentChangeBatch,
+    tool_collection: &str,
+    tool_doc_id: &str,
+    request_collection: &str,
+    caller_doc_id: Option<&str>,
+) -> bool {
+    batch.resync_required
+        || batch.changes.iter().any(|change| {
+            if change.doc_id.is_empty() {
+                true
+            } else if change.collection_id == tool_collection {
+                change.doc_id == tool_doc_id
+            } else if change.collection_id == request_collection {
+                caller_doc_id.is_none_or(|doc_id| change.doc_id == doc_id)
+            } else {
+                true
+            }
+        })
+}
+
 impl DefraSessionHook {
     pub(super) async fn take_owned_in_flight_lifecycle(
         &self,
@@ -71,6 +92,7 @@ impl DefraSessionHook {
     where
         S: futures::Stream<Item = events::DocumentChangeBatch> + Unpin,
     {
+        let collections = crate::collection_ids(&self.node, ["AgentToolCall", "AgentRequest"])?;
         let mut rescan = tokio::time::interval_at(
             tokio::time::Instant::now() + BACKGROUND_TOOL_RESCAN_INTERVAL,
             BACKGROUND_TOOL_RESCAN_INTERVAL,
@@ -97,15 +119,14 @@ impl DefraSessionHook {
 
             // Waiting is observational; ending this caller's turn must not
             // revoke the separately budgeted background job.
-            if crate::interrupt::fetch_interrupt_requested_at_scoped(
+            let interruption = crate::interrupt::observe_interrupt_requested_at_scoped(
                 &self.node,
                 &caller.request_id,
                 &caller.node_did,
                 caller.requester_did.as_deref(),
             )
-            .await?
-            .is_some()
-            {
+            .await?;
+            if interruption.requested_at.is_some() {
                 return self
                     .background_tool_envelope(lifecycle, "caller_interrupted")
                     .await;
@@ -129,12 +150,23 @@ impl DefraSessionHook {
             let remaining = (caller_deadline_at.min(wait_deadline_at) - now)
                 .to_std()
                 .unwrap_or(Duration::from_millis(0));
-            tokio::select! {
-                biased;
-                _ = tokio::time::sleep(remaining) => {}
-                _ = rescan.tick() => {}
-                batch = changes.next(), if changes_open => {
-                    changes_open = batch.is_some();
+            let tool_doc_id = lifecycle
+                .doc_id()
+                .context("background observation requires physical tool identity")?;
+            let deadline = tokio::time::sleep(remaining);
+            tokio::pin!(deadline);
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = &mut deadline => break,
+                    _ = rescan.tick() => break,
+                    batch = changes.next(), if changes_open => {
+                        match batch {
+                            None => { changes_open = false; break; }
+                            Some(batch) if background_change_relevant(&batch, &collections[0], tool_doc_id, &collections[1], interruption.request_doc_id.as_deref()) => break,
+                            Some(_) => tokio::task::yield_now().await,
+                        }
+                    }
                 }
             }
         }
@@ -247,5 +279,56 @@ impl DefraSessionHook {
             lifecycle.tool_name(),
             &self.truncation_limits,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::background_change_relevant;
+
+    #[test]
+    fn background_invalidations_preserve_exact_scope_and_resync() {
+        for (collection_id, doc_id, caller, resync, relevant) in [
+            ("tools", "tool", Some("caller"), false, true),
+            ("tools", "other-tool", Some("caller"), false, false),
+            ("tools", "", Some("caller"), false, true),
+            ("requests", "", Some("caller"), false, true),
+            ("requests", "caller", Some("caller"), false, true),
+            ("requests", "other-caller", Some("caller"), false, false),
+            ("requests", "other-caller", None, false, true),
+            ("unknown", "unrelated", Some("caller"), false, true),
+            ("tools", "other-tool", Some("caller"), true, true),
+        ] {
+            let batch = events::DocumentChangeBatch {
+                changes: vec![events::DocumentChange {
+                    collection_id: collection_id.into(),
+                    doc_id: doc_id.into(),
+                    has_local_write: false,
+                }],
+                resync_required: resync,
+                updates: 1,
+            };
+            assert_eq!(
+                background_change_relevant(&batch, "tools", "tool", "requests", caller),
+                relevant,
+                "collection={collection_id} document={doc_id} caller={caller:?} resync={resync}"
+            );
+        }
+        let mut batch = events::DocumentChangeBatch::default();
+        assert!(!background_change_relevant(
+            &batch,
+            "tools",
+            "tool",
+            "requests",
+            Some("caller")
+        ));
+        batch.resync_required = true;
+        assert!(background_change_relevant(
+            &batch,
+            "tools",
+            "tool",
+            "requests",
+            Some("caller")
+        ));
     }
 }
