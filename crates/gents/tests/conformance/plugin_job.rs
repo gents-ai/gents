@@ -75,35 +75,6 @@ fn wire_id(t: &LeanPluginJobTarget) -> String {
     format!("{}@{}", t.agent, t.node)
 }
 
-/// The host's resolution table over every target a step case names.
-fn resolution(
-    c: &LeanPluginJobContext,
-    job: &LeanPluginJobRow,
-    output: &LeanPluginJobOutput,
-) -> Vec<(String, (String, String))> {
-    let mut named: Vec<&LeanPluginJobTarget> = c.target_hops.iter().map(|h| &h.target).collect();
-    for scope in [
-        &c.caller_targets,
-        &c.job_targets,
-        &c.live.targets,
-        &c.policy.dynamic_targets,
-    ] {
-        named.extend(&scope.targets);
-    }
-    named.extend(job.children.iter().map(|child| &child.target));
-    if let Some(pin) = &job.pin {
-        named.extend(&pin.ceiling_at_pin.targets.targets);
-    }
-    if let LeanPluginJobOutput::Effects { spawns, .. } = output {
-        named.extend(spawns.iter().map(|spawn| &spawn.target));
-    }
-    let mut table: Vec<(String, (String, String))> =
-        named.into_iter().map(|t| (wire_id(t), target(t))).collect();
-    table.sort();
-    table.dedup();
-    table
-}
-
 fn scope(s: &LeanPluginJobScope) -> EndpointScope<(String, String), ()> {
     match s.kind.as_str() {
         "none" => EndpointScope::None,
@@ -113,18 +84,9 @@ fn scope(s: &LeanPluginJobScope) -> EndpointScope<(String, String), ()> {
     }
 }
 
-/// The wire spelling of a scope: the permitted AgentTarget ids. `all` has none.
-fn scope_ids(s: &LeanPluginJobScope) -> Vec<String> {
-    match s.kind.as_str() {
-        "none" => Vec::new(),
-        "only" => s.targets.iter().map(wire_id).collect(),
-        other => panic!("Lean endpoint scope {other} has no wire spelling"),
-    }
-}
-
 fn ceiling(c: &LeanPluginJobCeiling) -> JobCeiling {
     JobCeiling {
-        targets: scope_ids(&c.targets),
+        targets: c.targets.clone(),
         max_live: c.max_live,
         max_spawns: c.max_spawns,
         max_messages_per_slot: c.max_messages_per_slot,
@@ -389,7 +351,7 @@ fn output(o: &LeanPluginJobOutput) -> JobStepOutput {
 fn job_policy(p: &LeanPluginJobPolicy) -> JobPolicy {
     JobPolicy {
         dynamic: spelled(&p.mode),
-        dynamic_targets: scope_ids(&p.dynamic_targets),
+        dynamic_targets: p.dynamic_targets.clone(),
         trusted_packs: p.trusted_packs.clone(),
         project_roots: p.project_roots.clone(),
     }
@@ -401,8 +363,8 @@ fn target_ids(targets: &[LeanPluginJobTarget]) -> Vec<String> {
 
 fn context(
     c: &LeanPluginJobContext,
-    job: &LeanPluginJobRow,
-    out: &LeanPluginJobOutput,
+    _job: &LeanPluginJobRow,
+    _out: &LeanPluginJobOutput,
 ) -> StepContext {
     StepContext {
         live: ceiling(&c.live),
@@ -419,7 +381,11 @@ fn context(
             .iter()
             .map(|h| (target(&h.target), h.hop))
             .collect(),
-        target_ids: resolution(c, job, out),
+        target_ids: c
+            .bindings
+            .iter()
+            .map(|binding| (binding.wire.clone(), target(&binding.target)))
+            .collect(),
         live_background: c.live_background,
         started_by_job: c.started_by_job,
         cwd_allowed: c.cwd_allowed.clone(),
@@ -494,41 +460,18 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
     let cases = lean_plugin_job_admission_cases();
     assert_eq!(
         cases.len(),
-        125,
-        "Lean supplies 29 admission regressions and 96 wire-to-recovery traces"
+        221,
+        "Lean supplies 29 admission regressions and 192 interrupted wire-to-recovery traces"
     );
     let mut names = BTreeSet::new();
     for case in cases {
         assert!(names.insert(case.name.as_str()), "duplicate {}", case.name);
         let expected = &case.expected;
-        let expected_job = expected.job.as_ref().map(row).map(|mut expected_job| {
-            if let Some(trace) = &case.wire_trace {
-                expected_job
-                    .pin
-                    .as_mut()
-                    .expect("pinned wire trace")
-                    .ceiling_at_pin
-                    .targets
-                    .clone_from(&trace.pinned_ids);
-            }
-            expected_job
-        });
-        let mut context = context(&case.context, &case.job, &case.output);
-        let mut job = row(&case.job);
+        let expected_job = expected.job.as_ref().map(row);
+        let context = context(&case.context, &case.job, &case.output);
+        let job = row(&case.job);
         let mut output = output(&case.output);
         if let Some(trace) = &case.wire_trace {
-            context.target_ids = trace
-                .bindings
-                .iter()
-                .map(|binding| (binding.wire.clone(), target(&binding.target)))
-                .collect();
-            context.live.targets.clone_from(&trace.live_ids);
-            job.pin
-                .as_mut()
-                .expect("pinned wire trace")
-                .ceiling_at_pin
-                .targets
-                .clone_from(&trace.pinned_ids);
             let JobStepOutput::Effects { effects } = &mut output else {
                 panic!("{}: wire trace requires spawn effects", case.name);
             };
@@ -596,12 +539,38 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
             }
         };
         if let Some(trace) = &case.wire_trace {
+            let durable = match trace.interruption.as_str() {
+                "before_kill" if !expected.admitted => &job,
+                "before_kill" | "after_kill" => &settled,
+                other => panic!("unknown interruption {other}"),
+            };
+            let facts = gents::plugin_job::recovery::facts_from_durable_read(
+                durable,
+                durable.state == JobState::Running,
+                durable.pin.as_ref().expect("wire trace has a durable pin"),
+                gents::plugin_job::recovery::DurableRead {
+                    session_stopped: trace.read.session_stopped,
+                    now_millis: trace.read.now_millis,
+                    available: if trace.read.available {
+                        Ok(())
+                    } else {
+                        Err(admit::Refusal::NotAvailable)
+                    },
+                    progress_revision: trace.read.progress_revision,
+                    in_flight: trace.read.step_in_flight,
+                },
+            );
             let before = crate::lean_vocab_test::LeanPluginJobRecoveryRow {
-                running: settled.state == JobState::Running,
-                terminal_children: admit::terminal_count(&settled) as u32,
-                observed: settled.observed_terminal,
-                live: admit::live_count(&settled) as u32,
-                ..trace.before
+                running: facts.running,
+                terminal_children: facts.terminal_children,
+                observed: facts.observed,
+                live: facts.live,
+                session_stopped: facts.session_stopped,
+                deadline_expired: facts.deadline_expired,
+                available: facts.available.is_ok(),
+                stepped: facts.stepped,
+                step_in_flight: facts.in_flight,
+                step_new: facts.step_new,
             };
             assert_eq!(
                 before, trace.before,
@@ -1171,7 +1140,7 @@ fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
             } => {
                 *kinds.entry("policy_valid").or_default() += 1;
                 assert_eq!(
-                    policy_valid(&target_ids(agent_targets), &job_policy(policy)),
+                    policy_valid(agent_targets, &job_policy(policy)),
                     expected.valid,
                     "{name}: valid"
                 );

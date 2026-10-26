@@ -49,7 +49,10 @@ impl Visit for Operation<'_> {
     fn record_debug(&mut self, _field: &Field, _value: &dyn std::fmt::Debug) {}
 }
 
-impl<S: tracing::Subscriber> Layer<S> for ReadCapture {
+impl<S> Layer<S> for ReadCapture
+where
+    S: tracing::Subscriber,
+{
     fn on_event(&self, event: &tracing::Event<'_>, _context: Context<'_, S>) {
         if event.metadata().target() != "gents::config_client::txn" {
             return;

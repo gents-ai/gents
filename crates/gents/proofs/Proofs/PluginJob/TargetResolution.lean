@@ -1,6 +1,11 @@
-import Proofs.PluginJob.Admission
+import Proofs.ToolPolicy.Meet
 
-namespace PluginJob.TargetResolution
+namespace PluginJob
+
+/-- An AgentTarget wire ID resolves to `(target_node_did, agent_id)`. -/
+abbrev Target := String × String
+
+namespace TargetResolution
 
 /-- An AgentTarget document's wire ID and its resolved endpoint are distinct
 identities. The native configuration owner supplies the ordered bindings;
@@ -43,6 +48,27 @@ theorem scope_permits_iff (bindings : List Binding) (ids : List String) (target 
   · rintro ⟨binding, member, bound, named⟩
     exact ⟨binding, ⟨member, named⟩, bound⟩
 
+theorem scope_mono (bindings : List Binding) (left right : List String)
+    (subset : left ⊆ right) (target : Target)
+    (allowed : (scope bindings left).permits target) :
+    (scope bindings right).permits target := by
+  rw [scope_permits_iff] at allowed ⊢
+  have witness : ∃ binding ∈ bindings, endpoint binding = target ∧ binding.wire ∈ left := by
+    simpa [permits, List.any_eq_true, Bool.and_eq_true, beq_iff_eq,
+      List.contains_iff_mem] using allowed
+  obtain ⟨binding, member, bound, named⟩ := witness
+  simp only [permits, List.any_eq_true, Bool.and_eq_true, beq_iff_eq,
+    List.contains_iff_mem]
+  exact ⟨binding, member, bound, subset named⟩
+
+theorem meet_scope_permits_iff (bindings : List Binding) (live pinned : List String)
+    (target : Target) :
+    (scope bindings (meetIds live pinned)).permits target ↔
+      ∃ binding ∈ bindings, endpoint binding = target ∧
+        binding.wire ∈ live ∧ binding.wire ∈ pinned := by
+  simp [scope_permits_iff, permits, List.any_eq_true, Bool.and_eq_true,
+    beq_iff_eq, List.contains_iff_mem, meet_requires_same_wire]
+
 theorem unknown_wire_cannot_resolve (bindings : List Binding) (wire : String)
     (absent : ∀ binding ∈ bindings, binding.wire ≠ wire) : resolve bindings wire = none := by
   have missing : (bindings.find? fun binding => binding.wire == wire) = none := by
@@ -71,4 +97,5 @@ theorem permitted_endpoint_has_named_witness (bindings : List Binding) (ids : Li
   simpa [permits, List.any_eq_true, Bool.and_eq_true, beq_iff_eq,
     List.contains_iff_mem] using allowed
 
-end PluginJob.TargetResolution
+end TargetResolution
+end PluginJob

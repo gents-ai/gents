@@ -38,8 +38,15 @@ private def knownSources : List String := ["source-1", "source-2"]
 
 private def scope (ts : List Target) : EndpointScope Target Unit := .only ts.toFinset fun _ => ()
 
+private def wireId (target : Target) : String := target.2 ++ "@" ++ target.1
+
+private def wireIds (targets : List Target) : List String := targets.map wireId
+
+private def bindings : List TargetResolution.Binding :=
+  knownTargets.map fun target => ⟨wireId target, target.1, target.2⟩
+
 private def ceiling : Ceiling :=
-  { targets := scope [targetA, targetB], maxLive := 4, maxSpawns := 4, maxMessagesPerSlot := 2
+  { targets := wireIds [targetA, targetB], maxLive := 4, maxSpawns := 4, maxMessagesPerSlot := 2
   , resultBytes := 4000, maxWallSecs := 7200 }
 
 private def facts : HostFacts :=
@@ -51,9 +58,9 @@ private def guestPin : GuestPin :=
   { scriptId := "flow", sourceDigest := "source-1", handle := "flow-1", agentBudget := 3 }
 
 private def context : StepContext :=
-  { live := ceiling, available := true
+  { live := ceiling, bindings, available := true
   , callerTargets := scope [targetA, targetB], jobTargets := scope [targetA, targetB]
-  , policy := { mode := .run, dynamicTargets := scope [targetA]
+  , policy := { mode := .run, dynamicTargets := wireIds [targetA]
                 , trustedPacks := ["job_plugin_fixture"], projectRoots := [] }
   , engineDigest := "engine-1", engineProvenanceOperator := true
   , installedTrusted := fun digest => digest == "source-1"
@@ -125,7 +132,7 @@ def admissionCases : List AdmissionCase :=
       .result noExtras [] none
         (some { rowDoc := "row-0", engineCurrent := false, answer := none, budget := none })⟩
   , ⟨"operator_narrowing_refuses_removed_target",
-      { context with live := { ceiling with targets := scope [targetA] } },
+      { context with live := { ceiling with targets := wireIds [targetA] } },
       pinned [child "1:a" .live] 1 0, effects [spawn "2:b" targetB]⟩
   , ⟨"started_by_job_refused", { context with startedByJob := true }, stepZero,
       effects [spawn "1:a" targetA] (some guestPin)⟩
@@ -206,7 +213,7 @@ private def scopeJson : EndpointScope Target Unit → Json
       ("targets", toJson ((knownTargets.filter fun t => decide (sc.permits t)).map targetJson))]
 
 private def ceilingJson (c : Ceiling) : Json :=
-  Json.mkObj [("targets", scopeJson c.targets), ("max_live", toJson c.maxLive),
+  Json.mkObj [("targets", toJson c.targets), ("max_live", toJson c.maxLive),
     ("max_spawns", toJson c.maxSpawns), ("max_messages_per_slot", toJson c.maxMessagesPerSlot),
     ("result_bytes", toJson c.resultBytes), ("max_wall_secs", toJson c.maxWallSecs)]
 
@@ -322,11 +329,13 @@ private def knownDocs : List DocId := ["row-0", "row-1", "row-a", "row-b"]
 private def knownCwds : List String := ["/", "/work", "/work/sub"]
 
 private def policyJson (p : PluginJob.Policy) : Json :=
-  Json.mkObj [("mode", modeJson p.mode), ("dynamic_targets", scopeJson p.dynamicTargets),
+  Json.mkObj [("mode", modeJson p.mode), ("dynamic_targets", toJson p.dynamicTargets),
     ("trusted_packs", toJson p.trustedPacks), ("project_roots", toJson p.projectRoots)]
 
 private def contextJson (ctx : StepContext) : Json :=
   Json.mkObj [("live", ceilingJson ctx.live), ("available", toJson ctx.available),
+    ("bindings", toJson (ctx.bindings.map fun binding => Json.mkObj
+      [("wire", toJson binding.wire), ("target", targetJson (TargetResolution.endpoint binding))])),
     ("caller_targets", scopeJson ctx.callerTargets), ("job_targets", scopeJson ctx.jobTargets),
     ("policy", policyJson ctx.policy),
     ("engine_digest", toJson ctx.engineDigest),
@@ -998,18 +1007,18 @@ def packBlockCases : List PackBlockCase :=
 
 structure PolicyCase where
   name : String
-  agentTargets : List Target
+  agentTargets : List String
   policy : PluginJob.Policy
 
 def policyCases : List PolicyCase :=
-  [ ⟨"off_ignores_non_subset_dynamic_targets", [targetA, targetB],
-      { context.policy with mode := .off, dynamicTargets := scope [targetC] }⟩
-  , ⟨"run_refuses_non_subset_dynamic_targets", [targetA, targetB],
-      { context.policy with dynamicTargets := scope [targetC] }⟩
-  , ⟨"check_admits_subset_dynamic_targets", [targetA, targetB],
+  [ ⟨"off_ignores_non_subset_dynamic_targets", wireIds [targetA, targetB],
+      { context.policy with mode := .off, dynamicTargets := wireIds [targetC] }⟩
+  , ⟨"run_refuses_non_subset_dynamic_targets", wireIds [targetA, targetB],
+      { context.policy with dynamicTargets := wireIds [targetC] }⟩
+  , ⟨"check_admits_subset_dynamic_targets", wireIds [targetA, targetB],
       { context.policy with mode := .check }⟩
   , ⟨"default_empty_dynamic_targets_valid", [],
-      { context.policy with dynamicTargets := scope [] }⟩ ]
+      { context.policy with dynamicTargets := [] }⟩ ]
 
 structure WireCase where
   name : String
@@ -1111,7 +1120,7 @@ private def renderPackBlock (c : PackBlockCase) : Json :=
 
 private def renderPolicy (c : PolicyCase) : Json :=
   Json.mkObj [("name", toJson c.name), ("kind", toJson "policy_valid"),
-    ("agent_targets", targetsJson c.agentTargets), ("policy", policyJson c.policy),
+    ("agent_targets", toJson c.agentTargets), ("policy", policyJson c.policy),
     ("expected", Json.mkObj [("valid", toJson (c.policy.valid c.agentTargets))])]
 
 private def renderWire (c : WireCase) : Json :=
@@ -1130,10 +1139,7 @@ def authorityCasesJson : String :=
 
 /-- A target's wire spelling is its AgentTarget id; the host resolves it to the
 `(node, agent)` pair. -/
-private def targetId (t : Target) : Json := toJson t.2
-
-private def scopeTargets (sc : EndpointScope Target Unit) : Json :=
-  toJson ((knownTargets.filter fun t => decide (sc.permits t)).map targetId)
+private def targetId (t : Target) : Json := toJson (wireId t)
 
 /-- An optional field the protocol type omits when absent. -/
 private def optField (k : String) : Option Json → List (String × Json)
@@ -1145,7 +1151,7 @@ private def listField (k : String) (xs : List Json) : List (String × Json) :=
   if xs.isEmpty then [] else [(k, toJson xs)]
 
 private def wireCeilingJson (c : Ceiling) : Json :=
-  Json.mkObj [("targets", scopeTargets c.targets), ("max_live", toJson c.maxLive),
+  Json.mkObj [("targets", toJson c.targets), ("max_live", toJson c.maxLive),
     ("max_spawns", toJson c.maxSpawns), ("max_messages_per_slot", toJson c.maxMessagesPerSlot),
     ("result_bytes", toJson c.resultBytes), ("max_wall_secs", toJson c.maxWallSecs)]
 
@@ -1366,12 +1372,12 @@ private def wireInputJson (s : InputSample) : Json :=
     optField "verified_script" ((verified s).map fun v =>
       Json.mkObj [("source", toJson v.source), ("digest", toJson v.digest)]) ++
     [("mounts", toJson (s.mounts.map (wireMountJson c.policy.trustedPacks))),
-     ("ceiling", Json.mkObj [("targets", scopeTargets c.live.targets),
+     ("ceiling", Json.mkObj [("targets", toJson c.live.targets),
         ("max_live", toJson c.live.maxLive),
         ("remaining_spawns", toJson (Step.remainingSpawns c.live.maxSpawns j)),
         ("max_messages_per_slot", toJson c.live.maxMessagesPerSlot),
         ("result_bytes", toJson c.live.resultBytes), ("dynamic", modeJson c.policy.mode),
-        ("dynamic_targets", scopeTargets c.policy.dynamicTargets)]),
+        ("dynamic_targets", toJson c.policy.dynamicTargets)]),
      ("children", Json.mkObj (j.children.map fun ch => (ch.key.slot, childViewJson ch))),
      ("control", toJson (echo.control.map wireEchoJson)),
      ("scratch", Json.mkObj (s.scratch.map fun (n, v) => (n, toJson v))),
@@ -1639,29 +1645,32 @@ private def wireRecoveryCases : List Json := Id.run do
       for expired in [false, true] do
         for inFlight in [false, true] do
           for available in [false, true] do
-            let targets := TargetResolution.scope wireBindings
-              (TargetResolution.meetIds liveIds pinnedIds)
             let ctx := { context with
-              live := { ceiling with targets }
+              live := { ceiling with targets := liveIds }
+              bindings := wireBindings
               callerTargets := scope [targetA, targetD]
               jobTargets := scope [targetA, targetD] }
             let job := { pinned [child "existing" .live] 1 0 with
               pin := some { hostPin guestPin facts with
-                ceilingAtPin := { ceiling with targets } } }
+                ceilingAtPin := { ceiling with targets := pinnedIds } } }
             let some target := TargetResolution.resolve wireBindings wire | continue
             let out := effects [spawn "new" target]
             let c : AdmissionCase := ⟨s!"wire_recovery_{cases.length}", ctx, job, out⟩
-            let observed : RecoveryTrace.Observation :=
-              ⟨stopped, expired, available, true, inFlight, 1⟩
-            let before := RecoveryTrace.afterStep ctx job out observation observed
-            let after := RecoveryTrace.recoverAfterStep ctx job out observation observed
-            let trace := Json.mkObj
-              [("bindings", toJson (wireBindings.map fun binding => Json.mkObj
-                  [("wire", toJson binding.wire), ("target", targetJson (TargetResolution.endpoint binding))])),
-               ("live_ids", toJson liveIds), ("pinned_ids", toJson pinnedIds),
-               ("spawn_wires", toJson [wire]), ("before", jobRowJson before),
-               ("after", jobRowJson after)]
-            cases := cases ++ [render c trace]
+            for phase in [RecoveryTrace.Interruption.beforeKill, .afterKill] do
+              let read : RecoveryTrace.DurableRead :=
+                ⟨stopped, if expired then 7200000 else 0, available, 2, inFlight⟩
+              let before := RecoveryTrace.afterStep ctx job out observation phase read
+              let after := RecoveryTrace.recoverAfterStep ctx job out observation phase read
+              let trace := Json.mkObj
+                [("spawn_wires", toJson [wire]),
+                 ("interruption", toJson (if phase == .beforeKill then "before_kill" else "after_kill")),
+                 ("read", Json.mkObj [("session_stopped", toJson read.sessionStopped),
+                   ("now_millis", toJson read.nowMillis), ("available", toJson read.available),
+                   ("progress_revision", toJson read.progressRevision),
+                   ("step_in_flight", toJson read.stepInFlight)]),
+                 ("before", jobRowJson before), ("after", jobRowJson after)]
+              let c := { c with name := s!"wire_recovery_{cases.length}" }
+              cases := cases ++ [render c trace]
   return cases
 
 def admissionCasesJson : String :=

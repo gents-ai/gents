@@ -45,6 +45,27 @@ theorem different_requester_denied
     authorized caller owner = false := by
   simp [authorized, hRequester]
 
+/-- Provider call IDs are scoped labels and may repeat across requests or
+sessions. Process ownership is bound to the physical tool document as well. -/
+structure Invocation where
+  toolCallId : String
+  toolCallDocId : String
+  deriving DecidableEq, Repr
+
+def sameInvocation (requested owned : Invocation) : Bool :=
+  requested.toolCallId == owned.toolCallId && requested.toolCallDocId == owned.toolCallDocId
+
+theorem same_label_different_document_cannot_cancel (id requestedDoc ownedDoc : String)
+    (different : requestedDoc ≠ ownedDoc) :
+    sameInvocation ⟨id, requestedDoc⟩ ⟨id, ownedDoc⟩ = false := by
+  simp [sameInvocation, different]
+
+theorem invocation_identity_requires_both (requested owned : Invocation) :
+    sameInvocation requested owned = true ↔ requested = owned := by
+  cases requested
+  cases owned
+  simp [sameInvocation]
+
 inductive WaitBoundary where
   | waitTimeout
   | callerInterrupted
