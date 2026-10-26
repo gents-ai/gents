@@ -79,4 +79,15 @@ def processIdentityCasesJson : String :=
         ⟨requestedId, requestedDoc⟩ ⟨ownedId, ownedDoc⟩))])
   (toJson cases).compress
 
+def operatorControlCasesJson : String :=
+  let cases := do
+    let executing ← ["did:node:a", "did:node:b"]
+    let requested ← ["did:node:a", "did:node:b"]
+    let owner ← ["did:node:a", "did:node:b"]
+    let actor ← [none, some "did:node:a", some "did:node:b", some "did:operator:other"]
+    pure (Json.mkObj [("executing", toJson executing), ("requested", toJson requested),
+      ("owner", toJson owner), ("actor", toJson actor),
+      ("expected", toJson (Background.ProcessControl.operatorAtNode executing requested owner actor))])
+  (toJson cases).compress
+
 end Conformance.NativeRefinement

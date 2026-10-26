@@ -176,6 +176,8 @@ def snapshotJson : String :=
       ++ Conformance.GoalRequestHeadContracts.casesJson ++ ","
     ++ "\"durable_observation_cases\":"
       ++ Conformance.NativeRefinement.observationCasesJson ++ ","
+    ++ "\"operator_job_control_cases\":"
+      ++ Conformance.NativeRefinement.operatorControlCasesJson ++ ","
     ++ "\"background_process_identity_cases\":"
       ++ Conformance.NativeRefinement.processIdentityCasesJson ++ ","
     ++ "\"plugin_target_resolution_cases\":"
