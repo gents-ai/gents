@@ -176,6 +176,12 @@ def casesJson : String :=
         row 3 102 .terminal (foldedInto := some 2)] [] (some 1),
      caseJsonWithSelection "stale_terminal_observation_keeps_active_background_without_new_input"
        [row 1 100 .terminal, row 2 101 .active (backgroundWake := true)] [] (some 1),
+     caseJsonWithSelection "active_background_keeps_queued_user_messages_interruptible"
+       [row 1 100 .terminal (completed := true) (authoredInputMaterialized := true),
+        row 2 101 .active (backgroundWake := true),
+        row 3 102 .unclaimed (queuedAfter := some 101)] [] (some 1),
+     caseJsonWithSelection "non_normal_selected_row_cannot_anchor_a_later_active_turn"
+       [row 1 100 .terminal (publicInput := false), row 2 101 .active] [] (some 1),
      caseJsonWithSelection "active_turn_does_not_cross_requester_scope"
        [row 1 100 .terminal, row 2 101 .active (requester := 2)] [] (some 1),
      caseJsonWithSelection "active_observed_turn_is_preserved"
@@ -229,6 +235,6 @@ def casesJson : String :=
      caseJsonWithSelection "older_active_row_does_not_revive_a_newer_terminal_turn"
        [row 1 100 .active, row 2 101 .terminal] [] (some 2)]) ++ "]"
 
-def caseCount : Nat := scenarios.length + 20
+def caseCount : Nat := scenarios.length + 22
 
 end Conformance.ClientShellContracts.SessionTurnCases

@@ -333,3 +333,105 @@ fn received_message_body_uses_readable_parent_identity_without_changing_signed_i
         .unwrap()
         .starts_with("[message agent:"));
 }
+
+#[test]
+fn active_background_request_keeps_interrupt_and_queue_visible_after_public_completion() {
+    use gents_protocol::session::{SessionObservation, SessionRequestObservation};
+    let person = AgentRequestRow {
+        caused_by_trigger_id: Some("nightly".into()),
+        caused_by_trigger_kind: Some("schedule".into()),
+        ..request("person", "sess-1", 0)
+    };
+    let wake = AgentRequestRow {
+        lifecycle_state: Some(RequestLifecycleState::Processing),
+        input: input(serde_json::json!({"queue": {
+            "source":"background_completion", "policy":"coalesce",
+            "key":"background_completion:sess-1", "background_completion_wake_version":1
+        }})),
+        content: Some(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT.into()),
+        ..request("wake", "sess-1", 1)
+    };
+    let queued = AgentRequestRow {
+        lifecycle_state: Some(RequestLifecycleState::Pending),
+        input: input(serde_json::json!({"queue": {
+            "source":"user", "policy":"append", "queued_after_request_id":"wake"
+        }})),
+        ..request("queued", "sess-1", 2)
+    };
+    let mut header = session();
+    header.observation = Some(SessionObservation {
+        last_activity_at: "2026-04-21T12:00:01Z".into(),
+        preview: Some("person text".into()),
+        latest_request: Some(SessionRequestObservation {
+            request_id: person.request_id.clone(),
+            request_doc_id: person.doc_id.clone().unwrap(),
+            lifecycle_state: RequestLifecycleState::Completed,
+        }),
+    });
+    let store = ClientStore::from_rows(ClientStoreRows {
+        sessions: vec![header.clone()],
+        requests: vec![person, wake, queued],
+        ..Default::default()
+    });
+    let snapshot = build_session_snapshot_from_store(&store, "sess-1", Some("person")).unwrap();
+    assert_eq!(snapshot.latest_request_id.as_deref(), Some("wake"));
+    assert_eq!(snapshot.turn_state.as_deref(), Some("running"));
+    assert_eq!(
+        snapshot
+            .queued_turns
+            .iter()
+            .map(|row| row.request_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["queued"]
+    );
+    assert!(snapshot.pending_turn.is_none());
+    let serialized = serde_json::to_string(&snapshot.timeline_items).unwrap();
+    assert!(!serialized.contains(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT));
+    let summaries = session_summaries(&[header], &store.requests, "did:test:amy", &[], &[]);
+    assert_eq!(summaries[0].latest_request_id.as_deref(), Some("wake"));
+    assert_eq!(summaries[0].turn_state.as_deref(), Some("running"));
+    assert_eq!(summaries[0].trigger_id.as_deref(), Some("nightly"));
+    assert_eq!(summaries[0].trigger_kind.as_deref(), Some("schedule"));
+}
+
+#[test]
+fn queued_and_folded_observations_retain_the_active_owners_trigger() {
+    use gents_protocol::session::{SessionObservation, SessionRequestObservation};
+    for folded in [false, true] {
+        let owner = AgentRequestRow {
+            lifecycle_state: Some(RequestLifecycleState::Processing),
+            caused_by_trigger_id: Some("nightly".into()),
+            caused_by_trigger_kind: Some("schedule".into()),
+            ..request("owner", "sess-1", 0)
+        };
+        let mut observed = AgentRequestRow {
+            caused_by_trigger_id: Some("earlier-trigger".into()),
+            caused_by_trigger_kind: Some("event".into()),
+            lifecycle_state: Some(RequestLifecycleState::Pending),
+            input: input(serde_json::json!({"queue": {
+                "source":"user", "policy":"append", "queued_after_request_id":"owner"
+            }})),
+            ..request("observed", "sess-1", 1)
+        };
+        if folded {
+            observed.lifecycle_state = Some(RequestLifecycleState::Superseded);
+            observed.superseded_by_request = Some("owner".into());
+            observed.superseded_by_request_doc_id = Some("doc-owner".into());
+            observed.failure_reason = Some(gents::lifecycle::FOLDED_REASON.into());
+        }
+        let mut header = session();
+        header.observation = Some(SessionObservation {
+            last_activity_at: "2026-04-21T12:00:01Z".into(),
+            preview: None,
+            latest_request: Some(SessionRequestObservation {
+                request_id: observed.request_id.clone(),
+                request_doc_id: observed.doc_id.clone().unwrap(),
+                lifecycle_state: observed.lifecycle_state.unwrap(),
+            }),
+        });
+        let summaries = session_summaries(&[header], &[owner, observed], "did:test:amy", &[], &[]);
+        assert_eq!(summaries[0].latest_request_id.as_deref(), Some("owner"));
+        assert_eq!(summaries[0].trigger_id.as_deref(), Some("nightly"));
+        assert_eq!(summaries[0].trigger_kind.as_deref(), Some("schedule"));
+    }
+}

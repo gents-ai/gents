@@ -92,6 +92,13 @@ def jsonBoolOption : Option Bool → String
   | some value => boolJson value
   | none       => "null"
 
+def interruptPhaseName : ClientShell.InterruptControl.Phase → String
+  | .idle => "ready"
+  | .submitting => "submittingRequest"
+  | .awaiting => "awaitingObservation"
+  | .active => "turnInProgress"
+  | .blocked => "blocked"
+
 def clientTurnStateName : ClientTurnState → String
   | .waitingForClaim => "waitingForClaim"
   | .running         => "running"
