@@ -50,6 +50,7 @@ import Proofs.GoalAutomation.RequestHead
 import Proofs.GoalAutomation.RequestAncestry
 import Proofs.GoalAutomation.AuthenticationCost
 import Proofs.PluginJob.TargetResolution
+import Proofs.PluginJob.RecoveryTrace
 import Proofs.Background.Observation
 import Proofs.GoalAutomation.ReadinessGate
 import Proofs.Mailbox

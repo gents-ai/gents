@@ -19,6 +19,30 @@ def resolve (bindings : List Binding) (wire : String) : Option (String × String
 def permits (bindings : List Binding) (ids : List String) (target : String × String) : Bool :=
   bindings.any fun binding => endpoint binding == target && ids.contains binding.wire
 
+/-- Wire ceilings intersect before endpoint resolution. Two AgentTarget aliases
+for one endpoint do not make disjoint live and pinned ID ceilings overlap. -/
+def meetIds (live pinned : List String) : List String :=
+  live.filter pinned.contains
+
+def scope (bindings : List Binding) (ids : List String) : ToolPolicy.EndpointScope Target Unit :=
+  .only ((bindings.filter fun binding => ids.contains binding.wire).map endpoint).toFinset
+    (fun _ => ())
+
+theorem meet_requires_same_wire (live pinned : List String) (wire : String) :
+    wire ∈ meetIds live pinned ↔ wire ∈ live ∧ wire ∈ pinned := by
+  simp [meetIds, List.contains_iff_mem]
+
+theorem scope_permits_iff (bindings : List Binding) (ids : List String) (target : Target) :
+    (scope bindings ids).permits target ↔ permits bindings ids target = true := by
+  simp only [scope, ToolPolicy.EndpointScope.permits, List.mem_toFinset,
+    List.mem_map, List.mem_filter, List.contains_iff_mem, permits,
+    List.any_eq_true, Bool.and_eq_true, beq_iff_eq]
+  constructor
+  · rintro ⟨binding, ⟨member, named⟩, bound⟩
+    exact ⟨binding, member, bound, named⟩
+  · rintro ⟨binding, member, bound, named⟩
+    exact ⟨binding, ⟨member, named⟩, bound⟩
+
 theorem unknown_wire_cannot_resolve (bindings : List Binding) (wire : String)
     (absent : ∀ binding ∈ bindings, binding.wire ≠ wire) : resolve bindings wire = none := by
   have missing : (bindings.find? fun binding => binding.wire == wire) = none := by

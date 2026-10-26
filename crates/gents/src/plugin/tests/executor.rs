@@ -392,7 +392,7 @@ mod bound {
     }
 
     #[tokio::test]
-    async fn workspace_modes_allow_routine_plugin_writes_without_widening_folder_grants() {
+    async fn workspace_modes_bind_routine_plugin_writes_to_the_selected_consent_policy() {
         use approval::workspace::{self, Mode, WorkspaceKey};
 
         for mode in [Mode::Ask, Mode::AutoReview, Mode::FullAccess] {
@@ -419,9 +419,17 @@ mod bound {
             )
             .unwrap();
             let tool = tool_for(&fx.home, &fx.record);
-            workspace::scope(context, in_session(&tool, &work, &work, false))
+            let operator = if mode == Mode::Ask {
+                Some(answer(fx.home.path(), true, false).await)
+            } else {
+                None
+            };
+            workspace::scope(context, in_session(&tool, &work, &work, mode == Mode::Ask))
                 .await
                 .unwrap();
+            if let Some(operator) = operator {
+                operator.await.unwrap();
+            }
             assert_eq!(
                 std::fs::read_to_string(work.join("out.json")).unwrap(),
                 "{}"
@@ -592,9 +600,11 @@ mod bound {
         )
         .unwrap();
         let tool = tool_for(&fx.home, &fx.record);
-        let error = workspace::scope(context, in_session(&tool, &work, &work, false))
+        let operator = answer(fx.home.path(), true, false).await;
+        let error = workspace::scope(context, in_session(&tool, &work, &work, true))
             .await
             .unwrap_err();
+        operator.await.unwrap();
         assert!(error.contains("did not return a result"), "{error}");
         assert_eq!(std::fs::read(&permission_file).unwrap(), before);
     }
