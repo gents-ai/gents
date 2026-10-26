@@ -7,6 +7,42 @@ schemas operate or expose its vocabulary. Use DefraDB's DID identity and
 document ACP for database authorization. Reuse its transaction and P2P APIs
 through the existing Gents adapters.
 
+## Finding the owner
+
+Read versions and dependency revisions from `Cargo.toml`, `Cargo.lock` and
+`rust-toolchain.toml`; read the actual check matrix from `.github/workflows/`.
+Do not duplicate changing versions in instructions.
+
+| Surface | Starting point |
+| --- | --- |
+| Runtime documents, admission, tasks and recovery | `crates/gents/src/` |
+| Provider turn execution and input assembly | `crates/gents-loop/src/` |
+| Canonical wire types and database vocabulary | `crates/gents-protocol/`, `crates/gents-schemas/` |
+| Executable models and model-driven contracts | `crates/gents/proofs/`, `crates/gents-lean-contract/` |
+| CLI and installed editor helpers | `crates/gents-cli/`, `crates/gents-client-host/`, `crates/gents-media-host/` |
+| Desktop application | `apps/gents-desktop/` |
+| Shared desktop client and presentation | `crates/gents-desktop-core/`, `crates/gents-desktop/`, `packages/` |
+
+## Working on a change
+
+- Read the issue's acceptance, the owning contract and its callers before
+  editing. Reuse the existing owner rather than adding a parallel interpretation.
+  Keep each module focused on one responsibility; split at ownership seams.
+- Preserve unrelated edits and use an isolated worktree. Do not change a
+  checkout's source, HEAD, manifests or dependency pin while its build or test is
+  running. An observation timeout is not a stopped process; inspect its actual
+  state before restarting it. Stop only processes owned by the current work.
+- Diagnose a retained failure before rerunning it. Use the smallest regression
+  that distinguishes the defect; do not hide it with retries, larger deadlines
+  or looser assertions. Reuse valid evidence from unchanged inputs.
+- For performance changes, compare equivalent workloads at the affected owner
+  and record the source revision, scope and measured result. A narrower payload
+  alone does not establish faster execution or fewer database reads.
+- Keep review changes scoped to their final behavior and target the immediate
+  parent when stacked. Describe the problem, delivered behavior, actual checks
+  and remaining limits. Close an issue only when its complete acceptance is
+  delivered; record partial work without claiming the whole flow is finished.
+
 ## Ownership
 
 - Core is bounded to the owned agent loop and task and data management in
@@ -229,6 +265,20 @@ before pushing its implementation layers.
 
 ## Validation
 
-Before pushing, run `cargo test -p gents`, `cargo check --workspace --all-targets`
-and `make lint` (clippy, `-D warnings`). Run `lake build` for proof changes and
-the relevant CLI or desktop suites for affected consumers.
+During iteration, run focused checks for the changed owner or flow. Do not
+repeat broad suites, dependency installation or native/shared builds on every
+edit. Recheck when the source, dependency inputs or a concrete failure warrants
+it. Keep test, browser and installed-editor evidence distinct.
+
+Before pushing native implementation changes, run `cargo test -p gents`,
+`cargo check --workspace --all-targets` and `make lint` (clippy, `-D warnings`).
+Run `lake build` for proof changes and the relevant CLI or desktop suites for
+affected consumers. The named intentionally red specification layers above
+retain their own validation and integration constraints.
+
+In worktrees, select `PROFILE=fast-dev` for Make recipes or `--profile fast-dev`
+for direct Cargo build/test commands. Read recipe and feature names from the
+Makefile and owning manifests rather than inventing an equivalent command.
+Instruction-only edits need content, reference and discovery checks; workflow-only
+edits need their affected workflow/control checks. Neither alone requires a
+runtime rebuild or the native implementation gates.
