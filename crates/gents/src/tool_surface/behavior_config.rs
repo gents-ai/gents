@@ -1,6 +1,6 @@
+use crate::tool_surface::ToolSurfaceError;
 use rapidhash::RapidHashSet;
 
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 
 use crate::toolset::ToolSet;
@@ -16,6 +16,8 @@ use super::selection::{
 };
 use super::ToolSurface;
 use crate::document_config::{QueryToolDecl, WriteToolDecl};
+
+type Result<T, E = ToolSurfaceError> = std::result::Result<T, E>;
 
 #[derive(Clone)]
 pub struct AgentToolSurfaceConfig {
@@ -277,23 +279,20 @@ impl AgentToolSurfaceConfig {
         if !required_mcp_service_ids.is_empty() && !static_policy.meta {
             return Err(super::ToolSurfaceError::McpServicesRequireMeta {
                 agent_name: agent_name.to_owned(),
-            }
-            .into());
+            });
         }
         for service_id in &required_mcp_service_ids {
             if !static_policy.mcp_services.permits(service_id) {
                 return Err(super::ToolSurfaceError::McpServiceDenied {
                     agent_name: agent_name.to_owned(),
                     service_id: service_id.clone(),
-                }
-                .into());
+                });
             }
             if !effective_allowed_mcp_service_ids.contains(service_id) {
                 return Err(super::ToolSurfaceError::McpServiceNotAllowlisted {
                     agent_name: agent_name.to_owned(),
                     service_id: service_id.clone(),
-                }
-                .into());
+                });
             }
         }
 
@@ -333,8 +332,7 @@ impl AgentToolSurfaceConfig {
                 return Err(super::ToolSurfaceError::BackgroundableToolUnregistered {
                     agent_name: agent_name.to_owned(),
                     name: name.to_owned(),
-                }
-                .into());
+                });
             }
         }
 
@@ -497,8 +495,7 @@ impl AgentToolSurfaceConfig {
             if !missing.is_empty() {
                 return Err(super::ToolSurfaceError::McpServicesUnmeasured {
                     services: missing.join(", "),
-                }
-                .into());
+                });
             }
         }
         let availability = RuntimeToolAvailability::from_online_mcp_services(available_service_ids);

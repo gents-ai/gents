@@ -12,7 +12,7 @@ use crate::tool_call_lifecycle::FailureClass;
 use crate::toolset::{CommandPolicyDenial, DenialReason};
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum CommandError {
+pub enum CommandError {
     #[cfg(test)]
     #[error("artifact_write requires macOS sandbox-exec enforcement")]
     ArtifactSandboxUnavailable,

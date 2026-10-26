@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -38,7 +37,77 @@ pub enum BackgroundCompletionError {
     NonNotificationReceipt,
     #[error("wake receipt contains duplicate notification keys")]
     DuplicateReceiptKey,
+    #[error("parent AgentRequest {parent_request_id} not found")]
+    ParentAgentRequestNotFound { parent_request_id: String },
+    #[error("background completion parent session mismatch")]
+    BackgroundCompletionParentSessionMismatch,
+    #[error("background tool notification requires one exact physical lifecycle row")]
+    BackgroundToolNotificationRequiresOneExact,
+    #[error("background completion tool row {tool_call_doc_id} not found")]
+    BackgroundCompletionToolRowNotFound { tool_call_doc_id: String },
+    #[error(
+        "background completion tool row {tool_call_doc_id} is not awaiting terminal side effects"
+    )]
+    BackgroundCompletionToolRowNotAwaiting { tool_call_doc_id: String },
+    #[error("background tool notification lifecycle omitted tool_call_id")]
+    BackgroundToolNotificationLifecycleOmittedTool,
+    #[error("background notification requires its canonical provenance")]
+    BackgroundNotificationRequiresCanonicalProvenance,
+    #[error("background completion subscription channel closed")]
+    BackgroundCompletionSubscriptionChannelClosed,
+    #[error("canonical notification key {message_key} is ambiguous")]
+    CanonicalNotificationKeyAmbiguous { message_key: String },
+    #[error("canonical notification key matched a row without _docID")]
+    CanonicalNotificationKeyMatchedRowWithout,
+    #[error(transparent)]
+    ConfigClient(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    GraphqlResponse(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    QueryRows(#[from] crate::background_tools::QueryRowsError),
+    #[error(transparent)]
+    Recovery(#[from] crate::lifecycle::RecoveryError),
+    #[error(transparent)]
+    RequestBinding(#[from] crate::request_binding::RequestBindingError),
+    #[error(transparent)]
+    SessionMessage(Box<crate::session_message::SessionMessageError>),
+    #[error(transparent)]
+    SubscriptionSource(#[from] crate::trigger_engine::subscription_source::SubscriptionSourceError),
+    #[error(transparent)]
+    ToolCallQuery(#[from] crate::tool_call_lifecycle::query::ToolCallQueryError),
+    #[error(transparent)]
+    Lifecycle(Box<crate::lifecycle::LifecycleError>),
+    #[error(transparent)]
+    Queue(Box<crate::lifecycle::QueueError>),
+    #[error(transparent)]
+    Transition(#[from] crate::tool_call_lifecycle::TransitionError),
+    #[error("session-message row lacks physical identity")]
+    SessionMessageRowLacksPhysicalIdentity,
+    #[error("caused request lacks physical identity")]
+    CausedRequestLacksPhysicalIdentity,
+    #[error(transparent)]
+    PeriodicRecovery(#[from] crate::periodic_recovery::PeriodicRecoveryError),
 }
+
+impl From<crate::lifecycle::QueueError> for BackgroundCompletionError {
+    fn from(error: crate::lifecycle::QueueError) -> Self {
+        Self::Queue(Box::new(error))
+    }
+}
+
+impl From<crate::lifecycle::LifecycleError> for BackgroundCompletionError {
+    fn from(error: crate::lifecycle::LifecycleError) -> Self {
+        Self::Lifecycle(Box::new(error))
+    }
+}
+
+impl From<crate::session_message::SessionMessageError> for BackgroundCompletionError {
+    fn from(error: crate::session_message::SessionMessageError) -> Self {
+        Self::SessionMessage(Box::new(error))
+    }
+}
+
+type Result<T, E = BackgroundCompletionError> = std::result::Result<T, E>;
 
 pub(crate) fn notification_receipt_keys(
     encoded: &str,

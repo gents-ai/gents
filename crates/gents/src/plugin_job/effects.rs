@@ -1,12 +1,12 @@
 //! Pre-commit scratch files and slot interrupts. `admit_scratch` is Lean
 //! `scratchAdmitted`; `write_scratch` admits each file through it.
 
+use crate::plugin_job::origin::PluginJobError;
 use gents_protocol::error_chain::ErrorChain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::job::{JobEffects, JobScratch, JobSpawn};
 use gents_protocol::request_admission::AgentRequestCreate;
@@ -18,6 +18,8 @@ use crate::lifecycle::{
 use crate::plugin_job::admit::{StepChild, StepContext, StepRow};
 use crate::plugin_job::keys::{job_message_key, job_session_id, job_spawn_key};
 use crate::session_origin::SessionScope;
+
+type Result<T, E = PluginJobError> = std::result::Result<T, E>;
 
 const SCRATCH_MAX_BYTES: u64 = 1_048_576;
 const SCRATCH_MAX_FILES: u32 = 32;
@@ -46,7 +48,7 @@ pub(super) fn scratch_name(name: &str) -> bool {
 }
 
 pub fn write_scratch(cwd: &Path, tool_call_id: &str, files: &[JobScratch]) -> Result<()> {
-    let cwd_str = cwd.to_str().context("cwd is not utf-8")?;
+    let cwd_str = cwd.to_str().ok_or(PluginJobError::CwdNotUtf)?;
     for file in files {
         let dir = cwd.join(".gents/workflows/runs").join(tool_call_id);
         let count = distinct_count(&dir, &file.name);
@@ -59,7 +61,7 @@ pub fn write_scratch(cwd: &Path, tool_call_id: &str, files: &[JobScratch]) -> Re
             size,
             count,
         )
-        .context("scratch file refused")?;
+        .ok_or(PluginJobError::ScratchFileRefused)?;
         let path = PathBuf::from(&path);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -118,7 +120,7 @@ pub async fn interrupt_slots(
         if let Some(reason) =
             crate::session_message::interrupt_refusal(node, caller, target).await?
         {
-            anyhow::bail!(reason);
+            return Err(PluginJobError::InterruptRefused { reason });
         }
         crate::session_message::interrupt_session(node, target).await?;
     }
@@ -157,8 +159,8 @@ pub(crate) async fn stage_recorded_effects_in_txn(
     let mut issued = BTreeMap::<(String, u32), u32>::new();
     for message in &effects.message {
         let (slot, attempt, target, admitted) = {
-            let child =
-                latest(job.row, &message.slot).context("no admitted attempt for message slot")?;
+            let child = latest(job.row, &message.slot)
+                .ok_or(PluginJobError::NoAdmittedAttemptMessageSlot)?;
             (
                 child.slot.clone(),
                 child.attempt,
@@ -197,7 +199,7 @@ pub(crate) async fn stage_recorded_effects_in_txn(
 pub(crate) async fn recover_step_commit(
     node: &std::sync::Arc<EmbeddedNode>,
     identity: Option<identity::Did>,
-    commit_error: anyhow::Error,
+    commit_error: PluginJobError,
     staged: &[AgentRequestCreate],
 ) -> Result<()> {
     let recovery = crate::config_client::ConfigAccess::transact_local_readonly(
@@ -207,11 +209,18 @@ pub(crate) async fn recover_step_commit(
         move |txn| {
             Box::pin(async move {
                 for create in staged {
-                    let retry_key = create.retry_key.as_deref().context("staged request lacks a retry_key")?;
+                    let retry_key = create
+                        .retry_key
+                        .as_deref()
+                        .ok_or(PluginJobError::StagedRequestLacksRetryKey)?;
                     match one_request(txn, retry_key).await? {
                         None => return Ok(false),
                         Some(existing) if same_fingerprint(&existing, create) => {}
-                        Some(_) => bail!("job staging integrity error: retry key {retry_key} does not match the staged request"),
+                        Some(_) => {
+                            return Err(PluginJobError::JobStagingIntegrityErrorRetryKey {
+                                retry_key: retry_key.to_string(),
+                            })
+                        }
                     }
                 }
                 Ok(!staged.is_empty())
@@ -222,11 +231,10 @@ pub(crate) async fn recover_step_commit(
     match recovery {
         Ok(true) => Ok(()),
         Ok(false) => Err(commit_error),
-        Err(recovery_error) => Err(anyhow::anyhow!(
-            "job step recovery failed after ambiguous commit: {}; original commit error: {}",
-            ErrorChain(recovery_error.as_ref()),
-            ErrorChain(commit_error.as_ref())
-        )),
+        Err(recovery_error) => Err(PluginJobError::JobStepRecoveryFailedAfterAmbiguous {
+            detail: ErrorChain(&recovery_error).to_string(),
+            detail2: ErrorChain(&commit_error).to_string(),
+        }),
     }
 }
 
@@ -251,7 +259,7 @@ async fn stage_spawn(
         .iter()
         .find(|(pair, _)| pair.1 == spawn.target)
         .map(|(pair, hop)| (pair.0.clone(), pair.1.clone(), *hop))
-        .context("spawn target is not in target_hops")?;
+        .ok_or(PluginJobError::SpawnTargetNotTargetHops)?;
     let hop = next_request_hop(
         RequestHopCause::CrossSession {
             cause_hop: job.row.caller_hop,
@@ -368,7 +376,9 @@ async fn stage_request(
         if same_fingerprint(&existing, &create) {
             return Ok(create);
         }
-        bail!("job staging integrity error: retry key {retry_key} does not match the admitted request");
+        return Err(PluginJobError::JobStagingIntegrityErrorRetryKey2 {
+            retry_key: retry_key.to_string(),
+        });
     }
     let plan = crate::session_message::Plan::request(session_id, hop, create.clone());
     crate::session_message::stage_planned_write_in_txn(txn, cause, &plan).await?;
@@ -395,16 +405,17 @@ async fn one_request(
         .and_then(serde_json::Value::as_array)
         .cloned()
         .unwrap_or_default();
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "job staging integrity error: retry key {retry_key} is not unique"
-    );
+    if rows.len() > 1 {
+        return Err(PluginJobError::JobStagingIntegrityErrorRetryKey3 {
+            retry_key: retry_key.to_string(),
+        });
+    }
     let stored: Option<StoredRequest> = rows
         .into_iter()
         .next()
         .map(serde_json::from_value)
         .transpose()
-        .context("decoding job request fingerprint")?;
+        .map_err(PluginJobError::DecodingJobRequestFingerprint)?;
     if let Some(stored) = &stored {
         crate::request_admission::verify_request_receipt_signature(stored)?;
     }
@@ -569,7 +580,7 @@ mod tests {
                 let response = txn
                     .execute_with_variables(&query, &json!({ "input": value }))
                     .await?;
-                Ok::<_, anyhow::Error>(gents_protocol::graphql::extract_mutation_doc_id(&response, collection)?)
+                Ok::<_, PluginJobError>(gents_protocol::graphql::extract_mutation_doc_id(&response, collection)?)
             })
         })
         .await
@@ -853,7 +864,7 @@ mod tests {
         fresh: &[JobSpawn],
         effects: &JobEffects,
         row: &StepRow,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let fresh_refs: Vec<&JobSpawn> = fresh.iter().collect();
         let job = super::JobContext {
             ctx: &harness.ctx,
@@ -987,7 +998,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let lost = || anyhow::anyhow!("commit acknowledgement lost");
+        let lost = || PluginJobError::CommitAcknowledgementLost;
         super::recover_step_commit(&harness.node, None, lost(), &staged)
             .await
             .unwrap();

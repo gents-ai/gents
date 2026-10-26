@@ -79,7 +79,7 @@ pub enum HookError {
     #[error("active AgentRequest {request_id} not found")]
     ActiveRequestNotFound { request_id: String },
     #[error(transparent)]
-    Session(#[from] crate::session::SessionError),
+    Session(Box<crate::session::SessionError>),
     #[error(transparent)]
     RequestBinding(#[from] crate::request_binding::RequestBindingError),
     #[error(transparent)]
@@ -114,7 +114,132 @@ pub enum HookError {
     PluginEffectSettlement { message: String },
     #[error("foreground request already stopped")]
     ForegroundStopped,
+    #[error("request deadline expired before steering intake")]
+    RequestDeadlineExpiredBeforeSteeringIntake,
+    #[error("{tool_call_id} is a {tool_name} call; its result arrives only as a completion message, so wait_process does not wait on it")]
+    CallResultArrivesOnlyCompletionMessage {
+        tool_call_id: String,
+        tool_name: String,
+    },
+    #[error("background result requires physical tool identity")]
+    BackgroundResultRequiresPhysicalToolIdentity,
+    #[error("spawned background result requires request identity")]
+    SpawnedBackgroundResultRequiresRequestIdentity,
+    #[error("admission rejection must carry a failed outcome")]
+    AdmissionRejectionMustCarryFailedOutcome,
+    #[error("running spawn_process parent lacks physical identity")]
+    RunningSpawnProcessParentLacksPhysical,
+    #[error("spawned admission returned an unexpected stable process handle")]
+    SpawnedAdmissionReturnedUnexpectedStableProcess,
+    #[error("spawned background lifecycle lacks physical identity")]
+    SpawnedBackgroundLifecycleLacksPhysicalIdentity,
+    #[error("wait_process lifecycle was terminalized while its observation failed")]
+    WaitProcessLifecycleWasTerminalizedWhile,
+    #[error("wait_process lifecycle was terminalized before observation completion")]
+    WaitProcessLifecycleWasTerminalizedBefore,
+    #[error("serialize list_background_tools response: {error}")]
+    SerializeListBackgroundToolsResponse { error: String },
+    #[error("serialize read_tool_output response: {error}")]
+    SerializeReadToolOutputResponse { error: String },
+    #[error("background lifetime exceeds the representable range")]
+    BackgroundLifetimeExceedsRepresentableRange(#[source] chrono::OutOfRangeError),
+    #[error("lost terminal compare requires physical tool identity")]
+    LostTerminalCompareRequiresPhysicalTool,
+    #[error("wait timeout exceeds the representable range")]
+    WaitTimeoutExceedsRepresentableRange(#[source] chrono::OutOfRangeError),
+    #[error("agent_resume cannot verify plugin execution settlement because the runtime job owner is unavailable; retry after runtime recovery")]
+    AgentResumeCannotVerifyPluginExecution,
+    #[error("session-message dispatch lacks its calling request document")]
+    SessionMessageDispatchLacksCallingRequest,
+    #[error("session-message calling request disappeared")]
+    SessionMessageCallingRequestDisappeared,
+    #[error("session-message dispatch lacks its physical row")]
+    SessionMessageDispatchLacksPhysicalRow,
+    #[error("agents tool call lacks its calling request document")]
+    AgentsToolCallLacksCallingRequest,
+    #[error("agents tool calling request disappeared")]
+    AgentsToolCallingRequestDisappeared,
+    #[error(transparent)]
+    BackgroundToolsError(Box<crate::background_tools::BackgroundToolsError>),
+    #[error(transparent)]
+    Interrupt(Box<crate::interrupt::InterruptError>),
+    #[error(transparent)]
+    SubscriptionSource(#[from] crate::trigger_engine::subscription_source::SubscriptionSourceError),
+    #[error(transparent)]
+    Queue(Box<crate::lifecycle::QueueError>),
+    #[error(transparent)]
+    AdmissionCause(#[from] crate::request_admission::AdmissionCause),
+    #[error(transparent)]
+    Delivery(Box<crate::tool_call_lifecycle::delivery::DeliveryError>),
+    #[error(transparent)]
+    SessionControl(#[from] crate::session::SessionControlError),
+    #[error(transparent)]
+    SessionMessage(#[from] crate::session_message::SessionMessageError),
+    #[error(transparent)]
+    ToolCallRecovery(#[from] crate::tool_call_lifecycle::ToolCallRecoveryError),
+    #[error(transparent)]
+    ToolOutput(#[from] crate::tool_output::ToolOutputError),
+    #[error(transparent)]
+    DocumentConfig(Box<crate::document_config::DocumentConfigError>),
+    #[error(transparent)]
+    Goal(Box<crate::goal::GoalError>),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    OutputObligation(#[from] crate::agent::output_obligation::OutputObligationError),
+    #[error(transparent)]
+    PluginJob(Box<crate::plugin_job::origin::PluginJobError>),
 }
+
+impl From<crate::document_config::DocumentConfigError> for HookError {
+    fn from(error: crate::document_config::DocumentConfigError) -> Self {
+        Self::DocumentConfig(Box::new(error))
+    }
+}
+
+impl From<crate::session::SessionError> for HookError {
+    fn from(error: crate::session::SessionError) -> Self {
+        Self::Session(Box::new(error))
+    }
+}
+
+impl From<crate::goal::GoalError> for HookError {
+    fn from(error: crate::goal::GoalError) -> Self {
+        Self::Goal(Box::new(error))
+    }
+}
+
+impl From<crate::plugin_job::origin::PluginJobError> for HookError {
+    fn from(error: crate::plugin_job::origin::PluginJobError) -> Self {
+        Self::PluginJob(Box::new(error))
+    }
+}
+
+impl From<crate::tool_call_lifecycle::delivery::DeliveryError> for HookError {
+    fn from(error: crate::tool_call_lifecycle::delivery::DeliveryError) -> Self {
+        Self::Delivery(Box::new(error))
+    }
+}
+
+impl From<crate::lifecycle::QueueError> for HookError {
+    fn from(error: crate::lifecycle::QueueError) -> Self {
+        Self::Queue(Box::new(error))
+    }
+}
+
+impl From<crate::interrupt::InterruptError> for HookError {
+    fn from(error: crate::interrupt::InterruptError) -> Self {
+        Self::Interrupt(Box::new(error))
+    }
+}
+
+impl From<crate::background_tools::BackgroundToolsError> for HookError {
+    fn from(error: crate::background_tools::BackgroundToolsError) -> Self {
+        Self::BackgroundToolsError(Box::new(error))
+    }
+}
+
+type Result<T, E = HookError> = std::result::Result<T, E>;
 
 impl From<crate::tool_call_lifecycle::TransitionError> for HookError {
     fn from(error: crate::tool_call_lifecycle::TransitionError) -> Self {
@@ -1225,14 +1350,14 @@ impl gents_loop::session_hook::CanonicalSessionHook<crate::streaming::AcceptedTo
     async fn adopt_accepted_tool_calls(
         &self,
         calls: Vec<(String, crate::streaming::AcceptedToolCall)>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         Ok(DefraSessionHook::adopt_accepted_tool_calls(self, calls).await?)
     }
 }
 
 #[async_trait::async_trait]
 impl gents_loop::session_hook::SessionHook for DefraSessionHook {
-    type Error = anyhow::Error;
+    type Error = HookError;
 
     async fn run_foreground_tool(
         &self,
@@ -1370,19 +1495,16 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         result.map_err(|error| format!("cannot settle plugin effect: {}", ErrorChain(&error)))
     }
 
-    async fn pending_steering_inputs(
-        &self,
-    ) -> anyhow::Result<Vec<gents_loop::loop_stream::FoldedPrompt>> {
+    async fn pending_steering_inputs(&self) -> Result<Vec<gents_loop::loop_stream::FoldedPrompt>> {
         let Some(source) = self.steering_input_source.as_ref() else {
             return Ok(Vec::new());
         };
-        anyhow::ensure!(
-            crate::lifecycle::RequestLifecycle::input_publication_before_deadline(
-                Utc::now(),
-                self.state.lock().await.request_deadline_at,
-            ),
-            "request deadline expired before steering intake"
-        );
+        if !(crate::lifecycle::RequestLifecycle::input_publication_before_deadline(
+            Utc::now(),
+            self.state.lock().await.request_deadline_at,
+        )) {
+            return Err(HookError::RequestDeadlineExpiredBeforeSteeringIntake);
+        }
         Ok(
             crate::lifecycle::queue::steering_inputs(&self.node, &source.request, &source.verifier)
                 .await?,
@@ -1391,7 +1513,7 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
 
     async fn finish_steering_snapshot(
         &self,
-    ) -> anyhow::Result<Option<gents_loop::loop_stream::SteeringSnapshot>> {
+    ) -> Result<Option<gents_loop::loop_stream::SteeringSnapshot>> {
         let Some(source) = self
             .steering_input_source
             .as_ref()
@@ -1399,13 +1521,12 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         else {
             return Ok(None);
         };
-        anyhow::ensure!(
-            crate::lifecycle::RequestLifecycle::input_publication_before_deadline(
-                Utc::now(),
-                self.state.lock().await.request_deadline_at,
-            ),
-            "request deadline expired before steering intake"
-        );
+        if !(crate::lifecycle::RequestLifecycle::input_publication_before_deadline(
+            Utc::now(),
+            self.state.lock().await.request_deadline_at,
+        )) {
+            return Err(HookError::RequestDeadlineExpiredBeforeSteeringIntake);
+        }
         Ok(Some(
             crate::lifecycle::queue::steering_snapshot(
                 &self.node,

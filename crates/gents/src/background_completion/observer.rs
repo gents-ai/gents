@@ -66,7 +66,7 @@ impl BackgroundCompletionObserver {
                 batch = self.subscription.recv() => {
                     match batch {
                         Some(batch) => batch,
-                        None => anyhow::bail!("background completion subscription channel closed"),
+                        None => return Err(BackgroundCompletionError::BackgroundCompletionSubscriptionChannelClosed),
                     }
                 }
             };
@@ -91,7 +91,7 @@ impl BackgroundCompletionObserver {
                 {
                     tracing::warn!(
                         request_doc_id = %change.doc_id,
-                        error = %ErrorChain(error.as_ref()),
+                        error = %ErrorChain(&error),
                         "session-message settlement from a request update failed; the periodic scan retries"
                     );
                 }
@@ -105,7 +105,7 @@ impl BackgroundCompletionObserver {
                 {
                     tracing::warn!(
                         request_doc_id = %change.doc_id,
-                        error = %ErrorChain(error.as_ref()),
+                        error = %ErrorChain(&error),
                         "job wake from a request update failed"
                     );
                 }
@@ -159,7 +159,7 @@ impl BackgroundCompletionObserver {
             Ok(0) => {}
             Ok(ticked) => tracing::debug!(ticked, "plugin job recovery sweep ticked running jobs"),
             Err(error) => {
-                tracing::warn!(error = %ErrorChain(error.as_ref()), "plugin job recovery sweep failed; will retry");
+                tracing::warn!(error = %ErrorChain(&error), "plugin job recovery sweep failed; will retry");
             }
         }
         let wake_redrive =

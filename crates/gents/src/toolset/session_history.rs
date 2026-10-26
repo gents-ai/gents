@@ -1,3 +1,4 @@
+use crate::config_client::ConfigClientError;
 use gents_protocol::error_chain::ErrorChain;
 use rapidhash::RapidHashSet;
 use std::collections::{BTreeMap, BTreeSet};
@@ -9,7 +10,6 @@ pub use context_details::{load_session_context_details, SessionContextDetails};
 
 use crate::llm::tool::ToolDefinition;
 use crate::llm::tool::{Tool, ToolDyn};
-use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -170,12 +170,12 @@ pub async fn load_request_context_observation(
     session_id: &str,
     request_id: &str,
 ) -> Result<Option<RequestContextObservation>> {
-    anyhow::ensure!(
-        !node_did.trim().is_empty()
-            && !session_id.trim().is_empty()
-            && !request_id.trim().is_empty(),
-        "request accounting requires a node, session, and request"
-    );
+    if !(!node_did.trim().is_empty()
+        && !session_id.trim().is_empty()
+        && !request_id.trim().is_empty())
+    {
+        return Err(SessionHistoryError::RequestAccountingRequiresNodeSessionRequest);
+    }
     let requester = requester_did
         .map(|did| format!(r#""{}""#, escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
@@ -188,12 +188,12 @@ pub async fn load_request_context_observation(
             .as_ref()
             .and_then(|v| v.get("AgentRequest"))
             .cloned()
-            .context("missing context owner rows")?,
+            .ok_or(SessionHistoryError::MissingContextOwnerRows)?,
     )?;
     let owner = match requests.as_slice() {
         [] => return Ok(None),
         [owner] => owner,
-        _ => bail!("ambiguous context request identity"),
+        _ => return Err(SessionHistoryError::AmbiguousContextRequestIdentity),
     };
     load_pinned_request_context_observation(node, owner).await
 }
@@ -206,17 +206,17 @@ pub async fn load_pinned_request_context_observation(
         .node_did
         .as_deref()
         .filter(|id| !id.is_empty())
-        .context("context request lacks node")?;
-    anyhow::ensure!(
-        owner.session_id.as_deref().is_some_and(|id| !id.is_empty())
-            && !owner.request_id.is_empty(),
-        "context request lacks session or request identity"
-    );
+        .ok_or(SessionHistoryError::ContextRequestLacksNode)?;
+    if !(owner.session_id.as_deref().is_some_and(|id| !id.is_empty())
+        && !owner.request_id.is_empty())
+    {
+        return Err(SessionHistoryError::ContextRequestLacksSessionRequestIdentity);
+    }
     let doc = owner
         .doc_id
         .as_deref()
         .filter(|id| !id.is_empty())
-        .context("context request lacks physical identity")?;
+        .ok_or(SessionHistoryError::ContextRequestLacksPhysicalIdentity)?;
     let scope = crate::session::session_scope_filter(
         node_did,
         owner.session_id.as_deref().unwrap(),
@@ -228,11 +228,11 @@ pub async fn load_pinned_request_context_observation(
         .as_ref()
         .and_then(|data| data.get("AgentRequest"))
         .and_then(Value::as_array)
-        .context("missing physical context owner rows")?;
+        .ok_or(SessionHistoryError::MissingPhysicalContextOwnerRows)?;
     match rows.as_slice() {
         [] => return Ok(None),
         [row] if row["_docID"].as_str() == Some(doc) => {}
-        _ => bail!("invalid physical context request identity"),
+        _ => return Err(SessionHistoryError::InvalidPhysicalContextRequestIdentity),
     }
     let response = graphql_with_transaction_retry(
         node,
@@ -315,10 +315,9 @@ pub async fn load_session_request_doc_ids(
     requester_did: Option<&str>,
     session_id: &str,
 ) -> Result<BTreeMap<String, String>> {
-    anyhow::ensure!(
-        !node_did.trim().is_empty() && !session_id.trim().is_empty(),
-        "session request selection requires a node and session"
-    );
+    if !(!node_did.trim().is_empty() && !session_id.trim().is_empty()) {
+        return Err(SessionHistoryError::SessionRequestSelectionRequiresNodeSession);
+    }
     let requester = requester_did
         .map(|did| format!(r#""{}""#, escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
@@ -334,20 +333,20 @@ pub async fn load_session_request_doc_ids(
             escape_graphql_string(session_id.trim())
         ))
         .await
-        .context("session accounting ownership")?;
+        .map_err(SessionHistoryError::SessionAccountingOwnership)?;
     let requests: Vec<PhysicalRequestDocIdRow> = serde_json::from_value(
         data.pointer("/data/AgentRequest")
             .cloned()
-            .context("missing accounting request rows")?,
+            .ok_or(SessionHistoryError::MissingAccountingRequestRows)?,
     )?;
     requests
         .into_iter()
         .map(|request| {
             Ok((
                 clean(request.doc_id.as_ref())
-                    .context("accounting request lacks physical identity")?,
+                    .ok_or(SessionHistoryError::AccountingRequestLacksPhysicalIdentity)?,
                 clean(request.request_id.as_ref())
-                    .context("accounting request lacks logical identity")?,
+                    .ok_or(SessionHistoryError::AccountingRequestLacksLogicalIdentity)?,
             ))
         })
         .collect()
@@ -580,28 +579,245 @@ struct ProfileDetailRow {
 
 /// Messages are model-facing: each names the next call, so keep them stable.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum SessionHistoryError {
+pub enum SessionHistoryError {
     #[error("search requires query; filter.text matches only titles and IDs; next call: sessions {next}")]
     MissingSearchQuery { next: Value },
+    #[error("request accounting requires a node, session, and request")]
+    RequestAccountingRequiresNodeSessionRequest,
+    #[error("ambiguous context request identity")]
+    AmbiguousContextRequestIdentity,
+    #[error("context request lacks session or request identity")]
+    ContextRequestLacksSessionRequestIdentity,
+    #[error("invalid physical context request identity")]
+    InvalidPhysicalContextRequestIdentity,
+    #[error("session request selection requires a node and session")]
+    SessionRequestSelectionRequiresNodeSession,
+    #[error("unsupported sessions action; next call: sessions {{\"action\":\"help\"}}")]
+    UnsupportedSessionsActionNextCallSessions,
+    #[error("{detail}; next call: sessions {{\"action\":\"help\"}}")]
+    NextCallSessions { detail: String },
+    #[error("session history requires a node DID")]
+    SessionHistoryRequiresNodeDID,
+    #[error("sessions get requires a running node DID and non-empty session_id")]
+    SessionsGetRequiresRunningNodeDID,
+    #[error("session '{session_id}' has no requests owned by this agent")]
+    SessionHasNoRequestsOwnedAgent { session_id: String },
+    #[error("session investigation contains a request without a physical document ID")]
+    SessionInvestigationContainsRequestWithoutPhysical,
+    #[error("session investigation requires one canonical AgentSession")]
+    SessionInvestigationRequiresOneCanonicalAgentSession,
+    #[error("{label} timestamp contains only whitespace")]
+    TimestampContainsOnlyWhitespace { label: String },
+    #[error("missing context owner rows")]
+    MissingContextOwnerRows,
+    #[error("context request lacks node")]
+    ContextRequestLacksNode,
+    #[error("context request lacks physical identity")]
+    ContextRequestLacksPhysicalIdentity,
+    #[error("missing physical context owner rows")]
+    MissingPhysicalContextOwnerRows,
+    #[error("session accounting ownership")]
+    SessionAccountingOwnership(#[source] ConfigClientError),
+    #[error("missing accounting request rows")]
+    MissingAccountingRequestRows,
+    #[error("accounting request lacks physical identity")]
+    AccountingRequestLacksPhysicalIdentity,
+    #[error("accounting request lacks logical identity")]
+    AccountingRequestLacksLogicalIdentity,
+    #[error("serialize sessions result")]
+    SerializeSessionsResult(#[source] serde_json::Error),
+    #[error("canonical AgentSession is missing agent_id")]
+    CanonicalAgentSessionMissingAgentId,
+    #[error("decoding turn coordinate for call {call_id}")]
+    DecodingTurnCoordinateCall {
+        call_id: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("decoding context accounting for call {call_id}")]
+    DecodingContextAccountingCall {
+        call_id: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("{label} timestamp is not RFC3339")]
+    TimestampNotRFC3339 {
+        label: String,
+        #[source]
+        source: chrono::ParseError,
+    },
+    #[error("{label} query response missing object data")]
+    QueryResponseMissingObjectData { label: String },
+    #[error("decoding {label} query response")]
+    DecodingQueryResponse {
+        label: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("unknown help topic; next call: sessions {{\"action\":\"help\"}}")]
+    UnknownHelpTopicNextCallSessions,
+    #[error("invalid status '{status}'; next call: sessions {{\"action\":\"help\"}}")]
+    InvalidStatusNextCallSessions { status: String },
+    #[error("sessions query failed: {detail}")]
+    SessionsQueryFailed { detail: String },
+    #[error("sessions requires the running node; next call: sessions {{\"action\":\"help\"}}")]
+    SessionsRequiresRunningNodeNextCall,
+    #[error("limit must be 1 through 100; next call: sessions {{\"action\":\"help\"}}")]
+    LimitMustThroughNextCallSessions,
+    #[error("count does not accept cursor; next call: sessions {{\"action\":\"count\"}}")]
+    CountDoesNotAcceptCursorNext,
+    #[error("session is unavailable or ambiguous under ACP; next call: sessions {{\"action\":\"list\"}}")]
+    SessionUnavailableAmbiguousUnderACPNext,
+    #[error("no tool call with call_id {key} in session {session_id}; next call: sessions {transcript_call}")]
+    NoToolCallCallIdSession {
+        key: String,
+        session_id: String,
+        transcript_call: String,
+    },
+    #[error("call_id {key} names {docs_len} tool calls in session {session_id}: {detail}; next call: sessions {detail2}")]
+    CallIdNamesToolCallsSession {
+        key: String,
+        docs_len: String,
+        session_id: String,
+        detail: String,
+        detail2: String,
+    },
+    #[error(
+        "output requires call_id; next call: sessions {{\"action\":\"help\",\"topic\":\"output\"}}"
+    )]
+    OutputRequiresCallIdNextCall,
+    #[error("{detail}; next call: sessions {transcript_call}")]
+    NextCallSessions2 {
+        detail: String,
+        transcript_call: String,
+    },
+    #[error("tool call {tool_call_doc_id} has no delivered output yet (state {lifecycle_state}); next call: sessions {next}")]
+    ToolCallHasNoDeliveredOutput {
+        tool_call_doc_id: String,
+        lifecycle_state: String,
+        next: String,
+    },
+    #[error("tool call {tool_call_doc_id} has no single text output to page; next call: sessions {transcript_call}")]
+    ToolCallHasNoSingleText {
+        tool_call_doc_id: String,
+        transcript_call: String,
+    },
+    #[error("{reason}; next call: sessions {next}")]
+    NextCallSessions3 { reason: String, next: String },
+    #[error("sessions response omitted {collection}")]
+    SessionsResponseOmitted { collection: String },
+    #[error("sessions requires a valid running DID")]
+    SessionsRequiresValidRunningDID(#[source] ::identity::Error),
+    #[error("session_id required; next call: sessions {{\"action\":\"list\"}}")]
+    SessionIdRequiredNextCallSessions,
+    #[error("session node DID missing")]
+    SessionNodeDIDMissing,
+    #[error("request has no physical ID")]
+    RequestHasNoPhysicalID,
+    #[error("invalid cursor; next call: sessions {{\"action\":\"list\"}}")]
+    InvalidCursorNextCallSessions(#[source] serde_json::Error),
+    #[error("sessions exact aggregate count missing")]
+    SessionsExactAggregateCountMissing,
+    #[error("session has no creation time")]
+    SessionHasNoCreationTime,
+    #[error("session has no ID")]
+    SessionHasNoID,
+    #[error(
+        "output needs session_id outside a session; next call: sessions {{\"action\":\"list\"}}"
+    )]
+    OutputNeedsSessionIdOutsideSession,
+    #[error("invalid transcript cursor; next call: sessions {{\"action\":\"transcript\",\"session_id\":\"<ID>\"}}")]
+    InvalidTranscriptCursorNextCallSessions(#[source] serde_json::Error),
+    #[error("header has no physical ID")]
+    HeaderHasNoPhysicalID,
+    #[error("session ID missing")]
+    SessionIDMissing,
+    #[error("header ID missing")]
+    HeaderIDMissing,
+    #[error("message has no sequence")]
+    MessageHasNoSequence,
+    #[error("ACP session fixture creation failed: {value}")]
+    ACPSessionFixtureCreationFailed { value: String },
+    #[error("context details require an exact session scope")]
+    ContextDetailsRequireExactSessionScope,
+    #[error("missing context detail owners")]
+    MissingContextDetailOwners,
+    #[error("context detail owner lacks physical identity")]
+    ContextDetailOwnerLacksPhysicalIdentity,
+    #[error("missing context detail captures")]
+    MissingContextDetailCaptures,
+    #[error("missing capture provenance")]
+    MissingCaptureProvenance,
+    #[error("missing captured provider request")]
+    MissingCapturedProviderRequest,
+    #[error("captured chat messages are not an array")]
+    CapturedChatMessagesNotArray,
+    #[error("captured tool calls are not an array")]
+    CapturedToolCallsNotArray,
+    #[error("system estimate exceeds captured message accounting")]
+    SystemEstimateExceedsCapturedMessageAccounting,
+    #[error("captured tools are not an array")]
+    CapturedToolsNotArray,
+    #[error(transparent)]
+    CanonicalRows(#[from] crate::session::canonical_rows::CanonicalRowsError),
+    #[error(transparent)]
+    ConfigClient(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    SessionOutput(#[from] crate::session::SessionOutputError),
+    #[error(transparent)]
+    ProviderUsage(#[from] gents_loop::provider_usage::ProviderUsageError),
+    #[error(transparent)]
+    RenderedRequest(#[from] crate::rendered_request::RenderedRequestError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Session(Box<crate::session::SessionError>),
+    #[error(transparent)]
+    ProviderInput(#[from] gents_loop::provider_input::ProviderInputError),
 }
 
+impl From<crate::session::SessionError> for SessionHistoryError {
+    fn from(error: crate::session::SessionError) -> Self {
+        Self::Session(Box::new(error))
+    }
+}
+
+impl crate::config_client::TransactionFailure for SessionHistoryError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::SessionAccountingOwnership(error) => Some(error),
+            Self::ConfigClient(error) => Some(error),
+            Self::SessionOutput(error) => error.config_client_error(),
+            Self::RenderedRequest(error) => error.config_client_error(),
+            Self::Session(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = SessionHistoryError> = std::result::Result<T, E>;
+
 #[derive(Debug)]
-pub struct SessionHistoryToolError(anyhow::Error);
+pub struct SessionHistoryToolError(SessionHistoryError);
 
 impl std::fmt::Display for SessionHistoryToolError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", ErrorChain(self.0.as_ref()))
+        write!(f, "{}", ErrorChain(&self.0))
     }
 }
 
 impl std::error::Error for SessionHistoryToolError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(self.0.root_cause())
+        let mut root: &(dyn std::error::Error + 'static) = &self.0;
+        while let Some(source) = root.source() {
+            root = source;
+        }
+        Some(root)
     }
 }
 
-impl From<anyhow::Error> for SessionHistoryToolError {
-    fn from(error: anyhow::Error) -> Self {
+impl From<SessionHistoryError> for SessionHistoryToolError {
+    fn from(error: SessionHistoryError) -> Self {
         Self(error)
     }
 }
@@ -659,22 +875,18 @@ impl Tool for SessionHistoryTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let action = args.action.as_deref().unwrap_or("list").trim();
         if !ACTIONS.contains(&action) {
-            return Err(anyhow!(
-                "unsupported sessions action; next call: sessions {{\"action\":\"help\"}}"
-            )
-            .into());
+            return Err(SessionHistoryError::UnsupportedSessionsActionNextCallSessions.into());
         }
         let value = discovery::run(self, &args, action).await.map_err(|error| {
-            if ErrorChain(error.as_ref())
+            if ErrorChain(&error)
                 .to_string()
                 .contains("next call:")
             {
                 error
             } else {
-                anyhow!(
-                    "{}; next call: sessions {{\"action\":\"help\"}}",
-                    ErrorChain(error.as_ref())
-                )
+                SessionHistoryError::NextCallSessions {
+                    detail: ErrorChain(&error).to_string(),
+                }
             }
         })?;
         Ok(if action == "output" {
@@ -685,7 +897,7 @@ impl Tool for SessionHistoryTool {
         } else {
             serde_json::to_string(&discovery::AnswerFirst(&value))
         }
-        .context("serialize sessions result")?)
+        .map_err(SessionHistoryError::SerializeSessionsResult)?)
     }
 }
 
@@ -702,7 +914,9 @@ pub async fn load_session_history_snapshot(
     limit: Option<usize>,
 ) -> Result<SessionHistorySnapshot> {
     let agent = node_did.trim().to_owned();
-    anyhow::ensure!(!agent.is_empty(), "session history requires a node DID");
+    if agent.is_empty() {
+        return Err(SessionHistoryError::SessionHistoryRequiresNodeDID);
+    }
     crate::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
@@ -721,7 +935,9 @@ pub async fn load_session_history_snapshot_with_access(
     limit: Option<usize>,
 ) -> Result<SessionHistorySnapshot> {
     let agent = node_did.trim().to_owned();
-    anyhow::ensure!(!agent.is_empty(), "session history requires a node DID");
+    if agent.is_empty() {
+        return Err(SessionHistoryError::SessionHistoryRequiresNodeDID);
+    }
     access
         .transact_readonly("session.history", move |txn| {
             let agent = agent.clone();
@@ -793,7 +1009,7 @@ pub async fn load_session_investigation(
     let node_did = node_did.trim();
     let session_id = session_id.trim();
     if node_did.is_empty() || session_id.is_empty() {
-        bail!("sessions get requires a running node DID and non-empty session_id");
+        return Err(SessionHistoryError::SessionsGetRequiresRunningNodeDID);
     }
 
     let response = graphql_with_transaction_retry(
@@ -804,7 +1020,9 @@ pub async fn load_session_investigation(
     .await?;
     let envelope: InvestigationEnvelope = decode(response.data.as_ref(), "session investigation")?;
     if envelope.requests.is_empty() {
-        bail!("session '{session_id}' has no requests owned by this agent");
+        return Err(SessionHistoryError::SessionHasNoRequestsOwnedAgent {
+            session_id: session_id.to_string(),
+        });
     }
 
     let request_doc_ids = envelope
@@ -813,7 +1031,7 @@ pub async fn load_session_investigation(
         .filter_map(|request| clean(request.doc_id.as_ref()))
         .collect::<Vec<_>>();
     if request_doc_ids.len() != envelope.requests.len() {
-        bail!("session investigation contains a request without a physical document ID");
+        return Err(SessionHistoryError::SessionInvestigationContainsRequestWithoutPhysical);
     }
     let response = graphql_with_transaction_retry(
         node,
@@ -835,7 +1053,7 @@ pub async fn load_session_investigation(
             Err(error) => super::ParentAuditUsageObservation::Unavailable {
                 parent_request_doc_id: request.doc_id.clone(),
                 parent_request_id: request.request_id.clone(),
-                error: ErrorChain(error.as_ref()).to_string(),
+                error: ErrorChain(&error).to_string(),
             },
         };
         audit_usage.push(observation);
@@ -1015,12 +1233,11 @@ fn build_session_investigation(
     envelope: InvestigationEnvelope,
     calls: InvestigationCallsEnvelope,
 ) -> Result<SessionInvestigationSnapshot> {
-    anyhow::ensure!(
-        envelope.sessions.len() == 1,
-        "session investigation requires one canonical AgentSession"
-    );
+    if envelope.sessions.len() != 1 {
+        return Err(SessionHistoryError::SessionInvestigationRequiresOneCanonicalAgentSession);
+    }
     let agent_id = clean(envelope.sessions[0].agent_id.as_ref())
-        .context("canonical AgentSession is missing agent_id")?;
+        .ok_or(SessionHistoryError::CanonicalAgentSessionMissingAgentId)?;
     let agent = {
         envelope
             .agents
@@ -1161,8 +1378,12 @@ fn inference_turns(rows: &[InferenceDetailRow]) -> Result<Option<u64>> {
             return Ok(None);
         };
         let accounting: gents_protocol::rendered_request::ContextAccounting =
-            serde_json::from_str(encoded)
-                .with_context(|| format!("decoding turn coordinate for call {}", row.call_id))?;
+            serde_json::from_str(encoded).map_err(|source| {
+                SessionHistoryError::DecodingTurnCoordinateCall {
+                    source,
+                    call_id: row.call_id.to_string(),
+                }
+            })?;
         turns.insert((request_doc_id, accounting.turn_index));
     }
     Ok(Some(turns.len() as u64))
@@ -1262,8 +1483,12 @@ fn latest_context_from_detail_rows(
         call_id: row.call_id.clone(),
         call_sequence: row.call_seq,
         queued_at: row.queued_at.clone(),
-        accounting: serde_json::from_str(encoded)
-            .with_context(|| format!("decoding context accounting for call {}", row.call_id))?,
+        accounting: serde_json::from_str(encoded).map_err(|source| {
+                SessionHistoryError::DecodingContextAccountingCall {
+                    source,
+                call_id: row.call_id.to_string(),
+            }
+        })?,
     }))
 }
 
@@ -1373,14 +1598,19 @@ fn summary_timestamp(value: Option<&String>, label: &str) -> Result<Option<Strin
         return Ok(None);
     };
     let Some(value) = clean(Some(value)) else {
-        anyhow::ensure!(
-            value.is_empty(),
-            "{label} timestamp contains only whitespace"
-        );
+        if !value.is_empty() {
+            return Err(SessionHistoryError::TimestampContainsOnlyWhitespace {
+                label: label.to_string(),
+            });
+        }
         return Ok(None);
     };
-    chrono::DateTime::parse_from_rfc3339(&value)
-        .with_context(|| format!("{label} timestamp is not RFC3339"))?;
+    chrono::DateTime::parse_from_rfc3339(&value).map_err(|source| {
+        SessionHistoryError::TimestampNotRFC3339 {
+            source,
+            label: label.to_string(),
+        }
+    })?;
     Ok(Some(value))
 }
 
@@ -1399,8 +1629,13 @@ where
     let data = data
         .filter(|data| data.is_object())
         .cloned()
-        .with_context(|| format!("{label} query response missing object data"))?;
-    serde_json::from_value(data).with_context(|| format!("decoding {label} query response"))
+        .ok_or_else(|| SessionHistoryError::QueryResponseMissingObjectData {
+            label: label.to_string(),
+        })?;
+    serde_json::from_value(data).map_err(|source| SessionHistoryError::DecodingQueryResponse {
+        source,
+        label: label.to_string(),
+    })
 }
 
 fn build_session_rows(

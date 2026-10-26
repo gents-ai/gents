@@ -2,7 +2,6 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 use tokio::sync::Mutex;
 
@@ -62,7 +61,33 @@ pub enum StreamingError {
     ProviderStreamRewroteAcknowledged,
     #[error("provider stream structure shrank")]
     ProviderStreamShrank,
+    #[error("closing auxiliary audit output")]
+    ClosingAuxiliaryAuditOutput(#[source] Box<StreamingError>),
+    #[error(transparent)]
+    CanonicalStream(Box<crate::streaming::canonical::CanonicalStreamError>),
+    #[error(transparent)]
+    TryFromInt(#[from] std::num::TryFromIntError),
+    #[error(transparent)]
+    Lifecycle(Box<crate::lifecycle::LifecycleError>),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    StreamProcessor(#[from] gents_loop::stream_processor::StreamProcessorError),
 }
+
+impl From<crate::lifecycle::LifecycleError> for StreamingError {
+    fn from(error: crate::lifecycle::LifecycleError) -> Self {
+        Self::Lifecycle(Box::new(error))
+    }
+}
+
+impl From<crate::streaming::canonical::CanonicalStreamError> for StreamingError {
+    fn from(error: crate::streaming::canonical::CanonicalStreamError) -> Self {
+        Self::CanonicalStream(Box::new(error))
+    }
+}
+
+type Result<T, E = StreamingError> = std::result::Result<T, E>;
 
 pub(crate) mod auxiliary;
 #[cfg(test)]
@@ -347,7 +372,7 @@ impl DefraStreamWriter {
             return Ok(false);
         };
         if pending.segment.ordinal != Some(tail.next_ordinal) {
-            return Err(StreamingError::PendingFlushDisagrees.into());
+            return Err(StreamingError::PendingFlushDisagrees);
         }
         canonical::append_provider_segment(&self.node, generation, &pending.segment).await?;
         let pending = tail
@@ -664,8 +689,16 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
             Ok(id) => Ok(Some(id)),
             Err(error)
                 if matches!(
-                    error.downcast_ref::<crate::lifecycle::queue::QueueError>(),
-                    Some(crate::lifecycle::queue::QueueError::PendingInputChanged(_))
+                    &error,
+                    StreamingError::CanonicalStream(error)
+                        if matches!(
+                            &**error,
+                            crate::streaming::canonical::CanonicalStreamError::Queue(queue)
+                                if matches!(
+                                    &**queue,
+                                    crate::lifecycle::queue::QueueError::PendingInputChanged(_)
+                                )
+                        )
                 ) =>
             {
                 Ok(None)
@@ -745,7 +778,7 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
 }
 
 impl StreamWriter for DefraStreamWriter {
-    type Error = anyhow::Error;
+    type Error = StreamingError;
 
     async fn mark_pending_output(&self, doc_id: &str, output: PendingOutput) -> Result<bool> {
         self.buffers
@@ -856,7 +889,7 @@ fn provider_flush_delta(
         if let Some(old) = old {
             if !(old.declaration == stream.declaration && stream.payload.starts_with(&old.payload))
             {
-                return Err(StreamingError::ProviderStreamRewroteAcknowledged.into());
+                return Err(StreamingError::ProviderStreamRewroteAcknowledged);
             }
         }
         let offset = old.map_or(0, |value| value.payload.len());
@@ -871,7 +904,7 @@ fn provider_flush_delta(
         }
     }
     if !(encoded.streams.len() >= prior.len()) {
-        return Err(StreamingError::ProviderStreamShrank.into());
+        return Err(StreamingError::ProviderStreamShrank);
     }
     Ok(ProviderStreamDelta {
         grew: !runs.is_empty(),

@@ -1,7 +1,6 @@
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
@@ -14,7 +13,7 @@ use gents_loop::output_obligation::OutputObligationCheck;
 pub(crate) use gents_loop::output_obligation::{continuation_message, UnmetOutputObligation};
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum OutputObligationError {
+pub enum OutputObligationError {
     #[error("output obligation ancestry query omitted requests")]
     AncestryRequestsMissing,
     #[error("output obligations require a physical request document id")]
@@ -55,7 +54,27 @@ pub(crate) enum OutputObligationError {
     },
     #[error("completed `{tool_name}` writes disagree on expected_count_field `{field}`")]
     ExpectedCountDisagrees { tool_name: String, field: String },
+    #[error(transparent)]
+    ConfigClient(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    RequestBinding(#[from] crate::request_binding::RequestBindingError),
+    #[error(transparent)]
+    Goal(Box<crate::goal::GoalError>),
+    #[error(transparent)]
+    RunTimeline(#[from] crate::run_timeline_fetch::RunTimelineError),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Watcher(#[from] crate::watcher::WatcherError),
 }
+
+impl From<crate::goal::GoalError> for OutputObligationError {
+    fn from(error: crate::goal::GoalError) -> Self {
+        Self::Goal(Box::new(error))
+    }
+}
+
+type Result<T, E = OutputObligationError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ActiveOutputObligation {
@@ -171,7 +190,7 @@ impl OutputObligationGate {
         if self.request_doc_ids.is_empty()
             || self.request_doc_ids.iter().any(|id| id.trim().is_empty())
         {
-            return Err(OutputObligationError::RequestDocIdMissing.into());
+            return Err(OutputObligationError::RequestDocIdMissing);
         }
 
         let query = format!(
@@ -212,7 +231,7 @@ impl OutputObligationGate {
                 continue;
             }
             if row.doc_id.trim().is_empty() || !self.request_doc_ids.contains(&row.request_doc_id) {
-                return Err(OutputObligationError::RequestMembershipMismatch.into());
+                return Err(OutputObligationError::RequestMembershipMismatch);
             }
             if !requests.contains_key(&row.request_doc_id) {
                 let request = crate::request_binding::load_agent_request_by_doc_id(
@@ -228,7 +247,7 @@ impl OutputObligationGate {
                 || request.session_id != row.session_id
                 || request.requester_did != row.requester_did
             {
-                return Err(OutputObligationError::OwnershipScopeCrossed.into());
+                return Err(OutputObligationError::OwnershipScopeCrossed);
             }
             scoped_rows
                 .entry((
@@ -268,14 +287,14 @@ impl OutputObligationGate {
                     .map(Vec::as_slice)
                     .unwrap_or_default();
                 let [call] = matches else {
-                    return Err(OutputObligationError::ToolBindingNotUnique.into());
+                    return Err(OutputObligationError::ToolBindingNotUnique);
                 };
                 if call.session_id != row.session_id
                     || call.request_doc_id.as_deref() != Some(row.request_doc_id.as_str())
                     || call.tool_name != row.tool_name
                     || call.lifecycle_state.as_deref() != Some("completed")
                 {
-                    return Err(OutputObligationError::AcceptedIdentityChanged.into());
+                    return Err(OutputObligationError::AcceptedIdentityChanged);
                 }
                 writes
                     .entry(row.tool_name.clone())
@@ -311,8 +330,7 @@ impl OutputObligationGate {
                         completed: completed.len(),
                         expected,
                         minimum: obligation.contract.minimum_writes,
-                    }
-                    .into());
+                    });
                 }
             }
         }

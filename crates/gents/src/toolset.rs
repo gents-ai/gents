@@ -20,6 +20,7 @@ mod native_runner;
 pub use native_runner::enable_self_runner;
 pub(crate) mod session_history;
 mod title_audit_usage;
+pub(crate) use title_audit_usage::TitleAuditUsageError;
 pub(crate) use title_audit_usage::load_parent_inclusive_budget_usage;
 pub(crate) use title_audit_usage::load_session_goal_usage;
 pub use title_audit_usage::{ParentAuditUsage, ParentAuditUsageObservation};
@@ -116,7 +117,7 @@ pub use shared::{
     workspace_write_sandbox_enforced, CommandConstraints, CommandExecutionMode,
     CommandExecutionPolicy, CommandNetworkMode, WorkspaceAuthority,
 };
-pub(crate) use shared::{ContextError, ToolContext};
+pub(crate) use shared::{ContextError, ToolContext, ToolError};
 
 pub fn default_read_only_command_policy() -> CommandExecutionPolicy {
     CommandExecutionPolicy::read_only(default_read_only_commands())

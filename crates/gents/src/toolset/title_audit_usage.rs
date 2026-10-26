@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use anyhow::Context;
 use defra_node::EmbeddedNode;
 use gents_protocol::request_admission::RequestPurpose;
 use gents_protocol::row::AgentRequestRow;
@@ -11,7 +10,7 @@ use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 type Result<T, E = TitleAuditUsageError> = std::result::Result<T, E>;
 
 #[derive(Debug, thiserror::Error)]
-enum TitleAuditUsageError {
+pub enum TitleAuditUsageError {
     #[error("inference call row is not an object")]
     CallRowNotObject,
     #[error("decoding audit usage InferenceCall row")]
@@ -48,6 +47,34 @@ enum TitleAuditUsageError {
     BudgetUsageMissing { call_id: String },
     #[error("budget restart usage overflow")]
     BudgetOverflow,
+    #[error("duplicate goal request physical identity")]
+    DuplicateGoalRequestPhysicalIdentity,
+    #[error("budget restart disagrees with the execution owner's pinned limit")]
+    BudgetRestartDisagreesExecutionOwnerS,
+    #[error("audit usage parent is missing or ambiguous")]
+    AuditUsageParentMissingAmbiguous,
+    #[error("audit usage parent crossed its exact normal request scope")]
+    AuditUsageParentCrossedExactNormal,
+    #[error("duplicate auxiliary request physical identity")]
+    DuplicateAuxiliaryRequestPhysicalIdentity,
+    #[error("goal usage query omitted AgentRequest rows")]
+    GoalUsageQueryOmittedAgentRequestRows,
+    #[error("decoding goal usage AgentRequest rows")]
+    DecodingGoalUsageAgentRequestRows(#[source] serde_json::Error),
+    #[error("goal review has no same-session parent")]
+    GoalReviewHasNoSameSession,
+    #[error("goal usage query omitted InferenceCall rows")]
+    GoalUsageQueryOmittedInferenceCallRows,
+    #[error("audit usage query omitted InferenceCall rows")]
+    AuditUsageQueryOmittedInferenceCallRows,
+    #[error(transparent)]
+    AdmissionCause(#[from] crate::request_admission::AdmissionCause),
+    #[error(transparent)]
+    ConfigClient(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    RequestReceipt(#[from] crate::request_admission::RequestReceiptError),
+    #[error(transparent)]
+    ProviderUsage(#[from] gents_loop::provider_usage::ProviderUsageError),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -246,7 +273,7 @@ struct ParentUsageCatalog {
 fn project_goal_catalog(
     request_ids: &BTreeMap<String, String>,
     calls: Vec<CallRow>,
-) -> anyhow::Result<crate::goal::SessionTokenUsage> {
+) -> Result<crate::goal::SessionTokenUsage> {
     let calls = coherent_calls(request_ids, calls)?;
     let parts = || {
         calls
@@ -270,7 +297,7 @@ pub(crate) async fn load_session_goal_usage(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
-) -> anyhow::Result<crate::goal::SessionTokenUsage> {
+) -> Result<crate::goal::SessionTokenUsage> {
     let response = txn.execute(&format!(
         r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, purpose: {{ _in: ["normal", "access-review"] }} }}) {{ {} }} }}"#,
         escape_graphql_string(node_did), escape_graphql_string(session_id),
@@ -279,17 +306,16 @@ pub(crate) async fn load_session_goal_usage(
     let requests: Vec<AgentRequestRow> = serde_json::from_value(
         response
             .pointer("/data/AgentRequest")
-            .context("goal usage query omitted AgentRequest rows")?
+            .ok_or(TitleAuditUsageError::GoalUsageQueryOmittedAgentRequestRows)?
             .clone(),
     )
-    .context("decoding goal usage AgentRequest rows")?;
+    .map_err(TitleAuditUsageError::DecodingGoalUsageAgentRequestRows)?;
     let mut by_doc = BTreeMap::new();
     for request in &requests {
         let doc = nonempty(request.doc_id.as_deref(), "goal physical request")?;
-        anyhow::ensure!(
-            by_doc.insert(doc, request).is_none(),
-            "duplicate goal request physical identity"
-        );
+        if !(by_doc.insert(doc, request).is_none()) {
+            return Err(TitleAuditUsageError::DuplicateGoalRequestPhysicalIdentity);
+        }
     }
     let mut request_ids = BTreeMap::new();
     for request in &requests {
@@ -300,7 +326,7 @@ pub(crate) async fn load_session_goal_usage(
             )?;
             let parent = by_doc
                 .get(parent_doc)
-                .context("goal review has no same-session parent")?;
+                .ok_or(TitleAuditUsageError::GoalReviewHasNoSameSession)?;
             crate::request_admission::verify_historical_auxiliary_receipt(request, parent)?;
         }
         request_ids.insert(
@@ -327,7 +353,7 @@ pub(crate) async fn load_session_goal_usage(
     let raw_calls = response
         .pointer("/data/InferenceCall")
         .and_then(serde_json::Value::as_array)
-        .context("goal usage query omitted InferenceCall rows")?;
+        .ok_or(TitleAuditUsageError::GoalUsageQueryOmittedInferenceCallRows)?;
     project_goal_catalog(&request_ids, decode_calls_for_node(raw_calls, node_did)?)
 }
 
@@ -336,7 +362,7 @@ pub(crate) async fn load_session_goal_usage(
 pub async fn load_parent_inclusive_audit_usage(
     node: &EmbeddedNode,
     exact_parent: &AgentRequestRow,
-) -> anyhow::Result<ParentAuditUsage> {
+) -> Result<ParentAuditUsage> {
     let catalog = load_parent_catalog(node, exact_parent).await?;
     Ok(project_catalog(
         &catalog.parent_doc_id,
@@ -349,7 +375,7 @@ pub async fn load_parent_inclusive_audit_usage(
 pub(crate) async fn load_parent_inclusive_budget_usage(
     node: &EmbeddedNode,
     request: &crate::watcher::AgentRequest,
-) -> anyhow::Result<u64> {
+) -> Result<u64> {
     let scope = AgentRequestRow {
         doc_id: Some(request.doc_id.clone()),
         request_id: request.request_id.clone(),
@@ -360,17 +386,16 @@ pub(crate) async fn load_parent_inclusive_budget_usage(
         ..Default::default()
     };
     let catalog = load_parent_catalog(node, &scope).await?;
-    anyhow::ensure!(
-        catalog.max_total_tokens == request.max_total_tokens,
-        "budget restart disagrees with the execution owner's pinned limit"
-    );
+    if catalog.max_total_tokens != request.max_total_tokens {
+        return Err(TitleAuditUsageError::BudgetRestartDisagreesExecutionOwnerS);
+    }
     Ok(project_budget_catalog(&catalog.request_ids, catalog.calls)?)
 }
 
 async fn load_parent_catalog(
     node: &EmbeddedNode,
     exact_parent: &AgentRequestRow,
-) -> anyhow::Result<ParentUsageCatalog> {
+) -> Result<ParentUsageCatalog> {
     let parent_doc_id = nonempty(exact_parent.doc_id.as_deref(), "parent physical request")?;
     let parent_id = nonempty(Some(&exact_parent.request_id), "parent logical request")?;
     let agent = nonempty(exact_parent.node_did.as_deref(), "parent agent")?;
@@ -386,21 +411,20 @@ async fn load_parent_catalog(
     )
     .await?;
     let parents: Vec<AgentRequestRow> = required_rows(&response, "AgentRequest")?;
-    anyhow::ensure!(
-        parents.len() == 1,
-        "audit usage parent is missing or ambiguous"
-    );
+    if parents.len() != 1 {
+        return Err(TitleAuditUsageError::AuditUsageParentMissingAmbiguous);
+    }
     let parent = &parents[0];
-    anyhow::ensure!(
-        parent.doc_id.as_deref() == Some(parent_doc_id)
-            && parent.request_id == parent_id
-            && parent.node_did.as_deref() == Some(agent)
-            && parent.session_id.as_deref() == Some(session)
-            && parent.requester_did == exact_parent.requester_did
-            && parent.agent_id == exact_parent.agent_id
-            && parent.purpose == Some(RequestPurpose::Normal),
-        "audit usage parent crossed its exact normal request scope"
-    );
+    if !(parent.doc_id.as_deref() == Some(parent_doc_id)
+        && parent.request_id == parent_id
+        && parent.node_did.as_deref() == Some(agent)
+        && parent.session_id.as_deref() == Some(session)
+        && parent.requester_did == exact_parent.requester_did
+        && parent.agent_id == exact_parent.agent_id
+        && parent.purpose == Some(RequestPurpose::Normal))
+    {
+        return Err(TitleAuditUsageError::AuditUsageParentCrossedExactNormal);
+    }
     crate::request_admission::verify_request_receipt_signature(parent)?;
 
     let response = graphql_with_transaction_retry(
@@ -418,12 +442,12 @@ async fn load_parent_catalog(
     for request in &auxiliaries {
         crate::request_admission::verify_historical_auxiliary_receipt(request, parent)?;
         let request_doc = nonempty(request.doc_id.as_deref(), "auxiliary physical request")?;
-        anyhow::ensure!(
-            request_ids
-                .insert(request_doc.to_owned(), request.request_id.clone())
-                .is_none(),
-            "duplicate auxiliary request physical identity"
-        );
+        if !(request_ids
+            .insert(request_doc.to_owned(), request.request_id.clone())
+            .is_none())
+        {
+            return Err(TitleAuditUsageError::DuplicateAuxiliaryRequestPhysicalIdentity);
+        }
     }
 
     let docs = request_ids
@@ -444,7 +468,7 @@ async fn load_parent_catalog(
         .as_ref()
         .and_then(|data| data.get("InferenceCall"))
         .and_then(serde_json::Value::as_array)
-        .context("audit usage query omitted InferenceCall rows")?;
+        .ok_or(TitleAuditUsageError::AuditUsageQueryOmittedInferenceCallRows)?;
     let calls = decode_calls_for_node(raw_calls, agent)?;
     Ok(ParentUsageCatalog {
         parent_doc_id: parent_doc_id.to_owned(),

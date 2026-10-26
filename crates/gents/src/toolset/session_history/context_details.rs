@@ -16,10 +16,9 @@ pub async fn load_session_context_details(
     session: &str,
     context: &super::super::context_budget::LastRequestContextSnapshot,
 ) -> Result<Option<SessionContextDetails>> {
-    anyhow::ensure!(
-        !agent.trim().is_empty() && !session.trim().is_empty(),
-        "context details require an exact session scope"
-    );
+    if !(!agent.trim().is_empty() && !session.trim().is_empty()) {
+        return Err(SessionHistoryError::ContextDetailsRequireExactSessionScope);
+    }
     let requester = requester
         .map(|did| format!("\"{}\"", escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
@@ -41,13 +40,13 @@ pub async fn load_session_context_details(
         .data
         .as_ref()
         .and_then(|data| data["AgentRequest"].as_array())
-        .context("missing context detail owners")?;
+        .ok_or(SessionHistoryError::MissingContextDetailOwners)?;
     let [owner] = owners.as_slice() else {
         return Ok(None);
     };
     let doc = owner["_docID"]
         .as_str()
-        .context("context detail owner lacks physical identity")?;
+        .ok_or(SessionHistoryError::ContextDetailOwnerLacksPhysicalIdentity)?;
     let response = crate::graphql::graphql_with_transaction_retry(
         node,
         &format!(
@@ -69,7 +68,7 @@ pub async fn load_session_context_details(
         .data
         .as_ref()
         .and_then(|data| data["RenderedRequest"].as_array())
-        .context("missing context detail captures")?;
+        .ok_or(SessionHistoryError::MissingContextDetailCaptures)?;
     let [capture] = captures.as_slice() else {
         return Ok(None);
     };
@@ -86,7 +85,7 @@ pub async fn load_session_context_details(
         let provenance: Value = serde_json::from_str(
             capture["provenance_json"]
                 .as_str()
-                .context("missing capture provenance")?,
+                .ok_or(SessionHistoryError::MissingCaptureProvenance)?,
         )?;
         if provenance["admission"]["call_id"].as_str() != Some(context.call_id.as_str()) {
             return Ok(None);
@@ -102,7 +101,7 @@ pub async fn load_session_context_details(
             capture_version,
             capture["request_json"]
                 .as_str()
-                .context("missing captured provider request")?,
+                .ok_or(SessionHistoryError::MissingCapturedProviderRequest)?,
             crate::rendered_request::CapturePayloadKind::RequestBody,
         )
         .await?;
@@ -128,7 +127,7 @@ pub async fn load_session_context_details(
 fn chat_details(body: &Value, message_tokens: u64) -> Result<SessionContextDetails> {
     let messages = body["messages"]
         .as_array()
-        .context("captured chat messages are not an array")?;
+        .ok_or(SessionHistoryError::CapturedChatMessagesNotArray)?;
     let mut system = Vec::new();
     let mut message_count = 0_u64;
     let mut tool_call_count = 0_u64;
@@ -142,7 +141,7 @@ fn chat_details(body: &Value, message_tokens: u64) -> Result<SessionContextDetai
             if !calls.is_null() {
                 tool_call_count += calls
                     .as_array()
-                    .context("captured tool calls are not an array")?
+                    .ok_or(SessionHistoryError::CapturedToolCallsNotArray)?
                     .len() as u64;
             }
         }
@@ -156,12 +155,12 @@ fn chat_details(body: &Value, message_tokens: u64) -> Result<SessionContextDetai
     };
     let message_tokens = message_tokens
         .checked_sub(system_prompt_tokens)
-        .context("system estimate exceeds captured message accounting")?;
+        .ok_or(SessionHistoryError::SystemEstimateExceedsCapturedMessageAccounting)?;
     let tool_definitions_count = match body.get("tools") {
         None | Some(Value::Null) => 0,
         Some(tools) => tools
             .as_array()
-            .context("captured tools are not an array")?
+            .ok_or(SessionHistoryError::CapturedToolsNotArray)?
             .len() as u64,
     };
     Ok(SessionContextDetails {

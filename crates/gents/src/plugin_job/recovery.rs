@@ -1,9 +1,9 @@
 //! The observer's wake arm and recovery sweep for plugin job rows.
 
+use crate::plugin_job::origin::PluginJobError;
 use gents_protocol::error_chain::ErrorChain;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use gents_protocol::job::JobPin;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
@@ -17,6 +17,8 @@ use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
 use crate::plugin::store::{parse_coordinate, read_record};
 use crate::request_binding::load_agent_request_by_doc_id;
+
+type Result<T, E = PluginJobError> = std::result::Result<T, E>;
 
 /// Lean `PluginJobRow` for one job row.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,7 +117,7 @@ pub async fn redrive_running_jobs(driver: &Arc<JobDriver>) -> Result<usize> {
             Ok(false) => {}
             Err(error) => tracing::warn!(
                 row_doc_id,
-                error = %ErrorChain(error.as_ref()),
+                error = %ErrorChain(&error),
                 "plugin job recovery tick failed; the next sweep retries"
             ),
         }
@@ -190,8 +192,8 @@ async fn facts_of(
     } else {
         let caller = load_agent_request_by_doc_id(&runtime.node, request_doc_id)
             .await?
-            .with_context(|| {
-                format!("the caller request of job row {row_doc_id} does not exist")
+            .ok_or_else(|| PluginJobError::CallerRequestJobRowDoesNot2 {
+                row_doc_id: row_doc_id.to_string(),
             })?;
         let settings = live_job_settings(runtime, &caller, &pin.plugin_ref).await?;
         match parse_coordinate(&pin.plugin_ref)

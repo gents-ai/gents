@@ -68,7 +68,7 @@ pub enum RunTimelineError {
     #[error("timeline session is outside authoritative request scope")]
     SessionOutsideScope,
     #[error(transparent)]
-    Session(#[from] crate::session::SessionError),
+    Session(Box<crate::session::SessionError>),
     #[error(transparent)]
     Access(#[from] crate::config_client::ConfigClientError),
     #[error(transparent)]
@@ -191,6 +191,12 @@ pub enum RunTimelineError {
     ReductionBatchOutside,
     #[error("timeline ProviderContextReduction returned an unrequested request document")]
     ReductionUnrequested,
+}
+
+impl From<crate::session::SessionError> for RunTimelineError {
+    fn from(error: crate::session::SessionError) -> Self {
+        Self::Session(Box::new(error))
+    }
 }
 
 impl crate::config_client::TransactionFailure for RunTimelineError {

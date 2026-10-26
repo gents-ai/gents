@@ -138,11 +138,11 @@ pub enum CallbackError {
     #[error("{reason}")]
     StoredActionPlan { reason: String },
     #[error(transparent)]
-    EventDelivery(#[from] crate::trigger_engine::event_delivery::EventDeliveryError),
+    EventDelivery(Box<crate::trigger_engine::event_delivery::EventDeliveryError>),
     #[error(transparent)]
     EventSource(Box<crate::trigger_engine::event_source::EventSourceError>),
     #[error(transparent)]
-    Cursor(#[from] crate::config_client::event_source_cursor::EventSourceCursorError),
+    Cursor(Box<crate::config_client::event_source_cursor::EventSourceCursorError>),
     #[error(transparent)]
     GraphPipeline(Box<crate::graph_pipeline::GraphPipelineError>),
     #[error("arrival query omitted data")]
@@ -186,6 +186,18 @@ pub enum CallbackError {
     },
     #[error("callback source is not an object")]
     SourceNotObject,
+}
+
+impl From<crate::config_client::event_source_cursor::EventSourceCursorError> for CallbackError {
+    fn from(error: crate::config_client::event_source_cursor::EventSourceCursorError) -> Self {
+        Self::Cursor(Box::new(error))
+    }
+}
+
+impl From<crate::trigger_engine::event_delivery::EventDeliveryError> for CallbackError {
+    fn from(error: crate::trigger_engine::event_delivery::EventDeliveryError) -> Self {
+        Self::EventDelivery(Box::new(error))
+    }
 }
 
 impl From<crate::trigger_engine::event_source::EventSourceError> for CallbackError {

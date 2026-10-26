@@ -2,7 +2,6 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 
 use crate::event_delivery_contract::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
@@ -46,7 +45,11 @@ pub enum WatcherError {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Durable(#[from] crate::trigger_engine::durable::DurableTriggerError),
+    #[error(transparent)]
+    SubscriptionSource(#[from] crate::trigger_engine::subscription_source::SubscriptionSourceError),
 }
+
+type Result<T, E = WatcherError> = std::result::Result<T, E>;
 
 impl crate::config_client::TransactionFailure for WatcherError {
     fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {

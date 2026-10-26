@@ -5,7 +5,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ManagedExecError {
+pub enum ManagedExecError {
     #[error("cannot inspect process ownership records: {error}")]
     InspectRecords { error: std::io::Error },
     #[error("cannot enumerate process ownership records: {error}")]

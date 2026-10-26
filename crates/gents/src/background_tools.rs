@@ -543,7 +543,7 @@ pub enum BackgroundToolsError {
     #[error(transparent)]
     CanonicalRows(#[from] crate::session::canonical_rows::CanonicalRowsError),
     #[error(transparent)]
-    Hook(#[from] crate::hook::HookError),
+    Hook(Box<crate::hook::HookError>),
     #[error(transparent)]
     Reconstruction(gents_protocol::output::ReconstructionError),
     #[error("tool output row lacks request binding")]
@@ -576,6 +576,12 @@ pub enum BackgroundToolsError {
     BackgroundMissingStart,
     #[error("tool missing deadline")]
     BackgroundMissingDeadline,
+}
+
+impl From<crate::hook::HookError> for BackgroundToolsError {
+    fn from(error: crate::hook::HookError) -> Self {
+        Self::Hook(Box::new(error))
+    }
 }
 
 impl crate::config_client::TransactionFailure for BackgroundToolsError {

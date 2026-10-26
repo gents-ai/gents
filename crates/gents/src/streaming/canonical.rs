@@ -164,9 +164,21 @@ pub enum CanonicalStreamError {
     #[error(transparent)]
     Parse(#[from] chrono::ParseError),
     #[error(transparent)]
-    Queue(#[from] crate::lifecycle::QueueError),
+    Queue(Box<crate::lifecycle::QueueError>),
     #[error(transparent)]
-    Streaming(#[from] crate::streaming::StreamingError),
+    Streaming(Box<crate::streaming::StreamingError>),
+}
+
+impl From<crate::streaming::StreamingError> for CanonicalStreamError {
+    fn from(error: crate::streaming::StreamingError) -> Self {
+        Self::Streaming(Box::new(error))
+    }
+}
+
+impl From<crate::lifecycle::QueueError> for CanonicalStreamError {
+    fn from(error: crate::lifecycle::QueueError) -> Self {
+        Self::Queue(Box::new(error))
+    }
 }
 
 /// The provider rejection a failed canonical write carries, if any.

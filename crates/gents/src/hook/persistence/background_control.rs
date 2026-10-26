@@ -1,6 +1,7 @@
 use super::*;
 use crate::hook::HookError;
-use anyhow::Context;
+
+type Result<T, E = HookError> = std::result::Result<T, E>;
 
 impl DefraSessionHook {
     pub(super) async fn take_owned_in_flight_lifecycle(
@@ -44,7 +45,7 @@ impl DefraSessionHook {
         tool_call_id: &str,
         caller_deadline_at: chrono::DateTime<chrono::Utc>,
         wait_deadline_at: chrono::DateTime<chrono::Utc>,
-    ) -> anyhow::Result<String> {
+    ) -> Result<String> {
         let mut changes =
             crate::subscribe_collections(&self.node, ["AgentToolCall", "AgentRequest"])?;
         loop {
@@ -57,10 +58,10 @@ impl DefraSessionHook {
                 crate::tool_call_lifecycle::ToolRowKind::SessionMessage
                     | crate::tool_call_lifecycle::ToolRowKind::PluginJob
             ) {
-                anyhow::bail!(
-                    "{tool_call_id} is a {} call; its result arrives only as a completion message, so wait_process does not wait on it",
-                    lifecycle.tool_name()
-                );
+                return Err(HookError::CallResultArrivesOnlyCompletionMessage {
+                    tool_call_id: tool_call_id.to_string(),
+                    tool_name: lifecycle.tool_name().to_string(),
+                });
             }
             if lifecycle.is_terminal() {
                 return self.background_tool_envelope(lifecycle, "terminal").await;
@@ -145,10 +146,10 @@ impl DefraSessionHook {
         &self,
         lifecycle: ToolCallLifecycle,
         reason: &str,
-    ) -> anyhow::Result<String> {
+    ) -> Result<String> {
         let tool_doc_id = lifecycle
             .doc_id()
-            .context("background result requires physical tool identity")?;
+            .ok_or(HookError::BackgroundResultRequiresPhysicalToolIdentity)?;
         let result = if lifecycle.is_spawned_background()
             || crate::toolset::is_bash_tool_name(lifecycle.tool_name())
         {
@@ -157,7 +158,7 @@ impl DefraSessionHook {
                 tool_doc_id,
                 lifecycle
                     .request_doc_id()
-                    .context("spawned background result requires request identity")?,
+                    .ok_or(HookError::SpawnedBackgroundResultRequiresRequestIdentity)?,
                 lifecycle.session_id(),
                 lifecycle.node_did(),
                 lifecycle.requester_did(),

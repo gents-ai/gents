@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
@@ -11,7 +10,7 @@ use crate::graphql::escape_graphql_string;
 use super::{AwaitMode, CancelCause, FailureClass, ToolCallLifecycle, ToolCallState};
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ToolCallRecoveryError {
+pub enum ToolCallRecoveryError {
     #[error(transparent)]
     Config(#[from] crate::config_client::ConfigClientError),
     #[error("AgentRequest field missing from parent recovery query")]
@@ -32,7 +31,21 @@ pub(crate) enum ToolCallRecoveryError {
     PhysicalRowDisappeared,
     #[error(transparent)]
     Query(#[from] super::query::ToolCallQueryError),
+    #[error("background cancellation requires physical tool identity")]
+    BackgroundCancellationRequiresPhysicalToolIdentity,
+    #[error(transparent)]
+    Session(Box<crate::session::SessionError>),
+    #[error(transparent)]
+    Transition(#[from] crate::tool_call_lifecycle::TransitionError),
 }
+
+impl From<crate::session::SessionError> for ToolCallRecoveryError {
+    fn from(error: crate::session::SessionError) -> Self {
+        Self::Session(Box::new(error))
+    }
+}
+
+type Result<T, E = ToolCallRecoveryError> = std::result::Result<T, E>;
 
 impl crate::config_client::TransactionFailure for ToolCallRecoveryError {
     fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
@@ -480,7 +493,7 @@ impl super::ToolCallLifecycle {
         use crate::managed_exec::ProcessStopOutcome;
         let doc_id = lifecycle
             .doc_id()
-            .context("background cancellation requires physical tool identity")?
+            .ok_or(ToolCallRecoveryError::BackgroundCancellationRequiresPhysicalToolIdentity)?
             .to_owned();
         let tool_call_id = lifecycle.tool_call_id().to_owned();
         let process = executions.stop_execution(&tool_call_id, &doc_id).await;

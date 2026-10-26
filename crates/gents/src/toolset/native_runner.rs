@@ -17,7 +17,7 @@ const MAX_FS_RUNNER_SECONDS: i64 = 120;
 static SELF_RUNNER_ENABLED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum NativeRunnerError {
+pub enum NativeRunnerError {
     #[error("serializing native filesystem request for {tool_name}")]
     SerializeRequest {
         tool_name: &'static str,

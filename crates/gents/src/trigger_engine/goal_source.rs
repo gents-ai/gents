@@ -1,7 +1,7 @@
+use crate::trigger_engine::error::TriggerEngineError;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
@@ -30,6 +30,8 @@ use crate::UpdateSubscriptionSource;
 
 use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
 
+type Result<T, E = TriggerEngineError> = std::result::Result<T, E>;
+
 const GOAL_RESCAN_INTERVAL: Duration = Duration::from_secs(2);
 
 const GOAL_OBSERVED_COLLECTIONS: &[&str] = &[
@@ -43,7 +45,7 @@ const GOAL_OBSERVED_COLLECTIONS: &[&str] = &[
 ];
 
 #[derive(Debug, thiserror::Error)]
-enum GoalSourceError {
+pub enum GoalSourceError {
     #[error(transparent)]
     Config(#[from] ConfigClientError),
     #[error(transparent)]
@@ -277,7 +279,7 @@ impl GoalSource {
         };
         let status = goal
             .parsed_status()
-            .context("active Goal candidate has an unknown status")?;
+            .ok_or(TriggerEngineError::ActiveGoalCandidateHasUnknownStatus)?;
 
         let already_claimed =
             goal.last_continued_from_request_id.as_deref() == Some(latest.request_id.as_str());
@@ -297,7 +299,9 @@ impl GoalSource {
         );
         if persisted_phase == GoalContinuationPhase::ChildPresent {
             if reconciled_phase != GoalContinuationPhase::ChildPresent {
-                bail!("goal continuation reconciliation rejected a persisted child");
+                return Err(
+                    TriggerEngineError::GoalContinuationReconciliationRejectedPersistedChild,
+                );
             }
             if !already_claimed {
                 let _ = claim_continuation(&self.node, &goal, &latest.request_id).await?;
@@ -319,7 +323,9 @@ impl GoalSource {
                 agent.observation,
                 agent.settled,
                 child_exists,
-                &goal.state().context("claimed Goal has an unknown status")?,
+                &goal
+                    .state()
+                    .ok_or(TriggerEngineError::ClaimedGoalHasUnknownStatus)?,
             ) {
                 GoalClaimedDecision::Materialize => {}
                 GoalClaimedDecision::AwaitReadiness | GoalClaimedDecision::Inactive => {
@@ -362,7 +368,7 @@ impl GoalSource {
                 .await;
         }
         if reconciled_phase != GoalContinuationPhase::Unclaimed {
-            bail!("goal continuation reconciliation produced an invalid phase");
+            return Err(TriggerEngineError::GoalContinuationReconciliationProducedInvalidPhase);
         }
 
         if status == GoalStatus::Active
@@ -375,7 +381,7 @@ impl GoalSource {
                 let post = goal
                     .state()
                     .and_then(|state| state.step(GoalAction::UsageLimit))
-                    .context("usage-limit transition must be legal from active")?;
+                    .ok_or(TriggerEngineError::UsageLimitTransitionMustLegalActive)?;
                 let now = Utc::now();
                 let active_time = goal.current_active_time_seconds(now);
                 let updated_at = escape_graphql_string(&now.to_rfc3339());
@@ -452,7 +458,7 @@ impl GoalSource {
         let tokens_used = refresh_goal_usage(&self.node, &goal).await?;
         let refreshed_goal = load_goal_by_id(&self.node, &goal.node_did, &goal.goal_id)
             .await?
-            .context("refreshed Goal row disappeared")?;
+            .ok_or(TriggerEngineError::RefreshedGoalRowDisappeared)?;
         if !continuation_evidence_is_current(&goal, &refreshed_goal) {
             return Ok(None);
         }
@@ -462,7 +468,7 @@ impl GoalSource {
             .is_some_and(|budget| tokens_used >= budget);
         let status = goal
             .parsed_status()
-            .context("refreshed Goal candidate has an unknown status")?;
+            .ok_or(TriggerEngineError::RefreshedGoalCandidateHasUnknownStatus)?;
         let facts = facts(&goal, status, budget_reached);
         let gated = gate_goal_continuation(agent.observation, agent.settled, cause, &facts);
         let next_retries = next_goal_infrastructure_retries(cause, &facts, gated);
@@ -611,7 +617,7 @@ impl GoalSource {
         goal.continuation_sequence = Some(
             goal.continuation_sequence()
                 .checked_add(1)
-                .context("claimed continuation sequence exhausted")?,
+                .ok_or(TriggerEngineError::ClaimedContinuationSequenceExhausted)?,
         );
         goal.last_continued_from_request_id = Some(latest.request_id.clone());
         self.materialize_claimed_continuation(
@@ -637,7 +643,7 @@ impl GoalSource {
         }
         let prompt = continuation_prompt(&goal, retry_prefix.as_deref(), wrapup);
         let parent = AgentRequest::try_from(latest)
-            .context("decode goal continuation parent AgentRequest")?;
+            .map_err(TriggerEngineError::DecodeGoalContinuationParentAgentRequest)?;
         let Some(child) =
             publish_claimed_continuation(&self.node, &goal, &parent.request_id, &prompt, wrapup)
                 .await?
@@ -868,7 +874,7 @@ impl GoalSource {
         };
         goal.state()
             .and_then(|state| state.step(action))
-            .context("unavailable-agent transition must be legal for a publishing Goal")?;
+            .ok_or(TriggerEngineError::UnavailableAgentTransitionMustLegalPublishing)?;
         tracing::warn!(
             goal_id = %goal.goal_id,
             %reason,
@@ -898,7 +904,7 @@ impl GoalSource {
             ),
         )
         .await
-        .map_err(anyhow::Error::from)
+        .map_err(Into::into)
     }
 
     async fn record_readiness_wait(
@@ -942,7 +948,7 @@ impl GoalSource {
             ),
         )
         .await
-        .map_err(anyhow::Error::from)
+        .map_err(Into::into)
     }
 }
 

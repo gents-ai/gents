@@ -7,7 +7,6 @@ use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::Context as _;
 use gents_protocol::job::{
     JobCaller, JobCeilingView, JobChildState, JobChildView, JobPin, JobProgress, JobRef,
     JobRootCall, JobRowView, JobStepInput, JobUsage, JobVerifiedScript, PluginJobSettings,
@@ -128,6 +127,30 @@ pub enum InputError {
         #[source]
         source: serde_json::Error,
     },
+    #[error("reading the caller's tools")]
+    ReadingCallerSTools(#[source] Box<crate::request_admission::AgentRequestAdmissionError>),
+    #[error("the caller request of job row {row_doc_id} does not exist")]
+    CallerRequestJobRowDoesNot { row_doc_id: String },
+    #[error("job row {row_doc_id} has no job_pin")]
+    JobRowHasNoJobPin { row_doc_id: String },
+    #[error("the verified script is not UTF-8")]
+    VerifiedScriptNotUTF(#[source] std::string::FromUtf8Error),
+    #[error(transparent)]
+    Ancestry(#[from] crate::plugin_job::ancestry::AncestryError),
+    #[error(transparent)]
+    Mounts(#[from] crate::plugin::mounts::MountsError),
+    #[error(transparent)]
+    PluginJob(Box<crate::plugin_job::origin::PluginJobError>),
+    #[error(transparent)]
+    PluginStore(#[from] crate::plugin::store::PluginStoreError),
+    #[error(transparent)]
+    RequestBinding(#[from] crate::request_binding::RequestBindingError),
+}
+
+impl From<crate::plugin_job::origin::PluginJobError> for InputError {
+    fn from(error: crate::plugin_job::origin::PluginJobError) -> Self {
+        Self::PluginJob(Box::new(error))
+    }
 }
 
 impl TransactionFailure for InputError {
@@ -501,10 +524,10 @@ pub(super) async fn live_job_settings(
     runtime: &JobRuntime,
     caller: &AgentRequest,
     coordinate: &str,
-) -> anyhow::Result<Option<PluginJobSettings>> {
+) -> Result<Option<PluginJobSettings>> {
     let (_, tools, _) = load_request_context(&runtime.node, &caller.node_did, &caller.agent_id)
         .await
-        .context("reading the caller's tools")?;
+        .map_err(|error| InputError::ReadingCallerSTools(Box::new(error)))?;
     Ok(tools
         .and_then(|tools| tools.integrations)
         .and_then(|integrations| integrations.plugins)
@@ -609,11 +632,13 @@ pub async fn build_step_input(
     runtime: &JobRuntime,
     row_doc_id: &str,
     step: StepKind<'_>,
-) -> anyhow::Result<(JobStepInput, u64)> {
+) -> Result<(JobStepInput, u64)> {
     let (row, call) = read_call(access, row_doc_id).await?;
     let caller = load_agent_request_by_doc_id(&runtime.node, &row.request_doc_id)
         .await?
-        .with_context(|| format!("the caller request of job row {row_doc_id} does not exist"))?;
+        .ok_or_else(|| InputError::CallerRequestJobRowDoesNot {
+            row_doc_id: row_doc_id.to_string(),
+        })?;
     let (pin, coordinate, settings) = match step {
         StepKind::Step0 { binding } => (
             None,
@@ -621,9 +646,11 @@ pub async fn build_step_input(
             binding.settings.clone(),
         ),
         StepKind::Later => {
-            let pin = read_pin(access, row_doc_id)
-                .await?
-                .with_context(|| format!("job row {row_doc_id} has no job_pin"))?;
+            let pin = read_pin(access, row_doc_id).await?.ok_or_else(|| {
+                InputError::JobRowHasNoJobPin {
+                    row_doc_id: row_doc_id.to_string(),
+                }
+            })?;
             let settings = live_job_settings(runtime, &caller, &pin.plugin_ref).await?;
             (Some(pin.clone()), pin.plugin_ref, settings)
         }
@@ -650,7 +677,7 @@ pub async fn build_step_input(
                 digest,
             } => Some(JobVerifiedScript {
                 source: String::from_utf8(verified_script)
-                    .context("the verified script is not UTF-8")?,
+                    .map_err(InputError::VerifiedScriptNotUTF)?,
                 digest,
             }),
             Origin::Dynamic => None,
@@ -1701,7 +1728,7 @@ pub(crate) mod tests {
             .unwrap();
         }
 
-        async fn later(&self, row: &str) -> anyhow::Result<(JobStepInput, u64)> {
+        async fn later(&self, row: &str) -> Result<(JobStepInput, u64)> {
             build_step_input(&self.access, &self.runtime, row, StepKind::Later).await
         }
     }

@@ -513,7 +513,7 @@ where
                                         summaries.push(compaction::bounded_summary(entry.summary));
                                     }
                                     Err(error)
-                                        if is_stale_compaction_generation(error.as_ref())
+                                        if is_stale_compaction_generation(&error)
                                             && assembly_attempt == 0 =>
                                     {
                                         tracing::info!(
@@ -523,7 +523,7 @@ where
                                         );
                                         continue;
                                     }
-                                    Err(error) if is_stale_compaction_generation(error.as_ref()) => {
+                                    Err(error) if is_stale_compaction_generation(&error) => {
                                         tracing::warn!(
                                             request_id = %request.request_id,
                                             session_id = %request.session_id,
@@ -531,7 +531,7 @@ where
                                         );
                                         summaries.push(compaction::bounded_summary(summary.to_string()));
                                     }
-                                    Err(error) => return Err(error),
+                                    Err(error) => return Err(error.into()),
                                 }
                             } else if compacted_through_sequence.is_none() {
                                 tracing::warn!(

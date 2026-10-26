@@ -458,10 +458,12 @@ async fn publish_tool_turn_for_rollback_test(
         background_calls: Vec::new(),
         consumes_folded: None,
     };
-    Ok(
-        super::canonical::publish_provider_turn(node, lifecycle.execution_generation().unwrap(), plan)
-            .await?,
+    Ok(super::canonical::publish_provider_turn(
+        node,
+        lifecycle.execution_generation().unwrap(),
+        plan,
     )
+    .await?)
 }
 
 #[tokio::test]

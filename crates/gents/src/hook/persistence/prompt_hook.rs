@@ -1,6 +1,8 @@
 use super::*;
 use crate::hook::{decide_persistence_outcome, FailurePolicy, HookError, PolicyDecision};
 
+type Result<T, E = HookError> = std::result::Result<T, E>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HookOwnedTool {
     GetGoal,
@@ -172,7 +174,7 @@ impl DefraSessionHook {
                     action
                 }
                 Err(error) => {
-                    self.on_tool_persistence_error(route.persistence_context(), error.as_ref())
+                    self.on_tool_persistence_error(route.persistence_context(), &error)
                 }
             };
         }
@@ -192,7 +194,7 @@ impl DefraSessionHook {
                     action
                 }
                 Err(error) => {
-                    self.on_tool_persistence_error("persist job tool call", error.as_ref())
+                    self.on_tool_persistence_error("persist job tool call", &error)
                 }
             };
         }
@@ -245,7 +247,7 @@ impl DefraSessionHook {
         tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
-    ) -> anyhow::Result<ToolCallHookAction> {
+    ) -> Result<ToolCallHookAction> {
         let tool_name = binding.tool_name.as_str();
         let (session_id, request_id, deadline_at, _seq) =
             self.ensure_assistant_turn_sequence().await?;

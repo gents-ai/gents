@@ -93,7 +93,7 @@ type Result<T, E = QueueError> = std::result::Result<T, E>;
 #[derive(Debug, thiserror::Error)]
 pub enum QueueError {
     #[error(transparent)]
-    Goal(#[from] crate::goal::GoalError),
+    Goal(Box<crate::goal::GoalError>),
     #[error("pending AgentRequest row is missing _docID")]
     PendingRowMissingDocId,
     #[error("duplicate wake has no physical identity")]
@@ -323,7 +323,7 @@ pub enum QueueError {
     #[error(transparent)]
     SessionOutput(#[from] crate::session::SessionOutputError),
     #[error(transparent)]
-    Session(#[from] crate::session::SessionError),
+    Session(Box<crate::session::SessionError>),
     #[error(transparent)]
     Reconstruction(#[from] gents_protocol::output::ReconstructionError),
     #[error(transparent)]
@@ -331,11 +331,35 @@ pub enum QueueError {
     #[error(transparent)]
     SessionInputEdit(#[from] gents_protocol::session_input_edit::SessionInputEditError),
     #[error(transparent)]
-    Materialize(#[from] crate::lifecycle::materialize::MaterializeError),
+    Materialize(Box<crate::lifecycle::materialize::MaterializeError>),
     #[error(transparent)]
-    AgentRequestAdmission(#[from] crate::request_admission::AgentRequestAdmissionError),
+    AgentRequestAdmission(Box<crate::request_admission::AgentRequestAdmissionError>),
     #[error("{message}")]
     EditRejected { message: String },
+}
+
+impl From<crate::lifecycle::materialize::MaterializeError> for QueueError {
+    fn from(error: crate::lifecycle::materialize::MaterializeError) -> Self {
+        Self::Materialize(Box::new(error))
+    }
+}
+
+impl From<crate::session::SessionError> for QueueError {
+    fn from(error: crate::session::SessionError) -> Self {
+        Self::Session(Box::new(error))
+    }
+}
+
+impl From<crate::request_admission::AgentRequestAdmissionError> for QueueError {
+    fn from(error: crate::request_admission::AgentRequestAdmissionError) -> Self {
+        Self::AgentRequestAdmission(Box::new(error))
+    }
+}
+
+impl From<crate::goal::GoalError> for QueueError {
+    fn from(error: crate::goal::GoalError) -> Self {
+        Self::Goal(Box::new(error))
+    }
 }
 
 impl crate::config_client::TransactionFailure for QueueError {

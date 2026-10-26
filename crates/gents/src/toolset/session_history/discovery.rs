@@ -1,4 +1,3 @@
-use anyhow::{bail, Context, Result};
 use gents_protocol::error_chain::ErrorChain;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -7,6 +6,8 @@ use super::{clamp_limit, SessionHistoryError, SessionHistoryParams, SessionHisto
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::escape_graphql_string;
 use crate::session::TxnCanonicalReader;
+
+type Result<T, E = SessionHistoryError> = std::result::Result<T, E>;
 
 const FIELDS: &str = crate::session::AGENT_SESSION_FIELDS;
 const HELP: &str = "Read canonical sessions visible to your authenticated DID through DefraDB ACP. Actions: list, count, search, get, transcript, output. Use {\"action\":\"help\",\"topic\":\"search\"} for an action's syntax. Copied IDs grant no access; ACP determines visibility across nodes and requesters.";
@@ -32,7 +33,7 @@ fn action_help(topic: Option<&str>) -> Result<&'static str> {
         Some("output") => {
             r#"{"action":"output","call_id":"<call_id>"}. Returns a tool call's full stored output, including bytes trimmed from the model's view, 16000 bytes per page. call_id comes from a tool result or a [tool: …] stub; session_id defaults to the current session. Continue with the returned next_call: its offset_bytes and expected_hash keep pages from mixing output versions. If a call_id is ambiguous, pass the tool_call_doc_id the error lists."#
         }
-        Some(_) => bail!("unknown help topic; next call: sessions {{\"action\":\"help\"}}"),
+        Some(_) => return Err(SessionHistoryError::UnknownHelpTopicNextCallSessions),
     })
 }
 
@@ -103,7 +104,11 @@ fn filter_query(filter: &SessionFilter, cursor: Option<&Cursor>) -> Result<Strin
         parts.push(match status.as_str() {
             "open" => "{closed_at: {_eq: null}}".into(),
             "closed" => "{closed_at: {_ne: null}}".into(),
-            _ => bail!("invalid status '{status}'; next call: sessions {{\"action\":\"help\"}}"),
+            _ => {
+                return Err(SessionHistoryError::InvalidStatusNextCallSessions {
+                    status: status.to_string(),
+                })
+            }
         });
     }
     if let Some(after) = &filter.created_after {
@@ -144,17 +149,20 @@ fn matches_text(row: &Value, needle: Option<&str>) -> bool {
 }
 
 fn rows(response: Value, collection: &str) -> Result<Vec<Value>> {
-    anyhow::ensure!(
-        response
-            .get("errors")
-            .is_none_or(|e| e.is_null() || e.as_array().is_some_and(Vec::is_empty)),
-        "sessions query failed: {}",
-        response["errors"]
-    );
+    if !(response
+        .get("errors")
+        .is_none_or(|e| e.is_null() || e.as_array().is_some_and(Vec::is_empty)))
+    {
+        return Err(SessionHistoryError::SessionsQueryFailed {
+            detail: response["errors"].to_string(),
+        });
+    }
     let rows = response["data"][collection]
         .as_array()
         .cloned()
-        .with_context(|| format!("sessions response omitted {collection}"))?;
+        .ok_or_else(|| SessionHistoryError::SessionsResponseOmitted {
+            collection: collection.to_string(),
+        })?;
     if collection == "AgentSession" {
         for row in &rows {
             crate::session::decode_session_row(row)?;
@@ -252,10 +260,9 @@ pub(super) async fn run(
     }
     let current = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
     if let Some(context) = &current {
-        anyhow::ensure!(
-            context.node_did.as_deref() == Some(tool.node_did.as_str()),
-            "sessions requires the running node; next call: sessions {{\"action\":\"help\"}}"
-        );
+        if context.node_did.as_deref() != Some(tool.node_did.as_str()) {
+            return Err(SessionHistoryError::SessionsRequiresRunningNodeNextCall);
+        }
     }
     let requester = current
         .as_ref()
@@ -264,7 +271,7 @@ pub(super) async fn run(
     let agent = tool.node_did.clone();
     let identity = agent
         .parse()
-        .context("sessions requires a valid running DID")?;
+        .map_err(SessionHistoryError::SessionsRequiresValidRunningDID)?;
     let args = args.clone();
     let action = action.to_owned();
     ConfigAccess::transact_local_readonly(
@@ -303,10 +310,9 @@ async fn execute(
 ) -> Result<Value> {
     let limit = clamp_limit(args.limit).min(100);
     let filter = args.filter.clone().unwrap_or_default();
-    anyhow::ensure!(
-        args.limit.is_none_or(|limit| (1..=100).contains(&limit)),
-        "limit must be 1 through 100; next call: sessions {{\"action\":\"help\"}}"
-    );
+    if !(args.limit.is_none_or(|limit| (1..=100).contains(&limit))) {
+        return Err(SessionHistoryError::LimitMustThroughNextCallSessions);
+    }
     if action == "output" {
         return tool_output(txn, current_session, args).await;
     }
@@ -315,11 +321,11 @@ async fn execute(
             .session_id
             .as_deref()
             .filter(|id| !id.trim().is_empty())
-            .context("session_id required; next call: sessions {\"action\":\"list\"}")?;
+            .ok_or(SessionHistoryError::SessionIdRequiredNextCallSessions)?;
         let session = authorized_session(txn, id).await?;
         let agent = session["node_did"]
             .as_str()
-            .context("session node DID missing")?;
+            .ok_or(SessionHistoryError::SessionNodeDIDMissing)?;
         let requester = session["requester_did"].as_str();
         if action == "get" {
             let details = if args.details {
@@ -335,7 +341,11 @@ async fn execute(
                 let docs = envelope
                     .requests
                     .iter()
-                    .map(|row| row.doc_id.clone().context("request has no physical ID"))
+                    .map(|row| {
+                        row.doc_id
+                            .clone()
+                            .ok_or(SessionHistoryError::RequestHasNoPhysicalID)
+                    })
                     .collect::<Result<Vec<_>, _>>()?;
                 let calls = if docs.is_empty() {
                     super::InvestigationCallsEnvelope {
@@ -361,16 +371,15 @@ async fn execute(
         }
         return transcript(txn, agent, requester, id, args, limit).await;
     }
-    anyhow::ensure!(
-        action != "count" || args.cursor.is_none(),
-        "count does not accept cursor; next call: sessions {{\"action\":\"count\"}}"
-    );
+    if !(action != "count" || args.cursor.is_none()) {
+        return Err(SessionHistoryError::CountDoesNotAcceptCursorNext);
+    }
     let cursor = args
         .cursor
         .as_deref()
         .map(serde_json::from_str::<Cursor>)
         .transpose()
-        .context("invalid cursor; next call: sessions {\"action\":\"list\"}")?;
+        .map_err(SessionHistoryError::InvalidCursorNextCallSessions)?;
     let condition = filter_query(&filter, cursor.as_ref())?;
     if action == "count" && filter.text.is_none() {
         let result = txn
@@ -380,7 +389,7 @@ async fn execute(
             .await?;
         let count = result["data"]["total"]
             .as_u64()
-            .context("sessions exact aggregate count missing")?;
+            .ok_or(SessionHistoryError::SessionsExactAggregateCountMissing)?;
         return Ok(
             json!({"count":count,"scope":{"node_did":agent,"requester_did":requester,"visibility":"acp"}}),
         );
@@ -413,11 +422,11 @@ async fn execute(
                 hit_sequence: None,
                 created_at: row["created_at"]
                     .as_str()
-                    .context("session has no creation time")?
+                    .ok_or(SessionHistoryError::SessionHasNoCreationTime)?
                     .into(),
                 session_id: row["session_id"]
                     .as_str()
-                    .context("session has no ID")?
+                    .ok_or(SessionHistoryError::SessionHasNoID)?
                     .into(),
             };
             let resume_sequence = scan_cursor
@@ -486,10 +495,9 @@ async fn authorized_session(txn: &ConfigApplyTxn<'_>, id: &str) -> Result<Value>
         .await?,
         "AgentSession",
     )?;
-    anyhow::ensure!(
-        session.len() == 1,
-        "session is unavailable or ambiguous under ACP; next call: sessions {{\"action\":\"list\"}}"
-    );
+    if session.len() != 1 {
+        return Err(SessionHistoryError::SessionUnavailableAmbiguousUnderACPNext);
+    }
     Ok(session.remove(0))
 }
 
@@ -507,15 +515,13 @@ async fn tool_output(
     };
     let session_id = nonblank(&args.session_id)
         .or_else(|| current_session.map(str::to_owned))
-        .context(
-            "output needs session_id outside a session; next call: sessions {\"action\":\"list\"}",
-        )?;
+        .ok_or(SessionHistoryError::OutputNeedsSessionIdOutsideSession)?;
     let call_id = nonblank(&args.call_id);
     let named_doc = nonblank(&args.tool_call_doc_id);
     let session = authorized_session(txn, &session_id).await?;
     let agent = session["node_did"]
         .as_str()
-        .context("session node DID missing")?;
+        .ok_or(SessionHistoryError::SessionNodeDIDMissing)?;
     let requester = session["requester_did"].as_str();
     let transcript_call = json!({"action":"transcript","session_id":session_id});
     let tool_call_doc_id = match (named_doc, &call_id) {
@@ -557,21 +563,12 @@ async fn tool_output(
                 }
             }
             match docs.len() {
-                0 => bail!(
-                    "no tool call with call_id {key} in session {session_id}; next call: sessions {transcript_call}"
-                ),
+                0 => return Err(SessionHistoryError::NoToolCallCallIdSession { key: key.to_string(), session_id: session_id.to_string(), transcript_call: transcript_call.to_string() }),
                 1 => docs.pop_first().unwrap(),
-                _ => bail!(
-                    "call_id {key} names {} tool calls in session {session_id}: {}; next call: sessions {}",
-                    docs.len(),
-                    docs.iter().cloned().collect::<Vec<_>>().join(", "),
-                    json!({"action":"output","session_id":session_id,"tool_call_doc_id":docs.first()})
-                ),
+                _ => return Err(SessionHistoryError::CallIdNamesToolCallsSession { key: key.to_string(), docs_len: docs.len().to_string(), session_id: session_id.to_string(), detail: docs.iter().cloned().collect::<Vec<_>>().join(", ").to_string(), detail2: json!({"action":"output","session_id":session_id,"tool_call_doc_id":docs.first()}).to_string() }),
             }
         }
-        (None, None) => bail!(
-            "output requires call_id; next call: sessions {{\"action\":\"help\",\"topic\":\"output\"}}"
-        ),
+        (None, None) => return Err(SessionHistoryError::OutputRequiresCallIdNextCall),
     };
     let read = crate::tool_call_lifecycle::query::load_tool_call_read_in_txn(
         txn,
@@ -581,11 +578,9 @@ async fn tool_output(
         requester,
     )
     .await
-    .map_err(|error| {
-        anyhow::anyhow!(
-            "{}; next call: sessions {transcript_call}",
-            ErrorChain(&error)
-        )
+    .map_err(|error| SessionHistoryError::NextCallSessions2 {
+        detail: ErrorChain(&error).to_string(),
+        transcript_call: transcript_call.to_string(),
     })?;
     let mut next = json!({"action":"output","session_id":session_id});
     match &call_id {
@@ -594,14 +589,16 @@ async fn tool_output(
     }
     let Some(output) = read.raw_result.as_deref() else {
         if read.result.is_none() {
-            bail!(
-                "tool call {tool_call_doc_id} has no delivered output yet (state {:?}); next call: sessions {next}",
-                read.lifecycle_state
-            );
+            return Err(SessionHistoryError::ToolCallHasNoDeliveredOutput {
+                tool_call_doc_id: tool_call_doc_id.to_string(),
+                lifecycle_state: format!("{:?}", read.lifecycle_state),
+                next: next.to_string(),
+            });
         }
-        bail!(
-            "tool call {tool_call_doc_id} has no single text output to page; next call: sessions {transcript_call}"
-        );
+        return Err(SessionHistoryError::ToolCallHasNoSingleText {
+            tool_call_doc_id: tool_call_doc_id.to_string(),
+            transcript_call: transcript_call.to_string(),
+        });
     };
     let offset = args.offset_bytes.unwrap_or(0);
     let page = crate::defra_query::utf8_page(
@@ -622,7 +619,10 @@ async fn tool_output(
                 "offset_bytes is not a UTF-8 boundary within the output"
             }
         };
-        anyhow::anyhow!("{reason}; next call: sessions {next}")
+        SessionHistoryError::NextCallSessions3 {
+            reason: reason.to_string(),
+            next: next.to_string(),
+        }
     })?;
     let complete = page.end == output.len();
     let next_call = (!complete).then(|| {
@@ -662,8 +662,12 @@ async fn transcript(
     args: &SessionHistoryParams,
     limit: usize,
 ) -> Result<Value> {
-    let cursor = args.cursor.as_deref().map(serde_json::from_str::<TranscriptCursor>).transpose()
-        .context("invalid transcript cursor; next call: sessions {\"action\":\"transcript\",\"session_id\":\"<ID>\"}")?;
+    let cursor = args
+        .cursor
+        .as_deref()
+        .map(serde_json::from_str::<TranscriptCursor>)
+        .transpose()
+        .map_err(SessionHistoryError::InvalidTranscriptCursorNextCallSessions)?;
     let bounds = cursor
         .as_ref()
         .map(|cursor| {
@@ -687,7 +691,7 @@ async fn transcript(
     for row in headers.iter().take(page_limit) {
         let header_id = row["_docID"]
             .as_str()
-            .context("header has no physical ID")?;
+            .ok_or(SessionHistoryError::HeaderHasNoPhysicalID)?;
         let (header, message) = reader.load_message(header_id).await?;
         let presentation = gents_protocol::transcript::present_message(&message);
         let offset = cursor
@@ -733,10 +737,10 @@ async fn search_session(
 ) -> Result<Vec<(i64, Value)>> {
     let id = session["session_id"]
         .as_str()
-        .context("session ID missing")?;
+        .ok_or(SessionHistoryError::SessionIDMissing)?;
     let agent = session["node_did"]
         .as_str()
-        .context("session node DID missing")?;
+        .ok_or(SessionHistoryError::SessionNodeDIDMissing)?;
     let requester = session["requester_did"].as_str();
     let mut hits = Vec::new();
     if resume_sequence.is_none() && matches_text(session, Some(needle)) {
@@ -760,10 +764,12 @@ async fn search_session(
             if hits.len() >= remaining {
                 break 'pages;
             }
-            let header_id = row["_docID"].as_str().context("header ID missing")?;
+            let header_id = row["_docID"]
+                .as_str()
+                .ok_or(SessionHistoryError::HeaderIDMissing)?;
             let sequence = row["sequence"]
                 .as_i64()
-                .context("message has no sequence")?;
+                .ok_or(SessionHistoryError::MessageHasNoSequence)?;
             after = Some(sequence);
             let (header, message) = reader.load_message(header_id).await?;
             let text = gents_protocol::transcript::present_message(&message).body_markdown;
@@ -855,7 +861,7 @@ resources:
             let did = owner_did.clone();
             Box::pin(async move {
                 let value = txn.execute(&format!("mutation {{add_AgentSession(input: {{node_did: {}, requester_did: \"different-requester\", session_id: \"shared\", agent_id: \"engineer\", created_at: \"2026-01-01T00:00:00Z\"}}) {{_docID}}}}", quoted(&did))).await?;
-                Ok::<_, anyhow::Error>(value["data"]["add_AgentSession"][0]["_docID"].as_str().with_context(|| format!("ACP session fixture creation failed: {value}"))?.to_owned())
+                Ok::<_, SessionHistoryError>(value["data"]["add_AgentSession"][0]["_docID"].as_str().ok_or_else(|| SessionHistoryError::ACPSessionFixtureCreationFailed { value: value.to_string() })?.to_owned())
             })
         }).await.unwrap();
         node.add_dac_actor_relationship(owner.did(), "AgentSession", &doc, "reader", reader.did())

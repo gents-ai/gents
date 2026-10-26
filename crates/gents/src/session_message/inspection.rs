@@ -1,8 +1,6 @@
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
-
 use super::SessionMessageError;
 use defra_node::EmbeddedNode;
 use gents_protocol::message::{AssistantContent, Message, UserContent};
@@ -15,6 +13,8 @@ use crate::graphql::escape_graphql_string;
 use crate::session::TxnCanonicalReader;
 use crate::session_origin::SessionScope;
 use crate::tool_surface::AgentToolConfig;
+
+type Result<T, E = SessionMessageError> = std::result::Result<T, E>;
 
 const TEXT_CHARS: usize = 8_000;
 const TOOL_PREVIEW_CHARS: usize = 240;
@@ -219,7 +219,7 @@ async fn messages(
             && cursor.requester_did == target.requester_did
             && cursor.session_id == target.session_id)
         {
-            return Err(SessionMessageError::CursorOtherSession.into());
+            return Err(SessionMessageError::CursorOtherSession);
         }
     }
     let bounds = cursor
@@ -399,7 +399,7 @@ pub(crate) async fn agent_session_read(
 ) -> Result<Value> {
     args.validate()?;
     if !(args.session_id.trim() != caller.session_id) {
-        return Err(SessionMessageError::CallingSessionRead.into());
+        return Err(SessionMessageError::CallingSessionRead);
     }
     let target = super::resolve_send_target(node, &caller.node_did, tools, args.session_id.trim())
         .await?
@@ -419,7 +419,7 @@ pub(crate) async fn agent_session_read(
     let identity = caller
         .node_did
         .parse()
-        .context("session inspection requires a valid caller DID")?;
+        .map_err(SessionMessageError::InvalidCallerDid)?;
     ConfigAccess::transact_local_readonly(node, Some(identity), "agent_session.read", |txn| {
         let target = target.clone();
         let active = active.clone();
@@ -430,11 +430,11 @@ pub(crate) async fn agent_session_read(
             let response = txn.execute(&format!("{{AgentSession(filter: {{{scope}}}, limit: 2) {{{}}}}}", crate::session::AGENT_SESSION_FIELDS)).await?;
             let sessions = rows(&response, "AgentSession")?;
             if sessions.len() != 1 {
-    return Err(SessionMessageError::InspectedSessionAmbiguous.into());
+    return Err(SessionMessageError::InspectedSessionAmbiguous);
 }
             let session = crate::session::decode_session_row(&sessions[0])?.session;
             if !(super::session_target_allowed(&session, &caller.node_did, tools)) {
-    return Err(SessionMessageError::InspectedSessionNotMessageable.into());
+    return Err(SessionMessageError::InspectedSessionNotMessageable);
 }
             let unobserved = if active.is_none() {
                 match session.observation.as_ref().and_then(|view| view.latest_request.as_ref()) {

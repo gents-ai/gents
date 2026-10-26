@@ -25,9 +25,15 @@ pub enum BackgroundCompletionDiagnosticsError {
     #[error("background completion wake {request_id} has no session_id")]
     WakeWithoutSession { request_id: String },
     #[error(transparent)]
-    Session(#[from] crate::session::SessionError),
+    Session(Box<crate::session::SessionError>),
     #[error(transparent)]
     Access(#[from] crate::config_client::ConfigClientError),
+}
+
+impl From<crate::session::SessionError> for BackgroundCompletionDiagnosticsError {
+    fn from(error: crate::session::SessionError) -> Self {
+        Self::Session(Box::new(error))
+    }
 }
 
 impl crate::config_client::TransactionFailure for BackgroundCompletionDiagnosticsError {

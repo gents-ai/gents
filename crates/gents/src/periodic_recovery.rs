@@ -1,4 +1,3 @@
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 
 use crate::admission::{InferenceCall, InferenceCallRecoveryReport};
@@ -8,6 +7,28 @@ use crate::tool_call_lifecycle::{
     BackgroundCompletionSideEffectReport, OrphanedBackgroundToolReport, TerminalParentToolReport,
     ToolCallLifecycle,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub enum PeriodicRecoveryError {
+    #[error(transparent)]
+    TaskHookRecord(#[from] crate::task_hooks::TaskHookRecordError),
+    #[error(transparent)]
+    InferenceRecovery(#[from] crate::admission::InferenceRecoveryError),
+    #[error(transparent)]
+    Recovery(#[from] crate::lifecycle::RecoveryError),
+    #[error(transparent)]
+    ToolCallRecovery(#[from] crate::tool_call_lifecycle::ToolCallRecoveryError),
+    #[error(transparent)]
+    BackgroundCompletion(Box<crate::background_completion::BackgroundCompletionError>),
+}
+
+impl From<crate::background_completion::BackgroundCompletionError> for PeriodicRecoveryError {
+    fn from(error: crate::background_completion::BackgroundCompletionError) -> Self {
+        Self::BackgroundCompletion(Box::new(error))
+    }
+}
+
+type Result<T, E = PeriodicRecoveryError> = std::result::Result<T, E>;
 
 const REQUEST_TERMINAL_REPAIR_SWEEP_IDS: &[&str] = &["request_lifecycle_recover_all_requests"];
 const TERMINAL_PARENT_TOOL_SWEEP_IDS: &[&str] =
@@ -181,6 +202,7 @@ fn reconcile_terminal_parent_owned_tools<'a>(
         ToolCallLifecycle::reconcile_terminal_parent_owned_tools(node, node_did)
             .await
             .map(PeriodicRecoverySweepOutcome::TerminalParentTools)
+            .map_err(PeriodicRecoveryError::from)
     })
 }
 
@@ -197,6 +219,7 @@ fn reconcile_orphaned_background_tools<'a>(
         )
         .await
         .map(PeriodicRecoverySweepOutcome::OrphanedBackgroundTools)
+        .map_err(PeriodicRecoveryError::from)
     })
 }
 
@@ -209,6 +232,7 @@ fn reconcile_background_completion_side_effects<'a>(
         ToolCallLifecycle::reconcile_background_completion_side_effects(node, node_did)
             .await
             .map(PeriodicRecoverySweepOutcome::BackgroundCompletionSideEffects)
+            .map_err(PeriodicRecoveryError::from)
     })
 }
 
@@ -220,8 +244,8 @@ fn repair_terminal_requests<'a>(
     Box::pin(async move {
         RequestLifecycle::repair_terminal_requests(node, node_did)
             .await
-            .map_err(anyhow::Error::from)
             .map(PeriodicRecoverySweepOutcome::RequestTerminalRepair)
+            .map_err(PeriodicRecoveryError::from)
     })
 }
 
@@ -234,6 +258,7 @@ fn recover_inference_calls<'a>(
         InferenceCall::recover_all(node, node_did)
             .await
             .map(PeriodicRecoverySweepOutcome::InferenceCalls)
+            .map_err(PeriodicRecoveryError::from)
             .map_err(Into::into)
     })
 }
@@ -247,6 +272,7 @@ fn settle_session_message_rows<'a>(
         crate::background_completion::settle_running_session_message_rows(node, node_did)
             .await
             .map(PeriodicRecoverySweepOutcome::SessionMessageRows)
+            .map_err(PeriodicRecoveryError::from)
     })
 }
 

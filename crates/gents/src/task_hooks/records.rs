@@ -261,7 +261,7 @@ impl TaskHookRecordHandle {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum TaskHookRecordError {
+pub enum TaskHookRecordError {
     #[error(transparent)]
     Config(#[from] crate::config_client::ConfigClientError),
     #[error(transparent)]

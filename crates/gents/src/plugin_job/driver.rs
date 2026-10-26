@@ -1,13 +1,14 @@
 //! Ends a job row: maps a [`Settlement`] onto the row's terminal state and
 //! canonical tool output.
 
+use crate::plugin_job::origin::PluginJobError;
+use crate::plugin_job::origin::StepRunFailure;
 use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::job::{
     DataWrite, JobControlKind, JobFailure, JobPauseReason, JobPin, JobProgress, JobScratch,
@@ -49,6 +50,8 @@ use crate::session_origin::SessionScope;
 use crate::tool_call_lifecycle::query::load_tool_call_arguments_in_txn;
 use crate::tool_call_lifecycle::{PluginJobTerminal, ToolCallLifecycle, ToolCallState};
 use crate::tool_surface::EndpointScope;
+
+type Result<T, E = PluginJobError> = std::result::Result<T, E>;
 
 /// The handles one job step needs on its own runtime. The runtime's single
 /// `JobDriver` holds the one value; tests build it directly.
@@ -323,9 +326,12 @@ pub async fn run_step(runtime: &JobRuntime, row_doc_id: &str) -> Result<StepOutc
         kill(&access, &mut lifecycle, &row, KillCause::Stop).await?;
         return Ok(StepOutcome::Settled);
     }
-    let pin = read_pin(&access, row_doc_id)
-        .await?
-        .with_context(|| format!("job row {row_doc_id} has no job_pin"))?;
+    let pin =
+        read_pin(&access, row_doc_id)
+            .await?
+            .ok_or_else(|| PluginJobError::JobRowHasNoJobPin {
+                row_doc_id: row_doc_id.to_string(),
+            })?;
     let (namespace, name) = parse_coordinate(&pin.plugin_ref)?;
     let installed = match read_record(&runtime.home, namespace, name) {
         Ok(record) if record.digest == pin.engine_digest => record,
@@ -353,7 +359,9 @@ async fn step_on(
     let pin = input
         .pin
         .clone()
-        .with_context(|| format!("job row {row_doc_id} has no job_pin"))?;
+        .ok_or_else(|| PluginJobError::JobRowHasNoJobPin {
+            row_doc_id: row_doc_id.to_string(),
+        })?;
     let caller = &input.caller;
     let jobs = JobCaller::new(
         runtime.node.clone(),
@@ -388,23 +396,29 @@ async fn step_on(
             let trapped = error.is_trap()
                 || gents_protocol::error_chain::find_source::<PluginError>(&error)
                     .is_some_and(|error| matches!(error, PluginError::Trap(_)));
-            let error = if trapped {
-                anyhow::Error::new(StepFailure::Trap(format!("{}", ErrorChain(&error))))
+            let source = if trapped {
+                StepRunFailure::Failure(StepFailure::Trap(format!("{}", ErrorChain(&error))))
             } else {
-                error.into()
+                StepRunFailure::Run(error)
             };
-            return Err(error.context(format!("the step of job row {row_doc_id} did not run")));
+            return Err(PluginJobError::StepJobRowDidNotRun {
+                row_doc_id: row_doc_id.to_string(),
+                source,
+            });
         }
     };
     if let Some(failure) = step_failure(call.outcome.verdict, &call.outcome.diagnostics) {
-        return Err(anyhow::Error::new(failure).context(format!(
-            "the step of job row {row_doc_id} returned {:?}",
-            call.outcome.verdict
-        )));
+        return Err(PluginJobError::StepJobRowReturned {
+            row_doc_id: row_doc_id.to_string(),
+            verdict: format!("{:?}", call.outcome.verdict),
+            source: failure,
+        });
     }
     let output: JobStepOutput = serde_json::from_value(call.outcome.output).map_err(|error| {
-        anyhow::Error::new(StepFailure::MalformedOutput(error.to_string()))
-            .context(format!("decoding the step output of job row {row_doc_id}"))
+        PluginJobError::DecodingStepOutputJobRow {
+            row_doc_id: row_doc_id.to_string(),
+            source: StepFailure::MalformedOutput(error.to_string()),
+        }
     })?;
 
     let scratch = scratch_of(&output);
@@ -527,20 +541,13 @@ async fn step_on(
 #[cfg(test)]
 static STEP_TRANSACTION_RUNS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
-fn record_refusal(error: &anyhow::Error) -> Option<&RecordError> {
-    error
-        .downcast_ref::<crate::plugin_job::records::JobRecordsError>()
-        .and_then(crate::plugin_job::records::JobRecordsError::refusal)
-        .or_else(|| {
-            error
-                .downcast_ref::<crate::tool_call_lifecycle::TransitionError>()
-                .and_then(crate::tool_call_lifecycle::TransitionError::record_refusal)
-        })
-        .or_else(|| {
-            error
-                .downcast_ref::<crate::tool_call_lifecycle::delivery::DeliveryError>()
-                .and_then(crate::tool_call_lifecycle::delivery::DeliveryError::record_refusal)
-        })
+fn record_refusal(error: &PluginJobError) -> Option<&RecordError> {
+    match error {
+        PluginJobError::JobRecords(error) => error.refusal(),
+        PluginJobError::Transition(error) => error.record_refusal(),
+        PluginJobError::Delivery(error) => error.record_refusal(),
+        _ => None,
+    }
 }
 
 /// The step transaction: it re-reads every fact it admits against, so a
@@ -568,10 +575,11 @@ async fn step_transaction(
     if read_lifecycle_state(txn, row_doc_id).await? != ToolCallState::Running.as_str() {
         return Ok(Stepped::Ended);
     }
-    anyhow::ensure!(
-        read_pin(txn, row_doc_id).await?.as_ref() == Some(pin),
-        "the job_pin of {row_doc_id} changed during the step"
-    );
+    if read_pin(txn, row_doc_id).await?.as_ref() != Some(pin) {
+        return Err(PluginJobError::JobPinChangedDuringStep {
+            row_doc_id: row_doc_id.to_string(),
+        });
+    }
     // (b) the input is still current; (e)'s compare-and-set is the authority.
     let stored = read_progress(txn, row_doc_id).await?;
     if stored.as_ref().map_or(0, |progress| progress.revision) != revision {
@@ -615,11 +623,8 @@ async fn step_transaction(
         let grant = installed
             .as_ref()
             .and_then(InstalledPlugin::data_grant)
-            .with_context(|| {
-                format!(
-                    "plugin {} declares no data, so its step cannot write",
-                    pin.plugin_ref
-                )
+            .ok_or_else(|| PluginJobError::PluginDeclaresNoDataSoStep {
+                plugin_ref: pin.plugin_ref.to_string(),
             })?;
         let stamps = StampContext::JobStep {
             node_did: input.caller.node_did.clone(),
@@ -636,7 +641,9 @@ async fn step_transaction(
     let guest = progress_of(output)
         .cloned()
         .or_else(|| stored.clone())
-        .with_context(|| format!("job row {row_doc_id} has no progress to carry"))?;
+        .ok_or_else(|| PluginJobError::JobRowHasNoProgressCarry {
+            row_doc_id: row_doc_id.to_string(),
+        })?;
     let budget = stored.map_or_else(|| guest.budget.clone(), |progress| progress.budget);
     write_progress_in_txn(
         txn,
@@ -825,15 +832,17 @@ async fn max_request_hop_in_txn(txn: &ConfigApplyTxn<'_>, node_did: &str) -> Res
     let rows = response
         .pointer("/data/Node")
         .and_then(Value::as_array)
-        .context("Node hop-cap query returned no row array")?;
-    anyhow::ensure!(rows.len() <= 1, "multiple Node rows matched a DID");
+        .ok_or(PluginJobError::NodeHopCapQueryReturnedNo)?;
+    if rows.len() > 1 {
+        return Err(PluginJobError::MultipleNodeRowsMatchedDID);
+    }
     match rows.first().map(|row| &row["max_request_hop"]) {
         None | Some(Value::Null) => Ok(None),
         Some(hop) => hop
             .as_u64()
             .and_then(|hop| u32::try_from(hop).ok())
             .map(Some)
-            .context("Node.max_request_hop must be a nonnegative u32"),
+            .ok_or(PluginJobError::NodeMaxRequestHopMustNonnegative),
     }
 }
 
@@ -848,7 +857,9 @@ async fn read_lifecycle_state(txn: &ConfigApplyTxn<'_>, row_doc_id: &str) -> Res
         .pointer("/data/AgentToolCall/0/lifecycle_state")
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .with_context(|| format!("job row {row_doc_id} does not exist"))
+        .ok_or_else(|| PluginJobError::JobRowDoesNotExist2 {
+            row_doc_id: row_doc_id.to_string(),
+        })
 }
 
 /// The job row's lifecycle, loaded by its physical identity.
@@ -866,11 +877,16 @@ pub(super) async fn load_lifecycle(
         response
             .pointer("/data/AgentToolCall/0")
             .cloned()
-            .with_context(|| format!("job row {row_doc_id} does not exist"))?,
+            .ok_or_else(|| PluginJobError::JobRowDoesNotExist2 {
+                row_doc_id: row_doc_id.to_string(),
+            })?,
     )
-    .with_context(|| format!("decoding job row {row_doc_id}"))?;
+    .map_err(|source| PluginJobError::DecodingJobRow {
+        row_doc_id: row_doc_id.to_string(),
+        source,
+    })?;
     let ConfigAccess::Local(node) = access else {
-        anyhow::bail!("a job step needs a local node");
+        return Err(PluginJobError::JobStepNeedsLocalNode);
     };
     ToolCallLifecycle::load_by_doc_id(
         node.node().clone(),
@@ -880,7 +896,9 @@ pub(super) async fn load_lifecycle(
         stored.requester_did.as_deref(),
     )
     .await?
-    .with_context(|| format!("job row {row_doc_id} does not exist"))
+    .ok_or_else(|| PluginJobError::JobRowDoesNotExist2 {
+        row_doc_id: row_doc_id.to_string(),
+    })
 }
 
 /// Fails the job closed with `refusal`, the step having committed nothing.
@@ -1096,15 +1114,15 @@ impl JobDriver {
                     .remove(row_doc_id);
                 false
             }
-            Err(error) => match error.downcast_ref::<StepFailure>() {
+            Err(error) => match error.step_failure() {
                 None => {
-                    tracing::warn!(row_doc_id, error = %ErrorChain(error.as_ref()), "job step did not run");
+                    tracing::warn!(row_doc_id, error = %ErrorChain(error), "job step did not run");
                     false
                 }
                 Some(failure) => match self.step_failed(row_doc_id, failure).await {
                     Ok(verdict) => verdict == FailureVerdict::Retry,
                     Err(error) => {
-                        tracing::warn!(row_doc_id, error = %ErrorChain(error.as_ref()), "job step failure was not settled");
+                        tracing::warn!(row_doc_id, error = %ErrorChain(&error), "job step failure was not settled");
                         false
                     }
                 },
@@ -1252,9 +1270,14 @@ async fn read_row(txn: &ConfigApplyTxn<'_>, row_doc_id: &str) -> Result<StepRow>
         stored
             .pointer("/data/AgentToolCall/0")
             .cloned()
-            .with_context(|| format!("job row {row_doc_id} does not exist"))?,
+            .ok_or_else(|| PluginJobError::JobRowDoesNotExist2 {
+                row_doc_id: row_doc_id.to_string(),
+            })?,
     )
-    .with_context(|| format!("decoding job row {row_doc_id}"))?;
+    .map_err(|source| PluginJobError::DecodingJobRow {
+        row_doc_id: row_doc_id.to_string(),
+        source,
+    })?;
     let hop = txn
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ request_hop }} }}"#,
@@ -1263,7 +1286,9 @@ async fn read_row(txn: &ConfigApplyTxn<'_>, row_doc_id: &str) -> Result<StepRow>
         .await?;
     let caller_hop = hop
         .pointer("/data/AgentRequest/0")
-        .with_context(|| format!("the caller request of job row {row_doc_id} does not exist"))?
+        .ok_or_else(|| PluginJobError::CallerRequestJobRowDoesNot {
+            row_doc_id: row_doc_id.to_string(),
+        })?
         .get("request_hop")
         .and_then(Value::as_u64)
         .map_or(0, |hop| u32::try_from(hop).unwrap_or(u32::MAX));
@@ -1275,8 +1300,12 @@ async fn read_row(txn: &ConfigApplyTxn<'_>, row_doc_id: &str) -> Result<StepRow>
         stored.requester_did.as_deref(),
     )
     .await?;
-    let call: CallArgs = serde_json::from_str(&text)
-        .with_context(|| format!("decoding the accepted arguments of job row {row_doc_id}"))?;
+    let call: CallArgs = serde_json::from_str(&text).map_err(|source| {
+        PluginJobError::DecodingAcceptedArgumentsJobRow {
+            source,
+            row_doc_id: row_doc_id.to_string(),
+        }
+    })?;
     let pin = read_pin(txn, row_doc_id).await?;
     let progress = read_progress(txn, row_doc_id).await?;
     let lifecycle = stored
@@ -1959,7 +1988,7 @@ pub(crate) mod tests {
                         pause_reason: None,
                     };
                     write_progress_in_txn(txn, row, 1, running_progress(), host).await?;
-                    Ok::<_, anyhow::Error>(read_step_row_in_txn(txn, row).await?.spent)
+                    Ok::<_, PluginJobError>(read_step_row_in_txn(txn, row).await?.spent)
                 })
             })
             .await
@@ -2915,11 +2944,11 @@ pub(crate) mod tests {
         let error = run_step(&step.job.runtime, &step.row).await.unwrap_err();
         assert!(
             matches!(
-                error.downcast_ref::<StepFailure>(),
+                error.step_failure(),
                 Some(StepFailure::Trap(_))
             ),
             "{}",
-            ErrorChain(error.as_ref())
+            ErrorChain(&error)
         );
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "running");
         step.close().await;

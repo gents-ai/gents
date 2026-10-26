@@ -1,10 +1,10 @@
 //! The single kill owner for stop, pause, deadline and fail-closed: it
 //! interrupts a job's live children and ends the row now.
 
+use crate::plugin_job::origin::PluginJobError;
 use gents_protocol::error_chain::ErrorChain;
 use rapidhash::{HashMapExt, RapidHashMap};
 
-use anyhow::{Context, Result};
 use gents_protocol::job::{
     JobChildState, JobControlEcho, JobControlEchoKind, JobControlKind, JobControlOutcome,
     JobGuestPin, JobPin, JobReadError, JobResume, JobResumeEngine, JobState,
@@ -22,6 +22,8 @@ use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::plugin_job::keys::job_spawn_key;
 use crate::tool_call_lifecycle::{PluginJobTerminal, ToolCallLifecycle, ToolRowKind};
+
+type Result<T, E = PluginJobError> = std::result::Result<T, E>;
 
 /// Why a job row is killed: a control, the deadline, or a fail-closed refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,9 +181,9 @@ async fn caused_requests(
         response
             .pointer("/data/AgentRequest")
             .cloned()
-            .context("caused request query omitted rows")?,
+            .ok_or(PluginJobError::CausedRequestQueryOmittedRows)?,
     )
-    .context("decoding caused requests")?;
+    .map_err(PluginJobError::DecodingCausedRequests)?;
     Ok(rows
         .into_iter()
         .map(|row| (row.retry_key.clone(), row))
@@ -308,7 +310,7 @@ async fn kill_in_txn(
             txn,
             lifecycle
                 .doc_id()
-                .context("job row lacks physical identity")?,
+                .ok_or(PluginJobError::JobRowLacksPhysicalIdentity)?,
         )
         .await?;
         return Ok((
@@ -358,11 +360,8 @@ pub async fn control(
     tool_call_id: &str,
     action: JobControlKind,
 ) -> Result<JobControlOutcome, JobReadError> {
-    let unavailable = |error: anyhow::Error| JobReadError::Unavailable {
-        message: format!(
-            "{}; retry when the node answers",
-            ErrorChain(error.as_ref())
-        ),
+    let unavailable = |error: &(dyn std::error::Error + 'static)| JobReadError::Unavailable {
+        message: format!("{}; retry when the node answers", ErrorChain(error)),
     };
     let ConfigAccess::Local(node) = access else {
         return Err(JobReadError::Unavailable {
@@ -372,7 +371,7 @@ pub async fn control(
     let mut lifecycle =
         ToolCallLifecycle::load(node.node().clone(), &scope.session_id, tool_call_id)
             .await
-            .map_err(|error| unavailable(error.into()))?
+            .map_err(|error| unavailable(&error))?
             .ok_or(JobReadError::NotYetObservable)?;
     if !scope.authorizes(
         lifecycle.session_id(),
@@ -386,7 +385,7 @@ pub async fn control(
     }
     let doc_id = lifecycle
         .doc_id()
-        .ok_or_else(|| unavailable(anyhow::anyhow!("job row lacks physical identity")))?
+        .ok_or_else(|| unavailable(&PluginJobError::JobRowLacksPhysicalIdentity))?
         .to_owned();
     let cause = match action {
         JobControlKind::Stop => KillCause::Stop,
@@ -402,11 +401,11 @@ pub async fn control(
             })
         })
         .await
-        .map_err(unavailable)?;
+        .map_err(|error| unavailable(&error))?;
     if let Some(terminal) = terminal {
         crate::plugin_job::driver::finish_plugin_job_row(&mut lifecycle, terminal)
             .await
-            .map_err(unavailable)?;
+            .map_err(|error| unavailable(&error))?;
     }
     let outcome = if killed.won {
         JobControlOutcome::Applied {
@@ -483,7 +482,7 @@ pub(crate) async fn resume_target_in_txn(
         return Ok((row_doc_id.to_owned(), false, None));
     };
     let owner: OwnerRow =
-        serde_json::from_value(owner.clone()).context("decoding the resume target row")?;
+        serde_json::from_value(owner.clone()).map_err(PluginJobError::DecodingResumeTargetRow)?;
     let prior = read_step_row_in_txn(txn, row_doc_id).await?;
     let root = if prior.root == row_doc_id {
         prior.clone()
@@ -504,9 +503,9 @@ pub(crate) async fn resume_target_in_txn(
         session
             .pointer("/data/AgentToolCall")
             .cloned()
-            .context("session job query omitted rows")?,
+            .ok_or(PluginJobError::SessionJobQueryOmittedRows)?,
     )
-    .context("decoding session job rows")?;
+    .map_err(PluginJobError::DecodingSessionJobRows)?;
     let head = !rows.into_iter().any(|row| {
         row.job_pin
             .and_then(|pin| serde_json::from_value::<JobPin>(pin).ok())
@@ -670,7 +669,7 @@ mod tests {
                         &json!({ "input": value }),
                     )
                     .await?;
-                Ok::<_, anyhow::Error>(gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentRequest")?)
+                Ok::<_, PluginJobError>(gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentRequest")?)
             })
         })
         .await
@@ -735,7 +734,7 @@ mod tests {
                         kill_in_txn(txn, lifecycle, job, KillCause::Stop).await?;
                     assert!(killed.won);
                     assert!(terminal.is_some_and(|terminal| terminal.won()));
-                    anyhow::bail!("abort the staged kill")
+                    return Err(PluginJobError::AbortStagedKill);
                 })
             })
             .await;

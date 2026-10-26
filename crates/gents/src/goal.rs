@@ -308,7 +308,7 @@ pub enum GoalError {
     #[error("goal continuation sequence exhausted")]
     GoalContinuationSequenceExhausted,
     #[error("summing goal inference usage")]
-    SummingGoalInferenceUsage(#[source] anyhow::Error),
+    SummingGoalInferenceUsage(#[source] crate::toolset::TitleAuditUsageError),
     #[error("Goal usage snapshot has an unknown status")]
     GoalUsageSnapshotHasUnknownStatus,
     #[error("the current session already has a goal with a different objective or budget")]
@@ -466,11 +466,11 @@ pub enum GoalError {
     #[error(transparent)]
     ProfileSwitch(#[from] crate::config_client::ProfileSwitchError),
     #[error(transparent)]
-    DocumentConfig(#[from] crate::document_config::DocumentConfigError),
+    DocumentConfig(Box<crate::document_config::DocumentConfigError>),
     #[error(transparent)]
     GraphPipeline(Box<crate::graph_pipeline::GraphPipelineError>),
     #[error(transparent)]
-    Session(#[from] crate::session::SessionError),
+    Session(Box<crate::session::SessionError>),
     #[error(transparent)]
     GoalControl(#[from] gents_protocol::goal_control::GoalControlError),
     #[error(transparent)]
@@ -481,6 +481,18 @@ pub enum GoalError {
     WaitObservation(#[from] claimed_publication::wait_observation::WaitObservationError),
     #[error(transparent)]
     PluginSlots(crate::pack::CallbackError),
+}
+
+impl From<crate::session::SessionError> for GoalError {
+    fn from(error: crate::session::SessionError) -> Self {
+        Self::Session(Box::new(error))
+    }
+}
+
+impl From<crate::document_config::DocumentConfigError> for GoalError {
+    fn from(error: crate::document_config::DocumentConfigError) -> Self {
+        Self::DocumentConfig(Box::new(error))
+    }
 }
 
 impl From<crate::lifecycle::materialize::MaterializeError> for GoalError {

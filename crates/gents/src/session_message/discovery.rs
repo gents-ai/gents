@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use anyhow::Result;
-
 use super::SessionMessageError;
 use defra_node::EmbeddedNode;
 use gents_protocol::session::AgentSession;
@@ -13,6 +11,8 @@ use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
 use crate::session_origin::{SessionLineage, SessionScope};
 use crate::tool_surface::AgentToolConfig;
+
+type Result<T, E = SessionMessageError> = std::result::Result<T, E>;
 
 const PAGE_SIZE: usize = 100;
 const SCAN_PAGES: usize = 10;

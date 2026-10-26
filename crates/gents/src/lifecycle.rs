@@ -559,7 +559,7 @@ pub enum LifecycleError {
     #[error("{message}")]
     RequestFields { message: &'static str },
     #[error(transparent)]
-    AgentRequestAdmission(#[from] crate::request_admission::AgentRequestAdmissionError),
+    AgentRequestAdmission(Box<crate::request_admission::AgentRequestAdmissionError>),
     #[error(transparent)]
     BackgroundCompletion(#[from] crate::background_completion::BackgroundCompletionError),
     #[error(transparent)]
@@ -567,7 +567,7 @@ pub enum LifecycleError {
     #[error(transparent)]
     CompletionFactory(#[from] crate::completion_factory::CompletionFactoryError),
     #[error(transparent)]
-    EventSourceCursor(#[from] crate::config_client::event_source_cursor::EventSourceCursorError),
+    EventSourceCursor(Box<crate::config_client::event_source_cursor::EventSourceCursorError>),
     #[error(transparent)]
     ExecutionLease(Box<crate::lifecycle::execution_lease::ExecutionLeaseError>),
     #[error(transparent)]
@@ -581,13 +581,13 @@ pub enum LifecycleError {
     #[error(transparent)]
     GraphqlError(#[from] gents_protocol::graphql::GraphqlError),
     #[error(transparent)]
-    Goal(#[from] crate::goal::GoalError),
+    Goal(Box<crate::goal::GoalError>),
     #[error(transparent)]
     GraphPipeline(Box<crate::graph_pipeline::GraphPipelineError>),
     #[error(transparent)]
     Queue(Box<crate::lifecycle::QueueError>),
     #[error(transparent)]
-    Session(#[from] crate::session::SessionError),
+    Session(Box<crate::session::SessionError>),
     #[error(transparent)]
     Watcher(#[from] crate::watcher::WatcherError),
     #[error(transparent)]
@@ -606,6 +606,30 @@ pub enum LifecycleError {
     MailboxReplyClaimDidNotConsume,
     #[error("mailbox reply request disappeared")]
     MailboxReplyRequestDisappeared,
+}
+
+impl From<crate::config_client::event_source_cursor::EventSourceCursorError> for LifecycleError {
+    fn from(error: crate::config_client::event_source_cursor::EventSourceCursorError) -> Self {
+        Self::EventSourceCursor(Box::new(error))
+    }
+}
+
+impl From<crate::session::SessionError> for LifecycleError {
+    fn from(error: crate::session::SessionError) -> Self {
+        Self::Session(Box::new(error))
+    }
+}
+
+impl From<crate::goal::GoalError> for LifecycleError {
+    fn from(error: crate::goal::GoalError) -> Self {
+        Self::Goal(Box::new(error))
+    }
+}
+
+impl From<crate::request_admission::AgentRequestAdmissionError> for LifecycleError {
+    fn from(error: crate::request_admission::AgentRequestAdmissionError) -> Self {
+        Self::AgentRequestAdmission(Box::new(error))
+    }
 }
 
 impl From<crate::lifecycle::QueueError> for LifecycleError {

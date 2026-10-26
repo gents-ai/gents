@@ -1,7 +1,7 @@
+use crate::tool_surface::ToolSurfaceError;
 use std::sync::Arc;
 
 use crate::llm::tool::ToolDyn;
-use anyhow::Result;
 
 use super::modes::{BashMode, FileToolMode};
 
@@ -12,6 +12,8 @@ use crate::toolset::{
     default_read_only_command_policy, CommandExecutionMode, CommandExecutionPolicy,
     CommandNetworkMode,
 };
+
+type Result<T, E = ToolSurfaceError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct AgentToolConfig {

@@ -42,6 +42,15 @@ impl TransactionFailure for anyhow::Error {
     }
 }
 
+impl<T> TransactionFailure for Box<T>
+where
+    T: TransactionFailure,
+{
+    fn config_client_error(&self) -> Option<&ConfigClientError> {
+        (**self).config_client_error()
+    }
+}
+
 impl TransactionFailure for Box<dyn std::error::Error + Send + Sync> {
     fn config_client_error(&self) -> Option<&ConfigClientError> {
         let root: &(dyn std::error::Error + 'static) = self.as_ref();

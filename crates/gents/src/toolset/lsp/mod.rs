@@ -142,7 +142,7 @@ fn artifact_scope_denied() -> bool {
 const ARTIFACT_SCOPE_DENIAL: &str = "persistent LSP and supplementary linters are unavailable in artifact-scoped requests; use the sandboxed Bash compiler path";
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum LspToolError {
+pub enum LspToolError {
     #[error("reading matched diagnostic file {}", path.display())]
     ReadDiagnosticFile {
         path: PathBuf,

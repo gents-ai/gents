@@ -1,7 +1,6 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 
@@ -43,7 +42,90 @@ pub enum MaterializerError {
     GoalTaskBindingDecode(#[source] serde_json::Error),
     #[error("deterministic goal Task request identity conflicts with another binding")]
     GoalTaskRequestConflict,
+    #[error("fire receipt is not unique")]
+    FireReceiptNotUnique,
+    #[error("fire receipt request identity mismatch")]
+    FireReceiptRequestIdentityMismatch,
+    #[error("fire receipt has no unique admitted request")]
+    FireReceiptHasNoUniqueAdmitted,
+    #[error("active runtime snapshot has no node ACP actor")]
+    ActiveRuntimeSnapshotHasNoNode,
+    #[error("runtime node DID is not ACP-addressable")]
+    RuntimeNodeDIDNotACPAddressable(#[source] identity::Error),
+    #[error("fire recovery omitted receipt rows")]
+    FireRecoveryOmittedReceiptRows,
+    #[error(transparent)]
+    ConfigClient(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    GraphqlResponse(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    MaterializeDuplicate(#[from] crate::trigger_engine::MaterializeDuplicate),
+    #[error(transparent)]
+    WorkspaceRuntime(Box<crate::workspace::WorkspaceRuntimeError>),
+    #[error(transparent)]
+    Goal(Box<crate::goal::GoalError>),
+    #[error(transparent)]
+    GraphPipeline(Box<crate::graph_pipeline::GraphPipelineError>),
+    #[error(transparent)]
+    Lifecycle(Box<crate::lifecycle::LifecycleError>),
+    #[error(transparent)]
+    Materialize(Box<crate::lifecycle::materialize::MaterializeError>),
+    #[error(transparent)]
+    Session(Box<crate::session::SessionError>),
 }
+
+impl From<crate::lifecycle::materialize::MaterializeError> for MaterializerError {
+    fn from(error: crate::lifecycle::materialize::MaterializeError) -> Self {
+        Self::Materialize(Box::new(error))
+    }
+}
+
+impl From<crate::session::SessionError> for MaterializerError {
+    fn from(error: crate::session::SessionError) -> Self {
+        Self::Session(Box::new(error))
+    }
+}
+
+impl From<crate::workspace::WorkspaceRuntimeError> for MaterializerError {
+    fn from(error: crate::workspace::WorkspaceRuntimeError) -> Self {
+        Self::WorkspaceRuntime(Box::new(error))
+    }
+}
+
+impl From<crate::lifecycle::LifecycleError> for MaterializerError {
+    fn from(error: crate::lifecycle::LifecycleError) -> Self {
+        Self::Lifecycle(Box::new(error))
+    }
+}
+
+impl From<crate::goal::GoalError> for MaterializerError {
+    fn from(error: crate::goal::GoalError) -> Self {
+        Self::Goal(Box::new(error))
+    }
+}
+
+impl crate::config_client::TransactionFailure for MaterializerError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::ConfigClient(error) => Some(error),
+            Self::GraphqlResponse(error) => error.config_client_error(),
+            Self::Goal(error) => error.config_client_error(),
+            Self::GraphPipeline(error) => error.config_client_error(),
+            Self::Lifecycle(error) => error.config_client_error(),
+            Self::Materialize(error) => error.config_client_error(),
+            Self::Session(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+impl From<crate::graph_pipeline::GraphPipelineError> for MaterializerError {
+    fn from(error: crate::graph_pipeline::GraphPipelineError) -> Self {
+        Self::GraphPipeline(Box::new(error))
+    }
+}
+
+type Result<T, E = crate::trigger_engine::TriggerEngineError> = std::result::Result<T, E>;
 
 pub(crate) struct ProductionMaterializer {
     node: Arc<EmbeddedNode>,
@@ -63,9 +145,9 @@ impl ProductionMaterializer {
         let node = snapshot
             .node
             .as_ref()
-            .context("active runtime snapshot has no node ACP actor")?;
+            .ok_or(MaterializerError::ActiveRuntimeSnapshotHasNoNode)?;
         ::identity::Did::new(node.identity.did().to_owned())
-            .context("runtime node DID is not ACP-addressable")
+            .map_err(|error| MaterializerError::RuntimeNodeDIDNotACPAddressable(error).into())
     }
 
     fn resolve_agent(
@@ -238,9 +320,7 @@ impl MaterializerHandle for ProductionMaterializer {
             && (trigger_id.is_some() || trigger_doc_id.is_some())
         {
             return Box::pin(async {
-                Err(anyhow::Error::from(
-                    MaterializerError::ManualTriggerCarriesTrigger,
-                ))
+                Err(MaterializerError::ManualTriggerCarriesTrigger.into())
             });
         }
 
@@ -406,9 +486,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 (enqueued, conversation_title)
             } else {
                 if goal_token_budget.is_some() {
-                    return Err(anyhow::Error::from(
-                        MaterializerError::GoalBudgetWithoutObjective,
-                    ));
+                    return Err(MaterializerError::GoalBudgetWithoutObjective.into());
                 }
                 let request_id = prepared_ids
                     .as_ref()
@@ -489,7 +567,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 &owner,
             )
             .await
-            .map_err(anyhow::Error::from)
+            .map_err(Into::into)
         })
     }
 
@@ -570,7 +648,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 },
             )
             .await
-            .map_err(anyhow::Error::from)
+            .map_err(Into::into)
         })
     }
 
@@ -589,16 +667,22 @@ impl MaterializerHandle for ProductionMaterializer {
                         escape_graphql_string(&key),
                     )).await?;
                     let receipts = result["data"]["TriggerFire"].as_array()
-                        .context("fire recovery omitted receipt rows")?;
-                    anyhow::ensure!(receipts.len() <= 1, "fire receipt is not unique");
+                        .ok_or(MaterializerError::FireRecoveryOmittedReceiptRows)?;
+                    if receipts.len() > 1 {
+ return Err(MaterializerError::FireReceiptNotUnique.into());
+ }
                     let Some(receipt) = receipts.first() else { return Ok(None); };
                     let request_id = identity.request_id();
-                    anyhow::ensure!(receipt["request_id"].as_str() == Some(request_id.as_str()), "fire receipt request identity mismatch");
+                    if receipt["request_id"].as_str() != Some(request_id.as_str()) {
+ return Err(MaterializerError::FireReceiptRequestIdentityMismatch.into());
+ }
                     let result = txn.execute(&format!(
                         "{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}, limit: 2) {{_docID}} }}",
                         escape_graphql_string(&identity.owner_did), escape_graphql_string(&request_id),
                     )).await?;
-                    anyhow::ensure!(result["data"]["AgentRequest"].as_array().is_some_and(|rows| rows.len() == 1), "fire receipt has no unique admitted request");
+                    if !(result["data"]["AgentRequest"].as_array().is_some_and(|rows| rows.len() == 1)) {
+ return Err(MaterializerError::FireReceiptHasNoUniqueAdmitted.into());
+ }
                     Ok(Some(request_id))
                 }) },
             ).await
@@ -645,9 +729,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 .cloned()
                 .unwrap_or_default();
             if requests.len() > 1 {
-                return Err(anyhow::Error::from(
-                    MaterializerError::GoalTaskRequestNotUnique,
-                ));
+                return Err(MaterializerError::GoalTaskRequestNotUnique.into());
             }
             let observed = requests
                 .first()
@@ -662,9 +744,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 crate::goal::TaskGoalFireRecoveryDisposition::Recovered => {
                     Ok(decision.recovered_request_id)
                 }
-                crate::goal::TaskGoalFireRecoveryDisposition::Conflict => Err(anyhow::Error::from(
-                    MaterializerError::GoalTaskRequestConflict,
-                )),
+                crate::goal::TaskGoalFireRecoveryDisposition::Conflict => Err(MaterializerError::GoalTaskRequestConflict.into()),
             }
         })
     }

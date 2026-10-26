@@ -26,7 +26,13 @@ pub enum RecoveryError {
     #[error(transparent)]
     DurableTrigger(#[from] crate::trigger_engine::durable::DurableTriggerError),
     #[error(transparent)]
-    Lifecycle(#[from] crate::lifecycle::LifecycleError),
+    Lifecycle(Box<crate::lifecycle::LifecycleError>),
+}
+
+impl From<crate::lifecycle::LifecycleError> for RecoveryError {
+    fn from(error: crate::lifecycle::LifecycleError) -> Self {
+        Self::Lifecycle(Box::new(error))
+    }
 }
 
 impl crate::config_client::TransactionFailure for RecoveryError {

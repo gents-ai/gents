@@ -70,9 +70,21 @@ pub enum InterruptError {
     #[error(transparent)]
     RequestBinding(#[from] crate::request_binding::RequestBindingError),
     #[error(transparent)]
-    Goal(#[from] crate::goal::GoalError),
+    Goal(Box<crate::goal::GoalError>),
     #[error(transparent)]
-    Queue(#[from] crate::lifecycle::QueueError),
+    Queue(Box<crate::lifecycle::QueueError>),
+}
+
+impl From<crate::lifecycle::QueueError> for InterruptError {
+    fn from(error: crate::lifecycle::QueueError) -> Self {
+        Self::Queue(Box::new(error))
+    }
+}
+
+impl From<crate::goal::GoalError> for InterruptError {
+    fn from(error: crate::goal::GoalError) -> Self {
+        Self::Goal(Box::new(error))
+    }
 }
 
 type Result<T, E = InterruptError> = std::result::Result<T, E>;

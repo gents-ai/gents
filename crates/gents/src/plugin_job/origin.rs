@@ -32,6 +32,264 @@ pub enum PluginJobError {
         #[source]
         source: std::io::Error,
     },
+    #[error("job row lacks physical identity")]
+    JobRowLacksPhysicalIdentity,
+    #[error("abort the staged kill")]
+    AbortStagedKill,
+    #[error("caused request query omitted rows")]
+    CausedRequestQueryOmittedRows,
+    #[error("decoding caused requests")]
+    DecodingCausedRequests(#[source] serde_json::Error),
+    #[error("decoding the resume target row")]
+    DecodingResumeTargetRow(#[source] serde_json::Error),
+    #[error("session job query omitted rows")]
+    SessionJobQueryOmittedRows,
+    #[error("decoding session job rows")]
+    DecodingSessionJobRows(#[source] serde_json::Error),
+    #[error("a job tool call has no physical identity")]
+    JobToolCallHasNoPhysical,
+    #[error("assembling the step 0 input")]
+    AssemblingStepInput(#[source] crate::plugin_job::input::InputError),
+    #[error("an admitted control entry has no target")]
+    AdmittedControlEntryHasNoTarget,
+    #[error("an admitted control entry has no job row")]
+    AdmittedControlEntryHasNoJob,
+    #[error("job row {row_doc_id} does not exist")]
+    JobRowDoesNotExist { row_doc_id: String },
+    #[error("an effects output without a pin was admitted")]
+    EffectsOutputWithoutPinWasAdmitted,
+    #[error("a step 0 answer has no terminal")]
+    StepAnswerHasNoTerminal,
+    #[error("AgentToolCall query omitted rows for the control targets")]
+    AgentToolCallQueryOmittedRowsControlTargets,
+    #[error("decoding the control targets")]
+    DecodingControlTargets(#[source] serde_json::Error),
+    #[error("an adopted output carries a pin")]
+    AdoptedOutputCarriesPin,
+    #[error("an adopted row has a pin")]
+    AdoptedRowHasPin,
+    #[error("the job deadline is out of range")]
+    JobDeadlineOutRange,
+    #[error("the call is no longer a running foreground call")]
+    CallNoLongerRunningForegroundCall,
+    #[error("a plugin without data cannot write")]
+    PluginWithoutDataCannotWrite,
+    #[error("only an effects output stays a job")]
+    OnlyEffectsOutputStaysJob,
+    #[error("the job_pin of {row_doc_id} changed during the step")]
+    JobPinChangedDuringStep { row_doc_id: String },
+    #[error("multiple Node rows matched a DID")]
+    MultipleNodeRowsMatchedDID,
+    #[error("a job step needs a local node")]
+    JobStepNeedsLocalNode,
+    #[error("job row {row_doc_id} has no job_pin")]
+    JobRowHasNoJobPin { row_doc_id: String },
+    #[error("the step of job row {row_doc_id} did not run")]
+    StepJobRowDidNotRun {
+        row_doc_id: String,
+        #[source]
+        source: StepRunFailure,
+    },
+    #[error("the step of job row {row_doc_id} returned {verdict}")]
+    StepJobRowReturned {
+        row_doc_id: String,
+        verdict: String,
+        #[source]
+        source: crate::plugin_job::driver::StepFailure,
+    },
+    #[error("decoding the step output of job row {row_doc_id}")]
+    DecodingStepOutputJobRow {
+        row_doc_id: String,
+        #[source]
+        source: crate::plugin_job::driver::StepFailure,
+    },
+    #[error("plugin {plugin_ref} declares no data, so its step cannot write")]
+    PluginDeclaresNoDataSoStep { plugin_ref: String },
+    #[error("job row {row_doc_id} has no progress to carry")]
+    JobRowHasNoProgressCarry { row_doc_id: String },
+    #[error("Node hop-cap query returned no row array")]
+    NodeHopCapQueryReturnedNo,
+    #[error("Node.max_request_hop must be a nonnegative u32")]
+    NodeMaxRequestHopMustNonnegative,
+    #[error("job row {row_doc_id} does not exist")]
+    JobRowDoesNotExist2 { row_doc_id: String },
+    #[error("decoding job row {row_doc_id}")]
+    DecodingJobRow {
+        row_doc_id: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("the caller request of job row {row_doc_id} does not exist")]
+    CallerRequestJobRowDoesNot { row_doc_id: String },
+    #[error("decoding the accepted arguments of job row {row_doc_id}")]
+    DecodingAcceptedArgumentsJobRow {
+        row_doc_id: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error(
+        "job staging integrity error: retry key {retry_key} does not match the staged request"
+    )]
+    JobStagingIntegrityErrorRetryKey { retry_key: String },
+    #[error("job step recovery failed after ambiguous commit: {detail}; original commit error: {detail2}")]
+    JobStepRecoveryFailedAfterAmbiguous { detail: String, detail2: String },
+    #[error(
+        "job staging integrity error: retry key {retry_key} does not match the admitted request"
+    )]
+    JobStagingIntegrityErrorRetryKey2 { retry_key: String },
+    #[error("job staging integrity error: retry key {retry_key} is not unique")]
+    JobStagingIntegrityErrorRetryKey3 { retry_key: String },
+    #[error("commit acknowledgement lost")]
+    CommitAcknowledgementLost,
+    #[error("cwd is not utf-8")]
+    CwdNotUtf,
+    #[error("scratch file refused")]
+    ScratchFileRefused,
+    #[error("no admitted attempt for message slot")]
+    NoAdmittedAttemptMessageSlot,
+    #[error("staged request lacks a retry_key")]
+    StagedRequestLacksRetryKey,
+    #[error("spawn target is not in target_hops")]
+    SpawnTargetNotTargetHops,
+    #[error("decoding job request fingerprint")]
+    DecodingJobRequestFingerprint(#[source] serde_json::Error),
+    #[error("the caller request of job row {row_doc_id} does not exist")]
+    CallerRequestJobRowDoesNot2 { row_doc_id: String },
+    #[error("{reason}")]
+    InterruptRefused { reason: String },
+    #[error(transparent)]
+    HomeInstall(#[from] crate::pack::home_install::HomeInstallError),
+    #[error(transparent)]
+    Mounts(#[from] crate::plugin::mounts::MountsError),
+    #[error(transparent)]
+    AdmissionCause(#[from] crate::request_admission::AdmissionCause),
+    #[error(transparent)]
+    ConfigClient(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Delivery(#[from] crate::tool_call_lifecycle::delivery::DeliveryError),
+    #[error(transparent)]
+    Identity(#[from] crate::identity::IdentityError),
+    #[error(transparent)]
+    Input(Box<crate::plugin_job::input::InputError>),
+    #[error(transparent)]
+    Interrupt(Box<crate::interrupt::InterruptError>),
+    #[error(transparent)]
+    JobRecords(#[from] crate::plugin_job::records::JobRecordsError),
+    #[error(transparent)]
+    PluginStore(#[from] crate::plugin::store::PluginStoreError),
+    #[error(transparent)]
+    PluginWrites(#[from] crate::application_write::PluginWritesError),
+    #[error(transparent)]
+    RequestBinding(#[from] crate::request_binding::RequestBindingError),
+    #[error(transparent)]
+    RequestReceipt(#[from] crate::request_admission::RequestReceiptError),
+    #[error(transparent)]
+    SessionMessage(#[from] crate::session_message::SessionMessageError),
+    #[error(transparent)]
+    ToolCallQuery(#[from] crate::tool_call_lifecycle::query::ToolCallQueryError),
+    #[error(transparent)]
+    TryFromInt(#[from] std::num::TryFromIntError),
+    #[error(transparent)]
+    BackgroundCompletion(#[from] crate::background_completion::BackgroundCompletionError),
+    #[error(transparent)]
+    Goal(Box<crate::goal::GoalError>),
+    #[error(transparent)]
+    Hook(Box<crate::hook::HookError>),
+    #[error(transparent)]
+    Did(#[from] identity::Error),
+    #[error(transparent)]
+    Materialize(Box<crate::lifecycle::materialize::MaterializeError>),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Session(Box<crate::session::SessionError>),
+    #[error(transparent)]
+    Std(#[from] std::io::Error),
+    #[error(transparent)]
+    Transition(#[from] crate::tool_call_lifecycle::TransitionError),
+}
+
+impl From<crate::lifecycle::materialize::MaterializeError> for PluginJobError {
+    fn from(error: crate::lifecycle::materialize::MaterializeError) -> Self {
+        Self::Materialize(Box::new(error))
+    }
+}
+
+impl From<crate::session::SessionError> for PluginJobError {
+    fn from(error: crate::session::SessionError) -> Self {
+        Self::Session(Box::new(error))
+    }
+}
+
+impl From<crate::hook::HookError> for PluginJobError {
+    fn from(error: crate::hook::HookError) -> Self {
+        Self::Hook(Box::new(error))
+    }
+}
+
+impl From<crate::goal::GoalError> for PluginJobError {
+    fn from(error: crate::goal::GoalError) -> Self {
+        Self::Goal(Box::new(error))
+    }
+}
+
+impl From<crate::interrupt::InterruptError> for PluginJobError {
+    fn from(error: crate::interrupt::InterruptError) -> Self {
+        Self::Interrupt(Box::new(error))
+    }
+}
+
+impl crate::config_client::TransactionFailure for PluginJobError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::AssemblingStepInput(error) => error.config_client_error(),
+            Self::AdmissionCause(error) => error.config_client_error(),
+            Self::ConfigClient(error) => Some(error),
+            Self::Delivery(error) => error.config_client_error(),
+            Self::Input(error) => error.config_client_error(),
+            Self::Interrupt(error) => error.config_client_error(),
+            Self::JobRecords(error) => error.config_client_error(),
+            Self::PluginWrites(error) => error.config_client_error(),
+            Self::SessionMessage(error) => error.config_client_error(),
+            Self::ToolCallQuery(error) => error.config_client_error(),
+            Self::Goal(error) => error.config_client_error(),
+            Self::Hook(error) => error.config_client_error(),
+            Self::Materialize(error) => error.config_client_error(),
+            Self::Session(error) => error.config_client_error(),
+            Self::Transition(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+impl From<crate::plugin_job::input::InputError> for PluginJobError {
+    fn from(error: crate::plugin_job::input::InputError) -> Self {
+        Self::Input(Box::new(error))
+    }
+}
+
+/// Why a job step did not run: a classified guest failure or the run error.
+#[derive(Debug, thiserror::Error)]
+pub enum StepRunFailure {
+    #[error(transparent)]
+    Failure(crate::plugin_job::driver::StepFailure),
+    #[error(transparent)]
+    Run(crate::plugin::executor::PluginRunError),
+}
+
+impl PluginJobError {
+    /// The classified guest failure a step error carries, if any.
+    pub(crate) fn step_failure(&self) -> Option<&crate::plugin_job::driver::StepFailure> {
+        match self {
+            Self::StepJobRowDidNotRun {
+                source: StepRunFailure::Failure(failure),
+                ..
+            }
+            | Self::StepJobRowReturned { source: failure, .. }
+            | Self::DecodingStepOutputJobRow { source: failure, .. } => Some(failure),
+            _ => None,
+        }
+    }
 }
 
 /// The files every resolved mount of one call holds, with the provenance
@@ -124,7 +382,7 @@ pub fn script_index(
     plugin: &InstalledPlugin,
     policy: Option<&JobPolicy>,
     cwd: Option<&Path>,
-) -> anyhow::Result<ScriptIndex> {
+) -> Result<ScriptIndex, PluginJobError> {
     let mut files = Vec::new();
     for mount in crate::plugin::mounts::resolve(home, plugin, policy, cwd)? {
         for (sha, path) in mount_files(&mount.pack, &mount.digest, &mount.path)? {

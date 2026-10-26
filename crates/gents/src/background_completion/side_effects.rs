@@ -29,10 +29,13 @@ async fn existing_notification(
         crate::graphql::graphql_with_transaction_retry(node, &query, "existing_notification")
             .await?;
     let rows = crate::graphql::rows::<serde_json::Value>(&response, "AgentMessage")?;
-    anyhow::ensure!(
-        rows.len() <= 1,
-        "canonical notification key {message_key} is ambiguous"
-    );
+    if rows.len() > 1 {
+        return Err(
+            BackgroundCompletionError::CanonicalNotificationKeyAmbiguous {
+                message_key: message_key.to_string(),
+            },
+        );
+    }
     match rows.as_slice() {
         [] => Ok(None),
         [row] => {
@@ -40,7 +43,7 @@ async fn existing_notification(
                 .get("_docID")
                 .and_then(serde_json::Value::as_str)
                 .filter(|doc_id| !doc_id.is_empty())
-                .context("canonical notification key matched a row without _docID")?;
+                .ok_or(BackgroundCompletionError::CanonicalNotificationKeyMatchedRowWithout)?;
             Ok(Some(ExistingNotification {
                 doc_id: doc_id.to_owned(),
             }))

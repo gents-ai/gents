@@ -68,4 +68,114 @@ pub enum TriggerEngineError {
     IntegerRange(#[from] std::num::TryFromIntError),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error("goal continuation reconciliation rejected a persisted child")]
+    GoalContinuationReconciliationRejectedPersistedChild,
+    #[error("goal continuation reconciliation produced an invalid phase")]
+    GoalContinuationReconciliationProducedInvalidPhase,
+    #[error("active Goal candidate has an unknown status")]
+    ActiveGoalCandidateHasUnknownStatus,
+    #[error("claimed Goal has an unknown status")]
+    ClaimedGoalHasUnknownStatus,
+    #[error("usage-limit transition must be legal from active")]
+    UsageLimitTransitionMustLegalActive,
+    #[error("refreshed Goal row disappeared")]
+    RefreshedGoalRowDisappeared,
+    #[error("refreshed Goal candidate has an unknown status")]
+    RefreshedGoalCandidateHasUnknownStatus,
+    #[error("claimed continuation sequence exhausted")]
+    ClaimedContinuationSequenceExhausted,
+    #[error("decode goal continuation parent AgentRequest")]
+    DecodeGoalContinuationParentAgentRequest(#[source] crate::watcher::WatcherError),
+    #[error("unavailable-agent transition must be legal for a publishing Goal")]
+    UnavailableAgentTransitionMustLegalPublishing,
+    #[error(transparent)]
+    BlockedTurn(Box<crate::blocked_turn::BlockedTurnError>),
+    #[error(transparent)]
+    Goal(Box<crate::goal::GoalError>),
+    #[error(transparent)]
+    ConfigClient(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    GraphqlResponse(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    MaterializeDuplicate(#[from] crate::trigger_engine::MaterializeDuplicate),
+    #[error(transparent)]
+    Materializer(Box<crate::trigger_engine::production_materializer::MaterializerError>),
+    #[error(transparent)]
+    WorkspaceRuntime(Box<crate::workspace::WorkspaceRuntimeError>),
+    #[error(transparent)]
+    GraphPipeline(Box<crate::graph_pipeline::GraphPipelineError>),
+    #[error(transparent)]
+    Lifecycle(Box<crate::lifecycle::LifecycleError>),
+    #[error(transparent)]
+    Materialize(Box<crate::lifecycle::materialize::MaterializeError>),
+    #[error(transparent)]
+    Session(Box<crate::session::SessionError>),
+    #[error(transparent)]
+    GoalSource(#[from] crate::trigger_engine::goal_source::GoalSourceError),
+}
+
+impl From<crate::lifecycle::materialize::MaterializeError> for TriggerEngineError {
+    fn from(error: crate::lifecycle::materialize::MaterializeError) -> Self {
+        Self::Materialize(Box::new(error))
+    }
+}
+
+impl From<crate::session::SessionError> for TriggerEngineError {
+    fn from(error: crate::session::SessionError) -> Self {
+        Self::Session(Box::new(error))
+    }
+}
+
+impl From<crate::lifecycle::LifecycleError> for TriggerEngineError {
+    fn from(error: crate::lifecycle::LifecycleError) -> Self {
+        Self::Lifecycle(Box::new(error))
+    }
+}
+
+impl From<crate::workspace::WorkspaceRuntimeError> for TriggerEngineError {
+    fn from(error: crate::workspace::WorkspaceRuntimeError) -> Self {
+        Self::WorkspaceRuntime(Box::new(error))
+    }
+}
+
+impl From<crate::trigger_engine::production_materializer::MaterializerError> for TriggerEngineError {
+    fn from(error: crate::trigger_engine::production_materializer::MaterializerError) -> Self {
+        Self::Materializer(Box::new(error))
+    }
+}
+
+impl crate::config_client::TransactionFailure for TriggerEngineError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::DecodeGoalContinuationParentAgentRequest(error) => error.config_client_error(),
+            Self::BlockedTurn(error) => error.config_client_error(),
+            Self::Goal(error) => error.config_client_error(),
+            Self::ConfigClient(error) => Some(error),
+            Self::GraphqlResponse(error) => error.config_client_error(),
+            Self::Materializer(error) => error.config_client_error(),
+            Self::GraphPipeline(error) => error.config_client_error(),
+            Self::Lifecycle(error) => error.config_client_error(),
+            Self::Materialize(error) => error.config_client_error(),
+            Self::Session(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+impl From<crate::graph_pipeline::GraphPipelineError> for TriggerEngineError {
+    fn from(error: crate::graph_pipeline::GraphPipelineError) -> Self {
+        Self::GraphPipeline(Box::new(error))
+    }
+}
+
+impl From<crate::goal::GoalError> for TriggerEngineError {
+    fn from(error: crate::goal::GoalError) -> Self {
+        Self::Goal(Box::new(error))
+    }
+}
+
+impl From<crate::blocked_turn::BlockedTurnError> for TriggerEngineError {
+    fn from(error: crate::blocked_turn::BlockedTurnError) -> Self {
+        Self::BlockedTurn(Box::new(error))
+    }
 }

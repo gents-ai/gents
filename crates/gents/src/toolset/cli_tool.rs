@@ -17,7 +17,7 @@ use super::shared::{
 use super::CliToolConfig;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum CliToolError {
+pub enum CliToolError {
     #[error("argv for tool '{tool}' does not match any approved prefix policy")]
     ArgvNotApproved { tool: String },
     #[error("working directory for tool '{tool}' is not a directory: {}", path.display())]

@@ -1,3 +1,4 @@
+use crate::hook::HookError;
 use chrono::Utc;
 use serde_json::json;
 
@@ -13,13 +14,15 @@ use crate::toolset::{CreateGoalArgs, GetGoalArgs, UpdateGoalArgs};
 
 use super::DefraSessionHook;
 
+type Result<T, E = HookError> = std::result::Result<T, E>;
+
 impl DefraSessionHook {
     pub(super) async fn persist_create_goal_tool_call(
         &self,
         tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
-    ) -> anyhow::Result<ToolCallHookAction> {
+    ) -> Result<ToolCallHookAction> {
         let (session_id, request_id, deadline_at, _sequence) =
             self.ensure_assistant_turn_sequence().await?;
         let mut lifecycle = self
@@ -110,7 +113,7 @@ impl DefraSessionHook {
         tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
-    ) -> anyhow::Result<ToolCallHookAction> {
+    ) -> Result<ToolCallHookAction> {
         let (session_id, request_id, deadline_at, _sequence) =
             self.ensure_assistant_turn_sequence().await?;
         let mut lifecycle = self
@@ -151,7 +154,7 @@ impl DefraSessionHook {
                     )
                     .await?;
                 }
-                Ok::<_, anyhow::Error>(context)
+                Ok::<_, HookError>(context)
             }
             .await;
             match context {
@@ -211,7 +214,7 @@ impl DefraSessionHook {
         tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
-    ) -> anyhow::Result<ToolCallHookAction> {
+    ) -> Result<ToolCallHookAction> {
         let (session_id, request_id, deadline_at, _sequence) =
             self.ensure_assistant_turn_sequence().await?;
         let mut lifecycle = self

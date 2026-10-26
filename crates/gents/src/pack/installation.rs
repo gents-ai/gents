@@ -66,7 +66,7 @@ pub enum InstallationError {
     #[error("pack plugins require the node's local plugin home")]
     PluginHomeMissing,
     #[error(transparent)]
-    GraphPipeline(#[from] crate::graph_pipeline::GraphPipelineError),
+    GraphPipeline(Box<crate::graph_pipeline::GraphPipelineError>),
     #[error("installation record names unknown collection {name:?}")]
     UnknownCollection { name: String },
     #[error("reading the pack installation record")]
@@ -184,6 +184,12 @@ pub enum InstallationError {
     DependencyAssetNotPrepared { path: String },
     #[error("pack plugins require the node's local plugin home")]
     PluginHomeRequired,
+}
+
+impl From<crate::graph_pipeline::GraphPipelineError> for InstallationError {
+    fn from(error: crate::graph_pipeline::GraphPipelineError) -> Self {
+        Self::GraphPipeline(Box::new(error))
+    }
 }
 
 impl From<crate::graph_package::GraphPackageInstallError> for InstallationError {

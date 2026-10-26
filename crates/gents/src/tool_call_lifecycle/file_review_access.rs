@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::file_image_hydration::{
     FileImageDemand, FileImageHydrationReceipt, FileImageSelection,
@@ -8,6 +7,38 @@ use gents_protocol::file_image_hydration::{
 
 use crate::config_client::ConfigAccess;
 use crate::NodeIdentity;
+
+#[derive(Debug, thiserror::Error)]
+pub enum FileReviewAccessError {
+    #[error("file review receipt crossed its demand")]
+    FileReviewReceiptCrossedDemand,
+    #[error("file review receipt signature is invalid")]
+    FileReviewReceiptSignatureInvalid,
+    #[error("file review receipt does not authorize this client")]
+    FileReviewReceiptDoesNotAuthorize,
+    #[error("file-image storage has an unexpected document policy")]
+    FileImageStorageHasUnexpectedDocument,
+    #[error("file review receipt signer does not own the retained observation")]
+    FileReviewReceiptSignerDoesNot,
+    #[error("local file-image collection is unavailable")]
+    LocalFileImageCollectionUnavailable,
+    #[error("file-image storage has no document policy")]
+    FileImageStorageHasNoDocument,
+    #[error(transparent)]
+    ConfigClient(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    FileImageHydration(#[from] gents_protocol::file_image_hydration::FileImageHydrationError),
+    #[error(transparent)]
+    Acp(#[from] acp::error::Error),
+    #[error(transparent)]
+    Node(#[from] defra_node::Error),
+    #[error(transparent)]
+    Did(#[from] identity::Error),
+    #[error(transparent)]
+    Identity(#[from] crate::identity::IdentityError),
+}
+
+type Result<T, E = FileReviewAccessError> = std::result::Result<T, E>;
 
 /// A selected receipt delegates a local read of its exact observation to the
 /// named requester. It grants neither source-database access nor write access.
@@ -20,20 +51,19 @@ impl VerifiedFileImageReceipt {
         verifier: &dyn NodeIdentity,
     ) -> Result<Self> {
         receipt.validate_shape()?;
-        anyhow::ensure!(
-            &receipt.demand == demand,
-            "file review receipt crossed its demand"
-        );
-        anyhow::ensure!(
-            verifier
-                .verify(
-                    &demand.admission.node_did,
-                    &receipt.signing_payload()?,
-                    &receipt.signature
-                )
-                .await?,
-            "file review receipt signature is invalid"
-        );
+        if &receipt.demand != demand {
+            return Err(FileReviewAccessError::FileReviewReceiptCrossedDemand);
+        }
+        if !(verifier
+            .verify(
+                &demand.admission.node_did,
+                &receipt.signing_payload()?,
+                &receipt.signature,
+            )
+            .await?)
+        {
+            return Err(FileReviewAccessError::FileReviewReceiptSignatureInvalid);
+        }
         Ok(Self(receipt))
     }
 
@@ -53,24 +83,23 @@ impl VerifiedFileImageReceipt {
         };
         let document = document.clone();
         let scope = self.0.demand.admission.clone();
-        anyhow::ensure!(
-            node.node_identity_did() == Some(scope.requester_did.as_str()),
-            "file review receipt does not authorize this client"
-        );
+        if node.node_identity_did() != Some(scope.requester_did.as_str()) {
+            return Err(FileReviewAccessError::FileReviewReceiptDoesNotAuthorize);
+        }
         ConfigAccess::local(node)
             .run_local_owned(move |node| async move {
                 let collection = node
                     .get_collection(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)?
-                    .context("local file-image collection is unavailable")?;
+                    .ok_or(FileReviewAccessError::LocalFileImageCollectionUnavailable)?;
                 let policy = collection
                     .policy
-                    .context("file-image storage has no document policy")?;
-                anyhow::ensure!(
-                    policy.id == gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID
-                        && policy.resource_name
-                            == gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE,
-                    "file-image storage has an unexpected document policy"
-                );
+                    .ok_or(FileReviewAccessError::FileImageStorageHasNoDocument)?;
+                if !(policy.id == gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_ID
+                    && policy.resource_name
+                        == gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE)
+                {
+                    return Err(FileReviewAccessError::FileImageStorageHasUnexpectedDocument);
+                }
                 let acp = node.document_acp();
                 let Some(owner) = acp
                     .get_doc_owner(&policy.id, &policy.resource_name, &document)
@@ -78,10 +107,9 @@ impl VerifiedFileImageReceipt {
                 else {
                     return Ok(false);
                 };
-                anyhow::ensure!(
-                    owner.as_str() == scope.node_did,
-                    "file review receipt signer does not own the retained observation"
-                );
+                if owner.as_str() != scope.node_did {
+                    return Err(FileReviewAccessError::FileReviewReceiptSignerDoesNot);
+                }
                 let reader = defra_node::AcpIdentity::Authenticated(scope.requester_did.parse()?);
                 if acp
                     .check_doc_access(

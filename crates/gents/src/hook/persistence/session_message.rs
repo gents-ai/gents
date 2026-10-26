@@ -1,8 +1,10 @@
+use crate::hook::HookError;
 use super::*;
-use anyhow::Context;
 use gents_protocol::error_chain::ErrorChain;
 
 use crate::session_message::{AgentMessageArgs, AgentNewArgs};
+
+type Result<T, E = HookError> = std::result::Result<T, E>;
 
 impl DefraSessionHook {
     pub(super) async fn persist_session_message_tool_call(
@@ -11,7 +13,7 @@ impl DefraSessionHook {
         tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
-    ) -> anyhow::Result<ToolCallHookAction> {
+    ) -> Result<ToolCallHookAction> {
         let (session_id, request_id, deadline_at, _seq) =
             self.ensure_assistant_turn_sequence().await?;
         let mut lifecycle = self
@@ -36,12 +38,12 @@ impl DefraSessionHook {
 
         let caller_doc_id = lifecycle
             .request_doc_id()
-            .context("session-message dispatch lacks its calling request document")?
+            .ok_or(HookError::SessionMessageDispatchLacksCallingRequest)?
             .to_owned();
         let caller =
             crate::request_binding::load_agent_request_by_doc_id(&self.node, &caller_doc_id)
                 .await?
-                .context("session-message calling request disappeared")?;
+                .ok_or(HookError::SessionMessageCallingRequestDisappeared)?;
         let tools = crate::session_message::load_caller_session_tools(
             &self.node,
             &caller.node_did,
@@ -205,7 +207,7 @@ impl DefraSessionHook {
 
         let tool_call_doc_id = lifecycle
             .doc_id()
-            .context("session-message dispatch lacks its physical row")?
+            .ok_or(HookError::SessionMessageDispatchLacksPhysicalRow)?
             .to_owned();
         let cause = crate::lifecycle::SessionMessageCause {
             caller_node_did: caller.node_did.clone(),
@@ -240,7 +242,7 @@ impl DefraSessionHook {
                     "/session_id",
                     format!(
                         "the target chat could not be read: {}",
-                        ErrorChain(error.as_ref())
+                        ErrorChain(&error)
                     ),
                     true,
                 )
@@ -267,8 +269,10 @@ impl DefraSessionHook {
                     &["status", "session_id", "request_id", "tool_call_id"],
                 )?,
                 Err(error) => {
-                    let capacity = error
-                    .downcast_ref::<crate::tool_call_lifecycle::delivery::DeliveryError>()
+                    let capacity = match &error {
+                        crate::session_message::SessionMessageError::Delivery(error) => Some(error),
+                        _ => None,
+                    }
                     .and_then(
                         crate::tool_call_lifecycle::delivery::DeliveryError::background_capacity,
                     )
@@ -286,7 +290,7 @@ impl DefraSessionHook {
                             "/",
                             format!(
                                 "the message could not be delivered: {}",
-                                ErrorChain(error.as_ref())
+                                ErrorChain(&error)
                             ),
                             true,
                         )
@@ -302,7 +306,7 @@ impl DefraSessionHook {
             {
                 tracing::warn!(
                     target_session = %target.session_id,
-                    error = %ErrorChain(error.as_ref()),
+                    error = %ErrorChain(&error),
                     "agent_message delivered, but interrupting the target's turn failed"
                 );
             }
@@ -318,7 +322,7 @@ impl DefraSessionHook {
         tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
-    ) -> anyhow::Result<ToolCallHookAction> {
+    ) -> Result<ToolCallHookAction> {
         let (session_id, request_id, deadline_at, _seq) =
             self.ensure_assistant_turn_sequence().await?;
         let mut lifecycle = self
@@ -346,15 +350,15 @@ impl DefraSessionHook {
         lifecycle: &crate::tool_call_lifecycle::ToolCallLifecycle,
         tool_name: &str,
         args: &str,
-    ) -> anyhow::Result<String> {
+    ) -> Result<String> {
         let caller_doc_id = lifecycle
             .request_doc_id()
-            .context("agents tool call lacks its calling request document")?
+            .ok_or(HookError::AgentsToolCallLacksCallingRequest)?
             .to_owned();
         let caller =
             crate::request_binding::load_agent_request_by_doc_id(&self.node, &caller_doc_id)
                 .await?
-                .context("agents tool calling request disappeared")?;
+                .ok_or(HookError::AgentsToolCallingRequestDisappeared)?;
         let tools = crate::session_message::load_caller_session_tools(
             &self.node,
             &caller.node_did,
@@ -541,7 +545,7 @@ impl DefraSessionHook {
             }
             crate::toolset::AGENT_RESUME_TOOL_NAME => {
                 let Some(job_driver) = self.job_driver.clone() else {
-                    anyhow::bail!("agent_resume cannot verify plugin execution settlement because the runtime job owner is unavailable; retry after runtime recovery")
+                    return Err(HookError::AgentResumeCannotVerifyPluginExecution);
                 };
                 crate::session::resume_session(
                     &self.node,

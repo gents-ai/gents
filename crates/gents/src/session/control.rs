@@ -1,4 +1,3 @@
-use anyhow::Context;
 use defra_node::EmbeddedNode;
 use std::sync::Arc;
 
@@ -29,6 +28,58 @@ pub enum SessionControlError {
         "session-owned plugin job is still executing; retry agent_resume after its step settles"
     )]
     PluginJobExecuting,
+    #[error("session stop requires exact session and node identity")]
+    SessionStopRequiresExactSessionNode,
+    #[error("session stop is supported only on this node; remote control is unavailable")]
+    SessionStopSupportedOnlyNodeRemote,
+    #[error("session stop latch was not committed to the selected session")]
+    SessionStopLatchWasNotCommitted,
+    #[error("session resume requires exact session and node identity")]
+    SessionResumeRequiresExactSessionNode,
+    #[error("session resume is supported only on this node; remote control is unavailable")]
+    SessionResumeSupportedOnlyNodeRemote,
+    #[error("session resume latch was not cleared on the selected session")]
+    SessionResumeLatchWasNotCleared,
+    #[error("cannot stop a missing or differently scoped session")]
+    CannotStopMissingDifferentlyScopedSession,
+    #[error("cannot resume a missing or differently scoped session")]
+    CannotResumeMissingDifferentlyScopedSession,
+    #[error(transparent)]
+    Identity(#[from] crate::identity::IdentityError),
+    #[error(transparent)]
+    Interrupt(Box<crate::interrupt::InterruptError>),
+    #[error(transparent)]
+    Goal(Box<crate::goal::GoalError>),
+    #[error(transparent)]
+    Did(#[from] identity::Error),
+    #[error(transparent)]
+    Queue(Box<crate::lifecycle::QueueError>),
+    #[error(transparent)]
+    Session(Box<crate::session::SessionError>),
+}
+
+impl From<crate::session::SessionError> for SessionControlError {
+    fn from(error: crate::session::SessionError) -> Self {
+        Self::Session(Box::new(error))
+    }
+}
+
+impl From<crate::lifecycle::QueueError> for SessionControlError {
+    fn from(error: crate::lifecycle::QueueError) -> Self {
+        Self::Queue(Box::new(error))
+    }
+}
+
+impl From<crate::goal::GoalError> for SessionControlError {
+    fn from(error: crate::goal::GoalError) -> Self {
+        Self::Goal(Box::new(error))
+    }
+}
+
+impl From<crate::interrupt::InterruptError> for SessionControlError {
+    fn from(error: crate::interrupt::InterruptError) -> Self {
+        Self::Interrupt(Box::new(error))
+    }
 }
 
 impl crate::config_client::TransactionFailure for SessionControlError {
@@ -55,15 +106,13 @@ pub async fn stop_session(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-) -> anyhow::Result<SessionStopReceipt> {
-    anyhow::ensure!(
-        !session_id.trim().is_empty() && !node_did.trim().is_empty(),
-        "session stop requires exact session and node identity"
-    );
-    anyhow::ensure!(
-        node.node_identity_did() == Some(node_did),
-        "session stop is supported only on this node; remote control is unavailable"
-    );
+) -> Result<SessionStopReceipt> {
+    if !(!session_id.trim().is_empty() && !node_did.trim().is_empty()) {
+        return Err(SessionControlError::SessionStopRequiresExactSessionNode);
+    }
+    if node.node_identity_did() != Some(node_did) {
+        return Err(SessionControlError::SessionStopSupportedOnlyNodeRemote);
+    }
     let node_did = node_did.to_owned();
     let session_id = session_id.to_owned();
     let requester_did = requester_did.map(str::to_owned);
@@ -84,7 +133,7 @@ pub async fn stop_session(
                     requester_did.as_deref(),
                 )
                 .await?
-                .context("cannot stop a missing or differently scoped session")?;
+                .ok_or(SessionControlError::CannotStopMissingDifferentlyScopedSession)?;
                 let stopped_at = chrono::Utc::now().to_rfc3339();
                 let doc_id = crate::graphql::escape_graphql_string(&owner.doc_id);
                 let scope = crate::session::session_scope_filter(
@@ -100,11 +149,11 @@ pub async fn stop_session(
                         }}, input: {{ stopped_at: "{stopped_at}" }}) {{ _docID }} }}"#
                     ))
                     .await?;
-                anyhow::ensure!(
-                    response.pointer("/data/update_AgentSession/0/_docID")
-                        == Some(&serde_json::Value::String(owner.doc_id.clone())),
-                    "session stop latch was not committed to the selected session"
-                );
+                if response.pointer("/data/update_AgentSession/0/_docID")
+                    != Some(&serde_json::Value::String(owner.doc_id.clone()))
+                {
+                    return Err(SessionControlError::SessionStopLatchWasNotCommitted);
+                }
                 let drained_request_ids =
                     crate::lifecycle::queue::drain_all_pending_session_requests_in_txn(
                         txn,
@@ -151,15 +200,13 @@ pub async fn resume_session(
     requester_did: Option<&str>,
     background_executions: crate::hook::BackgroundExecutionRegistry,
     job_driver: Arc<crate::plugin_job::driver::JobDriver>,
-) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        !session_id.trim().is_empty() && !node_did.trim().is_empty(),
-        "session resume requires exact session and node identity"
-    );
-    anyhow::ensure!(
-        node.node_identity_did() == Some(node_did),
-        "session resume is supported only on this node; remote control is unavailable"
-    );
+) -> Result<()> {
+    if !(!session_id.trim().is_empty() && !node_did.trim().is_empty()) {
+        return Err(SessionControlError::SessionResumeRequiresExactSessionNode);
+    }
+    if node.node_identity_did() != Some(node_did) {
+        return Err(SessionControlError::SessionResumeSupportedOnlyNodeRemote);
+    }
     let node_did = node_did.to_owned();
     let session_id = session_id.to_owned();
     let requester_did = requester_did.map(str::to_owned);
@@ -186,7 +233,7 @@ pub async fn resume_session(
                     requester_did.as_deref(),
                 )
                 .await?
-                .context("cannot resume a missing or differently scoped session")?;
+                .ok_or(SessionControlError::CannotResumeMissingDifferentlyScopedSession)?;
                 ensure_session_executions_settled_in_txn(
                     txn,
                     &node_did,
@@ -209,11 +256,11 @@ pub async fn resume_session(
                         }}, input: {{ stopped_at: null }}) {{ _docID }} }}"#
                     ))
                     .await?;
-                anyhow::ensure!(
-                    response.pointer("/data/update_AgentSession/0/_docID")
-                        == Some(&serde_json::Value::String(owner.doc_id.clone())),
-                    "session resume latch was not cleared on the selected session"
-                );
+                if response.pointer("/data/update_AgentSession/0/_docID")
+                    != Some(&serde_json::Value::String(owner.doc_id.clone()))
+                {
+                    return Err(SessionControlError::SessionResumeLatchWasNotCleared);
+                }
                 crate::goal::stage_session_resume_in_txn(
                     txn,
                     identity.as_ref(),
@@ -221,7 +268,7 @@ pub async fn resume_session(
                     &session_id,
                 )
                 .await
-                .map_err(anyhow::Error::from)
+                .map_err(Into::into)
             })
         },
     )

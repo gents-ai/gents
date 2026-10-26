@@ -252,7 +252,8 @@ where
             Ok(gate) => gate,
             Err(error) => {
                 return Err(
-                    terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error).await,
+                    terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error.into())
+                        .await,
                 );
             }
         };

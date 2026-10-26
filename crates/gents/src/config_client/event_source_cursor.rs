@@ -17,7 +17,7 @@ pub enum EventSourceCursorError {
     #[error(transparent)]
     Graphql(#[from] crate::graphql::GraphqlResponseError),
     #[error(transparent)]
-    EventDelivery(#[from] crate::trigger_engine::event_delivery::EventDeliveryError),
+    EventDelivery(Box<crate::trigger_engine::event_delivery::EventDeliveryError>),
     #[error(transparent)]
     Introspection(#[from] crate::defra_query::DefraQueryFailure),
     #[error(transparent)]
@@ -100,6 +100,12 @@ pub enum EventSourceCursorError {
     CallbackOriginDecode(#[source] serde_json::Error),
     #[error("callback receipt disagrees with its arrival")]
     CallbackReceiptMismatch,
+}
+
+impl From<crate::trigger_engine::event_delivery::EventDeliveryError> for EventSourceCursorError {
+    fn from(error: crate::trigger_engine::event_delivery::EventDeliveryError) -> Self {
+        Self::EventDelivery(Box::new(error))
+    }
 }
 
 impl From<super::desired_state::DesiredStateError> for EventSourceCursorError {

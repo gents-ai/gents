@@ -41,7 +41,6 @@ use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 use std::path::PathBuf;
 
 use crate::llm::tool::ToolDyn;
-use anyhow::Result;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ToolSurfaceError {
@@ -147,7 +146,39 @@ pub enum ToolSurfaceError {
     DocumentConfig(Box<crate::document_config::DocumentConfigError>),
     #[error(transparent)]
     Access(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Context(#[from] crate::toolset::ContextError),
+    #[error(transparent)]
+    MetaTool(#[from] crate::meta_tools::MetaToolError),
+    #[error(transparent)]
+    PluginTool(#[from] crate::plugin::tool::PluginToolError),
+    #[error(transparent)]
+    RootAdmission(Box<crate::tool_surface::RootAdmissionError>),
+    #[error(transparent)]
+    Did(#[from] identity::Error),
+    #[error(transparent)]
+    Mailbox(#[from] crate::mailbox::MailboxError),
+    #[error(transparent)]
+    Tool(#[from] crate::toolset::ToolError),
+    #[error(transparent)]
+    DocumentView(#[from] crate::agent::document_view::DocumentViewError),
+    #[error(transparent)]
+    Build(Box<crate::tool_surface::build::BuildError>),
 }
+
+impl From<crate::tool_surface::build::BuildError> for ToolSurfaceError {
+    fn from(error: crate::tool_surface::build::BuildError) -> Self {
+        Self::Build(Box::new(error))
+    }
+}
+
+impl From<crate::tool_surface::RootAdmissionError> for ToolSurfaceError {
+    fn from(error: crate::tool_surface::RootAdmissionError) -> Self {
+        Self::RootAdmission(Box::new(error))
+    }
+}
+
+type Result<T, E = ToolSurfaceError> = std::result::Result<T, E>;
 
 impl crate::config_client::TransactionFailure for ToolSurfaceError {
     fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
@@ -512,7 +543,7 @@ impl ToolSurface {
                 .as_ref()
                 .ok_or(ToolSurfaceError::DatastoreRequiresIdentity)?;
             if !(identity.did() == runtime.node_did) {
-                return Err(ToolSurfaceError::DatastoreIdentityMismatch.into());
+                return Err(ToolSurfaceError::DatastoreIdentityMismatch);
             }
             Some(identity::Did::new(identity.did().to_owned())?)
         } else {
@@ -555,14 +586,12 @@ impl ToolSurface {
             if !decl.is_well_formed() || !decl.output_obligation_is_well_formed() {
                 return Err(ToolSurfaceError::WriteToolInvalid {
                     tool_name: decl.tool_name.clone(),
-                }
-                .into());
+                });
             }
             if !registered_names.insert(decl.tool_name.clone()) {
                 return Err(ToolSurfaceError::WriteToolDuplicate {
                     tool_name: decl.tool_name.clone(),
-                }
-                .into());
+                });
             }
             if decl.collection == crate::mailbox::MAILBOX_COLLECTION {
                 tools.push(Box::new(crate::mailbox::MailboxCreateTool::new(
@@ -603,28 +632,26 @@ impl ToolSurface {
             if !tool.is_well_formed() {
                 return Err(ToolSurfaceError::QueryToolInvalid {
                     tool_name: decl.tool_name.clone(),
-                }
-                .into());
+                });
             }
             if !registered_names.insert(tool.name()) {
                 return Err(ToolSurfaceError::QueryToolDuplicate {
                     tool_name: decl.tool_name.clone(),
-                }
-                .into());
+                });
             }
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }
         for query in &self.eth_queries {
             let tool = crate::eth::EthQueryTool::new(query.clone());
             if !registered_names.insert(tool.name()) {
-                return Err(ToolSurfaceError::EthQueryToolDuplicate { name: tool.name() }.into());
+                return Err(ToolSurfaceError::EthQueryToolDuplicate { name: tool.name() });
             }
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }
         for call in &self.eth_calls {
             let tool = crate::eth::EthCallTool::new(call.clone(), runtime.node.clone());
             if !registered_names.insert(tool.name()) {
-                return Err(ToolSurfaceError::EthCallToolDuplicate { name: tool.name() }.into());
+                return Err(ToolSurfaceError::EthCallToolDuplicate { name: tool.name() });
             }
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }
@@ -638,7 +665,7 @@ impl ToolSurface {
             )?
             .with_data_node(runtime.node.clone());
             if !registered_names.insert(tool.name()) {
-                return Err(ToolSurfaceError::PluginToolDuplicate { name: tool.name() }.into());
+                return Err(ToolSurfaceError::PluginToolDuplicate { name: tool.name() });
             }
             tools.push(Box::new(tool) as Box<dyn ToolDyn>);
         }

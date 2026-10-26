@@ -62,7 +62,7 @@ pub enum EventSourceError {
     #[error("event source correlation seeding cancelled")]
     CorrelationSeedingCancelled,
     #[error(transparent)]
-    GraphPipeline(#[from] crate::graph_pipeline::GraphPipelineError),
+    GraphPipeline(Box<crate::graph_pipeline::GraphPipelineError>),
     #[error("arrival query omitted data")]
     ArrivalDataMissing,
     #[error("arrival query omitted entries")]
@@ -76,7 +76,19 @@ pub enum EventSourceError {
     #[error("source document {doc_id} could not be rendered into a fire")]
     SourceDocNotRendered { doc_id: String },
     #[error(transparent)]
-    Cursor(#[from] crate::config_client::event_source_cursor::EventSourceCursorError),
+    Cursor(Box<crate::config_client::event_source_cursor::EventSourceCursorError>),
+}
+
+impl From<crate::config_client::event_source_cursor::EventSourceCursorError> for EventSourceError {
+    fn from(error: crate::config_client::event_source_cursor::EventSourceCursorError) -> Self {
+        Self::Cursor(Box::new(error))
+    }
+}
+
+impl From<crate::graph_pipeline::GraphPipelineError> for EventSourceError {
+    fn from(error: crate::graph_pipeline::GraphPipelineError) -> Self {
+        Self::GraphPipeline(Box::new(error))
+    }
 }
 
 impl crate::config_client::TransactionFailure for EventSourceError {

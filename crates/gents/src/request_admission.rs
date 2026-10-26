@@ -117,7 +117,7 @@ pub enum AdmissionCause {
     #[error(transparent)]
     RequestReceipt(#[from] crate::request_admission::RequestReceiptError),
     #[error(transparent)]
-    DocumentConfig(#[from] crate::document_config::DocumentConfigError),
+    DocumentConfig(Box<crate::document_config::DocumentConfigError>),
     #[error(transparent)]
     Goal(Box<crate::goal::GoalError>),
     #[error(transparent)]
@@ -128,6 +128,12 @@ pub enum AdmissionCause {
     Session(Box<crate::session::SessionError>),
     #[error(transparent)]
     Watcher(Box<crate::watcher::WatcherError>),
+}
+
+impl From<crate::document_config::DocumentConfigError> for AdmissionCause {
+    fn from(error: crate::document_config::DocumentConfigError) -> Self {
+        Self::DocumentConfig(Box::new(error))
+    }
 }
 
 impl crate::config_client::TransactionFailure for AdmissionCause {

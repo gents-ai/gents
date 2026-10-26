@@ -30,7 +30,9 @@ pub async fn run_startup_recovery_with_executions(
     executions: &crate::hook::BackgroundExecutionRegistry,
 ) -> StartupRecoveryOutcome {
     let tool_calls =
-        ToolCallLifecycle::recover_all_with_executions(node, node_did, executions).await;
+        ToolCallLifecycle::recover_all_with_executions(node, node_did, executions)
+            .await
+            .map_err(anyhow::Error::from);
     let requests = RequestLifecycle::recover_all(node, node_did)
         .await
         .map_err(anyhow::Error::from);

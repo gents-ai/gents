@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::error_chain::ErrorChain;
 use serde::Deserialize;
@@ -96,12 +95,107 @@ pub enum SessionMessageError {
     )]
     CursorOtherSessionScope,
     #[error("session inspection requires a valid caller DID")]
-    InvalidCallerDid,
+    InvalidCallerDid(#[source] ::identity::Error),
     #[error("session-message commit outcome is unknown after: {error}")]
     CommitOutcomeUnknown { error: String },
     #[error("{0}")]
     MutationRender(&'static str),
+    #[error("caller DID is not ACP-addressable")]
+    CallerDIDNotACPAddressable(#[source] identity::Error),
+    #[error(transparent)]
+    AgentRequestAdmission(Box<crate::request_admission::AgentRequestAdmissionError>),
+    #[error(transparent)]
+    CanonicalRows(#[from] crate::session::canonical_rows::CanonicalRowsError),
+    #[error(transparent)]
+    ConfigClient(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Delivery(#[from] crate::tool_call_lifecycle::delivery::DeliveryError),
+    #[error(transparent)]
+    DesiredState(#[from] crate::config_client::DesiredStateError),
+    #[error(transparent)]
+    GraphqlResponse(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    Identity(#[from] crate::identity::IdentityError),
+    #[error(transparent)]
+    Interrupt(Box<crate::interrupt::InterruptError>),
+    #[error(transparent)]
+    RequestBinding(#[from] crate::request_binding::RequestBindingError),
+    #[error(transparent)]
+    SessionOrigin(#[from] crate::session_origin::SessionOriginError),
+    #[error(transparent)]
+    SessionOutput(#[from] crate::session::SessionOutputError),
+    #[error(transparent)]
+    ToolCallQuery(#[from] crate::tool_call_lifecycle::query::ToolCallQueryError),
+    #[error(transparent)]
+    ToolSurface(#[from] crate::tool_surface::ToolSurfaceError),
+    #[error(transparent)]
+    BackgroundCompletion(#[from] crate::background_completion::BackgroundCompletionError),
+    #[error(transparent)]
+    Parse(#[from] chrono::ParseError),
+    #[error(transparent)]
+    Goal(Box<crate::goal::GoalError>),
+    #[error(transparent)]
+    Materialize(Box<crate::lifecycle::materialize::MaterializeError>),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Session(Box<crate::session::SessionError>),
+    #[error(transparent)]
+    Transition(#[from] crate::tool_call_lifecycle::TransitionError),
 }
+
+impl From<crate::lifecycle::materialize::MaterializeError> for SessionMessageError {
+    fn from(error: crate::lifecycle::materialize::MaterializeError) -> Self {
+        Self::Materialize(Box::new(error))
+    }
+}
+
+impl From<crate::session::SessionError> for SessionMessageError {
+    fn from(error: crate::session::SessionError) -> Self {
+        Self::Session(Box::new(error))
+    }
+}
+
+impl From<crate::goal::GoalError> for SessionMessageError {
+    fn from(error: crate::goal::GoalError) -> Self {
+        Self::Goal(Box::new(error))
+    }
+}
+
+impl From<crate::interrupt::InterruptError> for SessionMessageError {
+    fn from(error: crate::interrupt::InterruptError) -> Self {
+        Self::Interrupt(Box::new(error))
+    }
+}
+
+impl From<crate::request_admission::AgentRequestAdmissionError> for SessionMessageError {
+    fn from(error: crate::request_admission::AgentRequestAdmissionError) -> Self {
+        Self::AgentRequestAdmission(Box::new(error))
+    }
+}
+
+impl crate::config_client::TransactionFailure for SessionMessageError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::ConfigClient(error) => Some(error),
+            Self::Delivery(error) => error.config_client_error(),
+            Self::DesiredState(error) => error.config_client_error(),
+            Self::GraphqlResponse(error) => error.config_client_error(),
+            Self::Interrupt(error) => error.config_client_error(),
+            Self::SessionOrigin(error) => error.config_client_error(),
+            Self::SessionOutput(error) => error.config_client_error(),
+            Self::ToolCallQuery(error) => error.config_client_error(),
+            Self::ToolSurface(error) => error.config_client_error(),
+            Self::Goal(error) => error.config_client_error(),
+            Self::Materialize(error) => error.config_client_error(),
+            Self::Session(error) => error.config_client_error(),
+            Self::Transition(error) => error.config_client_error(),
+            _ => None,
+        }
+    }
+}
+
+type Result<T, E = SessionMessageError> = std::result::Result<T, E>;
 
 #[cfg(test)]
 mod goal_input_tests;
@@ -432,7 +526,7 @@ async fn target_goal_assignment(
                         return Ok(None);
                     };
                     if session.session.agent_id != target.agent_id {
-                        return Err(SessionMessageError::TargetAgentMismatch.into());
+                        return Err(SessionMessageError::TargetAgentMismatch);
                     }
                     let goal = crate::goal::load_canonical_goal_in_txn(
                         txn,
@@ -467,7 +561,7 @@ async fn target_goal_assignment(
     match state {
         crate::goal::SessionGoalObservationState::NoReadableSession => Ok(None),
         crate::goal::SessionGoalObservationState::Unknown => {
-            Err(SessionMessageError::GoalStateSyncing.into())
+            Err(SessionMessageError::GoalStateSyncing)
         }
         crate::goal::SessionGoalObservationState::Observed(observation) => {
             Ok(observation.goal.and_then(|goal| {
@@ -667,7 +761,7 @@ pub(crate) async fn commit(
     .await?
     .filter(|_| durable.is_running())
     .ok_or_else(|| SessionMessageError::CommitOutcomeUnknown {
-        error: ErrorChain(error.as_ref()).to_string(),
+        error: ErrorChain(&error).to_string(),
     })?;
     *lifecycle = durable;
     Ok(receipt)
@@ -701,7 +795,7 @@ async fn commit_once(
         PlannedWrite::Goal { .. } => (
             Some(
                 ::identity::Did::new(cause.caller_node_did.clone())
-                    .context("caller DID is not ACP-addressable")?,
+                    .map_err(SessionMessageError::CallerDIDNotACPAddressable)?,
             ),
             "session_message.commit_goal",
         ),
@@ -718,7 +812,7 @@ async fn commit_once(
                     &serde_json::to_string(&receipt)?,
                 )
                 .await?;
-                Ok::<_, anyhow::Error>((receipt, started_at))
+                Ok::<_, SessionMessageError>((receipt, started_at))
             })
         })
         .await?;
@@ -762,7 +856,7 @@ pub(crate) async fn stage_planned_write_in_txn(
                 create,
             )
             .await
-            .map_err(anyhow::Error::from)
+            .map_err(Into::into)
         }
     }
 }
@@ -775,7 +869,7 @@ async fn ensure_planned_hop_current(
         crate::session::load_session_current_hop_in_txn(txn, &create.node_did, &create.session_id)
             .await?;
     if !(create.request_hop >= current) {
-        return Err(SessionMessageError::TargetSessionMoved { current }.into());
+        return Err(SessionMessageError::TargetSessionMoved { current });
     }
     Ok(())
 }

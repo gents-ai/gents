@@ -7,7 +7,7 @@ use crate::goal::{CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NA
 use super::shared::ToolError;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum GoalToolError {
+pub enum GoalToolError {
     #[error("{tool} is executed by the session persistence hook")]
     ExecutedByPersistenceHook { tool: &'static str },
 }

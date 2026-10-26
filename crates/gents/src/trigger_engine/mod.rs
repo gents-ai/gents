@@ -19,6 +19,8 @@ pub mod subscription_source;
 
 pub use error::TriggerEngineError;
 
+type Result<T, E = TriggerEngineError> = std::result::Result<T, E>;
+
 #[cfg(test)]
 mod tests;
 
@@ -129,26 +131,48 @@ impl std::error::Error for MaterializeSkip {}
 
 #[derive(Debug, thiserror::Error)]
 #[error("fire already admitted as {request_id}")]
-pub(crate) struct MaterializeDuplicate {
+pub struct MaterializeDuplicate {
     pub request_id: String,
 }
 
-pub(crate) fn fire_result_from_materialize(result: anyhow::Result<String>) -> FireResult {
+fn materialize_skip(error: &TriggerEngineError) -> Option<&MaterializeSkip> {
+    use crate::graph_pipeline::GraphPipelineError;
+    use crate::trigger_engine::production_materializer::MaterializerError;
+    let graph = match error {
+        TriggerEngineError::GraphPipeline(error) => Some(&**error),
+        TriggerEngineError::Materializer(error) => match &**error {
+            MaterializerError::GraphPipeline(error) => Some(&**error),
+            _ => None,
+        },
+        _ => None,
+    };
+    match graph {
+        Some(GraphPipelineError::MaterializeSkip(skip)) => Some(skip),
+        _ => None,
+    }
+}
+
+fn materialize_duplicate(error: &TriggerEngineError) -> Option<&MaterializeDuplicate> {
+    use crate::trigger_engine::production_materializer::MaterializerError;
+    match error {
+        TriggerEngineError::MaterializeDuplicate(duplicate) => Some(duplicate),
+        TriggerEngineError::Materializer(error) => match &**error {
+            MaterializerError::MaterializeDuplicate(duplicate) => Some(duplicate),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+pub(crate) fn fire_result_from_materialize(result: Result<String>) -> FireResult {
     match result {
         Ok(request_id) => FireResult::Fired { request_id },
         Err(error) => {
-            if let Some(skip) = error.downcast_ref::<MaterializeSkip>().or_else(|| {
-                match error.downcast_ref::<crate::graph_pipeline::GraphPipelineError>() {
-                    Some(crate::graph_pipeline::GraphPipelineError::MaterializeSkip(skip)) => {
-                        Some(skip)
-                    }
-                    _ => None,
-                }
-            }) {
+            if let Some(skip) = materialize_skip(&error) {
                 FireResult::Skipped {
                     reason: skip.reason.clone(),
                 }
-            } else if let Some(duplicate) = error.downcast_ref::<MaterializeDuplicate>() {
+            } else if let Some(duplicate) = materialize_duplicate(&error) {
                 FireResult::Duplicate {
                     request_id: duplicate.request_id.clone(),
                 }
@@ -211,14 +235,13 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         durable_fire_key: &str,
         delivery: Option<&crate::trigger_engine::durable::PreparedFire>,
         prepared_ids: Option<(&str, &str)>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>;
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>>;
 
     fn recover_admitted_fire(
         &self,
         _identity: &gents_protocol::trigger_delivery::FireIdentity,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = anyhow::Result<Option<String>>> + Send + '_>,
-    > {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + '_>>
+    {
         Box::pin(async { Ok(None) })
     }
 
@@ -227,9 +250,8 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         _task: &crate::runtime_snapshot::ResolvedTask,
         _trigger_id: &str,
         _correlation: Option<&str>,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = anyhow::Result<Option<String>>> + Send + '_>,
-    > {
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + '_>>
+    {
         Box::pin(async { Ok(None) })
     }
 
@@ -238,29 +260,27 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         node_did: &str,
         trigger_id: &str,
         excluded_request_id: Option<&str>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>;
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool>> + Send + '_>>;
 
     fn supersede_active_runtime_requests_for_trigger(
         &self,
         node_did: &str,
         trigger_id: &str,
         excluded_request_id: Option<&str>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<usize>> + Send + '_>>;
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<usize>> + Send + '_>>;
 
     fn recover_goal_task_fire(
         &self,
         task: &crate::runtime_snapshot::ResolvedTask,
         durable_fire_key: &str,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = anyhow::Result<Option<String>>> + Send + '_>,
-    >;
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + '_>>;
 
     fn has_materialized_group_request(
         &self,
         node_did: &str,
         trigger_id: &str,
         durable_fire_key: &str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<bool>> + Send + '_>>;
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool>> + Send + '_>>;
 }
 
 pub(crate) struct TriggerEngine {

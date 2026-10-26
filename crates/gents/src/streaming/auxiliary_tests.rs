@@ -738,9 +738,7 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             let diagnostic = ErrorChain(&error).to_string();
             assert!(
                 matches!(
-                    canonical::provider_rejection::<canonical::ProviderCloseRejection>(
-                        &error
-                    ),
+                    canonical::provider_rejection::<canonical::ProviderCloseRejection>(&error),
                     Some(canonical::ProviderCloseRejection::WriterMismatch)
                 ),
                 "{}: stale close failed outside immutable writer check: {diagnostic}",

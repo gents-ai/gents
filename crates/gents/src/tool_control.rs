@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 use gents_protocol::job::{JobControlKind, JobControlOutcome, JobReadError};
 
@@ -16,7 +15,17 @@ pub enum ToolControlError {
     JobRead(#[from] JobReadError),
     #[error("background cancellation lacks physical identity")]
     LacksPhysicalIdentity,
+    #[error(transparent)]
+    SessionMessage(#[from] crate::session_message::SessionMessageError),
+    #[error(transparent)]
+    ToolCallQuery(#[from] crate::tool_call_lifecycle::query::ToolCallQueryError),
+    #[error(transparent)]
+    ToolCallRecovery(#[from] crate::tool_call_lifecycle::ToolCallRecoveryError),
+    #[error(transparent)]
+    Transition(#[from] crate::tool_call_lifecycle::TransitionError),
 }
+
+type Result<T, E = ToolControlError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CancelBackgroundToolCallOutcome {

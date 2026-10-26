@@ -19,7 +19,7 @@ use super::shared::{cap_output, render_file_contents, ToolContext, ToolError};
 use crate::tool_call_lifecycle::FailureClass;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum FileToolError {
+pub enum FileToolError {
     #[error("expected_content_hash and overwrite=true conflict: pass the hash to replace only the content you read, or overwrite=true to replace it regardless, not both.")]
     HashWithOverwrite,
     #[error("{display} has changed since it was read: expected {expected}, but the file no longer exists. Re-read the directory, or omit expected_content_hash to create a new file.")]

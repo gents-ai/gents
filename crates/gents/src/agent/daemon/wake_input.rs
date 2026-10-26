@@ -33,7 +33,7 @@ pub(super) enum WakeInputError {
     #[error("wake notification is not user input")]
     NotUserInput,
     #[error(transparent)]
-    Goal(#[from] crate::goal::GoalError),
+    Goal(Box<crate::goal::GoalError>),
     #[error(transparent)]
     RequestReceipt(#[from] crate::request_admission::RequestReceiptError),
     #[error(transparent)]
@@ -42,6 +42,12 @@ pub(super) enum WakeInputError {
     SessionOutput(#[from] crate::session::SessionOutputError),
     #[error(transparent)]
     Access(#[from] crate::config_client::ConfigClientError),
+}
+
+impl From<crate::goal::GoalError> for WakeInputError {
+    fn from(error: crate::goal::GoalError) -> Self {
+        Self::Goal(Box::new(error))
+    }
 }
 
 impl crate::config_client::TransactionFailure for WakeInputError {

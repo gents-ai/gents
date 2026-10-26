@@ -149,6 +149,44 @@ pub enum SessionError {
     InvalidTitleTimestamp(#[source] chrono::ParseError),
     #[error("updating title: no AgentSession for session_id={session_id}")]
     TitleSessionMissing { session_id: String },
+    #[error("loading prompt compaction state for session_id={session_id}: {errors}")]
+    LoadingPromptCompactionStateSessionId { session_id: String, errors: String },
+    #[error("loading compaction entries for session_id={session_id}: {errors}")]
+    LoadingCompactionEntriesSessionId { session_id: String, errors: String },
+    #[error("stale compaction generation for session {session_id}")]
+    StaleCompactionGenerationSession { session_id: String },
+    #[error("compaction cursor regression for session {session_id}")]
+    CompactionCursorRegressionSession { session_id: String },
+    #[error("CompactionEntry messages_compacted total overflowed usize")]
+    CompactionEntryMessagesCompactedTotalOverflowedUsize,
+    #[error("compaction original_tokens must be a non-negative usize")]
+    CompactionOriginalTokensMustNonNegative(#[source] std::num::TryFromIntError),
+    #[error("compaction compacted_tokens must be a non-negative usize")]
+    CompactionCompactedTokensMustNonNegative(#[source] std::num::TryFromIntError),
+    #[error("compaction sequence overflow")]
+    CompactionSequenceOverflow2(#[source] std::num::TryFromIntError),
+    #[error(transparent)]
+    History(#[from] crate::session::HistoryError),
+    #[error(transparent)]
+    ProviderContextReduction(#[from] crate::provider_context_reduction::ProviderContextReductionError),
+    #[error(transparent)]
+    Compaction(#[from] gents_loop::compaction::CompactionError),
+    #[error(transparent)]
+    RenderedRequest(#[from] crate::rendered_request::RenderedRequestError),
+    #[error(transparent)]
+    Streaming(Box<crate::streaming::StreamingError>),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    LoopRenderedRequest(#[from] gents_loop::rendered_request::RenderedRequestError),
+    #[error(transparent)]
+    Reduction(#[from] gents_loop::compaction::ReductionError),
+}
+
+impl From<crate::streaming::StreamingError> for SessionError {
+    fn from(error: crate::streaming::StreamingError) -> Self {
+        Self::Streaming(Box::new(error))
+    }
 }
 
 impl TransactionFailure for SessionError {

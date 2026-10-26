@@ -59,7 +59,7 @@ pub enum ContextError {
 }
 
 #[derive(Debug)]
-pub(crate) enum ToolError {
+pub enum ToolError {
     CliTool(CliToolError),
     Command(CommandError),
     Context(ContextError),

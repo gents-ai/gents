@@ -2,12 +2,12 @@
 //! loop; an answer that is not a job ends the call there, and a refusal
 //! completes it failed with the host code and the call that follows.
 
+use crate::plugin_job::origin::PluginJobError;
 use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use gents_loop::live_output::DeferredToolWrites;
 use gents_protocol::job::{
     JobBudget, JobControlKind, JobOrigin, JobPin, JobProgress, JobState, JobStepInput,
@@ -56,6 +56,8 @@ use crate::tool_call_lifecycle::PluginJobTerminal;
 use crate::tool_call_lifecycle::{AwaitMode, ReceiptDecision, ToolRowKind};
 use crate::tool_call_lifecycle::{FailureClass, ToolCallLifecycle, ToolCallState};
 use crate::tool_surface::EndpointScope;
+
+type Result<T, E = PluginJobError> = std::result::Result<T, E>;
 
 /// Runs step 0 of the running foreground job tool call `lifecycle` and ends
 /// it unless the output adopts a job. Returns the payload the model reads.
@@ -109,11 +111,11 @@ pub async fn run_step0(
     let access = ConfigAccess::local(runtime.node.clone());
     let row_doc_id = lifecycle
         .doc_id()
-        .context("a job tool call has no physical identity")?
+        .ok_or(PluginJobError::JobToolCallHasNoPhysical)?
         .to_owned();
     let (input, _) = build_step_input(&access, runtime, &row_doc_id, StepKind::Step0 { binding })
         .await
-        .context("assembling the step 0 input")?;
+        .map_err(PluginJobError::AssemblingStepInput)?;
     let caller = &input.caller;
     let data = DataCaller::new(runtime.node.clone(), &caller.node_did)?;
     let jobs = JobCaller::new(
@@ -244,10 +246,10 @@ pub async fn run_step0(
                 .control_targets
                 .iter()
                 .find(|(doc_id, _)| *doc_id == request.row_doc_id)
-                .context("an admitted control entry has no target")?;
+                .ok_or(PluginJobError::AdmittedControlEntryHasNoTarget)?;
             let (owner, _) = target
                 .as_ref()
-                .context("an admitted control entry has no job row")?;
+                .ok_or(PluginJobError::AdmittedControlEntryHasNoJob)?;
             let mut target_lifecycle = ToolCallLifecycle::load_by_doc_id(
                 runtime.node.clone(),
                 &request.row_doc_id,
@@ -256,15 +258,17 @@ pub async fn run_step0(
                 owner.requester_did.as_deref(),
             )
             .await?
-            .with_context(|| format!("job row {} does not exist", request.row_doc_id))?;
+            .ok_or_else(|| PluginJobError::JobRowDoesNotExist {
+                row_doc_id: request.row_doc_id.to_string(),
+            })?;
             let row = read_step_row(&access, &request.row_doc_id).await?;
             kill(&access, &mut target_lifecycle, &row, cause).await?;
         }
     }
     let settlement =
-        settlement_of(&output).context("an effects output without a pin was admitted")?;
+        settlement_of(&output).ok_or(PluginJobError::EffectsOutputWithoutPinWasAdmitted)?;
     let (terminal, text) =
-        terminal_text(lifecycle, settlement).context("a step 0 answer has no terminal")?;
+        terminal_text(lifecycle, settlement).ok_or(PluginJobError::StepAnswerHasNoTerminal)?;
     match terminal.state {
         ToolCallState::Completed => lifecycle.complete(&text).await?,
         _ => {
@@ -318,9 +322,9 @@ async fn control_targets(
         response
             .pointer("/data/AgentToolCall")
             .cloned()
-            .context("AgentToolCall query omitted rows for the control targets")?,
+            .ok_or(PluginJobError::AgentToolCallQueryOmittedRowsControlTargets)?,
     )
-    .context("decoding the control targets")?;
+    .map_err(PluginJobError::DecodingControlTargets)?;
     Ok(control
         .iter()
         .map(|request| {
@@ -471,9 +475,9 @@ async fn taken_handles(
         response
             .pointer("/data/AgentToolCall")
             .cloned()
-            .context("session job query omitted rows")?,
+            .ok_or(PluginJobError::SessionJobQueryOmittedRows)?,
     )
-    .context("decoding session job rows")?;
+    .map_err(PluginJobError::DecodingSessionJobRows)?;
     Ok(rows
         .into_iter()
         .filter(|row| row.doc_id != row_doc_id)
@@ -517,13 +521,13 @@ pub async fn adopt_step0(
         JobStepOutput::Effects { effects } => Some(effects),
         _ => None,
     };
-    let guest = out_pin(output).context("an adopted output carries a pin")?;
+    let guest = out_pin(output).ok_or(PluginJobError::AdoptedOutputCarriesPin)?;
     let (scratch, writes, resume) = (scratch_of(output), writes_of(output), out_resume(output));
     let caller = &input.caller;
     let coordinate = binding.plugin.plugin.as_str();
     let row_doc_id = lifecycle
         .doc_id()
-        .context("a job tool call has no physical identity")?
+        .ok_or(PluginJobError::JobToolCallHasNoPhysical)?
         .to_owned();
     if !scratch.is_empty() {
         if let Err(error) = write_scratch(Path::new(&caller.cwd), &caller.tool_call_id, scratch) {
@@ -531,7 +535,7 @@ pub async fn adopt_step0(
                 lifecycle,
                 FailureClass::PolicyDenied,
                 Refusal::PolicyDenied.code(),
-                &format!("{}", ErrorChain(error.as_ref())),
+                &format!("{}", ErrorChain(&error)),
                 "Next: return scratch files with plain names under the working folder, or finish without scratch",
             )
             .await;
@@ -649,7 +653,7 @@ pub async fn adopt_step0(
                         )
                         .await?
                         {
-                            return Ok::<_, anyhow::Error>(Adopted::Refused(refusal));
+                            return Ok::<_, PluginJobError>(Adopted::Refused(refusal));
                         }
                     }
                     let mut out = output.clone();
@@ -679,16 +683,16 @@ pub async fn adopt_step0(
                         .row
                         .pin
                         .clone()
-                        .context("an adopted row has a pin")?;
+                        .ok_or(PluginJobError::AdoptedRowHasPin)?;
                     // (b) the flip, with the job's wall deadline
                     let deadline_at = chrono::DateTime::from_timestamp_millis(i64::try_from(
                         pin.adopted_at + pin.ceiling_at_pin.max_wall_secs * 1000,
                     )?)
-                    .context("the job deadline is out of range")?;
+                    .ok_or(PluginJobError::JobDeadlineOutRange)?;
                     let flipped = lifecycle
                         .adopt_plugin_job_in_txn(txn, deadline_at)
                         .await?
-                        .context("the call is no longer a running foreground call")?;
+                        .ok_or(PluginJobError::CallNoLongerRunningForegroundCall)?;
                     // (c) the pin
                     write_pin_in_txn(txn, row_doc_id, &pin).await?;
                     // (e) initial progress, then step 0's evidence and resume block
@@ -737,7 +741,7 @@ pub async fn adopt_step0(
                     if !writes.is_empty() {
                         let grant = grant
                             .as_ref()
-                            .context("a plugin without data cannot write")?;
+                            .ok_or(PluginJobError::PluginWithoutDataCannotWrite)?;
                         let stamps = crate::plugin::data::StampContext::JobStep {
                             node_did: caller.node_did.clone(),
                             session_id: caller.session_id.clone(),
@@ -760,17 +764,17 @@ pub async fn adopt_step0(
                         // the call's own reply.
                         let inline = adoption.delivery == Some(Delivery::Inline);
                         let (_, payload) = terminal_text(&flipped, settlement.clone())
-                            .context("a step 0 answer has no terminal")?;
+                            .ok_or(PluginJobError::StepAnswerHasNoTerminal)?;
                         let terminal = settle_plugin_job_in_txn(txn, &flipped, settlement, inline)
                             .await?
-                            .context("a step 0 answer has no terminal")?;
+                            .ok_or(PluginJobError::StepAnswerHasNoTerminal)?;
                         return Ok(Adopted::Settled {
                             lifecycle: flipped,
                             terminal,
                             payload,
                         });
                     }
-                    let effects = effects.context("only an effects output stays a job")?;
+                    let effects = effects.ok_or(PluginJobError::OnlyEffectsOutputStaysJob)?;
                     // (f) the admitted effects
                     let staged_row = StepRow {
                         pin: Some(pin.clone()),

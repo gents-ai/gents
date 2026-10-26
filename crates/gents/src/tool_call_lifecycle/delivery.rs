@@ -65,7 +65,7 @@ pub enum DeliveryError {
     #[error(transparent)]
     SessionOutput(#[from] crate::session::SessionOutputError),
     #[error(transparent)]
-    Session(#[from] crate::session::SessionError),
+    Session(Box<crate::session::SessionError>),
     #[error(transparent)]
     Reconstruction(#[from] gents_protocol::output::ReconstructionError),
     #[error(transparent)]
@@ -326,6 +326,12 @@ pub enum DeliveryError {
     DispatchPhysicalToolLookupOmittedRows,
     #[error("dispatch physical tool is missing or ambiguous")]
     DispatchPhysicalToolIsMissingOrAmbiguous,
+}
+
+impl From<crate::session::SessionError> for DeliveryError {
+    fn from(error: crate::session::SessionError) -> Self {
+        Self::Session(Box::new(error))
+    }
 }
 
 impl From<crate::hook::HookError> for DeliveryError {

@@ -44,7 +44,7 @@ pub(crate) async fn settle_running_session_message_rows(
             Ok(false) => {}
             Err(error) => tracing::warn!(
                 tool_call_doc_id = %row.doc_id,
-                error = %ErrorChain(error.as_ref()),
+                error = %ErrorChain(&error),
                 "session-message row settlement failed; will retry"
             ),
         }
@@ -243,7 +243,7 @@ pub(crate) async fn settle_session_message_row(
     }
     let doc_id = lifecycle
         .doc_id()
-        .context("session-message row lacks physical identity")?
+        .ok_or(BackgroundCompletionError::SessionMessageRowLacksPhysicalIdentity)?
         .to_owned();
     let calling_request_id =
         crate::session_message::calling_request_id(node.as_ref(), lifecycle).await?;
@@ -276,7 +276,7 @@ pub(crate) async fn settle_session_message_row(
     let caused_doc_id = caused
         .doc_id
         .as_deref()
-        .context("caused request lacks physical identity")?;
+        .ok_or(BackgroundCompletionError::CausedRequestLacksPhysicalIdentity)?;
     let Some(terminal) =
         crate::background_tools::load_caused_request_terminal(node, caused_doc_id).await?
     else {

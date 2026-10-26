@@ -836,7 +836,8 @@ async fn run_agent_owned(
                 completion_job_driver,
                 completion_cancel,
             )
-            .await,
+            .await
+            .map_err(anyhow::Error::from),
         )
     });
 

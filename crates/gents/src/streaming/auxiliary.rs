@@ -1,7 +1,7 @@
+use crate::streaming::StreamingError;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context;
 use defra_node::EmbeddedNode;
 use gents_loop::provider_audit::{
     AuxiliaryObserve, AuxiliaryOutputError, AuxiliaryOutputEvent, AuxiliaryOutputObservation,
@@ -15,8 +15,10 @@ use tokio::sync::Mutex;
 
 use super::{canonical::ProviderAttemptClose, DefraStreamWriter, StreamWriter};
 
+type Result<T, E = AuxiliaryError> = std::result::Result<T, E>;
+
 #[derive(Debug, thiserror::Error)]
-enum AuxiliaryError {
+pub(crate) enum AuxiliaryError {
     #[error("auxiliary output sink received a non-audit source")]
     NonAuditSource,
     #[error("auxiliary attempt overlaps an open source")]
@@ -31,9 +33,21 @@ enum AuxiliaryError {
     DeadlineAttemptMismatch,
     #[error("auxiliary flush belongs to another attempt")]
     FlushAttemptMismatch,
+    #[error(transparent)]
+    TryFromInt(#[from] std::num::TryFromIntError),
+    #[error(transparent)]
+    Streaming(Box<crate::streaming::StreamingError>),
+    #[error(transparent)]
+    StreamProcessor(#[from] gents_loop::stream_processor::StreamProcessorError),
 }
 
-fn sink_failure(error: anyhow::Error) -> AuxiliaryOutputError {
+impl From<crate::streaming::StreamingError> for AuxiliaryError {
+    fn from(error: crate::streaming::StreamingError) -> Self {
+        Self::Streaming(Box::new(error))
+    }
+}
+
+fn sink_failure(error: AuxiliaryError) -> AuxiliaryOutputError {
     AuxiliaryOutputError::Sink {
         source: error.into(),
     }
@@ -103,7 +117,7 @@ pub(crate) fn sink_with_writer(
         let state = Arc::clone(&state);
         let generation = generation.clone();
         Box::pin(async move {
-            let observed: anyhow::Result<()> = async move {
+            let observed: Result<()> = async move {
                 let coordinate = (
                     observation.capture_scope,
                     observation.turn,
@@ -226,7 +240,7 @@ pub(crate) fn sink_with_writer(
                             close,
                         )
                         .await
-                        .context("closing auxiliary audit output")?;
+                        .map_err(|error| StreamingError::ClosingAuxiliaryAuditOutput(Box::new(error)))?;
                     writer.reset_tail(&request.doc_id).await?;
                     state.active = None;
                     state.closed = Some((coordinate, close));
@@ -261,7 +275,7 @@ pub(crate) fn sink_with_writer(
             let state = Arc::clone(&flush_state);
             let generation = flush_generation.clone();
             Box::pin(async move {
-                let flushed: anyhow::Result<()> = async move {
+                let flushed: Result<()> = async move {
                     let state = state.lock().await;
                     if state.active != Some((scope, turn, attempt)) {
                         return Err(AuxiliaryError::FlushAttemptMismatch.into());

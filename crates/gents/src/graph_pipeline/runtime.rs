@@ -363,7 +363,13 @@ pub enum GraphPipelineError {
     #[error("graph session continuation requires exactly one authenticated singleton root")]
     GraphSessionContinuationRequiresExactlyOne,
     #[error(transparent)]
-    Interrupt(#[from] crate::interrupt::InterruptError),
+    Interrupt(Box<crate::interrupt::InterruptError>),
+}
+
+impl From<crate::interrupt::InterruptError> for GraphPipelineError {
+    fn from(error: crate::interrupt::InterruptError) -> Self {
+        Self::Interrupt(Box::new(error))
+    }
 }
 
 impl From<crate::trigger_engine::production_materializer::MaterializerError> for GraphPipelineError {

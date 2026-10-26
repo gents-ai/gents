@@ -82,11 +82,23 @@ pub enum CanonicalRecoveryError {
     #[error(transparent)]
     Parse(#[from] chrono::ParseError),
     #[error(transparent)]
-    Lifecycle(#[from] crate::lifecycle::LifecycleError),
+    Lifecycle(Box<crate::lifecycle::LifecycleError>),
     #[error(transparent)]
-    Session(#[from] crate::session::SessionError),
+    Session(Box<crate::session::SessionError>),
     #[error(transparent)]
     RecoveryPlan(#[from] gents_protocol::output::recovery::RecoveryPlanError),
+}
+
+impl From<crate::session::SessionError> for CanonicalRecoveryError {
+    fn from(error: crate::session::SessionError) -> Self {
+        Self::Session(Box::new(error))
+    }
+}
+
+impl From<crate::lifecycle::LifecycleError> for CanonicalRecoveryError {
+    fn from(error: crate::lifecycle::LifecycleError) -> Self {
+        Self::Lifecycle(Box::new(error))
+    }
 }
 
 impl crate::config_client::TransactionFailure for CanonicalRecoveryError {

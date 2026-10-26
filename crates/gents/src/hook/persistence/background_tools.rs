@@ -1,8 +1,10 @@
+use crate::hook::HookError;
 use super::*;
-use anyhow::Context;
 use futures::FutureExt;
 use gents_protocol::error_chain::ErrorChain;
 use std::panic::AssertUnwindSafe;
+
+type Result<T, E = HookError> = std::result::Result<T, E>;
 
 async fn project_background_completion_if_owned<F>(
     won_terminal_compare: bool,
@@ -24,7 +26,7 @@ async fn complete_spawn_process_failure(
     failure: FailureClass,
     result: String,
     denial: Option<&crate::toolset::CommandPolicyDenial>,
-) -> anyhow::Result<ToolCallHookAction> {
+) -> Result<ToolCallHookAction> {
     let (bounded, presentation) = bounded_tool_result_with_presentation(
         SPAWN_PROCESS_TOOL_NAME,
         &result,
@@ -55,7 +57,7 @@ impl DefraSessionHook {
         tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
-    ) -> anyhow::Result<ToolCallHookAction> {
+    ) -> Result<ToolCallHookAction> {
         let (session_id, request_id, deadline_at, _seq) =
             self.ensure_assistant_turn_sequence().await?;
         let mut parent_lifecycle = self
@@ -132,7 +134,7 @@ impl DefraSessionHook {
                 text,
             } = crate::tool_call_lifecycle::ToolOutcome::from_dispatch(target_name, Err(error))
             else {
-                anyhow::bail!("admission rejection must carry a failed outcome");
+                return Err(HookError::AdmissionRejectionMustCarryFailedOutcome);
             };
             return complete_spawn_process_failure(
                 self,
@@ -158,12 +160,12 @@ impl DefraSessionHook {
             .lifetime;
         let background_deadline_at = chrono::Utc::now()
             + chrono::Duration::from_std(lifetime)
-                .context("background lifetime exceeds the representable range")?;
+                .map_err(HookError::BackgroundLifetimeExceedsRepresentableRange)?;
         let background_tool_call_id = format!(
             "spawned:{}",
-            parent_lifecycle.doc_id().ok_or_else(|| anyhow::anyhow!(
-                "running spawn_process parent lacks physical identity"
-            ))?
+            parent_lifecycle
+                .doc_id()
+                .ok_or_else(|| HookError::RunningSpawnProcessParentLacksPhysical)?
         );
         let effective_timeout = if crate::toolset::is_bash_tool_name(target_name) {
             let requested = parsed.args.get("timeout_secs").and_then(|v| v.as_u64());
@@ -205,14 +207,13 @@ impl DefraSessionHook {
                 return Err(error.into());
             }
         };
-        anyhow::ensure!(
-            lifecycle.tool_call_id() == background_tool_call_id,
-            "spawned admission returned an unexpected stable process handle"
-        );
+        if lifecycle.tool_call_id() != background_tool_call_id {
+            return Err(HookError::SpawnedAdmissionReturnedUnexpectedStableProcess);
+        }
         let cancellation_token = tokio_util::sync::CancellationToken::new();
         let execution_tool_doc_id = lifecycle
             .doc_id()
-            .ok_or_else(|| anyhow::anyhow!("spawned background lifecycle lacks physical identity"))?
+            .ok_or_else(|| HookError::SpawnedBackgroundLifecycleLacksPhysicalIdentity)?
             .to_owned();
         let execution_reservation = self.background_executions.reserve(
             background_tool_call_id.clone(),
@@ -311,7 +312,7 @@ impl DefraSessionHook {
         lifecycle: &mut crate::tool_call_lifecycle::ToolCallLifecycle,
         tool_name: &str,
         raw_result: String,
-    ) -> anyhow::Result<ToolCallHookAction> {
+    ) -> Result<ToolCallHookAction> {
         let (bounded, presentation) =
             bounded_tool_result_with_presentation(tool_name, &raw_result, &self.truncation_limits);
         let won = lifecycle
@@ -330,12 +331,12 @@ impl DefraSessionHook {
     async fn persisted_direct_tool_result(
         &self,
         lifecycle: &crate::tool_call_lifecycle::ToolCallLifecycle,
-    ) -> anyhow::Result<ToolCallHookAction> {
+    ) -> Result<ToolCallHookAction> {
         let message = crate::tool_call_lifecycle::query::load_tool_call_result(
             &crate::config_client::ConfigAccess::local(self.node.clone()),
             lifecycle
                 .doc_id()
-                .context("lost terminal compare requires physical tool identity")?,
+                .ok_or(HookError::LostTerminalCompareRequiresPhysicalTool)?,
             lifecycle.node_did(),
             lifecycle.session_id(),
             lifecycle.requester_did(),
@@ -351,7 +352,7 @@ impl DefraSessionHook {
         tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
-    ) -> anyhow::Result<ToolCallHookAction> {
+    ) -> Result<ToolCallHookAction> {
         let (session_id, request_id, parent_deadline_at, _seq) =
             self.ensure_assistant_turn_sequence().await?;
         let requester_did = self.active_requester_did().await;
@@ -413,7 +414,7 @@ impl DefraSessionHook {
         .wait;
         let wait_deadline_at = chrono::Utc::now()
             + chrono::Duration::from_std(wait_policy.wait_for(parsed.timeout_secs))
-                .context("wait timeout exceeds the representable range")?;
+                .map_err(HookError::WaitTimeoutExceedsRepresentableRange)?;
         self.in_flight_lifecycles
             .lock()
             .await
@@ -432,9 +433,7 @@ impl DefraSessionHook {
                 let Some(mut lifecycle) =
                     self.take_owned_in_flight_lifecycle(internal_call_id).await
                 else {
-                    anyhow::bail!(
-                        "wait_process lifecycle was terminalized while its observation failed"
-                    );
+                    return Err(HookError::WaitProcessLifecycleWasTerminalizedWhile);
                 };
                 if lifecycle.is_deadline_expired(chrono::Utc::now()) {
                     let _ = lifecycle.timeout().await?;
@@ -445,7 +444,7 @@ impl DefraSessionHook {
                 let result = background_invalid_tool_arguments_payload(
                     WAIT_PROCESS_TOOL_NAME,
                     "/tool_call_id",
-                    format!("{}", ErrorChain(error.as_ref())),
+                    format!("{}", ErrorChain(&error)),
                 );
                 return self
                     .complete_control_tool_call(&mut lifecycle, WAIT_PROCESS_TOOL_NAME, result)
@@ -454,7 +453,7 @@ impl DefraSessionHook {
         };
         let Some(mut lifecycle) = self.take_owned_in_flight_lifecycle(internal_call_id).await
         else {
-            anyhow::bail!("wait_process lifecycle was terminalized before observation completion");
+            return Err(HookError::WaitProcessLifecycleWasTerminalizedBefore);
         };
         if lifecycle.is_deadline_expired(chrono::Utc::now()) {
             let _ = lifecycle.timeout().await?;
@@ -471,7 +470,7 @@ impl DefraSessionHook {
         tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
-    ) -> anyhow::Result<ToolCallHookAction> {
+    ) -> Result<ToolCallHookAction> {
         let (session_id, request_id, deadline_at, _seq) =
             self.ensure_assistant_turn_sequence().await?;
         let mut lifecycle = self
@@ -516,7 +515,9 @@ impl DefraSessionHook {
         )
         .await?;
         let result = serde_json::to_value(response).map_err(|error| {
-            anyhow::anyhow!("serialize list_background_tools response: {error}")
+            HookError::SerializeListBackgroundToolsResponse {
+                error: error.to_string(),
+            }
         })?;
         let result = json_string(result);
         self.complete_control_tool_call(&mut lifecycle, LIST_PROCESSES_TOOL_NAME, result)
@@ -528,7 +529,7 @@ impl DefraSessionHook {
         tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
-    ) -> anyhow::Result<ToolCallHookAction> {
+    ) -> Result<ToolCallHookAction> {
         let (session_id, request_id, deadline_at, _seq) =
             self.ensure_assistant_turn_sequence().await?;
         let mut lifecycle = self
@@ -586,7 +587,9 @@ impl DefraSessionHook {
         {
             ReadToolOutputOutcome::Found(response) => {
                 let result = serde_json::to_value(response).map_err(|error| {
-                    anyhow::anyhow!("serialize read_tool_output response: {error}")
+                    HookError::SerializeReadToolOutputResponse {
+                        error: error.to_string(),
+                    }
                 })?;
                 json_string(result)
             }
@@ -612,7 +615,7 @@ impl DefraSessionHook {
         tool_call_id: Option<String>,
         internal_call_id: &str,
         args: &str,
-    ) -> anyhow::Result<ToolCallHookAction> {
+    ) -> Result<ToolCallHookAction> {
         let (session_id, request_id, deadline_at, _seq) =
             self.ensure_assistant_turn_sequence().await?;
         let mut control_lifecycle = self
@@ -833,9 +836,9 @@ impl DefraSessionHook {
             &self.node,
             &session_id,
             &notification_request_id,
-            lifecycle.doc_id().ok_or_else(|| {
-                anyhow::anyhow!("cancelled background lifecycle lacks physical identity")
-            })?,
+            lifecycle
+                .doc_id()
+                .ok_or_else(|| HookError::CancelledLifecycleMissingIdentity)?,
             &notification_tool_name,
             "cancelled",
             "",

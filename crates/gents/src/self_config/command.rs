@@ -59,7 +59,7 @@ pub(super) struct CommandGuidance {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(super) enum CommandError {
+pub enum CommandError {
     #[error(transparent)]
     Guidance(#[from] CommandGuidance),
     #[error(transparent)]

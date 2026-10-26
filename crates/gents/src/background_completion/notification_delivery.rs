@@ -1,5 +1,4 @@
 use super::*;
-use anyhow::anyhow;
 use gents_protocol::error_chain::ErrorChain;
 
 pub(super) struct SideEffects {
@@ -21,12 +20,13 @@ pub(crate) async fn append_background_tool_completion(
 ) -> Result<()> {
     let parent_request = crate::request_binding::load_agent_request(node, parent_request_id)
         .await?
-        .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
+        .ok_or_else(|| BackgroundCompletionError::ParentAgentRequestNotFound {
+            parent_request_id: parent_request_id.to_string(),
+        })?;
 
-    anyhow::ensure!(
-        parent_request.session_id == parent_session_id,
-        "background completion parent session mismatch"
-    );
+    if parent_request.session_id != parent_session_id {
+        return Err(BackgroundCompletionError::BackgroundCompletionParentSessionMismatch);
+    }
     let existing =
         existing_tool_completion_notification(node, &parent_request, tool_call_doc_id).await?;
     let tool_call_id = load_tool_call_id(node, tool_call_doc_id).await?;
@@ -135,16 +135,15 @@ async fn load_tool_call_id(node: &EmbeddedNode, tool_call_doc_id: &str) -> Resul
     let response =
         crate::graphql::graphql_with_transaction_retry(node, &query, "load_tool_call_id").await?;
     let rows = crate::graphql::rows::<serde_json::Value>(&response, "AgentToolCall")?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "background tool notification requires one exact physical lifecycle row"
-    );
+    if rows.len() != 1 {
+        return Err(BackgroundCompletionError::BackgroundToolNotificationRequiresOneExact);
+    }
     rows[0]
         .get("tool_call_id")
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(str::to_owned)
-        .context("background tool notification lifecycle omitted tool_call_id")
+        .ok_or(BackgroundCompletionError::BackgroundToolNotificationLifecycleOmittedTool)
 }
 
 pub(super) async fn ensure_notification_delivery(
@@ -156,7 +155,8 @@ pub(super) async fn ensure_notification_delivery(
     wake: crate::lifecycle::RequestHopCause,
     native: Option<crate::lifecycle::queue::ToolNotificationPublication>,
 ) -> Result<SideEffects> {
-    let native = native.context("background notification requires its canonical provenance")?;
+    let native = native
+        .ok_or(BackgroundCompletionError::BackgroundNotificationRequiresCanonicalProvenance)?;
     let enqueued = crate::lifecycle::queue::persist_background_completion_with_message_canonical(
         node,
         parent,
@@ -243,11 +243,19 @@ async fn mark_background_tool_completion_side_effects_done(
         .and_then(|data| data.get("AgentToolCall"))
         .and_then(serde_json::Value::as_array)
         .and_then(|rows| rows.first())
-        .ok_or_else(|| anyhow!("background completion tool row {tool_call_doc_id} not found"))?;
+        .ok_or_else(
+            || BackgroundCompletionError::BackgroundCompletionToolRowNotFound {
+                tool_call_doc_id: tool_call_doc_id.to_string(),
+            },
+        )?;
     let doc_id = row
         .get("_docID")
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| anyhow!("background completion tool row {tool_call_doc_id} not found"))?;
+        .ok_or_else(
+            || BackgroundCompletionError::BackgroundCompletionToolRowNotFound {
+                tool_call_doc_id: tool_call_doc_id.to_string(),
+            },
+        )?;
     let status = row
         .get("status")
         .and_then(serde_json::Value::as_str)
@@ -265,8 +273,10 @@ async fn mark_background_tool_completion_side_effects_done(
             "completed" | "failed" | "timedOut" | "cancelled"
         )
     {
-        anyhow::bail!(
-            "background completion tool row {tool_call_doc_id} is not awaiting terminal side effects"
+        return Err(
+            BackgroundCompletionError::BackgroundCompletionToolRowNotAwaiting {
+                tool_call_doc_id: tool_call_doc_id.to_string(),
+            },
         );
     }
     let escaped_doc_id = escape_graphql_string(doc_id);

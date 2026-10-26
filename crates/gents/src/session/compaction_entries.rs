@@ -1,9 +1,10 @@
 use super::rows::dedupe_paths;
 use super::*;
 use crate::graphql::graphql_response_with_transaction_retry as execute_query_timed;
-use anyhow::{Context, Result};
 use rapidhash::RapidHashSet;
 use std::collections::BTreeSet;
+
+type Result<T, E = SessionError> = std::result::Result<T, E>;
 
 #[derive(Serialize)]
 struct FilePathDelta<'a> {
@@ -217,11 +218,10 @@ pub(crate) async fn load_prompt_compaction_state(
     );
     let resp = execute_query_timed(node, &query, "load_prompt_compaction_state").await?;
     if resp.has_errors() {
-        anyhow::bail!(
-            "loading prompt compaction state for session_id={}: {:?}",
-            session_id,
-            resp.errors
-        );
+        return Err(SessionError::LoadingPromptCompactionStateSessionId {
+            session_id: session_id.to_string(),
+            errors: format!("{:?}", resp.errors),
+        });
     }
     let rows: Vec<PromptCompactionRow> = match resp
         .data
@@ -244,7 +244,7 @@ pub(crate) async fn load_prompt_compaction_state(
     let total_messages_compacted = active_rows.iter().try_fold(0usize, |total, row| {
         total
             .checked_add(row.messages_compacted as usize)
-            .context("CompactionEntry messages_compacted total overflowed usize")
+            .ok_or(SessionError::CompactionEntryMessagesCompactedTotalOverflowedUsize)
     })?;
     let state = PromptCompactionState {
         summaries: active_rows.iter().map(|row| row.summary.clone()).collect(),
@@ -296,11 +296,10 @@ pub async fn load_compaction_entries(
 
     let resp = execute_query_timed(node, &query, "load_compaction_entries").await?;
     if resp.has_errors() {
-        anyhow::bail!(
-            "loading compaction entries for session_id={}: {:?}",
-            session_id,
-            resp.errors
-        );
+        return Err(SessionError::LoadingCompactionEntriesSessionId {
+            session_id: session_id.to_string(),
+            errors: format!("{:?}", resp.errors),
+        });
     }
 
     let rows: Vec<CompactionGenerationRow> = match resp
@@ -322,9 +321,9 @@ pub async fn load_compaction_entries(
             files_read.push(&row.files_read)?;
             files_modified.push(&row.files_modified)?;
             let original_tokens = usize::try_from(row.original_tokens)
-                .context("compaction original_tokens must be a non-negative usize")?;
+                .map_err(SessionError::CompactionOriginalTokensMustNonNegative)?;
             let compacted_tokens = usize::try_from(row.compacted_tokens)
-                .context("compaction compacted_tokens must be a non-negative usize")?;
+                .map_err(SessionError::CompactionCompactedTokensMustNonNegative)?;
             Ok(CompactionEntry {
                 session_id: session_id.to_owned(),
                 sequence: row.sequence,
@@ -507,19 +506,21 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
                         return Ok(entry);
                     }
                 }
-                anyhow::ensure!(
-                    actual_generation == expected_generation,
-                    "stale compaction generation for session {session_id}"
-                );
+                if actual_generation != expected_generation {
+                    return Err(SessionError::StaleCompactionGenerationSession {
+                        session_id: session_id.to_string(),
+                    });
+                }
                 if let Some(cursor) = compacted_through_sequence {
                     let prior_cursor = rows
                         .iter()
                         .rev()
                         .find_map(|row| row.compacted_through_sequence);
-                    anyhow::ensure!(
-                        prior_cursor.is_none_or(|prior| cursor > prior),
-                        "compaction cursor regression for session {session_id}"
-                    );
+                    if !prior_cursor.is_none_or(|prior| cursor > prior) {
+                        return Err(SessionError::CompactionCursorRegressionSession {
+                            session_id: session_id.to_string(),
+                        });
+                    }
                 }
 
                 let mut cumulative_files_read =
@@ -534,8 +535,8 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
                 cumulative_files_modified.extend(files_modified.iter().cloned());
                 dedupe_paths(&mut cumulative_files_modified);
 
-                let sequence =
-                    u32::try_from(rows.len() + 1).context("compaction sequence overflow")?;
+                let sequence = u32::try_from(rows.len() + 1)
+                    .map_err(SessionError::CompactionSequenceOverflow2)?;
                 let compaction_key = compaction_key(node_did, session_id, requester_did, sequence);
                 let created_at =
                     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -571,7 +572,7 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
                     created_at = escape_graphql_string(&created_at),
                 );
                 txn.execute(&mutation).await?;
-                Ok::<_, anyhow::Error>(CompactionEntry {
+                Ok::<_, SessionError>(CompactionEntry {
                     session_id: session_id.to_string(),
                     sequence,
                     summary: summary.clone(),

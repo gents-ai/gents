@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 #[cfg(test)]
 extern crate self as gents;
 

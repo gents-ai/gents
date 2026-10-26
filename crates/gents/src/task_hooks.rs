@@ -22,6 +22,7 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use records::RecordedHookAttempt;
+pub(crate) use records::TaskHookRecordError;
 pub(crate) use records::TaskHookRecordHandle;
 pub(crate) use records::{recover_task_hook_records, TaskHookRecord, TaskHookRecordStore};
 

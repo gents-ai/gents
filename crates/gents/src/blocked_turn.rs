@@ -34,7 +34,13 @@ pub enum BlockedTurnError {
     #[error(transparent)]
     OAuthCredential(#[from] crate::oauth_credential::OAuthCredentialError),
     #[error(transparent)]
-    DocumentConfig(#[from] crate::document_config::DocumentConfigError),
+    DocumentConfig(Box<crate::document_config::DocumentConfigError>),
+}
+
+impl From<crate::document_config::DocumentConfigError> for BlockedTurnError {
+    fn from(error: crate::document_config::DocumentConfigError) -> Self {
+        Self::DocumentConfig(Box::new(error))
+    }
 }
 
 impl From<crate::goal::GoalError> for BlockedTurnError {
