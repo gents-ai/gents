@@ -960,7 +960,24 @@ async fn verify_automated_trigger_source(
     )
 }
 
+#[cfg(test)]
+thread_local! {
+    static RECEIPT_VERIFICATION_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn count_request_receipt_verifications<T, F>(operation: F) -> (T, usize)
+where
+    F: FnOnce() -> T,
+{
+    let before = RECEIPT_VERIFICATION_COUNT.get();
+    let value = operation();
+    (value, RECEIPT_VERIFICATION_COUNT.get() - before)
+}
+
 pub fn verify_request_receipt_signature(row: &AgentRequestRow) -> Result<()> {
+    #[cfg(test)]
+    RECEIPT_VERIFICATION_COUNT.set(RECEIPT_VERIFICATION_COUNT.get() + 1);
     let admission = row_admission(row)?;
     admission.validate_canonical_fields()?;
     admission
