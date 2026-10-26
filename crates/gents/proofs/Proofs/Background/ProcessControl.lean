@@ -66,6 +66,16 @@ theorem invocation_identity_requires_both (requested owned : Invocation) :
   cases owned
   simp [sameInvocation]
 
+/-- DefraDB authenticates the actor DID. A runtime operator controls only
+physical invocations owned by that runtime; a desktop replica is not its owner. -/
+def operatorAtNode (executing requested owner : String) (actor : Option String) : Bool :=
+  actor == some executing && requested == executing && owner == executing
+
+theorem operator_control_never_crosses_runtime (executing requested owner : String)
+    (actor : Option String) (allowed : operatorAtNode executing requested owner actor = true) :
+    actor = some executing ∧ requested = executing ∧ owner = executing := by
+  simpa [operatorAtNode, Bool.and_eq_true, and_assoc] using allowed
+
 inductive WaitBoundary where
   | waitTimeout
   | callerInterrupted
