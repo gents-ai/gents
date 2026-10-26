@@ -1,4 +1,3 @@
-use gents_protocol::error_chain::ErrorChain;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -549,31 +548,6 @@ pub async fn capture_body(
         "captured rendered provider request"
     );
     Ok(())
-}
-
-pub fn unexplained_send_message(context: &RenderedRequestContext, path: &str) -> String {
-    format!(
-        "a completion request to {path} reached the provider transport for request {} \
-         with no armed rendered-request capture; the completion loop that issued it does not \
-         install `LoopConfig::on_rendered_request`, so the call cannot be made durable and was \
-         not issued",
-        context.request_id
-    )
-}
-
-pub fn capture_failure_message(
-    stage: CaptureFailureStage,
-    capture_scope: &str,
-    turn_index: usize,
-    attempt: u32,
-    error: &(dyn std::error::Error + 'static),
-) -> String {
-    format!(
-        "rendered-request capture failed at stage {} for scope {capture_scope} turn {turn_index} \
-         attempt {attempt}; the provider call was not issued: {}",
-        stage.as_str(),
-        ErrorChain(error)
-    )
 }
 
 pub fn test_scope(

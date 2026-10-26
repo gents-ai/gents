@@ -652,10 +652,10 @@ impl TerminalRedriveReport {
 
 #[async_trait::async_trait]
 impl gents_loop::request_lifecycle::RequestLifecycleControl for RequestLifecycle {
-    type Error = anyhow::Error;
+    type Error = crate::agent::stream_processor::RuntimeSeamError;
 
-    async fn validate_owned_execution(&self) -> anyhow::Result<()> {
-        RequestLifecycle::validate_owned_execution(self).await
+    async fn validate_owned_execution(&self) -> Result<(), Self::Error> {
+        Ok(RequestLifecycle::validate_owned_execution(self).await?)
     }
 }
 

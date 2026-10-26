@@ -361,21 +361,32 @@ impl ConfigClientError {
         }
     }
 
-    /// DefraDB answered the operation with a store conflict its GraphQL
-    /// errors call retryable.
-    pub(crate) fn is_retryable_database_conflict(&self) -> bool {
+    /// The GraphQL errors DefraDB answered over HTTP, whichever owner carried
+    /// them; each wraps them transparently, so `source()` cannot reach them.
+    fn database_failure(&self) -> Option<&gents_protocol::database_error::GraphqlFailure> {
         match self {
             Self::Database(failure)
             | Self::Response(crate::graphql::GraphqlResponseError::Database(failure)) => {
-                failure.is_retryable_conflict()
+                Some(failure)
             }
-            Self::EmbeddedGraphqlErrors { errors } => errors.iter().any(|error| {
-                gents_protocol::database_error::reports_retryable_conflict(&error.message)
-            }),
+            Self::Protocol(error) => error.database_failure(),
+            _ => None,
+        }
+    }
+
+    /// DefraDB answered the operation with a store conflict its GraphQL
+    /// errors code as retryable.
+    pub(crate) fn is_retryable_database_conflict(&self) -> bool {
+        match self {
+            Self::EmbeddedGraphqlErrors { errors } => errors
+                .iter()
+                .any(|error| error.code() == Some(query::executor::TXN_CONFLICT_ERROR_CODE)),
             Self::Response(crate::graphql::GraphqlResponseError::Access(error))
             | Self::StorageFailure(error)
             | Self::HttpQuery { source: error, .. } => error.is_retryable_database_conflict(),
-            _ => false,
+            _ => self
+                .database_failure()
+                .is_some_and(gents_protocol::database_error::GraphqlFailure::is_retryable_conflict),
         }
     }
 
@@ -383,12 +394,11 @@ impl ConfigClientError {
     /// as opposed to a transport, storage or local failure.
     pub fn is_graphql_rejection(&self) -> bool {
         match self {
-            Self::Database(_) | Self::EmbeddedGraphqlErrors { .. } => true,
-            Self::Response(crate::graphql::GraphqlResponseError::Database(_)) => true,
+            Self::EmbeddedGraphqlErrors { .. } => true,
             Self::Response(crate::graphql::GraphqlResponseError::Access(error))
             | Self::StorageFailure(error)
             | Self::HttpQuery { source: error, .. } => error.is_graphql_rejection(),
-            _ => false,
+            _ => self.database_failure().is_some(),
         }
     }
 }

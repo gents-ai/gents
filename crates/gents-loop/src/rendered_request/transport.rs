@@ -12,12 +12,31 @@ use sha2::{Digest, Sha256};
 use super::scope::{self, CaptureClaim, PendingCapture, RequestCaptureScope};
 use super::RenderedRequestSource;
 
+/// Why the capturing transport refused a provider send. Rig renders a
+/// transport failure by its `Display` alone, so each message carries its whole
+/// cause; the source keeps the capture failure typed for chain walkers.
 #[derive(Debug, thiserror::Error)]
 enum TransportError {
-    #[error("{message}")]
-    UnexplainedSend { message: String },
-    #[error("{message}")]
-    CaptureFailed { message: String },
+    #[error(
+        "a completion request to {path} reached the provider transport for request \
+         {request_id} with no armed rendered-request capture; the completion loop that issued \
+         it does not install `LoopConfig::on_rendered_request`, so the call cannot be made \
+         durable and was not issued"
+    )]
+    UnexplainedSend { request_id: String, path: String },
+    #[error(
+        "rendered-request capture failed at stage {} for scope {capture_scope} turn \
+         {turn_index} attempt {attempt}; the provider call was not issued: {}",
+        .source.stage().as_str(),
+        ErrorChain(.source)
+    )]
+    CaptureFailed {
+        capture_scope: String,
+        turn_index: usize,
+        attempt: u32,
+        #[source]
+        source: scope::CaptureBodyError,
+    },
 }
 
 /// Persist the exact provider body before sending; a failed capture refuses
@@ -155,7 +174,8 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
             );
             return Err(http_client::Error::Instance(Box::new(
                 TransportError::UnexplainedSend {
-                    message: scope::unexplained_send_message(scope.context(), &path),
+                    request_id: scope.context().request_id.clone(),
+                    path,
                 },
             )));
         }
@@ -230,13 +250,10 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
             );
             Err(http_client::Error::Instance(Box::new(
                 TransportError::CaptureFailed {
-                    message: scope::capture_failure_message(
-                        stage,
-                        &capture_scope,
-                        turn_index,
-                        attempt,
-                        &error,
-                    ),
+                    capture_scope,
+                    turn_index,
+                    attempt,
+                    source: error,
                 },
             )))
         }
@@ -790,10 +807,15 @@ mod tests {
         .await;
 
         assert!(
-            error
-                .to_string()
-                .contains("no armed rendered-request capture"),
-            "the refusal must name its cause: {error}"
+            matches!(
+                &error,
+                http_client::Error::Instance(refusal)
+                    if matches!(
+                        refusal.downcast_ref::<TransportError>(),
+                        Some(TransportError::UnexplainedSend { .. })
+                    )
+            ),
+            "the refusal must name its cause: {error:?}"
         );
         assert_eq!(
             inner.sends.load(Ordering::SeqCst),

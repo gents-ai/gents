@@ -25,6 +25,9 @@ pub use rpc::{HttpEthRpc, ETH_USER_AGENT};
 pub enum EthRefusal {
     #[error("{0}")]
     Policy(String),
+    /// The call's arguments can never succeed as written.
+    #[error("{0}")]
+    InvalidArgument(String),
     #[error("eth pruned-history error (not retried): {0}")]
     PrunedHistory(String),
 }
@@ -33,6 +36,7 @@ impl EthRefusal {
     pub(crate) fn failure_class(&self) -> crate::tool_call_lifecycle::FailureClass {
         match self {
             Self::Policy(_) => crate::tool_call_lifecycle::FailureClass::PolicyDenied,
+            Self::InvalidArgument(_) => crate::tool_call_lifecycle::FailureClass::ArgumentInvalid,
             Self::PrunedHistory(_) => crate::tool_call_lifecycle::FailureClass::External,
         }
     }

@@ -1771,12 +1771,12 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-desktop-core/src/client/mutations/chat/request.rs", 1),
     ("crates/gents-desktop-core/src/client/mutations/chat/request/receipt/delivery.rs", 1),
     ("crates/gents-desktop-core/src/error.rs", 1),
-    ("crates/gents-loop/src/live_output.rs", 1),
     ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", 4),
     ("crates/gents-protocol/src/database_error.rs", 1),
     ("crates/gents-protocol/src/error_chain.rs", 1),
-    ("crates/gents-protocol/src/graphql.rs", 2),
+    ("crates/gents-protocol/src/graphql.rs", 3),
     ("crates/gents/src/agent/daemon.rs", 2),
+    ("crates/gents/src/agent/stream_processor.rs", 1),
     ("crates/gents/src/agent/daemon/request.rs", 1),
     ("crates/gents/src/agent/document_view/snapshot.rs", 1),
     ("crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/inventory.rs", 1),
@@ -1798,7 +1798,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/goal.rs", 2),
     ("crates/gents/src/graphql.rs", 1),
     ("crates/gents/src/home.rs", 3),
-    ("crates/gents/src/hook/persistence/background_tools.rs", 3),
+    ("crates/gents/src/hook/persistence/background_tools.rs", 1),
     ("crates/gents/src/hook/persistence/session_message.rs", 1),
     ("crates/gents/src/identity.rs", 1),
     ("crates/gents/src/lifecycle.rs", 1),
@@ -1831,7 +1831,6 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/storage_backend.rs", 9),
     ("crates/gents/src/store_key.rs", 2),
     ("crates/gents/src/streaming.rs", 1),
-    ("crates/gents/src/tool_call_lifecycle.rs", 3),
     ("crates/gents/src/tool_call_lifecycle/delivery.rs", 1),
     ("crates/gents/src/trigger_engine/mod.rs", 2),
 ];
@@ -1869,12 +1868,15 @@ impl<'ast> Visit<'ast> for DowncastVisitor {
         visit::visit_expr_call(self, call);
     }
 
+    /// Only an error receiver classifies a failure; `Any` maps, deferred
+    /// write payloads and panic payloads downcast data, not errors.
     fn visit_expr_method_call(&mut self, call: &'ast ExprMethodCall) {
         let method = call.method.to_string();
-        if matches!(
+        if (matches!(
             method.as_str(),
             "downcast" | "downcast_ref" | "downcast_mut"
-        ) || (method == "is" && call.turbofish.is_some())
+        ) || (method == "is" && call.turbofish.is_some()))
+            && expression_names_error(&call.receiver)
         {
             self.sites += 1;
         }
@@ -1938,6 +1940,9 @@ fn downcast_fence_counts_type_classification_outside_tests() {
         ("fn f(e: &anyhow::Error) -> bool { e.is::<E>() }", 1),
         ("fn f(e: &dyn Error) { find_source::<E>(e); gents_protocol::error_chain::find_source::<F>(e); }", 2),
         ("fn f(e: &Error) -> bool { e.is_conflict() || e.is(x) }", 0),
+        ("fn f(e: &dyn Error) -> bool { find_map_source(e, |cause| cause.downcast_ref::<E>()).is_some() }", 1),
+        ("fn f(m: &Map) -> Option<&T> { m.get(&id)?.downcast_ref() }", 0),
+        ("fn f(payload: &dyn Any) -> bool { payload.downcast_ref::<String>().is_some() }", 0),
         ("#[cfg(test)] mod tests { fn f(e: &anyhow::Error) { e.downcast_ref::<E>(); } }", 0),
         ("#[test] fn f() { error().downcast_ref::<E>(); }", 0),
         ("#[tokio::test] async fn f() { error().downcast_ref::<E>(); }", 0),
@@ -1959,6 +1964,8 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-cli/src/native_service.rs", 1),
     // not yet typed: pairing closures flatten failures to strings
     ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
+    // DefraDB duplicate-document rejection wording (no structured code)
+    ("crates/gents-desktop-core/src/client/mutations/chat/request/receipt.rs", 2),
     // provider text through Rig's ProviderError(String) (ProviderReport)
     ("crates/gents-loop/src/error.rs", 22),
     // serde_json schema-mismatch message prefixes
@@ -1967,10 +1974,8 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-loop/src/tool_call_lifecycle/runtime.rs", 8),
     // DefraDB schema validator messages
     ("crates/gents-migration/src/engine.rs", 1),
-    // DefraDB GraphQL conflict messages
-    ("crates/gents-protocol/src/database_error.rs", 2),
-    // DefraDB missing-collection messages; hyper connection failures via reqwest
-    ("crates/gents-protocol/src/graphql.rs", 11),
+    // DefraDB missing-collection messages
+    ("crates/gents-protocol/src/graphql.rs", 4),
     // replicated AgentRequest failure_reason
     ("crates/gents-protocol/src/node_readiness.rs", 1),
     // DefraDB HTTP 409 commit body
@@ -2023,7 +2028,7 @@ const ERROR_VIEWS: &[&str] = &[
 
 /// Identifier words that name an error or its rendering.
 const ERROR_WORDS: &[&str] = &[
-    "e", "err", "error", "errors", "stderr", "failure", "message", "msg",
+    "e", "err", "error", "errors", "stderr", "failure", "message", "msg", "cause",
 ];
 
 fn names_error(name: &str) -> bool {
@@ -2034,7 +2039,7 @@ fn names_error(name: &str) -> bool {
         _ => words.iter().any(|word| {
             matches!(
                 *word,
-                "e" | "err" | "error" | "errors" | "stderr" | "failure"
+                "e" | "err" | "error" | "errors" | "stderr" | "failure" | "cause"
             )
         }),
     }
@@ -2047,8 +2052,13 @@ fn expression_names_error(expression: &Expr) -> bool {
             .segments
             .last()
             .is_some_and(|segment| names_error(&segment.ident.to_string())),
+        // A `cause` field states why a request or event happened; a `cause`
+        // binding is an error walked from a source chain.
         Expr::Field(field) => match &field.member {
-            syn::Member::Named(name) => names_error(&name.to_string()),
+            syn::Member::Named(name) => {
+                let name = name.to_string();
+                name != "cause" && names_error(&name)
+            }
             syn::Member::Unnamed(_) => expression_names_error(&field.base),
         },
         Expr::Reference(reference) => expression_names_error(&reference.expr),
@@ -2315,6 +2325,11 @@ fn error_text_fence_counts_decisions_on_error_renderings() {
             r#"fn f(e: &E, seen: &str) -> bool { e.to_string() != seen }"#,
             0,
         ),
+        (
+            r#"fn f(e: &E) -> bool { std::iter::successors(Some(e), |c| c.source()).any(|cause| cause.to_string().contains("x")) }"#,
+            1,
+        ),
+        (r#"fn f(r: &R) -> bool { r.cause != "userCancelled" }"#, 0),
         (r#"fn f(text: &str) -> bool { text.contains("x") }"#, 0),
         (r#"fn f(e: &E) -> bool { e.path().to_string() == "." }"#, 0),
         (r#"fn f(e: &E) -> bool { matches!(e, E::Conflict) }"#, 0),

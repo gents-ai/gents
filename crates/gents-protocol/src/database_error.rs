@@ -3,6 +3,9 @@ use std::fmt;
 use serde_json::Value;
 
 pub const STORAGE_FULL_CODE: &str = "STORAGE_FULL";
+/// DefraDB's `extensions.code` for a store conflict the caller may replay;
+/// the final, engine-exhausted case carries `TXN_RETRY_EXHAUSTED` instead.
+pub const TXN_CONFLICT_CODE: &str = "TXN_CONFLICT";
 
 /// Full storage does not establish whether a mutation committed. A latched
 /// store must be reopened by its existing owner after space is available.
@@ -37,17 +40,15 @@ pub struct GraphqlFailure {
 
 impl GraphqlFailure {
     pub fn new(operation: impl Into<String>, errors: Value) -> Self {
-        let errors_list = errors.as_array().map(Vec::as_slice).unwrap_or_default();
-        let full = errors_list.iter().any(|error| {
-            StorageFull::from_code(error.pointer("/extensions/code").and_then(Value::as_str))
-                .is_some()
-        });
-        let retryable_conflict = errors_list.iter().any(|error| {
-            error
-                .get("message")
-                .and_then(Value::as_str)
-                .is_some_and(reports_retryable_conflict)
-        });
+        let codes = || {
+            errors
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|error| error.pointer("/extensions/code").and_then(Value::as_str))
+        };
+        let full = codes().any(|code| StorageFull::from_code(Some(code)).is_some());
+        let retryable_conflict = codes().any(|code| code == TXN_CONFLICT_CODE);
         Self {
             operation: operation.into(),
             errors,
@@ -60,14 +61,6 @@ impl GraphqlFailure {
     pub fn is_retryable_conflict(&self) -> bool {
         self.retryable_conflict
     }
-}
-
-/// External premise: DefraDB's GraphQL responses report a retryable store
-/// conflict only in an error's `message` (`transaction conflict`, `please
-/// retry`); it carries no `extensions.code` for it.
-pub fn reports_retryable_conflict(message: &str) -> bool {
-    let message = message.to_ascii_lowercase();
-    message.contains("transaction conflict") || message.contains("please retry")
 }
 
 impl fmt::Display for GraphqlFailure {

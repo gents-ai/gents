@@ -61,7 +61,7 @@ pub enum Error {
     MaterializeFailed { detail: String },
 
     #[error("defra node error: {0}")]
-    Node(Box<defra_node::Error>),
+    Node(#[source] Box<defra_node::Error>),
 
     #[error("defra node error: retained file image storage requires the configured node identity")]
     MissingNodeIdentity,

@@ -288,7 +288,8 @@ async fn reconcile_commit_failure(
 }
 
 /// A rejection that implies the owner already holds a request with this id.
-/// The wording is DefraDB's error body, which carries no structured code.
+/// External premise: DefraDB reports a duplicate document only in its error
+/// wording; its GraphQL errors carry no structured code for it.
 fn reports_existing_request(error: &(dyn std::error::Error + 'static)) -> bool {
     std::iter::successors(Some(error), |cause| cause.source()).any(|cause| {
         let text = cause.to_string().to_ascii_lowercase();

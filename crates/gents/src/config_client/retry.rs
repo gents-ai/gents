@@ -228,6 +228,46 @@ mod tests {
     }
 
     #[test]
+    fn database_conflicts_replay_on_every_access_path() {
+        assert_eq!(
+            gents_protocol::database_error::TXN_CONFLICT_CODE,
+            query::executor::TXN_CONFLICT_ERROR_CODE
+        );
+        let failure = |code: &str| {
+            gents_protocol::database_error::GraphqlFailure::new(
+                "read",
+                serde_json::json!([{"message": "opaque", "extensions": {"code": code}}]),
+            )
+        };
+        let http_read = |code: &str| ConfigClientError::HttpQuery {
+            endpoint: "http://node/graphql".into(),
+            source: Box::new(ConfigClientError::Protocol(
+                gents_protocol::graphql::GraphqlError::Database(failure(code)),
+            )),
+        };
+        let embedded = |code: &str| ConfigClientError::EmbeddedGraphqlErrors {
+            errors: vec![query::QueryResponseError::new("opaque").with_code(code)],
+        };
+        for conflict in [
+            http_read(query::executor::TXN_CONFLICT_ERROR_CODE),
+            ConfigClientError::Database(failure(query::executor::TXN_CONFLICT_ERROR_CODE)),
+            access(embedded(query::executor::TXN_CONFLICT_ERROR_CODE)),
+        ] {
+            assert!(conflict.is_retryable_database_conflict(), "{conflict:?}");
+            assert!(conflict.is_graphql_rejection(), "{conflict:?}");
+            assert!(is_retryable_ambiguous_write(erased(conflict).as_ref()));
+        }
+        for rejection in [
+            http_read(query::executor::TXN_RETRY_EXHAUSTED_ERROR_CODE),
+            embedded(query::executor::TXN_RETRY_EXHAUSTED_ERROR_CODE),
+        ] {
+            assert!(rejection.is_graphql_rejection(), "{rejection:?}");
+            assert!(!rejection.is_retryable_database_conflict(), "{rejection:?}");
+            assert!(!is_retryable_ambiguous_write(erased(rejection).as_ref()));
+        }
+    }
+
+    #[test]
     fn only_typed_conflicts_are_replayable() {
         let typed = transaction_conflict(ConflictSource::StructuredCode);
         assert_eq!(

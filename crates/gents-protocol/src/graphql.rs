@@ -103,6 +103,18 @@ pub enum GraphqlError {
 
 type Result<T, E = GraphqlError> = std::result::Result<T, E>;
 
+impl GraphqlError {
+    /// The GraphQL errors DefraDB answered with, which its transparent
+    /// variant hides from `source()`.
+    pub fn database_failure(&self) -> Option<&crate::database_error::GraphqlFailure> {
+        match self {
+            #[cfg(feature = "native")]
+            Self::Database(failure) => Some(failure),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphqlSubmittedRequest {
     pub request_id: String,
@@ -866,23 +878,16 @@ fn finish_graphql_response(graphql: &str, value: serde_json::Value) -> Result<se
     Ok(value)
 }
 
-/// External premise: reqwest exposes timeouts, connect and request failures as
-/// kinds, but a connection the peer drops mid-exchange (hyper's closed,
-/// reset, broken-pipe and early-EOF failures) surfaces only in its message.
+/// External premise: reqwest classifies a connection the peer drops before
+/// the response head as a request failure and one dropped mid-body as a body
+/// or decode failure; its message carries only that kind and the URL.
 #[cfg(feature = "native")]
 fn graphql_transport_error_is_retryable(error: &reqwest::Error) -> bool {
-    if error.is_timeout() || error.is_connect() || error.is_request() {
-        return true;
-    }
-
-    let message = error.to_string();
-    message.contains("connection closed before message completed")
-        || message.contains("connection reset")
-        || message.contains("broken pipe")
-        || message.contains("channel closed")
-        || message.contains("unexpected eof")
-        || message.contains("end of file before message length reached")
-        || message.contains("error decoding response body")
+    error.is_timeout()
+        || error.is_connect()
+        || error.is_request()
+        || error.is_body()
+        || error.is_decode()
 }
 
 /// Whether an error in its `source()` chain is retryable under the GraphQL transport policy.
@@ -892,7 +897,11 @@ pub fn graphql_error_is_retryable(error: &(dyn std::error::Error + 'static)) -> 
         return false;
     }
     graphql_transport_error_in_chain(error)
-        || crate::error_chain::find_source::<crate::database_error::GraphqlFailure>(error)
+        || crate::error_chain::find_source::<GraphqlError>(error)
+            .and_then(GraphqlError::database_failure)
+            .or_else(|| {
+                crate::error_chain::find_source::<crate::database_error::GraphqlFailure>(error)
+            })
             .is_some_and(crate::database_error::GraphqlFailure::is_retryable_conflict)
 }
 
@@ -1174,34 +1183,42 @@ mod tx_tests {
 
     #[test]
     fn retryable_graphql_conflicts_are_the_responses_defradb_reports() {
+        let failure = |code: &str| {
+            crate::database_error::GraphqlFailure::new(
+                "test",
+                serde_json::json!([{ "message": "opaque", "extensions": { "code": code } }]),
+            )
+        };
         #[derive(Debug, thiserror::Error)]
         #[error("outer shim context")]
         struct Outer(#[source] crate::database_error::GraphqlFailure);
-        let failure = |message: &str| {
-            Outer(crate::database_error::GraphqlFailure::new(
-                "test",
-                serde_json::json!([{ "message": message }]),
-            ))
-        };
-        for message in [
-            "Transaction conflict",
-            "wrapped backend: PLEASE RETRY the TRANSACTION CONFLICT",
-            "please retry",
-        ] {
-            let error = failure(message);
-            assert!(graphql_error_is_retryable(&error), "{message}");
-            assert!(!graphql_transport_error_in_chain(&error));
-        }
-        assert!(!graphql_error_is_retryable(&failure(
-            "validation error: unknown collection"
+        #[derive(Debug, thiserror::Error)]
+        #[error("outer protocol context")]
+        struct OuterProtocol(#[source] GraphqlError);
+
+        let conflict = || failure(crate::database_error::TXN_CONFLICT_CODE);
+        assert!(graphql_error_is_retryable(&conflict()));
+        assert!(graphql_error_is_retryable(&Outer(conflict())));
+        assert!(graphql_error_is_retryable(&GraphqlError::Database(
+            conflict()
+        )));
+        assert!(graphql_error_is_retryable(&OuterProtocol(
+            GraphqlError::Database(conflict())
+        )));
+        assert!(!graphql_transport_error_in_chain(&GraphqlError::Database(
+            conflict()
+        )));
+        assert!(!graphql_error_is_retryable(&GraphqlError::Database(
+            failure("TXN_RETRY_EXHAUSTED")
         )));
 
-        #[derive(Debug, thiserror::Error)]
-        #[error("TRANSACTION CONFLICT")]
-        struct Rendered;
+        let worded = crate::database_error::GraphqlFailure::new(
+            "test",
+            serde_json::json!([{ "message": "transaction conflict. Please retry" }]),
+        );
         assert!(
-            !graphql_error_is_retryable(&Rendered),
-            "an error that only renders conflict text is not a DefraDB response"
+            !graphql_error_is_retryable(&GraphqlError::Database(worded)),
+            "conflict wording without DefraDB's code is not a retryable conflict"
         );
     }
 }

@@ -11,6 +11,7 @@ use tracing::Instrument;
 use super::{AgentDaemon, HandleRequestOutcome, ShutdownDrainFailure};
 use crate::admission::{self, CallKind};
 use crate::agent::loop_stream::{LoopReplayInput, TaggedMessage};
+use crate::agent::stream_processor::{processor_failure, RuntimeSeamError};
 use crate::compaction::ReductionOptions;
 use crate::config::{MaxTurnsProvenance, ResolvedAgent};
 use crate::error::LoopFailureCause;
@@ -630,7 +631,7 @@ where
                                     match tokio::time::timeout(
                                         crate::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
                                         async {
-                                            match processor.validate_execution().await {
+                                            match processor.validate_execution().await.map_err(RuntimeSeamError::into_inner) {
                                                 Ok(()) => {}
                                                 Err(error) if error.is::<crate::lifecycle::ExecutionOwnershipLost>() => {
                                                     tracing::warn!(
@@ -692,7 +693,7 @@ where
                                     return Err(anyhow!("request interrupted during inference"));
                                 }
                                 _ = lease_poll.tick() => {
-                                    if let Err(error) = processor.validate_execution().await {
+                                    if let Err(error) = processor.validate_execution().await.map_err(RuntimeSeamError::into_inner) {
                                         let reason = format!("request execution lease: {error:#}");
                                         admission::set_terminal_failure_reason(
                                             &terminal_failure_reason,
@@ -976,18 +977,6 @@ fn compactor_failure(
     error: impl Into<Box<dyn std::error::Error + Send + Sync>>,
 ) -> crate::agent::loop_stream::TurnCompactionError {
     crate::agent::loop_stream::TurnCompactionError::Compactor(error.into())
-}
-
-/// The processor's writer, hook and lifecycle variants carry this runtime's
-/// own errors; unwrap them so daemon classifiers see the original chain.
-fn processor_failure(error: crate::agent::stream_processor::StreamProcessorError) -> anyhow::Error {
-    use crate::agent::stream_processor::StreamProcessorError;
-    match error {
-        StreamProcessorError::Writer(source)
-        | StreamProcessorError::Hook(source)
-        | StreamProcessorError::Lifecycle(source) => anyhow::Error::from_boxed(source),
-        error => error.into(),
-    }
 }
 
 #[cfg(test)]

@@ -61,11 +61,9 @@ async fn scripted_graphql(
         match state.scenario {
             Scenario::CommitThenAmbiguous | Scenario::ReceiptTransientThenPresent => {
                 state.durable.store(true, Ordering::SeqCst);
-                Json(json!({"errors": [{"message": "transaction conflict. please retry"}]}))
+                Json(transaction_conflict())
             }
-            Scenario::AbsentThenCommit if attempt == 1 => {
-                Json(json!({"errors": [{"message": "transaction conflict. please retry"}]}))
-            }
+            Scenario::AbsentThenCommit if attempt == 1 => Json(transaction_conflict()),
             Scenario::AbsentThenCommit => {
                 state.durable.store(true, Ordering::SeqCst);
                 Json(json!({"data": {"create_ReceiptFact": [{"_docID": "stable-id"}]}}))
@@ -74,7 +72,7 @@ async fn scripted_graphql(
     } else {
         let attempt = state.receipt_count.fetch_add(1, Ordering::SeqCst) + 1;
         if matches!(state.scenario, Scenario::ReceiptTransientThenPresent) && attempt == 1 {
-            return Json(json!({"errors": [{"message": "transaction conflict. please retry"}]}));
+            return Json(transaction_conflict());
         }
         let rows = if state.durable.load(Ordering::SeqCst) {
             vec![json!({"stable_id": "stable-id"})]
@@ -194,4 +192,12 @@ fn delegated_bearer_remains_caller_owned_and_is_redacted() {
             super::GraphqlEndpoint::with_delegated_authorization(endpoint.url(), invalid).is_err()
         );
     }
+}
+
+/// The conflict reply as the pinned DefraDB serializes it.
+fn transaction_conflict() -> Value {
+    serde_json::to_value(query::QueryResponse::transaction_conflict(
+        query::executor::TXN_CONFLICT_MESSAGE,
+    ))
+    .expect("serialize DefraDB conflict")
 }
