@@ -4600,3 +4600,59 @@ async fn claimed_continuation_waits_for_readiness_before_materializing() {
         Some("parent-claimed-waits")
     );
 }
+
+#[tokio::test]
+async fn closed_goal_notifications_keep_durable_continuation_and_cancellation_live() {
+    let db = test_db("goal-closed-notifications").await;
+    publish_node_readiness(
+        &db,
+        gents_protocol::row::NodeReadinessProcessState::Ready,
+        None,
+    )
+    .await;
+    let updates = MockUpdateSubscriptionSource::new();
+    updates.close();
+    let (_snapshot_tx, rx) = watch::channel(snapshot(db.node_identity.did()));
+    let cancel = CancellationToken::new();
+    let mut source = GoalSource::with_subscription_source(
+        Arc::new(updates),
+        rx,
+        db.node.clone(),
+        cancel.clone(),
+    )
+    .with_rescan_interval(RESCAN);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), source.next_fire())
+            .await
+            .is_err(),
+        "closing notifications must not retire the durable Goal source"
+    );
+    seed_completed_request(&db, "completed-before-continuation").await;
+    set_goal(
+        &db.node,
+        db.node_identity.did(),
+        SESSION,
+        Some("Continue the existing objective"),
+        Some(GoalStatus::Active),
+        None,
+    )
+    .await
+    .unwrap();
+    let _fire = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("durable rescan must find the active Goal")
+        .expect("closed notifications must not terminate the source");
+    assert_eq!(goal_children(&db).await.len(), 1);
+    let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(goal.parsed_status(), Some(GoalStatus::Active));
+    cancel.cancel();
+    assert!(
+        tokio::time::timeout(Duration::from_secs(1), source.next_fire())
+            .await
+            .expect("cancellation must stop the source")
+            .is_none()
+    );
+}
