@@ -251,8 +251,7 @@ pub async fn desktop_job_control(
         .ok_or_else(|| BridgeError::untyped("desktop bridge core not initialized"))?;
     tracing::info!(
         target: "gents_desktop::job_control",
-        session_id = %request.session_id,
-        tool_call_id = %request.tool_call_id,
+        tool_call_doc_id = %request.tool_call_doc_id,
         action = ?request.action,
         "desktop job control received"
     );
@@ -260,15 +259,13 @@ pub async fn desktop_job_control(
     match &result {
         Ok(outcome) => tracing::info!(
             target: "gents_desktop::job_control",
-            session_id = %request.session_id,
-            tool_call_id = %request.tool_call_id,
+            tool_call_doc_id = %request.tool_call_doc_id,
             outcome = ?outcome,
             "desktop job control completed"
         ),
         Err(error) => tracing::warn!(
             target: "gents_desktop::job_control",
-            session_id = %request.session_id,
-            tool_call_id = %request.tool_call_id,
+            tool_call_doc_id = %request.tool_call_doc_id,
             error,
             "desktop job control failed"
         ),

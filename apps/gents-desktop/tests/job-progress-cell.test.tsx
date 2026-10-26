@@ -31,6 +31,8 @@ const row = (over: Partial<RenderedToolCallView> = {}): RenderedToolCallView =>
     status: "running",
     statusKind: "running",
     toolCallId: "call-1",
+    nodeDid: "did:test:row-owner",
+    toolCallDocId: "physical-job-in-another-session",
     presentation: { kind: "generic", input: null, output: null },
     reconstruction: { state: "ready" },
     jobProgress: progress(),
@@ -149,10 +151,18 @@ describe("JobProgressCell", () => {
     fireEvent.click(screen.getByRole("button", { name: label }));
     await waitFor(() =>
       expect(jobControl).toHaveBeenCalledWith({
-        sessionId: "session-1",
-        toolCallId: "call-1",
+        nodeDid: "did:test:row-owner",
+        toolCallDocId: "physical-job-in-another-session",
         action,
       }),
     );
+  });
+  it("disables control until the displayed row has physical identity", () => {
+    const jobControl = vi.fn();
+    mount(row({ toolCallDocId: null }), { jobControl });
+    expect(screen.getByRole("button", { name: "Stop" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Pause" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+    expect(jobControl).not.toHaveBeenCalled();
   });
 });

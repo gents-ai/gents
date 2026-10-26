@@ -71,16 +71,18 @@ pub(super) async fn reconcile_coalesced_pending_request_for(
                 let mutation = &mutation;
                 Box::pin(async move {
                     if source == QueueSource::BackgroundCompletion {
-                        let assignments =
-                            crate::goal::load_request_assignments_in_txn(txn, node_did, session_id)
+                        let mut assignments =
+                            crate::goal::load_request_assignment_scopes(txn, node_did, session_id)
                                 .await?;
-                        if assignments.scope(survivor_doc)?
-                            != assignments.scope(
-                                duplicate
-                                    .doc_id
-                                    .as_deref()
-                                    .context("duplicate wake has no physical identity")?,
-                            )?
+                        if assignments.scope(survivor_doc).await?
+                            != assignments
+                                .scope(
+                                    duplicate
+                                        .doc_id
+                                        .as_deref()
+                                        .context("duplicate wake has no physical identity")?,
+                                )
+                                .await?
                         {
                             return Ok(());
                         }
@@ -190,21 +192,26 @@ async fn matching_coalesced_pending_requests(
                 let Some(anchor) = anchor else {
                     return Ok(Vec::new());
                 };
-                let assignments =
-                    crate::goal::load_request_assignments_in_txn(txn, node_did, session_id).await?;
-                let selected_scope = assignments.scope(
-                    anchor
-                        .doc_id
-                        .as_deref()
-                        .context("coalescing anchor has no physical identity")?,
-                )?;
+                let mut assignments =
+                    crate::goal::load_request_assignment_scopes(txn, node_did, session_id).await?;
+                let selected_scope = assignments
+                    .scope(
+                        anchor
+                            .doc_id
+                            .as_deref()
+                            .context("coalescing anchor has no physical identity")?,
+                    )
+                    .await?;
                 let mut matching = Vec::new();
                 for row in rows {
-                    if assignments.scope(
-                        row.doc_id
-                            .as_deref()
-                            .context("pending wake has no physical identity")?,
-                    )? == selected_scope
+                    if assignments
+                        .scope(
+                            row.doc_id
+                                .as_deref()
+                                .context("pending wake has no physical identity")?,
+                        )
+                        .await?
+                        == selected_scope
                     {
                         matching.push(row);
                     }

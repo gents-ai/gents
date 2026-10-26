@@ -14,7 +14,7 @@ const session = (overrides: Partial<SessionSummary>): SessionSummary => ({
   latestRequestId: "logical-parent",
   closedAt: null,
   archivedAt: null,
-  archiveRevision: "0",
+  archiveRevision: "",
   tags: [],
   provenance: null,
   title: "Lead",

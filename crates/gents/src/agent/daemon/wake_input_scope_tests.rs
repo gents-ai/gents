@@ -198,6 +198,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
     let snapshot = gents_lean_contract::load_contract_snapshot::<Value>().unwrap();
     let cases = snapshot["goal_wake_receipt_cases"].as_array().unwrap();
     assert_eq!(cases.len(), 11);
+    let mut conflicting_history_cases = 0;
     for case in cases {
         let name = case["name"].as_str().unwrap();
         let dir = tempfile::tempdir().unwrap();
@@ -264,6 +265,30 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
             terminal_source(&access, &row, false).await;
             roots.insert(pair, row);
         }
+        if case["prior"].as_array().unwrap().is_empty()
+            && case["retry_parent"].is_null()
+            && case["claim"]["scope"]["kind"] == "referenced"
+            && notifications
+                .iter()
+                .all(|notice| notice["scope"]["kind"] == "referenced")
+        {
+            let opening = roots.values().next().unwrap().doc_id.as_deref().unwrap();
+            access.transact_write("test.unrelated_goal_opening", |txn| {
+                let input = serde_json::json!({
+                    "goal_id": "unrelated-goal", "node_did": identity.did(), "session_id": session,
+                    "objective": "Unreadable retained history", "status": "invalid-retained-status",
+                    "assignment_root_request_doc_id": opening,
+                    "created_at": "2026-10-21T00:00:00Z", "updated_at": "2026-10-21T00:00:00Z"
+                });
+                Box::pin(async move {
+                    txn.execute_with_variables(
+                        "mutation($input: GoalMutationInputArg!) {create_Goal(input: $input) {_docID}}",
+                        &serde_json::json!({"input": input}),
+                    ).await
+                })
+            }).await.unwrap();
+            conflicting_history_cases += 1;
+        }
         let mut sources = BTreeMap::new();
         for notification in notifications {
             let id = notification["message"].as_u64().unwrap();
@@ -272,6 +297,19 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
             let row = write_request(&access, &identity, create).await;
             terminal_source(&access, &row, case["superseded_origins"] == true).await;
             sources.insert(id, row);
+        }
+        if case["prior"].as_array().unwrap().is_empty()
+            && case["retry_parent"].is_null()
+            && case["claim"]["scope"]["kind"] == "referenced"
+            && notifications
+                .iter()
+                .all(|notice| notice["scope"]["kind"] == "referenced")
+        {
+            assert!(
+                crate::goal::load_request_assignment(&node, sources.values().next().unwrap())
+                    .await
+                    .is_err()
+            );
         }
         let mut appended = 0;
         let mut retry_parent = None;
@@ -431,4 +469,5 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
         drop(lifecycle);
         node.shutdown().await;
     }
+    assert!(conflicting_history_cases > 0);
 }

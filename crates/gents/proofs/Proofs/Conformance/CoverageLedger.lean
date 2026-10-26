@@ -1780,6 +1780,11 @@ def caseCoverage : List CoverageEntry :=
       "hook::tests::goal_context::generated_goal_tool_context_uses_the_signed_callers_assignment")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "goal_request_scope_cases"
+      "GoalRequestScopeCases"
+      "goal::request_assignment::scope_tests::generated_ancestry_scope_cases_use_the_lean_composition")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "goal_request_ancestry_cases"
       "GoalRequestAncestryCases"
       "goal::request_head::tests::generated_goal_ancestry_cases_keep_one_signed_goal")
@@ -1789,6 +1794,31 @@ def caseCoverage : List CoverageEntry :=
       "GoalQueueAssignmentCases"
       "lifecycle::queue::folding::assignment_tests::generated_goal_assignments_bound_fold_and_steering")
       "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "durable_observation_cases"
+      "DurableObservationCases"
+      "hook::persistence::background_control::observation::tests::generated_observation_cases_preserve_deadlines_and_closed_feed_recovery")
+      "process-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "plugin_job_commit_kill_cases"
+      "PluginJobCommitKillCases"
+      "plugin_job::control::tests::kill_reads_children_that_committed_after_the_recovery_snapshot")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "operator_job_control_cases"
+      "OperatorJobControlCases"
+      "plugin_job::operator_control_conformance::generated_operator_controls_stay_on_the_owning_runtime")
+      "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "background_process_identity_cases"
+      "BackgroundProcessIdentityCases"
+      "hook::tests::generated_background_process_identity_cases_cancel_only_the_physical_invocation")
+      "process-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "plugin_target_resolution_cases"
+      "PluginTargetResolutionCases"
+      "plugin_job::admit::tests::generated_wire_targets_preserve_endpoint_and_permission_identity")
+      "plugin-jobs" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_request_head_cases"
       "GoalRequestHeadCases"
@@ -1818,6 +1848,11 @@ def caseCoverage : List CoverageEntry :=
       "goal_observation_cases"
       "GoalObservationCases"
       "goal::observation::contract_tests::generated_goal_observations_drive_signature_and_scope_validation")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_observation_cases"
+      "GoalObservationCases"
+      "goal::observation::contract_tests::generated_goal_rescans_recover_lost_notifications")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "plugin_approval_cases"

@@ -464,18 +464,23 @@ async fn background_completion_transaction_attempt(
     let pending_rows: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["pending"].clone())
             .context("decode pending AgentRequest rows")?;
-    let assignments =
-        crate::goal::load_request_assignments_in_txn(txn, &parent.node_did, &parent.session_id)
+    let mut assignments =
+        crate::goal::load_request_assignment_scopes(txn, &parent.node_did, &parent.session_id)
             .await?;
-    let parent_scope = assignments.scope_for_request(&parent.doc_id, &parent.request_id)?;
+    let parent_scope = assignments
+        .scope_for_request(&parent.doc_id, &parent.request_id)
+        .await?;
     let mut matching = None;
     for row in pending_rows {
         if row_matches_coalesced_source_and_key(&row, QueueSource::BackgroundCompletion, queue_key)
-            && assignments.scope(
-                row.doc_id
-                    .as_deref()
-                    .context("pending wake has no physical identity")?,
-            )? == parent_scope
+            && assignments
+                .scope(
+                    row.doc_id
+                        .as_deref()
+                        .context("pending wake has no physical identity")?,
+                )
+                .await?
+                == parent_scope
         {
             matching = Some(row);
             break;

@@ -78,7 +78,12 @@ mod tests {
                 panic!("expected server command");
             };
             assert_eq!(args.no_keychain_prompts, expected);
+            assert!(!args.keychain_startup_approval);
         }
+        assert!(
+            Cli::try_parse_from(["gents", "prepare-runtime", "--keychain-startup-approval"])
+                .is_err()
+        );
     }
 
     #[cfg(target_os = "macos")]

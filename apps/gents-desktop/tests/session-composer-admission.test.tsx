@@ -344,6 +344,27 @@ describe("SessionScreen canonical composer admission", () => {
     expect(sendChatMessage).not.toHaveBeenCalled();
   });
 
+  it("steers a follow-up into a running turn, and queues one sent with the modified Enter", async () => {
+    for (const [metaKey, delivery] of [
+      [false, "steer"],
+      [true, "queue"],
+    ] as const) {
+      const { app, sendChatMessage } = screenApp({
+        session: heldSession({ turnState: "running" }),
+      });
+      const view = renderScreen(app);
+      const message = screen.getByLabelText("Message");
+      fireEvent.change(message, { target: { value: "and this" } });
+      await act(async () => {
+        fireEvent.keyDown(message, { key: "Enter", metaKey });
+      });
+      expect(sendChatMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "and this", delivery }),
+      );
+      view.unmount();
+    }
+  });
+
   it("re-enables the rendered existing-session composer after terminal interruption", () => {
     const { app } = screenApp({ session: heldSession({ turnState: "running" }) });
     renderScreen(app);
