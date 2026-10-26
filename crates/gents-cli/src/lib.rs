@@ -883,11 +883,14 @@ mod tests {
             gents_protocol::error_chain::ErrorChain(&error)
         );
 
+        // Dropping a node only aborts its background work; its store stays
+        // locked until that work stops, so an in-process reopen shuts it down.
+        access.local_node().unwrap().shutdown().await;
         drop(access);
         assert_eq!(node.strong_count(), 0, "the access held the only node");
         let (reopened, _) = resolve_config_access(Some(&home), None)
             .await
-            .expect("a dropped access releases the store");
+            .expect("a released access releases the store");
         assert_eq!(reopened.mode(), "local");
     }
 

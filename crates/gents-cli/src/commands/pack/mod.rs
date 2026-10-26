@@ -425,7 +425,12 @@ pub(crate) async fn record_plugin_store_change(
         node_did: None,
     })
     .await?;
-    gents::pack::record_plugin_store_change(&access, &owner, home, coordinate, installed).await
+    let recorded =
+        gents::pack::record_plugin_store_change(&access, &owner, home, coordinate, installed).await;
+    if let Some(node) = access.local_node() {
+        node.shutdown().await;
+    }
+    recorded
 }
 
 pub(crate) fn warn_on_unrecorded_removal(coordinate: &str, recorded: Result<()>) {
