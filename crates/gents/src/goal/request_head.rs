@@ -119,6 +119,13 @@ pub(super) fn verify_goal_continuation_receipt(
     Ok(())
 }
 
+pub(crate) fn request_selection_fields() -> String {
+    format!(
+        "{} failure_reason superseded_by_request superseded_by_request_doc_id",
+        crate::request_admission::SIGNED_REQUEST_FIELDS
+    )
+}
+
 pub(crate) fn latest_goal_request<'a>(
     goal: &GoalDocument,
     rows: &'a [AgentRequestRow],
@@ -186,6 +193,11 @@ fn latest_scoped_request<'a>(
             && row.session_id.as_deref() == Some(session_id)
     };
     rows.iter().filter(in_scope).find(|parent| {
+        if crate::lifecycle::folded_into(parent).is_some()
+            || crate::lifecycle::retired_by_author(parent)
+        {
+            return false;
+        }
         !rows.iter().filter(in_scope).any(|child| {
             let Some(original_goal_id) = child.caused_by_trigger_id.as_deref() else {
                 return false;
@@ -551,14 +563,14 @@ pub(super) async fn load_session_requests(
     node_did: &str,
     session_id: &str,
 ) -> Result<Vec<AgentRequestRow>> {
-    use crate::request_admission::SIGNED_REQUEST_FIELDS;
+    let fields = request_selection_fields();
     let escaped_did = escape_graphql_string(node_did);
     let escaped_session = escape_graphql_string(session_id);
     let response = txn
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{
         node_did: {{ _eq: "{escaped_did}" }}, session_id: {{ _eq: "{escaped_session}" }}
-    }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {SIGNED_REQUEST_FIELDS} }} }}"#
+    }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {fields} }} }}"#
         ))
         .await?;
     serde_json::from_value(
