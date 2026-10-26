@@ -48,6 +48,9 @@ import Proofs.GoalAutomation.ClaimedPublication
 import Proofs.GoalAutomation.ResetResume
 import Proofs.GoalAutomation.RequestHead
 import Proofs.GoalAutomation.RequestAncestry
+import Proofs.GoalAutomation.AuthenticationCost
+import Proofs.PluginJob.TargetResolution
+import Proofs.Background.Observation
 import Proofs.GoalAutomation.ReadinessGate
 import Proofs.Mailbox
 import Proofs.Client
