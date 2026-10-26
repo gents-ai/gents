@@ -1,39 +1,9 @@
 use super::*;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use crate::test_support::read_observation::ReadCapture;
 use std::sync::Arc;
 use std::task::Poll;
 use std::time::{Duration, Instant};
-use tracing::field::{Field, Visit};
 use tracing::instrument::WithSubscriber;
-use tracing_subscriber::layer::{Context, SubscriberExt};
-use tracing_subscriber::{Layer, Registry};
-
-struct InterruptReads(Arc<AtomicUsize>);
-
-#[derive(Default)]
-struct Operation(bool);
-
-impl Visit for Operation {
-    fn record_str(&mut self, field: &Field, value: &str) {
-        if field.name() == "operation" && value == "fetch_interrupt_requested_at_scoped" {
-            self.0 = true;
-        }
-    }
-
-    fn record_debug(&mut self, _field: &Field, _value: &dyn std::fmt::Debug) {}
-}
-
-impl<S: tracing::Subscriber> Layer<S> for InterruptReads {
-    fn on_event(&self, event: &tracing::Event<'_>, _context: Context<'_, S>) {
-        if event.metadata().target() == "gents::config_client::txn" {
-            let mut operation = Operation::default();
-            event.record(&mut operation);
-            if operation.0 {
-                self.0.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-    }
-}
 
 #[tokio::test]
 #[ignore = "six-second quiet and traffic samples; writes the requested profile artifact"]
@@ -83,9 +53,8 @@ async fn background_wait_read_profile() {
                 })
             })
         });
-        let reads = Arc::new(AtomicUsize::new(0));
-        let subscriber =
-            tracing::Dispatch::new(Registry::default().with(InterruptReads(reads.clone())));
+        let reads = ReadCapture::new("fetch_interrupt_requested_at_scoped");
+        let subscriber = reads.dispatcher();
         let now = chrono::Utc::now();
         let wait = hook
             .await_background_tool_observing(
@@ -100,7 +69,7 @@ async fn background_wait_read_profile() {
         assert!(tokio::time::timeout(Duration::from_secs(6), wait)
             .await
             .is_err());
-        let count = reads.load(Ordering::Relaxed);
+        let count = reads.count();
         samples.push(
             json!({"unrelated_batches_per_second": if noisy { 10 } else { 0 },
             "elapsed_ms": started.elapsed().as_millis(), "caller_interruption_reads": count}),
