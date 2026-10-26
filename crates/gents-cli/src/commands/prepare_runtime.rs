@@ -52,6 +52,22 @@ fn refusal(reason: RuntimePreparationRefusal, message: impl Into<String>) -> any
     })
 }
 
+fn refusal_reason(error: &anyhow::Error) -> RuntimePreparationRefusal {
+    if error
+        .downcast_ref::<gents::store_key::StoreKeyUnavailable>()
+        .is_some()
+        || error
+            .downcast_ref::<gents::identity::IdentityKeyUnavailable>()
+            .is_some()
+    {
+        RuntimePreparationRefusal::KeyAccess
+    } else {
+        error
+            .downcast_ref::<PreparationFailure>()
+            .map_or(RuntimePreparationRefusal::Failed, |failure| failure.reason)
+    }
+}
+
 pub(crate) struct PreparedStartup {
     pub(crate) reservation: gents::home::RuntimeStartupReservation,
     pub(crate) outcome: RuntimePreparationOutcome,
@@ -76,9 +92,7 @@ pub(crate) async fn emit(result: RuntimePreparationResult) -> Result<()> {
 pub(crate) async fn prepare(args: ServeArgs, runtime: tokio::runtime::Handle) -> Result<()> {
     let result = prepare_inner(args, runtime).await;
     if let Err(error) = &result {
-        let reason = error
-            .downcast_ref::<PreparationFailure>()
-            .map_or(RuntimePreparationRefusal::Failed, |failure| failure.reason);
+        let reason = refusal_reason(error);
         if let Err(output_error) = emit(RuntimePreparationResult::Refused {
             reason,
             message: format!("{error:#}"),
@@ -187,10 +201,14 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
                 })
                 .await?
                 .map_err(|error| {
-                    refusal(
-                        RuntimePreparationRefusal::Credentials,
-                        format!("The runtime credentials are unavailable: {error:#}"),
-                    )
+                    if refusal_reason(&error) == RuntimePreparationRefusal::KeyAccess {
+                        error.context("The recorded runtime keys need access")
+                    } else {
+                        refusal(
+                            RuntimePreparationRefusal::Credentials,
+                            format!("The runtime credentials are unavailable: {error:#}"),
+                        )
+                    }
                 })?;
                 let authorization =
                     GraphqlEndpoint::as_principal(endpoint.to_string(), identity.did());

@@ -17,6 +17,7 @@ const refusals: Record<RuntimePreparationRefusal, true> = {
   starting: true,
   startupBusy: true,
   storeBusy: true,
+  keyAccess: true,
   credentials: true,
   failed: true,
 };

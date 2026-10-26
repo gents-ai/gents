@@ -23,6 +23,8 @@ pub enum RuntimePreparationRefusal {
     Starting,
     StartupBusy,
     StoreBusy,
+    /// Recorded keys exist but OS custody requires an explicit user unlock.
+    KeyAccess,
     Credentials,
     Failed,
 }

@@ -9,6 +9,36 @@ use super::*;
 type SeenCommands = Arc<Mutex<Vec<RuntimeControlCommand>>>;
 type ControlState = (Arc<KeyIdentity>, SeenCommands);
 
+#[test]
+fn custody_refusals_preserve_key_access_without_reclassifying_authorization() {
+    for error in [
+        anyhow::Error::new(gents::store_key::StoreKeyUnavailable {
+            data_path: std::path::PathBuf::from("fixture/data"),
+            code: -25308,
+        }),
+        anyhow::Error::new(gents::identity::IdentityKeyUnavailable {
+            label: "fixture-identity".to_owned(),
+            code: -25308,
+        }),
+    ] {
+        assert_eq!(
+            refusal_reason(&error.context("loading recorded runtime keys")),
+            RuntimePreparationRefusal::KeyAccess
+        );
+    }
+    assert_eq!(
+        refusal_reason(&refusal(
+            RuntimePreparationRefusal::Credentials,
+            "operator authorization refused"
+        )),
+        RuntimePreparationRefusal::Credentials
+    );
+    assert_eq!(
+        refusal_reason(&anyhow::anyhow!("key access refused")),
+        RuntimePreparationRefusal::Failed
+    );
+}
+
 struct ControlNode {
     endpoint: reqwest::Url,
     identity: Arc<KeyIdentity>,

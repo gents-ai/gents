@@ -44,7 +44,10 @@ fn main() -> Result<()> {
     }
     let args = Args::parse();
     if let Some(home) = &args.unlock_runtime_keys {
-        return gents_server::unlock_runtime_keys(home);
+        return tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?
+            .block_on(gents_server::unlock_runtime_keys(home));
     }
     if let Some(directory) = args.editor_checkpoints {
         return editor_checkpoints::serve(

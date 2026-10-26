@@ -6,7 +6,9 @@ use anyhow::{ensure, Context, Result};
 /// in the same executable as the managed server so macOS custody approval binds
 /// to that helper. Loading existing keys neither opens the database nor creates
 /// replacement keys, changes custody, or exports secret bytes to the editor.
-pub fn unlock_runtime_keys(home: &Path) -> Result<()> {
+/// OS custody may gate private-key use separately from loading its handle, so
+/// unlock exercises signing without retaining or transmitting the signature.
+pub async fn unlock_runtime_keys(home: &Path) -> Result<()> {
     ensure!(
         home.is_absolute(),
         "runtime home must be an absolute directory"
@@ -20,6 +22,7 @@ pub fn unlock_runtime_keys(home: &Path) -> Result<()> {
             &gents::home::default_data_dir(&home),
         )?);
     }
-    let _identity = crate::home_state::load_initialized_home_identity(&home, &config)?;
+    let identity = crate::home_state::load_initialized_home_identity(&home, &config)?;
+    drop(identity.sign(b"gents.runtime-key-unlock.v1").await?);
     Ok(())
 }
