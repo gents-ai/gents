@@ -593,10 +593,15 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let editor_history_gate = Arc::new(tokio::sync::Semaphore::new(0));
     let history_provider_gate = editor_history_gate.clone();
     let history_provider_hold = root.join("hold-history-provider");
-    let related_provider = Arc::new(editor_related_work::Provider::new(matches!(
-        journey,
-        Journey::EditorRelatedWorkFailure
-    )));
+    let activity_profile = std::env::var("GENTS_VSCODE_ACTIVITY_PROFILE").as_deref() == Ok("1");
+    ensure!(
+        !activity_profile || cfg!(unix),
+        "The command-output activity fixture requires a Unix shell."
+    );
+    let related_provider = Arc::new(editor_related_work::Provider::new(
+        matches!(journey, Journey::EditorRelatedWorkFailure),
+        activity_profile,
+    ));
     let provider_related = Arc::clone(&related_provider);
     let provider = FakeLlm::start_with_models(
         if journey.editor_scenario().is_some() {
@@ -1633,6 +1638,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &client_did,
             root,
             matches!(journey, Journey::EditorRelatedWorkFailure),
+            activity_profile,
         )
         .await?;
         std::fs::write(

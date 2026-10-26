@@ -699,3 +699,92 @@ async fn a_window_brings_results_delivered_after_its_cut_but_not_as_rows() {
     .expect("whole session");
     assert!(whole.result_messages.is_empty());
 }
+
+#[tokio::test]
+async fn running_tool_pages_read_only_their_open_output_source() {
+    use crate::client::canonical_output::project_canonical_live;
+    use gents::config_client::ConfigAccess;
+    use gents_protocol::output::{
+        live::{LiveView, OwnerLiveness},
+        OutputSource, OutputWriter,
+    };
+
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let response = ConfigAccess::write_local(
+        &node,
+        "test.live_tool_page",
+        r#"mutation {
+        call: create_AgentToolCall(input: {
+            tool_call_key:"running-tool", node_did:"node", requester_did:"reader",
+            request_doc_id:"request", request_id:"request-id", session_id:"live-page",
+            tool_call_id:"call", tool_name:"bash_unrestricted", message_sequence:1,
+            status:"running", lifecycle_state:"running"
+        }) { _docID }
+    }"#,
+    )
+    .await
+    .unwrap();
+    let tool = response["data"]["call"][0]["_docID"].as_str().unwrap();
+    for (owner, reader, source) in [
+        ("node", "reader", tool),
+        ("node", "other-reader", tool),
+        ("other-node", "reader", tool),
+        ("node", "reader", "unrelated-tool"),
+    ] {
+        ConfigAccess::write_local(&node, "test.live_tool_output", &format!(r#"mutation {{
+            create_AgentOutputSegment(input: {{
+                node_did:"{}", requester_did:"{}", session_id:"live-page", request_doc_id:"request",
+                source:{{kind:"tool_call", tool_call_doc_id:"{}"}},
+                writer:{{kind:"tool_execution", tool_call_doc_id:"{}"}}, ordinal:0,
+                runs:[{{stream:0, bytes:11, declaration:{{block_index:0, part_index:0, payload:{{kind:"tool_output"}}}}}}],
+                payload:"live output", created_at:"2026-10-03T00:00:00Z"
+            }}) {{ _docID }}
+        }}"#, escape_graphql_string(owner), escape_graphql_string(reader), escape_graphql_string(source), escape_graphql_string(source))).await.unwrap();
+    }
+    let page = load_session_transcript_page(
+        &node,
+        "live-page",
+        Some("node"),
+        Some("reader"),
+        None,
+        Some(10),
+    )
+    .await
+    .unwrap();
+    assert_eq!(page.store.tool_calls.len(), 1);
+    assert_eq!(page.canonical_dependencies.output_segments.len(), 1);
+    assert_eq!(page.query_count, 2);
+    let source = OutputSource::ToolCall {
+        tool_call_doc_id: tool.into(),
+    };
+    let writer = OutputWriter::ToolExecution {
+        tool_call_doc_id: tool.into(),
+    };
+    let view = project_canonical_live(
+        "request",
+        "live-page",
+        "request",
+        &source,
+        &writer,
+        None,
+        "node",
+        Some("reader"),
+        &[],
+        &page.canonical_dependencies.output_segments,
+        &[],
+        &[],
+        &[],
+        OwnerLiveness {
+            current_request: None,
+            live_tools: vec![tool],
+        },
+        false,
+        None,
+    );
+    let LiveView::Live { streams } = view else {
+        panic!("running output was not projected: {view:?}");
+    };
+    assert_eq!(streams.len(), 1);
+    assert_eq!(streams[0].text, "live output");
+}
