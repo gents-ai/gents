@@ -207,27 +207,45 @@ async fn cancelling_a_command_wait_removes_its_question_without_execution() {
 }
 
 #[tokio::test]
-async fn read_only_commands_and_full_access_do_not_prompt() {
-    for mode in [workspace::Mode::Ask, workspace::Mode::FullAccess] {
-        let fixture = Fixture::new();
-        fixture.select(mode);
-        let policy = if mode == workspace::Mode::Ask {
-            CommandExecutionPolicy::read_only(vec!["echo".into()])
-        } else {
-            write_policy()
+async fn strict_ask_requests_consent_for_each_read_only_command() {
+    let fixture = Fixture::new();
+    fixture.select(workspace::Mode::Ask);
+    approval::mark_listening(fixture.home.path()).unwrap();
+    let argv = ["approved".into()];
+    for _ in 0..2 {
+        let call = fixture.run(
+            CommandExecutionPolicy::read_only(vec!["echo".into()]),
+            "/bin/echo",
+            &argv,
+        );
+        let answer = async {
+            let question = fixture.question().await;
+            assert_eq!(question.command().unwrap().argv, ["/bin/echo", "approved"]);
+            approval::decide(fixture.home.path(), &question.id, Answer::Once).unwrap();
         };
-        let result = fixture
-            .run(policy, "/bin/echo", &["approved".into()])
-            .await
-            .unwrap();
+        let (result, ()) = tokio::join!(call, answer);
         assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&result).unwrap()["stdout"],
+            serde_json::from_str::<serde_json::Value>(&result.unwrap()).unwrap()["stdout"],
             "approved\n"
         );
-        assert!(approval::pending_requests(fixture.home.path())
-            .unwrap()
-            .is_empty());
     }
+}
+
+#[tokio::test]
+async fn full_access_commands_do_not_prompt() {
+    let fixture = Fixture::new();
+    fixture.select(workspace::Mode::FullAccess);
+    let result = fixture
+        .run(write_policy(), "/bin/echo", &["approved".into()])
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap()["stdout"],
+        "approved\n"
+    );
+    assert!(approval::pending_requests(fixture.home.path())
+        .unwrap()
+        .is_empty());
 }
 
 #[tokio::test]

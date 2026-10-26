@@ -330,3 +330,49 @@ async fn stop_cancels_review_before_a_human_question_can_be_published() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn strict_ask_prompts_for_each_routine_binding_without_invoking_review() {
+    let fixture = Fixture::new();
+    let current = workspace::get(&fixture.home, &fixture.key)
+        .unwrap()
+        .unwrap();
+    workspace::save_mode(
+        &fixture.home,
+        &fixture.key,
+        current.selection.revision,
+        Mode::Ask,
+        None,
+    )
+    .unwrap();
+    let reviewer: Reviewer = Arc::new(|_| panic!("strict Ask must not invoke automatic review"));
+    scope(Some(fixture.context(reviewer)), async {
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let decision = fixture.decision(true);
+            assert_eq!(decision.route, Route::Ask);
+            let mut consent = Box::pin(workspace::consent_binding(
+                &fixture.home,
+                decision,
+                true,
+                None,
+            ));
+            assert!(futures::poll!(consent.as_mut()).is_pending());
+            let questions = approval::pending(&fixture.home).unwrap();
+            assert_eq!(questions.len(), 1);
+            ids.push(questions[0].id.clone());
+            approval::decide(&fixture.home, &questions[0].id, approval::Answer::Once).unwrap();
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_secs(5), consent)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            );
+            assert!(approval::pending_requests(&fixture.home)
+                .unwrap()
+                .is_empty());
+        }
+        assert_ne!(ids[0], ids[1]);
+    })
+    .await;
+}

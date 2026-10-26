@@ -118,11 +118,23 @@ impl Fixture {
 }
 
 #[tokio::test]
-async fn routine_workspace_file_changes_do_not_request_consent() {
+async fn strict_ask_requests_consent_for_each_workspace_file_change() {
     let fixture = Fixture::new(Some(workspace::Mode::Ask));
     let path = fixture.key.path.join("nested/file.txt");
-    fixture.write(&path).await.unwrap();
-    fixture.edit(&path, false, None).await.unwrap();
+    let approve = async {
+        let question = fixture.question().await;
+        assert!(!path.exists());
+        approval::decide(fixture.home.path(), &question.id, Answer::Once).unwrap();
+    };
+    let (result, ()) = tokio::join!(fixture.write(&path), approve);
+    result.unwrap();
+    let approve = async {
+        let question = fixture.question().await;
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello world");
+        approval::decide(fixture.home.path(), &question.id, Answer::Once).unwrap();
+    };
+    let (result, ()) = tokio::join!(fixture.edit(&path, false, None), approve);
+    result.unwrap();
     assert_eq!(std::fs::read_to_string(path).unwrap(), "hello reader");
     fixture.assert_clear();
 }
