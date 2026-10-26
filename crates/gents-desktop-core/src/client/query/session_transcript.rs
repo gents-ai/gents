@@ -213,7 +213,7 @@ async fn load_page_canonical_dependencies(
         }
     }
 
-    let close_scopes = known_headers
+    let mut close_scopes = known_headers
         .values()
         .flat_map(|header| {
             header
@@ -229,6 +229,15 @@ async fn load_page_canonical_dependencies(
                 })
         })
         .collect::<BTreeSet<_>>();
+    for tool in page_tools {
+        if let (Some(payload), Some(node_did)) = (&tool.terminal_output, &tool.node_did) {
+            close_scopes.insert((
+                payload.output.close_doc_id.clone(),
+                node_did.clone(),
+                tool.requester_did.clone(),
+            ));
+        }
+    }
     if close_scopes.len() > MAX_CANONICAL_DEPENDENCY_ROWS {
         bail!(
             "canonical transcript page names more than {MAX_CANONICAL_DEPENDENCY_ROWS} output closures"
@@ -273,10 +282,14 @@ async fn load_page_canonical_dependencies(
     }
 
     let mut sources_by_request = BTreeMap::new();
-    for tool in page_tools
-        .iter()
-        .filter(|tool| tool.lifecycle_state.as_deref() == Some("running"))
-    {
+    for tool in page_tools.iter().filter(|tool| {
+        tool.lifecycle_state.as_deref() == Some("running")
+            || (tool.spawned_by_tool_call_doc_id.is_some()
+                && gents_protocol::wait_status::WaitLifecycle::from_persisted(
+                    tool.lifecycle_state.as_deref(),
+                )
+                .is_terminal())
+    }) {
         let (Some(tool_doc_id), Some(request_doc_id), Some(node_did)) = (
             tool.doc_id.as_deref(),
             tool.request_doc_id.as_deref(),

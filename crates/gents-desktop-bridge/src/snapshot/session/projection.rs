@@ -209,7 +209,18 @@ fn canonical_tool_payload(
             }
         }
     }
-    if !found_call && tool.spawned_by_tool_call_doc_id.is_none() {
+    if tool.spawned_by_tool_call_doc_id.is_some() || tool.plugin_parent_tool_call_doc_id.is_some() {
+        return match super::terminal_tool_output::terminal_tool_output(
+            tool,
+            output_segments,
+            denied_segments,
+            dependency_denials,
+        ) {
+            Ok(output) => (arguments, output, ready()),
+            Err(error) => (None, None, failed(error)),
+        };
+    }
+    if !found_call {
         return (
             None,
             None,
