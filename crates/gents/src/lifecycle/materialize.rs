@@ -876,7 +876,7 @@ impl RequestLifecycle {
         match lifecycle.claim_with_identity().await? {
             ClaimOutcome::Claimed => Ok(lifecycle),
             outcome => {
-                return Err(LifecycleError::NewlyMaterializedSignedAgentRequestWasNot {
+                Err(LifecycleError::NewlyMaterializedSignedAgentRequestWasNot {
                     outcome: format!("{:?}", outcome),
                 })
             }

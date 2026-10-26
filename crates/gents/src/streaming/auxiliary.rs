@@ -129,12 +129,12 @@ pub(crate) fn sink_with_writer(
                     attempt: observation.attempt,
                 };
                 if !source.is_auxiliary_audit() {
-                    return Err(AuxiliaryError::NonAuditSource.into());
+                    return Err(AuxiliaryError::NonAuditSource);
                 }
                 let mut state = state.lock().await;
                 if matches!(observation.event, AuxiliaryOutputEvent::AttemptStarted) {
                     if state.active.is_some() {
-                        return Err(AuxiliaryError::AttemptOverlaps.into());
+                        return Err(AuxiliaryError::AttemptOverlaps);
                     }
                     writer.initialize_request_buffer(&request.doc_id).await;
                     writer
@@ -167,7 +167,7 @@ pub(crate) fn sink_with_writer(
                     }
                 }
                 if state.active != Some(coordinate) {
-                    return Err(AuxiliaryError::AttemptMismatch.into());
+                    return Err(AuxiliaryError::AttemptMismatch);
                 }
                 let mut close = None;
                 let pending = match &observation.event {
@@ -182,7 +182,7 @@ pub(crate) fn sink_with_writer(
                         if profile
                             != gents_loop::provider_input::ProviderInputProfile::ClaudeMessages
                         {
-                            return Err(AuxiliaryError::ClaudeAuditMisrouted.into());
+                            return Err(AuxiliaryError::ClaudeAuditMisrouted);
                         }
                         state.content.apply_provider_audit(&event)?;
                         state.audit_seen = true;
@@ -213,7 +213,7 @@ pub(crate) fn sink_with_writer(
                         });
                     }
                     AuxiliaryOutputEvent::OutputObligationPending { .. } => {
-                        return Err(AuxiliaryError::ContinuationPrecededClosure.into());
+                        return Err(AuxiliaryError::ContinuationPrecededClosure);
                     }
                     AuxiliaryOutputEvent::ClosePartial => {
                         close = Some(ProviderAttemptClose::Partial)
@@ -280,7 +280,7 @@ pub(crate) fn sink_with_writer(
                 let flushed: Result<()> = async move {
                     let state = state.lock().await;
                     if state.active != Some((scope, turn, attempt)) {
-                        return Err(AuxiliaryError::FlushAttemptMismatch.into());
+                        return Err(AuxiliaryError::FlushAttemptMismatch);
                     }
                     if let Some(message) = state.content.message_snapshot() {
                         writer

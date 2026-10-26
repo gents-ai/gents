@@ -116,7 +116,7 @@ pub async fn cancel_background_tool_call(
                     | JobReadError::NotAuthorized
                     | JobReadError::NotYetObservable,
                 ) => CancelBackgroundToolCallOutcome::NotFound,
-                Err(error) => return Err(ToolControlError::from(error).into()),
+                Err(error) => return Err(ToolControlError::from(error)),
             },
         );
     }

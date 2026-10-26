@@ -83,6 +83,5 @@ pub async fn catalog(
             head,
             source,
         }
-        .into()
     })
 }

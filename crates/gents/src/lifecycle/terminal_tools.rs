@@ -177,7 +177,7 @@ pub(super) async fn account_tools_in_txn(
         for block in &header.message.blocks {
             if let MessageBlock::ToolCall { tool_call_doc_id, .. } = block {
                 if tools.iter().filter(|tool| &tool.doc_id == tool_call_doc_id).count() != 1 {
-                    return Err(TerminalToolsError::ToolMembershipAmbiguous.into());
+                    return Err(TerminalToolsError::ToolMembershipAmbiguous);
                 }
             }
         }
@@ -200,7 +200,7 @@ pub(super) async fn account_tools_in_txn(
                 && parent.row.plugin_parent_tool_call_doc_id.is_none()
                 && parent.row.plugin_effect_ordinal.is_none())
             {
-                return Err(TerminalToolsError::PluginParentNotDirect.into());
+                return Err(TerminalToolsError::PluginParentNotDirect);
             }
             let binding = directly_bound(headers, parent, generation)?;
             if binding.is_some() {
@@ -241,7 +241,7 @@ pub(super) async fn account_tools_in_txn(
                 if !(binding.1 == "spawn_process"
                     && tool.row.await_mode.as_deref() == Some("background"))
                 {
-                    return Err(TerminalToolsError::SpawnProvenanceInvalid.into());
+                    return Err(TerminalToolsError::SpawnProvenanceInvalid);
                 }
             }
             binding
@@ -260,7 +260,7 @@ pub(super) async fn account_tools_in_txn(
             state,
             "pending" | "running" | "completed" | "failed" | "timedOut" | "cancelled"
         ) {
-            return Err(TerminalToolsError::LifecycleInvalid.into());
+            return Err(TerminalToolsError::LifecycleInvalid);
         }
         if completed && state != "pending" {
             if state == "running" && tool.row.await_mode.as_deref() != Some("background") {
@@ -315,8 +315,7 @@ pub(super) async fn account_tools_in_txn(
                         accepted_call_id: format!("{:?}", intent.1),
                         exact_replies: deliveries.len(),
                         physical_delivery_candidates: format!("{candidates:?}"),
-                    }
-                    .into());
+                    });
                 }
                 reader.load_message(&deliveries[0].doc_id).await?;
             }
@@ -343,7 +342,7 @@ pub(super) async fn account_tools_in_txn(
             .and_then(|data| data.get("update_AgentToolCall"))
             .is_some_and(response_has_documents)
         {
-            return Err(TerminalToolsError::LifecycleCasLost.into());
+            return Err(TerminalToolsError::LifecycleCasLost);
         }
     }
     Ok(())

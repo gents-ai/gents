@@ -180,7 +180,7 @@ async fn validate_selection(
         .is_auxiliary()
     {
         if !(matches!(selection, TerminalOutput::NoMessage) && headers.is_empty()) {
-            return Err(CanonicalRecoveryError::AuxiliarySelectionInvalid.into());
+            return Err(CanonicalRecoveryError::AuxiliarySelectionInvalid);
         }
         return Ok(());
     }
@@ -410,7 +410,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
             ).await?;
             if is_auxiliary {
                 if !existing_headers.is_empty() {
-                    return Err(CanonicalRecoveryError::TranscriptHeaderFound.into());
+                    return Err(CanonicalRecoveryError::TranscriptHeaderFound);
                 }
                 ensure_auxiliary_has_no_tools(txn, &request_doc_id).await?;
             }
@@ -467,7 +467,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     }
                     [closing] if is_auxiliary => {
                         if closing.segment.writer != writer {
-                            return Err(CanonicalRecoveryError::ClosureGeneration.into());
+                            return Err(CanonicalRecoveryError::ClosureGeneration);
                         }
                         Vec::new()
                     }
@@ -483,7 +483,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                 };
                 if is_auxiliary {
                     if !blocks.is_empty() {
-                        return Err(CanonicalRecoveryError::PublicHeaderPlanned.into());
+                        return Err(CanonicalRecoveryError::PublicHeaderPlanned);
                     }
                     continue;
                 }
@@ -568,10 +568,10 @@ pub(crate) async fn recover_expired_generation_with_facts(
             let selection = if is_auxiliary {
                 if !selection_choice.as_ref().is_none_or(|choice|
                     matches!(choice, RecoverySelectionChoice::NoMessage)) {
-                    return Err(CanonicalRecoveryError::AuxiliaryChoiceSelected.into());
+                    return Err(CanonicalRecoveryError::AuxiliaryChoiceSelected);
                 }
                 if !matches!(selection, TerminalOutput::NoMessage) {
-                    return Err(CanonicalRecoveryError::AuxiliaryHeaderSelected.into());
+                    return Err(CanonicalRecoveryError::AuxiliaryHeaderSelected);
                 }
                 TerminalOutput::NoMessage
             } else {
@@ -600,7 +600,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     failure_reason: "execution lease expired", terminalized_at: "{now}", terminal_redrive_attempts: 0,
                     terminal_output: $terminal_output }}) {{ _docID }} }}"#), &serde_json::json!({"terminal_output": selection})).await?;
             if !response.get("data").and_then(|data| data.get("update_AgentRequest")).is_some_and(response_has_documents) {
-                return Err(CanonicalRecoveryError::RequestCasLost.into());
+                return Err(CanonicalRecoveryError::RequestCasLost);
             }
             crate::trigger_engine::durable::publish_request_outcome(
                 txn, agent, &row.request_id, &target, "execution lease expired", &timestamp,

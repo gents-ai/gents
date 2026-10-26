@@ -70,7 +70,7 @@ pub(crate) async fn enqueue_steering_request(
                     },
                 )
                 .await?;
-                Ok(steering_transaction_attempt(txn, parent, request_id, &mutation).await?)
+                steering_transaction_attempt(txn, parent, request_id, &mutation).await
             })
         },
     )

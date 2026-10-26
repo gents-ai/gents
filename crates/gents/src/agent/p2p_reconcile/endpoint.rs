@@ -19,7 +19,7 @@ pub async fn run_endpoint_heartbeat(
     identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    Ok(endpoint_heartbeat(node, identity, cancel).await?)
+    endpoint_heartbeat(node, identity, cancel).await
 }
 
 async fn endpoint_heartbeat(

@@ -920,7 +920,7 @@ pub async fn call_runner(
     budget: PluginBudget,
     bound: Option<BoundDir>,
 ) -> Result<PluginOutcome> {
-    Ok(drive(coordinate, runner, None, input, budget, bound, None).await?)
+    drive(coordinate, runner, None, input, budget, bound, None).await
 }
 
 /// The receipt of a finished attempt: the call's own, the one its failure

@@ -352,7 +352,7 @@ async fn redrive_in_transaction(
     if successor.observed.request_doc_id != created.doc_id
         || successor.observed.request_id != created.request_id
     {
-        return Err(LifecycleError::SuccessorNotHead.into());
+        return Err(LifecycleError::SuccessorNotHead);
     }
     // The observation never supplies retry authority; reopening remains the
     // claim owner's responsibility.
@@ -364,7 +364,7 @@ async fn redrive_in_transaction(
     )
     .await?
     {
-        return Err(LifecycleError::SuccessorObservationNotAdvanced.into());
+        return Err(LifecycleError::SuccessorObservationNotAdvanced);
     }
     Ok(RedriveOutcome::Created {
         request_id: request_id.to_string(),

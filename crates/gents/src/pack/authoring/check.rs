@@ -341,12 +341,10 @@ pub fn write_topology(dir: &Path) -> Result<()> {
             text.trim_end_matches('\n')
         ),
     };
-    Ok(
-        std::fs::write(&readme, updated).map_err(|source| CheckError::Write {
+    std::fs::write(&readme, updated).map_err(|source| CheckError::Write {
             path: readme.clone(),
             source,
-        })?,
-    )
+        })
 }
 
 /// The static lint every file-produced UX plugin must pass: what the

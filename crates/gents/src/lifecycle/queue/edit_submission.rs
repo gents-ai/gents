@@ -150,7 +150,7 @@ async fn submit_prepared_edit(
     match tokio::time::timeout(RECEIPT_WAIT, answered(access, &doc_id, &command)).await {
         Ok(receipt) => Ok(receipt?),
         Err(_) => {
-            return Err(QueueError::PendingEditWasSavedWaitingRuntime {
+            Err(QueueError::PendingEditWasSavedWaitingRuntime {
                 command_id: command.command_id.to_string(),
             })
         }

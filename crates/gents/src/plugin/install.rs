@@ -246,7 +246,7 @@ where
                 .transpose()?;
             let (data_unique_keys, data_collection_fields) =
                 crate::pack::plugin_data_unique_keys(manifest, plugin, &asset)?;
-            Ok(install_from_pack_locked(
+            install_from_pack_locked(
                 lock,
                 home,
                 &manifest.metadata.namespace,
@@ -259,7 +259,7 @@ where
                 data_unique_keys,
                 data_collection_fields,
                 consent,
-            )?)
+            )
         })
         .collect()
 }

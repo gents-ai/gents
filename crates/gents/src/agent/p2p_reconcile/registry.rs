@@ -146,7 +146,7 @@ pub async fn run_registry_heartbeat(
     network_id: String,
     cancel: CancellationToken,
 ) -> Result<()> {
-    Ok(registry_heartbeat(node, node_did, network_id, cancel).await?)
+    registry_heartbeat(node, node_did, network_id, cancel).await
 }
 
 async fn registry_heartbeat(

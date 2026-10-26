@@ -1889,7 +1889,7 @@ async fn create_goal_for_session_inner(
                     && existing.token_budget == token_budget
                     && load_goal_creation_claim_fingerprint(node, node_did, session_id)
                         .await
-                        .map_err(|error| CreateGoalForSessionError::Storage(error.into()))?
+                        .map_err(CreateGoalForSessionError::Storage)?
                         == Some(requested_fingerprint.clone())
                 {
                     return Ok(CreateGoalForSessionOutcome::Idempotent(existing));

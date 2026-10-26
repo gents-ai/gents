@@ -364,12 +364,12 @@ pub async fn load_parent_inclusive_audit_usage(
     exact_parent: &AgentRequestRow,
 ) -> Result<ParentAuditUsage> {
     let catalog = load_parent_catalog(node, exact_parent).await?;
-    Ok(project_catalog(
+    project_catalog(
         &catalog.parent_doc_id,
         &catalog.parent_id,
         &catalog.request_ids,
         catalog.calls,
-    )?)
+    )
 }
 
 pub(crate) async fn load_parent_inclusive_budget_usage(
@@ -389,7 +389,7 @@ pub(crate) async fn load_parent_inclusive_budget_usage(
     if catalog.max_total_tokens != request.max_total_tokens {
         return Err(TitleAuditUsageError::BudgetRestartDisagreesExecutionOwnerS);
     }
-    Ok(project_budget_catalog(&catalog.request_ids, catalog.calls)?)
+    project_budget_catalog(&catalog.request_ids, catalog.calls)
 }
 
 async fn load_parent_catalog(

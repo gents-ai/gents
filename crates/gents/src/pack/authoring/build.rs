@@ -330,10 +330,8 @@ pub fn build_graph_plans(dir: &Path, manifest: &PackManifest) -> Result<()> {
     let text = std::fs::read_to_string(&manifest_path).map_err(BuildError::ReadManifestJson)?;
     let mut assets = manifest.metadata.assets.clone();
     assets.extend(missing);
-    Ok(
-        std::fs::write(&manifest_path, replace_assets(&text, &assets)?)
-            .map_err(BuildError::WriteManifestJson)?,
-    )
+    std::fs::write(&manifest_path, replace_assets(&text, &assets)?)
+            .map_err(BuildError::WriteManifestJson)
 }
 
 fn replace_assets(text: &str, assets: &[String]) -> Result<String> {
@@ -435,14 +433,12 @@ pub fn build_plugin(
         source,
     })?;
     std::fs::create_dir_all(stamp.parent().ok_or(BuildError::StampParent)?)?;
-    Ok(
-        std::fs::write(&stamp, format!("{source_digest} {}", sha256_hex(&artifact))).map_err(
+    std::fs::write(&stamp, format!("{source_digest} {}", sha256_hex(&artifact))).map_err(
             |source| BuildError::Write {
                 path: stamp.clone(),
                 source,
             },
-        )?,
-    )
+        )
 }
 
 pub const BUILDER_ID: &str = concat!("gents/", env!("CARGO_PKG_VERSION"));

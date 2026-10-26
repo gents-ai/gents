@@ -372,9 +372,9 @@ pub(crate) async fn load_configured_task(
         },
     )
     .await?;
-    Ok(loaded
+    loaded
         .map(|value| serde_json::from_value(value).map_err(SessionMessageError::TaskDecode))
-        .transpose()?)
+        .transpose()
 }
 
 pub(crate) fn render_task_body(
@@ -878,11 +878,9 @@ async fn start_dispatch(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     start: &crate::tool_call_lifecycle::delivery::DispatchStart,
 ) -> Result<chrono::DateTime<chrono::Utc>> {
-    Ok(
-        crate::tool_call_lifecycle::delivery::start_running_in_txn(txn, start, None)
+    crate::tool_call_lifecycle::delivery::start_running_in_txn(txn, start, None)
             .await?
-            .ok_or(SessionMessageError::RowNotPending)?,
-    )
+            .ok_or(SessionMessageError::RowNotPending)
 }
 
 pub(crate) async fn load_receipt(

@@ -351,7 +351,7 @@ pub async fn open_home_store_key_with_custody(
         let record = StoreEncryption::prepare(choice, &key_file, data_path)?;
         config.store_encryption = Some(record.clone());
         crate::home::write_init_config(home_dir, &config)?;
-        return Ok(record.initialize(&key_file, data_path)?);
+        return record.initialize(&key_file, data_path);
     }
     let record = match pending {
         Some(record) => record,

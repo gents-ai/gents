@@ -258,9 +258,7 @@ fn recover_inference_calls<'a>(
         InferenceCall::recover_all(node, node_did)
             .await
             .map(PeriodicRecoverySweepOutcome::InferenceCalls)
-            .map_err(PeriodicRecoveryError::from)
-            .map_err(Into::into)
-    })
+            .map_err(PeriodicRecoveryError::from)})
 }
 
 fn settle_session_message_rows<'a>(

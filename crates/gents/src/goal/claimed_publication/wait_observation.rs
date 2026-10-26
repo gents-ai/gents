@@ -207,13 +207,12 @@ async fn observe_waits(
                 ..
             } = block
             {
-                if name == "wait_process" {
-                    if !(controls.insert(tool_call_doc_id.clone())) {
+                if name == "wait_process"
+                    && !(controls.insert(tool_call_doc_id.clone())) {
                         return Err(
                             WaitObservationError::DuplicateAcceptedWaitProcessPhysicalBinding,
                         );
                     }
-                }
             }
         }
     }

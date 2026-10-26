@@ -804,7 +804,7 @@ pub(super) async fn replace_pending_user_messages(
                 )
                 .await?
                 .map_err(|message| QueueError::EditRejected { message })?;
-                Ok(apply_pending_user_edit_in_txn(txn, validated).await?)
+                apply_pending_user_edit_in_txn(txn, validated).await
             })
         })
         .await

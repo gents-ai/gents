@@ -393,7 +393,7 @@ pub async fn fetch_interrupt_requested_at(
     request_id: &str,
 ) -> Result<Option<String>> {
     let request_doc_id = crate::request_binding::require_request_doc_id(node, request_id).await?;
-    Ok(fetch_interrupt_requested_at_by_doc_id(node, &request_doc_id).await?)
+    fetch_interrupt_requested_at_by_doc_id(node, &request_doc_id).await
 }
 
 pub async fn fetch_interrupt_requested_at_scoped(

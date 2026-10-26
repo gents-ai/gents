@@ -734,7 +734,7 @@ mod tests {
                         kill_in_txn(txn, lifecycle, job, KillCause::Stop).await?;
                     assert!(killed.won);
                     assert!(terminal.is_some_and(|terminal| terminal.won()));
-                    return Err(PluginJobError::AbortStagedKill);
+                    Err(PluginJobError::AbortStagedKill)
                 })
             })
             .await;

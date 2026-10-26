@@ -132,12 +132,12 @@ async fn request_row(
     doc_id: &str,
 ) -> Result<Option<AgentRequestRow>> {
     let response = txn.execute(&format!("{{AgentRequest(filter: {{{scope}, _docID: {{_eq: {}}}}}, limit: 1) {{_docID request_id lifecycle_state failure_reason created_at claimed_at terminalized_at request_hop}}}}", quoted(doc_id))).await?;
-    Ok(rows(&response, "AgentRequest")?
+    rows(&response, "AgentRequest")?
         .into_iter()
         .next()
         .map(serde_json::from_value)
         .transpose()
-        .map_err(SessionMessageError::DecodeInspectedRequest)?)
+        .map_err(SessionMessageError::DecodeInspectedRequest)
 }
 
 fn request_summary(row: &AgentRequestRow) -> Value {
