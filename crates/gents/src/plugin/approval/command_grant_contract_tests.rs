@@ -223,6 +223,7 @@ fn generated_command_revocation_preserves_the_selected_mode() {
     }
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn remembered_invocation_runs_again_and_revocation_requires_new_consent() {
     let directory = tempfile::tempdir().unwrap();

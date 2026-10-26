@@ -804,7 +804,15 @@ mod canonical_projection_tests {
             },
         };
         assert_eq!(
-            canonical_live_tool_output(&tool, Some(&request), &[], &[row.clone()], &[], &[], &[]),
+            canonical_live_tool_output(
+                &tool,
+                Some(&request),
+                &[],
+                std::slice::from_ref(&row),
+                &[],
+                &[],
+                &[]
+            ),
             Some("live text".to_string())
         );
         let mut large = row;
