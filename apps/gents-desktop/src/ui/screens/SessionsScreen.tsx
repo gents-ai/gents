@@ -59,7 +59,7 @@ import { sessionKeyOf } from "../../hooks/fleetStore";
 import { nodeDidOf, nodeOfSession } from "@/lib/nodes";
 import { NodeAgentStack } from "./NodeBehaviorStack";
 import { NodeAxis } from "./NodeAxis";
-import { SessionStatus } from "./SessionStatus";
+import { ListedSessionStatus } from "./SessionStatus";
 import { StartedCount } from "./StartedCount";
 import { SessionFilters, matchesView } from "./SessionFilters";
 import { emptyFilter, hasFilter } from "@/lib/session-filter";
@@ -650,7 +650,7 @@ const SessionRow = memo(function SessionRow({
           />
         }
       >
-        <SessionStatus turnState={session.turnState} />
+        <ListedSessionStatus session={session} />
         <div className="min-w-0">
           <p className="flex min-w-0 items-center gap-1.5 text-sm">
             {!parent && session.taskId && (

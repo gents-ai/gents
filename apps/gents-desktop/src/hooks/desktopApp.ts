@@ -24,6 +24,8 @@ import { createShellActions } from "./shellActions";
 import { createDraftStore } from "./draftStore";
 import type { ShellStores } from "./shellProjection";
 import { createShellView, type ShellViewStore } from "./shellView";
+import { seenMarks } from "../ui/app/sessionViews";
+import { seenMarkOf } from "../ui/lib/seen";
 
 export type DesktopBridge = {
   api: DesktopApiAdapter;
@@ -94,11 +96,30 @@ export function createDesktopApp({
     ...createProvenance({ api, stores }),
   };
   reconcileSelection(stores, actions.selectNode);
+  keepSeen(stores);
   const drafts = createDraftStore();
   return { api, stores, view, drafts, project, trackedRequestId, lifecycle, actions };
 }
 
 export type DesktopApp = ReturnType<typeof createDesktopApp>;
+
+/* the open session is seen while the window shows it, so work that ends
+   in front of the reader never reads as new */
+function keepSeen(stores: ShellStores) {
+  seenMarks.start(new Date().toISOString());
+  const stamp = () => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden")
+      return;
+    const { sessionId } = stores.selection.getState();
+    const session = sessionId ? stores.fleet.getState().bySessionId[sessionId] : null;
+    if (session) seenMarks.set(session.sessionId, seenMarkOf(session));
+  };
+  stores.selection.subscribe(stamp);
+  stores.fleet.subscribe(stamp);
+  if (typeof document !== "undefined")
+    document.addEventListener("visibilitychange", stamp);
+  stamp();
+}
 
 function endHeldTurn(stores: ShellStores) {
   let sent: { requestId: string; latestWhenSent: string | null } | null = null;

@@ -7,7 +7,7 @@ import { PortalContainerProvider } from "@gents/ui/lib/portal-container";
 import { href, type Route } from "@/lib/router";
 import type { NavMode } from "@/preferences";
 import { NodeAvatar } from "@/screens/AgentAvatar";
-import { SessionStatus } from "@/screens/SessionStatus";
+import { ListedSessionStatus } from "@/screens/SessionStatus";
 import { SyncHealth } from "./SyncHealth";
 import { navRowState, useNavItems, type NavContext, type NavItem } from "./navRegistry";
 import { ContribBoundary } from "@/contrib/react/boundary";
@@ -199,7 +199,7 @@ export function NavPanel({
                       currentSession === c.sessionId && "text-foreground",
                     )}
                   >
-                    <SessionStatus turnState={c.turnState} />
+                    <ListedSessionStatus session={c} />
                     <span className="min-w-0 flex-1 truncate">
                       {c.title ?? "Untitled session"}
                     </span>
