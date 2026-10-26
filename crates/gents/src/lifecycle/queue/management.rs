@@ -3,7 +3,6 @@ use super::*;
 use crate::config_client::ConfigAccess;
 use crate::identity::NodeIdentity;
 use crate::lifecycle::{RequestIdentity, RequestSigner, RequestSpec, WorkspaceLineage};
-use anyhow::Context;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -335,7 +334,7 @@ pub async fn prepare_pending_user_edit(
     session_id: &str,
     requester_did: &str,
     edit: &PendingQueueEdit,
-) -> anyhow::Result<Vec<AgentRequestCreate>> {
+) -> Result<Vec<AgentRequestCreate>> {
     prepare_pending_user_edit_with_deliveries(
         access,
         signer,
@@ -359,15 +358,13 @@ pub(crate) async fn prepare_pending_user_edit_with_deliveries(
     requester_did: &str,
     edit: &PendingQueueEdit,
     deliveries: Option<&[QueueDelivery]>,
-) -> anyhow::Result<Vec<AgentRequestCreate>> {
-    anyhow::ensure!(
-        signer.did() == requester_did && admission.signer_did == requester_did,
-        "Only the author can edit pending messages."
-    );
-    anyhow::ensure!(
-        deliveries.is_none_or(|values| values.len() == edit.messages.len()),
-        "Replacement delivery count changed."
-    );
+) -> Result<Vec<AgentRequestCreate>> {
+    if !(signer.did() == requester_did && admission.signer_did == requester_did) {
+        return Err(QueueError::OnlyAuthorCanEditPendingMessages);
+    }
+    if !(deliveries.is_none_or(|values| values.len() == edit.messages.len())) {
+        return Err(QueueError::ReplacementDeliveryCountChanged);
+    }
     let rows = access
         .transact_readonly("queue.read_pending_edit", |txn| {
             Box::pin(async move { pending_in_txn(txn, node_did, session_id).await })
@@ -384,7 +381,7 @@ pub(crate) async fn prepare_pending_user_edit_with_deliveries(
                     .find(|row| row.doc_id.as_deref() == Some(message.request_doc_id.as_str()))
                     .and_then(|row| row.input.as_ref())
                     .and_then(|input| input.queue.as_ref())
-                    .context("Selected message has no queue input.")?
+                    .ok_or(QueueError::SelectedMessageHasNoQueueInput)?
                     .delivery
             }
         };
@@ -505,30 +502,27 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
     requester_did: &str,
     edit: &PendingQueueEdit,
     creates: &[AgentRequestCreate],
-) -> anyhow::Result<std::result::Result<ValidatedPendingEdit, String>> {
+) -> Result<std::result::Result<ValidatedPendingEdit, String>> {
     crate::graphql::fence_arrivals(txn, "AgentRequest").await?;
     let current = pending_in_txn(txn, node_did, session_id).await?;
-    let checked = (|| -> anyhow::Result<ValidatedPendingEdit> {
+    let checked = (|| -> Result<ValidatedPendingEdit> {
         let selected = selected_group(&current, edit, requester_did)?;
-        anyhow::ensure!(
-            creates.len() == edit.messages.len(),
-            "Replacement request count changed."
-        );
+        if creates.len() != edit.messages.len() {
+            return Err(QueueError::ReplacementRequestCountChanged);
+        }
         let mut ids = rapidhash::RapidHashSet::default();
         for ((slot, message), create) in selected.iter().zip(&edit.messages).zip(creates) {
-            anyhow::ensure!(
-                ids.insert(&create.request_id) && !create.request_id.is_empty(),
-                "Replacement request identity is not fresh."
-            );
-            anyhow::ensure!(
-                create.admission.signer_did == requester_did,
-                "Only the author can replace pending messages."
-            );
+            if !(ids.insert(&create.request_id) && !create.request_id.is_empty()) {
+                return Err(QueueError::ReplacementRequestIdentityNotFresh);
+            }
+            if create.admission.signer_did != requester_did {
+                return Err(QueueError::OnlyAuthorCanReplacePendingMessages);
+            }
             create.admission.validate_canonical_fields()?;
             create
                 .admission
                 .validate_branch_fields()
-                .map_err(anyhow::Error::msg)?;
+                .map_err(|message| QueueError::RequestFields { message })?;
             let expected = super::super::materialize::build_request(replacement_spec(
                 selected,
                 slot,
@@ -544,23 +538,23 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
                         .input
                         .queue
                         .as_ref()
-                        .context("Replacement has no queue input.")?
+                        .ok_or(QueueError::ReplacementHasNoQueueInput)?
                         .delivery,
                 },
             )?);
-            anyhow::ensure!(
-                create == &expected,
-                "Replacement request does not match the selected message."
-            );
-            create.graphql_input_fields().map_err(anyhow::Error::msg)?;
-            anyhow::ensure!(
-                crate::identity::verify_did_signature(
-                    requester_did,
-                    &create.signing_payload(),
-                    &create.admission.signature
-                )?,
-                "Replacement request signature is invalid."
-            );
+            if create != &expected {
+                return Err(QueueError::ReplacementRequestDoesNotMatchSelected);
+            }
+            create
+                .graphql_input_fields()
+                .map_err(|message| QueueError::RequestFields { message })?;
+            if !(crate::identity::verify_did_signature(
+                requester_did,
+                &create.signing_payload(),
+                &create.admission.signature,
+            )?) {
+                return Err(QueueError::ReplacementRequestSignatureInvalid);
+            }
         }
         Ok(ValidatedPendingEdit {
             node_did: node_did.to_owned(),
@@ -778,7 +772,7 @@ pub(super) async fn replace_pending_user_messages(
     actor: PendingEditActor<'_>,
     edit: PendingQueueEdit,
     deliveries: &[QueueDelivery],
-) -> anyhow::Result<PendingQueueReceipt> {
+) -> Result<PendingQueueReceipt> {
     let PendingEditActor {
         node_did,
         session_id,
@@ -809,7 +803,7 @@ pub(super) async fn replace_pending_user_messages(
                     creates,
                 )
                 .await?
-                .map_err(anyhow::Error::msg)?;
+                .map_err(|message| QueueError::RequestFields { message })?;
                 Ok(apply_pending_user_edit_in_txn(txn, validated).await?)
             })
         })

@@ -1,5 +1,4 @@
 use super::*;
-use anyhow::Context;
 
 pub(crate) struct DurableClaimReceipt {
     request: AgentRequest,
@@ -64,10 +63,9 @@ async fn claim_request_with_projection<F>(
 where
     F: Fn(&str) -> String + Sync,
 {
-    anyhow::ensure!(
-        session_id == request.session_id,
-        "claim snapshot session differs from request"
-    );
+    if session_id != request.session_id {
+        return Err(LifecycleError::ClaimSnapshotSessionDiffersRequest);
+    }
     let scope = crate::session::session_scope_filter(
         &request.node_did,
         session_id,
@@ -147,22 +145,24 @@ where
                     let current = assignments.request(&request.doc_id)?;
                     let (retained_keys, retained_cutoff) = if let Some(parent_doc) = current.retry_parent_request_doc_id.as_deref() {
                         let parent = assignments.request(parent_doc)?;
-                        anyhow::ensure!(parent.lifecycle_state == Some(RequestLifecycleState::Failed)
+                        if !(parent.lifecycle_state == Some(RequestLifecycleState::Failed)
                             && parent.input.as_ref().is_some_and(super::is_background_completion_request)
                             && current.retry_parent_request.as_deref() == Some(parent.request_id.as_str())
-                            && current.caused_by_parent_request_doc_id.as_deref() == Some(parent_doc),
-                            "background retry does not name its physical failed wake");
+                            && current.caused_by_parent_request_doc_id.as_deref() == Some(parent_doc)) {
+ return Err(LifecycleError::BackgroundRetryDoesNotNamePhysical);
+ }
                         crate::request_admission::verify_runtime_local_control_receipt(current,
                             &request.node_did, &parent.request_id,
                             request.requester_did.as_deref().unwrap_or(&request.node_did))?;
                         let receipt = txn.execute(&format!(r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{background_completion_input_through_sequence background_completion_notification_keys_json}}}}"#,
                             escape_graphql_string(parent_doc))).await?;
-                        let receipt = receipt.pointer("/data/AgentRequest/0").context("failed wake receipt disappeared")?;
+                        let receipt = receipt.pointer("/data/AgentRequest/0").ok_or(LifecycleError::FailedWakeReceiptDisappeared)?;
                         let retained = receipt["background_completion_notification_keys_json"].as_str()
                             .map(crate::background_completion::notification_receipt_keys).transpose()?.unwrap_or_default();
                         let cutoff = receipt["background_completion_input_through_sequence"].as_u64();
-                        anyhow::ensure!(retained.is_empty() || cutoff.zip(through_sequence.map(u64::from)).is_some_and(|(prior,current)| prior <= current),
-                            "failed wake receipt has no available revision cutoff");
+                        if !(retained.is_empty() || cutoff.zip(through_sequence.map(u64::from)).is_some_and(|(prior,current)| prior <= current)) {
+ return Err(LifecycleError::FailedWakeReceiptHasNoAvailable);
+ }
                         (retained, cutoff)
                     } else { (Vec::new(), None) };
                     let notification_keys = response
@@ -182,11 +182,9 @@ where
                             let source = row
                                 .get("request_doc_id")
                                 .and_then(serde_json::Value::as_str)
-                                .context(
-                                    "background notification has no physical request binding",
-                                )?;
+                                .ok_or(LifecycleError::BackgroundNotificationHasNoPhysicalRequest)?;
                             let key = row.get("message_key").and_then(serde_json::Value::as_str)
-                                .context("background notification has no key")?;
+                                .ok_or(LifecycleError::BackgroundNotificationHasNoKey)?;
                             let retained = retained_keys.iter().any(|prior| prior == key)
                                 && row.get("sequence").and_then(serde_json::Value::as_u64)
                                     .zip(retained_cutoff).is_some_and(|(sequence,cutoff)| sequence <= cutoff);
@@ -195,8 +193,9 @@ where
                             }
                             Ok(keys)
                         })?;
-                    anyhow::ensure!(retained_keys.iter().all(|key| notification_keys.contains(key)),
-                        "failed wake retained notifications are missing from the current snapshot");
+                    if !(retained_keys.iter().all(|key| notification_keys.contains(key))) {
+ return Err(LifecycleError::FailedWakeRetainedNotificationsMissingCurrent);
+ }
                     BackgroundCompletionClaimSnapshot {
                         through_sequence,
                         notification_keys,
@@ -227,7 +226,7 @@ where
                     )
                     .await?;
                 }
-                Ok::<_, anyhow::Error>(Some((claimed, snapshot, folded_selection)))
+                Ok::<_, LifecycleError>(Some((claimed, snapshot, folded_selection)))
             })
         },
     )
@@ -261,8 +260,11 @@ async fn fetch_interrupt_and_ttl(
         crate::graphql::graphql_with_transaction_retry(node, &query, "fetch_interrupt_and_ttl")
             .await?;
     let row: gents_protocol::row::AgentRequestRow =
-        crate::graphql::first_row(&resp, "AgentRequest")?
-            .ok_or_else(|| anyhow::anyhow!("AgentRequest {doc_id} not found"))?;
+        crate::graphql::first_row(&resp, "AgentRequest")?.ok_or_else(|| {
+            LifecycleError::AgentRequestNotFound {
+                doc_id: doc_id.to_string(),
+            }
+        })?;
     let interrupt = row
         .interrupt_requested_at
         .as_deref()
@@ -306,10 +308,10 @@ impl RequestLifecycle {
         self.valid_until_at_claim =
             match super::parse_valid_until(valid_until.as_deref(), ttl_now()) {
                 super::TtlOutcome::Malformed(error) => {
-                    anyhow::bail!(
-                        "invalid valid_until on request {}: {error}",
-                        self.request.doc_id
-                    );
+                    return Err(LifecycleError::InvalidValidUntilRequest {
+                        doc_id: self.request.doc_id.to_string(),
+                        error: error.to_string(),
+                    });
                 }
                 super::TtlOutcome::Expired(_) => {
                     self.transition_pending_to_dead_stale().await?;
@@ -352,7 +354,7 @@ impl RequestLifecycle {
         .await?;
         stream_writer
             .initialize_request_buffer(&self.request.doc_id)
-            .await?;
+            .await;
         self.state = LocalLifecycleState::Streaming;
         Ok(())
     }
@@ -383,14 +385,16 @@ impl RequestLifecycle {
                         filter: {{ _docID: {{ _eq: "{doc}" }} }}, limit: 2
                     ) {{ request_id lifecycle_state execution_generation execution_lease_expires_at }} }}"#)).await?;
                     let rows = response["data"]["AgentRequest"].as_array()
-                        .context("execution begin omitted request rows")?;
-                    anyhow::ensure!(rows.len() == 1, "execution begin request is missing or ambiguous");
+                        .ok_or(LifecycleError::ExecutionBeginOmittedRequestRows)?;
+                    if rows.len() != 1 {
+ return Err(LifecycleError::ExecutionBeginRequestMissingAmbiguous);
+ }
                     let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(rows[0].clone())?;
-                    let state = row.lifecycle_state.context("execution begin missing lifecycle")?;
+                    let state = row.lifecycle_state.ok_or(LifecycleError::ExecutionBeginMissingLifecycle)?;
                     let observed_generation = row.execution_generation.as_deref()
-                        .context("execution begin missing generation")?;
+                        .ok_or(LifecycleError::ExecutionBeginMissingGeneration)?;
                     let expiry = row.execution_lease_expires_at.as_deref()
-                        .context("execution begin missing lease expiry")?;
+                        .ok_or(LifecycleError::ExecutionBeginMissingLeaseExpiry)?;
                     let observed = super::execution_policy::LeaseObservation {
                         request: state,
                         generation: observed_generation,
@@ -401,19 +405,24 @@ impl RequestLifecycle {
                     // or reset its lease; it may acknowledge the exact live
                     // generation's already committed processing state.
                     if state == RequestLifecycleState::Processing {
-                        anyhow::ensure!(super::execution_policy::authorize_producer_decision(
-                            observed, &generation, now), "execution begin replay lost ownership");
+                        if !super::execution_policy::authorize_producer_decision(
+                            observed, &generation, now) {
+ return Err(LifecycleError::ExecutionBeginReplayLostOwnership);
+ }
                         return Ok(());
                     }
-                    anyhow::ensure!(super::execution_policy::authorize_begin(observed, &generation, now),
-                        "execution begin requires a live claimed generation");
+                    if !super::execution_policy::authorize_begin(observed, &generation, now) {
+ return Err(LifecycleError::ExecutionBeginRequiresLiveClaimedGeneration);
+ }
                     let response = txn.execute(&format!(r#"mutation {{ update_AgentRequest(
                         docID: "{doc}", filter: {{ _docID: {{ _eq: "{doc}" }}, lifecycle_state: {{ _eq: "claimed" }},
                             execution_generation: {{ _eq: "{}" }}, execution_lease_expires_at: {{ _eq: "{}" }} }},
                         input: {{ lifecycle_state: "processing" }}
                     ) {{ _docID }} }}"#, escape_graphql_string(&generation), escape_graphql_string(expiry))).await?;
-                    anyhow::ensure!(response["data"]["update_AgentRequest"].as_array()
-                        .is_some_and(|rows| rows.len() == 1), "execution begin lost its request CAS");
+                    if !(response["data"]["update_AgentRequest"].as_array()
+                        .is_some_and(|rows| rows.len() == 1)) {
+ return Err(LifecycleError::ExecutionBeginLostRequestCAS);
+ }
                     Ok(())
                 })
             },
@@ -471,7 +480,7 @@ impl RequestLifecycle {
                         )
                         .await?;
                     }
-                    Ok::<_, anyhow::Error>(response)
+                    Ok::<_, LifecycleError>(response)
                 })
             },
         )
@@ -489,14 +498,16 @@ impl RequestLifecycle {
             {
                 return Ok(());
             }
-            anyhow::bail!(
-                "request {} could not transition pending -> interrupted; current lifecycle_state={}",
-                self.request.request_id,
-                request_view
-                    .as_ref()
-                    .and_then(|row| row.lifecycle_state)
-                    .map(RequestLifecycleState::as_str)
-                    .unwrap_or("missing")
+            return Err(
+                LifecycleError::RequestCouldNotTransitionPendingInterrupted {
+                    request_id: self.request.request_id.to_string(),
+                    detail: request_view
+                        .as_ref()
+                        .and_then(|row| row.lifecycle_state)
+                        .map(RequestLifecycleState::as_str)
+                        .unwrap_or("missing")
+                        .to_string(),
+                },
             );
         }
         Ok(())
@@ -554,7 +565,7 @@ impl RequestLifecycle {
                         )
                         .await?;
                     }
-                    Ok::<_, anyhow::Error>(response)
+                    Ok::<_, LifecycleError>(response)
                 })
             },
         )
@@ -572,15 +583,15 @@ impl RequestLifecycle {
             {
                 return Ok(());
             }
-            anyhow::bail!(
-                "request {} could not transition pending -> dead; current lifecycle_state={}",
-                self.request.request_id,
-                request_view
+            return Err(LifecycleError::RequestCouldNotTransitionPendingDead {
+                request_id: self.request.request_id.to_string(),
+                detail: request_view
                     .as_ref()
                     .and_then(|row| row.lifecycle_state)
                     .map(RequestLifecycleState::as_str)
                     .unwrap_or("missing")
-            );
+                    .to_string(),
+            });
         }
         self.failure_reason = Some("Stale".to_string());
         Ok(())
@@ -657,7 +668,7 @@ impl RequestLifecycle {
                         )
                         .await?;
                     }
-                    Ok::<_, anyhow::Error>(updated)
+                    Ok::<_, LifecycleError>(updated)
                 })
             },
         )
@@ -671,15 +682,15 @@ impl RequestLifecycle {
                     && row.terminal_output
                         == Some(gents_protocol::output::TerminalOutput::NoMessage)
             }) {
-                anyhow::bail!(
-                    "request {} could not reject admission from lifecycle_state={}",
-                    self.request.request_id,
-                    request_view
+                return Err(LifecycleError::RequestCouldNotRejectAdmissionLifecycle {
+                    request_id: self.request.request_id.to_string(),
+                    detail: request_view
                         .as_ref()
                         .and_then(|row| row.lifecycle_state)
                         .map(RequestLifecycleState::as_str)
                         .unwrap_or("missing")
-                );
+                        .to_string(),
+                });
             }
         }
         self.failure_reason = Some(reason_text);
@@ -725,19 +736,19 @@ impl RequestLifecycle {
         self.ensure_state(&[LocalLifecycleState::Pending], "claim")?;
         let claimed_at = now.to_rfc3339();
         let lease_secs = i64::try_from(self.execution_lease_duration_secs)
-            .context("execution lease duration out of range")?;
+            .map_err(LifecycleError::ExecutionLeaseDurationOutRange)?;
         let lease_ms = lease_secs
             .checked_mul(1000)
             .filter(|value| *value > 0)
-            .context("execution lease duration must be positive and representable")?;
+            .ok_or(LifecycleError::ExecutionLeaseDurationMustPositiveRepresentable)?;
         let execution_lease_expires_at = now
             .checked_add_signed(chrono::Duration::milliseconds(lease_ms))
-            .context("execution lease expiry out of range")?;
+            .ok_or(LifecycleError::ExecutionLeaseExpiryOutRange)?;
         let synthesized_deadline_at = i64::try_from(self.deadline_duration_secs)
             .ok()
             .and_then(chrono::Duration::try_seconds)
             .and_then(|duration| now.checked_add_signed(duration))
-            .context("request deadline duration is not representable")?;
+            .ok_or(LifecycleError::RequestDeadlineDurationNotRepresentable)?;
         let deadline_at = self
             .request
             .deadline
@@ -767,8 +778,10 @@ impl RequestLifecycle {
             let limit = self
                 .configured_max_total_tokens
                 .map(|limit| {
-                    anyhow::ensure!(limit > 0, "configured max_total_tokens must be positive");
-                    i64::try_from(limit).map_err(anyhow::Error::from)
+                    if limit <= 0 {
+                        return Err(LifecycleError::ConfiguredMaxTotalTokensMustPositive);
+                    }
+                    i64::try_from(limit).map_err(LifecycleError::from)
                 })
                 .transpose()?;
             format!(
@@ -838,24 +851,22 @@ impl RequestLifecycle {
         // not author.
         let claimed_request =
             crate::watcher::agent_request_from_mutation_response(&resp, "update_AgentRequest")?
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "request {doc_id} was not pending when this runtime attempted to claim it"
-                    )
+                .ok_or_else(|| LifecycleError::RequestWasNotPendingWhenRuntime {
+                    doc_id: doc_id.to_string(),
                 })?;
         let request_commit_cid =
             crate::graphql::mutation_composite_version(&resp, "update_AgentRequest")?
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "claimed AgentRequest {doc_id} returned no composite DefraDB version"
-                    )
-                })?
+                .ok_or_else(
+                    || LifecycleError::ClaimedAgentRequestReturnedNoCompositeDefraDB {
+                        doc_id: doc_id.to_string(),
+                    },
+                )?
                 .cid;
         if claimed_request.doc_id != doc_id {
-            anyhow::bail!(
-                "claim for AgentRequest {doc_id} returned document {}",
-                claimed_request.doc_id
-            );
+            return Err(LifecycleError::ClaimAgentRequestReturnedDocument {
+                doc_id: doc_id.to_string(),
+                doc_id2: claimed_request.doc_id.to_string(),
+            });
         }
         tracing::debug!(
             doc_id = %doc_id,
@@ -1308,7 +1319,7 @@ mod tests {
                         )
                         .await?;
                     }
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, LifecycleError>(())
                 })
             },
         )
@@ -1391,7 +1402,7 @@ mod tests {
             Box::pin(async move {
                 txn.execute_with_variables("mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
                     &serde_json::json!({"input": receipt})).await?;
-                Ok::<_, anyhow::Error>(())
+                Ok::<_, LifecycleError>(())
             })
         }).await.unwrap();
                 let mut first_lifecycle = RequestLifecycle::new_with_execution_binding(
@@ -1450,7 +1461,7 @@ mod tests {
                         let finish = &finish;
                         Box::pin(async move {
                             txn.execute(finish).await?;
-                            Ok::<_, anyhow::Error>(())
+                            Ok::<_, LifecycleError>(())
                         })
                     },
                 )
@@ -1554,7 +1565,7 @@ mod tests {
                             "mutation($input: TriggerFireMutationInputArg!) { create_TriggerFire(input: $input) { _docID } }",
                             &serde_json::json!({"input": input}),
                         ).await?;
-                        Ok::<_, anyhow::Error>(())
+                        Ok::<_, LifecycleError>(())
                     })
                 },
             ).await.unwrap();
@@ -1962,7 +1973,6 @@ mod tests {
                         )?,
                     )
                     .await
-                    .map_err(anyhow::Error::from)
                 })
             })
             .await

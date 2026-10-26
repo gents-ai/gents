@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use anyhow::Result;
 use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
@@ -432,7 +431,214 @@ pub enum LifecycleError {
     SuccessorNotHead,
     #[error("background wake successor observation was not advanced")]
     SuccessorObservationNotAdvanced,
+    #[error("claim snapshot session differs from request")]
+    ClaimSnapshotSessionDiffersRequest,
+    #[error("background retry does not name its physical failed wake")]
+    BackgroundRetryDoesNotNamePhysical,
+    #[error("failed wake receipt has no available revision cutoff")]
+    FailedWakeReceiptHasNoAvailable,
+    #[error("failed wake retained notifications are missing from the current snapshot")]
+    FailedWakeRetainedNotificationsMissingCurrent,
+    #[error("AgentRequest {doc_id} not found")]
+    AgentRequestNotFound { doc_id: String },
+    #[error("invalid valid_until on request {doc_id}: {error}")]
+    InvalidValidUntilRequest { doc_id: String, error: String },
+    #[error("execution begin request is missing or ambiguous")]
+    ExecutionBeginRequestMissingAmbiguous,
+    #[error("execution begin replay lost ownership")]
+    ExecutionBeginReplayLostOwnership,
+    #[error("execution begin requires a live claimed generation")]
+    ExecutionBeginRequiresLiveClaimedGeneration,
+    #[error("execution begin lost its request CAS")]
+    ExecutionBeginLostRequestCAS,
+    #[error("request {request_id} could not transition pending -> interrupted; current lifecycle_state={detail}")]
+    RequestCouldNotTransitionPendingInterrupted { request_id: String, detail: String },
+    #[error("request {request_id} could not transition pending -> dead; current lifecycle_state={detail}")]
+    RequestCouldNotTransitionPendingDead { request_id: String, detail: String },
+    #[error("request {request_id} could not reject admission from lifecycle_state={detail}")]
+    RequestCouldNotRejectAdmissionLifecycle { request_id: String, detail: String },
+    #[error("configured max_total_tokens must be positive")]
+    ConfiguredMaxTotalTokensMustPositive,
+    #[error("request {doc_id} was not pending when this runtime attempted to claim it")]
+    RequestWasNotPendingWhenRuntime { doc_id: String },
+    #[error("claimed AgentRequest {doc_id} returned no composite DefraDB version")]
+    ClaimedAgentRequestReturnedNoCompositeDefraDB { doc_id: String },
+    #[error("claim for AgentRequest {doc_id} returned document {doc_id2}")]
+    ClaimAgentRequestReturnedDocument { doc_id: String, doc_id2: String },
+    #[error("failed wake receipt disappeared")]
+    FailedWakeReceiptDisappeared,
+    #[error("background notification has no physical request binding")]
+    BackgroundNotificationHasNoPhysicalRequest,
+    #[error("background notification has no key")]
+    BackgroundNotificationHasNoKey,
+    #[error("execution begin omitted request rows")]
+    ExecutionBeginOmittedRequestRows,
+    #[error("execution begin missing lifecycle")]
+    ExecutionBeginMissingLifecycle,
+    #[error("execution begin missing generation")]
+    ExecutionBeginMissingGeneration,
+    #[error("execution begin missing lease expiry")]
+    ExecutionBeginMissingLeaseExpiry,
+    #[error("execution lease duration out of range")]
+    ExecutionLeaseDurationOutRange(#[source] std::num::TryFromIntError),
+    #[error("execution lease duration must be positive and representable")]
+    ExecutionLeaseDurationMustPositiveRepresentable,
+    #[error("execution lease expiry out of range")]
+    ExecutionLeaseExpiryOutRange,
+    #[error("request deadline duration is not representable")]
+    RequestDeadlineDurationNotRepresentable,
+    #[error("{missing_doc_id_error}: request_id lookup returned {rows_len} documents")]
+    RequestIdLookupReturnedDocuments {
+        missing_doc_id_error: String,
+        rows_len: String,
+    },
+    #[error("{missing_doc_id_error}")]
+    Invalid { missing_doc_id_error: String },
+    #[error("auxiliary requests require an ordinary parent")]
+    AuxiliaryRequestsRequireOrdinaryParent,
+    #[error("access review requires finite validity")]
+    AccessReviewRequiresFiniteValidity,
+    #[error("workspace-bound AgentRequest {request_doc_id} was not staged for activation")]
+    WorkspaceBoundAgentRequestWasNotStaged { request_doc_id: String },
+    #[error("newly materialized signed AgentRequest was not claimed: {outcome}")]
+    NewlyMaterializedSignedAgentRequestWasNot { outcome: String },
+    #[error("execution changed during atomic trigger supersession")]
+    ExecutionChangedDuringAtomicTriggerSupersession,
+    #[error("event request and receipt trigger identity disagree")]
+    EventRequestReceiptTriggerIdentityDisagree,
+    #[error("Task receipt and signed request identity disagree")]
+    TaskReceiptSignedRequestIdentityDisagree,
+    #[error("a Task admission cannot apply its Goal assignment")]
+    TaskAdmissionCannotApplyGoalAssignment,
+    #[error("outcome-enabled Task requires its source handoff identity")]
+    OutcomeEnabledTaskRequiresSourceHandoff,
+    #[error("Goal-backed Task requires an objective")]
+    GoalBackedTaskRequiresObjective,
+    #[error("Task Goal budget must be positive")]
+    TaskGoalBudgetMustPositive,
+    #[error("ordinary Task receipt cannot declare a Goal assignment")]
+    OrdinaryTaskReceiptCannotDeclareGoal,
+    #[error("Task target session is missing or belongs to another owner")]
+    TaskTargetSessionMissingBelongsAnother,
+    #[error("new Task session must derive from its fire identity")]
+    NewTaskSessionMustDeriveFire,
+    #[error("Task target session has a different agent")]
+    TaskTargetSessionHasDifferentAgent,
+    #[error("Task target session is closed")]
+    TaskTargetSessionClosed,
+    #[error("fire receipt requires exactly one admitted request")]
+    FireReceiptRequiresExactlyOneAdmitted,
+    #[error("admitted request changed its fire's session")]
+    AdmittedRequestChangedFireSSession,
+    #[error("auxiliary request creation omitted its exact durable request")]
+    AuxiliaryRequestCreationOmittedExactDurable,
+    #[error("AgentSession query omitted rows")]
+    AgentSessionQueryOmittedRows,
+    #[error("claimed session disappeared")]
+    ClaimedSessionDisappeared,
+    #[error("claimed request missing from its exact session scope")]
+    ClaimedRequestMissingExactSessionScope,
+    #[error("refused session disappeared")]
+    RefusedSessionDisappeared,
+    #[error("refused request missing from its exact session scope")]
+    RefusedRequestMissingExactSessionScope,
+    #[error("supersession omitted pending requests")]
+    SupersessionOmittedPendingRequests,
+    #[error("superseded request lacks ID")]
+    SupersededRequestLacksID,
+    #[error("admitted request query omitted rows")]
+    AdmittedRequestQueryOmittedRows,
+    #[error("admitted request lacks session ID")]
+    AdmittedRequestLacksSessionID,
+    #[error("admitted request lacks document ID")]
+    AdmittedRequestLacksDocumentID,
+    #[error("render manual template for task {task_id}: {e}")]
+    RenderManualTemplateTask { task_id: String, e: String },
+    #[error("create manual AgentRequest for task {task_id}: {e}")]
+    CreateManualAgentRequestTask { task_id: String, e: String },
+    #[error("{message}")]
+    RequestFields { message: &'static str },
+    #[error(transparent)]
+    AgentRequestAdmission(#[from] crate::request_admission::AgentRequestAdmissionError),
+    #[error(transparent)]
+    BackgroundCompletion(#[from] crate::background_completion::BackgroundCompletionError),
+    #[error(transparent)]
+    CanonicalRecovery(Box<crate::lifecycle::CanonicalRecoveryError>),
+    #[error(transparent)]
+    CompletionFactory(#[from] crate::completion_factory::CompletionFactoryError),
+    #[error(transparent)]
+    EventSourceCursor(#[from] crate::config_client::event_source_cursor::EventSourceCursorError),
+    #[error(transparent)]
+    ExecutionLease(Box<crate::lifecycle::execution_lease::ExecutionLeaseError>),
+    #[error(transparent)]
+    RequestReceipt(#[from] crate::request_admission::RequestReceiptError),
+    #[error(transparent)]
+    SessionOutput(#[from] crate::session::SessionOutputError),
+    #[error(transparent)]
+    TerminalTools(#[from] crate::lifecycle::terminal_tools::TerminalToolsError),
+    #[error(transparent)]
+    Parse(#[from] chrono::ParseError),
+    #[error(transparent)]
+    GraphqlError(#[from] gents_protocol::graphql::GraphqlError),
+    #[error(transparent)]
+    Goal(#[from] crate::goal::GoalError),
+    #[error(transparent)]
+    GraphPipeline(Box<crate::graph_pipeline::GraphPipelineError>),
+    #[error(transparent)]
+    Queue(Box<crate::lifecycle::QueueError>),
+    #[error(transparent)]
+    Session(#[from] crate::session::SessionError),
+    #[error(transparent)]
+    Watcher(#[from] crate::watcher::WatcherError),
+    #[error(transparent)]
+    Reconstruction(#[from] gents_protocol::output::ReconstructionError),
+    #[error(transparent)]
+    Materialize(Box<crate::lifecycle::materialize::MaterializeError>),
+    #[error(transparent)]
+    ClaimAdmission(#[from] ClaimAdmissionError),
+    #[error(transparent)]
+    PendingQueueChanged(#[from] execution_lease::PendingQueueChanged),
+    #[error(transparent)]
+    IntegerRange(#[from] std::num::TryFromIntError),
+    #[error("mailbox reply changed during admission")]
+    MailboxReplyChangedDuringAdmission,
+    #[error("mailbox reply claim did not consume an open item")]
+    MailboxReplyClaimDidNotConsume,
+    #[error("mailbox reply request disappeared")]
+    MailboxReplyRequestDisappeared,
 }
+
+impl From<crate::lifecycle::QueueError> for LifecycleError {
+    fn from(error: crate::lifecycle::QueueError) -> Self {
+        Self::Queue(Box::new(error))
+    }
+}
+
+impl From<crate::lifecycle::materialize::MaterializeError> for LifecycleError {
+    fn from(error: crate::lifecycle::materialize::MaterializeError) -> Self {
+        Self::Materialize(Box::new(error))
+    }
+}
+
+impl From<crate::graph_pipeline::GraphPipelineError> for LifecycleError {
+    fn from(error: crate::graph_pipeline::GraphPipelineError) -> Self {
+        Self::GraphPipeline(Box::new(error))
+    }
+}
+
+impl From<crate::lifecycle::execution_lease::ExecutionLeaseError> for LifecycleError {
+    fn from(error: crate::lifecycle::execution_lease::ExecutionLeaseError) -> Self {
+        Self::ExecutionLease(Box::new(error))
+    }
+}
+
+impl From<crate::lifecycle::CanonicalRecoveryError> for LifecycleError {
+    fn from(error: crate::lifecycle::CanonicalRecoveryError) -> Self {
+        Self::CanonicalRecovery(Box::new(error))
+    }
+}
+
+type Result<T, E = LifecycleError> = std::result::Result<T, E>;
 
 impl crate::config_client::TransactionFailure for LifecycleError {
     fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
@@ -450,7 +656,7 @@ impl crate::config_client::TransactionFailure for LifecycleError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ClaimAdmissionError {
+pub enum ClaimAdmissionError {
     #[error("mailbox reply {item_id} rejected: {reason}")]
     MailboxReplyRejected { item_id: String, reason: String },
     #[error("session {session_id} requester scope mismatch: {reason}")]
@@ -467,6 +673,10 @@ pub(crate) enum ClaimAdmissionError {
 
 pub(crate) fn is_claim_admission_error(error: &(dyn std::error::Error + 'static)) -> bool {
     gents_protocol::error_chain::find_source::<ClaimAdmissionError>(error).is_some()
+        || matches!(
+            gents_protocol::error_chain::find_source::<LifecycleError>(error),
+            Some(LifecycleError::ClaimAdmission(_))
+        )
 }
 
 pub use gents_loop::execution_origin::ExecutionOrigin;

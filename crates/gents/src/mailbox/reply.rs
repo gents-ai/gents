@@ -1,8 +1,10 @@
 use super::{MailboxAction, MailboxItem, MailboxStatus};
 use crate::config_client::ConfigApplyTxn;
 use crate::graphql::{escape_graphql_string, rows, single_mutation_document};
+use crate::lifecycle::LifecycleError;
 use crate::watcher::AgentRequest;
-use anyhow::{ensure, Context, Result};
+
+type Result<T, E = LifecycleError> = std::result::Result<T, E>;
 
 pub(crate) async fn claim_reply_in_txn(
     txn: &ConfigApplyTxn<'_>,
@@ -38,7 +40,7 @@ pub(crate) async fn claim_reply_in_txn(
     let record = records
         .into_iter()
         .next()
-        .context("mailbox reply request disappeared")?;
+        .ok_or(LifecycleError::MailboxReplyRequestDisappeared)?;
     let authenticated = crate::request_admission::verify_request_receipt_signature(&record).is_ok();
     let signed_request = AgentRequest::try_from(record)?;
     let now_time = chrono::Utc::now();
@@ -54,13 +56,13 @@ pub(crate) async fn claim_reply_in_txn(
             reason: error.to_string(),
         },
     )?;
-    ensure!(
-        signed_request.node_did == request.node_did
-            && signed_request.requester_did == request.requester_did
-            && signed_request.agent_id == request.agent_id
-            && signed_request.session_id == request.session_id,
-        "mailbox reply changed during admission"
-    );
+    if !(signed_request.node_did == request.node_did
+        && signed_request.requester_did == request.requester_did
+        && signed_request.agent_id == request.agent_id
+        && signed_request.session_id == request.session_id)
+    {
+        return Err(LifecycleError::MailboxReplyChangedDuringAdmission);
+    }
     if item.parsed_status() == Some(MailboxStatus::Acted) {
         return Ok(());
     }
@@ -75,10 +77,9 @@ pub(crate) async fn claim_reply_in_txn(
         escape_graphql_string(now),
     );
     let response = txn.execute_local_response(&mutation).await?;
-    ensure!(
-        single_mutation_document(&response, "update_MailboxItem")?.is_some(),
-        "mailbox reply claim did not consume an open item"
-    );
+    if !(single_mutation_document(&response, "update_MailboxItem")?.is_some()) {
+        return Err(LifecycleError::MailboxReplyClaimDidNotConsume);
+    }
     Ok(())
 }
 

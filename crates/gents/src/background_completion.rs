@@ -31,7 +31,7 @@ pub fn is_background_completion_notification_message_key(message_key: &str) -> b
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum BackgroundCompletionError {
+pub enum BackgroundCompletionError {
     #[error("invalid wake notification receipt")]
     InvalidReceipt(#[source] serde_json::Error),
     #[error("wake receipt names a non-notification message")]

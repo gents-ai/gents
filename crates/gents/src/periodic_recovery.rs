@@ -220,6 +220,7 @@ fn repair_terminal_requests<'a>(
     Box::pin(async move {
         RequestLifecycle::repair_terminal_requests(node, node_did)
             .await
+            .map_err(anyhow::Error::from)
             .map(PeriodicRecoverySweepOutcome::RequestTerminalRepair)
     })
 }

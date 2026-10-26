@@ -255,11 +255,13 @@ where
             Ok(ClaimOutcome::Queued | ClaimOutcome::Interrupted | ClaimOutcome::Expired) => {
                 return Ok(None)
             }
-            Err(error) if crate::lifecycle::is_claim_admission_error(error.as_ref()) => {
+            Err(error) if crate::lifecycle::is_claim_admission_error(&error) => {
                 lifecycle.reject_admission(&error.to_string()).await?;
                 return Ok(None);
             }
-            Err(error) => return Err(error.context("claiming auxiliary request")),
+            Err(error) => {
+                return Err(anyhow::Error::from(error).context("claiming auxiliary request"))
+            }
         }
         let writer = DefraStreamWriter::new(
             Arc::clone(&self.node),
@@ -320,12 +322,12 @@ where
             Ok(value) => value,
             Err(terminal_error) => {
                 if let Some(error) = reason {
-                    return Err(terminal_error.context(format!(
+                    return Err(anyhow::Error::from(terminal_error).context(format!(
                         "auxiliary request failed first: {}",
                         ErrorChain(error.as_ref())
                     )));
                 }
-                return Err(terminal_error);
+                return Err(terminal_error.into());
             }
         };
         if let Some(error) = reason {

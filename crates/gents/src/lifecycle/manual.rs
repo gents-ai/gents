@@ -1,4 +1,3 @@
-use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use serde_json::Value;
 
@@ -7,6 +6,10 @@ use crate::lifecycle::{
     TriggerLineage,
 };
 use crate::template::{render_template, task_node_ctx, TemplateScope};
+
+use crate::lifecycle::LifecycleError;
+
+type Result<T, E = LifecycleError> = std::result::Result<T, E>;
 
 pub async fn write_manual_agent_request(
     node: &std::sync::Arc<EmbeddedNode>,
@@ -69,8 +72,12 @@ pub async fn write_manual_agent_request_with_conversation_title(
         node: node_scope,
         ctx: ctx_scope,
     };
-    let content = render_template(prompt_template, &scope)
-        .map_err(|e| anyhow!("render manual template for task {task_id}: {e}"))?;
+    let content = render_template(prompt_template, &scope).map_err(|e| {
+        LifecycleError::RenderManualTemplateTask {
+            task_id: task_id.to_string(),
+            e: e.to_string(),
+        }
+    })?;
 
     let enqueued = write_pending_agent_request_with_lineage_workspace_and_conversation_title(
         node,
@@ -94,7 +101,10 @@ pub async fn write_manual_agent_request_with_conversation_title(
         Some(&session_id),
     )
     .await
-    .map_err(|e| anyhow!("create manual AgentRequest for task {task_id}: {e}"))?;
+    .map_err(|e| LifecycleError::CreateManualAgentRequestTask {
+        task_id: task_id.to_string(),
+        e: e.to_string(),
+    })?;
 
     tracing::info!(
         task_id = %task_id,

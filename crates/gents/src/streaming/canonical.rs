@@ -1,6 +1,5 @@
 //! Retries reuse prepared output facts; callers acknowledge only committed batches.
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::output::reconstruction::ObservedSegment;
@@ -31,7 +30,7 @@ pub(crate) struct ProviderPublicationPlan {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum CanonicalStreamError {
+pub enum CanonicalStreamError {
     #[error(transparent)]
     GraphqlResponse(#[from] crate::graphql::GraphqlResponseError),
     #[error(transparent)]
@@ -68,7 +67,135 @@ pub(crate) enum CanonicalStreamError {
     CloseCandidateIdentityChanged,
     #[error("provider close candidate must be terminal-only")]
     CloseCandidateNotTerminal,
+    #[error("headerless Complete closure requires an auxiliary audit source")]
+    HeaderlessCompleteClosureRequiresAuxiliaryAudit,
+    #[error("auxiliary audit closure cannot publish a transcript header")]
+    AuxiliaryAuditClosureCannotPublishTranscript,
+    #[error("provider close replay changed outcome")]
+    ProviderCloseReplayChangedOutcome,
+    #[error("partial close replay changed its closure candidate")]
+    PartialCloseReplayChangedClosureCandidate,
+    #[error("provider source has multiple closing records")]
+    ProviderSourceHasMultipleClosingRecords,
+    #[error("partial publication replay changed its exact header")]
+    PartialPublicationReplayChangedExactHeader,
+    #[error("partial publication replay changed its header candidate")]
+    PartialPublicationReplayChangedHeaderCandidate,
+    #[error("partial publication identity is ambiguous")]
+    PartialPublicationIdentityAmbiguous,
+    #[error("partial replay has no Partial closure")]
+    PartialReplayHasNoPartialClosure,
+    #[error("partial close replay is missing its committed publication header")]
+    PartialCloseReplayMissingCommittedPublication,
+    #[error("partial publication header candidate disagrees with canonical presentation")]
+    PartialPublicationHeaderCandidateDisagreesCanonical,
+    #[error("provider publication does not bind its request generation")]
+    ProviderPublicationDoesNotBindRequest,
+    #[error("authored publication cannot create tool intent")]
+    AuthoredPublicationCannotCreateToolIntent,
+    #[error("provider publication lost its live lease")]
+    ProviderPublicationLostLiveLease,
+    #[error("provider source is already closed")]
+    ProviderSourceAlreadyClosed,
+    #[error("background publication names a tool call outside this turn")]
+    BackgroundPublicationNamesToolCallOutside,
+    #[error("first publication native message changed")]
+    FirstPublicationNativeMessageChanged,
+    #[error("request deadline expired before steering consumption")]
+    RequestDeadlineExpiredBeforeSteeringConsumption,
+    #[error("closed provider source has no unique accepted header")]
+    ClosedProviderSourceHasNoUnique,
+    #[error("publication replay generation changed")]
+    PublicationReplayGenerationChanged,
+    #[error("publication replay native message changed")]
+    PublicationReplayNativeMessageChanged,
+    #[error("publication replay has ambiguous pending tool row")]
+    PublicationReplayHasAmbiguousPendingTool,
+    #[error("publication replay pending tool binding changed")]
+    PublicationReplayPendingToolBindingChanged,
+    #[error("raw append requires an open provider flush and its exact request writer")]
+    RawAppendRequiresOpenProviderFlush,
+    #[error("ambiguous immutable segment replay")]
+    AmbiguousImmutableSegmentReplay,
+    #[error("provider output request is missing or ambiguous")]
+    ProviderOutputRequestMissingAmbiguous,
+    #[error("provider segment crossed its request owner or session")]
+    ProviderSegmentCrossedRequestOwnerSession,
+    #[error("output source does not match its request purpose")]
+    OutputSourceDoesNotMatchRequest,
+    #[error("provider source has an invalid committed timestamp")]
+    ProviderSourceHasInvalidCommittedTimestamp(#[source] chrono::ParseError),
+    #[error("provider closure has an invalid created_at")]
+    ProviderClosureHasInvalidCreated(#[source] chrono::ParseError),
+    #[error("request generation missing")]
+    RequestGenerationMissing,
+    #[error("request lifecycle missing")]
+    RequestLifecycleMissing,
+    #[error("request expiry missing")]
+    RequestExpiryMissing,
+    #[error("provider publication has no output")]
+    ProviderPublicationHasNoOutput,
+    #[error("publication replay omitted headers")]
+    PublicationReplayOmittedHeaders,
+    #[error("publication replay omitted pending tool row")]
+    PublicationReplayOmittedPendingToolRow,
+    #[error("publication replay lacks await mode")]
+    PublicationReplayLacksAwaitMode,
+    #[error("publication replay has invalid await mode")]
+    PublicationReplayHasInvalidAwaitMode,
+    #[error("request lease deadline missing")]
+    RequestLeaseDeadlineMissing,
+    #[error("output request purpose missing")]
+    OutputRequestPurposeMissing,
+    #[error("source query omitted rows")]
+    SourceQueryOmittedRows,
+    #[error(transparent)]
+    Close(#[from] ProviderCloseRejection),
+    #[error(transparent)]
+    Replay(#[from] ProviderReplayRejection),
+    #[error(transparent)]
+    Append(#[from] ProviderAppendRejection),
+    #[error(transparent)]
+    CanonicalRows(#[from] crate::session::canonical_rows::CanonicalRowsError),
+    #[error(transparent)]
+    ConfigClient(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    SessionOutput(#[from] crate::session::SessionOutputError),
+    #[error(transparent)]
+    Parse(#[from] chrono::ParseError),
+    #[error(transparent)]
+    Queue(#[from] crate::lifecycle::QueueError),
+    #[error(transparent)]
+    Streaming(#[from] crate::streaming::StreamingError),
 }
+
+/// The provider rejection a failed canonical write carries, if any.
+#[cfg(test)]
+pub(crate) fn provider_rejection<'a, T>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a T>
+where
+    T: std::error::Error + 'static,
+{
+    std::iter::successors(Some(error), |cause| cause.source()).find_map(|cause| {
+        cause.downcast_ref::<T>().or_else(|| {
+            match cause.downcast_ref::<CanonicalStreamError>()? {
+                CanonicalStreamError::Close(rejection) => {
+                    (rejection as &dyn std::error::Error).downcast_ref::<T>()
+                }
+                CanonicalStreamError::Replay(rejection) => {
+                    (rejection as &dyn std::error::Error).downcast_ref::<T>()
+                }
+                CanonicalStreamError::Append(rejection) => {
+                    (rejection as &dyn std::error::Error).downcast_ref::<T>()
+                }
+                _ => None,
+            }
+        })
+    })
+}
+
+type Result<T, E = CanonicalStreamError> = std::result::Result<T, E>;
 
 impl crate::config_client::TransactionFailure for CanonicalStreamError {
     fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
@@ -165,7 +292,7 @@ pub(crate) enum ProviderAttemptClose {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ProviderCloseRejection {
+pub enum ProviderCloseRejection {
     #[error("provider close requires its exact request writer")]
     WriterMismatch,
     #[error("provider close candidate disagrees with committed extent")]
@@ -177,13 +304,13 @@ pub(crate) enum ProviderCloseRejection {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ProviderReplayRejection {
+pub enum ProviderReplayRejection {
     #[error("publication replay await mode changed")]
     AwaitModeChanged,
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ProviderAppendRejection {
+pub enum ProviderAppendRejection {
     #[error("cannot append to a closed provider source")]
     ClosedSource,
     #[error("provider append lost its live processing lease")]
@@ -292,18 +419,18 @@ pub(crate) async fn close_provider_attempt_at(
     {
         return Err(ProviderCloseRejection::WriterMismatch.into());
     }
-    anyhow::ensure!(
-        !matches!(close, ProviderAttemptClose::AuxiliaryComplete)
-            || prepared.source.is_auxiliary_audit(),
-        "headerless Complete closure requires an auxiliary audit source"
-    );
-    anyhow::ensure!(
-        !prepared.source.is_auxiliary_audit()
-            || candidate
-                .as_ref()
-                .is_none_or(|value| value.header.is_none()),
-        "auxiliary audit closure cannot publish a transcript header"
-    );
+    if !(!matches!(close, ProviderAttemptClose::AuxiliaryComplete)
+        || prepared.source.is_auxiliary_audit())
+    {
+        return Err(CanonicalStreamError::HeaderlessCompleteClosureRequiresAuxiliaryAudit);
+    }
+    if !(!prepared.source.is_auxiliary_audit()
+        || candidate
+            .as_ref()
+            .is_none_or(|value| value.header.is_none()))
+    {
+        return Err(CanonicalStreamError::AuxiliaryAuditClosureCannotPublishTranscript);
+    }
     ConfigAccess::transact_local_idempotent(
         node,
         None,
@@ -354,13 +481,16 @@ pub(crate) async fn close_provider_attempt_at(
                             ProviderAttemptClose::AuxiliaryComplete,
                         )
                     );
-                    anyhow::ensure!(matches, "provider close replay changed outcome");
+                    if !matches {
+                        return Err(CanonicalStreamError::ProviderCloseReplayChangedOutcome);
+                    }
                     if let Some(candidate) = candidate.as_ref() {
                         validate_closing_shape(prepared, &candidate.closing)?;
-                        anyhow::ensure!(
-                            candidate.closing == existing.segment,
-                            "partial close replay changed its closure candidate"
-                        );
+                        if candidate.closing != existing.segment {
+                            return Err(
+                                CanonicalStreamError::PartialCloseReplayChangedClosureCandidate,
+                            );
+                        }
                     }
                     if request.purpose.is_some_and(
                         gents_protocol::request_admission::RequestPurpose::is_auxiliary,
@@ -408,10 +538,9 @@ pub(crate) async fn close_provider_attempt_at(
                     }
                     .into());
                 }
-                anyhow::ensure!(
-                    closures.is_empty(),
-                    "provider source has multiple closing records"
-                );
+                if !closures.is_empty() {
+                    return Err(CanonicalStreamError::ProviderSourceHasMultipleClosingRecords);
+                }
                 if !writer_matches_generation {
                     return Err(ProviderCloseRejection::WriterMismatch.into());
                 }
@@ -432,9 +561,11 @@ pub(crate) async fn close_provider_attempt_at(
                     if let Some(last_created_at) = extent.last_created_at.as_deref() {
                         let closing = candidate.as_ref().map_or(prepared, |value| &value.closing);
                         let last_created_at = DateTime::parse_from_rfc3339(last_created_at)
-                            .context("provider source has an invalid committed timestamp")?;
+                            .map_err(
+                                CanonicalStreamError::ProviderSourceHasInvalidCommittedTimestamp,
+                            )?;
                         let closing_created_at = DateTime::parse_from_rfc3339(&closing.created_at)
-                            .context("provider closure has an invalid created_at")?;
+                            .map_err(CanonicalStreamError::ProviderClosureHasInvalidCreated)?;
                         if closing_created_at < last_created_at {
                             return Err(ProviderCloseRejection::RegressedTimestamp.into());
                         }
@@ -472,14 +603,14 @@ pub(crate) async fn close_provider_attempt_at(
                 let owner = request
                     .execution_generation
                     .as_deref()
-                    .context("request generation missing")?;
+                    .ok_or(CanonicalStreamError::RequestGenerationMissing)?;
                 let state = request
                     .lifecycle_state
-                    .context("request lifecycle missing")?;
+                    .ok_or(CanonicalStreamError::RequestLifecycleMissing)?;
                 let expiry = request
                     .execution_lease_expires_at
                     .as_deref()
-                    .context("request expiry missing")?;
+                    .ok_or(CanonicalStreamError::RequestExpiryMissing)?;
                 let deadline = DateTime::parse_from_rfc3339(expiry)?.timestamp_millis();
                 if !authorize_output_append(
                     LeaseObservation {
@@ -675,27 +806,28 @@ async fn partial_header_in_txn(
         .filter(|row| row.message.message_key == message_key)
         .collect::<Vec<_>>();
     if let [existing] = matching.as_slice() {
-        anyhow::ensure!(
-            existing.message.request_doc_id.as_deref() == Some(prepared.request_doc_id.as_str())
-                && existing.message.publication
-                    == (MessagePublication::RequestRecovery {
-                        execution_generation: generation.to_owned(),
-                    })
-                && existing.message.outcome == OutputOutcome::Partial
-                && existing.message.role == MessageRole::Assistant
-                && existing.message.native_id.is_none()
-                && existing.message.blocks.iter().all(|block| matches!(block,
+        if !(existing.message.request_doc_id.as_deref() == Some(prepared.request_doc_id.as_str())
+            && existing.message.publication
+                == (MessagePublication::RequestRecovery {
+                    execution_generation: generation.to_owned(),
+                })
+            && existing.message.outcome == OutputOutcome::Partial
+            && existing.message.role == MessageRole::Assistant
+            && existing.message.native_id.is_none()
+            && existing.message.blocks.iter().all(|block| {
+                matches!(block,
                     MessageBlock::Text { text }
                         if text.presentation == PayloadPresentation::Full
-                            && text.output.close_doc_id == closing.doc_id)),
-            "partial publication replay changed its exact header"
-        );
+                            && text.output.close_doc_id == closing.doc_id)
+            }))
+        {
+            return Err(CanonicalStreamError::PartialPublicationReplayChangedExactHeader);
+        }
         if let Some(factory) = header_factory {
             let proposed = factory(&closing.doc_id)?;
-            anyhow::ensure!(
-                proposed == existing.message,
-                "partial publication replay changed its header candidate"
-            );
+            if proposed != existing.message {
+                return Err(CanonicalStreamError::PartialPublicationReplayChangedHeaderCandidate);
+            }
         }
         crate::session::load_canonical_message_in_txn(
             txn,
@@ -706,13 +838,12 @@ async fn partial_header_in_txn(
         .await?;
         return Ok(Some(existing.doc_id.clone()));
     }
-    anyhow::ensure!(
-        matching.is_empty(),
-        "partial publication identity is ambiguous"
-    );
+    if !matching.is_empty() {
+        return Err(CanonicalStreamError::PartialPublicationIdentityAmbiguous);
+    }
     if replay {
         let Some(SourceClose::Closed { segments, .. }) = closing.segment.close.as_ref() else {
-            anyhow::bail!("partial replay has no Partial closure")
+            return Err(CanonicalStreamError::PartialReplayHasNoPartialClosure);
         };
         let retains_text = records.iter().any(|row| {
             row.segment
@@ -725,10 +856,9 @@ async fn partial_header_in_txn(
                     })
                 })
         });
-        anyhow::ensure!(
-            !retains_text,
-            "partial close replay is missing its committed publication header"
-        );
+        if retains_text {
+            return Err(CanonicalStreamError::PartialCloseReplayMissingCommittedPublication);
+        }
         return Ok(None);
     }
     let observations = records
@@ -773,10 +903,9 @@ async fn partial_header_in_txn(
     };
     let message = if let Some(factory) = header_factory {
         let proposed = factory(&closing.doc_id)?;
-        anyhow::ensure!(
-            proposed == derived,
-            "partial publication header candidate disagrees with canonical presentation"
-        );
+        if proposed != derived {
+            return Err(CanonicalStreamError::PartialPublicationHeaderCandidateDisagreesCanonical);
+        }
         proposed
     } else {
         derived
@@ -838,24 +967,27 @@ pub(super) async fn publish_provider_turn_with_time(
             let tool_deadline_at = plan.tool_deadline_at.clone();
             let background_calls = plan.background_calls.clone();
             Box::pin(async move {
-            let exemplar = plan.final_flush.as_ref().context("provider publication has no output")?;
-            anyhow::ensure!(
-                matches!(&exemplar.source, OutputSource::ProviderTurn { .. } | OutputSource::Authored { .. })
+            let exemplar = plan.final_flush.as_ref().ok_or(CanonicalStreamError::ProviderPublicationHasNoOutput)?;
+            if !(matches!(&exemplar.source, OutputSource::ProviderTurn { .. } | OutputSource::Authored { .. })
                     && !exemplar.source.is_auxiliary_audit()
                     && matches!(&exemplar.writer, OutputWriter::RequestExecution { execution_generation }
                         if execution_generation == generation)
-                    && matches!(&exemplar.close, None | Some(SourceClose::Closed { outcome: OutputOutcome::Complete, .. })),
-                "provider publication does not bind its request generation"
-            );
-            anyhow::ensure!(matches!(exemplar.source, OutputSource::ProviderTurn { .. }) || encoded.tool_calls.is_empty(), "authored publication cannot create tool intent");
+                    && matches!(&exemplar.close, None | Some(SourceClose::Closed { outcome: OutputOutcome::Complete, .. }))) {
+ return Err(CanonicalStreamError::ProviderPublicationDoesNotBindRequest);
+ }
+            if !(matches!(exemplar.source, OutputSource::ProviderTurn { .. }) || encoded.tool_calls.is_empty()) {
+ return Err(CanonicalStreamError::AuthoredPublicationCannotCreateToolIntent);
+ }
             let request = load_request_in_txn(txn, exemplar).await?;
-            let owner = request.execution_generation.as_deref().context("request generation missing")?;
-            let state = request.lifecycle_state.context("request lifecycle missing")?;
-            let expiry = request.execution_lease_expires_at.as_deref().context("request expiry missing")?;
+            let owner = request.execution_generation.as_deref().ok_or(CanonicalStreamError::RequestGenerationMissing)?;
+            let state = request.lifecycle_state.ok_or(CanonicalStreamError::RequestLifecycleMissing)?;
+            let expiry = request.execution_lease_expires_at.as_deref().ok_or(CanonicalStreamError::RequestExpiryMissing)?;
             let deadline = DateTime::parse_from_rfc3339(expiry)?.timestamp_millis();
-            anyhow::ensure!(authorize_output_append(
+            if !(authorize_output_append(
                 LeaseObservation { request: state, generation: owner, deadline_ms: deadline },
-                generation, fixture_now.unwrap_or_else(Utc::now).timestamp_millis()), "provider publication lost its live lease");
+                generation, fixture_now.unwrap_or_else(Utc::now).timestamp_millis())) {
+ return Err(CanonicalStreamError::ProviderPublicationLostLiveLease);
+ }
 
             let mut reader = crate::session::TxnCanonicalReader::new_single(
                 txn, &exemplar.node_did, exemplar.requester_did.as_deref(),
@@ -884,7 +1016,9 @@ pub(super) async fn publish_provider_turn_with_time(
                 }
                 return Ok(published);
             }
-            anyhow::ensure!(records.iter().all(|row| row.segment.close.is_none()), "provider source is already closed");
+            if !(records.iter().all(|row| row.segment.close.is_none())) {
+ return Err(CanonicalStreamError::ProviderSourceAlreadyClosed);
+ }
 
             let prepared = exemplar;
             let mut observations = records.iter().map(|row| ObservedSegment { doc_id: &row.doc_id, segment: &row.segment }).collect::<Vec<_>>();
@@ -895,9 +1029,9 @@ pub(super) async fn publish_provider_turn_with_time(
                 &observations, &prepared.request_doc_id, &prepared.source, &prepared.writer)?;
             if let Some(last_created_at) = extent.last_created_at.as_deref() {
                 let last_created_at = DateTime::parse_from_rfc3339(last_created_at)
-                    .context("provider source has an invalid committed timestamp")?;
+                    .map_err(CanonicalStreamError::ProviderSourceHasInvalidCommittedTimestamp)?;
                 let closing_created_at = DateTime::parse_from_rfc3339(&prepared.created_at)
-                    .context("provider closure has an invalid created_at")?;
+                    .map_err(CanonicalStreamError::ProviderClosureHasInvalidCreated)?;
                 if closing_created_at < last_created_at {
                     return Err(ProviderCloseRejection::RegressedTimestamp.into());
                 }
@@ -919,12 +1053,11 @@ pub(super) async fn publish_provider_turn_with_time(
             let sequence = crate::lifecycle::queue::next_append_sequence_in_transaction(
                 txn, &prepared.node_did, &prepared.session_id,
             ).await?;
-            anyhow::ensure!(
-                background_calls
+            if !(background_calls
                     .iter()
-                    .all(|id| encoded.tool_calls.iter().any(|tool| tool.id == *id)),
-                "background publication names a tool call outside this turn"
-            );
+                    .all(|id| encoded.tool_calls.iter().any(|tool| tool.id == *id))) {
+ return Err(CanonicalStreamError::BackgroundPublicationNamesToolCallOutside);
+ }
             let mut tool_call_keys = Vec::with_capacity(encoded.tool_calls.len());
             let mut tool_inputs = Vec::with_capacity(encoded.tool_calls.len());
             for tool in &encoded.tool_calls {
@@ -979,19 +1112,17 @@ pub(super) async fn publish_provider_turn_with_time(
             ).await?;
             let message_doc_id = created_doc_id(&created, "AgentMessage")?;
             let (_, reconstructed) = reader.load_created_message(&message_doc_id, &close_doc_id).await?;
-            anyhow::ensure!(
-                &reconstructed == expected.as_ref(),
-                "first publication native message changed"
-            );
+            if &reconstructed != expected.as_ref() {
+ return Err(CanonicalStreamError::FirstPublicationNativeMessageChanged);
+ }
 
             if let Some(consumption) = plan.consumes_folded.as_ref() {
-                anyhow::ensure!(
-                    crate::lifecycle::RequestLifecycle::input_publication_before_deadline(
+                if !(crate::lifecycle::RequestLifecycle::input_publication_before_deadline(
                         fixture_now.unwrap_or_else(Utc::now),
                         Some(DateTime::parse_from_rfc3339(&tool_deadline_at)?.with_timezone(&Utc)),
-                    ),
-                    "request deadline expired before steering consumption"
-                );
+                    )) {
+ return Err(CanonicalStreamError::RequestDeadlineExpiredBeforeSteeringConsumption);
+ }
                 crate::lifecycle::queue::consume_folded_in_txn(txn, consumption, &prepared.created_at, expected.as_ref()).await?;
             }
             let accepted_tools = encoded.tool_calls.iter().zip(tool_doc_ids).map(|(tool, tool_call_doc_id)| {
@@ -1060,33 +1191,31 @@ async fn replay_publication_in_txn(
         .as_ref()
         .and_then(|data| data.get("AgentMessage"))
         .and_then(serde_json::Value::as_array)
-        .context("publication replay omitted headers")?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "closed provider source has no unique accepted header"
-    );
+        .ok_or(CanonicalStreamError::PublicationReplayOmittedHeaders)?;
+    if rows.len() != 1 {
+        return Err(CanonicalStreamError::ClosedProviderSourceHasNoUnique);
+    }
     let row = decode_transcript_message_row(&rows[0])?;
     let MessagePublication::RequestExecution {
         execution_generation: accepted_generation,
     } = &row.message.publication
     else {
-        anyhow::bail!("publication replay generation changed");
+        return Err(CanonicalStreamError::PublicationReplayGenerationChanged);
     };
-    anyhow::ensure!(
-        accepted_generation == generation
-            || (matches!(exemplar.source, OutputSource::Authored { .. })
-                && accepted_writer
-                    == Some(&OutputWriter::RequestExecution {
-                        execution_generation: accepted_generation.clone(),
-                    })),
-        "publication replay generation changed"
-    );
+    if !(accepted_generation == generation
+        || (matches!(exemplar.source, OutputSource::Authored { .. })
+            && accepted_writer
+                == Some(&OutputWriter::RequestExecution {
+                    execution_generation: accepted_generation.clone(),
+                })))
+    {
+        return Err(CanonicalStreamError::PublicationReplayGenerationChanged);
+    }
     reader.observe_headers(std::slice::from_ref(&row));
     let (_, reconstructed) = reader.load_message(&row.doc_id).await?;
-    anyhow::ensure!(
-        &reconstructed == expected,
-        "publication replay native message changed"
-    );
+    if &reconstructed != expected {
+        return Err(CanonicalStreamError::PublicationReplayNativeMessageChanged);
+    }
     let mut accepted_tools = Vec::new();
     for block in &row.message.blocks {
         let MessageBlock::ToolCall {
@@ -1109,43 +1238,42 @@ async fn replay_publication_in_txn(
             .as_ref()
             .and_then(|data| data.get("AgentToolCall"))
             .and_then(serde_json::Value::as_array)
-            .context("publication replay omitted pending tool row")?;
-        anyhow::ensure!(
-            tools.len() == 1,
-            "publication replay has ambiguous pending tool row"
-        );
+            .ok_or(CanonicalStreamError::PublicationReplayOmittedPendingToolRow)?;
+        if tools.len() != 1 {
+            return Err(CanonicalStreamError::PublicationReplayHasAmbiguousPendingTool);
+        }
         let tool = &tools[0];
-        anyhow::ensure!(
-            tool.get("request_doc_id")
+        if !(tool
+            .get("request_doc_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(exemplar.request_doc_id.as_str())
+            && tool.get("session_id").and_then(serde_json::Value::as_str)
+                == Some(exemplar.session_id.as_str())
+            && tool.get("node_did").and_then(serde_json::Value::as_str)
+                == Some(exemplar.node_did.as_str())
+            && tool
+                .get("requester_did")
                 .and_then(serde_json::Value::as_str)
-                == Some(exemplar.request_doc_id.as_str())
-                && tool.get("session_id").and_then(serde_json::Value::as_str)
-                    == Some(exemplar.session_id.as_str())
-                && tool.get("node_did").and_then(serde_json::Value::as_str)
-                    == Some(exemplar.node_did.as_str())
-                && tool
-                    .get("requester_did")
-                    .and_then(serde_json::Value::as_str)
-                    == exemplar.requester_did.as_deref()
-                && tool
-                    .get("message_sequence")
-                    .and_then(serde_json::Value::as_u64)
-                    == Some(u64::from(row.message.sequence))
-                && tool.get("tool_call_id").and_then(serde_json::Value::as_str)
-                    == Some(id.as_str())
-                && tool.get("tool_name").and_then(serde_json::Value::as_str) == Some(name.as_str())
-                && tool
-                    .get("lifecycle_state")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("pending"),
-            "publication replay pending tool binding changed"
-        );
+                == exemplar.requester_did.as_deref()
+            && tool
+                .get("message_sequence")
+                .and_then(serde_json::Value::as_u64)
+                == Some(u64::from(row.message.sequence))
+            && tool.get("tool_call_id").and_then(serde_json::Value::as_str) == Some(id.as_str())
+            && tool.get("tool_name").and_then(serde_json::Value::as_str) == Some(name.as_str())
+            && tool
+                .get("lifecycle_state")
+                .and_then(serde_json::Value::as_str)
+                == Some("pending"))
+        {
+            return Err(CanonicalStreamError::PublicationReplayPendingToolBindingChanged);
+        }
         let await_mode = crate::tool_call_lifecycle::AwaitMode::from_persisted(
             tool["await_mode"]
                 .as_str()
-                .context("publication replay lacks await mode")?,
+                .ok_or(CanonicalStreamError::PublicationReplayLacksAwaitMode)?,
         )
-        .context("publication replay has invalid await mode")?;
+        .ok_or(CanonicalStreamError::PublicationReplayHasInvalidAwaitMode)?;
         let planned = if background_calls.contains(id) {
             crate::tool_call_lifecycle::AwaitMode::Background
         } else {
@@ -1232,14 +1360,14 @@ async fn append_in_txn_with_time(
     prepared: &OutputSegment,
     fixture_now: Option<DateTime<Utc>>,
 ) -> Result<String> {
-    anyhow::ensure!(
-        matches!(&prepared.source, OutputSource::ProviderTurn { .. })
-            && matches!(&prepared.writer, OutputWriter::RequestExecution { execution_generation }
+    if !(matches!(&prepared.source, OutputSource::ProviderTurn { .. })
+        && matches!(&prepared.writer, OutputWriter::RequestExecution { execution_generation }
                 if execution_generation == generation)
-            && prepared.ordinal.is_some()
-            && prepared.close.is_none(),
-        "raw append requires an open provider flush and its exact request writer"
-    );
+        && prepared.ordinal.is_some()
+        && prepared.close.is_none())
+    {
+        return Err(CanonicalStreamError::RawAppendRequiresOpenProviderFlush);
+    }
     let request = load_request_in_txn(txn, prepared).await?;
     let mut records = load_source_in_txn(txn, prepared).await?;
     let replays = records
@@ -1247,7 +1375,9 @@ async fn append_in_txn_with_time(
         .filter(|row| row.segment == *prepared)
         .collect::<Vec<_>>();
     if !replays.is_empty() {
-        anyhow::ensure!(replays.len() == 1, "ambiguous immutable segment replay");
+        if replays.len() != 1 {
+            return Err(CanonicalStreamError::AmbiguousImmutableSegmentReplay);
+        }
         return Ok(replays[0].doc_id.clone());
     }
     if records.iter().any(|row| row.segment.close.is_some()) {
@@ -1256,19 +1386,19 @@ async fn append_in_txn_with_time(
     let owner = request
         .execution_generation
         .as_deref()
-        .context("request generation missing")?;
+        .ok_or(CanonicalStreamError::RequestGenerationMissing)?;
     let deadline = DateTime::parse_from_rfc3339(
         request
             .execution_lease_expires_at
             .as_deref()
-            .context("request lease deadline missing")?,
+            .ok_or(CanonicalStreamError::RequestLeaseDeadlineMissing)?,
     )?
     .timestamp_millis();
     if !authorize_output_append(
         LeaseObservation {
             request: request
                 .lifecycle_state
-                .context("request lifecycle missing")?,
+                .ok_or(CanonicalStreamError::RequestLifecycleMissing)?,
             generation: owner,
             deadline_ms: deadline,
         },
@@ -1325,20 +1455,20 @@ async fn load_request_in_txn(
         ))
         .await?;
     let mut rows: Vec<AgentRequestRow> = crate::graphql::rows(&response, "AgentRequest")?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "provider output request is missing or ambiguous"
-    );
+    if rows.len() != 1 {
+        return Err(CanonicalStreamError::ProviderOutputRequestMissingAmbiguous);
+    }
     let row = rows.pop().expect("one request checked");
-    anyhow::ensure!(
-        row.doc_id.as_deref() == Some(prepared.request_doc_id.as_str())
-            && row.node_did.as_deref() == Some(prepared.node_did.as_str())
-            && row.requester_did == prepared.requester_did
-            && row.session_id.as_deref() == Some(prepared.session_id.as_str()),
-        "provider segment crossed its request owner or session"
-    );
+    if !(row.doc_id.as_deref() == Some(prepared.request_doc_id.as_str())
+        && row.node_did.as_deref() == Some(prepared.node_did.as_str())
+        && row.requester_did == prepared.requester_did
+        && row.session_id.as_deref() == Some(prepared.session_id.as_str()))
+    {
+        return Err(CanonicalStreamError::ProviderSegmentCrossedRequestOwnerSession);
+    }
     validate_source_purpose(
-        row.purpose.context("output request purpose missing")?,
+        row.purpose
+            .ok_or(CanonicalStreamError::OutputRequestPurposeMissing)?,
         &prepared.source,
     )?;
     Ok(row)
@@ -1352,10 +1482,9 @@ pub(crate) fn validate_source_purpose(
         OutputSource::ProviderTurn { scope, .. } => scope.kind.request_purpose(),
         _ => gents_protocol::request_admission::RequestPurpose::Normal,
     };
-    anyhow::ensure!(
-        purpose == expected,
-        "output source does not match its request purpose"
-    );
+    if purpose != expected {
+        return Err(CanonicalStreamError::OutputSourceDoesNotMatchRequest);
+    }
     Ok(())
 }
 
@@ -1376,7 +1505,7 @@ async fn load_source_in_txn(
         .as_ref()
         .and_then(|data| data.get("AgentOutputSegment"))
         .and_then(serde_json::Value::as_array)
-        .context("source query omitted rows")?;
+        .ok_or(CanonicalStreamError::SourceQueryOmittedRows)?;
     crate::session::canonical_rows::decode_scoped_request_output_segments(
         rows,
         &prepared.node_did,

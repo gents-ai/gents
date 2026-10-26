@@ -23,6 +23,10 @@ pub enum RecoveryError {
     MissingAttempts,
     #[error("terminal AgentRequest terminal_redrive_attempts must fit in u32")]
     AttemptsOutOfRange(#[source] std::num::TryFromIntError),
+    #[error(transparent)]
+    DurableTrigger(#[from] crate::trigger_engine::durable::DurableTriggerError),
+    #[error(transparent)]
+    Lifecycle(#[from] crate::lifecycle::LifecycleError),
 }
 
 impl crate::config_client::TransactionFailure for RecoveryError {
@@ -55,7 +59,7 @@ impl RequestLifecycle {
     pub async fn recover_all(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
-    ) -> anyhow::Result<RecoveryReport> {
+    ) -> Result<RecoveryReport> {
         let active = recover_active_requests(node, node_did).await?;
         crate::trigger_engine::durable::recover_outcomes(node, node_did).await?;
         let background_wakes_redriven = Self::redrive_failed_background_wakeups(node, node_did)
@@ -249,7 +253,7 @@ impl RequestLifecycle {
     pub async fn repair_terminal_requests(
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
-    ) -> anyhow::Result<TerminalRepairReport> {
+    ) -> Result<TerminalRepairReport> {
         Ok(recover_active_requests(node, node_did).await?.requests)
     }
 }
@@ -257,7 +261,7 @@ impl RequestLifecycle {
 async fn recover_active_requests(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
-) -> anyhow::Result<ActiveRequestRecoveryReport> {
+) -> Result<ActiveRequestRecoveryReport> {
     let active_states = RequestLifecycleState::graphql_list([
         RequestLifecycleState::Claimed,
         RequestLifecycleState::Processing,
@@ -386,7 +390,7 @@ async fn recover_active_requests(
             Ok(canonical_recovery::RecoveryResult::Lost) => {
                 report.requests.awaiting_outcome += 1;
             }
-            Err(error) if definitive_output_corruption(error.as_ref()) => {
+            Err(error) if definitive_output_corruption(&error) => {
                 // Failed recovery rolled back. Revoke only the same observed
                 // lease tuple; a renewal/recovery winner makes this lose. This
                 // metadata-only escape never repairs or chooses payload twins.

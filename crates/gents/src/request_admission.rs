@@ -40,7 +40,7 @@ pub enum RequestReceiptError {
 }
 
 #[derive(Debug)]
-pub(crate) enum AgentRequestAdmissionError {
+pub enum AgentRequestAdmissionError {
     Denied(anyhow::Error),
     Unavailable(anyhow::Error),
 }

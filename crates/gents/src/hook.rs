@@ -1383,8 +1383,10 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
             ),
             "request deadline expired before steering intake"
         );
-        crate::lifecycle::queue::steering_inputs(&self.node, &source.request, &source.verifier)
-            .await
+        Ok(
+            crate::lifecycle::queue::steering_inputs(&self.node, &source.request, &source.verifier)
+                .await?,
+        )
     }
 
     async fn finish_steering_snapshot(

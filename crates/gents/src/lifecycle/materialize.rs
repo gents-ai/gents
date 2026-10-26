@@ -1,5 +1,4 @@
 use super::*;
-use anyhow::Context;
 
 #[derive(Debug, Clone)]
 pub struct EnqueuedAgentRequest {
@@ -88,14 +87,16 @@ async fn resolve_created_agent_request_doc_id(
     let rows: Vec<gents_protocol::row::AgentRequestRow> =
         crate::graphql::rows(&query_resp, "AgentRequest")?;
     if rows.len() != 1 {
-        anyhow::bail!(
-            "{missing_doc_id_error}: request_id lookup returned {} documents",
-            rows.len()
-        );
+        return Err(LifecycleError::RequestIdLookupReturnedDocuments {
+            missing_doc_id_error: missing_doc_id_error.to_string(),
+            rows_len: rows.len().to_string(),
+        });
     }
     rows.first()
         .and_then(|row| row.doc_id.as_deref())
-        .ok_or_else(|| anyhow::anyhow!("{missing_doc_id_error}"))
+        .ok_or_else(|| LifecycleError::Invalid {
+            missing_doc_id_error: missing_doc_id_error.to_string(),
+        })
         .map(str::to_string)
 }
 
@@ -148,7 +149,9 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
         return publish_graph_root_request(node, actor, &create).await;
     }
     let escaped_request_id = escape_graphql_string(&request_id);
-    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
+    let mutation = create
+        .graphql_mutation()
+        .map_err(|message| LifecycleError::RequestFields { message })?;
     let mutation = &mutation;
 
     let response = crate::config_client::ConfigAccess::transact_local_write(
@@ -181,7 +184,9 @@ async fn publish_graph_root_request(
     actor: ::identity::Did,
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<EnqueuedAgentRequest> {
-    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
+    let mutation = create
+        .graphql_mutation()
+        .map_err(|message| LifecycleError::RequestFields { message })?;
     let mutation = &mutation;
     let doc_id = crate::config_client::ConfigAccess::transact_local_write(
         node,
@@ -191,7 +196,7 @@ async fn publish_graph_root_request(
             Box::pin(async move {
                 crate::graph_pipeline::fence_graph_root_request_in_txn(txn, create).await?;
                 let response = txn.execute(mutation).await?;
-                Ok::<_, anyhow::Error>(crate::graphql::created_doc_id(&response, "AgentRequest")?)
+                Ok::<_, LifecycleError>(crate::graphql::created_doc_id(&response, "AgentRequest")?)
             })
         },
     )
@@ -527,14 +532,12 @@ pub(crate) async fn write_pending_auxiliary_request(
     valid_until: Option<String>,
 ) -> Result<AgentRequest> {
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
-    anyhow::ensure!(
-        parent.purpose == RequestPurpose::Normal && purpose.is_auxiliary(),
-        "auxiliary requests require an ordinary parent"
-    );
-    anyhow::ensure!(
-        purpose != RequestPurpose::AccessReview || valid_until.is_some(),
-        "access review requires finite validity"
-    );
+    if !(parent.purpose == RequestPurpose::Normal && purpose.is_auxiliary()) {
+        return Err(LifecycleError::AuxiliaryRequestsRequireOrdinaryParent);
+    }
+    if !(purpose != RequestPurpose::AccessReview || valid_until.is_some()) {
+        return Err(LifecycleError::AccessReviewRequiresFiniteValidity);
+    }
     let identity = RequestIdentity {
         request_id: uuid::Uuid::new_v4().to_string(),
         node_did: parent.node_did.clone(),
@@ -559,7 +562,7 @@ pub(crate) async fn write_pending_auxiliary_request(
     let create = build_signed_request(spec, RequestSigner::RegisteredTarget).await?;
     let mutation = create
         .graphql_mutation_selecting(crate::watcher::AGENT_REQUEST_FIELDS)
-        .map_err(anyhow::Error::msg)?;
+        .map_err(|message| LifecycleError::RequestFields { message })?;
     let response = crate::config_client::ConfigAccess::write_local_response(
         node,
         "lifecycle.materialize_auxiliary",
@@ -567,7 +570,7 @@ pub(crate) async fn write_pending_auxiliary_request(
     )
     .await?;
     crate::watcher::agent_request_from_mutation_response(&response, "create_AgentRequest")?
-        .context("auxiliary request creation omitted its exact durable request")
+        .ok_or(LifecycleError::AuxiliaryRequestCreationOmittedExactDurable)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -780,9 +783,9 @@ pub async fn activate_workspace_bound_request(
         if activation_already_visible {
             return Ok(());
         }
-        anyhow::bail!(
-            "workspace-bound AgentRequest {request_doc_id} was not staged for activation"
-        );
+        return Err(LifecycleError::WorkspaceBoundAgentRequestWasNotStaged {
+            request_doc_id: request_doc_id.to_string(),
+        });
     }
     Ok(())
 }
@@ -873,7 +876,9 @@ impl RequestLifecycle {
         match lifecycle.claim_with_identity().await? {
             ClaimOutcome::Claimed => Ok(lifecycle),
             outcome => {
-                anyhow::bail!("newly materialized signed AgentRequest was not claimed: {outcome:?}")
+                return Err(LifecycleError::NewlyMaterializedSignedAgentRequestWasNot {
+                    outcome: format!("{:?}", outcome),
+                })
             }
         }
     }
@@ -917,7 +922,9 @@ impl RequestLifecycle {
             )
         };
         let create = build_signed_request(spec, RequestSigner::Identity(identity.as_ref())).await?;
-        let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
+        let mutation = create
+            .graphql_mutation()
+            .map_err(|message| LifecycleError::RequestFields { message })?;
         let resp = crate::config_client::ConfigAccess::write_local(
             &node,
             "lifecycle.materialize_before_claim",
@@ -1026,7 +1033,7 @@ async fn labeled_session_rows_in_txn(
         .await?;
     let rows = response["data"]["AgentSession"]
         .as_array()
-        .context("AgentSession query omitted rows")?;
+        .ok_or(LifecycleError::AgentSessionQueryOmittedRows)?;
     let mut decoded = Vec::new();
     let mut undecodable = Vec::new();
     for row in rows {
@@ -1069,7 +1076,7 @@ pub(super) async fn apply_request_session_projection(
 ) -> Result<()> {
     let rows = labeled_session_rows_in_txn(txn, request).await?;
     if let Some(error) = rows.undecodable.into_iter().next() {
-        return Err(LifecycleError::SessionRowUndecodable(error).into());
+        return Err(LifecycleError::SessionRowUndecodable(error));
     }
     if rows.decoded.len() > 1 {
         return Err(ClaimAdmissionError::SessionScopeMismatch {
@@ -1121,7 +1128,7 @@ pub(super) async fn apply_request_session_projection(
         request.requester_did.as_deref(),
     )
     .await?
-    .context("claimed session disappeared")?;
+    .ok_or(LifecycleError::ClaimedSessionDisappeared)?;
     let facts = session::load_scoped_request_facts_in_txn(txn, &owner.session, false).await?;
     let incoming = facts
         .iter()
@@ -1129,7 +1136,7 @@ pub(super) async fn apply_request_session_projection(
             fact.observed.request_doc_id == request.doc_id
                 && fact.observed.request_id == request.request_id
         })
-        .context("claimed request missing from its exact session scope")?;
+        .ok_or(LifecycleError::ClaimedRequestMissingExactSessionScope)?;
     let advanced =
         session::advance_session_request_observation_in_txn(txn, incoming, &request.content, now)
             .await?;
@@ -1197,7 +1204,7 @@ async fn project_refused_request_onto_session_in_txn(
         request.requester_did.as_deref(),
     )
     .await?
-    .context("refused session disappeared")?;
+    .ok_or(LifecycleError::RefusedSessionDisappeared)?;
     let incoming = async {
         let facts = session::load_scoped_request_facts_in_txn(txn, &owner.session, false).await?;
         facts
@@ -1207,7 +1214,7 @@ async fn project_refused_request_onto_session_in_txn(
                     && fact.observed.request_id == request.request_id
             })
             .cloned()
-            .context("refused request missing from its exact session scope")
+            .ok_or(LifecycleError::RefusedRequestMissingExactSessionScope)
     }
     .await;
     let incoming = match incoming {
@@ -1432,14 +1439,14 @@ pub async fn supersede_trigger_requests_in_txn(
     ) {{ _docID request_id }} }}"#, escape_graphql_string(&now))).await?;
     let pending = response["data"]["update_AgentRequest"]
         .as_array()
-        .context("supersession omitted pending requests")?;
+        .ok_or(LifecycleError::SupersessionOmittedPendingRequests)?;
     for row in pending {
         crate::trigger_engine::durable::publish_request_outcome(
             txn,
             owner,
             row["request_id"]
                 .as_str()
-                .context("superseded request lacks ID")?,
+                .ok_or(LifecycleError::SupersededRequestLacksID)?,
             "superseded",
             "newer trigger fire",
             &now,
@@ -1458,17 +1465,17 @@ pub async fn supersede_trigger_requests_in_txn(
     let active: Vec<gents_protocol::row::AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;
     for row in &active {
-        anyhow::ensure!(
-            super::execution_lease::stage_revoke_execution_preserving_output(
-                txn,
-                row,
-                RequestTerminalOutcome::Superseded,
-                "superseded by a newer trigger fire",
-            )
-            .await?
-                == TerminalizeResult::Won,
-            "execution changed during atomic trigger supersession",
-        );
+        if super::execution_lease::stage_revoke_execution_preserving_output(
+            txn,
+            row,
+            RequestTerminalOutcome::Superseded,
+            "superseded by a newer trigger fire",
+        )
+        .await?
+            != TerminalizeResult::Won
+        {
+            return Err(LifecycleError::ExecutionChangedDuringAtomicTriggerSupersession);
+        }
     }
     Ok(pending.len() + active.len())
 }
@@ -1492,30 +1499,28 @@ async fn stage_task_delivery_with_receipt(
 ) -> Result<TaskDeliveryAdmission> {
     if fresh {
         if create.caused_by_trigger_kind.as_deref() == Some("event") {
-            anyhow::ensure!(
-                create.caused_by_trigger_id.as_deref() == Some(fire.identity.trigger_id.as_str()),
-                "event request and receipt trigger identity disagree"
-            );
+            if create.caused_by_trigger_id.as_deref() != Some(fire.identity.trigger_id.as_str()) {
+                return Err(LifecycleError::EventRequestReceiptTriggerIdentityDisagree);
+            }
             crate::config_client::event_source_cursor::validate_event_admission(txn, fire).await?;
         }
-        anyhow::ensure!(
-            create.node_did == fire.identity.owner_did
-                && create.request_id == fire.request_id
-                && create.session_id == fire.session_id,
-            "Task receipt and signed request identity disagree"
-        );
-        anyhow::ensure!(
-            !fire.goal_assignment_applied,
-            "a Task admission cannot apply its Goal assignment"
-        );
-        anyhow::ensure!(
-            !fire.emit_outcome
-                || fire
-                    .source_handoff_id
-                    .as_deref()
-                    .is_some_and(|id| !id.trim().is_empty()),
-            "outcome-enabled Task requires its source handoff identity"
-        );
+        if !(create.node_did == fire.identity.owner_did
+            && create.request_id == fire.request_id
+            && create.session_id == fire.session_id)
+        {
+            return Err(LifecycleError::TaskReceiptSignedRequestIdentityDisagree);
+        }
+        if fire.goal_assignment_applied {
+            return Err(LifecycleError::TaskAdmissionCannotApplyGoalAssignment);
+        }
+        if !(!fire.emit_outcome
+            || fire
+                .source_handoff_id
+                .as_deref()
+                .is_some_and(|id| !id.trim().is_empty()))
+        {
+            return Err(LifecycleError::OutcomeEnabledTaskRequiresSourceHandoff);
+        }
         match &fire.goal_id {
             Some(goal_id) => {
                 crate::goal::validate_task_goal_identity_in_txn(
@@ -1526,21 +1531,22 @@ async fn stage_task_delivery_with_receipt(
                     create.input.goal_assignment.as_ref(),
                 )
                 .await?;
-                anyhow::ensure!(
-                    fire.goal_objective
-                        .as_deref()
-                        .is_some_and(|objective| !objective.trim().is_empty()),
-                    "Goal-backed Task requires an objective"
-                );
-                anyhow::ensure!(
-                    fire.goal_token_budget.is_none_or(|budget| budget > 0),
-                    "Task Goal budget must be positive"
-                );
+                if !(fire
+                    .goal_objective
+                    .as_deref()
+                    .is_some_and(|objective| !objective.trim().is_empty()))
+                {
+                    return Err(LifecycleError::GoalBackedTaskRequiresObjective);
+                }
+                if !fire.goal_token_budget.is_none_or(|budget| budget > 0) {
+                    return Err(LifecycleError::TaskGoalBudgetMustPositive);
+                }
             }
-            None => anyhow::ensure!(
-                fire.goal_objective.is_none() && fire.goal_token_budget.is_none(),
-                "ordinary Task receipt cannot declare a Goal assignment"
-            ),
+            None => {
+                if !(fire.goal_objective.is_none() && fire.goal_token_budget.is_none()) {
+                    return Err(LifecycleError::OrdinaryTaskReceiptCannotDeclareGoal);
+                }
+            }
         }
         let manual_label = create.caused_by_trigger_kind.as_deref() == Some("manual")
             && create.caused_by_trigger_id.is_none()
@@ -1557,41 +1563,39 @@ async fn stage_task_delivery_with_receipt(
         )
         .await?;
         if continue_existing {
-            anyhow::ensure!(
-                crate::trigger_engine::durable::resolve_session_id(
-                    &fire.identity,
-                    Some(&create.session_id),
-                    session.is_some()
-                )
-                .is_some(),
-                "Task target session is missing or belongs to another owner"
-            );
+            if !(crate::trigger_engine::durable::resolve_session_id(
+                &fire.identity,
+                Some(&create.session_id),
+                session.is_some(),
+            )
+            .is_some())
+            {
+                return Err(LifecycleError::TaskTargetSessionMissingBelongsAnother);
+            }
         } else {
-            anyhow::ensure!(
-                manual_label
-                    || crate::trigger_engine::durable::resolve_session_id(
-                        &fire.identity,
-                        None,
-                        false
-                    )
+            if !(manual_label
+                || crate::trigger_engine::durable::resolve_session_id(&fire.identity, None, false)
                     .as_deref()
-                        == Some(fire.session_id.as_str()),
-                "new Task session must derive from its fire identity"
-            );
+                    == Some(fire.session_id.as_str()))
+            {
+                return Err(LifecycleError::NewTaskSessionMustDeriveFire);
+            }
         }
         if let Some(session) = session {
-            anyhow::ensure!(
-                session.session.agent_id == create.agent_id,
-                "Task target session has a different agent"
-            );
-            anyhow::ensure!(
-                session.session.closed_at.is_none(),
-                "Task target session is closed"
-            );
+            if session.session.agent_id != create.agent_id {
+                return Err(LifecycleError::TaskTargetSessionHasDifferentAgent);
+            }
+            if !session.session.closed_at.is_none() {
+                return Err(LifecycleError::TaskTargetSessionClosed);
+            }
         }
         crate::graph_pipeline::fence_graph_root_request_in_txn(txn, create).await?;
-        txn.execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
-            .await?;
+        txn.execute(
+            &create
+                .graphql_mutation()
+                .map_err(|message| LifecycleError::RequestFields { message })?,
+        )
+        .await?;
     }
     let query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}}}) {{ _docID session_id }} }}",
         escape_graphql_string(&fire.identity.owner_did), escape_graphql_string(&fire.request_id));
@@ -1599,24 +1603,22 @@ async fn stage_task_delivery_with_receipt(
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(serde_json::Value::as_array)
-        .context("admitted request query omitted rows")?;
-    anyhow::ensure!(
-        rows.len() == 1,
-        "fire receipt requires exactly one admitted request"
-    );
+        .ok_or(LifecycleError::AdmittedRequestQueryOmittedRows)?;
+    if rows.len() != 1 {
+        return Err(LifecycleError::FireReceiptRequiresExactlyOneAdmitted);
+    }
     let session_id = rows[0]["session_id"]
         .as_str()
-        .context("admitted request lacks session ID")?;
-    anyhow::ensure!(
-        !fresh || session_id == fire.session_id,
-        "admitted request changed its fire's session"
-    );
+        .ok_or(LifecycleError::AdmittedRequestLacksSessionID)?;
+    if !(!fresh || session_id == fire.session_id) {
+        return Err(LifecycleError::AdmittedRequestChangedFireSSession);
+    }
     Ok(TaskDeliveryAdmission {
         duplicate: !fresh,
         request: EnqueuedAgentRequest {
             doc_id: rows[0]["_docID"]
                 .as_str()
-                .context("admitted request lacks document ID")?
+                .ok_or(LifecycleError::AdmittedRequestLacksDocumentID)?
                 .into(),
             request_id: fire.request_id.clone(),
             session_id: session_id.into(),

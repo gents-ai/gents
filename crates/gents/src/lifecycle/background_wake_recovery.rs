@@ -99,7 +99,7 @@ impl RequestLifecycle {
                     tracing::warn!(
                         request_id = %candidate.request_id,
                         session_id = required_str(candidate.session_id.as_deref(), "session_id")?,
-                        error = %gents_protocol::error_chain::ErrorChain(error.as_ref()),
+                        error = %gents_protocol::error_chain::ErrorChain(&error),
                         "failed to redrive background-completion wake"
                     );
                 }
@@ -261,7 +261,7 @@ fn retry_is_due(
 async fn redrive_one(
     node: &std::sync::Arc<EmbeddedNode>,
     candidate: &AgentRequestRow,
-) -> anyhow::Result<RedriveOutcome> {
+) -> Result<RedriveOutcome> {
     let request_id = uuid::Uuid::new_v4().to_string();
     let request_id = &request_id;
     crate::config_client::ConfigAccess::transact_local_idempotent(
@@ -280,7 +280,7 @@ async fn redrive_in_transaction(
     txn: &ConfigApplyTxn<'_>,
     candidate: &AgentRequestRow,
     request_id: &str,
-) -> anyhow::Result<RedriveOutcome> {
+) -> Result<RedriveOutcome> {
     let retry_key = format!(
         "retry:doc:{}",
         required_str(candidate.doc_id.as_deref(), "_docID")?
@@ -414,7 +414,7 @@ async fn redrive_mutation(
     request_id: &str,
     retry_key: &str,
     hop: u32,
-) -> anyhow::Result<String> {
+) -> Result<String> {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let retry_root = candidate
         .retry_root_request

@@ -19,7 +19,7 @@ pub(super) struct SessionRequestFields<'a> {
 pub(super) async fn session_request_create_mutation(
     parent: &AgentRequest,
     fields: SessionRequestFields<'_>,
-) -> anyhow::Result<String> {
+) -> Result<String> {
     session_request_create_mutation_at_hop(parent, parent.request_hop, fields).await
 }
 
@@ -27,7 +27,7 @@ pub(super) async fn session_request_create_mutation_at_hop(
     parent: &AgentRequest,
     hop: u32,
     fields: SessionRequestFields<'_>,
-) -> anyhow::Result<String> {
+) -> Result<String> {
     let SessionRequestFields {
         agent_id,
         content,
@@ -37,10 +37,9 @@ pub(super) async fn session_request_create_mutation_at_hop(
         created_at,
         retry_key,
     } = fields;
-    anyhow::ensure!(
-        !parent.request_id.trim().is_empty() && !parent.doc_id.trim().is_empty(),
-        "cannot enqueue runtime control continuation from an unbound parent request"
-    );
+    if !(!parent.request_id.trim().is_empty() && !parent.doc_id.trim().is_empty()) {
+        return Err(QueueError::CannotEnqueueRuntimeControlContinuationUnbound);
+    }
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
             &parent.node_did,
@@ -83,5 +82,7 @@ pub(super) async fn session_request_create_mutation_at_hop(
         )
     };
     let create = build_signed_request(spec, RequestSigner::RegisteredTarget).await?;
-    create.graphql_mutation().map_err(anyhow::Error::msg)
+    create
+        .graphql_mutation()
+        .map_err(|message| QueueError::RequestFields { message })
 }

@@ -1943,6 +1943,12 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                                 error.as_ref(),
                             )
                             .is_some()
+                                || matches!(
+                                    find_source::<crate::lifecycle::TerminalToolsError>(
+                                        error.as_ref()
+                                    ),
+                                    Some(crate::lifecycle::TerminalToolsError::Accounting(_))
+                                )
                                 || owner_error_is(
                                     error.as_ref(),
                                     "auxiliary source has no unique closure",
@@ -2145,7 +2151,7 @@ impl NativeCanonicalExecution {
             Ok(None) => {}
             Ok(Some(_)) => return Err("auxiliary close published a header".into()),
             Err(error)
-                if find_source::<crate::streaming::canonical::ProviderCloseRejection>(
+                if crate::streaming::canonical::provider_rejection::<crate::streaming::canonical::ProviderCloseRejection>(
                     error.as_ref(),
                 )
                 .is_some()
@@ -2258,7 +2264,7 @@ impl NativeCanonicalExecution {
         let message_doc_id = match result {
             Ok(message_doc_id) => message_doc_id,
             Err(error)
-                if find_source::<crate::streaming::canonical::ProviderCloseRejection>(
+                if crate::streaming::canonical::provider_rejection::<crate::streaming::canonical::ProviderCloseRejection>(
                     error.as_ref(),
                 )
                 .is_some()
@@ -2435,7 +2441,7 @@ impl NativeCanonicalExecution {
         let published = match published {
             Ok(value) => value,
             Err(error)
-                if find_source::<crate::streaming::canonical::ProviderCloseRejection>(
+                if crate::streaming::canonical::provider_rejection::<crate::streaming::canonical::ProviderCloseRejection>(
                     error.as_ref(),
                 )
                 .is_some() =>
@@ -2443,7 +2449,7 @@ impl NativeCanonicalExecution {
                 return self.observe(false).await;
             }
             Err(error)
-                if find_source::<crate::streaming::canonical::ProviderReplayRejection>(
+                if crate::streaming::canonical::provider_rejection::<crate::streaming::canonical::ProviderReplayRejection>(
                     error.as_ref(),
                 )
                 .is_some()

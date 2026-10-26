@@ -24,7 +24,7 @@ use crate::session::canonical_rows::{
 };
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum CanonicalRecoveryError {
+pub enum CanonicalRecoveryError {
     #[error(transparent)]
     Config(#[from] ConfigClientError),
     #[error(transparent)]
@@ -69,6 +69,24 @@ pub(crate) enum CanonicalRecoveryError {
     AuxiliaryHeaderSelected,
     #[error("expired-generation recovery lost request CAS")]
     RequestCasLost,
+    #[error(transparent)]
+    CanonicalStream(#[from] crate::streaming::canonical::CanonicalStreamError),
+    #[error(transparent)]
+    DurableTrigger(#[from] crate::trigger_engine::durable::DurableTriggerError),
+    #[error(transparent)]
+    RecoverySelectionRejected(#[from] RecoverySelectionRejected),
+    #[error(transparent)]
+    SessionOutput(#[from] crate::session::SessionOutputError),
+    #[error(transparent)]
+    TerminalTools(#[from] crate::lifecycle::terminal_tools::TerminalToolsError),
+    #[error(transparent)]
+    Parse(#[from] chrono::ParseError),
+    #[error(transparent)]
+    Lifecycle(#[from] crate::lifecycle::LifecycleError),
+    #[error(transparent)]
+    Session(#[from] crate::session::SessionError),
+    #[error(transparent)]
+    RecoveryPlan(#[from] gents_protocol::output::recovery::RecoveryPlanError),
 }
 
 impl crate::config_client::TransactionFailure for CanonicalRecoveryError {
@@ -106,7 +124,7 @@ pub(crate) enum RecoverySelectionChoice {
 
 #[derive(Debug, thiserror::Error)]
 #[error("recovery terminal selection is not an exact reconstructable owned assistant header")]
-pub(crate) struct RecoverySelectionRejected;
+pub struct RecoverySelectionRejected;
 
 use crate::graphql::created_doc_id;
 
@@ -143,7 +161,7 @@ async fn validate_selection(
     headers: &[TranscriptMessageRow],
     row: &AgentRequestRow,
     selection: &TerminalOutput,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     if row
         .purpose
         .ok_or(CanonicalRecoveryError::PurposeMissing)?
@@ -243,7 +261,7 @@ pub(super) async fn recover_expired_generation(
     observed: &AgentRequestRow,
     expected_generation: &str,
     expected_expiry: &str,
-) -> anyhow::Result<RecoveryResult> {
+) -> Result<RecoveryResult> {
     recover_expired_generation_with_facts(
         node,
         observed,
@@ -270,7 +288,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
     observed_now: DateTime<Utc>,
     selection_choice: Option<RecoverySelectionChoice>,
     expected_outcome: Option<RequestLifecycleState>,
-) -> anyhow::Result<RecoveryResult> {
+) -> Result<RecoveryResult> {
     let request_doc_id = observed
         .doc_id
         .as_deref()
@@ -578,7 +596,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
             if !is_auxiliary {
                 session::refresh_session_request_observation_in_txn(txn, agent, row.requester_did.as_deref(), session_id, &request_doc_id, &row.request_id, &timestamp).await?;
             }
-            Ok::<_, anyhow::Error>(RecoveryResult::Won { published: published.len() })
+            Ok::<_, CanonicalRecoveryError>(RecoveryResult::Won { published: published.len() })
         })},
     ).await
 }

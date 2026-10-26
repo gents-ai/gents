@@ -560,7 +560,7 @@ impl DefraStreamWriter {
         }
     }
 
-    pub(crate) async fn initialize_request_buffer(&self, request_doc_id: &str) -> Result<()> {
+    pub(crate) async fn initialize_request_buffer(&self, request_doc_id: &str) {
         self.buffers.lock().await.insert(
             request_doc_id.to_owned(),
             StreamBuffer {
@@ -569,7 +569,6 @@ impl DefraStreamWriter {
                 persisted: StreamBufferSnapshot::default(),
             },
         );
-        Ok(())
     }
 
     async fn flush_snapshot(&self, doc_id: &str, _snapshot: &StreamBufferSnapshot) -> Result<bool> {
@@ -681,9 +680,9 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
         message_doc_id: &str,
         pending_request_doc_ids: &[String],
     ) -> Result<bool> {
-        lifecycle
+        Ok(lifecycle
             .finish_natural_turn(message_doc_id, pending_request_doc_ids)
-            .await
+            .await?)
     }
 
     async fn start_provider_attempt(

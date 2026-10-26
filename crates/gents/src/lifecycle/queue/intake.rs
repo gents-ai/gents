@@ -59,7 +59,7 @@ pub(crate) async fn steering_snapshot(
     node: &std::sync::Arc<EmbeddedNode>,
     head: &AgentRequest,
     verifier: &crate::request_admission::AgentRequestAdmissionVerifier,
-) -> anyhow::Result<gents_loop::loop_stream::SteeringSnapshot> {
+) -> Result<gents_loop::loop_stream::SteeringSnapshot> {
     let rows = crate::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
@@ -99,7 +99,7 @@ pub(crate) async fn steering_inputs(
     node: &std::sync::Arc<EmbeddedNode>,
     head: &AgentRequest,
     verifier: &crate::request_admission::AgentRequestAdmissionVerifier,
-) -> anyhow::Result<Vec<gents_loop::loop_stream::FoldedPrompt>> {
+) -> Result<Vec<gents_loop::loop_stream::FoldedPrompt>> {
     Ok(steering_snapshot(node, head, verifier).await?.inputs)
 }
 

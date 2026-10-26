@@ -514,7 +514,7 @@ pub(super) async fn fail_routed_request(
         "",
     );
 
-    lifecycle.reject_admission(error_message).await
+    Ok(lifecycle.reject_admission(error_message).await?)
 }
 
 pub(in crate::agent) fn default_hostname() -> String {

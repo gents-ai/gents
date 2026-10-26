@@ -31,7 +31,9 @@ pub async fn run_startup_recovery_with_executions(
 ) -> StartupRecoveryOutcome {
     let tool_calls =
         ToolCallLifecycle::recover_all_with_executions(node, node_did, executions).await;
-    let requests = RequestLifecycle::recover_all(node, node_did).await;
+    let requests = RequestLifecycle::recover_all(node, node_did)
+        .await
+        .map_err(anyhow::Error::from);
     let inference_calls = InferenceCall::recover_all(node, node_did).await;
     let task_hooks = crate::task_hooks::recover_task_hook_records(
         node,

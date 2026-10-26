@@ -7,7 +7,7 @@ use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::session::canonical_rows::TranscriptMessageRow;
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ToolAccountingRejection {
+pub enum ToolAccountingRejection {
     #[error("foreground tool still running at normal request completion")]
     ForegroundRunning,
 }
@@ -24,7 +24,7 @@ struct ToolDocument {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum TerminalToolsError {
+pub enum TerminalToolsError {
     #[error("tool has ambiguous accepted header membership")]
     AmbiguousHeaderMembership,
     #[error("physical tool disagrees with accepted native intent")]
@@ -59,6 +59,18 @@ pub(crate) enum TerminalToolsError {
     },
     #[error("owned tool accounting lost lifecycle CAS")]
     LifecycleCasLost,
+    #[error(transparent)]
+    ConfigClient(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    GraphqlResponse(#[from] crate::graphql::GraphqlResponseError),
+    #[error(transparent)]
+    SessionOutput(#[from] crate::session::SessionOutputError),
+    #[error(transparent)]
+    ToolCallLifecycle(#[from] crate::tool_call_lifecycle::ToolCallLifecycleError),
+    #[error(transparent)]
+    ToolCallQuery(#[from] crate::tool_call_lifecycle::query::ToolCallQueryError),
+    #[error(transparent)]
+    Accounting(#[from] ToolAccountingRejection),
 }
 
 type Result<T, E = TerminalToolsError> = std::result::Result<T, E>;
@@ -115,7 +127,7 @@ pub(super) async fn account_tools_in_txn(
     generation: &str,
     completed: bool,
     timestamp: &str,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     let request_id = request
         .doc_id
         .as_deref()

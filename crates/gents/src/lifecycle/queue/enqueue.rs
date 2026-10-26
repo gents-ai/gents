@@ -1,5 +1,4 @@
 use super::*;
-use anyhow::Context;
 
 pub async fn enqueue_local_steering_request(
     node: &std::sync::Arc<EmbeddedNode>,
@@ -7,14 +6,15 @@ pub async fn enqueue_local_steering_request(
     parent_request_doc_id: &str,
     content: &str,
     input: RequestInput,
-) -> anyhow::Result<EnqueuedAgentRequest> {
+) -> Result<EnqueuedAgentRequest> {
     let parent = crate::request_binding::load_agent_request_by_doc_id(node, parent_request_doc_id)
         .await?
-        .with_context(|| format!("steering parent request {parent_request_doc_id} not found"))?;
-    anyhow::ensure!(
-        parent.request_id == parent_request_id,
-        "steering parent request changed logical binding"
-    );
+        .ok_or_else(|| QueueError::SteeringParentRequestNotFound {
+            parent_request_doc_id: parent_request_doc_id.to_string(),
+        })?;
+    if parent.request_id != parent_request_id {
+        return Err(QueueError::SteeringParentRequestChangedLogicalBinding);
+    }
     enqueue_steering_request(node, &parent, content, input).await
 }
 
@@ -23,21 +23,20 @@ pub(crate) async fn enqueue_steering_request(
     parent: &AgentRequest,
     content: &str,
     input: RequestInput,
-) -> anyhow::Result<EnqueuedAgentRequest> {
+) -> Result<EnqueuedAgentRequest> {
     let queue = input
         .queue
         .as_ref()
-        .context("atomic steering enqueue requires queue input")?;
-    anyhow::ensure!(
-        matches!(queue.source, QueueSource::Steering | QueueSource::User)
-            && queue.policy == QueuePolicy::Append
-            && queue.key.is_none(),
-        "atomic steering enqueue requires an unkeyed user or steering append"
-    );
-    anyhow::ensure!(
-        queue.background_completion_wake_version.is_none(),
-        "steering enqueue must not carry the background wake marker"
-    );
+        .ok_or(QueueError::AtomicSteeringEnqueueRequiresQueueInput)?;
+    if !(matches!(queue.source, QueueSource::Steering | QueueSource::User)
+        && queue.policy == QueuePolicy::Append
+        && queue.key.is_none())
+    {
+        return Err(QueueError::AtomicSteeringEnqueueRequiresUnkeyedUser);
+    }
+    if !queue.background_completion_wake_version.is_none() {
+        return Err(QueueError::SteeringEnqueueMustNotCarryBackground);
+    }
     let agent_id = parent_agent_id(parent)?;
     let request_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);

@@ -320,7 +320,7 @@ impl RequestLifecycle {
         &mut self,
         message_doc_id: &str,
         pending_request_doc_ids: &[String],
-    ) -> anyhow::Result<bool> {
+    ) -> Result<bool> {
         let generation = self.execution_generation()?.to_owned();
         let result = terminalize_execution_with_time(
             &self.node,
@@ -339,7 +339,7 @@ impl RequestLifecycle {
         )
         .await;
         match result {
-            Err(error) if error.is::<PendingQueueChanged>() => Ok(false),
+            Err(LifecycleError::PendingQueueChanged(_)) => Ok(false),
             Err(error) => Err(error),
             Ok(TerminalizeResult::Lost) => Err(ExecutionLeaseError::NaturalCompletionLost.into()),
             Ok(_) => {
@@ -354,7 +354,7 @@ impl RequestLifecycle {
         outcome: RequestTerminalOutcome,
         selection: TerminalOutput,
         reason: Option<&str>,
-    ) -> anyhow::Result<TerminalizeResult> {
+    ) -> Result<TerminalizeResult> {
         let generation = self.execution_generation()?.to_string();
         let result = terminalize_execution(
             &self.node,
@@ -384,7 +384,7 @@ pub(crate) async fn revoke_execution_generation(
     outcome: RequestTerminalOutcome,
     selection: TerminalOutput,
     reason: &str,
-) -> anyhow::Result<TerminalizeResult> {
+) -> Result<TerminalizeResult> {
     terminalize_execution(
         node,
         row.doc_id
@@ -415,7 +415,7 @@ pub(crate) async fn revoke_execution_preserving_output(
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,
     reason: &str,
-) -> anyhow::Result<TerminalizeResult> {
+) -> Result<TerminalizeResult> {
     terminalize_execution(
         node,
         row.doc_id
@@ -447,7 +447,7 @@ pub(crate) async fn revoke_execution_preserving_output_at(
     expected_generation: &str,
     fresh_generation: &str,
     now: DateTime<Utc>,
-) -> anyhow::Result<TerminalizeResult> {
+) -> Result<TerminalizeResult> {
     terminalize_execution_with_time(
         node,
         TerminalizeSpec {
@@ -480,7 +480,7 @@ async fn terminalize_execution(
     outcome: RequestTerminalOutcome,
     selection: Option<TerminalOutput>,
     reason: &str,
-) -> anyhow::Result<TerminalizeResult> {
+) -> Result<TerminalizeResult> {
     terminalize_execution_with_time(
         node,
         TerminalizeSpec {
@@ -505,7 +505,7 @@ pub(crate) async fn terminalize_owned_at(
     outcome: RequestTerminalOutcome,
     selection: TerminalOutput,
     now: DateTime<Utc>,
-) -> anyhow::Result<TerminalizeResult> {
+) -> Result<TerminalizeResult> {
     terminalize_execution_with_time(
         node,
         TerminalizeSpec {
@@ -536,7 +536,7 @@ struct TerminalizeSpec<'a> {
 async fn terminalize_execution_with_time(
     node: &std::sync::Arc<EmbeddedNode>,
     spec: TerminalizeSpec<'_>,
-) -> anyhow::Result<TerminalizeResult> {
+) -> Result<TerminalizeResult> {
     let fresh_generation = spec
         .fixture_fresh_generation
         .map_or_else(ExecutionGeneration::fresh, |generation| {
@@ -559,7 +559,7 @@ pub(super) async fn stage_revoke_execution_preserving_output(
     row: &AgentRequestRow,
     outcome: RequestTerminalOutcome,
     reason: &str,
-) -> anyhow::Result<TerminalizeResult> {
+) -> Result<TerminalizeResult> {
     terminalize_execution_in_txn(
         txn,
         &TerminalizeSpec {
@@ -593,7 +593,7 @@ async fn terminalize_execution_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     spec: &TerminalizeSpec<'_>,
     fresh_generation: &ExecutionGeneration,
-) -> anyhow::Result<TerminalizeResult> {
+) -> Result<TerminalizeResult> {
     let request_doc_id = spec.request_doc_id;
     let authority = spec.authority;
     let outcome = spec.outcome;
@@ -877,7 +877,7 @@ pub(super) fn validate_auxiliary_sources_decided(
     request_doc_id: &str,
     records: &[crate::session::canonical_rows::OutputSegmentRow],
     purpose: gents_protocol::request_admission::RequestPurpose,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     use gents_protocol::output::reconstruction::ObservedSegment;
     use gents_protocol::output::{OutputSource, SourceClose};
     let mut sources = Vec::new();
@@ -960,4 +960,4 @@ mod tests;
 
 #[derive(Debug, thiserror::Error)]
 #[error("pending input changed before natural completion")]
-struct PendingQueueChanged;
+pub struct PendingQueueChanged;

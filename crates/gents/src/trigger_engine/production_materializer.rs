@@ -570,6 +570,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 },
             )
             .await
+            .map_err(anyhow::Error::from)
         })
     }
 

@@ -466,9 +466,9 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
         if !case.expected.claimed_append_accepted {
             assert!(
                 matches!(
-                    claimed_append
-                        .unwrap_err()
-                        .downcast_ref::<canonical::ProviderAppendRejection>(),
+                    canonical::provider_rejection::<canonical::ProviderAppendRejection>(
+                        claimed_append.unwrap_err().as_ref()
+                    ),
                     Some(canonical::ProviderAppendRejection::LostLease)
                 ),
                 "{}: Claimed append failed outside the lease owner",
@@ -738,7 +738,9 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             let diagnostic = ErrorChain(error.as_ref()).to_string();
             assert!(
                 matches!(
-                    error.downcast_ref::<canonical::ProviderCloseRejection>(),
+                    canonical::provider_rejection::<canonical::ProviderCloseRejection>(
+                        error.as_ref()
+                    ),
                     Some(canonical::ProviderCloseRejection::WriterMismatch)
                 ),
                 "{}: stale close failed outside immutable writer check: {diagnostic}",

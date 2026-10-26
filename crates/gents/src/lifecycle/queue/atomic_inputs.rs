@@ -1,5 +1,4 @@
 use super::*;
-use anyhow::Context;
 
 use rapidhash::{HashMapExt, RapidHashMap};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
@@ -66,17 +65,17 @@ pub(crate) async fn persist_background_completion_with_message_canonical(
     existing_notification_doc_id: Option<&str>,
     native: &ToolNotificationPublication,
     wake: crate::lifecycle::RequestHopCause,
-) -> anyhow::Result<EnqueuedBackgroundCompletionInput> {
-    anyhow::ensure!(
-        queue.source == QueueSource::BackgroundCompletion && queue.policy == QueuePolicy::Coalesce,
-        "atomic background completion enqueue requires coalescing background queue input"
-    );
+) -> Result<EnqueuedBackgroundCompletionInput> {
+    if !(queue.source == QueueSource::BackgroundCompletion && queue.policy == QueuePolicy::Coalesce)
+    {
+        return Err(QueueError::AtomicBackgroundCompletionEnqueueRequiresCoalescing);
+    }
     let queue_key = queue
         .key
         .as_deref()
         .map(str::trim)
         .filter(|key| !key.is_empty())
-        .context("atomic background completion enqueue requires a queue key")?
+        .ok_or(QueueError::AtomicBackgroundCompletionEnqueueRequiresQueue)?
         .to_string();
 
     let gate = background_completion_gate(node, &parent.session_id, &parent.node_did, &queue_key);
@@ -148,7 +147,7 @@ pub(crate) async fn persist_background_completion_with_message(
     wake_content: &str,
     queue: RequestQueue,
     existing_notification_doc_id: Option<&str>,
-) -> anyhow::Result<EnqueuedBackgroundCompletionInput> {
+) -> Result<EnqueuedBackgroundCompletionInput> {
     persist_background_completion_with_message_waking(
         node,
         parent,
@@ -173,7 +172,7 @@ pub(crate) async fn persist_background_completion_with_message_waking(
     queue: RequestQueue,
     existing_notification_doc_id: Option<&str>,
     wake: crate::lifecycle::RequestHopCause,
-) -> anyhow::Result<EnqueuedBackgroundCompletionInput> {
+) -> Result<EnqueuedBackgroundCompletionInput> {
     use gents_protocol::output::{
         OutputOutcome, OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose,
         StreamDeclaration, StreamPayload,
@@ -200,28 +199,30 @@ pub(crate) async fn persist_background_completion_with_message_waking(
                         .await?;
                     let tools = existing["data"]["AgentToolCall"]
                         .as_array()
-                        .context("fixture tool lookup")?;
+                        .ok_or(QueueError::FixtureToolLookup)?;
                     if tools.len() == 1 {
                         let tool_doc = tools[0]["_docID"]
                             .as_str()
-                            .context("fixture tool ID")?
+                            .ok_or(QueueError::FixtureToolID)?
                             .to_owned();
                         let source = OutputSource::ToolCall {
                             tool_call_doc_id: tool_doc.clone(),
                         };
                         let rows = existing["data"]["AgentOutputSegment"]
                             .as_array()
-                            .context("fixture segment lookup")?;
+                            .ok_or(QueueError::FixtureSegmentLookup)?;
                         let close = rows
                             .iter()
                             .map(crate::session::canonical_rows::decode_output_segment_row)
                             .collect::<Result<Vec<_>, _>>()?
                             .into_iter()
                             .find(|row| row.segment.source == source && row.segment.close.is_some())
-                            .context("fixture tool closure")?;
+                            .ok_or(QueueError::FixtureToolClosure)?;
                         return Ok((tool_doc, close.doc_id));
                     }
-                    anyhow::ensure!(tools.is_empty(), "ambiguous fixture tool authority");
+                    if !tools.is_empty() {
+                        return Err(QueueError::AmbiguousFixtureToolAuthority);
+                    }
                     let created = txn
                         .execute(&format!(
                             r#"mutation {{ create_AgentToolCall(input: {{
@@ -326,7 +327,7 @@ async fn background_completion_transaction_attempt(
     txn: &ConfigApplyTxn<'_>,
     parent: &AgentRequest,
     attempt: CompletionAttempt<'_>,
-) -> anyhow::Result<EnqueuedBackgroundCompletionInput> {
+) -> Result<EnqueuedBackgroundCompletionInput> {
     use sha2::{Digest, Sha256};
 
     let CompletionAttempt {
@@ -395,14 +396,12 @@ async fn background_completion_transaction_attempt(
         .as_array()
         .cloned()
         .unwrap_or_default();
-    anyhow::ensure!(
-        notifications.len() <= 1,
-        "background completion notification key resolved to multiple rows"
-    );
-    anyhow::ensure!(
-        existing_notification_doc_id.is_none() || notifications.len() == 1,
-        "observed background notification disappeared"
-    );
+    if notifications.len() > 1 {
+        return Err(QueueError::BackgroundCompletionNotificationKeyResolvedMultiple);
+    }
+    if !(existing_notification_doc_id.is_none() || notifications.len() == 1) {
+        return Err(QueueError::ObservedBackgroundNotificationDisappeared);
+    }
     if let Some(raw) = notifications.first() {
         let row = crate::session::canonical_rows::decode_transcript_message_row(raw)?;
         let (_, reconstructed) = crate::session::load_canonical_message_in_txn(
@@ -412,44 +411,44 @@ async fn background_completion_transaction_attempt(
             parent.requester_did.as_deref(),
         )
         .await?;
-        anyhow::ensure!(
-            row.message.message_key == message_key
-                && row.message.session_id == parent.session_id
-                && row.message.node_did == parent.node_did
-                && row.message.requester_did == parent.requester_did
-                && row.message.role == gents_protocol::output::MessageRole::User
-                && reconstructed == gents_protocol::message::Message::user(content)
-                && matches!(&row.message.publication,
+        if !(row.message.message_key == message_key
+            && row.message.session_id == parent.session_id
+            && row.message.node_did == parent.node_did
+            && row.message.requester_did == parent.requester_did
+            && row.message.role == gents_protocol::output::MessageRole::User
+            && reconstructed == gents_protocol::message::Message::user(content)
+            && matches!(&row.message.publication,
                     gents_protocol::output::MessagePublication::ToolDelivery { tool_call_doc_id }
-                    if tool_call_doc_id == &native.tool_call_doc_id),
-            "canonical background notification replay conflicts with authority, scope, or content"
-        );
+                    if tool_call_doc_id == &native.tool_call_doc_id))
+        {
+            return Err(QueueError::CanonicalBackgroundNotificationReplayConflictsAuthority);
+        }
         let doc_id = row
             .message
             .request_doc_id
             .as_deref()
-            .context("canonical notification replay has no request binding")?;
+            .ok_or(QueueError::CanonicalNotificationReplayHasNoRequest)?;
         let binding = txn.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_id session_id node_did input }} }}"#,
             escape_graphql_string(doc_id))).await?;
         let rows: Vec<AgentRequestRow> =
             serde_json::from_value(binding["data"]["AgentRequest"].clone())?;
-        anyhow::ensure!(
-            rows.len() == 1
-                && rows[0].node_did.as_deref() == Some(parent.node_did.as_str())
-                && rows[0].session_id.as_deref() == Some(parent.session_id.as_str()),
-            "canonical notification replay request binding is invalid"
-        );
+        if !(rows.len() == 1
+            && rows[0].node_did.as_deref() == Some(parent.node_did.as_str())
+            && rows[0].session_id.as_deref() == Some(parent.session_id.as_str()))
+        {
+            return Err(QueueError::CanonicalNotificationReplayRequestBindingInvalid);
+        }
         let bound = &rows[0];
-        anyhow::ensure!(
-            row_matches_coalesced_source_and_key(
-                bound,
-                QueueSource::BackgroundCompletion,
-                queue_key,
-            ),
-            "canonical notification replay is not bound to its coalesced wake"
-        );
+        if !row_matches_coalesced_source_and_key(
+            bound,
+            QueueSource::BackgroundCompletion,
+            queue_key,
+        ) {
+            return Err(QueueError::CanonicalNotificationReplayNotBoundCoalesced);
+        }
         let request = Some(
-            queue_row_to_enqueued_request(bound).context("canonical wake binding is incomplete")?,
+            queue_row_to_enqueued_request(bound)
+                .ok_or(QueueError::CanonicalWakeBindingIncomplete)?,
         );
         return Ok(EnqueuedBackgroundCompletionInput {
             request,
@@ -464,7 +463,7 @@ async fn background_completion_transaction_attempt(
     let wake_hop = crate::lifecycle::next_request_hop(wake, current_hop);
     let pending_rows: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["pending"].clone())
-            .context("decode pending AgentRequest rows")?;
+            .map_err(QueueError::DecodePendingAgentRequestRows)?;
     let assignments =
         crate::goal::load_request_assignments_in_txn(txn, &parent.node_did, &parent.session_id)
             .await?;
@@ -475,7 +474,7 @@ async fn background_completion_transaction_attempt(
             && assignments.scope(
                 row.doc_id
                     .as_deref()
-                    .context("pending wake has no physical identity")?,
+                    .ok_or(QueueError::PendingWakeWithoutIdentity)?,
             )? == parent_scope
         {
             matching = Some(row);
@@ -505,18 +504,18 @@ async fn background_completion_transaction_attempt(
     {
         let retry_key = row["retry_key"]
             .as_str()
-            .context("background completion generation row has no retry key")?;
+            .ok_or(QueueError::BackgroundCompletionGenerationRowHasNo)?;
         let generation = retry_key
             .strip_prefix(&retry_key_prefix)
-            .context("background completion generation row has the wrong scope")?
+            .ok_or(QueueError::BackgroundCompletionGenerationRowHasWrong)?
             .parse::<u64>()
-            .context("background completion generation row is malformed")?;
+            .map_err(QueueError::BackgroundCompletionGenerationRowMalformed)?;
         max_generation = Some(max_generation.map_or(generation, |current| current.max(generation)));
     }
     let next_generation = match max_generation {
         Some(generation) => generation
             .checked_add(1)
-            .context("background completion queue generation overflow")?,
+            .ok_or(QueueError::BackgroundCompletionQueueGenerationOverflow)?,
         None => 0,
     };
 
@@ -558,7 +557,7 @@ async fn background_completion_transaction_attempt(
                 let lower_doc_id = lower
                     .doc_id
                     .as_deref()
-                    .context("pending wake is missing _docID")?;
+                    .ok_or(QueueError::PendingWakeMissingDocID)?;
                 let superseded = txn
                     .execute(&super::coalescing::supersede_pending_mutation(
                         lower_doc_id,
@@ -620,7 +619,7 @@ async fn publish_native_tool_notification(
     message_key: &str,
     expected_content: &str,
     native: &ToolNotificationPublication,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     use crate::session::canonical_rows::{
         transcript_message_create_variables, CREATE_AGENT_MESSAGE_MUTATION,
     };
@@ -636,17 +635,14 @@ async fn publish_native_tool_notification(
     }}"#)).await?;
     let tools = facts["data"]["AgentToolCall"]
         .as_array()
-        .context("tool authority query omitted rows")?;
-    anyhow::ensure!(
-        tools.len() == 1
-            && tools[0]["lifecycle_state"]
-                .as_str()
-                .is_some_and(|state| matches!(
-                    state,
-                    "completed" | "failed" | "timedOut" | "cancelled"
-                )),
-        "background notification requires the exact terminal background tool"
-    );
+        .ok_or(QueueError::ToolAuthorityQueryOmittedRows)?;
+    if !(tools.len() == 1
+        && tools[0]["lifecycle_state"].as_str().is_some_and(|state| {
+            matches!(state, "completed" | "failed" | "timedOut" | "cancelled")
+        }))
+    {
+        return Err(QueueError::BackgroundNotificationRequiresExactTerminalBackground);
+    }
     let source = OutputSource::ToolCall {
         tool_call_doc_id: native.tool_call_doc_id.clone(),
     };
@@ -669,19 +665,18 @@ async fn publish_native_tool_notification(
         .iter()
         .filter(|row| row.segment.close.is_some())
         .collect::<Vec<_>>();
-    anyhow::ensure!(
-        closes.len() == 1,
-        "background notification requires one exact tool closure"
-    );
+    if closes.len() != 1 {
+        return Err(QueueError::BackgroundNotificationRequiresOneExactTool);
+    }
     let close = closes[0];
     let outcome = match close
         .segment
         .close
         .as_ref()
-        .context("tool closure missing outcome")?
+        .ok_or(QueueError::ToolClosureMissingOutcome)?
     {
         SourceClose::Closed { outcome, .. } => *outcome,
-        SourceClose::Retracted => anyhow::bail!("retracted tool output cannot be notified"),
+        SourceClose::Retracted => return Err(QueueError::RetractedToolOutputCannotNotified),
     };
     let observed = source_rows
         .iter()
@@ -704,10 +699,9 @@ async fn publish_native_tool_notification(
             parts: native.presentation.clone(),
         },
     )?;
-    anyhow::ensure!(
-        rendered == expected_content,
-        "canonical tool notification presentation does not reproduce rendered content"
-    );
+    if rendered != expected_content {
+        return Err(QueueError::CanonicalToolNotificationPresentationDoesNot);
+    }
     let message = TranscriptMessage {
         message_key: message_key.to_owned(),
         session_id: parent.session_id.clone(),

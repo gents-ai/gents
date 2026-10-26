@@ -20,7 +20,7 @@ pub async fn submit_pending_user_edit(
     node_did: &str,
     session_id: &str,
     edit: PendingQueueEdit,
-) -> anyhow::Result<SessionInputEditReceipt> {
+) -> Result<SessionInputEditReceipt> {
     let requester_did = signer.did();
     let replacements = super::prepare_pending_user_edit(
         access,
@@ -54,13 +54,14 @@ pub async fn submit_pending_user_steer(
     session_id: &str,
     edit: PendingQueueEdit,
     request_doc_id: &str,
-) -> anyhow::Result<SessionInputEditReceipt> {
-    anyhow::ensure!(
-        edit.messages
-            .first()
-            .is_some_and(|message| message.request_doc_id == request_doc_id),
-        "The steered message must lead its selected queue group."
-    );
+) -> Result<SessionInputEditReceipt> {
+    if !(edit
+        .messages
+        .first()
+        .is_some_and(|message| message.request_doc_id == request_doc_id))
+    {
+        return Err(QueueError::SteeredMessageMustLeadSelectedQueue);
+    }
     let deliveries = edit
         .messages
         .iter()
@@ -104,7 +105,7 @@ async fn submit_prepared_edit(
     session_id: &str,
     edit: PendingQueueEdit,
     replacements: Vec<gents_protocol::request_admission::AgentRequestCreate>,
-) -> anyhow::Result<SessionInputEditReceipt> {
+) -> Result<SessionInputEditReceipt> {
     let requester_did = signer.did();
     let now = chrono::Utc::now();
     let mut command = SessionInputEdit {
@@ -148,10 +149,11 @@ async fn submit_prepared_edit(
     let doc_id = crate::graphql::created_doc_id(&response, "AgentSessionInputEdit")?;
     match tokio::time::timeout(RECEIPT_WAIT, answered(access, &doc_id, &command)).await {
         Ok(receipt) => Ok(receipt?),
-        Err(_) => anyhow::bail!(
-            "Pending edit {} was saved and is waiting for the runtime; its outcome is not yet confirmed.",
-            command.command_id
-        ),
+        Err(_) => {
+            return Err(QueueError::PendingEditWasSavedWaitingRuntime {
+                command_id: command.command_id.to_string(),
+            })
+        }
     }
 }
 

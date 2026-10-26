@@ -122,7 +122,7 @@ pub(crate) fn sink_with_writer(
                     if state.active.is_some() {
                         return Err(AuxiliaryError::AttemptOverlaps.into());
                     }
-                    writer.initialize_request_buffer(&request.doc_id).await?;
+                    writer.initialize_request_buffer(&request.doc_id).await;
                     writer
                         .start_provider_attempt(
                             &request.doc_id,

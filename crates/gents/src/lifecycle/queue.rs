@@ -222,6 +222,118 @@ pub enum QueueError {
     RequestCreate { reason: &'static str },
     #[error("Runtime rejected pending edit: {reason}")]
     RuntimeRejectedEdit { reason: String },
+    #[error("atomic background completion enqueue requires coalescing background queue input")]
+    AtomicBackgroundCompletionEnqueueRequiresCoalescing,
+    #[error("ambiguous fixture tool authority")]
+    AmbiguousFixtureToolAuthority,
+    #[error("background completion notification key resolved to multiple rows")]
+    BackgroundCompletionNotificationKeyResolvedMultiple,
+    #[error("observed background notification disappeared")]
+    ObservedBackgroundNotificationDisappeared,
+    #[error(
+        "canonical background notification replay conflicts with authority, scope, or content"
+    )]
+    CanonicalBackgroundNotificationReplayConflictsAuthority,
+    #[error("canonical notification replay request binding is invalid")]
+    CanonicalNotificationReplayRequestBindingInvalid,
+    #[error("canonical notification replay is not bound to its coalesced wake")]
+    CanonicalNotificationReplayNotBoundCoalesced,
+    #[error("background notification requires the exact terminal background tool")]
+    BackgroundNotificationRequiresExactTerminalBackground,
+    #[error("background notification requires one exact tool closure")]
+    BackgroundNotificationRequiresOneExactTool,
+    #[error("retracted tool output cannot be notified")]
+    RetractedToolOutputCannotNotified,
+    #[error("canonical tool notification presentation does not reproduce rendered content")]
+    CanonicalToolNotificationPresentationDoesNot,
+    #[error("atomic background completion enqueue requires a queue key")]
+    AtomicBackgroundCompletionEnqueueRequiresQueue,
+    #[error("fixture tool lookup")]
+    FixtureToolLookup,
+    #[error("fixture tool ID")]
+    FixtureToolID,
+    #[error("fixture segment lookup")]
+    FixtureSegmentLookup,
+    #[error("fixture tool closure")]
+    FixtureToolClosure,
+    #[error("canonical notification replay has no request binding")]
+    CanonicalNotificationReplayHasNoRequest,
+    #[error("canonical wake binding is incomplete")]
+    CanonicalWakeBindingIncomplete,
+    #[error("decode pending AgentRequest rows")]
+    DecodePendingAgentRequestRows(#[source] serde_json::Error),
+    #[error("background completion generation row has no retry key")]
+    BackgroundCompletionGenerationRowHasNo,
+    #[error("background completion generation row has the wrong scope")]
+    BackgroundCompletionGenerationRowHasWrong,
+    #[error("background completion generation row is malformed")]
+    BackgroundCompletionGenerationRowMalformed(#[source] std::num::ParseIntError),
+    #[error("background completion queue generation overflow")]
+    BackgroundCompletionQueueGenerationOverflow,
+    #[error("pending wake is missing _docID")]
+    PendingWakeMissingDocID,
+    #[error("tool authority query omitted rows")]
+    ToolAuthorityQueryOmittedRows,
+    #[error("tool closure missing outcome")]
+    ToolClosureMissingOutcome,
+    #[error("The steered message must lead its selected queue group.")]
+    SteeredMessageMustLeadSelectedQueue,
+    #[error("Pending edit {command_id} was saved and is waiting for the runtime; its outcome is not yet confirmed.")]
+    PendingEditWasSavedWaitingRuntime { command_id: String },
+    #[error("steering parent request changed logical binding")]
+    SteeringParentRequestChangedLogicalBinding,
+    #[error("atomic steering enqueue requires an unkeyed user or steering append")]
+    AtomicSteeringEnqueueRequiresUnkeyedUser,
+    #[error("steering enqueue must not carry the background wake marker")]
+    SteeringEnqueueMustNotCarryBackground,
+    #[error("steering parent request {parent_request_doc_id} not found")]
+    SteeringParentRequestNotFound { parent_request_doc_id: String },
+    #[error("atomic steering enqueue requires queue input")]
+    AtomicSteeringEnqueueRequiresQueueInput,
+    #[error("Only the author can edit pending messages.")]
+    OnlyAuthorCanEditPendingMessages,
+    #[error("Replacement delivery count changed.")]
+    ReplacementDeliveryCountChanged,
+    #[error("Replacement request count changed.")]
+    ReplacementRequestCountChanged,
+    #[error("Replacement request identity is not fresh.")]
+    ReplacementRequestIdentityNotFresh,
+    #[error("Only the author can replace pending messages.")]
+    OnlyAuthorCanReplacePendingMessages,
+    #[error("Replacement request does not match the selected message.")]
+    ReplacementRequestDoesNotMatchSelected,
+    #[error("Replacement request signature is invalid.")]
+    ReplacementRequestSignatureInvalid,
+    #[error("Selected message has no queue input.")]
+    SelectedMessageHasNoQueueInput,
+    #[error("Replacement has no queue input.")]
+    ReplacementHasNoQueueInput,
+    #[error("cannot enqueue runtime control continuation from an unbound parent request")]
+    CannotEnqueueRuntimeControlContinuationUnbound,
+    #[error("{message}")]
+    RequestFields { message: &'static str },
+    #[error(transparent)]
+    CanonicalRows(#[from] crate::session::canonical_rows::CanonicalRowsError),
+    #[error(transparent)]
+    Delivery(#[from] crate::tool_call_lifecycle::delivery::DeliveryError),
+    #[error(transparent)]
+    Identity(#[from] crate::identity::IdentityError),
+    #[error(transparent)]
+    RequestBinding(#[from] crate::request_binding::RequestBindingError),
+    #[error(transparent)]
+    SessionOutput(#[from] crate::session::SessionOutputError),
+    #[error(transparent)]
+    Session(#[from] crate::session::SessionError),
+    #[error(transparent)]
+    Reconstruction(#[from] gents_protocol::output::ReconstructionError),
+    #[error(transparent)]
+    RequestAdmission(#[from] gents_protocol::request_admission::RequestAdmissionError),
+    #[error(transparent)]
+    SessionInputEdit(#[from] gents_protocol::session_input_edit::SessionInputEditError),
+    #[error(transparent)]
+    Materialize(#[from] crate::lifecycle::materialize::MaterializeError),
+    #[error(transparent)]
+    AgentRequestAdmission(#[from] crate::request_admission::AgentRequestAdmissionError),
 }
 
 impl crate::config_client::TransactionFailure for QueueError {
