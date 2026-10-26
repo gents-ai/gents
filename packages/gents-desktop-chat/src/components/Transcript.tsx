@@ -22,8 +22,10 @@ export const MessageList = memo(function MessageList({
   compactTools = false,
   onEditUserMessage,
   renderAfterItem,
+  stickyUserItemKey,
 }: {
   timelineItems: RenderedTimelineItem[];
+  stickyUserItemKey?: string | null;
   renderAfterItem?: (item: RenderedTimelineItem) => ReactNode;
   timelineIdentity?: string | null;
   requestCancelCause?: DerivedCancelCauseView | null;
@@ -41,7 +43,7 @@ export const MessageList = memo(function MessageList({
     scrollElement ?? null,
     timelineKey,
     estimateItemSize,
-    { enabled: !!scrollElement, anchorTo: "end" },
+    { enabled: !!scrollElement, anchorTo: "end", stickyKey: stickyUserItemKey },
   );
   const revealAssistantItemKey = useAssistantReveal(
     displayItems,
@@ -58,7 +60,15 @@ export const MessageList = memo(function MessageList({
         {window.items.map(({ index, start }) => {
           const item = displayItems[index]!;
           return (
-            <li key={timelineKey(item)} {...window.attributes(index, start)}>
+            <li
+              key={timelineKey(item)}
+              {...window.attributes(index, start)}
+              className={
+                timelineKey(item) === stickyUserItemKey
+                  ? "current-user-turn"
+                  : undefined
+              }
+            >
               <TimelineItem
                 item={item}
                 onEditUserMessage={onEditUserMessage}
