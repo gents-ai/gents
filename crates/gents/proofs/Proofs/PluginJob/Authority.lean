@@ -205,7 +205,8 @@ theorem dynamic_off_refuses_run (ctx : StepContext) (job : Job) (out : StepOutpu
 
 /-- Under `policy.mode = off`, a step that carries no installed pin (no pin at
 all, or a dynamic-origin one) and whose call runs dynamic code
-(`runsDynamicCode`) is refused with `policyDenied` once rules 1-4 pass. -/
+(`runsDynamicCode`) is refused with `dynamicCodeDisabled` for a pinless call,
+or `policyDenied` for a pinned step, once rules 1-4 pass. -/
 theorem dynamic_off_refuses_pinless_step (ctx : StepContext) (job : Job) (out : StepOutput)
     (h : ctx.policy.mode = .off) (hr : job.state = .running)
     (ha : (ctx.available && ctx.engineProvenanceOperator) = true)
@@ -213,12 +214,21 @@ theorem dynamic_off_refuses_pinless_step (ctx : StepContext) (job : Job) (out : 
     (hres : (out.resume.isSome && !resumePlaced job out) = false)
     (hp : ∀ p, stepPin ctx job out = some p → p.origin = .dynamic)
     (hs : runsDynamicCode ctx job.call = true) :
-    admitStep ctx job out = .error .policyDenied := by
+    admitStep ctx job out = .error .dynamicCodeDisabled ∨
+      admitStep ctx job out = .error .policyDenied := by
   cases hstep : stepPin ctx job out with
   | none =>
     simp only [Bool.and_eq_true] at ha
-    simp [admitStep, hr, ha.1, ha.2, he, hres, hstep, h, hs]
-  | some p => exact dynamic_off_refuses_run ctx job out p h hr ha he hres hstep (hp p hstep)
+    cases hresume : resumeAdmitted ctx out with
+    | false =>
+      right
+      simp [admitStep, hr, ha.1, ha.2, he, hres, hresume, hstep, h, hs]
+    | true =>
+      left
+      simp [admitStep, hr, ha.1, ha.2, he, hres, hresume, hstep, h, hs]
+  | some p =>
+    right
+    exact dynamic_off_refuses_run ctx job out p h hr ha he hres hstep (hp p hstep)
 
 /-- Under `policy.mode = off`, a pinless call that carries no `script` and no
 `path` and names no dynamic-origin script (a named run of an installed script

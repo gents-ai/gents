@@ -127,6 +127,24 @@ def admissionCases : List AdmissionCase :=
       .result { writes := 1, scratch := ["runs/call-1/report.md"], progress := false } [] none
         none⟩ ]
 
+private def sourceBoundaryCases : List AdmissionCase :=
+  let off := { context with policy := { context.policy with mode := .off } }
+  let call (verb : String) (script path : Option String) : Job :=
+    { stepZero with call := { stepZero.call with argv := [verb, "installed-flow"], script, path } }
+  [ ⟨"absent_sources_under_off", off, call "run" none none, .result noExtras [] none none⟩
+  , ⟨"empty_script_under_off", off, call "run" (some "") none, .result noExtras [] none none⟩
+  , ⟨"empty_path_under_off", off, call "run" none (some ""), .result noExtras [] none none⟩
+  , ⟨"both_empty_under_off", off, call "run" (some "") (some ""), .result noExtras [] none none⟩
+  , ⟨"nonempty_script_under_off", off, call "run" (some "source") none, .result noExtras [] none none⟩
+  , ⟨"nonempty_path_under_off", off, call "run" none (some "source"), .result noExtras [] none none⟩
+  , ⟨"whitespace_script_is_source", off, call "run" (some " ") none, .result noExtras [] none none⟩
+  , ⟨"whitespace_path_is_source", off, call "run" none (some " "), .result noExtras [] none none⟩
+  , ⟨"check_empty_sources_under_off", off, call "check" (some "") (some ""), .result noExtras [] none none⟩
+  , ⟨"import_empty_sources_under_off", off, call "import" (some "") (some ""), .result noExtras [] none none⟩
+  , ⟨"dynamic_name_still_denied_with_empty_sources", { off with namedOrigin := some .dynamic }, call "run" (some "") (some ""), .result noExtras [] none none⟩
+  , ⟨"installed_name_with_empty_sources", { off with namedOrigin := some .installed }, call "run" (some "") (some ""), .result noExtras [] none none⟩
+  , ⟨"pinned_dynamic_under_off", off, { pinned [] 0 0 with pin := some (hostPin guestPin { facts with origin := .dynamic }) }, .result noExtras [] none none⟩ ]
+
 private def observation : SpawnKey → Recovery.KillObservation := fun _ => .causedLiveLocal
 
 private def settled (c : AdmissionCase) : Job × List (SpawnKey × Recovery.KillAction) :=
@@ -315,17 +333,18 @@ private def contextJson (ctx : StepContext) : Json :=
 
 private def render (c : AdmissionCase) : Json :=
   let (row, kill) := settled c
-  let (code, admitted) := match admitStep c.ctx c.job c.out with
-    | .ok j => ((none : Option String), some j)
-    | .error r => (r.code, none)
+  let (code, admitted, dynamicDisabled) : Option String × Option Job × Bool := match admitStep c.ctx c.job c.out with
+    | .ok j => ((none : Option String), some j, false)
+    | .error r => (r.code, none, decide (r = Refusal.dynamicCodeDisabled))
   Json.mkObj [("name", toJson c.name), ("context", contextJson c.ctx), ("job", jobJson c.job),
     ("output", outputJson c.out),
     ("expected", Json.mkObj [("admitted", toJson admitted.isSome), ("code", toJson code),
+      ("dynamic_code_disabled", toJson dynamicDisabled),
       ("job", toJson (admitted.map jobJson)), ("row_state", rowStateJson row.state),
       ("kill", toJson (kill.map fun (k, a) =>
         Json.mkObj [("retry_key", toJson k.retryKey), ("action", toJson a.toContract)]))])]
 
-def admissionCasesJson : String := (toJson (admissionCases.map render)).compress
+def admissionCasesJson : String := (toJson ((admissionCases ++ sourceBoundaryCases).map render)).compress
 
 private def toolCall : ToolExecution.ToolCallContext :=
   { callId := 1, requestId := 1, state := .running, operation := .nativeCommand, deadline := 20

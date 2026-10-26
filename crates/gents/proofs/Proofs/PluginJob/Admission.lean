@@ -76,7 +76,7 @@ def effectiveTargets (ctx : StepContext) (pin : Pin) : EndpointScope Target Unit
 
 inductive Refusal
   | terminal | notAvailable | engineChanged | policyDenied | stalled | depthExceeded | timedOut
-  | stepFailed | backgroundBudgetExceeded
+  | stepFailed | backgroundBudgetExceeded | dynamicCodeDisabled
   deriving DecidableEq, Repr
 
 /-- The host terminal codes; `.terminal` is a no-op and has none. -/
@@ -84,7 +84,7 @@ def Refusal.code : Refusal → Option String
   | .terminal => none
   | .notAvailable => some "plugin_job_not_available"
   | .engineChanged => some "plugin_job_engine_changed"
-  | .policyDenied => some "plugin_job_policy_denied"
+  | .policyDenied | .dynamicCodeDisabled => some "plugin_job_policy_denied"
   | .stalled => some "plugin_job_stalled"
   | .depthExceeded => some "plugin_job_depth_exceeded"
   | .timedOut => some "plugin_job_timed_out"
@@ -352,12 +352,19 @@ def admitNonJob (ctx : StepContext) (job : Job) : StepOutput → Except Refusal 
 def scriptVerbs : List String := ["run", "check", "import"]
 
 /-- A call runs dynamic script code when a script verb carries its source with
-the call: an inline `script` or a `path`. A pinless call presents no source
+the call: a nonempty inline `script` or `path`. Empty optional strings carry
+no source bytes; whitespace remains source and is never trimmed. A pinless call presents no source
 digest, so the host treats a carried source as dynamic. A named run of an
 installed script and the workflow control, status, result and help verbs
 carry neither. -/
 def CallArgs.runsDynamicScript (c : CallArgs) : Bool :=
-  c.argv.head?.any scriptVerbs.contains && (c.script.isSome || c.path.isSome)
+  c.argv.head?.any scriptVerbs.contains && (c.script.any (fun source => !source.isEmpty) || c.path.any (fun source => !source.isEmpty))
+
+theorem empty_source_fields_preserve_dynamic_classification (c : CallArgs) :
+    ({ c with script := some "", path := some "" }).runsDynamicScript =
+      ({ c with script := none, path := none }).runsDynamicScript := by
+  have empty : "".isEmpty = true := by decide
+  simp [CallArgs.runsDynamicScript, empty]
 
 /-- A pinless call runs dynamic code when it carries a dynamic source
 (`CallArgs.runsDynamicScript`) or when a script verb names a script whose
@@ -388,9 +395,10 @@ in the same transaction. Under the empty ceiling (an absent job block) a new
 pin is refused with `notAvailable` and a pinless call still runs. A step-0 `resume` is admitted only if `resumeValid`
 accepts it (`resumeAdmitted`), and its effects are admitted against the resumed
 chain row (`stepRow`). Under `policy.mode = off` a dynamic-origin pin is
-refused with `policyDenied` by `dynamicModeRefusal`, and a pinless step 0
-here, before `admitNonJob`, when its call runs dynamic code
-(`runsDynamicCode`): it carries a `script` or a `path`, or a script verb names
+refused with `policyDenied` by `dynamicModeRefusal`. A pinless step 0 is
+refused with `dynamicCodeDisabled` here, before `admitNonJob`, when its call
+runs dynamic code (`runsDynamicCode`): it carries a nonempty `script` or
+`path`, or a script verb names
 a script whose resolved origin is dynamic. Any other pinless call is not
 refused by the mode. A step whose pin has installed origin is refused with
 `policyDenied` once the step-0 rules pass when `installedTrusted` no longer
@@ -404,7 +412,7 @@ def admitStep (ctx : StepContext) (job : Job) (out : StepOutput) : Except Refusa
   else
     match stepPin ctx job out with
     | none =>
-      if ctx.policy.mode = .off ∧ runsDynamicCode ctx job.call = true then .error .policyDenied
+      if ctx.policy.mode = .off ∧ runsDynamicCode ctx job.call = true then .error .dynamicCodeDisabled
       else admitNonJob ctx job out
     | some pin =>
       if (dynamicModeRefusal ctx.policy pin.origin (stepRow ctx job out) out).isSome then

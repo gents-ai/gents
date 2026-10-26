@@ -895,6 +895,10 @@ fn step0_refusal(
             format!("{tool} cannot be admitted because the parent request has reached the concurrent background capacity ceiling ({MAX_BACKGROUNDED_TOOLS_PER_PARENT})"),
             format!("Next: wait for a background completion notification, then retry `{tool}`"),
         ),
+        Refusal::DynamicCodeDisabled => {
+            let (message, next) = super::driver::refusal_text(refusal, tool, "");
+            (FailureClass::PolicyDenied, message.to_owned(), next)
+        }
         Refusal::PolicyDenied if effects => (
             FailureClass::PolicyDenied,
             "step 0 effects require a pin".to_owned(),

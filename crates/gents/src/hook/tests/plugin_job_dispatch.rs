@@ -471,6 +471,88 @@ fn failed(row: &Value, class: &str) {
 }
 
 #[tokio::test]
+async fn named_run_source_boundaries_follow_the_model_and_preserve_accepted_arguments() {
+    let step = step0(
+        json!({"result": {"answer": 42}}),
+        Options {
+            settings: Some(worker_settings(JobPolicy {
+                dynamic: DynamicMode::Off,
+                ..running_policy()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    for (index, name) in [
+        "absent_sources_under_off",
+        "empty_script_under_off",
+        "empty_path_under_off",
+        "both_empty_under_off",
+        "nonempty_script_under_off",
+        "nonempty_path_under_off",
+        "whitespace_script_is_source",
+        "whitespace_path_is_source",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let case = crate::lean_vocab_test::lean_plugin_job_admission_cases()
+            .iter()
+            .find(|case| case.name == name)
+            .unwrap();
+        let arguments = json!({
+            "argv": case.job.call.argv,
+            "script": case.job.call.script,
+            "path": case.job.call.path,
+        });
+        let call = format!("source-boundary-{index}");
+        let answer = step.call_as(&call, &arguments.to_string()).await;
+        let row = step.row_of(&call).await;
+        if case.expected.admitted {
+            assert_eq!(answer, json!({"answer": 42}), "{name}");
+            assert_eq!(row["lifecycle_state"], "completed", "{name}: {row}");
+        } else {
+            assert!(case.expected.dynamic_code_disabled, "{name}");
+            assert_eq!(
+                answer["code"].as_str(),
+                case.expected.code.as_deref(),
+                "{name}"
+            );
+            assert!(
+                answer["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("job.policy.dynamic"),
+                "{name}: {answer}"
+            );
+            assert!(
+                answer["next"]
+                    .as_str()
+                    .unwrap()
+                    .contains("operator-installed script"),
+                "{name}: {answer}"
+            );
+            failed(&row, "policyDenied");
+        }
+        let accepted = crate::tool_call_lifecycle::load_tool_call_arguments(
+            &step.access(),
+            row["_docID"].as_str().unwrap(),
+            &step.hook.node_did,
+            &step.session_id,
+            Some(&step.hook.node_did),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&accepted).unwrap(),
+            arguments,
+            "{name}"
+        );
+    }
+    step.finish().await;
+}
+
+#[tokio::test]
 async fn non_job_result_with_writes_commits_atomically_with_the_foreground_terminal() {
     let step = step0(
         json!({

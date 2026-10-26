@@ -145,11 +145,15 @@ fn terminal(settlement: Settlement, tool: &str, address: &str) -> Option<Termina
 }
 
 /// What a host refusal means and the call that follows it.
-fn refusal_text(refusal: Refusal, tool: &str, address: &str) -> (&'static str, String) {
+pub(super) fn refusal_text(refusal: Refusal, tool: &str, address: &str) -> (&'static str, String) {
     let inspect = format!("Next: `{tool} status {address}`, then `{tool} resume {address}`");
     match refusal {
         Refusal::Stalled => ("the job stopped making progress", inspect),
         Refusal::PolicyDenied => ("the job asked for something its policy refuses", inspect),
+        Refusal::DynamicCodeDisabled => (
+            "`job.policy.dynamic` is `off`; dynamic script execution is disabled",
+            "Next: use an operator-installed script, or ask the operator to enable dynamic execution in `job.policy.dynamic`".to_owned(),
+        ),
         Refusal::NotAvailable => (
             "the job's plugin or its job grant is no longer available",
             format!("Next: ask the operator to restore `{tool}` and its `job` block, then `{tool} resume {address}`"),

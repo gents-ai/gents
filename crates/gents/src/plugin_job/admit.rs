@@ -115,6 +115,7 @@ pub enum Refusal {
     NotAvailable,
     EngineChanged,
     PolicyDenied,
+    DynamicCodeDisabled,
     Stalled,
     DepthExceeded,
     TimedOut,
@@ -129,7 +130,7 @@ impl Refusal {
             Self::Terminal => None,
             Self::NotAvailable => Some("plugin_job_not_available"),
             Self::EngineChanged => Some("plugin_job_engine_changed"),
-            Self::PolicyDenied => Some("plugin_job_policy_denied"),
+            Self::PolicyDenied | Self::DynamicCodeDisabled => Some("plugin_job_policy_denied"),
             Self::Stalled => Some("plugin_job_stalled"),
             Self::DepthExceeded => Some("plugin_job_depth_exceeded"),
             Self::TimedOut => Some("plugin_job_timed_out"),
@@ -281,7 +282,7 @@ fn admit(ctx: &StepContext, job: &StepRow, out: &JobStepOutput) -> Result<StepRo
     }
     let Some(pin) = step_pin(ctx, job, out) else {
         if ctx.policy.dynamic == DynamicMode::Off && runs_dynamic_code(ctx, &job.call) {
-            return Err(Refusal::PolicyDenied);
+            return Err(Refusal::DynamicCodeDisabled);
         }
         return admit_non_job(ctx, job, out);
     };
@@ -823,8 +824,11 @@ fn runs_dynamic_code(ctx: &StepContext, call: &StepCall) -> bool {
     call.argv
         .first()
         .is_some_and(|verb| SCRIPT_VERBS.contains(&verb.as_str()))
-        && (call.script.is_some()
-            || call.path.is_some()
+        && (call
+            .script
+            .as_ref()
+            .is_some_and(|source| !source.is_empty())
+            || call.path.as_ref().is_some_and(|source| !source.is_empty())
             || ctx.named_origin == Some(JobOrigin::Dynamic))
 }
 
