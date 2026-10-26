@@ -1,3 +1,4 @@
+import { cn } from "@gents/ui/lib/utils";
 import { AttachmentTray, useAttachmentDraft } from "./attachments";
 import { Fragment, useRef } from "react";
 import { ChevronDown } from "lucide-react";
@@ -31,8 +32,9 @@ import { agentName } from "../behavior";
 import { SelectedChatFolder } from "../ChatFolderPicker";
 import { AccessSentence } from "../parts";
 import { ReplyingTo } from "../ReplyingTo";
-import { SlashSkillMenu } from "../SlashSkillMenu";
-import { useSlashSkills } from "../useSlashSkills";
+import { SlashMenu } from "../SlashMenu";
+import { useSlashMenu } from "../useSlashMenu";
+import { GoalChip, goalCommand, useGoalMode } from "./goalMode";
 import {
   ComposerFooter,
   SessionSubmissionStatus,
@@ -109,7 +111,13 @@ function NewSessionComposer() {
   const sending = stores.chat.use.sending();
   const deployment = useSelectedNode();
   const choice = useAgentChoice();
-  const { draft, setDraft, send, error: sendError } = useComposerSend(choice.agentId);
+  const {
+    draft,
+    setDraft,
+    send,
+    setGoal,
+    error: sendError,
+  } = useComposerSend(choice.agentId);
   const attachmentRoot = useRef<HTMLDivElement | null>(null);
   const textarea = useRef<HTMLTextAreaElement | null>(null);
   const attachments = useAttachmentDraft(
@@ -118,19 +126,31 @@ function NewSessionComposer() {
     textarea,
   );
   const agent = agentOf(deployment, choice.agentId);
-  const slash = useSlashSkills(
+  const goalMode = useGoalMode({ draft, setDraft, onSet: setGoal });
+  const slash = useSlashMenu(
     draft,
     setDraft,
     deployment?.skills ?? [],
     deployment?.contexts.find((c) => c.context_id === agent?.contextId),
+    [goalCommand(null, false)],
+    goalMode.create,
   );
   return (
     <div
       data-testid="composer"
       ref={attachmentRoot}
       {...attachments.dropProps}
-      className={attachments.over ? "rounded-2xl ring-2 ring-ring" : undefined}
+      className={cn("relative", attachments.over && "rounded-2xl ring-2 ring-ring")}
     >
+      {!goalMode.mode && (
+        <SlashMenu
+          open={slash.open}
+          query={slash.query}
+          items={slash.items}
+          active={slash.active}
+          onPick={slash.accept}
+        />
+      )}
       <input
         {...attachments.fileInputProps}
         className="hidden"
@@ -140,7 +160,7 @@ function NewSessionComposer() {
         className="text-foreground"
         value={draft}
         onChange={setDraft}
-        onSend={send}
+        onSend={goalMode.mode ? (text) => void goalMode.submit(text) : send}
         models={[]}
         textareaRef={textarea}
         onAttach={attachments.pick}
@@ -149,26 +169,29 @@ function NewSessionComposer() {
         onPaste={attachments.onPaste}
         disabled={sendStatus.kind === "disabled"}
         above={
-          <>
-            <ReplyingTo />
-            {attachments.over && (
-              <p role="status" className="px-3 pt-2 text-xs text-muted-foreground">
-                Drop files to attach
-              </p>
-            )}
-            <AttachmentTray
-              items={attachments.items}
-              remove={attachments.remove}
-              error={attachments.error}
-            />
-            <SlashSkillMenu
-              items={slash.items}
-              active={slash.active}
-              onPick={slash.accept}
-            />
-          </>
+          goalMode.mode ? (
+            <GoalChip editing={false} onCancel={goalMode.leave} />
+          ) : (
+            <>
+              <ReplyingTo />
+              {attachments.over && (
+                <p role="status" className="px-3 pt-2 text-xs text-muted-foreground">
+                  Drop files to attach
+                </p>
+              )}
+              <AttachmentTray
+                items={attachments.items}
+                remove={attachments.remove}
+                error={attachments.error}
+              />
+            </>
+          )
         }
-        onKeyDown={slash.onKeyDown}
+        onKeyDown={(event) => {
+          goalMode.onKeyDown(event);
+          if (!event.defaultPrevented && !goalMode.mode) slash.onKeyDown(event);
+        }}
+        submitLabel={goalMode.mode ? "Set goal" : "Send"}
         leading={
           <AgentPicker
             deployment={deployment}
@@ -177,10 +200,18 @@ function NewSessionComposer() {
           />
         }
         sending={sending}
-        placeholder={placeholderFor(
-          presentedComposerSendStatus(draft, sendStatus, attachments.hasAttachments),
-          "Ask anything",
-        )}
+        placeholder={
+          goalMode.mode
+            ? "Describe the goal"
+            : placeholderFor(
+                presentedComposerSendStatus(
+                  draft,
+                  sendStatus,
+                  attachments.hasAttachments,
+                ),
+                "Ask anything",
+              )
+        }
       />
       {sendError && (
         <p role="alert" className="mt-2 text-xs text-destructive">
