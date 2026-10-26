@@ -81,55 +81,14 @@ pub(super) async fn load_latest_session_request_context(
     requester_did: Option<&str>,
     session_id: &str,
 ) -> anyhow::Result<Option<LoadedRequestContext>> {
-    let request_bindings =
-        gents::toolset::load_session_request_doc_ids(access, node_did, requester_did, session_id)
-            .await?;
-    if request_bindings.is_empty() {
-        return Ok(None);
-    }
-    let request_doc_ids = request_bindings
-        .keys()
-        .map(|request_doc_id| {
-            format!(
-                "\"{}\"",
-                gents::graphql::escape_graphql_string(request_doc_id)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    let query = format!(
-        r#"query {{
-            InferenceCall(
-                filter: {{
-                    request_doc_id: {{ _in: [{request_doc_ids}] }},
-                    node_did: {{ _eq: "{node_did}" }},
-                    call_kind: {{ _eq: "inference" }}
-                }},
-                order: {{ queued_at: DESC }},
-                limit: 10
-            ) {{
-                request_doc_id
-                request_id
-                call_id
-                call_seq
-                queued_at
-                context_accounting_json
-            }}
-        }}"#,
-        node_did = gents::graphql::escape_graphql_string(node_did),
-    );
-    let data = access.execute(&query).await?;
-    let rows = data
-        .pointer("/data/InferenceCall")
-        .and_then(serde_json::Value::as_array)
-        .map(Vec::as_slice)
-        .ok_or_else(|| {
-            anyhow::anyhow!("session InferenceCall response omitted its result array")
-        })?;
-    for row in rows {
-        validated_call_request_identity(row, &request_bindings)?;
-    }
-    decode_latest_request_context(rows)
+    let rows = gents::toolset::load_latest_session_context_calls(
+        access,
+        node_did,
+        requester_did,
+        session_id,
+    )
+    .await?;
+    decode_latest_request_context(&rows)
 }
 
 /// `request_doc_ids` come from the scoped transcript page, so each one has a
@@ -205,26 +164,6 @@ pub(super) async fn load_session_request_context_history(
             Ok(context)
         })
         .collect()
-}
-
-fn validated_call_request_identity(
-    row: &serde_json::Value,
-    request_bindings: &std::collections::BTreeMap<String, String>,
-) -> anyhow::Result<(String, String)> {
-    let required = |field: &str| {
-        row.get(field)
-            .and_then(serde_json::Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(str::to_owned)
-            .ok_or_else(|| anyhow::anyhow!("InferenceCall accounting row has no {field}"))
-    };
-    let request_doc_id = required("request_doc_id")?;
-    let request_id = required("request_id")?;
-    anyhow::ensure!(
-        request_bindings.get(&request_doc_id) == Some(&request_id),
-        "InferenceCall request identity does not match its scoped AgentRequest"
-    );
-    Ok((request_doc_id, request_id))
 }
 
 fn has_context_accounting(row: &serde_json::Value) -> bool {
@@ -372,24 +311,4 @@ mod tests {
         server.verify().await;
     }
 
-    #[test]
-    fn inference_call_logical_ids_must_match_the_scoped_physical_request() {
-        let bindings = std::collections::BTreeMap::from([(
-            "AgentRequest/physical-1".to_owned(),
-            "request-1".to_owned(),
-        )]);
-        let valid = serde_json::json!({
-            "request_doc_id": "AgentRequest/physical-1",
-            "request_id": "request-1"
-        });
-        assert_eq!(
-            validated_call_request_identity(&valid, &bindings).unwrap(),
-            ("AgentRequest/physical-1".to_owned(), "request-1".to_owned())
-        );
-        let collision = serde_json::json!({
-            "request_doc_id": "AgentRequest/physical-1",
-            "request_id": "request-from-another-session"
-        });
-        assert!(validated_call_request_identity(&collision, &bindings).is_err());
-    }
 }
