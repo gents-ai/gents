@@ -1,5 +1,6 @@
 import type { RequestAttachment } from "@source-inc/gents-desktop-client";
 import { writeAttachments } from "../../../hooks/draftStore";
+import type { QueueDelivery } from "@source-inc/gents-desktop-client/generated/QueueDelivery";
 import { useApp, useView } from "@/app/AppContext";
 import { navigate } from "@/lib/router";
 import { workspace } from "@/app/workspace";
@@ -31,13 +32,17 @@ export function useComposerSend(agentId: string | null | undefined) {
       ? failure.message
       : null;
 
-  const send = async (text: string, supplied?: RequestAttachment[]) => {
+  const send = async (
+    text: string,
+    supplied?: RequestAttachment[],
+    followUp?: QueueDelivery,
+  ) => {
     const selected = drafts.getState().attachments[draftKey] ?? [];
     if (!supplied && selected.some((a) => !a.content || a.error)) return false;
     const attachments =
       supplied ?? selected.flatMap((a) => (a.content ? [a.content] : []));
     const ids = new Set(selected.map((a) => a.id));
-    const pending = sendMessage(text, agentId, attachments);
+    const pending = sendMessage(text, agentId, attachments, followUp);
     const intentGeneration = captureComposeIntent();
     const result = await pending;
     if (result) {

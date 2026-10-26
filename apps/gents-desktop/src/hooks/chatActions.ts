@@ -3,6 +3,7 @@ import type { RequestAttachment } from "@source-inc/gents-desktop-client";
 import {
   selectedNodeReadinessDecision,
   type ChatSendResult,
+  type PendingMessageSteerRequest,
   type PendingQueueEditRequest,
   type DesktopApiAdapter,
   type DesktopInterruptRequestRequest,
@@ -10,6 +11,7 @@ import {
 } from "@source-inc/gents-desktop-client";
 import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
 import type { DesktopJobControlRequest } from "@source-inc/gents-desktop-client/generated/DesktopJobControlRequest";
+import type { QueueDelivery } from "@source-inc/gents-desktop-client/generated/QueueDelivery";
 
 import {
   adoptNewChatFolder,
@@ -69,9 +71,9 @@ function queueEditFailure(
   after: DesktopSessionSnapshot | null,
   requestIds: string[],
   error: unknown,
+  doing = "change pending messages",
 ): string {
-  if (!after || requestIds.length === 0)
-    return actionFailure("change pending messages", error);
+  if (!after || requestIds.length === 0) return actionFailure(doing, error);
   const waiting = new Set((after.pendingQueue ?? []).map((entry) => entry.requestId));
   const taken = new Set([
     ...after.foldedInputs.map((input) => input.requestId),
@@ -83,7 +85,7 @@ function queueEditFailure(
       : "This message already reached the agent";
   if (requestIds.every((id) => waiting.has(id)))
     return "The queue changed before it was saved";
-  return actionFailure("change pending messages", error);
+  return actionFailure(doing, error);
 }
 
 export function createChatActions({
@@ -103,6 +105,7 @@ export function createChatActions({
     content: string,
     agentId?: string | null,
     attachments: RequestAttachment[] = [],
+    followUp?: QueueDelivery,
   ): Promise<ChatSendResult | null> {
     if (submissionInFlight) return null;
     const node = selectedNode() ?? firstNode(stores.fleet.getState());
@@ -170,6 +173,9 @@ export function createChatActions({
         sessionId: earlier?.sessionId ?? selectedSessionId,
         content,
         attachments,
+        /* how a message behind a running turn waits; the bridge steers when
+           it is not said */
+        delivery: status.kind === "queue" ? (followUp ?? null) : null,
         causedBySourceDocId: mailboxRoute?.itemId ?? null,
         cwd: folderOf(stores.chat.getState().folders, selectedSessionId),
         resolveRequestId: earlier?.requestId ?? null,
@@ -270,6 +276,30 @@ export function createChatActions({
     }
   }
 
+  async function steerPendingMessage(request: PendingMessageSteerRequest) {
+    const before = heldFor(
+      readSession(stores.session),
+      request.sessionId,
+      request.nodeDid,
+    );
+    const queue = before?.pendingQueue ?? [];
+    const at = queue.findIndex((entry) => entry.requestDocId === request.requestDocId);
+    const requestIds = queue.slice(0, at + 1).map((entry) => entry.requestId);
+    const showing = () =>
+      store.getState().nodeDid === request.nodeDid &&
+      store.getState().sessionId === request.sessionId;
+    try {
+      await api.steerPendingMessage(request);
+      if (showing()) await refreshSession(request.sessionId);
+    } catch (error) {
+      const after = showing() ? await refreshSession(request.sessionId) : null;
+      reportFailure(
+        queueEditFailure(after, at < 0 ? [] : requestIds, error, "steer the message"),
+      );
+      throw shownFailure(error);
+    }
+  }
+
   async function editPendingQueue(request: PendingQueueEditRequest) {
     const selected = new Set(request.selectedRequestDocIds);
     const requestIdsIn = (session: DesktopSessionSnapshot | null) =>
@@ -328,6 +358,7 @@ export function createChatActions({
   return {
     sendMessage,
     editPendingQueue,
+    steerPendingMessage,
     retryMessage,
     renameSession,
     interruptRequest,

@@ -23,6 +23,7 @@ import {
 } from "./composerParts";
 import { ComposerEditContext, lastEditable, useComposerEditing } from "./composerEdit";
 import { useComposerSend } from "./useComposerSend";
+import { useFollowUp } from "@/preferences";
 
 export function OpenSessionComposer({
   roomRef,
@@ -71,6 +72,11 @@ export function OpenSessionComposer({
     sendStatus.kind === "disabled" && sendStatus.reason === "sessionNotOwned"
       ? sendStatus.hint
       : null;
+  /* a message behind a running turn goes the way the setting says, and the
+     modified Enter sends that one message the other way */
+  const followUp = useFollowUp();
+  const turnRunning = sendStatus.kind === "queue";
+  const otherWay = followUp === "steer" ? "queue" : "steer";
   const blocked = sendStatus.kind === "disabled" && !inFlight;
   const covered = blocked && loadingStatus !== null;
 
@@ -111,6 +117,18 @@ export function OpenSessionComposer({
       }
     }
     slash.onKeyDown(event);
+    if (
+      !event.defaultPrevented &&
+      turnRunning &&
+      event.key === "Enter" &&
+      (event.metaKey || event.ctrlKey) &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing &&
+      draft.trim() !== ""
+    ) {
+      event.preventDefault();
+      void send(draft, undefined, otherWay);
+    }
   };
 
   return (
@@ -161,7 +179,7 @@ export function OpenSessionComposer({
               editing
                 ? (text) =>
                     void (editing.reached ? edit.sendAsNew(text) : edit.save(text))
-                : send
+                : (text) => send(text, undefined, followUp)
             }
             models={[]}
             onAttach={attachments.pick}
