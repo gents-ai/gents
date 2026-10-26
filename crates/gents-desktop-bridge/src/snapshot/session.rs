@@ -49,7 +49,7 @@ use context_projection::{build_session_context_from_stores, usize_to_i64};
 pub use live_delta::build_session_live_delta;
 #[cfg(test)]
 pub(crate) use live_delta::build_session_live_delta_from_store;
-use pending_turn::{build_pending_turn, project_retry_eligibility};
+use pending_turn::{project_pending_turn, project_retry_eligibility};
 use projection::build_session_snapshot_from_store_for_node_with_transcript;
 pub(crate) use projection::render_transcript_rows;
 #[cfg(test)]
