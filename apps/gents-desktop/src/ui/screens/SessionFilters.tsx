@@ -13,9 +13,11 @@ import type { ComponentType, ReactNode } from "react";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import {
   hasFilter,
+  isShown,
   matchesSource,
   matchesState,
   passes,
+  toggleShown,
   type SessionFilter,
   type SessionSource,
   type SessionState,
@@ -91,7 +93,13 @@ export function Axis<V extends string>({
 }) {
   const picked = options.filter((o) => value.includes(o.value));
   const toggle = (v: V) =>
-    onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v]);
+    onChange(
+      toggleShown(
+        options.map((o) => o.value),
+        value,
+        v,
+      ),
+    );
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -120,7 +128,7 @@ export function Axis<V extends string>({
           {options.map(({ value: v, label: text, icon: Icon, tint }) => (
             <DropdownMenuCheckboxItem
               key={v}
-              checked={value.includes(v)}
+              checked={isShown(value, v)}
               onCheckedChange={() => toggle(v)}
               closeOnClick={false}
             >

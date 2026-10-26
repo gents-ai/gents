@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { NavPanel } from "@/app/RailFlyout";
 import { listViews, restoreListViews } from "@/app/listViews";
+import { isShown, toggleShown } from "@/lib/session-filter";
 import { deployment } from "./config-panel-wiring/fixtures";
 import { node, renderIn, testApp } from "./app-fixture";
 
@@ -66,34 +67,21 @@ const recentTitles = () =>
     .filter((t) => t === "Done" || t === "Busy");
 
 describe("the side nav's recent sessions filter", () => {
-  it("narrows the recent sessions by state, apart from the sessions list's own", async () => {
+  it("starts with every choice checked, and hides a state when it is unchecked", async () => {
     const { u } = showNav();
     expect(recentTitles()).toEqual(["Busy", "Done"]);
 
     await u.click(screen.getByRole("button", { name: "Filter recent sessions" }));
     await u.click(await screen.findByRole("menuitem", { name: /State/ }));
     await waitFor(() => expect(screen.getAllByRole("menu").length).toBeGreaterThan(1));
-    await u.click(
-      within(screen.getAllByRole("menu").at(-1)!).getByRole("menuitemcheckbox", {
-        name: /Finished/,
-      }),
-    );
+    const states = within(screen.getAllByRole("menu").at(-1)!);
+    for (const item of states.getAllByRole("menuitemcheckbox")) {
+      expect(item).toHaveAttribute("aria-checked", "true");
+      expect(item).not.toHaveAttribute("aria-disabled");
+    }
+    await u.click(states.getByRole("menuitemcheckbox", { name: /Finished/ }));
 
-    await waitFor(() => expect(recentTitles()).toEqual(["Done"]));
-  });
-
-  it("offers a state no session is in yet", async () => {
-    const { u } = showNav();
-    await u.click(screen.getByRole("button", { name: "Filter recent sessions" }));
-    await u.click(await screen.findByRole("menuitem", { name: /State/ }));
-    await waitFor(() => expect(screen.getAllByRole("menu").length).toBeGreaterThan(1));
-    const failed = within(screen.getAllByRole("menu").at(-1)!).getByRole(
-      "menuitemcheckbox",
-      { name: /Failed/ },
-    );
-    expect(failed).not.toHaveAttribute("aria-disabled");
-    await u.click(failed);
-    await waitFor(() => expect(recentTitles()).toEqual([]));
+    await waitFor(() => expect(recentTitles()).toEqual(["Busy"]));
   });
 
   it("says when nothing matches and clears the filter", async () => {
@@ -113,5 +101,14 @@ describe("the side nav's recent sessions filter", () => {
       }).recentFilter.states,
     ).toEqual(["working"]);
     expect(restoreListViews({}).recentFilter.states).toEqual([]);
+  });
+
+  it("keeps the rest when one is unchecked, and clears when all are checked again", () => {
+    const all = ["a", "b", "c"] as const;
+    expect(toggleShown(all, [], "b")).toEqual(["a", "c"]);
+    expect(toggleShown(all, ["a", "c"], "b")).toEqual([]);
+    expect(toggleShown(all, ["a"], "a")).toEqual(["a"]);
+    expect(isShown([], "a")).toBe(true);
+    expect(isShown(["b"], "a")).toBe(false);
   });
 });

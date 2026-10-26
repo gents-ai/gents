@@ -58,3 +58,20 @@ export const passes = (c: SessionSummary, f: SessionFilter) =>
   (f.states.length === 0 || f.states.some((s) => matchesState(c, s))) &&
   (f.sources.length === 0 || f.sources.some((s) => matchesSource(c, s))) &&
   (f.agents.length === 0 || f.agents.includes(c.agentId ?? ""));
+
+/** A choice shows checked while nothing narrows its axis. */
+export const isShown = <V extends string>(picked: readonly V[], v: V) =>
+  picked.length === 0 || picked.includes(v);
+
+/** Unchecking one of an axis's choices keeps the rest, checking every one
+    again clears the axis, and the last checked choice can't be unchecked. */
+export function toggleShown<V extends string>(
+  all: readonly V[],
+  picked: readonly V[],
+  v: V,
+): V[] {
+  const shown = picked.length ? picked : all;
+  const next = shown.includes(v) ? shown.filter((x) => x !== v) : [...shown, v];
+  if (next.length === 0) return [...picked];
+  return all.every((x) => next.includes(x)) ? [] : next;
+}

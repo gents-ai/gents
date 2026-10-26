@@ -19,8 +19,10 @@ import { useFleet } from "@/hooks/useFleet";
 import {
   emptyFilter,
   hasFilter,
+  isShown,
   matchesSource,
   matchesState,
+  toggleShown,
   type SessionFilter,
 } from "@/lib/session-filter";
 import { agentName } from "@/screens/behavior";
@@ -40,16 +42,16 @@ export function RecentFilter({ sessions }: { sessions: SessionSummary[] }) {
       return { id, name: agentName(id, nodes[nodeKeyOf(holder)] ?? null) };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
+  const agentIds = agents.map((a) => a.id);
   const toggle = <K extends keyof SessionFilter>(
     axis: K,
+    all: readonly string[],
     v: SessionFilter[K][number],
-  ) => {
-    const picked = value[axis] as string[];
+  ) =>
     listViews.setRecentFilter({
       ...value,
-      [axis]: picked.includes(v) ? picked.filter((p) => p !== v) : [...picked, v],
+      [axis]: toggleShown(all, value[axis] as string[], v),
     });
-  };
 
   return (
     <DropdownMenu>
@@ -76,8 +78,8 @@ export function RecentFilter({ sessions }: { sessions: SessionSummary[] }) {
                 value: id,
                 label: name,
                 count: sessions.filter((c) => c.agentId === id).length,
-                checked: value.agents.includes(id),
-                onToggle: () => toggle("agents", id),
+                checked: isShown(value.agents, id),
+                onToggle: () => toggle("agents", agentIds, id),
               }))}
             />
           )}
@@ -87,8 +89,13 @@ export function RecentFilter({ sessions }: { sessions: SessionSummary[] }) {
             options={STATES.map((o) => ({
               ...o,
               count: sessions.filter((c) => matchesState(c, o.value)).length,
-              checked: value.states.includes(o.value),
-              onToggle: () => toggle("states", o.value),
+              checked: isShown(value.states, o.value),
+              onToggle: () =>
+                toggle(
+                  "states",
+                  STATES.map((s) => s.value),
+                  o.value,
+                ),
             }))}
           />
           <Axis
@@ -97,8 +104,13 @@ export function RecentFilter({ sessions }: { sessions: SessionSummary[] }) {
             options={SOURCES.map((o) => ({
               ...o,
               count: sessions.filter((c) => matchesSource(c, o.value)).length,
-              checked: value.sources.includes(o.value),
-              onToggle: () => toggle("sources", o.value),
+              checked: isShown(value.sources, o.value),
+              onToggle: () =>
+                toggle(
+                  "sources",
+                  SOURCES.map((s) => s.value),
+                  o.value,
+                ),
             }))}
           />
         </DropdownMenuGroup>
