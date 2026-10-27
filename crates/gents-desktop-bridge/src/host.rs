@@ -63,6 +63,9 @@ impl ClientHost {
         host
     }
 
+    /// Private client attachments present the current identity's replicated
+    /// mailbox, including decision questions. Embedding webview grants remain
+    /// independent; no runtime document authorization is conferred here.
     pub(crate) fn with_accounts(
         core: Arc<ClientCore>,
         pending_oauth_credentials: Arc<crate::accounts::PendingOAuthCredentials>,
@@ -83,6 +86,7 @@ impl ClientHost {
                 },
                 snapshot_grants: SnapshotGrants {
                     session_read: true,
+                    mailbox_read: true,
                     fleet_read: true,
                     ..SnapshotGrants::default()
                 },
