@@ -542,7 +542,7 @@ async fn served_node_lists_shows_and_watches_ended_jobs() -> Result<()> {
         "{stdout}"
     );
     assert!(
-        stdout.contains("workflow result job-s1:call-done"),
+        stdout.contains("gents job show job-s1:call-done"),
         "{stdout}"
     );
 

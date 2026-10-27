@@ -403,7 +403,7 @@ pub(crate) async fn install_in_txn(
             !keep.contains(&key(document.collection.graphql_type(), id))
         })
         .collect();
-    let plan = super::provenance::prepare_pack_plan_in_txn(txn, &applied, false)
+    let plan = super::provenance::prepare_pack_plan_in_txn(txn, &applied)
         .await?
         .with_removals(removals)?;
     crate::config_client::validate_desired_state_plan(txn, &plan).await?;

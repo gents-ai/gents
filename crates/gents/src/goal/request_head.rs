@@ -141,7 +141,7 @@ pub(crate) fn latest_goal_request<'a>(
     latest_scoped_request(
         &goal.node_did,
         &goal.session_id,
-        Some(&goal.goal_id),
+        &goal.goal_id,
         rows,
         |row| {
             let Some((by_doc, openings)) = assignment.as_ref() else {
@@ -171,7 +171,7 @@ pub(crate) fn latest_goal_request<'a>(
 fn latest_scoped_request<'a, F>(
     node_did: &str,
     session_id: &str,
-    goal_id: Option<&str>,
+    goal_id: &str,
     rows: &'a [AgentRequestRow],
     allowed: F,
 ) -> Option<&'a AgentRequestRow>
@@ -199,7 +199,7 @@ where
                 && child.caused_by_parent_request_doc_id == parent.doc_id
                 && child.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
                 && child.caused_by_trigger_kind.as_deref() == Some(GOAL_TRIGGER_KIND)
-                && goal_id.is_none_or(|expected| expected == original_goal_id)
+                && goal_id == original_goal_id
                 && in_scope(child)
                 && verify_goal_continuation_edge(
                     node_did,

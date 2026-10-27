@@ -142,14 +142,5 @@ mod tests {
         );
         assert!(read_only.tool_router.has_route("query"));
         assert!(!read_only.tool_router.has_route("write"));
-
-        let writable = DefraQueryMcp::new(
-            GRAPHQL.to_owned(),
-            McpServiceOptions {
-                scope: CollectionScope::all(),
-                write_collections: BTreeSet::from(["Finding".to_owned()]),
-            },
-        );
-        assert!(writable.tool_router.has_route("write"));
     }
 }

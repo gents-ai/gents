@@ -316,7 +316,6 @@ export function createDesktopUiHarness(
           sourceId: "request_01JZ6Q0Y5Q7V0MOBILE_SOURCE_IDENTIFIER_WITHOUT_BREAKS",
           sessionId: "session-intro",
           requestId: "request-intro",
-          graphRunId: null,
           causeDocId: null,
           targetNodeDid: NODE_DID,
           targetAgentId: DEFAULT_AGENT_ID,

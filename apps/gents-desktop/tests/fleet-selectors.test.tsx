@@ -36,7 +36,6 @@ const item = (itemId: string): MailboxItemView => ({
   sourceId: "s-1",
   sessionId: "s-1",
   requestId: null,
-  graphRunId: null,
   causeDocId: null,
   targetNodeDid: AGENT,
   targetAgentId: "default",

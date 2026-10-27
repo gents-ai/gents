@@ -2985,7 +2985,7 @@ mod tests {
             .await;
         let response = parse_response(dispatch.response.as_deref().expect("response line"));
         assert!(response.get("error").is_none(), "{response}");
-        assert_eq!(response["result"], json!({"workflows": []}));
+        assert_eq!(response["result"], json!({"result": {"workflows": []}}));
     }
 
     #[tokio::test]

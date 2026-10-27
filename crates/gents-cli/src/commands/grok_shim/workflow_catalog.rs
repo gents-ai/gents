@@ -14,13 +14,15 @@ use serde_json::{json, Value};
 
 /// One row of the pager's Workflows tab: an installed job plugin's name, its
 /// manifest description, and the first paragraph of its TOOL.md (or the
-/// description again) as `when_to_use`.
+/// description again) as `when_to_use`. The pager reads the reply at
+/// `/result/workflows` and decodes five snake_case fields per row.
 #[derive(Serialize)]
 struct WorkflowInfo {
     name: String,
     description: String,
     when_to_use: String,
     source: &'static str,
+    path: Option<String>,
 }
 
 fn workflow_info(record: &InstalledPlugin) -> WorkflowInfo {
@@ -35,6 +37,7 @@ fn workflow_info(record: &InstalledPlugin) -> WorkflowInfo {
         description,
         when_to_use,
         source: "bundled",
+        path: None,
     }
 }
 
@@ -47,7 +50,7 @@ fn first_paragraph(text: &str) -> Option<String> {
         .map(|paragraph| paragraph.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
-/// The `{"workflows": [...]}` result: one row per plugin in the agent's Tools
+/// The `{"result": {"workflows": [...]}}` reply: one row per plugin in the agent's Tools
 /// whose installed record declares `job: true`. A plugin that is not
 /// installed, is pinned to another artifact or runs no jobs is skipped.
 pub(super) async fn list(
@@ -76,7 +79,7 @@ pub(super) async fn list(
         .filter(|record| record.declaration.job.0)
         .map(|record| workflow_info(&record))
         .collect();
-    Ok(json!({ "workflows": workflows }))
+    Ok(json!({ "result": { "workflows": workflows } }))
 }
 
 #[cfg(test)]
@@ -209,7 +212,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_job_plugin_returns_empty_list() {
-        let empty = json!({"workflows": Vec::<Value>::new()});
+        let empty = json!({"result": {"workflows": Vec::<Value>::new()}});
 
         let home = tempfile::tempdir().unwrap();
         install(
@@ -240,20 +243,22 @@ mod tests {
             node_with_agent(Some(&["team/review", "team/terse", "team/not-installed"])).await;
         assert_eq!(
             list(&node, &did, &agent, home.path()).await.unwrap(),
-            json!({"workflows": [
+            json!({"result": {"workflows": [
                 {
                     "name": "review",
                     "description": "review description",
                     "when_to_use": "Review a diff through four lenses.",
                     "source": "bundled",
+                    "path": null,
                 },
                 {
                     "name": "terse",
                     "description": "terse description",
                     "when_to_use": "terse description",
                     "source": "bundled",
+                    "path": null,
                 },
-            ]})
+            ]}})
         );
     }
 }

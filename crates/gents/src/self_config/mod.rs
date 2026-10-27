@@ -1200,8 +1200,7 @@ impl PackInstaller {
         // records or plugins through a binding an install would refuse.
         self.fence_bindings(&prepared.inference.bindings).await?;
         for dependency in &prepared.dependencies {
-            let crate::pack::PreparedDependency::Documents { inference, .. } = dependency;
-            self.fence_bindings(&inference.bindings).await?;
+            self.fence_bindings(&dependency.inference.bindings).await?;
         }
         let mut schemas = Vec::new();
         for path in crate::pack::document_pack_schema_paths(distribution.manifest())? {
