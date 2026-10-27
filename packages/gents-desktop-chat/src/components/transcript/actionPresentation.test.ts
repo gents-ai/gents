@@ -2,6 +2,7 @@ import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { describe, expect, it } from "vitest";
 import {
   actionEntries,
+  actionKind,
   actionStatus,
   actionTitle,
   runningAction,
@@ -54,6 +55,21 @@ function pair(): RenderedToolCallView[] {
 }
 
 describe("action presentation", () => {
+  it.each([null, "bash_unrestricted"])(
+    "classifies a reconstructed command with display text %s from its native kind",
+    (command) => {
+      const tool = pair()[1]!;
+      tool.reconstruction = { state: "ready" };
+      if (tool.presentation.kind !== "command")
+        throw new Error("command fixture");
+      tool.presentation.command = command;
+      expect(actionKind({ tool })).toBe("command");
+    },
+  );
+
+  it("does not treat an unverified command placeholder as reconstructed output", () => {
+    expect(actionKind({ tool: pair()[1]! })).toBeNull();
+  });
   it.each([
     ["error", "userCancelled", "cancelled"],
     ["error", "interrupted", "cancelled"],
