@@ -5,6 +5,9 @@ pub enum Template {
     Graph,
     PluginTool,
     Assets,
+    /// A documents pack shipping one workflow: a Rust job plugin, the worker
+    /// persona it spawns and the caller Tools template `pack wire` copies.
+    Workflow,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,7 +31,7 @@ impl Template {
     pub fn manifest_kind(self) -> &'static str {
         match self {
             Template::Graph => "graph",
-            Template::Minimal | Template::Automation => "documents",
+            Template::Minimal | Template::Automation | Template::Workflow => "documents",
             Template::PluginTool => "plugins",
             Template::Assets => "assets",
         }

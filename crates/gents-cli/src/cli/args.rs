@@ -410,6 +410,8 @@ pub(crate) enum PackTemplate {
     PluginTool,
     /// A pack of files with no configuration.
     Assets,
+    /// A documents pack shipping one workflow: a Rust job plugin, the worker it spawns and the caller Tools template.
+    Workflow,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
