@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { GitBranch } from "lucide-react";
+import { Split } from "lucide-react";
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
 import type { Action } from "@gents/ui/conversation";
 import { useApp, useView } from "@/app/AppContext";
@@ -25,8 +25,8 @@ export function useEditInBranch(item: SentUserMessage | null): Action | null {
   const text = item?.content;
   if (!item || !sessionId || !text || notOwned) return null;
   return {
-    label: "Edit in a new branch",
-    icon: <GitBranch />,
+    label: "Fork",
+    icon: <Split />,
     disabled: forking || working,
     onClick: async () => {
       setForking(true);

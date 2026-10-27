@@ -92,7 +92,7 @@ function screenApp(forkSessionBeforeMessage: ReturnType<typeof vi.fn>) {
 }
 
 const branchButtons = () =>
-  screen.getAllByRole("button", { name: "Edit in a new branch" });
+  screen.getAllByRole("button", { name: "Fork" });
 
 describe("edit an earlier message in a new branch", () => {
   it("forks before the message and opens the branch with its text in the composer", async () => {
