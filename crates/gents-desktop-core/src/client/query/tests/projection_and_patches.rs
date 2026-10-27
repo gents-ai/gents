@@ -747,6 +747,9 @@ fn request_projection_retains_every_field_needed_to_verify_signed_ancestry() {
     let projected: std::collections::BTreeSet<_> =
         AGENT_REQUEST_FIELDS.split_whitespace().collect();
     for field in gents::SIGNED_REQUEST_FIELDS.split_whitespace() {
-        assert!(projected.contains(field), "request projection omits {field}");
+        assert!(
+            projected.contains(field),
+            "request projection omits {field}"
+        );
     }
 }
