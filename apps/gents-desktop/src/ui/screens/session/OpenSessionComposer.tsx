@@ -1,5 +1,12 @@
 import { AttachmentTray, SentAttachments, useAttachmentDraft } from "./attachments";
-import { useMemo, useRef, type KeyboardEvent, type RefCallback } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  type KeyboardEvent,
+  type RefCallback,
+} from "react";
+import { useStore } from "zustand";
 import { ArrowDown, Check, Pencil, X } from "lucide-react";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
@@ -7,6 +14,7 @@ import { Composer } from "@gents/ui/conversation";
 import { cn } from "@gents/ui/lib/utils";
 import { useApp, useView } from "@/app/AppContext";
 import { useInterruptVisible, useSelectedNode } from "@/hooks/useClient";
+import { focusDraft } from "../../../hooks/draftStore";
 import { agentOf } from "@/lib/agents";
 import { placeholderFor } from "@/lib/send-status";
 import { SelectedChatFolder } from "../ChatFolderPicker";
@@ -25,6 +33,8 @@ import { ComposerEditContext, lastEditable, useComposerEditing } from "./compose
 import { GoalChip, goalCommand, goalIsEditable, useGoalMode } from "./goalMode";
 import { useComposerSend } from "./useComposerSend";
 import { useFollowUp } from "@/preferences";
+import { GoalDeliveryFeedback } from "./GoalDeliveryFeedback";
+import { ChatDeliveryFeedback } from "./ChatDeliveryFeedback";
 
 export function OpenSessionComposer({
   roomRef,
@@ -43,7 +53,7 @@ export function OpenSessionComposer({
   goal: DesktopSessionSnapshot["goal"];
   agentId: string | null;
 }) {
-  const { stores, actions } = useApp();
+  const { drafts, stores, actions } = useApp();
   const activityStatus = useView((view) => view.shellProjection.activityStatus);
   const sendStatus = useView((view) => view.shellProjection.nonEmptyContentSendStatus);
   const loadingStatus = useView((view) => view.loadingStatus);
@@ -95,6 +105,13 @@ export function OpenSessionComposer({
   const otherWay = followUp === "steer" ? "queue" : "steer";
   const blocked = sendStatus.kind === "disabled" && !inFlight;
   const covered = blocked && loadingStatus !== null;
+  const draftKey = useView((view) => view.draftKey);
+  const focusRequested = useStore(drafts, (state) => state.focus === draftKey);
+  useEffect(() => {
+    if (!focusRequested || blocked) return;
+    focusDraft(drafts, null);
+    textarea.current?.focus();
+  }, [focusRequested, blocked, drafts]);
 
   const attachments = useAttachmentDraft(
     attachmentRoot,
@@ -187,6 +204,8 @@ export function OpenSessionComposer({
       <ComposerEditContext.Provider value={editContext}>
         <SelectedPendingTray />
       </ComposerEditContext.Provider>
+      <GoalDeliveryFeedback />
+      <ChatDeliveryFeedback />
       <div
         data-testid="composer"
         ref={attachmentRoot}

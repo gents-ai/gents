@@ -149,6 +149,11 @@ impl Session {
         })
     }
 
+    /// The call is a job step, whose input `state` is the host's stored guest state.
+    pub(super) fn is_step(&self) -> bool {
+        matches!(self.caller.stamp.invocation(), Invocation::JobStep)
+    }
+
     /// Answers by request id; a refused request is its own error result,
     /// never the call's.
     pub(super) async fn serve(

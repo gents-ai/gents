@@ -291,14 +291,14 @@ async fn fetch_doc_patch_hydrates_mailbox_live_updates() {
         .execute(
             r#"mutation {
                 create_MailboxItem(input: {
-                    item_key: "graph:wait-live:ask:1",
+                    item_key: "session:wait-live:ask:1",
                     requester_did: "did:test:owner",
                     node_did: "did:test:agent",
                     status: "open",
                     kind: "ask",
                     action: "start_request",
                     title: "Live item",
-                    source_kind: "graph",
+                    source_kind: "session",
                     source_id: "wait-live",
                     target_node_did: "did:test:agent",
                     target_agent_id: "operator",
@@ -312,7 +312,7 @@ async fn fetch_doc_patch_hydrates_mailbox_live_updates() {
     let lookup = node
         .execute(
             r#"query {
-                MailboxItem(filter: { item_key: { _eq: "graph:wait-live:ask:1" } }) {
+                MailboxItem(filter: { item_key: { _eq: "session:wait-live:ask:1" } }) {
                     _docID
                 }
             }"#,
@@ -740,4 +740,16 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
         missing.observed_documents < 2,
         "the observer's missing-document predicate must distinguish this batch"
     );
+}
+
+#[test]
+fn request_projection_retains_every_field_needed_to_verify_signed_ancestry() {
+    let projected: std::collections::BTreeSet<_> =
+        AGENT_REQUEST_FIELDS.split_whitespace().collect();
+    for field in gents::SIGNED_REQUEST_FIELDS.split_whitespace() {
+        assert!(
+            projected.contains(field),
+            "request projection omits {field}"
+        );
+    }
 }

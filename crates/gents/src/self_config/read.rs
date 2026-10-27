@@ -96,7 +96,6 @@ impl SelfConfigCore {
             .map(crate::tool_surface::ResolvedToolSelection::from_document)
             .transpose()?;
         let lsp_selected = selection.as_ref().is_some_and(|s| s.enable_lsp);
-        let graph_selected = selection.as_ref().is_some_and(|s| s.enable_graph_tools);
         let configured_network_mode = canonical_tools
             .as_ref()
             .and_then(|tools| tools.host.as_ref())
@@ -259,11 +258,10 @@ impl SelfConfigCore {
             "execution_settings": execution_settings(documents.get("InferenceExecution"))?,
             "self_config": {"categories": categories, "no_lockout": no_lockout, "preview": preview},
             "tool_grants": {
-                "configured": { "lsp": lsp_selected, "native_graph_tools": graph_selected, "network_mode": configured_network_mode },
+                "configured": { "lsp": lsp_selected, "network_mode": configured_network_mode },
                 "confirmed_by": "canonical Tools selection decoded from durable configuration",
                 "activation": "Applies after reconciliation to later dispatched requests. Tool registration and successful execution must be tested in the working agent.",
                 "lsp_readiness": "Selection does not prove a language server is installed, started, or indexed.",
-                "graph_readiness": "Selection does not install a pack or grant graph caller admission. Use native list_graphs/run_graph on this node; do not adopt another runtime home or rebuild a CLI.",
             },
             "runtime_effective": {
                 "meaning": "agent_narrowing is saved permission; effective also applies this process's ceiling. Save lasting role restrictions in Tools even when this process already blocks access. Use tools edit with options.agent to select the role.",

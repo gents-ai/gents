@@ -19,11 +19,14 @@ export type SessionRow = {
   starter: { key: string; level: string | null } | null;
   /** of the sessions it started, the ones its open group leaves out */
   hidden: number;
+  /** the person keeps it at the head of its level */
+  pinned: boolean;
 };
 
 /* an open row shows this many of what it started; the rest are a level of
    their own away */
 export const OPENED_SHOWN = 5;
+const NONE_PINNED: ReadonlySet<string> = new Set();
 
 /**
  * One level of `sessions` (the sessions in scope, in list order): the ones
@@ -38,6 +41,8 @@ export const OPENED_SHOWN = 5;
  *   first `OPENED_SHOWN`, and any still working beyond them.
  * - While narrowed (`matches`), the level is flat: every match at or below
  *   it, each with the path from the level to it.
+ * - Pinned sessions (`pinned`) come first among the sessions beside them,
+ *   in list order.
  *
  * `shown` counts the matches (every session on the level when not narrowed),
  * out of `total`, the sessions at or below the level.
@@ -48,6 +53,7 @@ export function sessionRows({
   under,
   matches,
   isOpen = () => false,
+  pinned = NONE_PINNED,
 }: {
   sessions: readonly SessionSummary[];
   parentOf: (session: SessionSummary) => SessionSummary | null;
@@ -55,10 +61,16 @@ export function sessionRows({
   /** null when nothing narrows the list */
   matches: ((session: SessionSummary) => boolean) | null;
   isOpen?: (key: string) => boolean;
+  /** session keys */
+  pinned?: ReadonlySet<string>;
 }): { rows: SessionRow[]; trail: SessionSummary[]; shown: number; total: number } {
-  const listed = new Map(sessions.map((s) => [sessionKeyOf(s), s]));
+  const first = (s: SessionSummary) => pinned.has(sessionKeyOf(s));
+  const inOrder = pinned.size
+    ? [...sessions.filter(first), ...sessions.filter((s) => !first(s))]
+    : sessions;
+  const listed = new Map(inOrder.map((s) => [sessionKeyOf(s), s]));
   const starterOf = new Map<string, string>();
-  for (const session of sessions) {
+  for (const session of inOrder) {
     const parent = parentOf(session);
     const key = parent && sessionKeyOf(parent);
     if (key && listed.has(key)) starterOf.set(sessionKeyOf(session), key);
@@ -74,7 +86,7 @@ export function sessionRows({
   };
   const tops: SessionSummary[] = [];
   const startedBy = new Map<string, SessionSummary[]>();
-  for (const session of sessions) {
+  for (const session of inOrder) {
     const line = lineOf(sessionKeyOf(session));
     if (line.length === 1) {
       tops.push(session);
@@ -117,6 +129,7 @@ export function sessionRows({
       depth,
       open: !path && kin.length > 0 && isOpen(key),
       hidden: 0,
+      pinned: pinned.has(key),
       starter:
         starter && lineOf(key).length > 1
           ? {

@@ -141,7 +141,7 @@ pub(crate) fn latest_goal_request<'a>(
     latest_scoped_request(
         &goal.node_did,
         &goal.session_id,
-        Some(&goal.goal_id),
+        &goal.goal_id,
         rows,
         |row| {
             let Some((by_doc, openings)) = assignment.as_ref() else {
@@ -168,18 +168,10 @@ pub(crate) fn latest_goal_request<'a>(
     )
 }
 
-pub(crate) fn latest_authenticated_session_request<'a>(
-    node_did: &str,
-    session_id: &str,
-    rows: &'a [AgentRequestRow],
-) -> Option<&'a AgentRequestRow> {
-    latest_scoped_request(node_did, session_id, None, rows, |_| true)
-}
-
 fn latest_scoped_request<'a, F>(
     node_did: &str,
     session_id: &str,
-    goal_id: Option<&str>,
+    goal_id: &str,
     rows: &'a [AgentRequestRow],
     allowed: F,
 ) -> Option<&'a AgentRequestRow>
@@ -207,7 +199,7 @@ where
                 && child.caused_by_parent_request_doc_id == parent.doc_id
                 && child.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
                 && child.caused_by_trigger_kind.as_deref() == Some(GOAL_TRIGGER_KIND)
-                && goal_id.is_none_or(|expected| expected == original_goal_id)
+                && goal_id == original_goal_id
                 && in_scope(child)
                 && verify_goal_continuation_edge(
                     node_did,
@@ -224,7 +216,6 @@ where
 pub(crate) struct AuthenticatedGoalRequestMembers<'a> {
     pub(crate) entry: &'a AgentRequestRow,
     pub(crate) member_doc_ids: Vec<String>,
-    pub(crate) parents: std::collections::BTreeMap<String, String>,
 }
 
 pub(crate) fn authenticated_goal_request_members<'a>(
@@ -237,7 +228,16 @@ pub(crate) fn authenticated_goal_request_members<'a>(
     let current = *by_doc
         .get(current_doc_id)
         .context("current request is absent from its owner/session observation")?;
-    let entry = authenticated_entry(node_did, session_id, current, &by_doc, None)?;
+    let mut entries = rapidhash::RapidHashMap::default();
+    let entry = authenticated_physical_entry(
+        node_did,
+        session_id,
+        current,
+        &by_doc,
+        None,
+        None,
+        Some(&mut entries),
+    )?;
     let entry_doc = entry
         .doc_id
         .as_deref()
@@ -245,28 +245,33 @@ pub(crate) fn authenticated_goal_request_members<'a>(
     let mut member_doc_ids = by_doc
         .iter()
         .filter_map(|(doc, row)| {
-            authenticated_entry(node_did, session_id, row, &by_doc, None)
-                .ok()
-                .filter(|root| root.doc_id.as_deref() == Some(entry_doc))
-                .map(|_| (*doc).to_owned())
+            authenticated_physical_entry(
+                node_did,
+                session_id,
+                row,
+                &by_doc,
+                None,
+                None,
+                Some(&mut entries),
+            )
+            .ok()
+            .filter(|root| root.doc_id.as_deref() == Some(entry_doc))
+            .map(|_| (*doc).to_owned())
         })
         .collect::<Vec<_>>();
     member_doc_ids.sort_unstable();
-    let mut parents = std::collections::BTreeMap::new();
     for doc in &member_doc_ids {
         if doc == entry_doc {
             continue;
         }
-        let parent = by_doc[doc.as_str()]
+        by_doc[doc.as_str()]
             .caused_by_parent_request_doc_id
             .as_deref()
             .context("authenticated Goal member has no physical parent")?;
-        parents.insert(doc.clone(), parent.to_owned());
     }
     Ok(AuthenticatedGoalRequestMembers {
         entry,
         member_doc_ids,
-        parents,
     })
 }
 
@@ -318,6 +323,7 @@ pub(super) fn authenticated_assignment_entry<'a>(
         by_doc,
         expected_goal,
         Some(openings),
+        None,
     )
 }
 
@@ -328,7 +334,14 @@ pub(super) fn authenticated_entry<'a>(
     by_doc: &rapidhash::RapidHashMap<&'a str, &'a AgentRequestRow>,
     expected_goal: Option<&str>,
 ) -> Result<&'a AgentRequestRow> {
-    authenticated_physical_entry(node_did, session_id, row, by_doc, expected_goal, None)
+    authenticated_physical_entry(node_did, session_id, row, by_doc, expected_goal, None, None)
+}
+
+/// Authenticated suffixes are reusable only within one immutable owner/session
+/// observation. Assignment openings require their own retained-version checks.
+struct AuthenticatedSuffix<'a> {
+    entry: &'a AgentRequestRow,
+    goal_id: Option<&'a str>,
 }
 
 fn authenticated_physical_entry<'a>(
@@ -338,10 +351,14 @@ fn authenticated_physical_entry<'a>(
     by_doc: &rapidhash::RapidHashMap<&'a str, &'a AgentRequestRow>,
     expected_goal: Option<&str>,
     assignment_openings: Option<&AssignmentOpenings<'_>>,
+    mut entries: Option<&mut rapidhash::RapidHashMap<&'a str, AuthenticatedSuffix<'a>>>,
 ) -> Result<&'a AgentRequestRow> {
+    if assignment_openings.is_some() {
+        entries = None;
+    }
     let mut visited = rapidhash::RapidHashSet::default();
     let mut path_goal: Option<&str> = None;
-    loop {
+    let entry = loop {
         let doc = row
             .doc_id
             .as_deref()
@@ -353,6 +370,15 @@ fn authenticated_physical_entry<'a>(
                 && row.session_id.as_deref() == Some(session_id),
             "request ancestry is outside its owner/session"
         );
+        if let Some(suffix) = entries.as_ref().and_then(|entries| entries.get(doc)) {
+            anyhow::ensure!(
+                expected_goal
+                    .or(path_goal)
+                    .is_none_or(|expected| suffix.goal_id.is_none_or(|goal| expected == goal)),
+                "Goal continuation belongs to another assignment"
+            );
+            break suffix.entry;
+        }
         verify_request_receipt_signature(row)?;
         if row.caused_by_trigger_kind.as_deref() != Some(GOAL_TRIGGER_KIND) {
             let opening_goals = assignment_openings.and_then(|openings| openings.get(doc));
@@ -370,7 +396,7 @@ fn authenticated_physical_entry<'a>(
                     .is_none_or(|input| input.goal_assignment.is_none())
                 && crate::lifecycle::queue::row_is_automated_wakeup(row);
             if !follows_wake {
-                return Ok(row);
+                break row;
             }
             let parent_doc = row
                 .caused_by_parent_request_doc_id
@@ -422,10 +448,25 @@ fn authenticated_physical_entry<'a>(
             .and_then(|openings| openings.get(doc))
             .is_some_and(|goals| goals.contains(goal_id))
         {
-            return Ok(row);
+            break row;
         }
         row = parent;
+    };
+    if let Some(entries) = entries {
+        for doc in visited {
+            let row = by_doc[doc];
+            entries.insert(
+                doc,
+                AuthenticatedSuffix {
+                    entry,
+                    goal_id: row.caused_by_trigger_id.as_deref().filter(|_| {
+                        row.caused_by_trigger_kind.as_deref() == Some(GOAL_TRIGGER_KIND)
+                    }),
+                },
+            );
+        }
     }
+    Ok(entry)
 }
 
 pub(crate) fn goal_session_is_idle(rows: &[AgentRequestRow]) -> bool {

@@ -447,3 +447,6 @@ mod contract_tests;
 
 #[cfg(test)]
 mod command_grant_contract_tests;
+
+#[cfg(all(test, target_os = "macos"))]
+mod command_browser_approval_tests;

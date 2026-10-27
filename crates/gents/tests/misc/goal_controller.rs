@@ -345,6 +345,15 @@ fn unready_source(db: &TestDb) -> (GoalSource, watch::Sender<Arc<ActiveRuntimeSn
 }
 
 async fn seed_signed_terminal_request(db: &TestDb, request_id: &str, state: &str) -> String {
+    seed_signed_terminal_request_in_session(db, request_id, SESSION, state).await
+}
+
+async fn seed_signed_terminal_request_in_session(
+    db: &TestDb,
+    request_id: &str,
+    session: &str,
+    state: &str,
+) -> String {
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };
@@ -356,7 +365,7 @@ async fn seed_signed_terminal_request(db: &TestDb, request_id: &str, state: &str
         did,
         did,
         crate::support::AGENT_NAME,
-        SESSION,
+        session,
         "hello",
         "interactive",
         "2026-07-15T00:00:00Z",
@@ -1023,19 +1032,8 @@ async fn delimiter_ambiguous_goal_parent_pairs_get_distinct_retry_keys() {
     let db = test_db("goal-delimiter-safe-key").await;
     let did = db.node_identity.did();
     for (session, parent) in [("b:c", "d"), ("b", "c:d")] {
-        let doc_id = create_request_for_agent_with_signed_fields(
-            db.node.as_ref(),
-            did,
-            parent,
-            session,
-            "completed",
-            "2026-07-15T00:00:00Z",
-            None,
-            None,
-            None,
-            None,
-        )
-        .await;
+        let doc_id =
+            seed_signed_terminal_request_in_session(&db, parent, session, "completed").await;
         publish_canonical_terminal_activity(&db, &doc_id, "progress").await;
         assert!(!doc_id.is_empty());
         set_goal(
@@ -4656,3 +4654,6 @@ async fn closed_goal_notifications_keep_durable_continuation_and_cancellation_li
             .is_none()
     );
 }
+
+#[path = "goal_controller/control_failure.rs"]
+mod control_failure;

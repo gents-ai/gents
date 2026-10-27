@@ -533,7 +533,7 @@ async fn help_is_layered_and_its_recipes_run_as_written() {
             page.len()
         );
     }
-    for alias in ["task", "trigger", "event-source", "agent", "graph"] {
+    for alias in ["task", "trigger", "event-source", "agent"] {
         call_config_tool(&tools, vec!["help".into(), alias.into()])
             .await
             .unwrap_or_else(|error| panic!("{alias}: {error}"));
@@ -1077,7 +1077,6 @@ async fn job_block_help_topic_states_bounds_defaults_and_policy() {
         "dynamic: off|check|run; default check",
         "dynamic_targets",
         "trusted_packs",
-        "project_roots",
         "operator-only",
     ] {
         assert!(shapes.contains(detail), "missing {detail:?}: {shapes}");

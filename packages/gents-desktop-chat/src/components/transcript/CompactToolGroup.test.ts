@@ -440,3 +440,55 @@ it("retains unchanged group objects across adjacent physical request boundaries"
   expect(result[0]).toBe(first);
   expect(result[1]).toBe(second);
 });
+
+describe("activity totals and failures", () => {
+  function command(key: string, status: string): RenderedToolCallView {
+    return {
+      ...tool(key, status),
+      toolName: "bash",
+      presentation: {
+        kind: "command",
+        command: "echo check",
+        exitCode: status === "error" ? 1 : 0,
+        timedOut: false,
+        failed: status === "error",
+        durationMs: null,
+        cwd: null,
+        executionMode: null,
+        networkMode: null,
+        stdout: "",
+        stderr: "",
+        fallbackOutput: null,
+      },
+    };
+  }
+  it.each([1, 3])("counts all four commands when %s succeed", (succeeded) => {
+    const tools = Array.from({ length: 4 }, (_, i) =>
+      command(`command-${i}`, i < succeeded ? "success" : "error"),
+    );
+    const html = renderToStaticMarkup(
+      createElement(CompactToolGroup, { tools }),
+    );
+    expect(html).toContain("Ran 4 commands");
+    expect(html).toContain(
+      `${4 - succeeded} ${succeeded === 3 ? "command" : "commands"} failed`,
+    );
+  });
+  it("counts all-failed commands and keeps cancellation and unknown facts separate", () => {
+    const html = renderToStaticMarkup(
+      createElement(CompactToolGroup, {
+        tools: [
+          command("failed-1", "error"),
+          command("failed-2", "error"),
+          command("cancelled", "cancelled"),
+          command("unknown", "unknown"),
+        ],
+      }),
+    );
+    expect(html).toContain("Ran 2 commands");
+    expect(html).toContain("2 commands failed");
+    expect(html).toContain("1 action stopped");
+    expect(html).toContain("1 status unavailable");
+    expect(html).not.toContain("Ran 4 commands");
+  });
+});

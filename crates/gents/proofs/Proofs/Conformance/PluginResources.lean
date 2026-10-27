@@ -182,51 +182,7 @@ private def publicationJson : Json := toJson <| [false, true].flatMap fun previo
       ("expected", if PluginPublication.installedNew events then toJson "new"
         else if previous then toJson "previous" else Json.null)]
 
-section Mounts
-
-private def packMount (installed trusted : Bool) (via : InstallProvenance) : AssetMount :=
-  { klass := .pack "workflows", pack := "pack-a", installDigest := "digest-a",
-    path := "/cache/digest-a/workflows", installed := installed, trusted := trusted, via := via,
-    files := [] }
-
-private def projectWorkflows : AssetMount := projectMount "/work/repo/.gents/workflows"
-
-private def mountLists : List (List AssetMount) :=
-  [ [], [packMount true true .operator], [packMount true false .selfConfig]
-  , [packMount false true .operator], [projectWorkflows]
-  , [packMount true true .operator, projectWorkflows] ]
-
-def assetMountCases : List (Bool × List AssetMount) :=
-  [false, true].flatMap fun rwBind => mountLists.map (rwBind, ·)
-
-def assetMountVerdict (c : Bool × List AssetMount) : List (Option PluginAccess) × Bool :=
-  (c.2.map mountAccess, mountCallAdmitted c.1 c.2)
-
-private def renderMount (m : AssetMount) : Json := Json.mkObj [
-  ("pack", toJson m.pack),
-  ("class", toJson (match m.klass with | .pack klass => klass | .project => "project")),
-  ("digest", toJson m.installDigest), ("path", toJson m.path), ("trusted", toJson m.trusted),
-  ("installed", toJson m.installed)]
-
-private def assetMountJson : Json := toJson <| assetMountCases.map fun c =>
-  let (access, admitted) := assetMountVerdict c
-  Json.mkObj [("rw_bind", toJson c.1), ("mounts", toJson (c.2.map renderMount)),
-    ("access", toJson (access.map fun (a : Option PluginAccess) => match a with
-      | none => Json.null | some a => toJson a.spelling)),
-    ("admitted", toJson admitted)]
-
-/-- The host relation "`cwd` lies within `root`" compares whole path components. -/
-private def within (root cwd : String) : Bool :=
-  cwd == root || cwd.startsWith (root ++ "/")
-
-def projectTierCases : List (String × List String) :=
-  ["/work/repo", "/work/repo/sub", "/work/other", "/work/repository"].flatMap fun cwd =>
-    [[], ["/work/repo"], ["/elsewhere"], ["/elsewhere", "/work/repo"]].map (cwd, ·)
-
-def projectTierVerdict (c : String × List String) : Bool := projectPreopen c.1 c.2 within
-
-private def projectTierJson : Json := toJson <| projectTierCases.map fun c => Json.mkObj [
-  ("cwd", toJson c.1), ("project_roots", toJson c.2), ("expected", toJson (projectTierVerdict c))]
+section Scratch
 
 structure ScratchCase where
   cwdAllowed : Bool
@@ -259,14 +215,6 @@ private def scratchJson : Json := toJson <| scratchCases.map fun c => Json.mkObj
   ("size", toJson c.size), ("count", toJson c.count), ("expected", toJson (scratchVerdict c))]
 
 theorem job_resource_regressions :
-    assetMountCases.map assetMountVerdict =
-      [ ([], true), ([some .read], true), ([some .read], true), ([none], true)
-      , ([some .read], true), ([some .read, some .read], true)
-      , ([], true), ([some .read], false), ([some .read], false), ([none], false)
-      , ([some .read], false), ([some .read, some .read], false) ] ∧
-    projectTierCases.map projectTierVerdict =
-      [ false, true, false, true, false, true, false, true
-      , false, false, false, false, false, false, false, false ] ∧
     scratchCases.map scratchVerdict =
       [ some "/work/repo/.gents/workflows/runs/call-1/notes.md"
       , some "/work/repo/.gents/workflows/runs/call-1/notes.md"
@@ -276,7 +224,7 @@ theorem job_resource_regressions :
       , none, none, none ] := by
   native_decide
 
-end Mounts
+end Scratch
 
 section Data
 open PluginData
@@ -455,7 +403,5 @@ def casesJson : String := (Json.mkObj [("consent", consentJson), ("budgets", bud
   ("tool_effect_accounting", PluginEffects.accountingCasesJson),
   ("model_slots", modelSlotsJson), ("network", networkJson),
   ("call_access", callAccessJson), ("invocation", invocationJson), ("receipt", Conformance.PluginReceipt.casesJson),
-  ("asset_mount", assetMountJson),
-  ("project_tier", projectTierJson),
   ("scratch", scratchJson)]).compress
 end Conformance.PluginResources

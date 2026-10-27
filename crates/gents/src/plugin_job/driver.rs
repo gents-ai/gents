@@ -2,7 +2,6 @@
 //! canonical tool output.
 
 use rapidhash::{HashMapExt, RapidHashMap};
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 
@@ -10,7 +9,7 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::job::{
     DataWrite, JobControlKind, JobFailure, JobPauseReason, JobPin, JobProgress, JobScratch,
-    JobState, JobStepInput, JobStepOutput, JobSuspend, JobSuspendKind,
+    JobState, JobStepInput, JobStepOutput, JobSuspend, JobSuspendKind, JOB_GUEST_STATE_MAX_BYTES,
 };
 use gents_protocol::plugin::PluginExecutionReceipt;
 use serde::Deserialize;
@@ -21,14 +20,14 @@ use super::admit::{
     admit_step, fresh_spawns, root_call_of, HostFacts, Refusal, StepCall, StepContext, StepRow,
 };
 use super::control::{
-    kill, kill_decision, observe_live_children, KillCause, KillObservation, KillOutcome,
+    kill, kill_as, kill_decision, observe_live_children, KillCause, KillObservation, KillOutcome,
 };
 use super::effects::{
     interrupt_slots, recover_step_commit, stage_recorded_effects_in_txn, write_scratch, JobContext,
 };
 use super::input::{build_step_input, chain_of, derive_children_in_txn, CallArgs, StepKind};
 use super::keys::job_session_id;
-use super::origin::{engine_guard, script_index, trusted_hint};
+use super::origin::engine_guard;
 use super::records::{
     read_pin, read_progress, read_step_state, write_progress_in_txn, write_step_state_in_txn,
     HostProgressFacts, RecordError,
@@ -38,7 +37,6 @@ use crate::background_tools::ProcessControlScope;
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::SessionMessageCause;
-use crate::pack::InstalledVia;
 use crate::plugin::data::{DataCaller, StampContext};
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::job_calls::{job_state, JobCaller};
@@ -68,6 +66,11 @@ pub enum Settlement {
     Fail(JobFailure),
     Suspend(JobSuspend),
     Refused(Refusal),
+    /// `Refused(StepFailed)` with the third step's own error, so the caller
+    /// learns what the guest got wrong without reading the host log.
+    StepFailed {
+        last_error: String,
+    },
     Control(JobControlKind),
 }
 
@@ -78,7 +81,11 @@ pub(super) struct Terminal {
     pub(super) state: ToolCallState,
     output: Value,
     reason: Option<String>,
-    progress: Option<(JobState, Option<JobPauseReason>)>,
+    /// The job state, pause reason and, for a host-ended row, the last event
+    /// the stored progress is stamped with, so a killed row reads as ended. A
+    /// guest terminal (`Result`, `Fail`) is stamped by its own step
+    /// transaction and carries `None`.
+    progress: Option<(JobState, Option<JobPauseReason>, Option<String>)>,
 }
 
 /// The settlement table. `None` for `Refused(Terminal)`: the row already ended.
@@ -89,11 +96,36 @@ fn terminal(settlement: Settlement, tool: &str, address: &str) -> Option<Termina
         reason,
         progress: None,
     };
+    let killed = |state, output, reason, event: String| Terminal {
+        state,
+        output,
+        reason,
+        progress: Some((job_state(state, None), None, Some(event))),
+    };
+    let refused = |refusal: Refusal, last_error: Option<&str>| {
+        let code = refusal.code()?;
+        let (state, status) = if refusal == Refusal::TimedOut {
+            (ToolCallState::TimedOut, "timed_out")
+        } else {
+            (ToolCallState::Failed, "failed")
+        };
+        let (message, next) = refusal_text(refusal, tool, address);
+        let message = match last_error {
+            Some(last_error) => format!("{message}; last: {last_error}"),
+            None => message.to_owned(),
+        };
+        Some(killed(
+            state,
+            json!({"status": status, "code": code, "message": message, "next": next}),
+            Some(code.to_owned()),
+            message,
+        ))
+    };
     let paused = |reason: Option<JobPauseReason>, message: &str| Terminal {
         state: ToolCallState::Completed,
         output: json!({"status": "paused", "reason": reason, "message": message}),
         reason: None,
-        progress: Some((JobState::Paused, reason)),
+        progress: Some((JobState::Paused, reason, None)),
     };
     Some(match settlement {
         Settlement::Result(result) => ended(ToolCallState::Completed, result, None),
@@ -117,26 +149,15 @@ fn terminal(settlement: Settlement, tool: &str, address: &str) -> Option<Termina
             state: ToolCallState::Completed,
             output: json!({"status": "awaiting_user", "question": question, "message": message}),
             reason: None,
-            progress: Some((JobState::AwaitingUser, None)),
+            progress: Some((JobState::AwaitingUser, None, None)),
         },
-        Settlement::Refused(refusal) => {
-            let code = refusal.code()?;
-            let (state, status) = if refusal == Refusal::TimedOut {
-                (ToolCallState::TimedOut, "timed_out")
-            } else {
-                (ToolCallState::Failed, "failed")
-            };
-            let (message, next) = refusal_text(refusal, tool, address);
-            ended(
-                state,
-                json!({"status": status, "code": code, "message": message, "next": next}),
-                Some(code.to_owned()),
-            )
-        }
-        Settlement::Control(JobControlKind::Stop) => ended(
+        Settlement::StepFailed { last_error } => refused(Refusal::StepFailed, Some(&last_error))?,
+        Settlement::Refused(refusal) => refused(refusal, None)?,
+        Settlement::Control(JobControlKind::Stop) => killed(
             ToolCallState::Cancelled,
             json!({"status": "cancelled", "message": "the job was stopped"}),
             Some("explicit_cancel".to_owned()),
+            "the job was stopped".to_owned(),
         ),
         Settlement::Control(JobControlKind::Pause) => {
             paused(Some(JobPauseReason::User), "the job was paused")
@@ -146,21 +167,25 @@ fn terminal(settlement: Settlement, tool: &str, address: &str) -> Option<Termina
 
 /// What a host refusal means and the call that follows it.
 pub(super) fn refusal_text(refusal: Refusal, tool: &str, address: &str) -> (&'static str, String) {
-    let inspect = format!("Next: `{tool} status {address}`, then `{tool} resume {address}`");
+    let inspect =
+        format!("Next: `gents job show {address}`; the `{tool}` help says how a run is resumed");
     match refusal {
-        Refusal::Stalled => ("the job stopped making progress", inspect),
+        Refusal::Stalled => (
+            "the job stopped making progress: every child is terminal and the step spawned nothing and sent no message",
+            inspect,
+        ),
         Refusal::PolicyDenied => ("the job asked for something its policy refuses", inspect),
         Refusal::DynamicCodeDisabled => (
             "`job.policy.dynamic` is `off`; dynamic script execution is disabled",
-            "Next: use an operator-installed script, or ask the operator to enable dynamic execution in `job.policy.dynamic`".to_owned(),
+            format!("Next: call `{tool}` without a `script` to run the installed plugin, or ask the operator to enable dynamic execution in `job.policy.dynamic`"),
         ),
         Refusal::NotAvailable => (
             "the job's plugin or its job grant is no longer available",
-            format!("Next: ask the operator to restore `{tool}` and its `job` block, then `{tool} resume {address}`"),
+            format!("Next: ask the operator to restore `{tool}` and its `job` block, then call `{tool}` again"),
         ),
         Refusal::EngineChanged => (
-            "the job's engine changed since the job was pinned",
-            format!("Next: `{tool} resume {address} --engine current`"),
+            "the job's plugin changed since the job was pinned",
+            format!("Next: call `{tool}` again to start a new run; `gents job show {address}` keeps the old one"),
         ),
         Refusal::DepthExceeded => (
             "the job would run too deep in a chain of jobs",
@@ -173,7 +198,8 @@ pub(super) fn refusal_text(refusal: Refusal, tool: &str, address: &str) -> (&'st
             "Next: wait for a background completion notification, then retry".to_owned(),
         ),
         Refusal::Terminal => ("the job already ended", inspect),
-        Refusal::ResumeUnknown | Refusal::ResumeNotHead => {
+        Refusal::ResumeUnknown => ("the job's resume named a row that does not exist", inspect),
+        Refusal::ResumeNotHead => {
             ("the job's resume named a row that is not the newest of a run", inspect)
         }
     }
@@ -349,11 +375,13 @@ async fn step_on(
             let trapped = error
                 .chain()
                 .any(|cause| cause.downcast_ref::<GuestTrap>().is_some());
-            let error = if trapped {
-                anyhow::Error::new(StepFailure::Trap(format!("{error:#}")))
+            // A non-trap call error counts too: it raises no progress
+            // revision, so recovery would otherwise re-step the row every sweep.
+            let error = anyhow::Error::new(if trapped {
+                StepFailure::Trap(format!("{error:#}"))
             } else {
-                error
-            };
+                StepFailure::NotRun(format!("{error:#}"))
+            });
             return Err(error.context(format!("the step of job row {row_doc_id} did not run")));
         }
     };
@@ -367,6 +395,20 @@ async fn step_on(
         anyhow::Error::new(StepFailure::MalformedOutput(error.to_string()))
             .context(format!("decoding the step output of job row {row_doc_id}"))
     })?;
+    // Checked before the step transaction so the driver counts it.
+    if let Some(bytes) = guest_state_of(&output)
+        .map(|state| state.to_string().len())
+        .filter(|bytes| *bytes > JOB_GUEST_STATE_MAX_BYTES)
+    {
+        let too_large = RecordError::GuestStateTooLarge {
+            bytes,
+            max: JOB_GUEST_STATE_MAX_BYTES,
+        };
+        return Err(
+            anyhow::Error::new(StepFailure::MalformedOutput(too_large.to_string()))
+                .context(format!("the step output of job row {row_doc_id}")),
+        );
+    }
 
     let scratch = scratch_of(&output);
     if !scratch.is_empty() {
@@ -592,7 +634,7 @@ async fn step_transaction(
         },
     )
     .await?;
-    write_step_state_in_txn(txn, row_doc_id, receipt, None).await?;
+    write_step_state_in_txn(txn, row_doc_id, receipt, None, guest_state_of(output)).await?;
     // (f)
     let Some(settlement) = settlement_of(output) else {
         return Ok(Stepped::Committed(None));
@@ -629,7 +671,7 @@ async fn step_context(
 }
 
 /// [`step_context`] over the host `facts` a step is admitted with; they name
-/// the plugin and the working folder the live settings and mounts are read for.
+/// the plugin and the working folder the live settings are read for.
 pub(super) async fn step_context_for(
     txn: &ConfigApplyTxn<'_>,
     runtime: &JobRuntime,
@@ -657,23 +699,6 @@ pub(super) async fn step_context_for(
         .and_then(|(namespace, name)| read_record(&runtime.home, namespace, name).ok());
     let policy = settings.as_ref().map(|settings| &settings.policy);
     let cwd = Path::new(&facts.cwd);
-    let installed_trusted_sources = match &installed {
-        Some(plugin) => {
-            let index = script_index(&runtime.home, plugin, policy, Some(cwd))?;
-            let via: BTreeMap<&str, InstalledVia> = index
-                .installed_via
-                .iter()
-                .map(|(pack, via)| (pack.as_str(), *via))
-                .collect();
-            index
-                .files
-                .iter()
-                .filter(|(_, pack, _, class)| trusted_hint(pack, class, &via, &index.trusted_packs))
-                .map(|(sha, ..)| sha.clone())
-                .collect()
-        }
-        None => Vec::new(),
-    };
     let key = |target: &crate::document_config::AgentTargetDocument| {
         (target.target_node_did.clone(), target.agent_id.clone())
     };
@@ -732,7 +757,6 @@ pub(super) async fn step_context_for(
         engine_provenance_operator: installed
             .as_ref()
             .is_some_and(|plugin| engine_guard(&runtime.home, plugin).is_ok()),
-        installed_trusted_sources,
         max_hop: max_request_hop_in_txn(txn, &caller.node_did).await?,
         target_hops,
         target_ids: targets
@@ -743,7 +767,6 @@ pub(super) async fn step_context_for(
         started_by_job: false,
         cwd_allowed,
         within,
-        named_origin: None,
         adoption_facts: facts.clone(),
         caller_scope: ProcessControlScope {
             request_id: caller.request_id.clone(),
@@ -837,7 +860,7 @@ async fn fail_closed(
     Ok(StepOutcome::Refused(refusal))
 }
 
-/// A step invocation that failed: the three failures that count towards
+/// A step invocation that failed: the failures that count towards
 /// `plugin_job_step_failed`.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StepFailure {
@@ -847,6 +870,8 @@ pub enum StepFailure {
     BudgetExhausted,
     #[error("the guest returned a malformed step output: {0}")]
     MalformedOutput(String),
+    #[error("the plugin call did not run: {0}")]
+    NotRun(String),
 }
 
 /// What a step failure means for the row.
@@ -1124,10 +1149,13 @@ impl JobDriver {
             .read = Some((row.clone(), observed));
         let verdict = self.on_step_failure(row_doc_id, error);
         if verdict == FailureVerdict::Settle {
-            kill(
+            kill_as(
                 &access,
                 &mut lifecycle,
                 KillCause::FailClosed(Refusal::StepFailed),
+                Settlement::StepFailed {
+                    last_error: error.to_string(),
+                },
             )
             .await?;
             self.failures
@@ -1189,6 +1217,16 @@ pub(super) fn scratch_of(output: &JobStepOutput) -> &[JobScratch] {
         JobStepOutput::Result { scratch, .. } | JobStepOutput::Suspend { scratch, .. } => scratch,
         JobStepOutput::Effects { effects } => &effects.scratch,
         JobStepOutput::Fail { .. } => &[],
+    }
+}
+
+/// The guest state a step carries for its next step: on `effects`, or on a
+/// `suspend` so a resume starts from it. Terminal results carry none.
+pub(super) fn guest_state_of(output: &JobStepOutput) -> Option<&serde_json::Value> {
+    match output {
+        JobStepOutput::Effects { effects } => effects.state.as_ref(),
+        JobStepOutput::Suspend { state, .. } => state.as_ref(),
+        JobStepOutput::Result { .. } | JobStepOutput::Fail { .. } => None,
     }
 }
 
@@ -1308,7 +1346,6 @@ async fn read_row(txn: &ConfigApplyTxn<'_>, row_doc_id: &str) -> Result<StepRow>
                 .args
                 .map(|args| serde_json::to_string(&args))
                 .transpose()?,
-            path: call.path,
             script: call.script,
             agent_budget: call.agent_budget,
         },
@@ -1638,6 +1675,55 @@ pub(crate) mod tests {
         finish(admission).await;
     }
 
+    /// The terminal stamp never fails a host kill: a row whose guest progress
+    /// sits just under the cap still settles.
+    #[tokio::test]
+    async fn a_host_kill_settles_a_row_whose_progress_sits_just_under_the_cap() {
+        use super::super::records::{write_progress_in_txn, HostProgressFacts};
+        use gents_protocol::job::{JobPhase, JobPhaseState, JOB_PROGRESS_MAX_BYTES};
+        let mut admission = job_row("driver-full-progress").await;
+        let mut full = stored_progress(&admission).await;
+        full.last_event = String::new();
+        let phase = JobPhase {
+            title: "p".repeat(200),
+            state: JobPhaseState::Done,
+        };
+        let bytes = |progress: &JobProgress| {
+            serde_json::to_vec(&JobProgress {
+                revision: progress.revision + 1,
+                ..progress.clone()
+            })
+            .unwrap()
+            .len()
+        };
+        while bytes(&full) + 250 < JOB_PROGRESS_MAX_BYTES {
+            full.phases.push(phase.clone());
+        }
+        full.title
+            .push_str(&"t".repeat(JOB_PROGRESS_MAX_BYTES - bytes(&full) - 4));
+        let doc_id = admission.tool.doc_id().unwrap().to_owned();
+        ConfigAccess::transact_local_write(&admission.node, None, "test.driver.full", |txn| {
+            let (doc_id, full) = (doc_id.clone(), full.clone());
+            Box::pin(async move {
+                let host = HostProgressFacts {
+                    spawned: full.spawned,
+                    budget: full.budget.clone(),
+                    observed_terminal_children: full.observed_terminal_children,
+                    state: full.state,
+                    pause_reason: None,
+                };
+                write_progress_in_txn(txn, &doc_id, full.revision, full, host).await
+            })
+        })
+        .await
+        .unwrap();
+        settle_plugin_job(&mut admission.tool, Settlement::Refused(Refusal::TimedOut))
+            .await
+            .unwrap();
+        assert_eq!(stored_row(&admission).await["lifecycle_state"], "timedOut");
+        finish(admission).await;
+    }
+
     #[tokio::test]
     async fn stop_control_settles_cancelled_and_pause_control_settles_paused_by_user() {
         let (stopped, row) = settled(
@@ -1770,8 +1856,10 @@ pub(crate) mod tests {
             |txn| {
                 let doc_id = doc_id.clone();
                 Box::pin(async move {
-                    super::super::records::write_step_state_in_txn(txn, &doc_id, evidence, None)
-                        .await
+                    super::super::records::write_step_state_in_txn(
+                        txn, &doc_id, evidence, None, None,
+                    )
+                    .await
                 })
             },
         )
@@ -2539,7 +2627,7 @@ pub(crate) mod tests {
         let earlier = evidence("persisted");
         ConfigAccess::transact_local_write(&step.job.node, None, "test.driver.earlier", |txn| {
             let (row, earlier) = (step.row.clone(), earlier.clone());
-            Box::pin(async move { write_step_state_in_txn(txn, &row, &earlier, None).await })
+            Box::pin(async move { write_step_state_in_txn(txn, &row, &earlier, None, None).await })
         })
         .await
         .unwrap();
@@ -2669,7 +2757,6 @@ pub(crate) mod tests {
             call: StepCall {
                 argv: vec!["run".to_owned()],
                 args: None,
-                path: None,
                 script: None,
                 agent_budget: None,
             },
@@ -2840,7 +2927,7 @@ pub(crate) mod tests {
         let earlier = evidence("earlier");
         ConfigAccess::transact_local_write(&step.job.node, None, "test.driver.earlier", |txn| {
             let (row, earlier) = (step.row.clone(), earlier.clone());
-            Box::pin(async move { write_step_state_in_txn(txn, &row, &earlier, None).await })
+            Box::pin(async move { write_step_state_in_txn(txn, &row, &earlier, None, None).await })
         })
         .await
         .unwrap();
@@ -2852,9 +2939,18 @@ pub(crate) mod tests {
         let output = step.output(&step.row).await;
         assert_eq!(output["code"], "plugin_job_step_failed");
         let next = output["next"].as_str().unwrap();
+        assert!(next.contains("gents job show"), "{next}");
+        let message = output["message"].as_str().unwrap();
         assert!(
-            next.contains("workflow status") && next.contains("workflow resume"),
-            "{next}"
+            message.starts_with("three consecutive job steps failed; last: ")
+                && message.contains("malformed step output"),
+            "the failure must name the last step error: {message}"
+        );
+        let progress = step.progress(&step.row).await;
+        assert_eq!(progress.state, JobState::Failed, "{progress:?}");
+        assert!(
+            message.starts_with(progress.last_event.as_str()),
+            "the last event is the failure message (cut to the record cap): {progress:?}"
         );
         assert_eq!(
             stored_receipt(&row),
@@ -2865,9 +2961,8 @@ pub(crate) mod tests {
             }
         );
         assert_eq!(
-            step.progress(&step.row).await.revision,
-            1,
-            "nothing committed"
+            progress.revision, 2,
+            "the failed steps committed nothing; the terminal stamp is the only write"
         );
         step.close().await;
     }
@@ -2951,6 +3046,111 @@ pub(crate) mod tests {
             "{error:#}"
         );
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "running");
+        step.close().await;
+    }
+
+    #[tokio::test]
+    async fn a_step_call_error_that_is_not_a_trap_counts_towards_step_failed() {
+        let step = stepper_wat(r#"(module (memory (export "memory") 1))"#).await;
+        let error = run_step(&step.job.runtime, &step.row).await.unwrap_err();
+        assert!(
+            matches!(
+                error.downcast_ref::<StepFailure>(),
+                Some(StepFailure::NotRun(_))
+            ),
+            "the call error is not a trap: {error:#}"
+        );
+        let driver = JobDriver::new(step.job.runtime.clone());
+        let sweep = crate::plugin_job::recovery::redrive_running_jobs;
+        // The sweep re-steps the row, which has not stepped since adoption.
+        sweep(&driver).await.unwrap();
+        idle(&driver).await;
+        assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "failed");
+        assert_eq!(
+            step.output(&step.row).await["code"],
+            "plugin_job_step_failed"
+        );
+        assert_eq!(
+            sweep(&driver).await.unwrap(),
+            0,
+            "a failed row is not re-stepped"
+        );
+        step.close().await;
+    }
+
+    /// Lean `guest_state_opaque`: the state a step carries is stored beside
+    /// its records and echoed to the next step's input, untouched by the host.
+    #[tokio::test]
+    async fn a_steps_guest_state_is_stored_and_echoed_to_the_next_step() {
+        let step = stepper(json!({"effects": {
+            "spawn": [{"slot": "1:a", "attempt": 0, "target": "t-a", "prompt": "p", "title": "a"}],
+            "state": {"phase": "scan", "paths": ["src/lib.rs"]},
+        }}))
+        .await;
+        assert_eq!(step.run(&step.row).await, StepOutcome::Committed);
+        let stored = step.state(&step.row).await.unwrap();
+        assert_eq!(
+            stored.guest,
+            Some(json!({"phase": "scan", "paths": ["src/lib.rs"]}))
+        );
+        let (input, _) = step.input(&step.row).await;
+        assert_eq!(
+            input.state,
+            Some(json!({"phase": "scan", "paths": ["src/lib.rs"]}))
+        );
+        step.close().await;
+    }
+
+    /// A step that carries no state keeps the stored one.
+    #[tokio::test]
+    async fn a_step_without_state_keeps_the_stored_one() {
+        let step = stepper(json!({"effects": {
+            "spawn": [{"slot": "1:a", "attempt": 0, "target": "t-a", "prompt": "p", "title": "a"}],
+        }}))
+        .await;
+        step.job
+            .write_guest_state(&step.row, &json!({"phase": "recon"}))
+            .await;
+        assert_eq!(step.run(&step.row).await, StepOutcome::Committed);
+        assert_eq!(
+            step.state(&step.row).await.unwrap().guest,
+            Some(json!({"phase": "recon"}))
+        );
+        step.close().await;
+    }
+
+    /// A state over `JOB_GUEST_STATE_MAX_BYTES` is a malformed output: nothing
+    /// is stored, and the driver counts it until the row fails closed.
+    #[tokio::test]
+    async fn a_guest_state_over_the_cap_fails_the_step_and_stores_nothing() {
+        let big = "x".repeat(gents_protocol::job::JOB_GUEST_STATE_MAX_BYTES + 1);
+        let step = stepper(json!({"effects": {
+            "spawn": [{"slot": "1:a", "attempt": 0, "target": "t-a", "prompt": "p", "title": "a"}],
+            "state": {"blob": big},
+        }}))
+        .await;
+        let outcome = run_step(&step.job.runtime, &step.row).await;
+        assert!(
+            matches!(
+                outcome
+                    .as_ref()
+                    .map_err(|error| error.downcast_ref::<StepFailure>()),
+                Err(Some(StepFailure::MalformedOutput(_)))
+            ),
+            "an over-cap state is a malformed output: {outcome:?}"
+        );
+        assert_eq!(
+            step.state(&step.row).await.and_then(|state| state.guest),
+            None
+        );
+        let driver = JobDriver::new(step.job.runtime.clone());
+        driver.kick(&step.row);
+        idle(&driver).await;
+        assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "failed");
+        assert_eq!(
+            step.output(&step.row).await["code"],
+            "plugin_job_step_failed"
+        );
         step.close().await;
     }
 }

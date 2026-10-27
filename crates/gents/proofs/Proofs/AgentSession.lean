@@ -30,7 +30,6 @@ structure ForkOrigin where
   deriving DecidableEq, Repr
 structure Provenance where
   task : Option Nat := none
-  graphRun : Option Nat := none
   parentRequestDoc : Option Nat := none
   /-- The request whose claim or refusal created this session through a
       calling tool call. It is written once, with `parentRequestDoc`, and
@@ -49,6 +48,7 @@ structure Observation where
   activity : Time
   preview : Option String
   latest : Option RequestObservation
+  replyPreview : Option String := none
   deriving DecidableEq, Repr
 structure Document where
   scope : Scope
@@ -303,6 +303,27 @@ def refresh (s : Document) (rows : List RequestFact) (event : RequestObservation
       else s
     | none => s
   | none => s
+
+/-- `reply` is reconstructed from the exact terminal output selected by the
+authoritative request. The adapter supplies only visible assistant text; missing
+or unreadable output remains absent. It is presentation, never work authority. -/
+def observeReply (o : Observation) (current : RequestObservation)
+    (reply : Option String) : Observation :=
+  if o.latest.any (fun latest => latest.docId == current.docId && latest.requestId == current.requestId)
+      && decide (HasTerminal.isTerminal current.state) then
+    { o with replyPreview := reply.map (fun text => String.mk (text.toList.take 240)) }
+  else o
+
+theorem nonterminal_reply_preserves_observation (o : Observation)
+    (current : RequestObservation) (reply : Option String)
+    (h : ¬ HasTerminal.isTerminal current.state) : observeReply o current reply = o := by
+  simp [observeReply, h]
+
+theorem reply_preserves_request_identity (o : Observation)
+    (current : RequestObservation) (reply : Option String) :
+    (observeReply o current reply).latest = o.latest := by
+  unfold observeReply
+  split <;> rfl
 
 /-- Only a newly published tool terminal emits activity, in the same transaction.
 Replays and losing publications emit no notification. Request lifecycle state

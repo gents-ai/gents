@@ -19,7 +19,16 @@ async fn persisted_reply(
     id: &str,
     tamper_signature: bool,
 ) -> AgentRequest {
-    persisted_request(node, identity, Some(&item.doc_id), id, tamper_signature).await
+    persisted_request(
+        node,
+        identity,
+        Some(&item.doc_id),
+        id,
+        tamper_signature,
+        "Approved",
+        None,
+    )
+    .await
 }
 
 async fn persisted_request(
@@ -28,6 +37,8 @@ async fn persisted_request(
     source_doc_id: Option<&str>,
     id: &str,
     tamper_signature: bool,
+    content: &str,
+    question_reply: Option<&gents_protocol::mailbox_question::MailboxQuestionReply>,
 ) -> AgentRequest {
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
     let mut create = AgentRequestCreate::base(
@@ -37,12 +48,13 @@ async fn persisted_request(
         identity.did(),
         "operator",
         "session-1",
-        "Approved",
+        content,
         "interactive",
         Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         AgentRequestAdmissionRecord::local_self(identity.did()),
     );
     create.caused_by_source_doc_id = source_doc_id.map(str::to_owned);
+    create.input.question_reply = question_reply.cloned();
     crate::sign_agent_request_create(identity, &mut create)
         .await
         .unwrap();
@@ -193,6 +205,114 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
 }
 
 #[tokio::test]
+async fn modern_questions_require_correlated_replies_and_preserve_skip_claims() {
+    use gents_protocol::mailbox_question::{MailboxQuestion, MailboxQuestionAnswer};
+    let node = tests::test_node().await;
+    let temp = tempfile::tempdir().unwrap();
+    let identity = KeyIdentity::load_or_create(temp.path().join("questions.key"), None).unwrap();
+    let mut context = tests::context(identity.did());
+    context.node_did = identity.did().into();
+    for optional in [false, true] {
+        let payload = json!({
+            "version": 2, "prompt": "Any further constraints?", "options": [],
+            "allow_free_text": true, "optional": optional,
+        })
+        .to_string();
+        let question = MailboxQuestion::from_payload(&payload).unwrap();
+        let mut args = tests::args(MailboxAction::StartRequest, &format!("question-{optional}"));
+        args.payload = Some(payload);
+        let item = stamp_create(&node, &context, args).await.unwrap();
+        let error = dismiss_mailbox_item(&node, &item.doc_id, identity.did())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("original item"));
+        assert_eq!(
+            load_mailbox_item(&node, &item.doc_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "open"
+        );
+        let skipped = question.reply_content(
+            "Constraints",
+            &MailboxQuestionAnswer {
+                skip: Some(true),
+                ..Default::default()
+            },
+        );
+        assert_eq!(skipped.is_ok(), optional);
+        let answer = MailboxQuestionAnswer {
+            question_hash: Some(
+                gents_protocol::mailbox_question::question_source_hash(
+                    &item.title,
+                    item.summary.as_deref(),
+                    item.payload.as_deref().unwrap(),
+                    item.request_id.as_deref(),
+                )
+                .unwrap(),
+            ),
+            skip: optional.then_some(true),
+            free_text: (!optional).then(|| "Keep the existing data".into()),
+            ..Default::default()
+        };
+        let content = question.reply_content(&item.title, &answer).unwrap();
+        let evidence = gents_protocol::mailbox_question::MailboxQuestionReply::new(
+            &item.doc_id,
+            &item.title,
+            item.summary.as_deref(),
+            item.payload.as_deref().unwrap(),
+            item.request_id.as_deref(),
+            answer,
+        )
+        .unwrap();
+        let request = persisted_request(
+            &node,
+            &identity,
+            Some(&item.doc_id),
+            &format!("reply-{optional}"),
+            false,
+            &content,
+            Some(&evidence),
+        )
+        .await;
+        assert_eq!(request.content, content);
+        let mut stale = item.clone();
+        stale.summary = Some("A changed decision context".into());
+        assert!(reply::validate_reply_claim(&stale, &request, true, true).is_err());
+        let mut missing = request.clone();
+        missing.input.question_reply = None;
+        assert!(reply::validate_reply_claim(&item, &missing, true, true).is_err());
+        assert!(claim(&node, &request, true).await.is_err());
+        assert_eq!(
+            load_mailbox_item(&node, &item.doc_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .status,
+            "open"
+        );
+        claim(&node, &request, false).await.unwrap();
+        claim(&node, &request, false).await.unwrap();
+        let observed = dismiss_mailbox_item(&node, &item.doc_id, identity.did())
+            .await
+            .unwrap();
+        assert_eq!(observed.status, "acted");
+        let mut changed_after_claim = observed.clone();
+        changed_after_claim.summary = Some("Later context".into());
+        assert!(reply::validate_reply_claim(&changed_after_claim, &request, true, false).is_ok());
+        assert_eq!(
+            observed.resolved_doc_id.as_deref(),
+            Some(request.doc_id.as_str())
+        );
+        let replay = signed_reply(&node, &identity, &item, &format!("replay-{optional}")).await;
+        assert!(claim(&node, &replay, false).await.is_err());
+        assert_eq!(stored_lifecycle(&node, &replay).await, "pending");
+    }
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
     use crate::lifecycle::{
         ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
@@ -224,7 +344,16 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
     let node = tests::test_node().await;
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("handoff.key"), None).unwrap();
-    let producer = persisted_request(&node, &identity, None, "producer-request", false).await;
+    let producer = persisted_request(
+        &node,
+        &identity,
+        None,
+        "producer-request",
+        false,
+        "Approved",
+        None,
+    )
+    .await;
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "operator",
@@ -350,7 +479,7 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
 #[test]
 fn generated_reply_cases_drive_claim_validation() {
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().mailbox_reply_cases;
-    assert_eq!(cases.len(), 216);
+    assert_eq!(cases.len(), 228);
     assert!(cases
         .iter()
         .any(|case| case["variant"] == "expired-deadline"
@@ -382,6 +511,15 @@ fn generated_reply_cases_drive_claim_validation() {
             })).unwrap()
         ).unwrap();
         request.requester_did = Some(text("requester_did").into());
+        if case["question_current"] == false {
+            request.input.question_reply =
+                Some(gents_protocol::mailbox_question::MailboxQuestionReply {
+                    question_version: None,
+                    source_doc_id: "other-question".into(),
+                    question_hash: "invalid".into(),
+                    answer: Default::default(),
+                });
+        }
         let result = reply::validate_reply_claim(
             &item,
             &request,

@@ -41,6 +41,7 @@ use super::query::{
 use crate::remote_admin::PairingErrorClass;
 
 pub use enrollment::EnrollmentRequestResult;
+pub use goal::{GoalSubmissionReference, RetainedGoalSubmission};
 pub use observation_scope::ClientObservationAttachment;
 pub use sync_state::RuntimeSchemaObservation;
 pub use writes::RefreshedRequestProjection;

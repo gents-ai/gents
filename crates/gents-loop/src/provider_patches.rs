@@ -3,7 +3,7 @@ use serde_json::Value;
 
 pub fn patch_instructions_body(body: &[u8]) -> Option<Bytes> {
     let mut value = serde_json::from_slice::<Value>(body).ok()?;
-    let mut changed = false;
+    let mut changed = crate::responses_normalize::normalize_function_call_item_ids(&mut value);
 
     if value.get("instructions").is_none() {
         let instructions = first_system_text(value.get("input")?)?;

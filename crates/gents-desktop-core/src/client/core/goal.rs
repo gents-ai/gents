@@ -10,7 +10,10 @@ use gents_protocol::request_input::{GoalAssignmentInput, QueueDelivery, RequestI
 
 use super::writes::ensure_peer_chat_ready_at;
 use super::ClientCore;
+
+mod delivery;
 use crate::client::mutations::{prepare_request_submission, SubmitRequestOptions};
+pub use delivery::{GoalSubmissionReference, RetainedGoalSubmission};
 
 impl ClientCore {
     pub(super) async fn prepare_goal_input(
@@ -80,8 +83,43 @@ impl ClientCore {
         expected: Option<GoalRevision>,
         operation: GoalOperation,
         agent_id: Option<&str>,
-        mut input: RequestInput,
+        input: RequestInput,
     ) -> Result<SessionGoalControlReceipt> {
+        let (signer, command) = self
+            .prepare_session_goal_command(
+                node_did,
+                session_id,
+                session_doc_id,
+                expected,
+                operation,
+                agent_id,
+                input,
+                uuid::Uuid::new_v4().to_string(),
+            )
+            .await?;
+        gents::goal::submit_prepared_session_goal_control(
+            &self.session_queue_access(node_did),
+            signer.as_ref(),
+            &command,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn prepare_session_goal_command(
+        &self,
+        node_did: &str,
+        session_id: &str,
+        session_doc_id: Option<String>,
+        expected: Option<GoalRevision>,
+        operation: GoalOperation,
+        agent_id: Option<&str>,
+        mut input: RequestInput,
+        command_id: String,
+    ) -> Result<(
+        std::sync::Arc<dyn gents::identity::NodeIdentity>,
+        SessionGoalControl,
+    )> {
         let peer = self
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
@@ -94,7 +132,6 @@ impl ClientCore {
         crate::local_runtime::ensure_request_input_supported(peer.as_ref(), &input).await?;
         let (signer, admission, requester_did) =
             self.request_authority(node_did, peer.as_ref()).await?;
-        let command_id = uuid::Uuid::new_v4().to_string();
         let initial_request = if let GoalOperation::Create { objective, .. } = &operation {
             let goal_id = if expected.is_some() {
                 gents::goal::replacement_goal_identity(node_did, session_id, &command_id).goal_id
@@ -152,12 +189,8 @@ impl ClientCore {
             initial_request,
             signature: Vec::new(),
         };
-        gents::goal::submit_session_goal_control(
-            &self.session_queue_access(node_did),
-            signer.as_ref(),
-            command,
-        )
-        .await
+        let command = gents::goal::prepare_session_goal_control(signer.as_ref(), command).await?;
+        Ok((signer, command))
     }
 }
 

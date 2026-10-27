@@ -1,7 +1,11 @@
 import type {
   PackEditedChoice,
   PackInstallRequest,
+  DynamicWorkflow,
+  DynamicWorkflows,
   PackWireRequest,
+  WorkflowPromoteRequest,
+  WorkflowPromoted,
   PackWireResult,
   PackWireSources,
 } from "../types/packs.js";
@@ -38,6 +42,18 @@ export function createPackCommands(
     listPackWireSources: () =>
       invokeDesktop("desktop_pack_wire_sources").then(
         (report) => report as PackWireSources,
+      ),
+    listDynamicWorkflows: () =>
+      invokeDesktop("desktop_workflows_dynamic").then(
+        (report) => report as DynamicWorkflows,
+      ),
+    getDynamicWorkflow: (selector: string) =>
+      invokeDesktop("desktop_workflow_dynamic", { selector }).then(
+        (report) => report as DynamicWorkflow,
+      ),
+    promoteWorkflow: (request: WorkflowPromoteRequest) =>
+      invokeDesktop("desktop_workflow_promote", { request }).then(
+        (report) => report as WorkflowPromoted,
       ),
     signInToPackRegistry: (token: string) =>
       invokeDesktop("desktop_pack_login", { token }).then(() => undefined),

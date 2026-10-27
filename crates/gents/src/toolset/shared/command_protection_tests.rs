@@ -119,6 +119,45 @@ async fn read_only_commands_keep_the_permission_guard() {
 }
 
 #[tokio::test]
+async fn workspace_write_allows_rendezvous_but_refuses_other_bootstrap_names_and_outside_writes() {
+    let (_directory, root, home) = fixture();
+    let outside = tempfile::tempdir().unwrap();
+    let target = outside.path().join("must-not-exist");
+    let script = r#"import ctypes, os, pathlib, sys
+lib = ctypes.CDLL('/usr/lib/libSystem.B.dylib')
+lib.bootstrap_check_in.argtypes = [ctypes.c_uint, ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint)]
+port = ctypes.c_uint.in_dll(lib, 'bootstrap_port').value
+for prefix, expected in [
+    ('org.chromium.Chromium.MachPortRendezvousServer.', 0),
+    ('com.google.chrome.for.testing.MachPortRendezvousServer.', 0),
+    ('org.gents.tests.unrelated.', 1100),
+    ('org.chromium.Chromium.MachPortRendezvousServerX.', 1100),
+]:
+    output = ctypes.c_uint()
+    actual = lib.bootstrap_check_in(port, (prefix + str(os.getpid())).encode(), ctypes.byref(output))
+    assert actual == expected, (prefix, actual)
+try:
+    pathlib.Path(sys.argv[1]).write_text('outside')
+except PermissionError:
+    pass
+else:
+    raise AssertionError('outside write was permitted')
+print('scoped rendezvous and write boundary verified')
+"#;
+    let (code, output) = run(
+        &root,
+        &home,
+        CommandExecutionMode::WorkspaceWrite,
+        "/usr/bin/python3",
+        &["-c".into(), script.into(), target.to_str().unwrap().into()],
+    )
+    .await;
+    assert_eq!(code, Some(0), "{}", String::from_utf8_lossy(&output));
+    assert!(String::from_utf8_lossy(&output).contains("write boundary verified"));
+    assert!(!target.exists());
+}
+
+#[tokio::test]
 async fn guarded_commands_build_and_run_a_rust_workspace() {
     for mode in [
         CommandExecutionMode::WorkspaceWrite,

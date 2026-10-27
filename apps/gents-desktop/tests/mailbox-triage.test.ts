@@ -21,7 +21,6 @@ const item = (kind: string, extra: Partial<MailboxItemView> = {}): MailboxItemVi
   sourceId: "src",
   sessionId: null,
   requestId: null,
-  graphRunId: null,
   causeDocId: null,
   targetNodeDid: "did:node",
   targetAgentId: "b1",

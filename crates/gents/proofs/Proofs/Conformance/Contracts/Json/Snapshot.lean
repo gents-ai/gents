@@ -14,9 +14,9 @@ import Proofs.Conformance.ClientRequestCacheIdentityCases
 import Proofs.Conformance.SessionQueueOrderCases
 import Proofs.Conformance.CountCarrier
 import Proofs.Conformance.ConfigurationScope
+import Proofs.Conformance.Initialization
 import Proofs.Conformance.EnrollmentPendingRequests
 import Proofs.Conformance.ClientObservationAdmission
-import Proofs.Conformance.GraphWorkspaceLineage
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
 import Proofs.Conformance.InvalidToolProgress
@@ -27,8 +27,10 @@ import Proofs.Conformance.PluginResources
 import Proofs.Conformance.PluginJob
 import Proofs.Conformance.MailboxNotification
 import Proofs.Conformance.MailboxReply
+import Proofs.Conformance.MailboxQuestion
 import Proofs.Conformance.MailboxHandoff
 import Proofs.Conformance.MailboxSweep
+import Proofs.Conformance.SessionReplyPreview
 import Proofs.Conformance.ArtifactAuthority
 import Proofs.Conformance.WorkspacePathCapability
 import Proofs.Conformance.FileImageHydration
@@ -82,7 +84,6 @@ import Proofs.Conformance.CoverageLedger
 import Proofs.Identity.Conformance
 import Proofs.Conformance.EventDelivery
 import Proofs.Conformance.TriggerDelivery
-import Proofs.Conformance.GraphPipeline
 import Proofs.Conformance.GoalOperatorResume
 import Proofs.Conformance.GoalClaimedPublication
 import Proofs.Conformance.GoalResetResume
@@ -100,11 +101,10 @@ import Proofs.Conformance.GoalToolContext
 import Proofs.Conformance.GoalEdit
 import Proofs.Conformance.GoalClientControl
 import Proofs.Conformance.GoalClientMutation
+import Proofs.Conformance.GoalClientDelivery
 import Proofs.Conformance.GoalClientStart
 import Proofs.Conformance.GoalObservation
 import Proofs.Conformance.PluginApproval
-import Proofs.Conformance.GraphFailureAttribution
-import Proofs.Conformance.GraphLogicalInvocation
 import Proofs.Conformance.RequestExecutionLease
 import Proofs.Conformance.InferenceRegistry
 import Proofs.Conformance.RootAdmission
@@ -142,8 +142,6 @@ def snapshotJson : String :=
     ++ "\"state_machines\":"
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
     ++ "\"pairing_reconcile_cases\":" ++ pairingReconcileCasesJson ++ ","
-    ++ "\"graph_failure_attribution_traces\":"
-      ++ Conformance.GraphFailureAttributionContracts.traceCasesJson ++ ","
     ++ "\"session_message_goal_input_cases\":"
       ++ Conformance.GoalRequestAssignmentContracts.messageInputCasesJson ++ ","
     ++ "\"goal_delivery_input_cases\":"
@@ -190,6 +188,7 @@ def snapshotJson : String :=
     ++ "\"goal_client_control_cases\":" ++ Conformance.GoalClientControlContracts.casesJson ++ ","
     ++ "\"goal_client_start_cases\":" ++ Conformance.GoalClientStartContracts.casesJson ++ ","
     ++ "\"goal_client_receipt_cases\":" ++ Conformance.GoalClientMutationContracts.receiptCasesJson ++ ","
+    ++ "\"goal_client_delivery_cases\":" ++ Conformance.GoalClientDeliveryContracts.casesJson.compress ++ ","
     ++ "\"goal_observation_cases\":" ++ Conformance.GoalObservationContracts.casesJson ++ ","
     ++ "\"workspace_permission_write_cases\":" ++ workspacePermissionWriteCasesJson ++ ","
     ++ "\"workspace_permission_cases\":" ++ workspacePermissionCasesJson ++ ","
@@ -203,10 +202,6 @@ def snapshotJson : String :=
     ++ "\"workspace_command_grant_revocations\":" ++ Conformance.WorkspaceCommandGrants.revocationsJson.compress ++ ","
     ++ "\"goal_objective_whitespace_codepoints\":"
       ++ Conformance.GoalEditContracts.whitespaceCodepointsJson ++ ","
-    ++ "\"graph_logical_invocation_cases\":"
-      ++ Conformance.GraphLogicalInvocationContracts.casesJson ++ ","
-    ++ "\"graph_invocation_publication_cases\":"
-      ++ Conformance.GraphLogicalInvocationContracts.publicationCasesJson ++ ","
     ++ "\"goal_claimed_publication_cases\":"
       ++ Conformance.GoalClaimedPublicationContracts.casesJson ++ ","
     ++ "\"goal_operator_resume_cases\":"
@@ -217,14 +212,6 @@ def snapshotJson : String :=
       ++ Conformance.GoalOperatorResumeContracts.configCasesJson ++ ","
     ++ "\"goal_reset_resume_cases\":"
       ++ Conformance.GoalResetResumeContracts.casesJson ++ ","
-    ++ "\"graph_pipeline_validation_cases\":"
-      ++ Conformance.GraphPipelineContracts.validationCasesJson ++ ","
-    ++ "\"graph_pipeline_revision_gate_cases\":"
-      ++ Conformance.GraphPipelineContracts.revisionGateCasesJson ++ ","
-    ++ "\"graph_pipeline_run_terminal_cases\":"
-      ++ Conformance.GraphPipelineContracts.runTerminalCasesJson ++ ","
-    ++ "\"graph_pipeline_edge_delivery_cases\":"
-      ++ Conformance.GraphPipelineContracts.edgeDeliveryCasesJson ++ ","
     ++ "\"request_transition_cases\":"
       ++ jsonArray (requestTransitionCases.map lifecycleTransitionCaseJson) ++ ","
     ++ "\"provider_eof_cases\":"
@@ -323,7 +310,9 @@ def snapshotJson : String :=
     ++ "\"discovery_scope_cases\":" ++ Conformance.ConfigurationScope.discoveryCasesJson ++ ","
     ++ "\"budget_rehydration_cases\":" ++ budgetRehydrationCasesJson ++ ","
     ++ "\"configuration_scope_cases\":" ++ Conformance.ConfigurationScope.casesJson ++ ","
+    ++ "\"initial_inference_cases\":" ++ Conformance.Initialization.casesJson ++ ","
     ++ "\"session_document_cases\":" ++ sessionDocumentsJson ++ ","
+    ++ "\"session_reply_preview_cases\":" ++ Conformance.SessionReplyPreview.casesJson ++ ","
     ++ "\"background_wake_row_cases\":" ++ backgroundWakeRowsCasesJson ++ ","
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
     ++ "\"agent_request_admission_cases\":"
@@ -468,9 +457,6 @@ def snapshotJson : String :=
       ++ boundariesJson ++ ","
     ++ "\"deviations\":"
       ++ deviationsJson ++ ","
-    ++ "\"graph_session_continuation_cases\":" ++ Conformance.GraphWorkspaceLineageContracts.SessionCases.casesJson ++ ","
-    ++ "\"graph_assignment_head_cases\":" ++ Conformance.GraphLogicalInvocationContracts.AssignmentCases.casesJson ++ ","
-    ++ "\"graph_workspace_lineage_cases\":" ++ Conformance.GraphWorkspaceLineageContracts.casesJson ++ ","
     ++ "\"artifact_mode_meet_cases\":" ++ artifactModeMeetCasesJson ++ ","
     ++ "\"artifact_admission_cases\":" ++ artifactAdmissionCasesJson ++ ","
     ++ "\"artifact_spawn_cases\":" ++ artifactSpawnCasesJson ++ ","
@@ -542,6 +528,8 @@ def snapshotJson : String :=
       ++ Conformance.MailboxNotificationContracts.casesJson ++ ","
     ++ "\"mailbox_reply_cases\":"
       ++ Conformance.MailboxReplyContracts.casesJson ++ ","
+    ++ "\"mailbox_question_cases\":"
+      ++ Conformance.MailboxQuestionContracts.casesJson ++ ","
     ++ "\"mailbox_handoff_cases\":"
       ++ Conformance.MailboxHandoffContracts.casesJson ++ ","
     ++ "\"mailbox_sweep_cases\":"
@@ -668,6 +656,9 @@ def snapshotJson : String :=
     ++ "\"wake_input_cases\":" ++ wakeInputCasesJson ++ ","
     ++ "\"prompt_assembly_sanitize_cases\":"
       ++ promptAssemblySanitizeCasesJson ++ ","
+    ++ "\"provider_tool_identity_cases\":" ++ providerToolIdentityCasesJson ++ ","
+
+    ++ "\"discovery_guidance_cases\":" ++ discoveryGuidanceCasesJson ++ ","
     ++ "\"prompt_assembly_assistant_order_cases\":"
       ++ promptAssemblyAssistantOrderCasesJson ++ ","
     ++ "\"prompt_assembly_mode_sanitize_cases\":"

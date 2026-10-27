@@ -177,6 +177,13 @@ debug = 0
 split-debuginfo = "off"
 incremental = false
 
+[profile.ci-native]
+inherits = "test"
+opt-level = 0
+
+[profile.ci-native.package."*"]
+opt-level = 1
+
 [patch.crates-io]
 # Keep Iroh's shared transport types on the same source as the path-retry fix.
 iroh = { git = "https://github.com/n0-computer/iroh", rev = "26dfe1d469e274d38fe3b41617a20f9bb7a10072" }

@@ -1,5 +1,7 @@
+import { acceptedChatReply } from "./chat-delivery-fixture";
+import { goalDeliveryStorage } from "./goal-delivery-storage";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatTranscriptPanel } from "@source-inc/gents-desktop-chat";
 import { MessageList } from "@source-inc/gents-desktop-chat";
@@ -439,11 +441,7 @@ describe("error card retry", () => {
   });
 
   it("projects an acknowledged send immediately before replication observes it", async () => {
-    const sendChatMessage = vi.fn().mockResolvedValue({
-      nodeDid: deployment.nodeDid,
-      sessionId: "s1",
-      requestId: "req_new",
-    });
+    const sendChatMessage = vi.fn(acceptedChatReply);
     const shellProjection = projectChatShell({
       clientAvailable: true,
       selectedNodeDid: deployment.nodeDid,
@@ -469,10 +467,13 @@ describe("error card retry", () => {
     expect(stores.chat.getState().optimisticPendingTurn).toEqual(
       expect.objectContaining({
         sessionId: "s1",
-        requestId: "req_new",
+        requestId: sendChatMessage.mock.calls[0][0].requestId,
         content: "check the upgrade",
         lifecycleState: "pending",
       }),
     );
   });
 });
+
+beforeEach(() => vi.stubGlobal("localStorage", goalDeliveryStorage()));
+afterEach(() => vi.unstubAllGlobals());

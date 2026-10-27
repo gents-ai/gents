@@ -78,6 +78,18 @@ export function actionEntries(tools: RenderedToolCallView[]): ActionEntry[] {
 export function toolLabel(name: string) {
   const builtin = name.split(".").at(-1);
   switch (builtin) {
+    case "get_goal":
+      return "Goal status";
+    case "update_goal":
+      return "Goal update";
+    case "create_goal":
+      return "New goal";
+    case "get_graph_run":
+      return "Task progress";
+    case "get_graph_result":
+      return "Task result";
+    case "file_mailbox_item":
+      return "Inbox update";
     case "bash":
     case "bash_unrestricted":
     case "gents_exec":
@@ -156,6 +168,11 @@ export function actionTitle(entry: ActionEntry): string {
 }
 
 export function actionKind(entry: ActionEntry): string | null {
+  if (
+    entry.tool.reconstruction.state === "ready" &&
+    entry.tool.presentation.kind === "command"
+  )
+    return "command";
   if (actionCommand(entry)) return "command";
   const { tool } = entry;
   if (tool.reconstruction.state !== "ready") return null;
@@ -172,6 +189,20 @@ export function actionKind(entry: ActionEntry): string | null {
 }
 
 export function runningAction(entry: ActionEntry) {
+  switch (entry.tool.toolName.split(".").at(-1)) {
+    case "get_goal":
+      return "Checking goal";
+    case "update_goal":
+      return "Updating goal";
+    case "create_goal":
+      return "Setting goal";
+    case "get_graph_run":
+      return "Checking task progress";
+    case "get_graph_result":
+      return "Reading task result";
+    case "file_mailbox_item":
+      return "Updating inbox";
+  }
   const title = actionTitle(entry);
   const { tool } = entry;
   if (tool.reconstruction.state === "ready") {

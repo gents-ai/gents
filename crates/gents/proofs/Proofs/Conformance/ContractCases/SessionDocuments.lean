@@ -13,7 +13,6 @@ def session : Document :=
     tags := ["review", "session-test"]
     provenance := some
       { task := some 4
-        graphRun := some 5
         parentRequestDoc := some 6
         fork := some ⟨7, 2⟩ } }
 def request (id time : Nat) : RequestFact :=

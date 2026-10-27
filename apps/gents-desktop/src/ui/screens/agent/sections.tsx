@@ -8,6 +8,7 @@ import {
   Plug,
   Puzzle,
   Radio,
+  Route,
   Sparkles,
   Timer,
   Waypoints,
@@ -33,6 +34,7 @@ import { ToolServicesPanel } from "./ToolServicesPanel";
 import { ToolsPanel } from "./ToolsPanel";
 import { TriggersPanel } from "./TriggersPanel";
 import { UxPluginsPanel } from "./UxPluginsPanel";
+import { WorkflowsPanel } from "./WorkflowsPanel";
 
 export type SectionPanelProps = {
   deployment: NodeView;
@@ -131,6 +133,13 @@ export const SECTIONS: AgentSection[] = [
     icon: Radio,
     count: (d) => d.eventSources.length,
     Panel: EventSourcesPanel,
+  },
+  {
+    group: "Automation",
+    id: "workflows",
+    label: "Workflows",
+    icon: Route,
+    Panel: WorkflowsPanel,
   },
   {
     group: "Tools",

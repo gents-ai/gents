@@ -59,7 +59,6 @@ pub(super) async fn apply_pack_documents(
 pub(crate) async fn prepare_pack_plan_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     documents: &[crate::config_client::DesiredStateApplyDocument],
-    immutable: bool,
 ) -> Result<crate::config_client::DesiredStateApplyPlan> {
     let mut prepared = Vec::with_capacity(documents.len());
     for authored in documents {
@@ -78,14 +77,6 @@ pub(crate) async fn prepare_pack_plan_in_txn(
         )
         .await?
         {
-            if immutable {
-                anyhow::ensure!(
-                    pack_artifact_document_digest(&document.add)?
-                        == pack_artifact_document_digest(&live)?,
-                    "immutable package resource {} {owner:?}/{id:?} drifted",
-                    document.collection.graphql_type()
-                );
-            }
             merge_tags(&mut document.update, &live)?;
         }
         prepared.push(document);

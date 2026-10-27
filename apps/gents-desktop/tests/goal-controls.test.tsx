@@ -1,5 +1,8 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { appliedGoalResult } from "./goal-delivery-fixture";
+import { goalDeliveryStorage } from "./goal-delivery-storage";
+import type { GoalControlRequest } from "@source-inc/gents-desktop-client";
 
 import { SessionScreen } from "../src/ui/screens/SessionScreen";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
@@ -19,16 +22,20 @@ vi.mock("@/lib/router", async (importOriginal) => ({
 vi.mock("../src/ui/screens/BehaviorPicker", () => ({
   AgentPicker: () => null,
 }));
-vi.stubGlobal(
-  "IntersectionObserver",
-  class {
-    observe() {}
-    disconnect() {}
-  },
-);
 
 const NODE = deployment.nodeDid;
 const REVISION = { document: "goal-doc", composite: "cid-1" };
+beforeEach(() => {
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  vi.stubGlobal("localStorage", goalDeliveryStorage());
+});
+afterEach(() => vi.unstubAllGlobals());
 
 const goal = (status: string) => ({
   goalId: "g",
@@ -66,11 +73,9 @@ function session(over: Partial<DesktopSessionSnapshot> = {}) {
 }
 
 function setup(held: DesktopSessionSnapshot) {
-  const controlGoal = vi.fn().mockResolvedValue({
-    goalId: "g2",
-    sessionId: "session",
-    requestId: "goal-request",
-  });
+  const controlGoal = vi.fn(async (request: GoalControlRequest) =>
+    appliedGoalResult(request),
+  );
   const fetchSessionGoal = vi.fn().mockResolvedValue({
     nodeDid: NODE,
     sessionId: "session",
@@ -81,6 +86,7 @@ function setup(held: DesktopSessionSnapshot) {
   const app = testApp({
     api: {
       controlGoal,
+      acknowledgeGoalSubmission: vi.fn().mockResolvedValue(undefined),
       fetchSessionGoal,
       sendChatMessage: vi.fn(),
       sessionProvenance: vi.fn().mockResolvedValue(null),
@@ -90,6 +96,12 @@ function setup(held: DesktopSessionSnapshot) {
     session: held,
     selection: { nodeDid: NODE, sessionId: held.sessionId },
   });
+  app.stores.client.setState((state) => ({
+    snapshot: {
+      ...state.snapshot!,
+      client: { ...state.snapshot!.client!, clientDid: "test-client" },
+    },
+  }));
   render(
     <MemoryNavProvider initial={{ name: "session", sessionId: held.sessionId }}>
       <SessionScreen />

@@ -12,8 +12,10 @@ where
 {
     Builder::<R>::new("gents-desktop-bridge")
         .setup(move |app, _api| {
+            // Tauri holds its plugin registry while a plugin sets up, so
+            // registering the fs plugin from here would wait on itself.
             if app.try_fs_scope().is_none() {
-                app.plugin(tauri_plugin_fs::init())?;
+                return Err("register tauri_plugin_fs before the desktop bridge".into());
             }
             let app_data_dir = app.path().app_data_dir().ok();
             let policy = resolve_policy(&config, app_data_dir)
@@ -124,6 +126,9 @@ where
             tauri_commands::ux_plugins::desktop_ux_data_surfaces,
             tauri_commands::packs::desktop_pack_wire,
             tauri_commands::packs::desktop_pack_wire_sources,
+            tauri_commands::packs::desktop_workflows_dynamic,
+            tauri_commands::packs::desktop_workflow_dynamic,
+            tauri_commands::packs::desktop_workflow_promote,
             tauri_commands::allowed_dirs::desktop_allowed_dirs_list,
             tauri_commands::allowed_dirs::desktop_allowed_dirs_add,
             tauri_commands::allowed_dirs::desktop_allowed_dirs_remove,
@@ -173,6 +178,9 @@ where
             tauri_commands::chat::desktop_pending_message_steer,
             tauri_commands::chat::desktop_session_goal,
             tauri_commands::chat::desktop_goal_control,
+            tauri_commands::chat::desktop_goal_submission_recover,
+            tauri_commands::chat::desktop_goal_submission_resume,
+            tauri_commands::chat::desktop_goal_submission_acknowledge,
             tauri_commands::chat::desktop_session_fork_before_message,
             tauri_commands::chat::desktop_session_rename,
             tauri_commands::chat::desktop_session_archive,

@@ -752,6 +752,7 @@ mod tests {
             Some(identity.did()),
         );
         let observation = gents_protocol::session::SessionObservation {
+            reply_preview: None,
             last_activity_at: chrono::Utc::now().to_rfc3339(),
             preview: None,
             latest_request: Some(gents_protocol::session::SessionRequestObservation {

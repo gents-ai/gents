@@ -287,6 +287,7 @@ pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
                 source: gents_protocol::session::SessionTitleSource::Placeholder,
             }),
             observation: Some(gents_protocol::session::SessionObservation {
+                reply_preview: None,
                 last_activity_at: RECOVERY_CREATED_AT.into(),
                 preview: Some("startup recovery".into()),
                 latest_request: Some(gents_protocol::session::SessionRequestObservation {
@@ -376,6 +377,7 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
             &db.node,
             &session_id,
             &gents_protocol::session::SessionObservation {
+                reply_preview: None,
                 last_activity_at: RECOVERY_CREATED_AT.into(),
                 preview: Some("deferred recovery".into()),
                 latest_request: Some(gents_protocol::session::SessionRequestObservation {
@@ -491,6 +493,7 @@ async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCa
                 source: gents_protocol::session::SessionTitleSource::Placeholder,
             }),
             observation: Some(gents_protocol::session::SessionObservation {
+                reply_preview: None,
                 last_activity_at: RECOVERY_CREATED_AT.into(),
                 preview: Some("recovery request".into()),
                 latest_request: Some(gents_protocol::session::SessionRequestObservation {
@@ -733,6 +736,7 @@ async fn request_recovery_before_output_persists_canonical_terminal_selection() 
                 source: gents_protocol::session::SessionTitleSource::Placeholder,
             }),
             observation: Some(gents_protocol::session::SessionObservation {
+                reply_preview: None,
                 last_activity_at: RECOVERY_CREATED_AT.into(),
                 preview: Some("recovery no response".into()),
                 latest_request: Some(gents_protocol::session::SessionRequestObservation {
@@ -802,6 +806,7 @@ async fn request_recovery_before_output_persists_canonical_terminal_selection() 
                 source: gents_protocol::session::SessionTitleSource::Placeholder,
             }),
             observation: Some(gents_protocol::session::SessionObservation {
+                reply_preview: None,
                 last_activity_at: RECOVERY_CREATED_AT.into(),
                 preview: Some("recovery no response interrupted".into()),
                 latest_request: Some(gents_protocol::session::SessionRequestObservation {

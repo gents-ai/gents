@@ -23,16 +23,29 @@ fn verified_entry_belongs_to_goal(goal: &GoalDocument, entry: &AgentRequestRow) 
     {
         return false;
     }
+    entry_matches_assignment(
+        &goal.goal_id,
+        goal.assignment_root_request_doc_id.as_deref(),
+        entry,
+    )
+}
+
+/// The caller authenticates the entry and fixes its node/session scope first.
+pub(super) fn entry_matches_assignment(
+    goal_id: &str,
+    root_request_doc_id: Option<&str>,
+    entry: &AgentRequestRow,
+) -> bool {
     let reference = entry
         .input
         .as_ref()
         .and_then(|input| input.goal_assignment.as_ref());
-    match (goal.assignment_root_request_doc_id.as_deref(), reference) {
+    match (root_request_doc_id, reference) {
         (None, None) => true,
         (None, Some(_)) => false,
         (Some(root), None) => entry.doc_id.as_deref() == Some(root),
         (Some(root), Some(reference)) => {
-            reference.goal_id == goal.goal_id
+            reference.goal_id == goal_id
                 && reference
                     .root_request_doc_id
                     .as_deref()

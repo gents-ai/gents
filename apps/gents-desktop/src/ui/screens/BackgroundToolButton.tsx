@@ -1,9 +1,11 @@
 import { useRef, useState } from "react";
+import { Terminal } from "lucide-react";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { useApp } from "@/app/AppContext";
 import { useSelectedSessionFields } from "../hooks/useSelectedSession";
 import { toastFailure } from "@/lib/failure";
+import { openBackgroundLog } from "./background";
 
 export function BackgroundToolButton({ tool }: { tool: RenderedToolCallView }) {
   const { actions } = useApp();
@@ -14,7 +16,26 @@ export function BackgroundToolButton({ tool }: { tool: RenderedToolCallView }) {
   const sessionId = session?.sessionId;
   const [requested, setRequested] = useState(false);
   const inFlight = useRef(false);
-  if (tool.awaitMode === "background") return <span>In background</span>;
+  if (tool.awaitMode === "background")
+    return (
+      <>
+        <span>In background</span>
+        {sessionId && tool.requestId && tool.toolCallId && (
+          <Button
+            variant="quiet"
+            size="xs"
+            className="ml-1.5"
+            onClick={(event) => {
+              event.stopPropagation();
+              openBackgroundLog(sessionId, tool.requestId!, tool.toolCallId!);
+            }}
+          >
+            <Terminal />
+            View output
+          </Button>
+        )}
+      </>
+    );
   if (
     tool.statusKind !== "running" ||
     tool.backgroundAvailable !== true ||

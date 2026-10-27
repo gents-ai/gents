@@ -8,7 +8,7 @@ use gents::session::canonical_rows::TranscriptMessageRow;
 use gents_desktop_core::client::{
     CanonicalTranscriptDependencies, ClientCore, ClientStore, SessionTranscriptQueryPage,
 };
-use gents_protocol::job::{JobOutcome, JobProgress, JobState};
+use gents_protocol::job::{JobOutcome, JobState};
 use gents_protocol::message::Message;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::{AgentRequestRow, AgentToolCallRow};
@@ -40,6 +40,8 @@ mod pending_turn;
 mod projection;
 #[path = "session/request_context.rs"]
 mod request_context;
+#[path = "session/terminal_tool_output.rs"]
+mod terminal_tool_output;
 #[path = "session/timeline_page.rs"]
 mod timeline_page;
 
@@ -60,14 +62,14 @@ use timeline_page::insert_timeline_item_by_sequence;
 pub use timeline_page::{apply_session_timeline_page, apply_session_timeline_page_with_query};
 
 pub(super) fn message_is_runtime_control(
-    message: &TranscriptMessageRow,
+    message: &gents_protocol::output::TranscriptMessage,
     input_request: Option<&AgentRequestRow>,
 ) -> bool {
     let request_input = input_request
         .and_then(|request| request.input.as_ref())
         .cloned()
         .unwrap_or_default();
-    gents::lifecycle::is_runtime_control_message(&request_input, &message.message.message_key)
+    gents::lifecycle::is_runtime_control_message(&request_input, &message.message_key)
 }
 
 pub(super) fn request_origin_view(
@@ -121,14 +123,14 @@ pub(super) fn request_origin_view(
 
 pub(super) fn message_origin(
     store: &ClientStore,
-    message: &TranscriptMessageRow,
+    message: &gents_protocol::output::TranscriptMessage,
     input_request: Option<&AgentRequestRow>,
 ) -> Option<RequestOriginView> {
-    if message.message.role != gents_protocol::output::MessageRole::User {
+    if message.role != gents_protocol::output::MessageRole::User {
         return None;
     }
     if gents::background_completion::is_background_completion_notification_message_key(
-        &message.message.message_key,
+        &message.message_key,
     ) {
         return Some(RequestOriginView::BackgroundCompletion);
     }
@@ -648,8 +650,6 @@ async fn fill_job_outcomes(core: &ClientCore, snapshot: &mut DesktopSessionSnaps
             session_id,
             tool.tool_call_id.as_deref(),
             tool.job_state,
-            tool.job_progress.as_ref(),
-            tool.job_handle.as_deref(),
             &outcomes,
         ) {
             tool.job_outcome = outcome;
@@ -663,8 +663,6 @@ async fn fill_job_outcomes(core: &ClientCore, snapshot: &mut DesktopSessionSnaps
                     session_id,
                     tool.tool_call_id.as_deref(),
                     tool.job_state,
-                    tool.job_progress.as_ref(),
-                    tool.job_handle.as_deref(),
                     &outcomes,
                 ) {
                     tool.job_outcome = outcome;
@@ -703,19 +701,11 @@ fn job_row_fill(
     session_id: &str,
     tool_call_id: Option<&str>,
     state: Option<JobState>,
-    progress: Option<&JobProgress>,
-    handle: Option<&str>,
     outcomes: &RapidHashMap<String, JobOutcome>,
 ) -> Option<(Option<JobOutcome>, Vec<String>)> {
     let (state, tool_call_id) = (state?, tool_call_id?);
     let outcome = outcomes.get(tool_call_id).cloned();
-    let next_calls = gents_server::jobs::next_calls(
-        state,
-        progress.and_then(|progress| progress.pause_reason),
-        outcome.as_ref().map(|outcome| outcome.code.as_str()),
-        &format!("{session_id}:{tool_call_id}"),
-        handle.unwrap_or(tool_call_id),
-    );
+    let next_calls = gents_server::jobs::next_calls(state, &format!("{session_id}:{tool_call_id}"));
     Some((outcome, next_calls))
 }
 

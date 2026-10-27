@@ -13,27 +13,48 @@ pub async fn session_goal(
     session_id: &str,
 ) -> Result<Option<SessionGoalView>> {
     let observation = core.session_goal_observation(node_did, session_id).await?;
-    Ok(observation.map(|observation| SessionGoalView {
-        node_did: observation.node_did,
-        session_id: observation.session_id,
-        session_doc_id: observation.session_doc_id,
-        observed_at: observation.observed_at,
-        goal: observation.goal.map(|goal| {
-            let snapshot = goal.snapshot;
-            GoalControlView {
-                goal_id: snapshot.goal_id,
-                revision: goal.revision,
-                objective: snapshot.objective,
-                status: snapshot.status,
-                token_budget: snapshot.token_budget.map(|budget| budget.to_string()),
-                tokens_used: snapshot.tokens_used.to_string(),
-                active_time_seconds: snapshot.active_time_seconds.to_string(),
-                continuation_sequence: snapshot.continuation_sequence.to_string(),
-                last_blocked_reason: snapshot.last_blocked_reason,
-                last_failure: snapshot.last_failure,
-                completion_evidence: snapshot.completion_evidence,
-            }
-        }),
+    Ok(observation.map(|observation| {
+        let snapshot = core.store().snapshot();
+        let mut sessions = snapshot.sessions.iter().filter(|session| {
+            session.node_did == node_did
+                && session.session_id == session_id
+                && session.requester_did == observation.requester_did
+        });
+        let source = sessions.next().filter(|_| sessions.next().is_none());
+        let waiting_question_ids = source.and_then(|session| {
+            let latest = session.observation.as_ref()?.latest_request.as_ref()?;
+            let ids = gents::goal::awaiting_goal_question_ids(
+                &observation,
+                latest,
+                &snapshot.requests,
+                &snapshot.mailbox_items,
+                chrono::Utc::now(),
+            );
+            (!ids.is_empty()).then_some(ids)
+        });
+        SessionGoalView {
+            waiting_question_ids,
+            node_did: observation.node_did,
+            session_id: observation.session_id,
+            session_doc_id: observation.session_doc_id,
+            observed_at: observation.observed_at,
+            goal: observation.goal.map(|goal| {
+                let snapshot = goal.snapshot;
+                GoalControlView {
+                    goal_id: snapshot.goal_id,
+                    revision: goal.revision,
+                    objective: snapshot.objective,
+                    status: snapshot.status,
+                    token_budget: snapshot.token_budget.map(|budget| budget.to_string()),
+                    tokens_used: snapshot.tokens_used.to_string(),
+                    active_time_seconds: snapshot.active_time_seconds.to_string(),
+                    continuation_sequence: snapshot.continuation_sequence.to_string(),
+                    last_blocked_reason: snapshot.last_blocked_reason,
+                    last_failure: snapshot.last_failure,
+                    completion_evidence: snapshot.completion_evidence,
+                }
+            }),
+        }
     }))
 }
 
@@ -52,6 +73,43 @@ pub async fn control_goal(
     core: &ClientCore,
     request: GoalControlRequest,
 ) -> Result<GoalControlResult, BridgeError> {
+    control_goal_with_reference(core, request, None).await
+}
+
+pub(super) async fn control_goal_with_reference(
+    core: &ClientCore,
+    request: GoalControlRequest,
+    resume: Option<crate::types::GoalSubmissionReceipt>,
+) -> Result<GoalControlResult, BridgeError> {
+    if let Some(submission) = &resume {
+        if request.client_did.as_deref() != Some(submission.client_did.as_str())
+            || request.command_id.as_deref() != Some(submission.reference.command_id.as_str())
+            || request.node_did != submission.node_did
+            || request.session_id.as_deref() != Some(submission.session_id.as_str())
+        {
+            return Err(invalid_goal_argument(anyhow::anyhow!(
+                "Goal resume differs from its original caller, runtime or destination"
+            )));
+        }
+    }
+    let command_id = match (request.client_did.as_deref(), request.command_id.as_deref()) {
+        (None, None) => None,
+        (Some(client), Some(command))
+            if client == core.node_identity().did() && !command.trim().is_empty() =>
+        {
+            if request.session_id.is_none() {
+                return Err(invalid_goal_argument(anyhow::anyhow!(
+                    "a retained Goal command requires its destination session"
+                )));
+            }
+            Some(command.to_owned())
+        }
+        _ => {
+            return Err(invalid_goal_argument(anyhow::anyhow!(
+            "a retained Goal command requires its original native client and command identities"
+        )))
+        }
+    };
     let operation = match request.action {
         GoalControlAction::Create {
             objective,
@@ -103,8 +161,21 @@ pub async fn control_goal(
         ..Default::default()
     };
     let starts_goal = matches!(operation, GoalOperation::Create { .. });
-    let receipt = core
-        .control_session_goal(
+    let receipt = if let Some(command_id) = &command_id {
+        core.control_session_goal_correlated(
+            command_id,
+            &request.node_did,
+            &session_id,
+            request.session_doc_id,
+            request.expected,
+            operation,
+            request.agent_id.as_deref(),
+            input,
+            resume.as_ref().map(|submission| &submission.reference),
+        )
+        .await
+    } else {
+        core.control_session_goal(
             &request.node_did,
             &session_id,
             request.session_doc_id,
@@ -114,7 +185,20 @@ pub async fn control_goal(
             input,
         )
         .await
-        .map_err(BridgeError::classify_transport_error)?;
+    }
+    .map_err(BridgeError::classify_transport_error)?;
+    if let Some(command_id) = command_id {
+        let retained = core
+            .recover_goal_submission(&request.node_did, &command_id)
+            .await
+            .map_err(BridgeError::classify_transport_error)?
+            .context("confirmed Goal command has no retained caller binding")
+            .map_err(invalid_goal_argument)?;
+        return super::goal_submission::applied(
+            &retained,
+            super::goal_submission::reference(core, &retained),
+        );
+    }
     goal_control_result(session_id, starts_goal, receipt.outcome)
 }
 
@@ -122,7 +206,7 @@ fn invalid_goal_argument(error: anyhow::Error) -> BridgeError {
     BridgeError::new(BridgeErrorCode::InvalidArgument, error.to_string())
 }
 
-fn goal_control_result(
+pub(super) fn goal_control_result(
     session_id: String,
     starts_goal: bool,
     outcome: GoalControlOutcome,
@@ -132,6 +216,7 @@ fn goal_control_result(
             goal_id,
             request_id,
         } => Ok(GoalControlResult {
+            submission_receipt: None,
             started_goal_id: (starts_goal && request_id.is_some()).then(|| goal_id.clone()),
             goal_id,
             session_id,

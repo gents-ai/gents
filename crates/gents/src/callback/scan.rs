@@ -20,7 +20,7 @@ use super::documents::{
 };
 use super::{CallbackEngine, LIFECYCLE_PENDING};
 
-use crate::trigger_engine::event_delivery::source_scan::{load_doc_field, load_doc_ids};
+use crate::trigger_engine::event_delivery::source_scan::load_doc_ids;
 
 const CALLBACK_RESCAN_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -81,8 +81,6 @@ impl CallbackEngine {
         let mut desired = RapidHashSet::new();
         let mut cursor_bindings = RapidHashMap::new();
         let mut group_collections = RapidHashSet::new();
-        let mut consumers: RapidHashMap<String, Vec<(String, Option<String>)>> =
-            RapidHashMap::new();
         for binding in &bindings {
             match load_event_source(&self.node, &binding.event_source_id, &binding.node_did).await {
                 Ok(Some(source)) => {
@@ -93,10 +91,6 @@ impl CallbackEngine {
                         cursor_bindings
                             .insert(binding.binding_id.clone(), source.source_collection.clone());
                     } else {
-                        consumers
-                            .entry(source.source_collection.clone())
-                            .or_default()
-                            .push((binding.binding_id.clone(), source.correlation_field.clone()));
                         group_collections.insert(source.source_collection.clone());
                     }
                     desired.insert(source.source_collection);
@@ -114,8 +108,7 @@ impl CallbackEngine {
             .cloned()
             .collect();
         for collection in &added {
-            let collection_consumers = consumers.get(collection).map_or(&[][..], Vec::as_slice);
-            if let Err(error) = self.seed_seen_docs(collection, collection_consumers).await {
+            if let Err(error) = self.seed_seen_docs(collection).await {
                 tracing::warn!(
                     source_collection = %collection,
                     %error,
@@ -133,38 +126,13 @@ impl CallbackEngine {
         }
     }
 
-    async fn seed_seen_docs(
-        &mut self,
-        collection: &str,
-        consumers: &[(String, Option<String>)],
-    ) -> Result<()> {
+    async fn seed_seen_docs(&mut self, collection: &str) -> Result<()> {
         let ids = tokio::select! {
             biased;
             _ = self.cancel.cancelled() => return Ok(()),
             ids = load_doc_ids(self.node.as_ref(), collection) => ids?,
         };
-        let mut ids: RapidHashSet<String> = ids.into_iter().collect();
-        let live = crate::graph_pipeline::live_run_correlations(
-            self.node.as_ref(),
-            &self.node_did,
-            consumers.iter().map(|(id, _)| id.as_str()),
-        )
-        .await?;
-        if !live.is_empty() {
-            for (consumer, field) in consumers {
-                let Some(field) = field else { continue };
-                let fields = tokio::select! {
-                    biased;
-                    _ = self.cancel.cancelled() => return Ok(()),
-                    fields = load_doc_field(self.node.as_ref(), collection, field) => fields?,
-                };
-                for (doc_id, correlation) in fields {
-                    if crate::graph_pipeline::is_live_for(&live, consumer, &correlation) {
-                        ids.remove(&doc_id);
-                    }
-                }
-            }
-        }
+        let ids: RapidHashSet<String> = ids.into_iter().collect();
         self.seen_docs
             .entry(collection.to_string())
             .or_default()

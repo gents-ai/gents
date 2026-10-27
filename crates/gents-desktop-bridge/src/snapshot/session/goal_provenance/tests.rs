@@ -43,6 +43,7 @@ pub(crate) async fn assert_copied_opening(
                 .filter(|row| row.message.session_id != "child")
                 .cloned()
                 .collect(),
+            origin_requests: rows.requests.clone(),
             output_segments: rows.output_segments.clone(),
             ..Default::default()
         };

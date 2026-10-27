@@ -43,6 +43,8 @@ pub struct RequestInput {
     /// Signed assignment attribution; authorization remains with admission and ACP.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goal_assignment: Option<GoalAssignmentInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question_reply: Option<crate::mailbox_question::MailboxQuestionReply>,
     /// Submitted snapshots, distinct from authored prose and configuration grants.
     #[serde(
         default,
@@ -71,6 +73,17 @@ impl RequestInput {
             || runtime_version == Some(u64::from(crate::goal_control::GOAL_STOP_CONTRACT_VERSION))
     }
 
+    pub fn question_reply_compatible(&self, runtime_version: Option<u64>) -> bool {
+        self.question_reply.as_ref().is_none_or(|reply| {
+            let required = u64::from(reply.question_version.unwrap_or(2));
+            runtime_version.is_some_and(|version| {
+                required >= 2
+                    && required <= version
+                    && version <= u64::from(crate::mailbox_question::MAILBOX_QUESTION_VERSION)
+            })
+        })
+    }
+
     pub fn has_authored_input(&self, prose: &str) -> bool {
         !prose.trim().is_empty()
             || !self.captured_context.is_empty()
@@ -91,6 +104,7 @@ impl RequestInput {
 
     pub fn for_fresh_session(&self) -> Self {
         Self {
+            question_reply: None,
             queue: None,
             goal_continuation: None,
             goal_assignment: None,

@@ -25,8 +25,8 @@ pub struct HomePackInstall {
     pub assets: String,
     /// The materialized asset directories of the dependencies this install ran,
     /// as `(coordinate, assets)` with `assets` spelled as [`Self::assets`].
-    /// Dependencies are graph packs and write no record of their own, so the
-    /// dependent's record is where their assets are found. Empty when none.
+    /// Dependencies write no record of their own, so the dependent's record
+    /// is where their assets are found. Empty when none.
     #[serde(default)]
     pub dependency_assets: Vec<(String, String)>,
     pub plugins: Vec<InstalledPackPlugin>,
@@ -45,8 +45,7 @@ pub struct HomePackInstall {
 /// Lean `provenanceOf`. `record` is `None` without a record, `Some(None)` for
 /// a record without `installed_via`. The CLI was the only writer of legacy
 /// assets and plugins records, so those read `Operator`; documents never had
-/// one, and a missing record fails closed. A graph pack writes no record and
-/// reads as documents do.
+/// one, and a missing record fails closed.
 pub fn recorded_provenance(kind: PackKind, record: Option<Option<InstalledVia>>) -> InstalledVia {
     match (record, kind) {
         (Some(Some(via)), _) => via,
@@ -72,16 +71,13 @@ pub fn record_after_install_via(
 }
 
 /// Writes `record` with the provenance [`record_after_install_via`] decides,
-/// replacing any prior record. A graph pack writes no record.
+/// replacing any prior record.
 pub fn record_after_install(
     home: &Path,
     mut record: HomePackInstall,
     installed_via: InstalledVia,
     explicit: bool,
 ) -> Result<()> {
-    if record.kind == PackKind::Graph {
-        return Ok(());
-    }
     let prior = read_home_install(home, &record.coordinate)?.map(|stored| stored.installed_via);
     record.installed_via = Some(record_after_install_via(
         prior,
@@ -183,11 +179,27 @@ pub fn forget_home_install(home: &Path, coordinate: &str) -> Result<()> {
 /// does not parse (one a newer gents wrote) is skipped with a warning, so
 /// one bad install cannot hide the rest from a listing.
 pub fn list_readable_home_installs(home: &Path) -> Result<Vec<HomePackInstall>> {
+    Ok(list_home_installs_with_skips(home)?.0)
+}
+
+/// A HomePackInstall file a listing skipped because it did not parse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedHomeInstall {
+    pub path: PathBuf,
+    pub reason: String,
+}
+
+/// Every readable record under `home`, sorted by coordinate, and every
+/// record file that did not parse; a listing never fails on one bad file.
+pub fn list_home_installs_with_skips(
+    home: &Path,
+) -> Result<(Vec<HomePackInstall>, Vec<SkippedHomeInstall>)> {
     let root = home.join(crate::home::PACK_INSTALLS_DIR_NAME);
     if !root.is_dir() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let mut records = Vec::new();
+    let mut skipped = Vec::new();
     for namespace_entry in
         std::fs::read_dir(&root).with_context(|| format!("reading {}", root.display()))?
     {
@@ -211,13 +223,15 @@ pub fn list_readable_home_installs(home: &Path) -> Result<Vec<HomePackInstall>> 
             match parsed {
                 Ok(record) => records.push(record),
                 Err(error) => {
-                    tracing::warn!(path = %path.display(), error = %format!("{error:#}"), "unreadable pack install record; skipped")
+                    let reason = format!("{error:#}");
+                    tracing::warn!(path = %path.display(), error = %reason, "unreadable pack install record; skipped");
+                    skipped.push(SkippedHomeInstall { path, reason });
                 }
             }
         }
     }
     records.sort_by(|a, b| a.coordinate.cmp(&b.coordinate));
-    Ok(records)
+    Ok((records, skipped))
 }
 
 pub fn list_home_installs(home: &Path) -> Result<Vec<HomePackInstall>> {
@@ -271,13 +285,6 @@ mod tests {
         }
     }
 
-    fn sample_of(coordinate: &str, kind: PackKind) -> HomePackInstall {
-        HomePackInstall {
-            kind,
-            ..sample(coordinate)
-        }
-    }
-
     fn read_via(home: &Path, coordinate: &str) -> Option<Option<InstalledVia>> {
         read_home_install(home, coordinate)
             .unwrap()
@@ -306,6 +313,39 @@ mod tests {
         );
         let strict = list_home_installs(home.path()).unwrap_err();
         assert!(format!("{strict:#}").contains("future.json"), "{strict:#}");
+    }
+
+    #[test]
+    fn home_install_with_retired_kind_is_skipped() {
+        let home = tempfile::tempdir().unwrap();
+        write_home_install(home.path(), &sample("fixture/kept")).unwrap();
+        let mut json = serde_json::to_value(sample("fixture/retired")).unwrap();
+        json["kind"] = "retired_fixture".into();
+        let retired = home
+            .path()
+            .join(crate::home::PACK_INSTALLS_DIR_NAME)
+            .join("fixture")
+            .join("retired.json");
+        std::fs::write(&retired, serde_json::to_vec(&json).unwrap()).unwrap();
+
+        let (records, skipped) = list_home_installs_with_skips(home.path()).unwrap();
+        assert_eq!(
+            records
+                .iter()
+                .map(|r| r.coordinate.as_str())
+                .collect::<Vec<_>>(),
+            vec!["fixture/kept"]
+        );
+        assert_eq!(skipped.len(), 1, "{skipped:?}");
+        assert_eq!(skipped[0].path, retired);
+        assert!(
+            skipped[0].reason.contains("unknown variant"),
+            "{}",
+            skipped[0].reason
+        );
+        assert_eq!(list_readable_home_installs(home.path()).unwrap(), records);
+        let strict = list_home_installs(home.path()).unwrap_err();
+        assert!(format!("{strict:#}").contains("retired.json"), "{strict:#}");
     }
 
     #[test]
@@ -415,29 +455,9 @@ mod tests {
     }
 
     #[test]
-    fn graph_install_writes_no_home_record() {
-        let home = tempfile::tempdir().unwrap();
-        record_after_install(
-            home.path(),
-            sample_of("gents/flow", PackKind::Graph),
-            InstalledVia::Operator,
-            true,
-        )
-        .unwrap();
-        assert!(read_home_install(home.path(), "gents/flow")
-            .unwrap()
-            .is_none());
-    }
-
-    #[test]
     fn recorded_provenance_is_lean_provenance_of() {
         use InstalledVia::{Operator, SelfConfig};
-        for kind in [
-            PackKind::Graph,
-            PackKind::Documents,
-            PackKind::Assets,
-            PackKind::Plugins,
-        ] {
+        for kind in [PackKind::Documents, PackKind::Assets, PackKind::Plugins] {
             for via in [Operator, SelfConfig] {
                 assert_eq!(recorded_provenance(kind.clone(), Some(Some(via))), via);
             }

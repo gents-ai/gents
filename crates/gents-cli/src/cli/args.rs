@@ -15,7 +15,7 @@ use crate::{
     SESSION_AFTER_HELP, STATUS_AFTER_HELP, TASK_AFTER_HELP, TOOLS_AFTER_HELP, TRACE_AFTER_HELP,
 };
 
-use gents::backend_registry::{DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_QUEUE_DEPTH};
+use gents::backend_registry::DEFAULT_MAX_QUEUE_DEPTH;
 
 fn parse_env_var_name(value: &str) -> Result<String, String> {
     let mut chars = value.chars();
@@ -186,11 +186,6 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: UxCommand,
     },
-    #[command(about = "Run and observe installed graphs")]
-    Graph {
-        #[command(subcommand)]
-        command: GraphCommand,
-    },
     #[command(about = "Run local configuration and runtime diagnostics", after_help = DIAGNOSE_AFTER_HELP)]
     Diagnose(DiagnoseArgs),
     #[command(about = "Explain resolved agent tool surfaces", after_help = TOOLS_AFTER_HELP)]
@@ -347,22 +342,6 @@ impl ServiceCommand {
     }
 }
 
-#[derive(clap::Subcommand)]
-pub(crate) enum GraphCommand {
-    #[command(about = "Start a run of an installed active graph")]
-    Run(GraphRunArgs),
-    #[command(about = "Watch durable graph progress until terminal")]
-    Watch(GraphWatchArgs),
-    #[command(about = "Read named durable outputs for a graph run")]
-    Result(GraphResultArgs),
-    #[command(about = "Request cancellation of a running graph")]
-    Cancel(GraphCancelArgs),
-    #[command(about = "Block new runs without interrupting pinned work")]
-    Disable(GraphToggleArgs),
-    #[command(about = "Allow new runs of an active graph")]
-    Enable(GraphToggleArgs),
-}
-
 #[derive(clap::Args, Clone)]
 pub(crate) struct ScopeArgs {
     #[arg(long)]
@@ -404,18 +383,17 @@ pub(crate) enum PackTemplate {
     Minimal,
     /// The minimal pack plus a job schema, an event source and a trigger.
     Automation,
-    /// A graph pack: one stage from a job entry to one result.
-    Graph,
     /// A plugins pack with one plugin, ready to build.
     PluginTool,
     /// A pack of files with no configuration.
     Assets,
+    /// A documents pack shipping one workflow: a Rust job plugin, the worker it spawns and the caller Tools template.
+    Workflow,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PackKindArg {
     Documents,
-    Graph,
     Assets,
     Plugins,
 }
@@ -438,7 +416,7 @@ pub(crate) struct PackScaffoldArgs {
     pub(crate) template: Option<PackTemplate>,
     #[arg(
         long,
-        help = "Plugin language for the plugin-tool template; defaults to rust"
+        help = "Plugin language; the plugin-tool template takes any language gents builds, the workflow template rust, js or ts; defaults to rust"
     )]
     pub(crate) language: Option<String>,
     #[arg(
@@ -490,32 +468,6 @@ pub(crate) enum PackAddCommand {
         #[arg(long, help = "Collection whose new documents fire the trigger")]
         on: String,
     },
-    /// A graph; the pack becomes a graph pack.
-    Graph { graph_id: String },
-    /// A graph stage that runs a task, reading one collection and writing another.
-    Stage {
-        node: String,
-        #[arg(long)]
-        graph: String,
-        #[arg(
-            long,
-            required_unless_present = "plugin",
-            conflicts_with = "plugin",
-            help = "The Task an agent node runs"
-        )]
-        task: Option<String>,
-        #[arg(long, help = "The pack's own plugin a plugin node runs")]
-        plugin: Option<String>,
-        #[arg(long, help = "Collection the stage reads")]
-        input: String,
-        #[arg(long, help = "Collection the stage writes")]
-        output: String,
-        #[arg(
-            long,
-            help = "Upstream node.port; the first stage becomes the graph's entry"
-        )]
-        from: Option<String>,
-    },
     /// A plugin from source, or from an already compiled plugin file.
     Plugin {
         name: String,
@@ -543,7 +495,6 @@ pub(crate) enum PackPart {
     Agent,
     Task,
     Trigger,
-    Graph,
     Plugin,
     Skill,
     Schema,
@@ -631,17 +582,6 @@ pub(crate) struct PackCheckArgs {
 }
 
 #[derive(clap::Args)]
-pub(crate) struct PackGraphArgs {
-    #[arg(help = "Graph pack directory; defaults to the current directory")]
-    pub(crate) dir: Option<PathBuf>,
-    #[arg(
-        long,
-        help = "Replace the README's topology diagram instead of printing it"
-    )]
-    pub(crate) write_readme: bool,
-}
-
-#[derive(clap::Args)]
 pub(crate) struct PackVerifyArgs {
     #[arg(help = "A .pack file, or sha256:<hex> for a pack in the home's store")]
     pub(crate) target: String,
@@ -676,8 +616,6 @@ pub(crate) enum PackCommand {
     Test(PackTestArgs),
     /// Run every validation an install would on pack directories; writes nothing.
     Check(PackCheckArgs),
-    /// Print a graph pack's topology diagram, or write it into its README.
-    Graph(PackGraphArgs),
     /// Install a pack into an initialized node; never seed or prune.
     Install(PackInstallArgs),
     /// Wire an installed plugin into an agent's Tools and Context, or with
@@ -941,12 +879,6 @@ pub(crate) struct PackUpdateArgs {
     #[arg(help = "The installed pack to update; every outdated pack when omitted")]
     pub(crate) package: Option<String>,
     #[arg(
-        long,
-        requires = "package",
-        help = "JSON file containing node_did and an optional inference_slots map, as for install"
-    )]
-    pub(crate) bindings: Option<PathBuf>,
-    #[arg(
         long = "inference-slot",
         value_name = "NAME=PROFILE_ID",
         action = clap::ArgAction::Append,
@@ -1001,11 +933,6 @@ pub(crate) struct PackInstallArgs {
     #[arg(help = "A local path/sha256:<hex>, an installed coordinate, or a registry name")]
     pub(crate) package: String,
     #[arg(
-        long,
-        help = "JSON file containing node_did and an optional inference_slots map"
-    )]
-    pub(crate) bindings: Option<PathBuf>,
-    #[arg(
         long = "inference-slot",
         value_name = "NAME=PROFILE_ID",
         action = clap::ArgAction::Append,
@@ -1021,7 +948,7 @@ pub(crate) struct PackInstallArgs {
     #[command(flatten)]
     pub(crate) scope: ScopeArgs,
     #[arg(long, value_enum, default_value_t = OutputFormat::Json,
-        help = "Report format; document/asset installs require json, graph installs also support text")]
+        help = "Report format; document/asset installs require json")]
     pub(crate) output: OutputFormat,
     #[arg(
         long,
@@ -1090,86 +1017,6 @@ pub(crate) struct PackRemoveArgs {
     pub(crate) scope: ScopeArgs,
     #[command(flatten)]
     pub(crate) drift: PackDriftArgs,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct GraphRunArgs {
-    #[arg(
-        required_unless_present = "graph_id",
-        help = "Installed package whose active graph to run; or use --graph-id with --digest"
-    )]
-    pub(crate) package: Option<String>,
-    #[arg(
-        long = "graph-id",
-        requires = "digest",
-        conflicts_with = "package",
-        help = "Run this graph by id instead of by package; requires --digest"
-    )]
-    pub(crate) graph_id: Option<String>,
-    #[arg(
-        long,
-        requires = "graph_id",
-        help = "The graph's active revision digest (sha256:...); any other revision is refused"
-    )]
-    pub(crate) digest: Option<String>,
-    #[arg(
-        long,
-        help = "The entry to start; required when the installed plan has more than one"
-    )]
-    pub(crate) entry: Option<String>,
-    #[arg(
-        long,
-        help = "The entry's operator input, as a JSON object or @FILE naming one; default {}"
-    )]
-    pub(crate) input: Option<String>,
-    #[arg(
-        long = "field",
-        value_name = "NAME=VALUE",
-        help = "Set one string field on the input, overriding --input; repeatable"
-    )]
-    pub(crate) field: Vec<String>,
-    #[arg(long, default_value_t = false)]
-    pub(crate) watch: bool,
-    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-    pub(crate) output: OutputFormat,
-    #[command(flatten)]
-    pub(crate) scope: ScopeArgs,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct GraphWatchArgs {
-    pub(crate) run_id: String,
-    #[arg(long, default_value_t = 1_000)]
-    pub(crate) interval_ms: u64,
-    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-    pub(crate) output: OutputFormat,
-    #[command(flatten)]
-    pub(crate) scope: ScopeArgs,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct GraphResultArgs {
-    pub(crate) run_id: String,
-    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
-    pub(crate) output: OutputFormat,
-    #[command(flatten)]
-    pub(crate) scope: ScopeArgs,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct GraphCancelArgs {
-    pub(crate) run_id: String,
-    #[arg(long)]
-    pub(crate) reason: Option<String>,
-    #[command(flatten)]
-    pub(crate) scope: ScopeArgs,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct GraphToggleArgs {
-    pub(crate) package: String,
-    #[command(flatten)]
-    pub(crate) scope: ScopeArgs,
 }
 
 #[derive(clap::Args)]
@@ -1256,7 +1103,7 @@ pub(crate) enum PluginCommand {
     Bind(PluginBindArgs),
     /// Leave an installed plugin's model slot unbound again.
     Unbind(PluginUnbindArgs),
-    /// Choose the folders plugins may read or write when an agent or a graph names a path.
+    /// Choose the folders plugins may read or write when an agent names a path.
     /// The session's working folder is readable without asking (never `/` or your home); add folders or single files beyond it here.
     Dirs {
         #[command(subcommand)]
@@ -1813,8 +1660,8 @@ pub(crate) struct InitArgs {
         help = "Model id to bind to the default agent. Required for presets without a local default model"
     )]
     pub(crate) model_name: Option<String>,
-    #[arg(long, default_value_t = DEFAULT_MAX_CONCURRENT)]
-    pub(crate) max_concurrent: i64,
+    #[arg(long, help = "Override the backend's default concurrent request limit")]
+    pub(crate) max_concurrent: Option<i64>,
     #[arg(long, default_value_t = DEFAULT_MAX_QUEUE_DEPTH)]
     pub(crate) max_queue_depth: i64,
     #[arg(
@@ -1871,13 +1718,6 @@ pub(crate) struct InitArgs {
         help = "Restrict the defra_query tool to these collections when a package enables it (repeatable); omit for all collections"
     )]
     pub(crate) defra_query_collections: Vec<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        conflicts_with = "identity_only",
-        help = "After init, install gents/rhai_workflows as an operator install and wire it into the default agent (grants the engine pack's declared authority)"
-    )]
-    pub(crate) workflows: bool,
 }
 
 impl InitArgs {
@@ -1960,14 +1800,6 @@ pub(crate) struct ServeArgs {
         help = "Expose write for exactly these application collections; each call must forward a caller-signed DefraDB bearer (repeatable)"
     )]
     pub(crate) mcp_write_collections: Vec<String>,
-    #[arg(
-        long = "mcp-graph-tools",
-        requires = "enable_mcp",
-        conflicts_with = "mcp_query_collections",
-        default_value_t = false,
-        help = "With --enable-mcp, expose the read-only list_graphs, get_graph_run and get_graph_result at /mcp. Each call must forward a caller-signed DefraDB bearer, whose DID selects whose graphs are listed and observed. The graph collections carry no per-caller policy, so this restricts no access: the flag is refused with --mcp-query-collection and offered only where /mcp already reads every collection"
-    )]
-    pub(crate) mcp_graph_tools: bool,
     #[arg(
         long,
         help = "Root directory for readonly/readwrite tool ceilings. Readonly defaults to the current working directory when unset"
@@ -4074,6 +3906,10 @@ pub(crate) enum JobCommand {
     Stop(JobControlArgs),
     #[command(about = "Pause one plugin job and interrupt its children; local only")]
     Pause(JobControlArgs),
+    #[command(
+        about = "Turn a finished dynamic workflow run into an installed tool, wired into an agent"
+    )]
+    Promote(JobPromoteArgs),
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -4136,6 +3972,26 @@ pub(crate) struct JobControlArgs {
         help = "Resolve a handle within this session"
     )]
     pub(crate) session: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct JobPromoteArgs {
+    #[command(flatten)]
+    pub(crate) scope: ScopeArgs,
+    #[arg(help = "A dynamic job address (SESSION_ID:TOOL_CALL_ID) or a tool call id")]
+    pub(crate) selector: String,
+    #[arg(
+        long,
+        help = "The tool's snake_case name, installed as gents/<name>; defaults to the run's handle when it is one"
+    )]
+    pub(crate) name: Option<String>,
+    #[arg(
+        long,
+        help = "Agent to wire the tool into; defaults to the agent that ran the workflow"
+    )]
+    pub(crate) agent: Option<String>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
 }
 
 #[derive(clap::Args)]

@@ -23,7 +23,7 @@ export function node(overrides: Record<string, unknown> = {}) {
 export function publish(app: DesktopApp, deployments: unknown[]) {
   publishSnapshot(app, {
     bootstrap: app.stores.client.getState().snapshot?.bootstrap ?? {},
-    client: { deployments },
+    client: { clientDid: "test-client", deployments },
   } as unknown as DesktopClientSnapshot);
 }
 

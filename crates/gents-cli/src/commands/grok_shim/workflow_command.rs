@@ -137,7 +137,7 @@ pub(super) fn control_reply(
             }),
         ) => format!("Stopped {handle} ({killed_children} agents interrupted)."),
         (JobControlKind::Pause, Ok(JobControlOutcome::Applied { .. })) => {
-            format!("Paused {handle}. To resume, ask in chat: \"/workflow resume {handle}\".")
+            format!("Paused {handle}. Its tool's help says how a paused run is resumed.")
         }
         _ => match control_lines(kind, view, result) {
             Ok(lines) => lines.join("\n"),

@@ -63,10 +63,30 @@ impl DefraSessionHook {
                     json!({"accepted": false, "error": format!("Goal caller attribution unavailable: {error:#}")}),
                 );
                 return self
-                    .complete_control_tool_call(&mut lifecycle, CREATE_GOAL_TOOL_NAME, result)
+                    .fail_control_tool_call(
+                        &mut lifecycle,
+                        CREATE_GOAL_TOOL_NAME,
+                        result,
+                        crate::tool_call_lifecycle::FailureClass::ServiceUnavailable,
+                    )
                     .await;
             }
         };
+        if matches!(context.assignment, RequestAssignmentObservation::Unknown) {
+            let result = super::helpers::json_string(json!({
+                "accepted": false,
+                "disposition": "error",
+                "error": "Goal caller attribution is unknown; continue from a verified request",
+            }));
+            return self
+                .fail_control_tool_call(
+                    &mut lifecycle,
+                    CREATE_GOAL_TOOL_NAME,
+                    result,
+                    crate::tool_call_lifecycle::FailureClass::ServiceUnavailable,
+                )
+                .await;
+        }
         let outcome = match create_goal_for_request(
             &self.node,
             &context.request,
@@ -126,6 +146,7 @@ impl DefraSessionHook {
             )
             .await?;
         lifecycle.start_running().await?;
+        let mut attribution_unavailable = false;
         let result = if serde_json::from_str::<GetGoalArgs>(args).is_err() {
             super::helpers::json_string(json!({"error": "get_goal expects an empty object"}))
         } else {
@@ -155,18 +176,24 @@ impl DefraSessionHook {
             }
             .await;
             match context {
-                Err(error) => super::helpers::json_string(
-                    json!({"error": format!("Goal caller attribution unavailable: {error:#}")}),
-                ),
+                Err(error) => {
+                    attribution_unavailable = true;
+                    super::helpers::json_string(
+                        json!({"error": format!("Goal caller attribution unavailable: {error:#}")}),
+                    )
+                }
                 Ok(context) => {
                     let read_only = !context.can_write();
                     match context.assignment {
                         RequestAssignmentObservation::None => {
                             super::helpers::json_string(json!({"goal": null}))
                         }
-                        RequestAssignmentObservation::Unknown => super::helpers::json_string(
-                            json!({"error": "Goal caller attribution is unknown; continue from a verified request"}),
-                        ),
+                        RequestAssignmentObservation::Unknown => {
+                            attribution_unavailable = true;
+                            super::helpers::json_string(
+                                json!({"error": "Goal caller attribution is unknown; continue from a verified request"}),
+                            )
+                        }
                         RequestAssignmentObservation::Assigned(goal) => {
                             let mut observed = crate::goal::snapshot(&goal, Utc::now());
                             if read_only {
@@ -202,8 +229,18 @@ impl DefraSessionHook {
                 }
             }
         };
-        self.complete_control_tool_call(&mut lifecycle, GET_GOAL_TOOL_NAME, result)
+        if attribution_unavailable {
+            self.fail_control_tool_call(
+                &mut lifecycle,
+                GET_GOAL_TOOL_NAME,
+                result,
+                crate::tool_call_lifecycle::FailureClass::ServiceUnavailable,
+            )
             .await
+        } else {
+            self.complete_control_tool_call(&mut lifecycle, GET_GOAL_TOOL_NAME, result)
+                .await
+        }
     }
 
     pub(super) async fn persist_update_goal_tool_call(
@@ -253,17 +290,33 @@ impl DefraSessionHook {
                     json!({"accepted": false, "error": format!("Goal caller attribution unavailable: {error:#}")}),
                 );
                 return self
-                    .complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
+                    .fail_control_tool_call(
+                        &mut lifecycle,
+                        UPDATE_GOAL_TOOL_NAME,
+                        result,
+                        crate::tool_call_lifecycle::FailureClass::ServiceUnavailable,
+                    )
                     .await;
             }
         };
         if !context.can_write() {
+            let unavailable = matches!(context.assignment, RequestAssignmentObservation::Unknown);
             let error = match context.assignment {
                 RequestAssignmentObservation::None => "the calling request has no Goal assignment",
                 RequestAssignmentObservation::Unknown => "Goal caller attribution is unknown; continue from a verified request",
                 RequestAssignmentObservation::Assigned(_) => "the calling request's retained Goal assignment is read-only; a new request is required to work on the current Goal",
             };
             let result = super::helpers::json_string(json!({"accepted": false, "error": error}));
+            if unavailable {
+                return self
+                    .fail_control_tool_call(
+                        &mut lifecycle,
+                        UPDATE_GOAL_TOOL_NAME,
+                        result,
+                        crate::tool_call_lifecycle::FailureClass::ServiceUnavailable,
+                    )
+                    .await;
+            }
             return self
                 .complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
                 .await;

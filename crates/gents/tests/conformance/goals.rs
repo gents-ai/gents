@@ -77,7 +77,7 @@ fn generated_goal_decision_cases_fence_runtime_controller() {
 #[test]
 fn generated_goal_readiness_gate_cases_fence_retry_accounting() {
     let cases = lean_goal_readiness_gate_cases();
-    assert_eq!(cases.len(), 20, "the goal readiness gate matrix drifted");
+    assert_eq!(cases.len(), 25, "the goal readiness gate matrix drifted");
     for case in cases {
         let observation = match case.observation.as_str() {
             "ready" => GoalAgentObservation::Ready {
@@ -92,6 +92,7 @@ fn generated_goal_readiness_gate_cases_fence_retry_accounting() {
         let cause = match case.cause.as_str() {
             "attempt" => GoalFailureCause::Attempt,
             "agent_unavailable" => GoalFailureCause::AgentUnavailable,
+            "goal_control_unavailable" => GoalFailureCause::GoalControlUnavailable,
             other => panic!("unknown cause {other:?} in Lean case {}", case.name),
         };
         let readiness = observe_goal_agent_readiness(observation, case.settled);

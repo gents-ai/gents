@@ -4,6 +4,50 @@ All desktop crates and npm packages release together at `workspace.package.versi
 (lockstep train). The bundled frontend and Rust bridge use generated types and
 source consistency checks, not a separate runtime compatibility version.
 
+## Unreleased
+
+- `gents job promote <address|tool_call_id> --name <snake_case>` installs a
+  finished dynamic workflow run as a tool wired to its agent, so later calls
+  run the script as an `installed` job. The generated pack lives at
+  `<home>/packs/promoted/<name>`. It needs javy 8.1.1 to build the plugin
+  artifact.
+- The desktop run view has a Promote action on finished dynamic runs, and a
+  Workflows section under the node's Automation group lists the installed
+  workflow plugins and the dynamic scripts that ran, with run counts and the
+  tool names they became. A script that is already promoted offers no
+  second promotion. Only a completed run is promotable: a run that is still
+  live or ended failed, cancelled or timed out is refused with
+  `promote_not_completed` and a script with no completed run is not listed.
+- `JobChildRow.target` is reported by `gents job show --output json` and
+  carried in the desktop bindings.
+- The graph system is removed: `gents graph`, graph packs (`kind: graph`,
+  `graphs`, `graph_intents`, `graph_capabilities`, `compiler_version`), the
+  native graph tools and the `enable_graph_tools` grant, the MCP graph reads
+  (`--mcp-graph-tools`), the Grok graph-run pager and the graph fences in
+  goals, triggers, callbacks and lifecycle. Workflows are job plugins. The
+  `GraphDefinition`, `GraphRevision` and `GraphRun` collections are no longer
+  registered; an existing home keeps its orphaned rows and nothing reads them.
+  `MailboxItem.graph_run_id` stays in the schema, unwritten, so an existing
+  home's MailboxItem lineage still matches; the `graph` mailbox source kind
+  and session provenance `graph_run_id` are gone.
+- `gents init --workflows` is removed and `gents init` no longer suggests
+  installing `gents/rhai_workflows`: a workflow is an ordinary job plugin a
+  content pack ships (`gents pack install <pack> --grant-authority`, then
+  `gents pack wire <ns>/<plugin> --agent <agent> --targets-from <pack>`), and
+  `gents pack new <name> --template workflow` scaffolds one.
+- The Rhai-era job host surfaces are removed: plugin manifests no longer take
+  `asset_mounts` or `catalog`, job policies no longer take `project_roots`,
+  and the step input no longer carries `path`, `verified_script` or `mounts`.
+  A job's origin is decided by its call: a call that carries a `script` is
+  `dynamic` and the job policy gates it; any other call runs the plugin
+  artifact and is `installed`. Job next-call hints name `gents job` verbs.
+  Upgrade: a Tools document that still sets `job.policy.project_roots`
+  loads in this release with the key ignored and dropped on the next write;
+  remove it before the next release. `policy.trusted_packs` no longer
+  affects a job's origin or admission; it remains the wiring default. The
+  `next` hints a model sees in job receipts and refusals name `gents job`
+  verbs (`gents job show`), not the plugin's own subcommands.
+
 ## 0.21.0 - 2026-10-23
 
 - The desktop reads a session's transcript by message number, and one scroll

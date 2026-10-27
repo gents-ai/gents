@@ -71,7 +71,6 @@ fn tool_config(categories: &[&str], no_lockout: bool, preview: bool) -> SelfConf
         no_lockout,
         preview,
         enable_pack_install: false,
-        enable_graph_tools: false,
         process_ceiling: Default::default(),
     }
 }

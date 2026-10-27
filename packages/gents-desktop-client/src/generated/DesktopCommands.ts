@@ -32,6 +32,8 @@ import type { DesktopOperationsSnapshotRequest } from "./DesktopOperationsSnapsh
 import type { DesktopProbeMcpServiceRequest } from "./DesktopProbeMcpServiceRequest.js";
 import type { DesktopSessionProvenanceRequest } from "./DesktopSessionProvenanceRequest.js";
 import type { DesktopSessionSnapshot } from "./DesktopSessionSnapshot.js";
+import type { DynamicWorkflowView } from "./DynamicWorkflowView.js";
+import type { DynamicWorkflowsView } from "./DynamicWorkflowsView.js";
 import type { EditedDocuments } from "./EditedDocuments.js";
 import type { EnrollmentRequestView } from "./EnrollmentRequestView.js";
 import type { EnrollmentStatusRequest } from "./EnrollmentStatusRequest.js";
@@ -39,6 +41,9 @@ import type { EventSourceDeleteRequest } from "./EventSourceDeleteRequest.js";
 import type { EventSourceSaveRequest } from "./EventSourceSaveRequest.js";
 import type { GoalControlRequest } from "./GoalControlRequest.js";
 import type { GoalControlResult } from "./GoalControlResult.js";
+import type { GoalSubmissionQuery } from "./GoalSubmissionQuery.js";
+import type { GoalSubmissionReceipt } from "./GoalSubmissionReceipt.js";
+import type { GoalSubmissionRecovery } from "./GoalSubmissionRecovery.js";
 import type { GrokLoginRequest } from "./GrokLoginRequest.js";
 import type { GrokLoginResult } from "./GrokLoginResult.js";
 import type { InferenceBackendRecommendationRequest } from "./InferenceBackendRecommendationRequest.js";
@@ -138,6 +143,8 @@ import type { TriggerDeleteRequest } from "./TriggerDeleteRequest.js";
 import type { TriggerSaveRequest } from "./TriggerSaveRequest.js";
 import type { UxDataCallRequest } from "./UxDataCallRequest.js";
 import type { UxDataSurfacesRequest } from "./UxDataSurfacesRequest.js";
+import type { WorkflowPromoteRequest } from "./WorkflowPromoteRequest.js";
+import type { WorkflowPromoteView } from "./WorkflowPromoteView.js";
 import type { WorkspaceListingView } from "./WorkspaceListingView.js";
 
 export type DesktopCommands = {
@@ -169,6 +176,9 @@ export type DesktopCommands = {
   desktop_event_source_delete: { args: { request: EventSourceDeleteRequest }; result: DesktopClientSnapshot };
   desktop_event_source_save: { args: { request: EventSourceSaveRequest }; result: DesktopClientSnapshot };
   desktop_goal_control: { args: { request: GoalControlRequest }; result: GoalControlResult };
+  desktop_goal_submission_acknowledge: { args: { receipt: GoalSubmissionReceipt }; result: void };
+  desktop_goal_submission_recover: { args: { query: GoalSubmissionQuery }; result: GoalSubmissionRecovery };
+  desktop_goal_submission_resume: { args: { request: GoalControlRequest; receipt: GoalSubmissionReceipt }; result: GoalControlResult };
   desktop_grok_login: { args: { request: GrokLoginRequest }; result: GrokLoginResult };
   desktop_grok_login_cancel: { args: Record<string, never>; result: void };
   desktop_inference_backend_recommendation: { args: { request: InferenceBackendRecommendationRequest }; result: InferenceModelRecommendation };
@@ -272,5 +282,8 @@ export type DesktopCommands = {
   desktop_ux_data_surfaces: { args: { request: UxDataSurfacesRequest }; result: JsonValue };
   desktop_ux_plugin_source: { args: { id: string }; result: JsonValue };
   desktop_ux_plugins_list: { args: Record<string, never>; result: JsonValue };
+  desktop_workflow_dynamic: { args: { selector: string }; result: DynamicWorkflowView };
+  desktop_workflow_promote: { args: { request: WorkflowPromoteRequest }; result: WorkflowPromoteView };
+  desktop_workflows_dynamic: { args: Record<string, never>; result: DynamicWorkflowsView };
   desktop_workspace_list: { args: { subpath?: string | null }; result: WorkspaceListingView };
 };

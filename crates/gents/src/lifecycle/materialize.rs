@@ -8,6 +8,21 @@ pub struct EnqueuedAgentRequest {
     pub session_id: String,
 }
 
+/// A pending fire or EventGroup state persisted before the upgrade can still
+/// name a retired graph trigger as its cause; such a request is never created.
+fn refuse_retired_reserved_cause(
+    create: &gents_protocol::request_admission::AgentRequestCreate,
+) -> Result<()> {
+    if let Some(id) = create
+        .caused_by_trigger_id
+        .as_deref()
+        .filter(|id| crate::agent::document_view::is_retired_reserved_id(id))
+    {
+        anyhow::bail!("trigger {id} belongs to a retired graph revision; it no longer runs");
+    }
+    Ok(())
+}
+
 fn validate_trigger_lineage(
     trigger_lineage: &TriggerLineage,
     trigger_doc_id: Option<&str>,
@@ -119,13 +134,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
         trigger_doc_id,
     )
     .await?;
-    if create
-        .caused_by_trigger_id
-        .as_deref()
-        .is_some_and(crate::graph_pipeline::graph_artifact_is_reserved)
-    {
-        return publish_graph_root_request(node, actor, &create).await;
-    }
+    refuse_retired_reserved_cause(&create)?;
     let escaped_request_id = escape_graphql_string(&request_id);
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
     let mutation = &mutation;
@@ -152,33 +161,6 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
         doc_id,
         request_id,
         session_id,
-    })
-}
-
-async fn publish_graph_root_request(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor: ::identity::Did,
-    create: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<EnqueuedAgentRequest> {
-    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-    let mutation = &mutation;
-    let doc_id = crate::config_client::ConfigAccess::transact_local_write(
-        node,
-        Some(actor),
-        "lifecycle.publish_graph_root",
-        move |txn| {
-            Box::pin(async move {
-                crate::graph_pipeline::fence_graph_root_request_in_txn(txn, create).await?;
-                let response = txn.execute(mutation).await?;
-                crate::graphql::created_doc_id(&response, "AgentRequest")
-            })
-        },
-    )
-    .await?;
-    Ok(EnqueuedAgentRequest {
-        doc_id,
-        request_id: create.request_id.clone(),
-        session_id: create.session_id.clone(),
     })
 }
 
@@ -1102,9 +1084,9 @@ pub(super) async fn apply_request_session_projection(
                 && fact.observed.request_id == request.request_id
         })
         .context("claimed request missing from its exact session scope")?;
+    let preview = session::request_preview_in_txn(txn, request).await?;
     let advanced =
-        session::advance_session_request_observation_in_txn(txn, incoming, &request.content, now)
-            .await?;
+        session::advance_session_request_observation_in_txn(txn, incoming, preview, now).await?;
     if !reopened && !advanced {
         session::touch_session_in_txn(txn, &owner, now).await?;
     }
@@ -1170,19 +1152,21 @@ async fn project_refused_request_onto_session_in_txn(
     )
     .await?
     .context("refused session disappeared")?;
-    let incoming = async {
+    let incoming: Result<_> = async {
         let facts = session::load_scoped_request_facts_in_txn(txn, &owner.session, false).await?;
-        facts
+        let incoming = facts
             .iter()
             .find(|fact| {
                 fact.observed.request_doc_id == request.doc_id
                     && fact.observed.request_id == request.request_id
             })
             .cloned()
-            .context("refused request missing from its exact session scope")
+            .context("refused request missing from its exact session scope")?;
+        let preview = session::request_preview_in_txn(txn, request).await?;
+        Ok((incoming, preview))
     }
     .await;
-    let incoming = match incoming {
+    let (incoming, preview) = match incoming {
         Ok(incoming) => incoming,
         Err(error) => {
             tracing::warn!(
@@ -1196,8 +1180,7 @@ async fn project_refused_request_onto_session_in_txn(
             return Ok(());
         }
     };
-    session::advance_refused_request_observation_in_txn(txn, &incoming, &request.content, now)
-        .await?;
+    session::advance_refused_request_observation_in_txn(txn, &incoming, preview, now).await?;
     Ok(())
 }
 
@@ -1561,7 +1544,7 @@ async fn stage_task_delivery_with_receipt(
                 "Task target session is closed"
             );
         }
-        crate::graph_pipeline::fence_graph_root_request_in_txn(txn, create).await?;
+        refuse_retired_reserved_cause(create)?;
         txn.execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
             .await?;
     }
@@ -1696,5 +1679,105 @@ mod task_delivery_tests {
             "pending"
         );
         assert_eq!(after["data"]["Goal"].as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn reserved_trigger_cause_is_refused() {
+        let identity_dir = tempfile::tempdir().unwrap();
+        let _identity = pin_fixed_signing_identity(identity_dir.path());
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(PIN_FIXED_DID)
+                .build()
+                .await
+                .unwrap(),
+        );
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        let access = crate::config_client::ConfigAccess::local(node.clone());
+        let message =
+            "trigger graph-trigger-retired belongs to a retired graph revision; it no longer runs";
+        let lineage = || TriggerLineage {
+            trigger_id: Some("graph-trigger-retired".into()),
+            trigger_kind: Some("schedule".into()),
+            source_doc_id: None,
+            correlation: None,
+            trigger_context: None,
+        };
+
+        let actor = ::identity::Did::new(PIN_FIXED_DID.to_string()).unwrap();
+        let err = write_pending_agent_request_with_lineage_workspace_and_conversation_title(
+            &node,
+            actor,
+            PIN_FIXED_DID,
+            "agent",
+            "work",
+            ExecutionOrigin::Interactive,
+            lineage(),
+            None,
+            None,
+            None,
+            None,
+            Some("trigger-doc"),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.to_string(), message);
+
+        let identity = gents_protocol::trigger_delivery::FireIdentity {
+            owner_did: PIN_FIXED_DID.into(),
+            trigger_id: "manual:task".into(),
+            source_collection: "Task".into(),
+            source_doc_id: "invocation-key".into(),
+        };
+        let key = task_fire_key(&identity);
+        let session_id = format!("trigger-session:{key}");
+        let fire = gents_protocol::trigger_delivery::TriggerFire {
+            fire_key: key.clone(),
+            identity,
+            task_id: "task".into(),
+            request_id: format!("trigger-request:{key}"),
+            session_id: session_id.clone(),
+            goal_id: None,
+            goal_objective: None,
+            goal_token_budget: None,
+            goal_assignment_applied: false,
+            emit_outcome: false,
+            queued_serial: false,
+            source_handoff_id: None,
+            reply_session_id: None,
+            shard_id: None,
+            attempt: None,
+            created_at: "2026-01-01T00:00:00Z".into(),
+        };
+        let create =
+            build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
+                PIN_FIXED_DID,
+                "agent",
+                "work",
+                ExecutionOrigin::Interactive,
+                lineage(),
+                None,
+                None,
+                &fire.request_id,
+                &fire.session_id,
+                Some(&fire.fire_key),
+                None,
+                Some("trigger-doc"),
+            )
+            .await
+            .unwrap();
+        let err = write_task_delivery(&access, &fire, false, &create)
+            .await
+            .err()
+            .expect("reserved cause must be refused");
+        assert_eq!(err.to_string(), message);
+
+        let after = access
+            .execute("{ TriggerFire { fire_key } AgentRequest { request_id } }")
+            .await
+            .unwrap();
+        assert_eq!(after["data"]["TriggerFire"].as_array().unwrap().len(), 0);
+        assert_eq!(after["data"]["AgentRequest"].as_array().unwrap().len(), 0);
     }
 }

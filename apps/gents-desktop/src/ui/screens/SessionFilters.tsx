@@ -13,7 +13,11 @@ import type { ComponentType, ReactNode } from "react";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import {
   hasFilter,
-  stateOf,
+  isShown,
+  matchesSource,
+  matchesState,
+  passes,
+  toggleShown,
   type SessionFilter,
   type SessionSource,
   type SessionState,
@@ -41,21 +45,6 @@ import {
 import { cn } from "@gents/ui/lib/utils";
 import { AgentInitials } from "./parts";
 
-const matchesState = (c: SessionSummary, state: SessionState) =>
-  stateOf(c.turnState) === state;
-
-const matchesSource = (c: SessionSummary, source: SessionSource) =>
-  source === "task"
-    ? Boolean(c.taskId || c.triggerId)
-    : source === "session"
-      ? Boolean(c.startedBy)
-      : !(c.taskId || c.triggerId || c.startedBy);
-
-const passes = (c: SessionSummary, f: SessionFilter) =>
-  (f.states.length === 0 || f.states.some((s) => matchesState(c, s))) &&
-  (f.sources.length === 0 || f.sources.some((s) => matchesSource(c, s))) &&
-  (f.agents.length === 0 || f.agents.includes(c.agentId ?? ""));
-
 export const matchesView = (
   c: SessionSummary,
   f: SessionFilter,
@@ -71,7 +60,7 @@ export type Option<V extends string> = {
   tint?: string;
 };
 
-const STATES: Option<SessionState>[] = [
+export const STATES: Option<SessionState>[] = [
   { value: "working", label: "Working", icon: Activity },
   { value: "waiting", label: "Waiting for node", icon: Clock },
   { value: "failed", label: "Failed", icon: CircleX, tint: "text-destructive" },
@@ -79,7 +68,7 @@ const STATES: Option<SessionState>[] = [
   { value: "finished", label: "Finished", icon: Circle },
 ];
 
-const SOURCES: Option<SessionSource>[] = [
+export const SOURCES: Option<SessionSource>[] = [
   { value: "person", label: "A person", icon: User },
   { value: "task", label: "A task", icon: Play },
   { value: "session", label: "Another session", icon: CornerDownRight },
@@ -104,7 +93,13 @@ export function Axis<V extends string>({
 }) {
   const picked = options.filter((o) => value.includes(o.value));
   const toggle = (v: V) =>
-    onChange(value.includes(v) ? value.filter((x) => x !== v) : [...value, v]);
+    onChange(
+      toggleShown(
+        options.map((o) => o.value),
+        value,
+        v,
+      ),
+    );
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -133,16 +128,17 @@ export function Axis<V extends string>({
           {options.map(({ value: v, label: text, icon: Icon, tint }) => (
             <DropdownMenuCheckboxItem
               key={v}
-              checked={value.includes(v)}
-              disabled={(counts[v] ?? 0) === 0 && !value.includes(v)}
+              checked={isShown(value, v)}
               onCheckedChange={() => toggle(v)}
               closeOnClick={false}
             >
               <Icon className={cn("size-4 shrink-0", tint)} />
               <span className="min-w-0 flex-1 truncate">{text}</span>
-              <span className="text-xs tabular-nums text-muted-foreground">
-                {counts[v] ?? 0}
-              </span>
+              {(counts[v] ?? 0) > 0 && (
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {counts[v]}
+                </span>
+              )}
             </DropdownMenuCheckboxItem>
           ))}
         </DropdownMenuGroup>
@@ -237,16 +233,14 @@ function AgentAxis({
             const b = byId.get(id);
             if (!b) return null;
             return (
-              <ComboboxItem
-                key={id}
-                value={id}
-                disabled={b.count === 0 && !value.includes(id)}
-              >
+              <ComboboxItem key={id} value={id}>
                 <AgentInitials name={b.name} className="size-5 text-[9px]" />
                 <span className="min-w-0 flex-1 truncate">{b.name}</span>
-                <span className="text-xs tabular-nums text-muted-foreground">
-                  {b.count}
-                </span>
+                {b.count > 0 && (
+                  <span className="text-xs tabular-nums text-muted-foreground">
+                    {b.count}
+                  </span>
+                )}
               </ComboboxItem>
             );
           }}

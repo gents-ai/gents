@@ -8,6 +8,8 @@ import {
 
 import { loadChatFolders, type ChatFolders } from "./chatFolders";
 import { createSelectors, type WithSelectors } from "./createSelectors";
+import { loadGoalDrafts, type GoalDraft } from "./goalDrafts";
+import { loadChatDrafts, type ChatDraft } from "./chatDrafts";
 
 export type ChatState = {
   localWorkflow: ChatWorkflowState;
@@ -23,6 +25,12 @@ export type ChatState = {
       what follows a send (the view going to the turn once it begins) */
   sentTurns: readonly SentTurn[];
   folders: ChatFolders;
+  goalDrafts: GoalDraft[];
+  goalDraftError: string | null;
+  goalCommandsInFlight: ReadonlySet<string>;
+  chatDrafts: ChatDraft[];
+  chatDraftError: string | null;
+  chatRequestsInFlight: ReadonlySet<string>;
 };
 
 export type SentTurn = { sessionId: string; requestId: string; queued: boolean };
@@ -40,6 +48,10 @@ export function createChatStore(initial: Partial<ChatState> = {}) {
       optimisticPendingTurn: null,
       sentTurns: [],
       folders: loadChatFolders(),
+      ...loadGoalDrafts(),
+      goalCommandsInFlight: new Set(),
+      ...loadChatDrafts(),
+      chatRequestsInFlight: new Set(),
       ...initial,
     })),
   );

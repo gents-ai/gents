@@ -1,5 +1,48 @@
 use super::*;
 
+#[test]
+fn empty_mcp_tool_selection_explains_why_no_tools_are_attached() {
+    for style in [
+        crate::document_config::RemoteToolStyle::Discovery,
+        crate::document_config::RemoteToolStyle::Flat,
+    ] {
+        let config = AgentToolSurfaceConfig::from_selection(
+            "worker",
+            ResolvedToolSelection {
+                enable_meta_tools: true,
+                allowed_mcp_service_ids: vec!["research".into()],
+                remote_tools: Some(crate::document_config::RemoteTools {
+                    services: vec![crate::document_config::RemoteServiceTools {
+                        mcp_service_id: "research".into(),
+                        style,
+                        ..Default::default()
+                    }],
+                }),
+                ..Default::default()
+            },
+            &ToolCeiling::meta_only(),
+            Vec::new(),
+        )
+        .unwrap();
+        let explanation = config.explain_with_runtime(true, "did:test:owner", &Default::default());
+        assert!(!explanation
+            .tool_names
+            .iter()
+            .any(|name| crate::meta_tools::META_TOOL_NAMES.contains(&name.as_str())));
+        let warning = explanation
+            .warnings
+            .iter()
+            .find(|warning| warning.code == "mcp_service_has_no_selected_tools")
+            .expect("an available service with no selected names needs a selection diagnostic");
+        assert!(warning.message.contains("research"));
+        assert!(warning.message.contains("tool_names"));
+        assert!(!explanation
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "meta_requested_no_online_mcp"));
+    }
+}
+
 fn temp_root(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("{name}-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&path).unwrap();
@@ -93,7 +136,6 @@ fn selection_file_tool_root_clamps_within_operator_root() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
-            enable_graph_tools: false,
             enable_lsp: false,
             lsp_config: None,
             eth_queries: Vec::new(),
@@ -181,7 +223,6 @@ fn build_tools_does_not_bake_a_per_request_workspace_root() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
-            enable_graph_tools: false,
             enable_lsp: false,
             lsp_config: None,
             eth_queries: Vec::new(),
@@ -252,7 +293,6 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
-            enable_graph_tools: false,
             enable_lsp: false,
             lsp_config: None,
             eth_queries: Vec::new(),
@@ -313,7 +353,6 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
-            enable_graph_tools: false,
             enable_lsp: false,
             lsp_config: None,
             eth_queries: Vec::new(),
@@ -373,7 +412,6 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
-            enable_graph_tools: false,
             enable_lsp: false,
             lsp_config: None,
             eth_queries: Vec::new(),
@@ -432,7 +470,6 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
-            enable_graph_tools: false,
             enable_lsp: false,
             lsp_config: None,
             eth_queries: Vec::new(),
@@ -492,7 +529,6 @@ fn containing_selection_root_clamps_to_operator_root() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
-            enable_graph_tools: false,
             enable_lsp: false,
             lsp_config: None,
             eth_queries: Vec::new(),
@@ -564,7 +600,6 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
-            enable_graph_tools: false,
             enable_lsp: false,
             lsp_config: None,
             eth_queries: Vec::new(),
@@ -621,7 +656,6 @@ fn readonly_ceiling_clamps_unrestricted_background_bash_to_registered_tool() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
-            enable_graph_tools: false,
             enable_lsp: false,
             lsp_config: None,
             eth_queries: Vec::new(),
@@ -676,7 +710,6 @@ fn selection_without_root_inherits_operator_root() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
-            enable_graph_tools: false,
             enable_lsp: false,
             lsp_config: None,
             eth_queries: Vec::new(),
@@ -744,7 +777,6 @@ fn selection_cli_tools_require_ceiling_entries() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
-            enable_graph_tools: false,
             enable_lsp: false,
             lsp_config: None,
             eth_queries: Vec::new(),
@@ -809,7 +841,6 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
-            enable_graph_tools: false,
             enable_lsp: false,
             lsp_config: None,
             eth_queries: Vec::new(),
@@ -877,7 +908,6 @@ fn selection_mcp_service_allowlist_is_deduped() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
-            enable_graph_tools: false,
             enable_lsp: false,
             lsp_config: None,
             eth_queries: Vec::new(),
@@ -1020,7 +1050,6 @@ fn background_tool_allowlist_registers_r6_tools() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
-            enable_graph_tools: false,
             enable_lsp: false,
             lsp_config: None,
             eth_queries: Vec::new(),
@@ -1076,7 +1105,6 @@ fn background_tool_allowlist_rejects_non_backgroundable_tools() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
-            enable_graph_tools: false,
             enable_lsp: false,
             lsp_config: None,
             eth_queries: Vec::new(),
@@ -1140,7 +1168,6 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
             self_config_no_lockout: false,
             self_config_preview: false,
             enable_pack_install: false,
-            enable_graph_tools: false,
             enable_lsp: false,
             lsp_config: None,
             eth_queries: Vec::new(),

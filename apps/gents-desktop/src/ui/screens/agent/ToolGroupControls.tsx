@@ -320,7 +320,6 @@ export function ToolGroupControls({
       </Group>
       <Group title="Runtime tools">
         {flags("built_ins", [
-          ["enable_graph_tools", "Graph tools"],
           ["enable_goal_tools", "Read and update goals"],
           ["enable_goal_creation", "Create goals"],
           ["enable_memory", "Memory"],
@@ -331,7 +330,7 @@ export function ToolGroupControls({
       <Group title="Self-configuration">
         {flags("self_config", [
           ["enable_self_config", "Can change this node's configuration"],
-          ["enable_pack_install", "Install graph packs"],
+          ["enable_pack_install", "Install packs"],
           ["self_config_no_lockout", "Prevent self-configuration lockout"],
           ["self_config_preview", "Preview configuration changes"],
         ])}

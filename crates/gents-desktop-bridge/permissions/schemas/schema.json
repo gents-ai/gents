@@ -631,6 +631,42 @@
           "markdownDescription": "Denies the desktop_goal_control command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_goal_submission_acknowledge command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-goal-submission-acknowledge",
+          "markdownDescription": "Enables the desktop_goal_submission_acknowledge command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_goal_submission_acknowledge command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-goal-submission-acknowledge",
+          "markdownDescription": "Denies the desktop_goal_submission_acknowledge command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_goal_submission_recover command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-goal-submission-recover",
+          "markdownDescription": "Enables the desktop_goal_submission_recover command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_goal_submission_recover command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-goal-submission-recover",
+          "markdownDescription": "Denies the desktop_goal_submission_recover command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_goal_submission_resume command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-goal-submission-resume",
+          "markdownDescription": "Enables the desktop_goal_submission_resume command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_goal_submission_resume command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-goal-submission-resume",
+          "markdownDescription": "Denies the desktop_goal_submission_resume command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_grok_login command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-grok-login",
@@ -1867,6 +1903,42 @@
           "markdownDescription": "Denies the desktop_ux_plugins_list command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_workflow_dynamic command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-workflow-dynamic",
+          "markdownDescription": "Enables the desktop_workflow_dynamic command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_workflow_dynamic command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-workflow-dynamic",
+          "markdownDescription": "Denies the desktop_workflow_dynamic command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_workflow_promote command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-workflow-promote",
+          "markdownDescription": "Enables the desktop_workflow_promote command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_workflow_promote command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-workflow-promote",
+          "markdownDescription": "Denies the desktop_workflow_promote command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_workflows_dynamic command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-workflows-dynamic",
+          "markdownDescription": "Enables the desktop_workflows_dynamic command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_workflows_dynamic command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-workflows-dynamic",
+          "markdownDescription": "Denies the desktop_workflows_dynamic command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_workspace_list command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-workspace-list",
@@ -1921,10 +1993,10 @@
           "markdownDescription": "Tool-surface explain (config family)\n#### This permission set includes:\n\n- `allow-desktop-tool-surface-explain`"
         },
         {
-          "description": "Chat submission, branching, rename and archive\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-chat-submission-recover`\n- `allow-desktop-chat-submission-acknowledge`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-pending-message-steer`\n- `allow-desktop-goal-control`\n- `allow-desktop-session-fork-before-message`\n- `allow-desktop-session-rename`\n- `allow-desktop-session-archive`",
+          "description": "Chat submission, branching, rename and archive\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-chat-submission-recover`\n- `allow-desktop-chat-submission-acknowledge`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-pending-message-steer`\n- `allow-desktop-goal-control`\n- `allow-desktop-goal-submission-recover`\n- `allow-desktop-goal-submission-resume`\n- `allow-desktop-goal-submission-acknowledge`\n- `allow-desktop-session-fork-before-message`\n- `allow-desktop-session-rename`\n- `allow-desktop-session-archive`",
           "type": "string",
           "const": "chat-write",
-          "markdownDescription": "Chat submission, branching, rename and archive\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-chat-submission-recover`\n- `allow-desktop-chat-submission-acknowledge`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-pending-message-steer`\n- `allow-desktop-goal-control`\n- `allow-desktop-session-fork-before-message`\n- `allow-desktop-session-rename`\n- `allow-desktop-session-archive`"
+          "markdownDescription": "Chat submission, branching, rename and archive\n#### This permission set includes:\n\n- `allow-desktop-chat-send`\n- `allow-desktop-chat-submission-recover`\n- `allow-desktop-chat-submission-acknowledge`\n- `allow-desktop-pending-queue-edit`\n- `allow-desktop-pending-message-steer`\n- `allow-desktop-goal-control`\n- `allow-desktop-goal-submission-recover`\n- `allow-desktop-goal-submission-resume`\n- `allow-desktop-goal-submission-acknowledge`\n- `allow-desktop-session-fork-before-message`\n- `allow-desktop-session-rename`\n- `allow-desktop-session-archive`"
         },
         {
           "description": "Owner-scoped mailbox envelope reads\n#### This permission set includes:\n\n- `allow-desktop-mailbox-list`",
@@ -1963,10 +2035,10 @@
           "markdownDescription": "Open a web link in the person's own browser\n#### This permission set includes:\n\n- `allow-desktop-open-external-url`"
         },
         {
-          "description": "Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model or be wired\n#### This permission set includes:\n\n- `allow-desktop-pack-installed`\n- `allow-desktop-pack-search`\n- `allow-desktop-pack-info`\n- `allow-desktop-pack-whoami`\n- `allow-desktop-pack-plugin-slots`\n- `allow-desktop-pack-wire-sources`",
+          "description": "Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model or be wired\n#### This permission set includes:\n\n- `allow-desktop-pack-installed`\n- `allow-desktop-pack-search`\n- `allow-desktop-pack-info`\n- `allow-desktop-pack-whoami`\n- `allow-desktop-pack-plugin-slots`\n- `allow-desktop-pack-wire-sources`\n- `allow-desktop-workflows-dynamic`\n- `allow-desktop-workflow-dynamic`",
           "type": "string",
           "const": "packs-read",
-          "markdownDescription": "Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model or be wired\n#### This permission set includes:\n\n- `allow-desktop-pack-installed`\n- `allow-desktop-pack-search`\n- `allow-desktop-pack-info`\n- `allow-desktop-pack-whoami`\n- `allow-desktop-pack-plugin-slots`\n- `allow-desktop-pack-wire-sources`"
+          "markdownDescription": "Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model or be wired\n#### This permission set includes:\n\n- `allow-desktop-pack-installed`\n- `allow-desktop-pack-search`\n- `allow-desktop-pack-info`\n- `allow-desktop-pack-whoami`\n- `allow-desktop-pack-plugin-slots`\n- `allow-desktop-pack-wire-sources`\n- `allow-desktop-workflows-dynamic`\n- `allow-desktop-workflow-dynamic`"
         },
         {
           "description": "The ux plugins on disk and each one's module, for the desktop loader\n#### This permission set includes:\n\n- `allow-desktop-ux-plugins-list`\n- `allow-desktop-ux-plugin-source`\n- `allow-desktop-ux-data-surfaces`",
@@ -1981,10 +2053,10 @@
           "markdownDescription": "A ux plugin calling one of its own pack's .afb plugins, or a datastore tool its manifest declares\n#### This permission set includes:\n\n- `allow-desktop-plugin-call`\n- `allow-desktop-ux-data-call`"
         },
         {
-          "description": "Install, update and remove packs, wire a plugin to an agent, bind a plugin to an inference profile, and sign in to the registry\n#### This permission set includes:\n\n- `allow-desktop-pack-install`\n- `allow-desktop-pack-update`\n- `allow-desktop-pack-remove`\n- `allow-desktop-pack-login`\n- `allow-desktop-pack-logout`\n- `allow-desktop-pack-plugin-bind`\n- `allow-desktop-pack-wire`",
+          "description": "Install, update and remove packs, wire a plugin to an agent, bind a plugin to an inference profile, and sign in to the registry\n#### This permission set includes:\n\n- `allow-desktop-pack-install`\n- `allow-desktop-pack-update`\n- `allow-desktop-pack-remove`\n- `allow-desktop-pack-login`\n- `allow-desktop-pack-logout`\n- `allow-desktop-pack-plugin-bind`\n- `allow-desktop-pack-wire`\n- `allow-desktop-workflow-promote`",
           "type": "string",
           "const": "packs-admin",
-          "markdownDescription": "Install, update and remove packs, wire a plugin to an agent, bind a plugin to an inference profile, and sign in to the registry\n#### This permission set includes:\n\n- `allow-desktop-pack-install`\n- `allow-desktop-pack-update`\n- `allow-desktop-pack-remove`\n- `allow-desktop-pack-login`\n- `allow-desktop-pack-logout`\n- `allow-desktop-pack-plugin-bind`\n- `allow-desktop-pack-wire`"
+          "markdownDescription": "Install, update and remove packs, wire a plugin to an agent, bind a plugin to an inference profile, and sign in to the registry\n#### This permission set includes:\n\n- `allow-desktop-pack-install`\n- `allow-desktop-pack-update`\n- `allow-desktop-pack-remove`\n- `allow-desktop-pack-login`\n- `allow-desktop-pack-logout`\n- `allow-desktop-pack-plugin-bind`\n- `allow-desktop-pack-wire`\n- `allow-desktop-workflow-promote`"
         },
         {
           "description": "The folders plugins may read or write, and the plugin questions waiting for an answer\n#### This permission set includes:\n\n- `allow-desktop-allowed-dirs-list`\n- `allow-desktop-plugin-approvals-pending`",

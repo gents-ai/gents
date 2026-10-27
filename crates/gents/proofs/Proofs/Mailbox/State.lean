@@ -70,7 +70,6 @@ def toDefraDB : Handling → String
 end Handling
 
 inductive SourceKind where
-  | graph
   | session
   | agent
   | runtime
@@ -80,7 +79,6 @@ inductive SourceKind where
 namespace SourceKind
 
 def toDefraDB : SourceKind → String
-  | .graph => "graph"
   | .session => "session"
   | .agent => "agent"
   | .runtime => "runtime"

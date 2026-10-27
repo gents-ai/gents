@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-workflow-promote"
+description = "Enables the desktop_workflow_promote command without any pre-configured scope."
+commands.allow = ["desktop_workflow_promote"]
+
+[[permission]]
+identifier = "deny-desktop-workflow-promote"
+description = "Denies the desktop_workflow_promote command without any pre-configured scope."
+commands.deny = ["desktop_workflow_promote"]

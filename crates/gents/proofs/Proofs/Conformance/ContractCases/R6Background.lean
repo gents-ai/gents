@@ -774,7 +774,7 @@ def backgroundWakeRowsCases : List WakeRowsCase :=
       rows := [wakeParent BackgroundCompletion.failedWakeFixture, wakeSuccessor],
       successor := { wakeSuccessor with createdAt := 4, observed := ⟨104, 904, .pending⟩ } }
   , { name := "stale-session-observation-does-not-block-current-parent",
-      session := { wakeSession with observation := some ⟨2, none, some ⟨999, 999, .processing⟩⟩ } }
+      session := { wakeSession with observation := some ⟨2, none, some ⟨999, 999, .processing⟩, none⟩ } }
   , { name := "wrong-session-queue-key-denied",
       wake := BackgroundCompletion.failedWakeFixture (queueKey := some 999) }
   ]

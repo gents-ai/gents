@@ -177,6 +177,21 @@ impl ClientSyncStateOwner {
         Ok(record)
     }
 
+    pub(super) async fn remember_enrollment_endpoint(
+        &self,
+        peer_id: &str,
+        node_did: &str,
+        request_digest: &str,
+        expires_at: &str,
+        endpoint: &str,
+    ) -> anyhow::Result<()> {
+        self.directory
+            .write()
+            .await
+            .remember_enrollment_endpoint(peer_id, node_did, request_digest, expires_at, endpoint)
+            .await
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "fields of one enrollment authorization"

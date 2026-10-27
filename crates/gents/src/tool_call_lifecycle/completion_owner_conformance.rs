@@ -246,6 +246,7 @@ async fn drive_notification(case: &LeanR6BackgroundingCase) {
 
 async fn seed_session_head(node: &EmbeddedNode, session: &str, request: &Value) {
     let observation = gents_protocol::session::SessionObservation {
+        reply_preview: None,
         last_activity_at: request["created_at"].as_str().unwrap().to_owned(),
         preview: Some("background input".to_owned()),
         latest_request: Some(gents_protocol::session::SessionRequestObservation {

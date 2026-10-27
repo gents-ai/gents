@@ -590,7 +590,6 @@ impl SelfConfigCore {
 pub fn apply_tool_grant_selection(
     tools: &mut Tools,
     enable_lsp: Option<bool>,
-    enable_graph_tools: Option<bool>,
     network_mode: Option<CommandNetworkMode>,
 ) {
     if let Some(enabled) = enable_lsp {
@@ -600,12 +599,6 @@ pub fn apply_tool_grant_selection(
         } else {
             integrations.lsp = None;
         }
-    }
-    if let Some(enabled) = enable_graph_tools {
-        tools
-            .built_ins
-            .get_or_insert_with(Default::default)
-            .enable_graph_tools = Some(enabled);
     }
     if let Some(network_mode) = network_mode {
         tools

@@ -587,7 +587,7 @@ async fn tool_output(
         None => next["tool_call_doc_id"] = json!(tool_call_doc_id),
     }
     let Some(output) = read.raw_result.as_deref() else {
-        if read.result.is_none() {
+        if read.result.is_none() || !read.lifecycle_state.is_terminal() {
             bail!(
                 "tool call {tool_call_doc_id} has no delivered output yet (state {:?}); next call: sessions {next}",
                 read.lifecycle_state
@@ -905,25 +905,16 @@ resources:
             .to_string()
     }
 
-    #[tokio::test]
-    async fn output_pages_the_full_stored_tool_output_behind_a_bounded_view() {
-        use crate::tool_call_lifecycle::admission_fixture::{
-            published_admission, PublishedAdmissionOptions,
-        };
+    /// Completes `lifecycle` with a 9 000-line output behind a bounded view
+    /// and returns the full output.
+    async fn complete_with_large_output(
+        lifecycle: &mut crate::tool_call_lifecycle::ToolCallLifecycle,
+    ) -> String {
         use gents_protocol::output::{PayloadPresentation, PresentationPart};
 
-        let fixture = published_admission(PublishedAdmissionOptions {
-            name: "sessions-output".into(),
-            real_identity: true,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-        let mut lifecycle = fixture.tool;
         let raw: String = (0..9_000)
             .map(|line| format!("{line:05} aé€😀\n"))
             .collect();
-        assert!(raw.len() > 2 * 50 * 1024);
         let bounded = "[Showing first 10 of many bytes]";
         lifecycle
             .complete_raw_with_presentation(
@@ -937,6 +928,73 @@ resources:
             )
             .await
             .unwrap();
+        raw
+    }
+
+    #[tokio::test]
+    async fn output_pages_a_background_calls_stored_output_past_its_receipt() {
+        use crate::tool_call_lifecycle::admission_fixture::{
+            published_admission, PublishedAdmissionOptions,
+        };
+
+        let fixture = published_admission(PublishedAdmissionOptions {
+            name: "sessions-output-background".into(),
+            real_identity: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let mut lifecycle = fixture.tool;
+        lifecycle
+            .background_with_receipt("{\"status\":\"running\",\"handle\":\"h\"}")
+            .await
+            .unwrap();
+        let session = lifecycle.session_id().to_owned();
+        let tool = SessionHistoryTool::new(fixture.node.clone(), fixture.node_did.clone());
+        // While the call runs, its only delivery is the receipt: not output.
+        let error = call_error(
+            &tool,
+            json!({"action":"output","session_id":session,"call_id":"spawn-provider-call"}),
+        )
+        .await;
+        assert!(error.contains("no delivered output yet"), "{error}");
+        let raw = complete_with_large_output(&mut lifecycle).await;
+
+        let mut params =
+            json!({"action":"output","session_id":session,"call_id":"spawn-provider-call"});
+        let mut recovered = String::new();
+        loop {
+            let text = Tool::call(&tool, serde_json::from_value(params.clone()).unwrap())
+                .await
+                .unwrap();
+            let page: Value = serde_json::from_str(&text).unwrap();
+            recovered.push_str(page["text"].as_str().unwrap());
+            assert_eq!(page["tool_call_doc_id"], lifecycle.doc_id().unwrap());
+            if page["complete"] == true {
+                break;
+            }
+            params = page["next_call"].clone();
+        }
+        assert_eq!(recovered, raw);
+        fixture.node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn output_pages_the_full_stored_tool_output_behind_a_bounded_view() {
+        use crate::tool_call_lifecycle::admission_fixture::{
+            published_admission, PublishedAdmissionOptions,
+        };
+
+        let fixture = published_admission(PublishedAdmissionOptions {
+            name: "sessions-output".into(),
+            real_identity: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let mut lifecycle = fixture.tool;
+        let raw = complete_with_large_output(&mut lifecycle).await;
+        assert!(raw.len() > 2 * 50 * 1024);
         let session = lifecycle.session_id().to_owned();
         let tool = SessionHistoryTool::new(fixture.node.clone(), fixture.node_did.clone());
 

@@ -390,23 +390,6 @@ async fn stage_resume_inner(
     )?;
     create.input.goal_assignment = Some(continuation_assignment(&goal, &parent, None)?);
     sign_request(&mut create, RequestSigner::Identity(identity)).await?;
-    if let Some(binding) = crate::graph_pipeline::graph_binding_for_request_in_txn(
-        txn,
-        parent_row
-            .doc_id
-            .as_deref()
-            .context("goal predecessor lacks document ID")?,
-    )
-    .await?
-    {
-        crate::graph_pipeline::fence_graph_publication_in_txn(
-            txn,
-            &binding.run_id,
-            &binding.revision_digest,
-        )
-        .await?;
-    }
-
     stage_resume_state(txn, &goal, post, Some((sequence, from_request_id)), now).await?;
     let response = txn
         .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)

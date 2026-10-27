@@ -574,7 +574,7 @@ mod tests {
             step.output(&vanished).await["code"],
             "plugin_job_not_available"
         );
-        assert_eq!(step.progress(&vanished).await.revision, 1);
+        assert_eq!(step.progress(&vanished).await.revision, 2);
         step.close().await;
     }
 
@@ -620,7 +620,13 @@ mod tests {
         assert_eq!(redrive_running_jobs(&driver).await.unwrap(), 1);
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "failed");
         assert_eq!(step.output(&step.row).await["code"], "plugin_job_stalled");
-        assert_eq!(step.progress(&step.row).await.revision, 1);
+        let progress = step.progress(&step.row).await;
+        assert_eq!(progress.revision, 2, "the stall stamp is the only write");
+        assert_eq!(progress.state, JobState::Failed);
+        assert!(
+            progress.last_event.contains("stopped making progress"),
+            "{progress:?}"
+        );
         step.close().await;
     }
 
@@ -632,7 +638,7 @@ mod tests {
         assert_eq!(redrive_running_jobs(&driver).await.unwrap(), 1);
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "failed");
         assert_eq!(step.output(&step.row).await["code"], "plugin_job_stalled");
-        assert_eq!(step.progress(&step.row).await.revision, 2);
+        assert_eq!(step.progress(&step.row).await.revision, 3);
         step.close().await;
     }
 
@@ -690,20 +696,6 @@ mod tests {
             step.output(&resumed).await
         );
         assert_eq!(step.output(&resumed).await["status"], "awaiting_user");
-        step.close().await;
-    }
-
-    #[tokio::test]
-    async fn stepped_row_at_rest_still_fails_closed_stalled() {
-        let step = stepper(json!({"effects": {}})).await;
-        terminal_child(&step, &step.row, "child-1").await;
-        let driver = driver_of(&step);
-        let stepped = driver.step_now(&step.row).await.unwrap().unwrap();
-        assert_eq!(stepped, StepOutcome::Committed);
-        assert_eq!(redrive_running_jobs(&driver).await.unwrap(), 1);
-        assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "failed");
-        assert_eq!(step.output(&step.row).await["code"], "plugin_job_stalled");
-        assert_eq!(step.progress(&step.row).await.revision, 2);
         step.close().await;
     }
 

@@ -75,6 +75,17 @@ export function coalesceToolGroups(items: CompactTimelineItem[]) {
   return result;
 }
 
+function activityCaption(value: string): string {
+  const limit = 256;
+  if (value.length <= limit) return value;
+  let end = limit - 1;
+  const last = value.charCodeAt(end - 1);
+  const next = value.charCodeAt(end);
+  if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff)
+    end--;
+  return `${value.slice(0, end)}…`;
+}
+
 function completedLabel(entries: ActionEntry[]) {
   const counts = new Map<string, number>();
   for (const entry of entries) {
@@ -231,7 +242,9 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
             .filter(Boolean)
             .join(", ") + " failed";
         const settledParts = [
-          succeeded.length ? completedLabel(succeeded) : null,
+          succeeded.length + failures.length
+            ? completedLabel([...succeeded, ...failures])
+            : null,
           stopped
             ? `${stopped} ${stopped === 1 ? "action stopped" : "actions stopped"}`
             : null,
@@ -241,11 +254,13 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
               : `${unknown} ${unknown === 1 ? "status" : "statuses"} unavailable`
             : null,
         ].filter(Boolean);
-        const caption = running
-          ? entries.length === 1
-            ? runningAction(first)
-            : `${entries.length} actions running`
-          : settledParts.join(" · ") || failedLabel;
+        const caption = activityCaption(
+          running
+            ? entries.length === 1
+              ? runningAction(first)
+              : `${entries.length} actions running`
+            : settledParts.join(" · ") || failedLabel,
+        );
         const label =
           !running && failed && settledParts.length
             ? `${caption} · ${failedLabel}`

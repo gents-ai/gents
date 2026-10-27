@@ -67,7 +67,7 @@ const FEATURES = [
     ),
     enables: (
       <>
-        Seed a <code>ReviewJob</code> and the graph runs itself. Surfaces write members; templates
+        Seed a <code>ReviewJob</code> and the review runs itself. Surfaces write members; templates
         brief each worker; the trigger is the edge — and now the join.
       </>
     ),

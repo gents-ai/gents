@@ -2,7 +2,6 @@
 //! loop; an answer that is not a job ends the call there, and a refusal
 //! completes it failed with the host code and the call that follows.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -24,14 +23,15 @@ use super::admit::{
 };
 use super::control::{kill, resume_target_in_txn, validate_resume, KillCause};
 use super::driver::{
-    progress_of, read_step_row, read_step_row_in_txn, scratch_of, settle_plugin_job_in_txn,
-    settlement_of, step_context_for, terminal_text, writes_of, JobDriver,
+    guest_state_of, progress_of, read_step_row, read_step_row_in_txn, scratch_of,
+    settle_plugin_job_in_txn, settlement_of, step_context_for, terminal_text, writes_of, JobDriver,
 };
 use super::effects::{stage_effects_in_txn, write_scratch, JobContext};
 use super::input::{build_step_input, CallArgs, StepKind};
-use super::origin::{classify_origin, engine_guard, engine_guard_next, script_index, trusted_hint};
+use super::origin::{call_origin, engine_guard, engine_guard_next};
 use super::records::{
-    write_pin_in_txn, write_progress_in_txn, write_step_state_in_txn, HostProgressFacts,
+    read_step_state, write_pin_in_txn, write_progress_in_txn, write_step_state_in_txn,
+    HostProgressFacts,
 };
 use super::settings::effective_ceiling;
 use super::JobBinding;
@@ -43,7 +43,6 @@ use crate::hook::persistence::{
 };
 use crate::hook::DefraSessionHook;
 use crate::lifecycle::SessionMessageCause;
-use crate::pack::InstalledVia;
 use crate::plugin::data::DataCaller;
 use crate::plugin::data::StampContext;
 use crate::plugin::job_calls::JobCaller;
@@ -192,9 +191,7 @@ pub async fn run_step0(
     let row = read_step_row(&access, &row_doc_id).await?;
     let max_hop =
         crate::request_admission::max_request_hop(runtime.node.as_ref(), &caller.node_did).await?;
-    let mut ctx = step0_context(
-        runtime, binding, &installed, &input, &output, lifecycle, max_hop,
-    )?;
+    let mut ctx = step0_context(runtime, binding, &installed, &input, lifecycle, max_hop)?;
     ctx.control_targets = control_targets(&access, coordinate, &output).await?;
     if let Err(refusal) = admit_step(&ctx, &row, &output) {
         let (class, message, next) = step0_refusal(
@@ -487,7 +484,6 @@ fn args_digest(input: &JobStepInput) -> String {
     let call = json!({
         "argv": input.argv,
         "args": input.args,
-        "path": input.path,
         "script": input.script,
         "agent_budget": input.agent_budget,
     });
@@ -625,11 +621,7 @@ pub async fn adopt_step0(
                         .unwrap_or(u32::MAX);
                     }
                     let facts = HostFacts {
-                        origin: if ctx.installed_trusted_sources.contains(&guest.source_digest) {
-                            JobOrigin::Installed
-                        } else {
-                            JobOrigin::Dynamic
-                        },
+                        origin: call_origin(input.script.as_deref()),
                         ceiling_at_pin: ctx.live.clone(),
                         ..provisional
                     };
@@ -729,11 +721,20 @@ pub async fn adopt_step0(
                         },
                     )
                     .await?;
+                    // The guest state a resume continues from is the prior row's, unless step 0 wrote its own.
+                    let guest = match (guest_state_of(output), adoption.row.resume.as_ref()) {
+                        (Some(state), _) => Some(state.clone()),
+                        (None, Some(resume)) => read_step_state(txn, &resume.row_doc_id)
+                            .await?
+                            .and_then(|state| state.guest),
+                        (None, None) => None,
+                    };
                     write_step_state_in_txn(
                         txn,
                         row_doc_id,
                         step0_receipt,
                         adoption.row.resume.as_ref(),
+                        guest.as_ref(),
                     )
                     .await?;
                     // (d) step 0's data writes
@@ -795,7 +796,7 @@ pub async fn adopt_step0(
                         "handle": pin.handle,
                         "script_id": pin.script_id,
                         "tier": progress.last_event,
-                        "next": format!("Next: `{} status {address}`", lifecycle.tool_name()),
+                        "next": format!("Next: `gents job show {address}`"),
                     })
                     .to_string();
                     crate::tool_call_lifecycle::publish_background_receipt_in_txn(
@@ -918,18 +919,18 @@ fn step0_refusal(
                 "no job row {} exists to resume",
                 resume.map_or("", |(row, _)| row)
             ),
-            format!("Next: `{tool} resume <address>` with the address the run's receipt printed"),
+            format!("Next: `gents job show <address>` with the address the run's receipt printed; the `{tool}` help says how a run is resumed"),
         ),
         Refusal::ResumeNotHead => match resume {
             Some((row, Some(address))) => (
                 FailureClass::PolicyDenied,
                 format!("{row} was already resumed by {address}; only a run's newest row resumes"),
-                format!("Next: `{tool} resume {address}`"),
+                format!("Next: `gents job show {address}`; the `{tool}` help says how a run is resumed"),
             ),
             _ => (
                 FailureClass::PolicyDenied,
                 "that row was already resumed; only a run's newest row resumes".to_owned(),
-                format!("Next: `{tool} resume <address>` with the newest row's address"),
+                format!("Next: `gents job show <address>` with the newest row's address; the `{tool}` help says how a run is resumed"),
             ),
         },
         Refusal::PolicyDenied if effects => (
@@ -954,33 +955,11 @@ fn step0_context(
     binding: &JobBinding,
     installed: &InstalledPlugin,
     input: &JobStepInput,
-    output: &JobStepOutput,
     lifecycle: &ToolCallLifecycle,
     max_hop: Option<u32>,
 ) -> Result<StepContext> {
     let caller = &input.caller;
     let policy = binding.settings.as_ref().map(|settings| &settings.policy);
-    let cwd = (!caller.cwd.is_empty()).then(|| Path::new(&caller.cwd));
-    let index = script_index(&runtime.home, installed, policy, cwd)?;
-    let via: BTreeMap<&str, InstalledVia> = index
-        .installed_via
-        .iter()
-        .map(|(pack, via)| (pack.as_str(), *via))
-        .collect();
-    let installed_trusted_sources = index
-        .files
-        .iter()
-        .filter(|(_, pack, _, class)| trusted_hint(pack, class, &via, &index.trusted_packs))
-        .map(|(sha, ..)| sha.clone())
-        .collect();
-    let origin = out_pin(output).map_or(JobOrigin::Dynamic, |guest| {
-        classify_origin(
-            &guest.source_digest,
-            &index.files,
-            &via,
-            &index.trusted_packs,
-        )
-    });
     let live = effective_ceiling(binding.settings.as_ref());
     let facts = HostFacts {
         engine_digest: installed.digest.clone(),
@@ -988,7 +967,7 @@ fn step0_context(
         cwd: caller.cwd.clone(),
         args_digest: String::new(),
         chain_root: input.job.row_doc_id.clone(),
-        origin,
+        origin: call_origin(input.script.as_deref()),
         adopted_at: 0,
         resume_of: None,
         replayed_from: None,
@@ -1002,7 +981,6 @@ fn step0_context(
         policy: policy.cloned().unwrap_or_default(),
         engine_digest: installed.digest.clone(),
         engine_provenance_operator: engine_guard(&runtime.home, installed).is_ok(),
-        installed_trusted_sources,
         max_hop,
         target_hops: Vec::new(),
         target_ids: Vec::new(),
@@ -1010,7 +988,6 @@ fn step0_context(
         started_by_job: caller.started_by_job,
         cwd_allowed: Vec::new(),
         within: Vec::new(),
-        named_origin: None,
         adoption_facts: facts.clone(),
         caller_scope: ProcessControlScope {
             request_id: caller.request_id.clone(),
@@ -1070,7 +1047,6 @@ mod tests {
             },
             engine_digest: "engine".to_owned(),
             engine_provenance_operator: true,
-            installed_trusted_sources: Vec::new(),
             max_hop: Some(8),
             target_hops: vec![(("node".to_owned(), "a".to_owned()), 0)],
             target_ids: vec![("a".to_owned(), ("node".to_owned(), "a".to_owned()))],
@@ -1078,7 +1054,6 @@ mod tests {
             started_by_job: false,
             cwd_allowed: Vec::new(),
             within: Vec::new(),
-            named_origin: None,
             adoption_facts: facts(),
             caller_scope: ProcessControlScope {
                 request_id: "request".to_owned(),
@@ -1103,7 +1078,6 @@ mod tests {
             call: StepCall {
                 argv: vec!["run".to_owned()],
                 args: None,
-                path: None,
                 script: None,
                 agent_budget: None,
             },

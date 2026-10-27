@@ -4,7 +4,7 @@ use anyhow::Result;
 use gents::ConfigAccess;
 use serde_json::Value;
 
-use crate::cli::args::{PluginBindArgs, PluginCommand, PluginUnbindArgs};
+use crate::cli::args::{JobPromoteArgs, PluginBindArgs, PluginCommand, PluginUnbindArgs};
 use crate::cli::{
     PackAccountArgs, PackDriftArgs, PackInfoArgs, PackInstallArgs, PackLoginArgs, PackOutdatedArgs,
     PackRemoveArgs, PackSearchArgs, PackUpdateArgs, PackWireArgs, ScopeArgs,
@@ -71,7 +71,6 @@ pub async fn install(
 ) -> Result<Value> {
     capture_report(command::install(PackInstallArgs {
         package,
-        bindings: None,
         inference_slots,
         preview,
         scope: scope(home),
@@ -107,6 +106,120 @@ pub async fn wire(
         scope: scope(home),
     }))
     .await
+}
+
+/// Promotes a finished dynamic run into the installed, wired tool
+/// `gents/<name>`; the `PromoteReport` as JSON.
+pub async fn promote(
+    home: PathBuf,
+    selector: String,
+    name: Option<String>,
+    agent: Option<String>,
+) -> Result<Value> {
+    capture_report(crate::commands::job::job_promote(JobPromoteArgs {
+        scope: scope(home),
+        selector,
+        name,
+        agent,
+        output: OutputFormat::Json,
+    }))
+    .await
+}
+
+/// Every dynamic script with a completed run, newest first: its completed
+/// runs and the tools it was promoted to. Runs that failed, were cancelled or
+/// timed out are not promotable (`promote::gate`) and are left out.
+pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
+    use gents::plugin_job::view::{list_jobs, JobFilter, StateFilter};
+    use gents_protocol::job::{JobState, JobView};
+    let (access, home) = crate::resolve_config_access(Some(&home), None).await?;
+    let views = list_jobs(
+        &access,
+        &JobFilter {
+            session_id: None,
+            requester: None,
+            state: StateFilter::States(vec![JobState::Completed]),
+            plugin: None,
+        },
+    )
+    .await
+    .map_err(crate::commands::job::read_error)?;
+    let promotions = gents::plugin_job::promote::list_promotions(&home)?;
+    let mut scripts: std::collections::BTreeMap<&str, Vec<&JobView>> = Default::default();
+    for view in views
+        .iter()
+        .filter(|view| gents::plugin_job::promote::gate(view).is_ok())
+    {
+        scripts.entry(&view.pin.script_id).or_default().push(view);
+    }
+    let mut workflows = Vec::new();
+    for (script_id, runs) in scripts {
+        let latest = runs
+            .iter()
+            .max_by_key(|view| view.created_at)
+            .expect("a group has a run");
+        let agent_id = gents::session_origin::load_session(
+            &access,
+            &latest.session_id,
+            latest.scope.requester_did.as_deref(),
+        )
+        .await?
+        .map(|session| session.agent_id);
+        workflows.push(serde_json::json!({
+            "script_id": script_id,
+            "handle": latest.handle,
+            "runs": runs.len(),
+            "last_run_at": latest.created_at,
+            "agent_id": agent_id,
+            "latest_address": latest.address,
+            "promoted_as": promoted_as(&promotions, script_id),
+        }));
+    }
+    workflows.sort_by_key(|workflow| std::cmp::Reverse(workflow["last_run_at"].as_u64()));
+    // Installed workflows are the home's job plugins, as Grok's `/workflows` lists them.
+    let installed: Vec<Value> = gents::plugin::store::list_records(&home)?
+        .into_iter()
+        .filter(|record| record.declaration.job.0)
+        .map(|record| {
+            serde_json::json!({
+                "plugin": format!("{}/{}", record.namespace, record.name),
+                "version": record.version,
+                "description": record.declaration.description,
+                "pack": record.owner_pack_coordinate,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({ "workflows": workflows, "installed": installed }))
+}
+
+/// One dynamic run, selected by its address (SESSION_ID:TOOL_CALL_ID) or tool
+/// call id: its view, script and promotions.
+pub async fn dynamic_workflow(home: PathBuf, selector: String) -> Result<Value> {
+    let actor = crate::home_state::resolve_node_did(Some(&home), None)?;
+    let (access, home) = crate::resolve_config_access(Some(&home), None).await?;
+    let view = crate::commands::job::resolve_job(&access, &actor, &selector, None).await?;
+    let run = gents::plugin_job::promote::load_dynamic_run(
+        &access,
+        gents::plugin_job::view::JobKey::RowDocId(view.row_doc_id),
+    )
+    .await?;
+    let promotions = gents::plugin_job::promote::list_promotions(&home)?;
+    Ok(serde_json::json!({
+        "promoted_as": promoted_as(&promotions, &run.view.pin.script_id),
+        "view": run.view,
+        "script": run.script,
+    }))
+}
+
+fn promoted_as(
+    promotions: &[gents::plugin_job::promote::PromotionRecord],
+    script_id: &str,
+) -> Vec<String> {
+    promotions
+        .iter()
+        .filter(|record| record.script_id == script_id)
+        .map(|record| record.name.clone())
+        .collect()
 }
 
 pub async fn plugin_slots(home: PathBuf) -> Result<Value> {
@@ -185,7 +298,6 @@ pub async fn update(
 ) -> Result<Value> {
     capture_report(command::update::update(PackUpdateArgs {
         package,
-        bindings: None,
         inference_slots: Vec::new(),
         scope: scope(home),
         registry,

@@ -176,3 +176,46 @@ pub struct PackPluginBindingView {
     pub plugin: String,
     pub bound: Option<gents::plugin::model_calls::ModelBinding>,
 }
+
+/// The JSON `gents job promote` reports for a promoted dynamic run.
+#[derive(Debug, Serialize, Deserialize, TS)]
+pub struct WorkflowPromoteView {
+    pub tool: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+pub struct DynamicWorkflowsView {
+    pub workflows: Vec<DynamicWorkflowSummary>,
+    pub installed: Vec<InstalledWorkflowSummary>,
+}
+
+/// One installed job plugin: a workflow that is already a pack.
+#[derive(Debug, Serialize, Deserialize, TS)]
+pub struct InstalledWorkflowSummary {
+    pub plugin: String,
+    pub version: String,
+    pub description: String,
+    pub pack: Option<String>,
+}
+
+/// One dynamic script that ran, with its runs and the tools it became.
+#[derive(Debug, Serialize, Deserialize, TS)]
+pub struct DynamicWorkflowSummary {
+    pub script_id: String,
+    pub handle: String,
+    #[ts(type = "number")]
+    pub runs: u64,
+    #[ts(type = "number")]
+    pub last_run_at: u64,
+    pub agent_id: Option<String>,
+    pub latest_address: String,
+    pub promoted_as: Vec<String>,
+}
+
+/// One dynamic run: its job view, script source and promotions.
+#[derive(Debug, Serialize, Deserialize, TS)]
+pub struct DynamicWorkflowView {
+    pub view: gents_protocol::job::JobView,
+    pub script: String,
+    pub promoted_as: Vec<String>,
+}

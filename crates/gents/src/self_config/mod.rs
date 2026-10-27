@@ -10,7 +10,6 @@ mod command;
 pub(crate) use command::{is_help_call, ConfigCommandParams};
 mod execution;
 pub use execution::ConfigExecutionReceipt;
-mod graph_preview;
 mod ops;
 mod pack_plugins;
 mod read;
@@ -50,28 +49,8 @@ pub fn engineer_self_config() -> crate::document_config::SelfConfigTools {
 }
 
 pub const CONFIG_TOOL_NAME: &str = "config";
-pub const PREVIEW_GRAPH_TOOL_NAME: &str = "preview_graph";
-pub const LIST_GRAPHS_TOOL_NAME: &str = "list_graphs";
-pub const RUN_GRAPH_TOOL_NAME: &str = "run_graph";
-pub const GET_GRAPH_RUN_TOOL_NAME: &str = "get_graph_run";
-pub const GET_GRAPH_RESULT_TOOL_NAME: &str = "get_graph_result";
-pub const CANCEL_GRAPH_RUN_TOOL_NAME: &str = "cancel_graph_run";
 
-pub const MCP_GRAPH_READ_TOOL_NAMES: [&str; 3] = [
-    LIST_GRAPHS_TOOL_NAME,
-    GET_GRAPH_RUN_TOOL_NAME,
-    GET_GRAPH_RESULT_TOOL_NAME,
-];
-
-pub const SELF_CONFIG_TOOL_NAMES: [&str; 7] = [
-    CONFIG_TOOL_NAME,
-    PREVIEW_GRAPH_TOOL_NAME,
-    LIST_GRAPHS_TOOL_NAME,
-    RUN_GRAPH_TOOL_NAME,
-    GET_GRAPH_RUN_TOOL_NAME,
-    GET_GRAPH_RESULT_TOOL_NAME,
-    CANCEL_GRAPH_RUN_TOOL_NAME,
-];
+pub const SELF_CONFIG_TOOL_NAMES: [&str; 1] = [CONFIG_TOOL_NAME];
 
 pub(crate) use crate::tool_output::{ordered, Ordered};
 
@@ -631,8 +610,6 @@ pub struct ConfigureAgentParams {
     #[serde(default)]
     pub enable_lsp: Option<bool>,
     #[serde(default)]
-    pub enable_graph_tools: Option<bool>,
-    #[serde(default)]
     pub network_mode: Option<crate::toolset::CommandNetworkMode>,
 }
 
@@ -854,7 +831,7 @@ async fn guard_agent_profile_choice(
     ops::guard_compaction_choice_in_txn(txn, SelfConfigTarget::Agent, &anchor, &own, &cloned).await
 }
 
-/// Install document, graph and plugins-only packs from the home's pack store or the registry through the
+/// Install document and plugins-only packs from the home's pack store or the registry through the
 /// canonical resolver, package publication, and activation owners. The running
 /// node is always the install owner; callers cannot select another DID,
 /// filesystem distribution, registry endpoint, or control-plane endpoint.
@@ -916,18 +893,6 @@ impl ConfigPackDistribution {
             } => Some(artifact_digest),
             _ => None,
         }
-    }
-
-    fn load_graph(
-        &self,
-        options: &crate::pack::PackInstallOptions,
-        environment: &dyn Fn(&str) -> Option<String>,
-    ) -> anyhow::Result<crate::graph_package::LoadedGraphPackage> {
-        crate::graph_package::load_archive_graph_package_with_environment(
-            &self.0.archive,
-            options,
-            environment,
-        )
     }
 }
 
@@ -1010,8 +975,7 @@ impl PackInstaller {
             };
             // Local built artifacts flow through the same canonical
             // installers as registry-resolved packs: documents through
-            // prepare/install_prepared_document_pack, graphs through
-            // load_graph + install_loaded_graph_package, plugins-only through
+            // prepare/install_prepared_document_pack, plugins-only through
             // plugins_pack. Plugin authority is unchanged: preview reports
             // installation_blockers and commit refuses them unless the
             // operator grants authority, so a locally built pack (e.g. one
@@ -1020,11 +984,9 @@ impl PackInstaller {
             anyhow::ensure!(
                 matches!(
                     archive.manifest().metadata.kind,
-                    crate::pack::PackKind::Graph
-                        | crate::pack::PackKind::Documents
-                        | crate::pack::PackKind::Plugins
+                    crate::pack::PackKind::Documents | crate::pack::PackKind::Plugins
                 ),
-                "pack {:?} is {:?}; the model-facing installer supports document, graph and plugins-only packs",
+                "pack {:?} is {:?}; the model-facing installer supports document and plugins-only packs",
                 archive.manifest().name,
                 archive.manifest().metadata.kind
             );
@@ -1075,33 +1037,13 @@ impl PackInstaller {
             operation == "get"
                 || matches!(
                     distribution.manifest().metadata.kind,
-                    crate::pack::PackKind::Graph | crate::pack::PackKind::Documents | crate::pack::PackKind::Plugins
+                    crate::pack::PackKind::Documents | crate::pack::PackKind::Plugins
                 ),
-            "pack {:?} is {:?}; the model-facing installer supports document, graph and plugins-only packs",
+            "pack {:?} is {:?}; the model-facing installer supports document and plugins-only packs",
             distribution.manifest().name,
             distribution.manifest().metadata.kind
         );
         Ok(distribution)
-    }
-
-    async fn installed(
-        &self,
-        manifest: &crate::pack::PackManifest,
-    ) -> anyhow::Result<Option<crate::graph_pipeline::GraphPlan>> {
-        let access = crate::config_client::ConfigAccess::local(self.node.clone());
-        let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
-        if crate::pack::read_installed_pack(&access, self.core.node_did(), &coordinate)
-            .await?
-            .is_none()
-        {
-            return Ok(None);
-        }
-        crate::graph_package::load_installed_package_plan(
-            &access,
-            &manifest.name,
-            self.core.node_did(),
-        )
-        .await
     }
 
     async fn installation_status(
@@ -1123,13 +1065,6 @@ impl PackInstaller {
                 .map(serde_json::to_value)
                 .transpose()
                 .map_err(Into::into);
-        }
-        if manifest.metadata.kind == crate::pack::PackKind::Graph {
-            return Ok(self.installed(manifest).await?.map(|plan| {
-                json!({
-                    "graph_id": plan.graph_id, "revision_digest": plan.digest,
-                })
-            }));
         }
         let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
@@ -1259,17 +1194,13 @@ impl PackInstaller {
         )
         .await?;
         // Inference slot bindings pick provider accounts exactly like the
-        // graph lifecycle: every selected profile must be account-free or on
+        // install lifecycle: every selected profile must be account-free or on
         // its provider's default account. Fence before the preview return or
         // any installation side effect so a documents pack cannot publish
-        // records or plugins through a binding the graph path would refuse.
+        // records or plugins through a binding an install would refuse.
         self.fence_bindings(&prepared.inference.bindings).await?;
         for dependency in &prepared.dependencies {
-            let bindings = match dependency {
-                crate::pack::PreparedDependency::Graph(_, bindings) => &bindings.inference_slots,
-                crate::pack::PreparedDependency::Documents { inference, .. } => &inference.bindings,
-            };
-            self.fence_bindings(bindings).await?;
+            self.fence_bindings(&dependency.inference.bindings).await?;
         }
         let mut schemas = Vec::new();
         for path in crate::pack::document_pack_schema_paths(distribution.manifest())? {
@@ -1328,7 +1259,7 @@ impl PackInstaller {
             "registry_artifact_digest": distribution.registry_artifact_digest(), "install": receipt,
             "inference": prepared.inference, "dependency_inference": prepared.dependency_inference,
             "dependencies": dependency_receipts, "effective": effective,
-            "effect": "The document pack is installed. Installation did not start a graph run.",
+            "effect": "The document pack is installed.",
         }))?)
     }
 
@@ -1376,9 +1307,7 @@ impl PackInstaller {
             let manifest = archive.manifest();
             let installable = matches!(
                 manifest.metadata.kind,
-                crate::pack::PackKind::Graph
-                    | crate::pack::PackKind::Documents
-                    | crate::pack::PackKind::Plugins
+                crate::pack::PackKind::Documents | crate::pack::PackKind::Plugins
             );
             let installed = if installable {
                 self.installation_status(manifest).await?
@@ -1435,7 +1364,7 @@ impl PackInstaller {
         ordered! {
             "items": items,
             "next_call": if has_more { page.checked_add(1).map(|next| json!({"argv":["pack","search"],"options":{"query":query,"page":next}})) } else { None },
-            "guidance": "Inspect a candidate with pack get before installation: it reports its kind, inference slots and installed state. This installer supports document, graph and plugins-only packs; search includes other kinds too.",
+            "guidance": "Inspect a candidate with pack get before installation: it reports its kind, inference slots and installed state. This installer supports document and plugins-only packs; search includes other kinds too.",
             "registry": registry,
             "page": page,
             "has_more": has_more,
@@ -1460,16 +1389,9 @@ impl PackInstaller {
         .await?;
         let installable = matches!(
             distribution.manifest().metadata.kind,
-            crate::pack::PackKind::Graph
-                | crate::pack::PackKind::Documents
-                | crate::pack::PackKind::Plugins
+            crate::pack::PackKind::Documents | crate::pack::PackKind::Plugins
         );
-        let installed = if distribution.manifest().metadata.kind == crate::pack::PackKind::Graph {
-            self.installed(distribution.manifest())
-                .await?
-                .map(serde_json::to_value)
-                .transpose()?
-        } else if installable {
+        let installed = if installable {
             self.installation_status(distribution.manifest()).await?
         } else {
             None
@@ -1489,9 +1411,8 @@ impl PackInstaller {
         }))?)
     }
 
-    /// Removes an installed graph package's `PackInstallation` record and
-    /// everything it lists. Refused while any of its graphs has a run that
-    /// has not reached a terminal status. Never resolves the package (no
+    /// Removes an installed pack's `PackInstallation` record and everything
+    /// it lists. Never resolves the package (no
     /// store or registry lookup); releases its home and plugin store records
     /// but no plugin bytes or archive; use `gents pack remove` for that.
     async fn remove(&self, package: &str) -> anyhow::Result<String> {
@@ -1536,7 +1457,7 @@ impl PackInstaller {
         ordered! {
             "pack": coordinate,
             "removed": report,
-            "effect": "The package's graph and documents were removed. Package SDL schemas and run history stay.",
+            "effect": "The package's documents were removed. Package SDL schemas stay.",
         }
         .pretty()
     }
@@ -1569,41 +1490,7 @@ impl PackInstaller {
     /// Installs the plugins `distribution` ships into the home's plugin store,
     /// sealed: a plugin that asks for authority is refused, because granting
     /// it is the operator's call. Local plugin records are the publication
-    /// boundary; later graph failures do not roll them back.
-    fn install_plugins(
-        &self,
-        distribution: &ConfigPackDistribution,
-        package_digest: &str,
-        bindings: &crate::pack::PackInferenceBindings,
-    ) -> anyhow::Result<Vec<crate::plugin::store::InstalledPlugin>> {
-        let manifest = distribution.manifest();
-        if manifest.metadata.plugins.is_empty() {
-            return Ok(Vec::new());
-        }
-        let home = self.home.as_deref().with_context(|| {
-            format!(
-                "pack {:?} ships plugins, which install into the node's plugin home, and this runtime has none; install it with `gents pack install`",
-                manifest.name
-            )
-        })?;
-        crate::plugin::install::install_pack_plugins_with_bindings(
-            home,
-            manifest,
-            package_digest,
-            |path| distribution.0.archive.asset(path),
-            false,
-            Some(self.core.node_did()),
-            bindings,
-            |_| Ok(()),
-        )
-        .with_context(|| {
-            format!(
-                "pack {:?} ships a plugin this installer cannot authorize; install it with `gents pack install --grant-authority`",
-                manifest.name
-            )
-        })
-    }
-
+    /// boundary; later failures do not roll them back.
     /// Pack slots have no current backend: each bound profile must be
     /// account-free or on its provider's default account.
     async fn fence_bindings(
@@ -1645,104 +1532,11 @@ impl PackInstaller {
         if distribution.manifest().metadata.kind == crate::pack::PackKind::Documents {
             return self.documents(operation, &args, &distribution, false).await;
         }
-        let installed = self.installed(distribution.manifest()).await?;
-        anyhow::ensure!(
-            operation != "update" || installed.is_some(),
-            "pack {:?} is not installed; preview install instead",
-            distribution.manifest().name
-        );
-        let access = crate::config_client::ConfigAccess::local(self.node.clone());
-        let inspected = crate::pack::inspect_pack_inference_bindings(
-            &access,
-            distribution.manifest(),
-            self.core.node_did(),
-            &args.inference_slots,
+        anyhow::bail!(
+            "pack {:?} is {:?}; the model-facing installer supports document and plugins-only packs",
+            distribution.manifest().name,
+            distribution.manifest().metadata.kind
         )
-        .await?;
-        let missing_slots = inspected
-            .slots
-            .iter()
-            .filter(|slot| !slot.optional && !args.inference_slots.contains_key(&slot.name))
-            .map(|slot| slot.name.clone())
-            .collect::<Vec<_>>();
-        if !missing_slots.is_empty() {
-            return Ok(serde_json::to_string_pretty(&json!({
-                "committed": false,
-                "ready": false,
-                "operation": operation,
-                "package": distribution.manifest().name,
-                "version": distribution.manifest().version,
-                "source": distribution.source(),
-                "artifact_digest": distribution.digest(),
-                "registry_artifact_digest": distribution.registry_artifact_digest(),
-                "inference": inspected,
-                "missing_inference_slots": missing_slots,
-                "installed": installed,
-                "next": "repeat --inference-slot NAME=PROFILE_ID for every missing slot, using exact eligible profile IDs",
-            }))?);
-        }
-        let inference = crate::pack::preview_pack_inference_bindings(
-            &access,
-            distribution.manifest(),
-            self.core.node_did(),
-            &args.inference_slots,
-        )
-        .await?;
-        self.fence_bindings(&inference.bindings).await?;
-        let scope = crate::pack::PackInstallOptions {
-            node_did: self.core.node_did().to_owned(),
-        };
-        let environment = |name: &str| args.variables.get(name).cloned();
-        let package = distribution.load_graph(&scope, &environment)?;
-        let bindings = crate::graph_package::GraphPackageInstallBindings {
-            node_did: self.core.node_did().to_owned(),
-            inference_slots: inference.bindings.clone(),
-        };
-        let prepared = crate::graph_package::prepare_loaded_graph_package_install(
-            &access, &package, &bindings,
-        )
-        .await?;
-        let materialized_ids = prepared
-            .desired_state
-            .documents()
-            .iter()
-            .map(|document| {
-                json!({
-                    "collection": document.collection.graphql_type(),
-                    "id": document.add[document.collection.unique_field()],
-                })
-            })
-            .collect::<Vec<_>>();
-        let blockers = self.plugin_install_blockers(distribution.manifest());
-        let ready = blockers.is_empty();
-        Ok(serde_json::to_string_pretty(&json!({
-            "committed": false,
-            "ready": ready,
-            "installation_blockers": blockers,
-            "operator_action": (!ready).then_some("An operator must review the plugin requirements and install this pinned package with gents pack install --grant-authority, selecting the intended --home and the same inference slots. The config tool cannot grant plugin authority; leave the current installation intact."),
-            "operation": operation,
-            "package": package.manifest.name,
-            "version": package.manifest.version,
-            "source": distribution.source(),
-            "artifact_digest": distribution.digest(),
-            "registry_artifact_digest": distribution.registry_artifact_digest(),
-            "inference": inference,
-            "external_dependencies": package.manifest.external_dependencies,
-            "plugins": package.manifest.metadata.plugins,
-            "plan": {
-                "graph_id": prepared.plan.graph_id,
-                "revision_digest": prepared.plan.digest,
-                "predecessor_revision_digest": prepared.plan.package.as_ref().and_then(|package| package.predecessor_revision_digest.as_ref()),
-                "materialized_ids": materialized_ids,
-                "schema_digests": prepared.schema_digests,
-            },
-            "installed": installed,
-            "apply_with": ready.then(|| json!({
-                "argv_prefix": ["pack", operation, distribution.pinned_spec(&args.package), "--digest", distribution.digest()],
-                "repeat_inference_slots": inference.bindings,
-                "repeat_variables": args.variables,
-            })),
-        }))?)
     }
 
     async fn apply(&self, operation: &str, args: PackInstallParams) -> anyhow::Result<String> {
@@ -1763,528 +1557,11 @@ impl PackInstaller {
         if distribution.manifest().metadata.kind == crate::pack::PackKind::Documents {
             return self.documents(operation, &args, &distribution, true).await;
         }
-        let previous = self.installed(distribution.manifest()).await?;
-        anyhow::ensure!(
-            operation != "update" || previous.is_some(),
-            "pack {:?} is not installed; use pack install",
-            distribution.manifest().name
-        );
-        let access = crate::config_client::ConfigAccess::local(self.node.clone());
-        let missing_slots = distribution
-            .manifest()
-            .metadata
-            .inference_slots
-            .iter()
-            .filter(|slot| !slot.optional && !args.inference_slots.contains_key(&slot.name))
-            .map(|slot| slot.name.as_str())
-            .collect::<Vec<_>>();
-        anyhow::ensure!(
-            missing_slots.is_empty(),
-            "pack {:?} requires explicit --inference-slot bindings for: {}; preview the pack and bind every declared role",
+        anyhow::bail!(
+            "pack {:?} is {:?}; the model-facing installer supports document and plugins-only packs",
             distribution.manifest().name,
-            missing_slots.join(", ")
-        );
-        let inference = crate::pack::preview_pack_inference_bindings(
-            &access,
-            distribution.manifest(),
-            self.core.node_did(),
-            &args.inference_slots,
+            distribution.manifest().metadata.kind
         )
-        .await?;
-        self.fence_bindings(&inference.bindings).await?;
-        let scope = crate::pack::PackInstallOptions {
-            node_did: self.core.node_did().to_owned(),
-        };
-        let environment = |name: &str| args.variables.get(name).cloned();
-        let package = distribution.load_graph(&scope, &environment)?;
-        anyhow::ensure!(
-            package.package_digest == expected,
-            "resolved package content does not match the previewed artifact digest"
-        );
-        let bindings = crate::graph_package::GraphPackageInstallBindings {
-            node_did: self.core.node_did().to_owned(),
-            inference_slots: inference.bindings.clone(),
-        };
-        let external_dependencies = package.manifest.external_dependencies.clone();
-        let plugins = package.manifest.metadata.plugins.clone();
-        let installed_plugins =
-            self.install_plugins(&distribution, &package.package_digest, &inference.bindings)?;
-        let record = crate::graph_package::GraphInstallRecord {
-            plugins: installed_plugins
-                .iter()
-                .map(|plugin| crate::pack::InstalledPackPlugin {
-                    name: plugin.name.clone(),
-                    digest: plugin.digest.clone(),
-                })
-                .collect(),
-            explicit: operation == "install",
-        };
-        // Local plugin publication is its own completed effect. A later node
-        // transaction failure is reported without deleting that installation;
-        // retrying the pinned pack operation can reconcile the graph record.
-        let receipt = crate::graph_package::install_loaded_graph_package(
-            &access,
-            self.core.node_did(),
-            &package,
-            &bindings,
-            None,
-            &record,
-        )
-        .await
-        .context("graph installation failed after local pack plugins were published; the plugins remain installed")?;
-        let activation = crate::graph_pipeline::activate_graph_revision_with_access(
-            &access,
-            self.core.node_did(),
-            &receipt.graph_id,
-            &receipt.revision_digest,
-            previous.as_ref().map(|plan| plan.digest.as_str()),
-        )
-        .await
-        .context("graph installation completed, but activation failed; locally published plugins remain installed")?;
-        let effective = self
-            .installed(distribution.manifest())
-            .await?
-            .context("installed package is not discoverable after activation")?;
-        anyhow::ensure!(
-            effective.digest == receipt.revision_digest
-                && effective
-                    .package
-                    .as_ref()
-                    .is_some_and(|package| package.package_digest == expected),
-            "installed package failed effective digest verification"
-        );
-        Ok(serde_json::to_string_pretty(&json!({
-            "operation": operation,
-            "source": distribution.source(),
-            "artifact_digest": expected,
-            "registry_artifact_digest": distribution.registry_artifact_digest(),
-            "inference": inference,
-            "install": receipt,
-            "activation": activation,
-            "external_dependencies": external_dependencies,
-            "plugins": plugins,
-            "effective": effective,
-            "effect": "The graph package is installed and active. Installation did not start a graph run.",
-        }))?)
-    }
-}
-
-fn graph_access(node: &Arc<EmbeddedNode>) -> crate::config_client::ConfigAccess {
-    crate::config_client::ConfigAccess::local(node.clone())
-}
-
-pub async fn list_graphs_value(
-    access: &crate::config_client::ConfigAccess,
-    owner_did: &str,
-    run_tool: Option<&'static str>,
-) -> Result<String> {
-    let owner = escape_graphql_string(owner_did);
-    let response = access
-        .execute(&format!(
-            r#"{{ GraphDefinition(filter: {{node_did: {{_eq: "{owner}"}}}}) {{ graph_id node_did enabled active_revision_digest generation created_at updated_at tags }} }}"#
-        ))
-        .await?;
-    let rows = response
-        .get("data")
-        .and_then(|data| data.get("GraphDefinition"))
-        .and_then(Value::as_array)
-        .context("GraphDefinition query returned no rows array")?;
-    let mut graphs = Vec::with_capacity(rows.len());
-    for definition in rows {
-        let graph_id = definition
-            .get("graph_id")
-            .and_then(Value::as_str)
-            .context("GraphDefinition is missing graph_id")?;
-        let plan =
-            crate::graph_pipeline::load_active_graph_plan_with_access(access, owner_did, graph_id)
-                .await?;
-        let mut graph = json!({ "definition": definition, "active_plan": &plan });
-        if let Some(tool) = run_tool {
-            graph["run_with"] = json!({
-                "tool": tool,
-                "package": plan
-                    .as_ref()
-                    .and_then(|plan| plan.package.as_ref())
-                    .map(|package| package.name.clone()),
-                "graph_id": graph_id,
-                "revision_digest": plan.as_ref().map(|plan| plan.digest.clone()),
-            });
-        }
-        graphs.push(graph);
-    }
-    graphs.sort_by(|left, right| {
-        left["definition"]["graph_id"]
-            .as_str()
-            .cmp(&right["definition"]["graph_id"].as_str())
-    });
-    Ok(serde_json::to_string_pretty(&json!({
-        "node_did": owner_did,
-        "node_bound": true,
-        "graphs": graphs,
-    }))?)
-}
-
-pub struct ListGraphsTool {
-    core: SelfConfigCore,
-    node: Arc<EmbeddedNode>,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ListGraphsParams {}
-
-impl Tool for ListGraphsTool {
-    const NAME: &'static str = LIST_GRAPHS_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = ListGraphsParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        list_graphs_definition()
-    }
-
-    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        Ok(list_graphs_value(
-            &graph_access(&self.node),
-            self.core.node_did(),
-            Some(RUN_GRAPH_TOOL_NAME),
-        )
-        .await?)
-    }
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RunGraphParams {
-    #[serde(default)]
-    pub package: Option<String>,
-    #[serde(default)]
-    pub graph_id: Option<String>,
-    #[serde(default)]
-    pub revision_digest: Option<String>,
-    #[serde(default)]
-    pub entry: Option<String>,
-    #[serde(default)]
-    pub input: Option<Value>,
-}
-
-pub struct RunGraphTool {
-    core: SelfConfigCore,
-    node: Arc<EmbeddedNode>,
-    plugins: Arc<crate::plugin::executor::PluginExecutor>,
-}
-
-impl Tool for RunGraphTool {
-    const NAME: &'static str = RUN_GRAPH_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = RunGraphParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        run_graph_definition()
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let access = graph_access(&self.node);
-        let selector = match (
-            args.package.as_deref(),
-            args.graph_id.as_deref(),
-            args.revision_digest.as_deref(),
-        ) {
-            (Some(name), None, None) => crate::graph_package::GraphRunSelector::Package {
-                name,
-                coordinate: None,
-            },
-            (None, Some(graph_id), Some(digest)) => {
-                crate::graph_package::GraphRunSelector::Pinned { graph_id, digest }
-            }
-            (Some(_), _, _) => {
-                return Err(anyhow!(
-                    "package runs must not include generic graph_id/revision_digest selectors"
-                )
-                .into())
-            }
-            (None, Some(_), None) => {
-                return Err(anyhow!(
-                    "a graph_id run requires the revision_digest list_graphs returns"
-                )
-                .into())
-            }
-            (None, None, _) => {
-                return Err(anyhow!(
-                    "run_graph requires package or graph_id; list_graphs returns both"
-                )
-                .into())
-            }
-        };
-        let plan = crate::graph_package::select_run_plan(&access, self.core.node_did(), &selector)
-            .await?
-            .with_context(|| match selector {
-                crate::graph_package::GraphRunSelector::Package { name, .. } => format!(
-                    "package {name:?} is not installed; run config pack install {name} first"
-                ),
-                crate::graph_package::GraphRunSelector::Pinned { graph_id, .. } => {
-                    format!("graph {graph_id:?} has no active revision; call list_graphs again")
-                }
-            })?;
-        let selected_entry = crate::graph_package::select_entry(&plan, args.entry.as_deref()).ok();
-        let requires_git_diff_ceiling = selected_entry
-            .and_then(|entry| entry.prepare.as_ref())
-            .is_some_and(|prepare| {
-                prepare
-                    .host
-                    .iter()
-                    .any(|step| matches!(step, crate::graph_pipeline::HostInput::GitDiff { .. }))
-            });
-        let host_root = if requires_git_diff_ceiling {
-            let effective = self
-                .core
-                .read_effective_config(&BTreeSet::new(), false, false)
-                .await?;
-            let effective_file_mode = effective
-                .pointer("/runtime_effective/effective/file_mode")
-                .and_then(Value::as_str)
-                .map(crate::tool_surface::FileToolMode::parse)
-                .transpose()?
-                .unwrap_or_default();
-            if effective_file_mode == crate::tool_surface::FileToolMode::Off {
-                return Err(anyhow!(
-                    "this graph's prepare step requires effective read authority on the current agent"
-                )
-                .into());
-            }
-            let effective_root = effective
-                .pointer("/runtime_effective/effective/root")
-                .and_then(Value::as_str)
-                .context("this graph's prepare step requires an explicit effective managed root")?;
-            Some(std::path::PathBuf::from(effective_root))
-        } else {
-            None
-        };
-        let prepared = crate::graph_package::prepare_entry_run(
-            &access,
-            self.core.node_did(),
-            crate::graph_package::EntryRunRequest {
-                plan: &plan,
-                entry: args.entry.as_deref(),
-                input: args.input.unwrap_or_else(|| json!({})),
-                host_root: host_root.as_deref(),
-                plugins: &self.plugins,
-            },
-        )
-        .await?;
-        let receipt = crate::graph_pipeline::start_graph_run_with_access(
-            &access,
-            self.core.node_did(),
-            &plan.graph_id,
-            Some(&plan.digest),
-            &prepared.entry_name,
-            prepared.input,
-            prepared.origin,
-        )
-        .await?;
-        let observed = crate::graph_pipeline::load_graph_run_view_with_access(
-            &access,
-            self.core.node_did(),
-            &receipt.run_id,
-        )
-        .await?;
-        crate::graph_pipeline::run_graph_tool_result(
-            self.core.node_did(),
-            &receipt,
-            &observed,
-            json!({"status_tool": GET_GRAPH_RUN_TOOL_NAME, "result_tool": GET_GRAPH_RESULT_TOOL_NAME}),
-        )
-        .map_err(|error| SelfConfigError(anyhow!(error)))
-    }
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GraphRunIdParams {
-    pub run_id: String,
-}
-
-pub struct GetGraphRunTool {
-    core: SelfConfigCore,
-    node: Arc<EmbeddedNode>,
-}
-
-impl Tool for GetGraphRunTool {
-    const NAME: &'static str = GET_GRAPH_RUN_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = GraphRunIdParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        get_graph_run_definition()
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let view = crate::graph_pipeline::load_graph_run_view_with_access(
-            &graph_access(&self.node),
-            self.core.node_did(),
-            &args.run_id,
-        )
-        .await?;
-        crate::tool_output::render(
-            &view,
-            &[
-                "results",
-                "status",
-                "error",
-                "failure_evidence",
-                "stages",
-                "requests",
-                "run_id",
-            ],
-        )
-        .map_err(|error| SelfConfigError(anyhow!(error)))
-    }
-}
-
-pub struct GetGraphResultTool {
-    core: SelfConfigCore,
-    node: Arc<EmbeddedNode>,
-}
-
-impl Tool for GetGraphResultTool {
-    const NAME: &'static str = GET_GRAPH_RESULT_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = GraphRunIdParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        get_graph_result_definition()
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let view = crate::graph_pipeline::load_graph_run_result_view_with_access(
-            &graph_access(&self.node),
-            self.core.node_did(),
-            &args.run_id,
-        )
-        .await?;
-        crate::tool_output::render(
-            &view,
-            &[
-                "results",
-                "status",
-                "error",
-                "failure_evidence",
-                "stages",
-                "requests",
-                "run_id",
-            ],
-        )
-        .map_err(|error| SelfConfigError(anyhow!(error)))
-    }
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CancelGraphRunParams {
-    pub run_id: String,
-    #[serde(default)]
-    pub reason: Option<String>,
-}
-
-pub struct CancelGraphRunTool {
-    core: SelfConfigCore,
-    node: Arc<EmbeddedNode>,
-}
-
-impl Tool for CancelGraphRunTool {
-    const NAME: &'static str = CANCEL_GRAPH_RUN_TOOL_NAME;
-    type Error = SelfConfigError;
-    type Args = CancelGraphRunParams;
-    type Output = String;
-
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        cancel_graph_run_definition()
-    }
-
-    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let view = crate::graph_pipeline::request_graph_run_cancellation_with_access(
-            &graph_access(&self.node),
-            self.core.node_did(),
-            &args.run_id,
-            args.reason.as_deref(),
-        )
-        .await?;
-        crate::tool_output::render(
-            &view,
-            &[
-                "results",
-                "status",
-                "error",
-                "failure_evidence",
-                "stages",
-                "requests",
-                "run_id",
-            ],
-        )
-        .map_err(|error| SelfConfigError(anyhow!(error)))
-    }
-}
-
-pub fn graph_tool_definitions() -> [ToolDefinition; 5] {
-    [
-        list_graphs_definition(),
-        run_graph_definition(),
-        get_graph_run_definition(),
-        get_graph_result_definition(),
-        cancel_graph_run_definition(),
-    ]
-}
-
-fn list_graphs_definition() -> ToolDefinition {
-    ToolDefinition {
-        name: LIST_GRAPHS_TOOL_NAME.to_owned(),
-        description: "Discover installed graphs on this managed node for the current node. Returns exact active revision digests, package attribution, entry schemas/input contracts, results, limits, and activation state; it never searches a home directory or another endpoint.".to_owned(),
-        parameters: json!({"type":"object","properties":{},"additionalProperties":false}),
-    }
-}
-
-fn run_graph_definition() -> ToolDefinition {
-    ToolDefinition {
-        name: RUN_GRAPH_TOOL_NAME.to_owned(),
-        description: "Start an installed graph on this managed node as the current node. Select it by package, or by the exact graph_id and revision_digest that list_graphs returns. Supply entry only when the graph has more than one, and input matching that entry's input_schema from list_graphs (default {}). Returns a durable run receipt and observed initial state.".to_owned(),
-        parameters: json!({
-            "type":"object",
-            "properties":{
-                "package":{"type":"string"},
-                "graph_id":{"type":"string"},
-                "revision_digest":{"type":"string"},
-                "entry":{"type":"string"},
-                "input":{"type":"object"}
-            },
-            "additionalProperties":false
-        }),
-    }
-}
-
-fn get_graph_run_definition() -> ToolDefinition {
-    ToolDefinition {
-        name: GET_GRAPH_RUN_TOOL_NAME.to_owned(),
-        description: "Inspect durable status, stages, requests, cancellation, and result-contract progress for one exact run on this managed node.".to_owned(),
-        parameters: json!({"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"],"additionalProperties":false}),
-    }
-}
-
-fn get_graph_result_definition() -> ToolDefinition {
-    ToolDefinition {
-        name: GET_GRAPH_RESULT_TOOL_NAME.to_owned(),
-        description: "Load terminal graph results and their durable documents for one exact run on this managed node. A nonterminal run is reported honestly as not ready.".to_owned(),
-        parameters: json!({"type":"object","properties":{"run_id":{"type":"string"}},"required":["run_id"],"additionalProperties":false}),
-    }
-}
-
-fn cancel_graph_run_definition() -> ToolDefinition {
-    ToolDefinition {
-        name: CANCEL_GRAPH_RUN_TOOL_NAME.to_owned(),
-        description: "Persist cancellation intent and interrupt active requests for one exact graph run on this managed node. Returns the observed durable run state.".to_owned(),
-        parameters: json!({"type":"object","properties":{"run_id":{"type":"string"},"reason":{"type":"string"}},"required":["run_id"],"additionalProperties":false}),
     }
 }
 
@@ -2296,7 +1573,7 @@ pub fn build_self_config_tools(
     config: &SelfConfigToolConfig,
     plugins: Arc<crate::plugin::executor::PluginExecutor>,
 ) -> Vec<Box<dyn ToolDyn>> {
-    if !config.enabled && !config.enable_graph_tools {
+    if !config.enabled {
         return Vec::new();
     }
     let core = match SelfConfigCore::new(node.clone(), node_did.clone(), config.agent_id.clone()) {
@@ -2318,34 +1595,6 @@ pub fn build_self_config_tools(
     };
 
     let mut tools: Vec<Box<dyn ToolDyn>> = Vec::new();
-    if previews_graphs(config) {
-        tools.push(Box::new(graph_preview::PreviewGraphTool {
-            core: core.clone(),
-        }));
-    }
-    if config.enable_graph_tools {
-        tools.push(Box::new(ListGraphsTool {
-            core: core.clone(),
-            node: node.clone(),
-        }));
-        tools.push(Box::new(RunGraphTool {
-            core: core.clone(),
-            node: node.clone(),
-            plugins: plugins.clone(),
-        }));
-        tools.push(Box::new(GetGraphRunTool {
-            core: core.clone(),
-            node: node.clone(),
-        }));
-        tools.push(Box::new(GetGraphResultTool {
-            core: core.clone(),
-            node: node.clone(),
-        }));
-        tools.push(Box::new(CancelGraphRunTool {
-            core: core.clone(),
-            node: node.clone(),
-        }));
-    }
     if !config.enabled {
         return tools;
     }
@@ -2365,24 +1614,8 @@ pub fn build_self_config_tools(
     tools
 }
 
-fn previews_graphs(config: &SelfConfigToolConfig) -> bool {
-    config.enable_graph_tools && config.enable_pack_install
-}
-
 pub fn self_config_tool_names(config: &SelfConfigToolConfig) -> Vec<String> {
     let mut names = Vec::new();
-    if previews_graphs(config) {
-        names.push(PREVIEW_GRAPH_TOOL_NAME.to_string());
-    }
-    if config.enable_graph_tools {
-        names.extend([
-            LIST_GRAPHS_TOOL_NAME.to_string(),
-            RUN_GRAPH_TOOL_NAME.to_string(),
-            GET_GRAPH_RUN_TOOL_NAME.to_string(),
-            GET_GRAPH_RESULT_TOOL_NAME.to_string(),
-            CANCEL_GRAPH_RUN_TOOL_NAME.to_string(),
-        ]);
-    }
     if !config.enabled {
         return names;
     }

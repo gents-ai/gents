@@ -22,7 +22,7 @@ fn transient_graphql_read_retry_delay(retry: usize) -> Duration {
 }
 
 /// Collections whose changes can produce novel projected session events.
-const PROJECTED_COLLECTIONS: [&str; 11] = [
+const PROJECTED_COLLECTIONS: [&str; 10] = [
     "AgentRequest",
     "AgentSession",
     "AgentToolCall",
@@ -32,11 +32,10 @@ const PROJECTED_COLLECTIONS: [&str; 11] = [
     "CompactionEntry",
     "ProviderContextReduction",
     "Goal",
-    "GraphRun",
     "Trigger",
 ];
 
-/// Graph-run and goal panels read through owners whose rows lie outside
+/// Goal panels read through owners whose rows lie outside
 /// [`PROJECTED_COLLECTIONS`]; this bounds how stale they can become.
 const PROJECTION_FALLBACK: Duration = Duration::from_secs(2);
 
@@ -541,7 +540,6 @@ impl TurnManager {
                 let mut after = String::new();
                 let mut delivery_after = String::new();
                 let mut goal_cursor = super::goals::GoalCursor::default();
-                let mut graph_cursor = super::graph_runs::GraphRunCursor::default();
                 let mut job_cursor = super::job_runs::JobRunCursor::default();
                 let mut goal_refresh_at = tokio::time::Instant::now();
                 loop {
@@ -568,19 +566,6 @@ impl TurnManager {
                         {
                             tracing::warn!(%error, session_id = %observed_session,
                             "Grok goal observation failed; retrying");
-                        }
-                        for error in graph_cursor
-                            .refresh(
-                                &manager.node,
-                                &manager.config.node_did,
-                                &observed_session,
-                                &sender,
-                                &projections,
-                            )
-                            .await
-                        {
-                            tracing::warn!(error = %format_args!("{error:#}"),
-                            session_id = %observed_session, "Grok graph run observation failed");
                         }
                         for error in job_cursor
                             .refresh(

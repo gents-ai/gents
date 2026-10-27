@@ -933,67 +933,6 @@ fn pack_install_wire_refuses_before_any_write_without_grant() -> Result<()> {
     Ok(())
 }
 
-/// `gents init --workflows` on a home whose store holds an engine pack with a
-/// plugin that ships no reviewed job block installs it as the operator and
-/// prints the wire report naming `--targets-from`.
-#[test]
-fn init_workflows_installs_and_wires_the_engine_offline() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating init workflows tempdir")?;
-    let scratch = tempdir.path();
-    let home = scratch.join("agent-home");
-    let init_args = ["--node-name", "init-workflows", "--home", dir_arg(&home)];
-    run_init_json(scratch, &init_args)?;
-
-    let engine = scratch.join("rhai_workflows");
-    copy_dir_all(&fixture_pack_dir("job_plugin_fixture"), &engine)?;
-    let manifest_path = engine.join("manifest.json");
-    let mut manifest = read_json_file(&manifest_path)?;
-    manifest["namespace"] = "gents".into();
-    manifest["name"] = "rhai_workflows".into();
-    manifest["plugins"][0]["name"] = "workflow".into();
-    write_json_file(&manifest_path, &manifest)?;
-    edit_pack_config(&engine, |config| {
-        *config = serde_json::json!({
-            "node": {},
-            "tools": [{
-                "tools_id": "workflow-caller",
-                "display_name": "Workflow caller",
-                "integrations": {"plugins": [{"plugin": "gents/workflow"}]},
-            }],
-        });
-    })?;
-    run_cli_text(scratch, &["pack", "build", dir_arg(&engine)])?;
-    run_cli_json(
-        scratch,
-        &[
-            "pack",
-            "fetch",
-            dir_arg(&engine),
-            "--store",
-            "--home",
-            dir_arg(&home),
-        ],
-    )?;
-
-    let mut with_flag = init_args.to_vec();
-    with_flag.push("--workflows");
-    let printed = run_init_json(scratch, &with_flag)?;
-    let next_call = printed["workflows"]["wired"][0]["report"]["next_call"]
-        .as_str()
-        .context("init --workflows printed no next_call for a pack without a job block")?;
-    anyhow::ensure!(
-        next_call.contains("--targets-from"),
-        "next_call does not name --targets-from: {next_call}"
-    );
-    let record = gents::pack::read_home_install(&home, "gents/rhai_workflows")?
-        .context("init --workflows did not install the engine pack")?;
-    anyhow::ensure!(
-        record.installed_via == Some(gents::pack::home_install::InstalledVia::Operator),
-        "the engine pack is not an operator install: {record:?}"
-    );
-    Ok(())
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wire_sources_lists_job_plugins_and_target_packs() -> Result<()> {
     let fixture = wire_fixture(true)?;

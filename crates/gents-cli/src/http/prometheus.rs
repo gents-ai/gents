@@ -64,9 +64,9 @@ pub(crate) struct MetricsBackendRow {
     #[serde(default)]
     pub(crate) enabled: bool,
     #[serde(default)]
-    pub(crate) max_concurrent: i64,
+    pub(crate) max_concurrent: Option<i64>,
     #[serde(default)]
-    pub(crate) max_queue_depth: i64,
+    pub(crate) max_queue_depth: Option<i64>,
     #[serde(default, deserialize_with = "null_string_as_unknown")]
     pub(crate) probe_status: String,
     pub(crate) last_probe: Option<String>,
@@ -1506,13 +1506,17 @@ pub(crate) fn push_backend_metrics(
             lines,
             "gents_backend_max_concurrent",
             &[("backend_id", backend.backend_id.clone())],
-            backend.max_concurrent,
+            backend
+                .max_concurrent
+                .unwrap_or(gents::backend_registry::DEFAULT_MAX_CONCURRENT),
         );
         push_metric_sample(
             lines,
             "gents_backend_max_queue_depth",
             &[("backend_id", backend.backend_id.clone())],
-            backend.max_queue_depth,
+            backend
+                .max_queue_depth
+                .unwrap_or(gents::backend_registry::DEFAULT_MAX_QUEUE_DEPTH),
         );
         let measured_entry = measured.get(&backend.backend_id);
         let status = measured_entry
@@ -1600,6 +1604,53 @@ fn rfc3339_timestamp(value: &str) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backend_capacity_metrics_resolve_nullable_config_through_backend_defaults() {
+        use gents::backend_registry::{DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_QUEUE_DEPTH};
+
+        for (limits, concurrency, queue_depth) in [
+            (
+                serde_json::json!({}),
+                DEFAULT_MAX_CONCURRENT,
+                DEFAULT_MAX_QUEUE_DEPTH,
+            ),
+            (
+                serde_json::json!({"max_concurrent": null, "max_queue_depth": null}),
+                DEFAULT_MAX_CONCURRENT,
+                DEFAULT_MAX_QUEUE_DEPTH,
+            ),
+            (
+                serde_json::json!({"max_concurrent": 7, "max_queue_depth": 0}),
+                7,
+                0,
+            ),
+        ] {
+            let mut backend = serde_json::json!({
+                "backend_id": "backend", "enabled": true, "probe_status": null
+            });
+            backend
+                .as_object_mut()
+                .unwrap()
+                .extend(limits.as_object().unwrap().clone());
+            let data: MetricsQueryEnvelope = serde_json::from_value(serde_json::json!({
+                "InferenceBackend": [backend]
+            }))
+            .unwrap();
+            let mut lines = Vec::new();
+            push_backend_metrics(
+                &mut lines,
+                &data.inference_backends,
+                &RapidHashMap::default(),
+            );
+            assert!(lines.contains(&format!(
+                "gents_backend_max_concurrent{{backend_id=\"backend\"}} {concurrency}"
+            )));
+            assert!(lines.contains(&format!(
+                "gents_backend_max_queue_depth{{backend_id=\"backend\"}} {queue_depth}"
+            )));
+        }
+    }
 
     #[tokio::test]
     async fn failed_liveness_activity_read_degrades_to_claimed_at() {
@@ -1763,8 +1814,8 @@ mod tests {
             MetricsBackendRow {
                 backend_id: backend_id.to_string(),
                 enabled: true,
-                max_concurrent: 4,
-                max_queue_depth: 100,
+                max_concurrent: Some(4),
+                max_queue_depth: Some(100),
                 probe_status: probe_status.to_string(),
                 last_probe: last_probe.map(str::to_string),
             }

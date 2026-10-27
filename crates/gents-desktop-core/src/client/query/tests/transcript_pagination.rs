@@ -719,6 +719,7 @@ async fn running_tool_pages_read_only_their_open_output_source() {
             tool_call_key:"running-tool", node_did:"node", requester_did:"reader",
             request_doc_id:"request", request_id:"request-id", session_id:"live-page",
             tool_call_id:"call", tool_name:"bash_unrestricted", message_sequence:1,
+            spawned_by_tool_call_doc_id:"parent-call",
             status:"running", lifecycle_state:"running"
         }) { _docID }
     }"#,
@@ -787,4 +788,58 @@ async fn running_tool_pages_read_only_their_open_output_source() {
     };
     assert_eq!(streams.len(), 1);
     assert_eq!(streams[0].text, "live output");
+
+    let tool_id = escape_graphql_string(tool);
+    ConfigAccess::write_local(&node, "test.completed_spawn_output", &format!(r#"mutation {{
+        update_AgentToolCall(docID:"{tool_id}", input:{{
+            lifecycle_state:"completed"
+        }}) {{ _docID }}
+        create_AgentOutputSegment(input:{{
+            node_did:"node", requester_did:"reader", session_id:"live-page", request_doc_id:"request",
+            source:{{kind:"tool_call", tool_call_doc_id:"{tool_id}"}},
+            writer:{{kind:"tool_execution", tool_call_doc_id:"{tool_id}"}},
+            payload:"", close:{{kind:"closed", outcome:"complete", segments:1, stream_bytes:[11]}},
+            created_at:"2026-10-03T00:00:01Z"
+        }}) {{ _docID }}
+    }}"#)).await.unwrap();
+    let retained = load_session_transcript_page(
+        &node,
+        "live-page",
+        Some("node"),
+        Some("reader"),
+        None,
+        Some(10),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        retained.store.tool_calls[0]
+            .spawned_by_tool_call_doc_id
+            .as_deref(),
+        Some("parent-call")
+    );
+    assert_eq!(retained.canonical_dependencies.output_segments.len(), 2);
+    assert_eq!(retained.query_count, 2);
+    let rows = &retained.canonical_dependencies.output_segments;
+    let closing = rows.iter().find(|row| row.segment.close.is_some()).unwrap();
+    let observed = rows
+        .iter()
+        .map(
+            |row| gents_protocol::output::reconstruction::ObservedSegment {
+                doc_id: &row.doc_id,
+                segment: &row.segment,
+            },
+        )
+        .collect::<Vec<_>>();
+    let output = gents_protocol::output::reconstruction::reconstruct_stream(
+        &observed,
+        &[],
+        &[],
+        &gents_protocol::output::PayloadRef {
+            close_doc_id: closing.doc_id.clone(),
+            stream: 0,
+        },
+    )
+    .unwrap();
+    assert_eq!(output.text, "live output");
 }

@@ -29,17 +29,16 @@ pub enum Collection {
     CallbackBinding,
     CallbackModule,
     RepositoryPlacement,
-    GraphDefinition,
     EvalDefinition,
 }
 
 /// This enumeration provides no reference-safety guarantee; publication must
 /// validate the complete manifest and atomically commit it, including legal
 /// reference cycles.
-pub const DESIRED_STATE_APPLY_ORDER: [Collection; 27] = Collection::ALL;
+pub const DESIRED_STATE_APPLY_ORDER: [Collection; 26] = Collection::ALL;
 
 impl Collection {
-    pub const ALL: [Collection; 27] = [
+    pub const ALL: [Collection; 26] = [
         Self::Node,
         Self::Agent,
         Self::AgentContext,
@@ -65,7 +64,6 @@ impl Collection {
         Self::CallbackBinding,
         Self::CallbackModule,
         Self::RepositoryPlacement,
-        Self::GraphDefinition,
         Self::EvalDefinition,
     ];
 
@@ -103,7 +101,6 @@ impl Collection {
             Self::CallbackBinding => Some("callback_bindings"),
             Self::CallbackModule => Some("callback_modules"),
             Self::RepositoryPlacement => Some("repository_placements"),
-            Self::GraphDefinition => Some("graphs"),
             Self::EvalDefinition => Some("eval_definitions"),
         }
     }
@@ -135,7 +132,6 @@ impl Collection {
             Self::CallbackBinding => "CallbackBinding",
             Self::CallbackModule => "CallbackModule",
             Self::RepositoryPlacement => "RepositoryPlacement",
-            Self::GraphDefinition => "GraphDefinition",
             Self::EvalDefinition => "EvalDefinition",
         }
     }
@@ -168,7 +164,6 @@ impl Collection {
             Self::CallbackBinding => "binding_id",
             Self::CallbackModule => "module_id",
             Self::RepositoryPlacement => "repository_id",
-            Self::GraphDefinition => "graph_id",
             Self::EvalDefinition => "definition_id",
         }
     }
@@ -214,7 +209,6 @@ mod tests {
                 let (name, _) = line.split_once(':')?;
                 Some(name)
             })
-            .filter(|name| !matches!(*name, "graph_intents" | "graph_capabilities"))
             .collect();
         let names: BTreeSet<_> = Collection::ALL.iter().map(|c| c.to_string()).collect();
         assert_eq!(names.len(), Collection::ALL.len());

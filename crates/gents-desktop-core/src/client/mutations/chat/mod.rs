@@ -16,4 +16,5 @@ pub use session::rename_session;
 
 pub(crate) use request::prepare_request_submission;
 pub(crate) use request::receipt::delivery as submission_delivery;
+pub(crate) use request::receipt::goal_delivery;
 pub(crate) use request::receipt::journal as submission_journal;

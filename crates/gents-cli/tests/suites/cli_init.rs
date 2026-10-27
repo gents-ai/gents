@@ -224,12 +224,6 @@ async fn init_bootstraps_backend_default_agent_and_tools_idempotently() -> Resul
             "self_config.{field}"
         );
     }
-    assert_eq!(
-        tools
-            .pointer("/built_ins/enable_graph_tools")
-            .and_then(Value::as_bool),
-        Some(true)
-    );
 
     Ok(())
 }

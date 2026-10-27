@@ -17,6 +17,7 @@ fn stale_session(state: RequestLifecycleState) -> AgentSession {
         tags: Vec::new(),
         provenance: None,
         observation: Some(SessionObservation {
+            reply_preview: None,
             last_activity_at: "2026-04-21T12:02:00Z".into(),
             preview: Some("done".into()),
             latest_request: Some(SessionRequestObservation {

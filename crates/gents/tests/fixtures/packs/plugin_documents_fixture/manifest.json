@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "name": "plugin_documents_fixture",
   "version": "1.0.0",
-  "description": "Documents pack that also ships one plugin: three inference slots, one task, one schema. Used by pack install and removal tests that need a plugin without a graph.",
+  "description": "Documents pack that also ships one plugin: three inference slots, one task, one schema. Used by pack install and removal tests that need a plugin.",
   "namespace": "fixture",
   "authors": [
     "gents-ai contributors"

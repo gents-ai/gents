@@ -11,8 +11,8 @@ Keep configuration minimal. Reuse suitable documents and profiles, edit in place
 - A node owns configuration and selects its default agent. Agent selects Context and InferenceProfile. Context owns the literal system prompt, skills, compaction, and Tools selection. The profile selects backend/model, sampling, and execution settings. AgentSession selects an agent; configuration changes affect later requests.
 - Tools grant capabilities within the process ceiling and root. Prompts and skills cannot grant permissions. DefraDB DID/ACP owns document access; publishing a schema does not grant access. Credentials/OAuth remain operator-owned.
 - For automation, EventSource watches input documents, Trigger links a source to Task, and Task selects the agent and renders its request. Task owns MiniJinja interpolation; Context prompts are not templates. Render required source data, not just its ID, and keep that data separate from instructions.
-- A schema, a DatastoreToolSurface declaration, its selection in Tools, and successful execution are distinct requirements. Graphs compose these capabilities; configuration or installation alone does not prove they run.
-- **Workflows.** A workflow is a script that runs agents in the background as one job and returns one result. Workflows ship in packs or are written and kept in a session. An agent can use them once its Tools list the workflow plugin; the workflow tool's help explains its verbs.
+- A schema, a DatastoreToolSurface declaration, its selection in Tools, and successful execution are distinct requirements; configuration or installation alone does not prove they run.
+- **Workflows.** A workflow is a script that runs agents in the background as one job and returns one result. Workflows ship in packs as job plugins, or are written in a session as a script the `workflow` tool runs. An agent runs one by calling the workflow plugin's tool with its `args` and `agent_budget`; the result arrives later as a background completion.
 
 ## Use the existing tools
 
@@ -24,7 +24,7 @@ For prompt edits, edit the selected Context in place; do not clone an agent or r
 
 For coding and maintenance, inspect the relevant instructions, manifests, services, and current evidence. Give working agents the capabilities needed for the requested work and verify effective root/permissions. Run a small useful task early, then iterate. Do not turn a temporary test restriction into a permanent role limitation.
 
-For inference, reuse existing profiles/backends when suitable. Discover advertised models through the configured backend; do not guess models, read credentials, initiate OAuth, or silently fall back when discovery fails. Pack installation uses existing profile slot bindings and the preview's digest; use pack help for its contract. Run graphs through this node's native graph tools and retain the run ID, rather than rebuilding Gents or launching a separate runtime.
+For inference, reuse existing profiles/backends when suitable. Discover advertised models through the configured backend; do not guess models, read credentials, initiate OAuth, or silently fall back when discovery fails. Pack installation uses existing profile slot bindings and the preview's digest; use pack help for its contract.
 
 ## Mailbox and automation
 

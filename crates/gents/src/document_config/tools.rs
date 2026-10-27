@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::tool_surface::{BashMode, FileToolMode};
 use crate::toolset::{CommandExecutionMode, CommandNetworkMode};
+pub use gents_protocol::row::RetiredKey;
 
 /// Tool capabilities, execution policies, and dependencies referenced by a context.
 /// Groups are embedded in this document and share its ownership. Missing groups
@@ -371,14 +372,11 @@ pub struct AgentTools {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct BuiltInTools {
-    /// Native graph discovery/run/status/result/cancel, independent of self-config
-    /// and pack installation. Existing graph caller admission still applies. Not an
-    /// operator-managed grant: a self-config write may set it, because it presents
-    /// run tools only and run authority stays with each graph's `allowed_callers`
-    /// (Lean `SelfConfig.graphToolPresented`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub enable_graph_tools: Option<bool>,
+    /// Tools documents stored before graph tools were removed carry this key;
+    /// it is accepted and ignored, and the canonical serializer drops it on next write.
+    #[serde(default, rename = "enable_graph_tools", skip_serializing)]
+    #[cfg_attr(feature = "typescript", ts(skip))]
+    pub retired_graph_tools: RetiredKey,
     /// Independent goal get/update capability. Unset is disabled.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -573,8 +571,8 @@ pub struct SelfConfigTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub self_config_preview: Option<bool>,
-    /// Opt-in authority to install and activate graph packs from the home store or
-    /// registry for this node. Disabled by absence and never implied by
+    /// Opt-in authority to install packs from the home store or registry for
+    /// this node. Disabled by absence and never implied by
     /// general self-config.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -1009,7 +1007,7 @@ fn union_into(list: &mut Vec<String>, items: &[String]) {
 }
 
 /// Merges `new` into `existing` without widening anything `existing` grants
-/// (targets and trusted packs are the additions); `project_roots` is never set.
+/// (targets and trusted packs are the additions).
 fn merge_job_blocks(
     existing: &gents_protocol::job::PluginJobSettings,
     new: &gents_protocol::job::PluginJobSettings,
@@ -1114,11 +1112,7 @@ pub fn wire_plugin(
             let merged = job.is_some();
             let mut block = match &job {
                 Some(existing) => merge_job_blocks(existing, &incoming),
-                None => {
-                    let mut fresh = incoming;
-                    fresh.policy.project_roots.clear();
-                    fresh
-                }
+                None => incoming,
             };
             for (pack, pack_targets, via) in targets_from {
                 (block.policy, block.agent_targets, agents.target_ids) =
@@ -1214,7 +1208,7 @@ pub fn wire_plugin(
 /// plugin entry still needs it (skills are not recorded per plugin, so any
 /// remaining plugin keeps them). With `targets_from`, keeps the plugin and
 /// removes only those packs' targets and trust entries; a block left without
-/// targets is dropped. `agents.enabled`, `policy.dynamic`, `project_roots` and
+/// targets is dropped. `agents.enabled`, `policy.dynamic` and
 /// `built_ins.p2p_collections` are never written: a P2P grant may back a live
 /// pairing or another plugin, so narrowing it stays an explicit Tools edit.
 pub fn unwire_plugin(
@@ -1439,10 +1433,6 @@ mod tests {
             (json!({"agent_targets":[]}), "job.agent_targets"),
             (json!({"agent_targets":["a"],"max_live":0}), "job.max_live"),
             (
-                json!({"agent_targets":["a"],"policy":{"project_roots":["rel"]}}),
-                "job.policy.project_roots",
-            ),
-            (
                 json!({"agent_targets":["a"],"policy":{"trusted_packs":["not a pack"]}}),
                 "job.policy.trusted_packs",
             ),
@@ -1461,6 +1451,21 @@ mod tests {
                 "{message}"
             );
         }
+    }
+
+    #[test]
+    fn a_0_21_job_policy_with_project_roots_still_loads_and_drops_them() {
+        let tools = document(
+            json!({"integrations":{"plugins":[{"plugin":"ns/runner","job":{
+                "agent_targets":["a"],
+                "policy":{"trusted_packs":["ns/pack"],"project_roots":["/work"]},
+            }}]}}),
+        );
+        tools.validate().unwrap();
+        let policy =
+            &serde_json::to_value(&tools).unwrap()["integrations"]["plugins"][0]["job"]["policy"];
+        assert_eq!(policy["trusted_packs"], json!(["ns/pack"]), "{policy}");
+        assert!(policy.get("project_roots").is_none(), "{policy}");
     }
 
     mod wire {
@@ -1586,7 +1591,6 @@ mod tests {
             );
             assert_eq!(block.policy.dynamic, DynamicMode::Check);
             assert!(block.policy.dynamic_targets.is_empty());
-            assert!(block.policy.project_roots.is_empty());
             assert_eq!(block.max_live, PluginJobSettings::DEFAULT_MAX_LIVE);
             assert_eq!(block.max_spawns, PluginJobSettings::DEFAULT_MAX_SPAWNS);
             assert_eq!(
@@ -1660,40 +1664,6 @@ mod tests {
             assert_eq!(block.max_wall_secs, 100);
             assert_eq!(block.policy.dynamic, DynamicMode::Off);
             assert_eq!(block.policy.dynamic_targets, strs(&["c"]));
-        }
-
-        #[test]
-        fn project_roots_untouched() {
-            let (mut tools, context) = start(None);
-            existing(
-                &mut tools,
-                job(json!({"agent_targets": ["a"], "policy": {"project_roots": ["/w"]}})),
-            );
-            let reviewed = job(json!({
-                "agent_targets": ["b"], "policy": {"project_roots": ["/elsewhere"]}
-            }));
-            let (tools, _, _) = wire_plugin(
-                &tools,
-                &context,
-                &installed(true, None),
-                Some(&reviewed),
-                &[],
-                &[],
-            )
-            .unwrap();
-            assert_eq!(block(&tools).unwrap().policy.project_roots, strs(&["/w"]));
-
-            let (fresh, context) = start(None);
-            let (fresh, _, _) = wire_plugin(
-                &fresh,
-                &context,
-                &installed(true, None),
-                Some(&reviewed),
-                &[],
-                &[],
-            )
-            .unwrap();
-            assert!(block(&fresh).unwrap().policy.project_roots.is_empty());
         }
 
         #[test]
@@ -1987,7 +1957,7 @@ mod tests {
         }
 
         #[test]
-        fn remove_never_changes_enabled_dynamic_or_project_roots() {
+        fn remove_never_changes_enabled_or_dynamic() {
             for (removed, dynamic_targets) in [("b", vec!["a"]), ("a", vec![])] {
                 let (mut tools, context) = start(Some(true));
                 tools.agents.as_mut().unwrap().target_ids = strs(&["a", "b"]);
@@ -1995,9 +1965,7 @@ mod tests {
                     &mut tools,
                     job(json!({
                         "agent_targets": ["a", "b"],
-                        "policy": {
-                            "dynamic": "run", "dynamic_targets": ["a"], "project_roots": ["/w"]
-                        }
+                        "policy": {"dynamic": "run", "dynamic_targets": ["a"]}
                     })),
                 );
                 let pack = (
@@ -2009,7 +1977,6 @@ mod tests {
                     unwire_plugin(&tools, &context, &installed(true, None), &[], &[pack]).unwrap();
                 let block = block(&tools).unwrap();
                 assert_eq!(block.policy.dynamic, DynamicMode::Run);
-                assert_eq!(block.policy.project_roots, strs(&["/w"]));
                 assert_eq!(block.policy.dynamic_targets, strs(&dynamic_targets));
                 assert_eq!(tools.agents.unwrap().enabled, Some(true));
             }

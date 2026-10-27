@@ -304,7 +304,7 @@ pub(super) fn cmp_opt_str_asc(left: Option<&str>, right: Option<&str>) -> std::c
 }
 
 /// Physical identity resolves equal display-order keys so full and batched
-/// projections give graph adapters the same order regardless of fetch order.
+/// projections give adapters the same order regardless of fetch order.
 pub(crate) fn sort_request_rows(requests: &mut [AgentRequestRow]) {
     requests.sort_by(|left, right| {
         left.session_id

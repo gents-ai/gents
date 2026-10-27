@@ -113,14 +113,12 @@ describe("canonical tool selections", () => {
     const { api, app } = harness();
     const user = userEvent.setup();
     renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
-    expect(
-      screen.getByRole("switch", { name: "Install graph packs" }),
-    ).not.toBeChecked();
-    await user.click(screen.getByRole("switch", { name: "Graph tools" }));
+    expect(screen.getByRole("switch", { name: "Install packs" })).not.toBeChecked();
+    await user.click(screen.getByRole("switch", { name: "Memory" }));
     expect(api.saveToolsConfig).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Save" }));
     const tools = api.saveToolsConfig.mock.calls[0][0].document;
-    expect(tools.built_ins).toEqual({ enable_graph_tools: true });
+    expect(tools.built_ins).toEqual({ enable_memory: true });
     expect(tools.self_config).toBeNull();
     expect(tools.host.files.mode).toBe("ReadOnly");
   });

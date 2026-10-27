@@ -1,4 +1,5 @@
 import type { RequestAttachment } from "@source-inc/gents-desktop-client";
+import { useEffect, useRef } from "react";
 import { writeAttachments } from "../../../hooks/draftStore";
 import type { QueueDelivery } from "@source-inc/gents-desktop-client/generated/QueueDelivery";
 import { useApp, useView } from "@/app/AppContext";
@@ -20,6 +21,13 @@ export function useAgentChoice() {
 const GOAL_COMMAND = /^\s*\/goal\s+(?=\S)/;
 
 export function useComposerSend(agentId: string | null | undefined) {
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const {
     drafts,
     stores,
@@ -41,6 +49,7 @@ export function useComposerSend(agentId: string | null | undefined) {
   ) => {
     if (
       acceptsComposeIntent(intentGeneration) &&
+      mounted.current &&
       result &&
       result.sessionId !== selectedSessionId
     ) {
@@ -50,9 +59,19 @@ export function useComposerSend(agentId: string | null | undefined) {
   };
 
   const goal = async (text: string, objective = text) => {
-    const pending = setGoal(objective.replace(GOAL_COMMAND, "").trim(), agentId);
+    const clientDid = stores.client.getState().snapshot?.client?.clientDid;
+    const pending = setGoal(
+      objective.replace(GOAL_COMMAND, "").trim(),
+      agentId,
+      () => mounted.current,
+    );
     const intentGeneration = captureComposeIntent();
     const result = await pending;
+    if (
+      !mounted.current ||
+      stores.client.getState().snapshot?.client?.clientDid !== clientDid
+    )
+      return Boolean(result);
     if (result) setDraft((current) => (current === text ? "" : current));
     follow(intentGeneration, result);
     return Boolean(result);
@@ -69,9 +88,18 @@ export function useComposerSend(agentId: string | null | undefined) {
     const attachments =
       supplied ?? selected.flatMap((a) => (a.content ? [a.content] : []));
     const ids = new Set(selected.map((a) => a.id));
-    const pending = sendMessage(text, agentId, attachments, followUp);
+    const clientDid = stores.client.getState().snapshot?.client?.clientDid;
+    const pending = sendMessage(
+      text,
+      agentId,
+      attachments,
+      followUp,
+      () => mounted.current,
+    );
     const intentGeneration = captureComposeIntent();
     const result = await pending;
+    if (stores.client.getState().snapshot?.client?.clientDid !== clientDid)
+      return Boolean(result);
     if (result) {
       if (!supplied) setDraft((current) => (current === text ? "" : current));
       if (!supplied)

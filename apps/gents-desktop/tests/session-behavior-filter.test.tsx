@@ -51,7 +51,7 @@ describe("the sessions agent filter", () => {
     );
     await userEvent.click(screen.getByLabelText("Agent"));
     expect(await screen.findByText("Code Reviewer")).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: /Default\s*0$/ })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: /Default$/ })).toBeInTheDocument();
   });
 
   it("keeps a stored pick no listed session runs in view, so it can be cleared", () => {

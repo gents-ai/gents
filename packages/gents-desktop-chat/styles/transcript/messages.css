@@ -702,3 +702,7 @@
     height: 24px;
   }
 }
+
+.transcript-items > .current-user-turn {
+  background: var(--chat-background, var(--color-surface-strong));
+}

@@ -605,6 +605,86 @@ mod replay_error_tests {
         }
     }
 
+    #[cfg(feature = "native")]
+    #[tokio::test]
+    async fn cross_provider_tool_identity_reaches_dispatch_and_rebuilt_history() {
+        use crate::backend_provider::BackendProviderKind;
+        use crate::provider_input::tool_call_identity_tests::{
+            assert_responses_body, cases, counter, messages,
+        };
+        for case in cases().into_iter().filter(|case| case.responses) {
+            let original = messages(&case);
+            let prompt = original.last().unwrap().clone();
+            let history = &original[..original.len() - 1];
+            for provider in [
+                BackendProviderKind::OpenAiCompatible,
+                BackendProviderKind::ChatGptCodex,
+                BackendProviderKind::XaiGrokOAuth,
+            ] {
+                let mut config = replay_assembly_config();
+                config.provider_input_counter = Arc::new(counter(provider));
+                config.preamble = Some("System instructions".into());
+                let mut request = super::build_request(
+                    &AssemblyOnlyModel,
+                    prompt.clone(),
+                    history,
+                    &[],
+                    &[],
+                    &config,
+                )
+                .await
+                .unwrap();
+                let dispatch_body = |request: &rig::completion::CompletionRequest| {
+                    let dto = rig::providers::openai::responses_api::CompletionRequest::try_from((
+                        "test-model".into(),
+                        request.clone(),
+                    ))
+                    .unwrap();
+                    let mut body = serde_json::to_value(dto).unwrap();
+                    match provider {
+                        BackendProviderKind::OpenAiCompatible => {
+                            crate::responses_normalize::normalize_responses_assistant_items(
+                                &mut body,
+                            )
+                        }
+                        BackendProviderKind::ChatGptCodex => {
+                            if let Some(patched) = crate::provider_patches::patch_instructions_body(
+                                &serde_json::to_vec(&body).unwrap(),
+                            ) {
+                                body = serde_json::from_slice(&patched).unwrap();
+                            }
+                        }
+                        _ => {}
+                    }
+                    body
+                };
+                let openai = provider != BackendProviderKind::XaiGrokOAuth;
+                assert_responses_body(&dispatch_body(&request), &case, openai);
+                assert_responses_body(
+                    &config
+                        .provider_input_counter
+                        .project_body(&request)
+                        .unwrap(),
+                    &case,
+                    openai,
+                );
+                super::replace_core_chat_history(
+                    &mut request,
+                    &config,
+                    &history
+                        .iter()
+                        .cloned()
+                        .map(TaggedMessage::unassociated)
+                        .collect::<Vec<_>>(),
+                    &[TaggedMessage::unassociated(prompt.clone())],
+                )
+                .unwrap();
+                assert_responses_body(&dispatch_body(&request), &case, openai);
+                assert_eq!(original, messages(&case));
+            }
+        }
+    }
+
     async fn producing_capture(
         model: &AssemblyOnlyModel,
         config: &LoopConfig,

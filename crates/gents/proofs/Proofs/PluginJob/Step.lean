@@ -43,6 +43,8 @@ structure Row where
   latched : List String
   progress : Option String
   revision : Nat
+  /-- The guest's own state, stored verbatim and never read by the host. -/
+  guest : Option String
   deriving DecidableEq
 
 /-- The first pin wins: a stored pin is kept, whatever a later step carries. -/
@@ -76,7 +78,24 @@ def apply (w : StepWrite) (r : Row) : Row :=
   { job := applyJob w r.job
     latched := latch r.latched w.effects.interrupts
     progress := (writeProgress r.progress r.revision w.progress).1
-    revision := (writeProgress r.progress r.revision w.progress).2 }
+    revision := (writeProgress r.progress r.revision w.progress).2
+    guest := r.guest }
+
+/-- A step's guest state replaces the stored one when given and keeps it when
+absent; it is written beside the step's other records and read by no host rule. -/
+def applyGuest (incoming : Option String) (r : Row) : Row :=
+  { r with guest := incoming <|> r.guest }
+
+/-- The guest state is opaque: writing it changes no other field of the row, a
+step's effects never change it, and an absent write keeps the stored state. -/
+theorem guest_state_opaque (incoming : Option String) (w : StepWrite) (r : Row) :
+    (applyGuest incoming r).job = r.job ∧ (applyGuest incoming r).latched = r.latched ∧
+      (applyGuest incoming r).progress = r.progress ∧
+      (applyGuest incoming r).revision = r.revision ∧
+      (applyGuest incoming r).guest = (incoming <|> r.guest) ∧
+      (apply w r).guest = r.guest ∧ applyGuest none r = r := by
+  refine ⟨rfl, rfl, rfl, rfl, rfl, rfl, ?_⟩
+  simp [applyGuest]
 
 inductive PinWrite | commit | replay | conflict
   deriving DecidableEq, Repr

@@ -173,19 +173,7 @@ def selfConfigSelectionCasesJson : String :=
           ++ "\"requested\":" ++ optionalBoolJson requested ++ ","
           ++ "\"selected\":" ++ agentBool (selectedToolFlag requested existing) ++ "}"]
     return rows
-  let presentation := Id.run do
-    let mut rows : List String := []
-    for requested in bools do
-      for selfConfig in bools do
-        for packInstall in bools do
-          rows := rows ++ ["{\"requested\":" ++ agentBool requested ++ ","
-            ++ "\"self_config\":" ++ agentBool selfConfig ++ ","
-            ++ "\"pack_install\":" ++ agentBool packInstall ++ ","
-            ++ "\"presented\":" ++ agentBool (graphToolPresented requested selfConfig packInstall)
-            ++ "}"]
-    return rows
-  "{\"tool_flag_cases\":" ++ jsonArray toolFlags ++ ","
-    ++ "\"graph_presentation_cases\":" ++ jsonArray presentation
+  "{\"tool_flag_cases\":" ++ jsonArray toolFlags
     ++ ",\"job_guard_cases\":" ++ jsonArray (jobGuardRows.map jobGuardCaseJson) ++ "}"
 
 end Conformance.Contracts

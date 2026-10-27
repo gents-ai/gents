@@ -63,7 +63,7 @@ export function WhatWeWillSee() {
       <p className="eyebrow">What we’ll see</p>
       <p className="talk-lead">
         One seed write. Four document edges. No coordinator process.{" "}
-        <code>gents graph run code_review --field base=origin/main --watch</code> creates a <code>ReviewJob</code>; each
+        Writing a <code>ReviewJob</code> with <code>base=origin/main</code> starts the review; each
         create fires a trigger that materializes that stage’s Task on that stage’s Agent.
       </p>
       <ol className="edge-list">

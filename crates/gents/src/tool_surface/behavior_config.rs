@@ -211,7 +211,6 @@ impl AgentToolSurfaceConfig {
             file_limits,
             enable_meta_tools: _,
             enable_goal_tools: _,
-            enable_graph_tools,
             enable_goal_creation: _,
             allowed_mcp_service_ids,
             remote_tools,
@@ -384,7 +383,6 @@ impl AgentToolSurfaceConfig {
                 no_lockout: self_config_no_lockout,
                 preview: self_config_preview,
                 enable_pack_install,
-                enable_graph_tools,
                 process_ceiling: super::SelfConfigProcessCeiling {
                     file_mode: ceiling.file_tools(),
                     bash_mode: ceiling.bash(),

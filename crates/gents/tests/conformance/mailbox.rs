@@ -86,11 +86,10 @@ async fn rust_mailbox_dismiss_owner_drives_only_lean_legal_transitions() {
             title: "Conformance item".to_string(),
             summary: None,
             payload: None,
-            source_kind: MailboxSourceKind::Graph,
+            source_kind: MailboxSourceKind::Session,
             source_id: "wait-conformance".to_string(),
             session_id: None,
             request_id: None,
-            graph_run_id: None,
             cause_doc_id: None,
             expected_collection: None,
             parent_item_id: None,
@@ -130,5 +129,12 @@ async fn rust_mailbox_dismiss_owner_drives_only_lean_legal_transitions() {
         .await
         .expect("re-dismiss of a terminal item is an idempotent no-op");
     assert_eq!(repeated.status, "dismissed");
-    assert_eq!(repeated.resolved_at, dismissed.resolved_at);
+    let resolved_instant = |raw: Option<&str>| {
+        chrono::DateTime::parse_from_rfc3339(raw.expect("resolution timestamp"))
+            .expect("valid resolution timestamp")
+    };
+    assert_eq!(
+        resolved_instant(repeated.resolved_at.as_deref()),
+        resolved_instant(dismissed.resolved_at.as_deref())
+    );
 }

@@ -2,21 +2,17 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use serde_json::json;
 
 use crate::pack::{declared_paths, PackKind, PackManifest};
 use crate::pack_archive::{pack_dir, PackArchive};
 
 pub const PLACEHOLDER_OWNER: &str = "did:key:zPackCheckPlaceholderOwner";
-const TOPOLOGY_START: &str = "<!-- pack-topology:start -->";
-const TOPOLOGY_END: &str = "<!-- pack-topology:end -->";
 
 #[derive(Debug, Serialize)]
 pub struct CheckReport {
     pub dir: PathBuf,
     pub pack: Option<String>,
     pub digest: Option<String>,
-    pub graphs: Vec<String>,
     pub problems: Vec<String>,
     pub unverified: Vec<&'static str>,
 }
@@ -26,7 +22,6 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
         dir: dir.to_path_buf(),
         pack: None,
         digest: None,
-        graphs: Vec::new(),
         problems: Vec::new(),
         unverified: Vec::new(),
     };
@@ -68,21 +63,9 @@ pub async fn check_dir(dir: &Path) -> CheckReport {
     };
     report.digest = Some(archive.digest().to_owned());
 
-    if matches!(
-        manifest.metadata.kind,
-        PackKind::Documents | PackKind::Graph
-    ) {
+    if manifest.metadata.kind == PackKind::Documents {
         match load_config(&archive) {
             Ok(config) => {
-                if manifest.metadata.kind == PackKind::Graph {
-                    match crate::graph_package::check_graph_pack(&archive, PLACEHOLDER_OWNER) {
-                        Ok(plans) => {
-                            report.graphs = plans.into_iter().map(|plan| plan.graph_id).collect()
-                        }
-                        Err(error) => report.problems.push(format!("{error:#}")),
-                    }
-                    check_topology(dir, &config, &mut report.problems);
-                }
                 if config
                     .event_sources
                     .iter()
@@ -199,83 +182,12 @@ pub fn check_readme(dir: &Path, problems: &mut Vec<String>) {
     }
 }
 
-fn check_topology(
-    dir: &Path,
-    config: &crate::document_config::PackConfig,
-    problems: &mut Vec<String>,
-) {
-    let block = topology_block(config);
-    let current = read_pack_text_asset(dir, "README.md").unwrap_or_default();
-    if !current.contains(&block) {
-        problems.push(
-            "README.md topology diagram is stale or missing; run gents pack graph --write-readme"
-                .into(),
-        );
-    }
-}
-
 fn read_pack_text_asset(dir: &Path, path: &str) -> Result<String> {
     let mut file = crate::pack::open_pack_asset(dir, path)?;
     let mut text = String::new();
     std::io::Read::read_to_string(&mut file, &mut text)
         .with_context(|| format!("reading {path}"))?;
     Ok(text)
-}
-
-pub fn topology_block(config: &crate::document_config::PackConfig) -> String {
-    let mut labels: Vec<&str> = Vec::new();
-    fn id<'a>(labels: &mut Vec<&'a str>, label: &'a str) -> usize {
-        labels
-            .iter()
-            .position(|known| *known == label)
-            .unwrap_or_else(|| {
-                labels.push(label);
-                labels.len() - 1
-            })
-    }
-    let mut edges = Vec::new();
-    for graph in &config.graph_intents {
-        for node in &graph.nodes {
-            id(&mut labels, &node.node_id);
-        }
-        for edge in &graph.edges {
-            let from = id(&mut labels, &edge.from.node_id);
-            let to = id(&mut labels, &edge.to.node_id);
-            let label = format!("{} \u{2192} {}", edge.from.port, edge.to.port);
-            edges.push(format!("    n{from} -->|{}| n{to}", json!(label)));
-        }
-    }
-    let nodes = labels
-        .iter()
-        .enumerate()
-        .map(|(index, label)| format!("    n{index}[{}]", json!(label)))
-        .collect::<Vec<_>>();
-    format!(
-        "{TOPOLOGY_START}\n```mermaid\nflowchart LR\n{}\n{}\n```\n{TOPOLOGY_END}",
-        nodes.join("\n"),
-        edges.join("\n")
-    )
-}
-
-pub fn write_topology(dir: &Path) -> Result<()> {
-    let (bytes, _) = pack_dir(dir).with_context(|| format!("packing {}", dir.display()))?;
-    let block = topology_block(&load_config(&PackArchive::from_bytes(&bytes)?)?);
-    let readme = dir.join("README.md");
-    let text = read_pack_text_asset(dir, "README.md")?;
-    let updated = match (text.find(TOPOLOGY_START), text.find(TOPOLOGY_END)) {
-        (Some(start), Some(end)) if start < end => {
-            format!(
-                "{}{block}{}",
-                &text[..start],
-                &text[end + TOPOLOGY_END.len()..]
-            )
-        }
-        _ => format!(
-            "{}\n## Declared topology\n\nCompiled capability edges.\n\n{block}\n",
-            text.trim_end_matches('\n')
-        ),
-    };
-    std::fs::write(&readme, updated).with_context(|| format!("writing {}", readme.display()))
 }
 
 /// The static lint every file-produced UX plugin must pass: what the
@@ -318,21 +230,6 @@ mod tests {
         .unwrap();
     }
 
-    fn scaffold_graph(dir: &Path, name: &str) {
-        super::super::scaffold::scaffold(
-            dir,
-            name,
-            &super::super::scaffold::ScaffoldInput {
-                kind: None,
-                namespace: "acme".into(),
-                template: Some(super::super::template::Template::Graph),
-                language: None,
-                ux: false,
-            },
-        )
-        .unwrap();
-    }
-
     #[tokio::test]
     async fn a_scaffolded_minimal_pack_checks_clean_with_a_digest() {
         let root = tempfile::tempdir().unwrap();
@@ -342,7 +239,6 @@ mod tests {
         assert!(report.problems.is_empty(), "{:#?}", report.problems);
         assert!(report.unverified.is_empty(), "{:#?}", report.unverified);
         assert!(report.digest.is_some());
-        assert_eq!(report.graphs, Vec::<String>::new());
     }
 
     #[cfg(unix)]
@@ -364,37 +260,6 @@ mod tests {
         assert!(
             crate::pack_archive::pack_dir(&dir).is_err(),
             "pack writer must reject the same external manifest link"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_scaffolded_graph_pack_checks_clean_and_names_its_graph() {
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("review_toolkit");
-        scaffold_graph(&dir, "review_toolkit");
-        let report = check_dir(&dir).await;
-        assert!(report.problems.is_empty(), "{:#?}", report.problems);
-        assert_eq!(report.graphs, vec!["review-toolkit".to_owned()]);
-    }
-
-    #[tokio::test]
-    async fn a_shipped_plan_that_differs_from_compilation_is_refused() {
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("review_toolkit");
-        scaffold_graph(&dir, "review_toolkit");
-        let plan_path = dir.join("graphs/review_toolkit.plan.json");
-        let mut plan: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&plan_path).unwrap()).unwrap();
-        plan["digest"] = "sha256:0".into();
-        std::fs::write(&plan_path, serde_json::to_vec_pretty(&plan).unwrap()).unwrap();
-        let report = check_dir(&dir).await;
-        assert!(
-            report
-                .problems
-                .iter()
-                .any(|problem| problem.contains("rebuild the pack")),
-            "{:#?}",
-            report.problems
         );
     }
 
@@ -451,53 +316,6 @@ mod tests {
             "{:#?}",
             report.unverified
         );
-    }
-
-    #[tokio::test]
-    async fn a_missing_readme_is_reported_and_topology_rewrite_fixes_a_graph_pack() {
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("review_toolkit");
-        scaffold_graph(&dir, "review_toolkit");
-        let readme = dir.join("README.md");
-        let text = std::fs::read_to_string(&readme).unwrap();
-        let start = text.find(TOPOLOGY_START).unwrap();
-        std::fs::write(&readme, &text[..start]).unwrap();
-        assert!(check_dir(&dir)
-            .await
-            .problems
-            .iter()
-            .any(|problem| problem.contains("topology diagram is stale")));
-        write_topology(&dir).unwrap();
-        let report = check_dir(&dir).await;
-        assert!(report.problems.is_empty(), "{:#?}", report.problems);
-    }
-
-    #[test]
-    fn the_topology_block_renders_the_scaffolded_graph() {
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("review_toolkit");
-        scaffold_graph(&dir, "review_toolkit");
-        let (bytes, _) = pack_dir(&dir).unwrap();
-        let mut config = load_config(&PackArchive::from_bytes(&bytes).unwrap()).unwrap();
-        let block = topology_block(&config);
-        assert!(block.contains(TOPOLOGY_START));
-        assert!(block.contains("flowchart LR"));
-        assert!(block.contains("n0[\"worker\"]"));
-        assert!(!block.contains(" -->|"));
-        let graph = &mut config.graph_intents[0];
-        let mut next = graph.nodes[0].clone();
-        next.node_id = "reviewer".into();
-        graph.nodes.push(next);
-        graph.edges.push(
-            serde_json::from_value(json!({
-                "from": {"node_id": "worker", "port": "result"},
-                "to": {"node_id": "reviewer", "port": "job"},
-            }))
-            .unwrap(),
-        );
-        let block = topology_block(&config);
-        assert!(block.contains("n1[\"reviewer\"]"));
-        assert!(block.contains("n0 -->|\"result → job\"| n1"));
     }
 
     #[tokio::test]

@@ -2,7 +2,12 @@ use std::env;
 use std::path::Path;
 use std::process::Command;
 
+/// Windows' initial thread does not inherit the runtime's worker-stack size;
+/// CLI dispatch polls its top-level future on that thread.
 fn main() {
+    if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        println!("cargo:rustc-link-arg-bin=gents=/STACK:16777216");
+    }
     println!("cargo:rerun-if-env-changed=GENTS_BUILD_GIT_SHA");
     println!("cargo:rerun-if-env-changed=GENTS_BUILD_GIT_REF");
     println!("cargo:rerun-if-env-changed=GENTS_BUILD_GIT_TAG");

@@ -2,6 +2,7 @@ import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { describe, expect, it } from "vitest";
 import {
   actionEntries,
+  actionKind,
   actionStatus,
   actionTitle,
   runningAction,
@@ -54,6 +55,21 @@ function pair(): RenderedToolCallView[] {
 }
 
 describe("action presentation", () => {
+  it.each([null, "bash_unrestricted"])(
+    "classifies a reconstructed command with display text %s from its native kind",
+    (command) => {
+      const tool = pair()[1]!;
+      tool.reconstruction = { state: "ready" };
+      if (tool.presentation.kind !== "command")
+        throw new Error("command fixture");
+      tool.presentation.command = command;
+      expect(actionKind({ tool })).toBe("command");
+    },
+  );
+
+  it("does not treat an unverified command placeholder as reconstructed output", () => {
+    expect(actionKind({ tool: pair()[1]! })).toBeNull();
+  });
   it.each([
     ["error", "userCancelled", "cancelled"],
     ["error", "interrupted", "cancelled"],
@@ -141,4 +157,23 @@ describe("action presentation", () => {
       expect(actionTitle({ tool })).toBe("Shell command");
     },
   );
+});
+
+it.each([
+  ["get_goal", "Checking goal"],
+  ["update_goal", "Updating goal"],
+  ["create_goal", "Setting goal"],
+  ["gents.get_goal", "Checking goal"],
+])("uses readable active text for %s", (toolName, expected) => {
+  const tool = {
+    ...pair()[1]!,
+    toolName,
+    presentation: {
+      kind: "generic" as const,
+      summary: toolName,
+      input: null,
+      output: null,
+    },
+  };
+  expect(runningAction({ tool })).toBe(expected);
 });

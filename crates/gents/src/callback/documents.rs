@@ -334,7 +334,9 @@ pub async fn list_enabled_bindings(
         );
         validate_callback_binding(binding)?;
     }
-    bindings.retain(|binding| binding.enabled);
+    bindings.retain(|binding| {
+        binding.enabled && !crate::agent::document_view::is_retired_reserved_id(&binding.binding_id)
+    });
     bindings.sort_by(|a, b| a.binding_id.cmp(&b.binding_id));
     Ok(bindings)
 }

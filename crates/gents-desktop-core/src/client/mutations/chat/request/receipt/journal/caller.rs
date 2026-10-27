@@ -35,6 +35,7 @@ pub(crate) async fn lookup(
         Some((_, Entry::Uncorrelated(_))) => {
             anyhow::bail!("request identity has no caller binding")
         }
+        Some((_, Entry::Goal(_))) => anyhow::bail!("request identity belongs to a Goal command"),
     }
 }
 
@@ -70,6 +71,7 @@ pub(crate) async fn reserve(node: &Arc<EmbeddedNode>, proposal: &Record) -> Resu
             let records = match existing {
                 Some((_, Entry::Caller(record))) => vec![*record],
                 Some((_, Entry::Uncorrelated(_))) => anyhow::bail!("request identity has no caller binding"),
+                Some((_, Entry::Goal(_))) => anyhow::bail!("request identity belongs to a Goal command"),
                 None => Vec::new(),
             };
             let (staged, decision) = correlated::prepare(&records, proposal, true);
@@ -88,7 +90,7 @@ pub(crate) async fn reserve(node: &Arc<EmbeddedNode>, proposal: &Record) -> Resu
 
 fn encode(record: &Record) -> Result<String> {
     Ok(escape_graphql_string(&serde_json::to_string(
-        &Envelope::Caller(record.clone()),
+        &Envelope::Caller(Box::new(record.clone())),
     )?))
 }
 

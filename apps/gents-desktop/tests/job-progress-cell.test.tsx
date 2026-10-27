@@ -1,11 +1,11 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import type { JobProgress } from "@source-inc/gents-desktop-client/generated/JobProgress";
 
 import { JobProgressCell } from "../src/ui/screens/JobProgressCell";
-import { renderIn, testApp } from "./app-fixture";
+import { node, renderIn, testApp } from "./app-fixture";
 
 const progress = (over: Partial<JobProgress> = {}): JobProgress => ({
   title: "review the diff",
@@ -41,8 +41,16 @@ const row = (over: Partial<RenderedToolCallView> = {}): RenderedToolCallView =>
     ...over,
   }) as unknown as RenderedToolCallView;
 
-function mount(tool: RenderedToolCallView, api: object = {}) {
-  const app = testApp({ api, selection: { sessionId: "session-1" } });
+function mount(
+  tool: RenderedToolCallView,
+  api: object = {},
+  owner = { nodeDid: "did:test:row-owner", source: "local" },
+) {
+  const app = testApp({
+    api,
+    deployments: [node(owner)],
+    selection: { nodeDid: owner.nodeDid, sessionId: "session-1" },
+  });
   renderIn(
     app,
     <>
@@ -164,5 +172,155 @@ describe("JobProgressCell", () => {
     expect(screen.getByRole("button", { name: "Pause" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(jobControl).not.toHaveBeenCalled();
+  });
+
+  it("offers Promote only on a completed dynamic run", () => {
+    const { unmount } = renderIn(
+      testApp({ selection: { sessionId: "session-1" } }),
+      <JobProgressCell tool={row({ jobOrigin: "dynamic" })} />,
+    );
+    expect(screen.queryByRole("button", { name: "Promote" })).toBeNull();
+    unmount();
+    for (const jobState of ["failed", "cancelled", "timed_out"] as const) {
+      const notCompleted = renderIn(
+        testApp({ selection: { sessionId: "session-1" } }),
+        <JobProgressCell tool={row({ jobState, jobOrigin: "dynamic" })} />,
+      );
+      expect(screen.queryByRole("button", { name: "Promote" })).toBeNull();
+      notCompleted.unmount();
+    }
+    const ended = renderIn(
+      testApp({ selection: { sessionId: "session-1" } }),
+      <JobProgressCell tool={row({ jobState: "completed", jobOrigin: "installed" })} />,
+    );
+    expect(screen.queryByRole("button", { name: "Promote" })).toBeNull();
+    ended.unmount();
+    const getDynamicWorkflow = vi.fn().mockReturnValue(new Promise(() => {}));
+    mount(row({ jobState: "completed", jobOrigin: "dynamic" }), { getDynamicWorkflow });
+    fireEvent.click(screen.getByRole("button", { name: "Promote" }));
+    expect(getDynamicWorkflow).toHaveBeenCalledWith("session-1:call-1");
+  });
+
+  it("drops Promote once the run's script has been promoted", async () => {
+    const getDynamicWorkflow = vi
+      .fn()
+      .mockResolvedValue({ promoted_as: ["gents/rome"] });
+    mount(row({ jobState: "completed", jobOrigin: "dynamic" }), { getDynamicWorkflow });
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Promote" })).toBeNull(),
+    );
+    expect(getDynamicWorkflow).toHaveBeenCalledWith("session-1:call-1");
+  });
+
+  it("only looks up/promotes a run when the selected node owns the row and is local", async () => {
+    const getDynamicWorkflow = vi.fn().mockResolvedValue({ promoted_as: [] });
+    const local = renderIn(
+      testApp({
+        api: { getDynamicWorkflow },
+        deployments: [node({ nodeDid: "did:test:row-owner", source: "local" })],
+        selection: { nodeDid: "did:test:row-owner", sessionId: "session-1" },
+      }),
+      <JobProgressCell tool={row({ jobState: "completed", jobOrigin: "dynamic" })} />,
+    );
+    expect(await screen.findByRole("button", { name: "Promote" })).toBeTruthy();
+    expect(getDynamicWorkflow).toHaveBeenCalledWith("session-1:call-1");
+    local.unmount();
+
+    const remoteLookup = vi.fn();
+    const remote = renderIn(
+      testApp({
+        api: { getDynamicWorkflow: remoteLookup },
+        deployments: [node({ nodeDid: "did:test:remote", source: "enrollment" })],
+        selection: { nodeDid: "did:test:remote", sessionId: "session-1" },
+      }),
+      <JobProgressCell
+        tool={row({
+          nodeDid: "did:test:remote",
+          jobState: "completed",
+          jobOrigin: "dynamic",
+        })}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Promote" })).toBeNull();
+    expect(remoteLookup).not.toHaveBeenCalled();
+    remote.unmount();
+  });
+
+  it("closes an open local promotion dialog when the selected owner changes", async () => {
+    const getDynamicWorkflow = vi.fn().mockReturnValue(new Promise(() => {}));
+    const localNode = node({ nodeDid: "did:test:row-owner", source: "local" });
+    const remoteNode = node({ nodeDid: "did:test:remote", source: "enrollment" });
+    const app = testApp({
+      api: { getDynamicWorkflow },
+      deployments: [localNode, remoteNode],
+      selection: { nodeDid: localNode.nodeDid, sessionId: "session-1" },
+    });
+    const view = renderIn(
+      app,
+      <JobProgressCell tool={row({ jobState: "completed", jobOrigin: "dynamic" })} />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Promote" }));
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(getDynamicWorkflow).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      app.stores.selection.setState({ nodeDid: remoteNode.nodeDid });
+      view.rerender(
+        <JobProgressCell
+          tool={row({
+            nodeDid: remoteNode.nodeDid,
+            jobState: "completed",
+            jobOrigin: "dynamic",
+          })}
+        />,
+      );
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Promote" })).toBeNull();
+    expect(getDynamicWorkflow).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not apply an older lookup after the row selector changes", async () => {
+    let finishOld!: (value: { promoted_as: string[] }) => void;
+    const getDynamicWorkflow = vi.fn((selector: string) =>
+      selector === "session-1:call-old"
+        ? new Promise<{ promoted_as: string[] }>((resolve) => {
+            finishOld = resolve;
+          })
+        : Promise.resolve({ promoted_as: [] }),
+    );
+    const app = testApp({
+      api: { getDynamicWorkflow },
+      deployments: [node({ nodeDid: "did:test:row-owner", source: "local" })],
+      selection: { nodeDid: "did:test:row-owner", sessionId: "session-1" },
+    });
+    const view = renderIn(
+      app,
+      <JobProgressCell
+        tool={row({
+          toolCallId: "call-old",
+          jobState: "completed",
+          jobOrigin: "dynamic",
+        })}
+      />,
+    );
+    await waitFor(() =>
+      expect(getDynamicWorkflow).toHaveBeenCalledWith("session-1:call-old"),
+    );
+    view.rerender(
+      <JobProgressCell
+        tool={row({
+          toolCallId: "call-new",
+          jobState: "completed",
+          jobOrigin: "dynamic",
+        })}
+      />,
+    );
+    await waitFor(() =>
+      expect(getDynamicWorkflow).toHaveBeenCalledWith("session-1:call-new"),
+    );
+    expect(await screen.findByRole("button", { name: "Promote" })).toBeTruthy();
+    await act(async () => finishOld({ promoted_as: ["gents/old"] }));
+    expect(screen.getByRole("button", { name: "Promote" })).toBeTruthy();
   });
 });

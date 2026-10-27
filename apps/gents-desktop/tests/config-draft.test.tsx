@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useDraft } from "../src/ui/screens/agent/draft";
 import { DraftActions, TextRow } from "../src/ui/screens/agent/editors";
@@ -31,6 +31,47 @@ function Harness({
 }
 
 describe("configuration drafts", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("keeps Save in place, and floats it over the form only while there are edits", async () => {
+    let seen: (ratio: number) => void = () => {};
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(callback: IntersectionObserverCallback) {
+          seen = (intersectionRatio) =>
+            callback(
+              [{ intersectionRatio } as IntersectionObserverEntry],
+              this as never,
+            );
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    const user = userEvent.setup();
+    render(<Harness persist={vi.fn(async () => undefined)} />);
+    const bar = () => screen.getByTestId("draft-actions");
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(bar()).not.toHaveClass("sticky");
+
+    await user.click(screen.getByRole("button", { name: "Edit text" }));
+    expect(bar()).toHaveClass("sticky");
+    expect(bar()).not.toHaveAttribute("data-floating");
+    act(() => seen(0.5));
+    expect(bar()).toHaveAttribute("data-floating");
+    act(() => seen(1));
+    expect(bar()).not.toHaveAttribute("data-floating");
+
+    act(() => seen(0.5));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(bar()).toHaveClass("sticky", "animate-out");
+    fireEvent.animationEnd(bar());
+    expect(bar()).not.toHaveClass("sticky");
+    expect(bar()).not.toHaveAttribute("data-floating");
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
   it("does not persist text or choices until Save and Cancel restores the baseline", async () => {
     const user = userEvent.setup();
     const persist = vi.fn(async () => undefined);

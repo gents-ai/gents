@@ -118,7 +118,6 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
         };
         let install_args = PackInstallArgs {
             package: format!("{coordinate}@{latest}"),
-            bindings: args.bindings.clone(),
             inference_slots: args.inference_slots.clone(),
             preview: false,
             scope: args.scope.clone(),
@@ -231,7 +230,6 @@ mod tests {
         .await;
         crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
             package: "demo_pack".to_owned(),
-            bindings: None,
             inference_slots: Vec::new(),
             preview: false,
             scope: scope.clone(),
@@ -256,7 +254,6 @@ mod tests {
         .await;
         let report = crate::request_helpers::capture_report(update(PackUpdateArgs {
             package: None,
-            bindings: None,
             inference_slots: Vec::new(),
             scope,
             registry: Some(registry_b),
@@ -310,7 +307,6 @@ mod tests {
                 .to_owned();
             crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
                 package,
-                bindings: None,
                 inference_slots: vec![slot.clone()],
                 preview: false,
                 scope: scope.clone(),
@@ -356,7 +352,6 @@ mod tests {
         let fixture = super::super::test_support::fixture_dir("assets_fixture");
         crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
             package: fixture.to_str().unwrap().to_owned(),
-            bindings: None,
             inference_slots: Vec::new(),
             preview: false,
             scope: scope.clone(),

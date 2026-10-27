@@ -16,7 +16,7 @@ export type Trigger = { node_did: string, trigger_id: string, display_name?: str
  */
 session_id_template?: string | null, enabled?: boolean | null,
 /**
- * Absent defaults to Parallel, matching the graph-edge default.
+ * Absent defaults to Parallel.
  */
 concurrency?: ConcurrencyMode | null, created_at?: string | null, updated_at?: string | null,
 /**

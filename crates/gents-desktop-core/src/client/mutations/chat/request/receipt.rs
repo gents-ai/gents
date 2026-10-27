@@ -19,6 +19,7 @@ use super::SubmittedRequest;
 
 pub(crate) mod correlated;
 pub(crate) mod delivery;
+pub(crate) mod goal_delivery;
 pub(crate) mod journal;
 
 /// Confirmed rejection of the original caller-bound signed preparation.

@@ -218,7 +218,7 @@ impl PackStore {
             unpacked.display(),
             header.digest
         );
-        let manifest: crate::pack::PackManifest = serde_json::from_slice(
+        let manifest = crate::pack::PackManifest::from_slice(
             &std::fs::read(unpacked.join("manifest.json")).context("reading manifest.json")?,
         )
         .context("the unpacked manifest is not valid")?;
@@ -232,7 +232,7 @@ impl PackStore {
                 "the unpacked pack's contents no longer hash to their digest; unpacking the stored archive again"
             );
             self.unpack(digest, &unpacked)?;
-            let reread: crate::pack::PackManifest = serde_json::from_slice(
+            let reread = crate::pack::PackManifest::from_slice(
                 &std::fs::read(unpacked.join("manifest.json")).context("reading manifest.json")?,
             )
             .context("the unpacked manifest is not valid")?;

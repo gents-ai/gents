@@ -647,6 +647,16 @@ def goalReadinessGateCases : List GoalReadinessGateCase :=
       settled := true, cause := .agentUnavailable, input := activeInput .failed 1 }
   , { name := "stale_readiness_still_decides_an_executed_attempt", observation := .ready false,
       settled := true, cause := .attempt, input := activeInput .failed 0 }
+  , { name := "completed_goal_control_failure_is_charged", observation := .ready true,
+      settled := true, cause := .goalControlUnavailable, input := activeInput .completed 0 }
+  , { name := "repeated_goal_control_failure_uses_second_retry", observation := .ready true,
+      settled := true, cause := .goalControlUnavailable, input := activeInput .completed 1 }
+  , { name := "generated_text_cannot_reset_goal_control_failures", observation := .ready true,
+      settled := true, cause := .goalControlUnavailable, input := activeInput .completed 2 }
+  , { name := "exhausted_goal_control_failure_pauses_even_without_readiness", observation := .unknown,
+      settled := true, cause := .goalControlUnavailable, input := activeInput .completed 2 }
+  , { name := "goal_control_failure_does_not_duplicate_a_child", observation := .ready true,
+      settled := true, cause := .goalControlUnavailable, input := activeInput .completed 0 (child := true) }
   , { name := "busy_session_never_continues", observation := .unavailable,
       settled := true, cause := .attempt, input := activeInput .completed (idle := false) }
   ]
@@ -666,6 +676,7 @@ def readinessName : Readiness → String
 def readinessCauseName : Cause → String
   | .attempt => "attempt"
   | .agentUnavailable => "agent_unavailable"
+  | .goalControlUnavailable => "goal_control_unavailable"
 
 def gatedName : Gated → String
   | .decided decision => decisionName decision
