@@ -3118,6 +3118,32 @@ Denies the desktop_task_save command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-tool-file-changes`
+
+</td>
+<td>
+
+Enables the desktop_tool_file_changes command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-tool-file-changes`
+
+</td>
+<td>
+
+Denies the desktop_tool_file_changes command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-tool-service-delete`
 
 </td>

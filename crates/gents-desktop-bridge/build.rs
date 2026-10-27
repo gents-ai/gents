@@ -57,6 +57,7 @@ const COMMANDS: &[&str] = &[
     "desktop_session_hydration_retry",
     "desktop_session_live_delta",
     "desktop_session_rows",
+    "desktop_tool_file_changes",
     "desktop_request_timeline",
     "desktop_tool_surface_explain",
     "desktop_chat_send",

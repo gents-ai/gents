@@ -1,4 +1,5 @@
 import type { RequestAttachment } from "../generated/RequestAttachment.js";
+import type { ToolFileChanges } from "../generated/ToolFileChanges.js";
 import type { ProviderRecoveryRequest } from "../generated/ProviderRecoveryRequest.js";
 import type { ProviderRecoveryPlan } from "../generated/ProviderRecoveryPlan.js";
 import type { ProviderRecoveryApply } from "../generated/ProviderRecoveryApply.js";
@@ -223,6 +224,14 @@ export type DesktopApiAdapter = {
     window: SessionRowsWindow;
     limit?: number;
   }) => Promise<SessionRowsView | null>;
+  /** The file versions one native file tool call recorded before and after
+   *  its edit; null when the call recorded none or the client is not running. */
+  fetchToolFileChanges?: (request: {
+    nodeDid: string;
+    sessionId: string;
+    requestId: string;
+    toolCallDocId: string;
+  }) => Promise<ToolFileChanges | null>;
   fetchSessionLiveDelta?: (request: {
     sessionId: string;
     nodeDid?: string | null;
