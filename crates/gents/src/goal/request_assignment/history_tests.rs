@@ -205,11 +205,13 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
         let first_document = case["versions"][0]["document"].as_u64().unwrap();
         let doc = crate::graphql::escape_graphql_string(&documents[&first_document]);
         for index in 0..65 {
+            let objective =
+                crate::graphql::escape_graphql_string(&format!("History observation {index}"));
             access
                 .write(
                     "test.goal_history_many_revisions",
                     &format!(
-                        r#"mutation {{ update_Goal(docID: "{doc}", input: {{objective: "History observation {index}"}}) {{_docID}} }}"#
+                        r#"mutation {{ update_Goal(docID: "{doc}", input: {{objective: "{objective}"}}) {{_docID}} }}"#
                     ),
                 )
                 .await
