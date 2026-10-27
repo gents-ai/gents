@@ -12,7 +12,7 @@ def allHandlings : List Handling :=
   [.ack, .startRequest, .writeDocument]
 
 def allSourceKinds : List SourceKind :=
-  [.graph, .session, .agent, .runtime, .tool]
+  [.session, .agent, .runtime, .tool]
 
 def statusVocabulary : List String :=
   allStatuses.map Status.toDefraDB

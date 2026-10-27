@@ -808,7 +808,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_graph_stage_writes_only_where_the_operator_allowed_writing() {
+    async fn a_plugin_stage_writes_only_where_the_operator_allowed_writing() {
         let writer = || {
             crate::plugin::tests::executor::installed_plugin(
                 &crate::plugin::tests::create_file_wat("out.json"),

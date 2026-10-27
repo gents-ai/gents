@@ -32,11 +32,10 @@ pub use installation::{
     InstalledPackPlugin, PackIdentity, PreparedDependency, PreparedDocumentPackInstall,
     RemoveReport, Retained,
 };
-pub(crate) use installation::{observe_graph_install_in_txn, record_graph_install_in_txn};
 pub use loader::{
     decode_pack_config, ensure_pack_leaves_default_unselected, load_pack_config, pin_pack_plugins,
 };
-pub(crate) use provenance::{pack_artifact_document_digest, prepare_pack_plan_in_txn};
+pub(crate) use provenance::pack_artifact_document_digest;
 pub use provenance::{pack_document_digests, pack_origin_from_tags, pack_origin_tag};
 
 #[path = "pack_asset_path.rs"]
@@ -45,7 +44,6 @@ mod asset_path;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackKind {
-    Graph,
     Documents,
     Assets,
     Plugins,
@@ -819,8 +817,6 @@ pub struct PackManifest {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub schemas: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub compiler_version: Option<String>,
     #[serde(
         default,
         deserialize_with = "crate::document_config::deserialize_default_on_null",
@@ -944,7 +940,7 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
     );
 
     // Only a pack that installs as a home file record (assets, plugins) is
-    // scanned for UX plugins; a documents or graph pack installs into a
+    // scanned for UX plugins; a documents pack installs into a
     // node, where its ux[] would never be listed.
     anyhow::ensure!(
         manifest.metadata.ux.is_empty()
@@ -1012,7 +1008,6 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
     }
     anyhow::ensure!(
         manifest.metadata.kind == PackKind::Documents
-            || manifest.metadata.kind == PackKind::Graph
             || manifest
                 .metadata
                 .inference_slots
@@ -1052,11 +1047,11 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
     }
 
     match manifest.metadata.kind {
-        PackKind::Documents | PackKind::Graph => {
+        PackKind::Documents => {
             let config = manifest
                 .config
                 .as_deref()
-                .context("document/graph pack requires a config asset")?;
+                .context("document pack requires a config asset")?;
             anyhow::ensure!(
                 manifest.metadata.assets.iter().any(|asset| asset == config),
                 "config asset must be declared"
@@ -1080,17 +1075,6 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
             "schema asset must be declared: {schema}"
         );
         anyhow::ensure!(schemas.insert(schema), "duplicate schema asset: {schema}");
-    }
-    if manifest.metadata.kind == PackKind::Graph {
-        anyhow::ensure!(
-            manifest.compiler_version.as_deref() == Some(crate::graph_pipeline::COMPILER_VERSION),
-            "graph pack compiler version does not match runtime"
-        );
-    } else {
-        anyhow::ensure!(
-            manifest.compiler_version.is_none(),
-            "non-graph pack cannot select a graph compiler"
-        );
     }
     Ok(())
 }

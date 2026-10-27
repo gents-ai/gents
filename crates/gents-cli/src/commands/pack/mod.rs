@@ -603,7 +603,6 @@ pub(crate) async fn install_documents_pack(
             .collect();
         let dependency_args = PackInstallArgs {
             package: dependency.manifest().name.clone(),
-            bindings: None,
             inference_slots: dependency_slots,
             preview: false,
             scope: args.scope.clone(),
@@ -617,7 +616,6 @@ pub(crate) async fn install_documents_pack(
             explicit: false,
         };
         match dependency.manifest().metadata.kind {
-            PackKind::Graph => anyhow::bail!("graph packs are not supported"),
             // A dependency installs exactly as `gents pack install <dep>`
             // would; the boxed future breaks the async recursion.
             PackKind::Documents => {
@@ -832,12 +830,7 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
         &[crate::cli::output_format::OutputFormat::Json],
     )?;
     match pack.manifest().metadata.kind {
-        PackKind::Graph => anyhow::bail!("graph packs are not supported"),
         PackKind::Documents => {
-            anyhow::ensure!(
-                args.bindings.is_none(),
-                "document packs use --inference-slot; --bindings is a graph installation option"
-            );
             let (access, _) = crate::resolve_config_access(
                 args.scope.home.as_deref(),
                 args.scope.graphql.as_deref(),
@@ -848,11 +841,10 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
         PackKind::Assets | PackKind::Plugins => {
             let requested = parse_inference_slot_bindings(&args.inference_slots)?;
             anyhow::ensure!(
-                args.bindings.is_none()
-                    && args.scope.graphql.is_none()
+                args.scope.graphql.is_none()
                     && (args.scope.node_did.is_none() || !requested.is_empty())
                     && !args.force_rebind_concrete_did,
-                "asset and plugins packs install locally with --home; identity and graph binding flags do not apply"
+                "asset and plugins packs install locally with --home; identity flags do not apply"
             );
             if args.preview {
                 return crate::print_json(&json!({
@@ -1114,7 +1106,6 @@ mod tests {
     ) -> PackInstallArgs {
         PackInstallArgs {
             package: spec.to_str().unwrap().to_owned(),
-            bindings: None,
             inference_slots,
             preview: false,
             scope: ScopeArgs {

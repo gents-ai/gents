@@ -691,22 +691,6 @@ pub(crate) fn isolated_workspace_record_query(workspace_id: &str, node_did: &str
     )
 }
 
-pub(crate) fn decode_isolated_workspace_record_response(
-    response: &serde_json::Value,
-) -> Result<Option<IsolatedWorkspaceRecord>> {
-    let rows = response
-        .pointer("/data/IsolatedWorkspace")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow!("workspace observation omitted IsolatedWorkspace"))?;
-    anyhow::ensure!(rows.len() <= 1, "ambiguous node-scoped workspace");
-    rows.first()
-        .cloned()
-        .map(serde_json::from_value::<IsolatedWorkspaceRow>)
-        .transpose()?
-        .map(decode_isolated_workspace_record)
-        .transpose()
-}
-
 fn decode_isolated_workspace_record(row: IsolatedWorkspaceRow) -> Result<IsolatedWorkspaceRecord> {
     let workspace_id = optional_id(row.workspace_id.as_deref())
         .ok_or_else(|| anyhow!("IsolatedWorkspace is missing workspace_id"))?

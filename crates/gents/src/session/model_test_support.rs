@@ -24,7 +24,6 @@ pub(super) fn model_session(value: &serde_json::Value) -> gents_protocol::sessio
     if let Some(object) = provenance.as_object_mut() {
         for name in [
             "task_id",
-            "graph_run_id",
             "parent_request_doc_id",
             "opening_request_doc_id",
         ] {

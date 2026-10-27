@@ -48,7 +48,7 @@ const HELP_INDEX: &[(&str, &str)] = &[
 ];
 
 const HELP_GRAMMAR: &str = "Documents: list, get, create, update, delete. target_id names the document; set writes fields, clear removes optional fields. list takes options.limit/cursor. create requires a new ID; update requires an existing ID. agent create takes options instead of set and allocates its ID and Context/Tools.
-Preview: [RESOURCE,preview,VERB]. Delete needs options.digest from preview. batch takes options.operations: ordered config calls; each commits separately, stopping on error. Packs use installation workflows. Collections and migrations use the separate schema tool; graph authoring is unavailable.";
+Preview: [RESOURCE,preview,VERB]. Delete needs options.digest from preview. batch takes options.operations: ordered config calls; each commits separately, stopping on error. Packs use installation workflows. Collections and migrations use the separate schema tool.";
 
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]

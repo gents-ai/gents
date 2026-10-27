@@ -17,8 +17,7 @@ namespace PluginJob
 
 open ToolPolicy
 
-/-- The pack kinds that write an install record. Graph-kind installs and graph
-dependencies write no record, so there is no graph constructor. -/
+/-- The pack kinds that write an install record. -/
 inductive PackKind | documents | assets | plugins
   deriving DecidableEq, Repr
 

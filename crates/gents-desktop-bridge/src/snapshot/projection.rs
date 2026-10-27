@@ -442,7 +442,6 @@ mod tests {
                         source_id: "request-1".into(),
                         session_id: Some("sess_1".into()),
                         request_id: Some("request-1".into()),
-                        graph_run_id: None,
                         cause_doc_id: None,
                         target_node_did: "did:test:local".into(),
                         target_agent_id: "default".into(),

@@ -42,8 +42,6 @@ pub mod external_adapter_capture;
 pub mod file_inventory;
 pub mod file_lock;
 pub mod goal;
-pub mod graph_package;
-pub mod graph_pipeline;
 pub mod graphql;
 pub mod health_checker;
 pub mod home;
@@ -307,64 +305,6 @@ pub(crate) mod test_support {
             home.path().to_path_buf(),
         )));
         (home, plugins)
-    }
-
-    pub(crate) fn load_test_graph_package(
-        name: &str,
-        options: &crate::graph_package::GraphPackageInstallBindings,
-    ) -> crate::graph_package::LoadedGraphPackage {
-        load_test_graph_package_with_plugin_output(name, options, &serde_json::json!({}))
-    }
-
-    pub(crate) fn load_test_graph_package_with_plugin_output(
-        name: &str,
-        options: &crate::graph_package::GraphPackageInstallBindings,
-        plugin_output: &serde_json::Value,
-    ) -> crate::graph_package::LoadedGraphPackage {
-        let scope = crate::pack::PackInstallOptions {
-            node_did: options.node_did.clone(),
-        };
-        let (_guard, dir) = fixture_pack_copy(name, plugin_output);
-        let (bytes, _) = crate::pack_archive::pack_dir(&dir)
-            .unwrap_or_else(|error| panic!("packing fixture {name:?}: {error:#}"));
-        let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
-        crate::graph_package::load_archive_graph_package_with_environment(
-            &archive,
-            &scope,
-            &|name| (name == "GENTS_REVIEW_MODEL").then(|| "test-model".to_owned()),
-        )
-        .unwrap()
-    }
-
-    pub(crate) async fn install_test_graph_package(
-        access: &crate::ConfigAccess,
-        actor: &str,
-        name: &str,
-        options: &crate::graph_package::GraphPackageInstallBindings,
-    ) -> anyhow::Result<crate::graph_package::GraphPackageInstallReceipt> {
-        install_test_graph_package_explicit(access, actor, name, options, true).await
-    }
-
-    pub(crate) async fn install_test_graph_package_explicit(
-        access: &crate::ConfigAccess,
-        actor: &str,
-        name: &str,
-        options: &crate::graph_package::GraphPackageInstallBindings,
-        explicit: bool,
-    ) -> anyhow::Result<crate::graph_package::GraphPackageInstallReceipt> {
-        let package = load_test_graph_package(name, options);
-        crate::graph_package::install_loaded_graph_package(
-            access,
-            actor,
-            &package,
-            options,
-            None,
-            &crate::graph_package::GraphInstallRecord {
-                plugins: Vec::new(),
-                explicit,
-            },
-        )
-        .await
     }
 
     pub(crate) fn first_content<T>(items: &[T]) -> &T {

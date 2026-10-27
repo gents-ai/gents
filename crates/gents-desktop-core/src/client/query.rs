@@ -138,7 +138,7 @@ pub(super) const DATASTORE_TOOL_SURFACE_FIELDS: &str =
     "surface_id node_did display_name enabled entries created_at tags";
 pub(super) const CHAIN_KEY_BINDING_FIELDS: &str =
     "binding_id node_did address key_backend attestation created_at revoked_at tags";
-pub(super) const MAILBOX_ITEM_FIELDS: &str = "_docID item_key requester_did node_did status kind action title summary payload source_kind source_id session_id request_id graph_run_id cause_doc_id target_node_did target_agent_id expected_collection parent_item_id deadline_at created_at updated_at resolved_at resolved_doc_id";
+pub(super) const MAILBOX_ITEM_FIELDS: &str = "_docID item_key requester_did node_did status kind action title summary payload source_kind source_id session_id request_id cause_doc_id target_node_did target_agent_id expected_collection parent_item_id deadline_at created_at updated_at resolved_at resolved_doc_id";
 
 pub async fn load_chat_patch(
     access: &gents::config_client::ConfigAccess,

@@ -657,10 +657,10 @@ async fn create_event_trigger(
 }
 
 #[tokio::test]
-async fn apply_control_update_full_reloads_reserved_graph_triggers() {
+async fn usage_collection_write_never_reloads_the_runtime_view() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("document-view-graph-trigger"));
+    let identity = Arc::new(test_identity("document-view-usage"));
     bind_default_agent_backend(
         &node,
         identity.did(),
@@ -673,13 +673,13 @@ async fn apply_control_update_full_reloads_reserved_graph_triggers() {
 
     let outcome = apply_control_update(
         identity.did(),
-        "GraphRevision",
-        "opaque-graph-revision-doc-id",
+        "ProviderAccountUsage",
+        "opaque-usage-doc-id",
         &mut view,
     )
     .await
     .unwrap();
-    assert_eq!(outcome, ControlUpdateOutcome::FullReload);
+    assert_eq!(outcome, ControlUpdateOutcome::Irrelevant);
 
     node.shutdown().await;
 }

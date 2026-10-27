@@ -548,18 +548,6 @@ async fn dependency_fixture() -> (Arc<defra_node::EmbeddedNode>, ConfigAccess) {
     (node, access)
 }
 
-/// The slot bindings the graph dependency fixtures install under.
-fn graph_bindings() -> crate::graph_package::GraphPackageInstallBindings {
-    crate::graph_package::GraphPackageInstallBindings {
-        node_did: OWNER.into(),
-        inference_slots: std::collections::BTreeMap::from([
-            ("coordinator".into(), "claude:inference".into()),
-            ("worker".into(), "glm:inference".into()),
-            ("verifier".into(), "grok:inference".into()),
-        ]),
-    }
-}
-
 /// Installs `dependee_fixture` the way a front-end installs a documents pack.
 async fn install_dependee(access: &ConfigAccess, explicit: bool) {
     let (_guard, dir) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
@@ -1287,60 +1275,6 @@ async fn documents_pack_shipping_workflows_is_materialized_with_no_plugin_instal
 }
 
 #[tokio::test]
-async fn dependency_install_materializes_the_same_way() {
-    let (_node, access) = dependency_fixture().await;
-    let options = graph_bindings();
-    let (_guard, dir) = crate::test_support::fixture_pack_copy("review_graph", &json!({}));
-    let (bytes, _) = crate::pack_archive::pack_dir(&dir).unwrap();
-    let dependency = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
-    let package = crate::graph_package::load_archive_graph_package_with_environment(
-        &dependency,
-        &crate::pack::PackInstallOptions {
-            node_did: OWNER.into(),
-        },
-        &|name| (name == "GENTS_REVIEW_MODEL").then(|| "test-model".to_owned()),
-    )
-    .unwrap();
-    let mut prepared = prepared();
-    prepared.dependencies = vec![PreparedDependency::Graph(package, options)];
-    let home = tempfile::tempdir().unwrap();
-    let archive = documents_archive_shipping(&[]);
-    install_prepared_document_pack(
-        &access,
-        OWNER,
-        &archive,
-        &[&dependency],
-        &prepared,
-        Some(home.path()),
-        false,
-        crate::pack::InstalledVia::SelfConfig,
-        DriftPolicy::Refuse,
-    )
-    .await
-    .unwrap();
-    let root = crate::pack::materialize::cache_root(
-        home.path(),
-        &dependency.manifest().metadata.namespace,
-        &dependency.manifest().name,
-        dependency.digest(),
-    )
-    .unwrap();
-    assert!(root.join("agents/review_recon/system_prompt.md").is_file());
-    let stored = recorded(home.path(), &archive);
-    assert_eq!(stored.assets, "");
-    assert_eq!(
-        stored.dependency_assets,
-        vec![(
-            "fixture/review_graph".to_owned(),
-            root.strip_prefix(home.path())
-                .unwrap()
-                .to_string_lossy()
-                .into_owned()
-        )]
-    );
-}
-
-#[tokio::test]
 async fn pack_with_no_asset_class_is_not_materialized() {
     let home = tempfile::tempdir().unwrap();
     let archive = documents_archive_shipping(&[]);
@@ -1890,7 +1824,7 @@ fn a_plugin_a_declared_dependency_ships_resolves() {
     let home = tempfile::tempdir().unwrap();
     let manifest = plugin_pack_manifest("workflow", "documents", &[]);
     let config = config_naming_plugin("acme/web_search");
-    let dependency = plugin_pack_manifest("web", "graph", &["web_search"]);
+    let dependency = plugin_pack_manifest("web", "documents", &["web_search"]);
     let dependency_config = config_naming_plugin("acme/web_search");
     super::documents::ensure_plugin_references_resolve(
         &[(&manifest, &config), (&dependency, &dependency_config)],

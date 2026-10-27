@@ -69,10 +69,6 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) vocabularies: Vec<LeanVocabularyContract>,
     pub(crate) state_machines: Vec<LeanStateMachineContract>,
     pub(crate) pairing_reconcile_cases: Vec<LeanPairingReconcileCase>,
-    pub(crate) graph_pipeline_validation_cases: Vec<LeanGraphPipelineValidationCase>,
-    pub(crate) graph_pipeline_revision_gate_cases: Vec<LeanGraphPipelineRevisionGateCase>,
-    pub(crate) graph_pipeline_run_terminal_cases: Vec<LeanGraphPipelineRunTerminalCase>,
-    pub(crate) graph_pipeline_edge_delivery_cases: Vec<LeanGraphPipelineEdgeDeliveryCase>,
     pub(crate) goal_claimed_publication_cases: Vec<serde_json::Value>,
     pub(crate) goal_wake_coalescing_cases: Vec<serde_json::Value>,
     pub(crate) goal_wake_ancestry_cases: Vec<serde_json::Value>,
@@ -99,10 +95,6 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) goal_operator_resume_on_cases: Vec<serde_json::Value>,
     pub(crate) goal_config_reactivation_cases: Vec<serde_json::Value>,
     pub(crate) goal_reset_resume_cases: Vec<serde_json::Value>,
-    pub(crate) graph_logical_invocation_cases: Vec<serde_json::Value>,
-    pub(crate) graph_workspace_lineage_cases: Vec<serde_json::Value>,
-    pub(crate) graph_session_continuation_cases: Vec<serde_json::Value>,
-    pub(crate) graph_assignment_head_cases: Vec<serde_json::Value>,
     pub(crate) trigger_delivery: serde_json::Value,
     pub(crate) operator_base_freeze_cases: Vec<serde_json::Value>,
     pub(crate) workspace_path_capability_cases: Vec<serde_json::Value>,
@@ -164,8 +156,6 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) client_request_closure_cases: Vec<serde_json::Value>,
     pub(crate) client_request_cache_identity_cases: Vec<serde_json::Value>,
     pub(crate) client_session_queue_order_cases: Vec<serde_json::Value>,
-    pub(crate) graph_invocation_publication_cases: Vec<serde_json::Value>,
-    pub(crate) graph_failure_attribution_traces: Vec<serde_json::Value>,
     pub(crate) request_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub(crate) process_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub(crate) provider_eof_cases: Vec<LeanProviderEofCase>,
@@ -1424,75 +1414,6 @@ pub(crate) struct LeanPairingReconcileCase {
     pub(crate) after: LeanPairingReconcileSnapshot,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum LeanGraphTopologyFault {
-    Valid,
-    MissingInputBinding,
-    Cycle,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum LeanGraphBoundsFault {
-    Within,
-    NodeLimit,
-    InvocationCeiling,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct LeanGraphPipelineValidationCase {
-    pub(crate) name: String,
-    pub(crate) types_valid: bool,
-    pub(crate) topology_fault: LeanGraphTopologyFault,
-    pub(crate) capabilities_authorized: bool,
-    pub(crate) bounds_fault: LeanGraphBoundsFault,
-    pub(crate) terminal_result_declared: bool,
-    pub(crate) expected_valid: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum LeanGraphActivePointer {
-    Empty,
-    Current,
-    Other,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct LeanGraphPipelineRevisionGateCase {
-    pub(crate) name: String,
-    pub(crate) status: String,
-    pub(crate) artifacts_complete: bool,
-    pub(crate) active_pointer: LeanGraphActivePointer,
-    pub(crate) activation_precondition_met: bool,
-    pub(crate) pointer_matches: bool,
-    pub(crate) expected_activate: bool,
-    pub(crate) expected_start: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct LeanGraphPipelineRunTerminalCase {
-    pub(crate) name: String,
-    pub(crate) status: String,
-    pub(crate) cancellation_requested: bool,
-    pub(crate) result_contract_satisfied: bool,
-    pub(crate) active_work_terminal: bool,
-    pub(crate) failure_proven: bool,
-    pub(crate) expected_succeed: bool,
-    pub(crate) expected_fail: bool,
-    pub(crate) expected_cancel: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct LeanGraphPipelineEdgeDeliveryCase {
-    pub(crate) name: String,
-    pub(crate) concurrency: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub(crate) delivery: Option<serde_json::Value>,
-    pub(crate) expected_concurrency_valid: bool,
-    pub(crate) expected_valid: bool,
-}
 #[derive(Debug, Deserialize)]
 pub(crate) struct LeanVocabularyContract {
     pub(crate) domain: String,

@@ -93,17 +93,6 @@
       "title": "Complete research desk configuration"
     },
     {
-      "id": "l6-graph",
-      "definition_id": "configurator-l6-graph",
-      "path": "ladder/l6_graph",
-      "subject": "ladder/engineer_subject",
-      "coverage": [
-        "custom graph authoring"
-      ],
-      "title": "Graph authoring capability probe",
-      "blocked_reason": "The Engineer cannot publish custom graphs; excluded from the onboarding acceptance matrix."
-    },
-    {
       "id": "schema-experience",
       "definition_id": "engineer-schema-experience",
       "path": "schema_experience",
@@ -166,10 +155,9 @@
       "coverage": [
         "registry discovery without installation",
         "inference slot binding",
-        "saved installation and graph state",
+        "saved installation state",
         "blocked upgrade preserves installed version",
-        "removal preserves unrelated configuration",
-        "no graph execution"
+        "removal preserves unrelated configuration"
       ]
     },
     {

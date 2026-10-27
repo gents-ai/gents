@@ -222,8 +222,6 @@ pub struct MailboxItemRow {
     #[serde(default)]
     pub request_id: Option<String>,
     #[serde(default)]
-    pub graph_run_id: Option<String>,
-    #[serde(default)]
     pub cause_doc_id: Option<String>,
     pub target_node_did: String,
     pub target_agent_id: String,

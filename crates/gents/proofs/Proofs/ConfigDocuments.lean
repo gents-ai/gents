@@ -33,12 +33,11 @@ inductive Collection where
   | callbackBinding
   | callbackModule
   | repositoryPlacement
-  | graphDefinition
   | evalDefinition
   deriving DecidableEq, Repr
 
 def all : List Collection :=
-  [.node, .agent, .agentContext, .compaction, .skill, .datastoreToolSurface, .chainKeyBinding, .ethTool, .tools, .agentTarget, .inferenceBackend, .inferenceProfile, .inferenceSampling, .inferenceExecution, .inferenceRetryPolicy, .toolServiceRegistry, .projectionAcpBinding, .task, .schedule, .eventSource, .trigger, .callback, .callbackBinding, .callbackModule, .repositoryPlacement, .graphDefinition, .evalDefinition]
+  [.node, .agent, .agentContext, .compaction, .skill, .datastoreToolSurface, .chainKeyBinding, .ethTool, .tools, .agentTarget, .inferenceBackend, .inferenceProfile, .inferenceSampling, .inferenceExecution, .inferenceRetryPolicy, .toolServiceRegistry, .projectionAcpBinding, .task, .schedule, .eventSource, .trigger, .callback, .callbackBinding, .callbackModule, .repositoryPlacement, .evalDefinition]
 
 /-- One formal catalog row per canonical document; projections below serve
 existing consumers without parallel name/key/field tables. -/
@@ -75,7 +74,6 @@ def documentSpec : Collection → DocumentSpec
   | .callbackBinding => ⟨"CallbackBinding", "binding_id", "automation", ["binding_id", "node_did", "event_source_id", "callback_id", "input_fields", "enabled", "tags"]⟩
   | .callbackModule => ⟨"CallbackModule", "module_id", "automation", ["module_id", "node_did", "abi_version", "artifact_bytes", "canonical_args", "signer_did", "provenance", "enabled", "fuel_limit", "memory_pages", "max_input_bytes", "max_output_bytes", "tags"]⟩
   | .repositoryPlacement => ⟨"RepositoryPlacement", "repository_id", "automation", ["repository_id", "node_did", "host_path", "enabled", "tags"]⟩
-  | .graphDefinition => ⟨"GraphDefinition", "graph_id", "automation", ["graph_id", "node_did", "enabled", "created_at", "updated_at", "tags"]⟩
   | .evalDefinition => ⟨"EvalDefinition", "definition_id", "automation", ["definition_id", "node_did", "comparability_version", "title", "subject", "fixtures", "cases", "updated_at", "tags"]⟩
 
 abbrev Collection.collectionName (c : Collection) := (documentSpec c).collectionName

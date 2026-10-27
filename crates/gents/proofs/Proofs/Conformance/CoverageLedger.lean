@@ -162,15 +162,6 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.runtimeInternal]
     , deferred := []
     }
-  , { feature := "graph-pipeline"
-    , required := [Surface.runtimeInternal]
-    , deferred :=
-        [ (Surface.agentFacing, "evaluation-only custom tool; production configuration wiring follows graduation")
-        , (Surface.operatorCli, "post-experiment graduation surface")
-        , (Surface.operatorUi, "post-experiment graduation surface")
-        , (Surface.api, "post-experiment graduation surface")
-        ]
-    }
   , { feature := "session-recovery"
     , required := [Surface.runtimeInternal]
     , deferred := []
@@ -608,16 +599,6 @@ def caseCoverage : List CoverageEntry :=
       "trigger_delivery"
       "Triggers.Durable.Outcomes"
       "trigger_engine::tests::durable_contract::generated_terminal_outcome_action_traces_use_native_owners")
-      "durable-goals" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "graph_session_continuation_cases"
-      "GraphPipeline.WorkspaceLineage.SessionContinuation"
-      "graph_pipeline::session_continuation_contract_tests::session_selection_matches_executable_graph_owner")
-      "triggers" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "graph_assignment_head_cases"
-      "GraphPipeline.LogicalInvocation.AssignmentHead"
-      "graph_pipeline::session_continuation_contract_tests::applied_assignment_heads_match_executable_graph_owner")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "trigger_cases"
@@ -1331,17 +1312,6 @@ def caseCoverage : List CoverageEntry :=
       "RecoverySweepCases"
       "conformance::generated_recovery_sweep_cases_drive_startup_recovery_contract")
       "recovery" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "graph_failure_attribution_traces"
-      "GraphFailureAttributionTraces"
-      "graph_pipeline::run::attribution_contract_tests::generated_graph_failure_attribution_traces_drive_real_transactions"
-      "Covers durable CAS outcomes and emitted positive failure decisions through the real interrupt owner. Isolated no-failure/cancellation suppression remains unobserved; a false failure-interrupt decision does not forbid cancellation-driven interrupts.")
-      "graph-pipeline" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "graph_workspace_lineage_cases"
-      "GraphWorkspaceLineageCases"
-      "graph_pipeline::run::workspace_lineage_contract_tests::generated_graph_workspace_cases_drive_installed_plan_and_signed_receipts")
-      "graph-pipeline" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "artifact_mode_meet_cases"
       "ArtifactModeMeetCases"
@@ -1692,18 +1662,6 @@ def caseCoverage : List CoverageEntry :=
       "WorkspacePathAliasCases"
       "workspace::tests::path_alias_contract::generated_workspace_path_alias_cases_drive_real_git_delta")
       "isolated-workspaces" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "graph_logical_invocation_cases"
-      "GraphLogicalInvocationCases"
-      "graph_pipeline::logical_invocation_contract_tests::generated_graph_logical_invocations_drive_persisted_run_projection"
-      "Fifteen representable cases replay through signed production owners. The defensive pinned-root-with-parent row is outside admission: root event/schedule authority excludes Goal/local-control parent authority, and ancestry excludes its entry. Reconcile that abstract input domain before claiming runtime projection coverage; do not broaden authority to manufacture the row.")
-      "graph-pipeline" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "graph_invocation_publication_cases"
-      "GraphInvocationPublicationCases"
-      "graph_pipeline::run::publication_contract_tests::generated_graph_invocation_publication_traces_drive_real_transactions"
-      "Covers durable publication, failure/cancellation fences and child counts. Failure-driven interrupts still need observations through the graph execution owner; recomputing may_interrupt_for_failure from stored flags does not exercise that decision.")
-      "graph-pipeline" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_claimed_publication_cases"
       "GoalClaimedPublicationCases"
@@ -1879,26 +1837,6 @@ def caseCoverage : List CoverageEntry :=
       "GoalResetResumeCases"
       "goal::reset_resume::contract_tests::generated_goal_reset_resume_cases_drive_real_transactions")
       "durable-goals" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "graph_pipeline_validation_cases"
-      "GraphPipelineValidationCases"
-      "conformance::graph_pipeline::generated_validation_cases_fence_whole_graph_compilation_gate")
-      "graph-pipeline" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "graph_pipeline_revision_gate_cases"
-      "GraphPipelineRevisionGateCases"
-      "conformance::graph_pipeline::generated_revision_gate_cases_fence_publication_and_start_readiness")
-      "graph-pipeline" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "graph_pipeline_run_terminal_cases"
-      "GraphPipelineRunTerminalCases"
-      "conformance::graph_pipeline::generated_run_terminal_cases_fence_completion_cas")
-      "graph-pipeline" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "graph_pipeline_edge_delivery_cases"
-      "GraphPipelineEdgeDeliveryCases"
-      "conformance::graph_pipeline::generated_edge_delivery_cases_fence_graph_edge_admission")
-      "graph-pipeline" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "restart_disposition_cases"
       "RestartDispositionCases"

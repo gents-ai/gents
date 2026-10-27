@@ -16,7 +16,6 @@ import Proofs.Conformance.CountCarrier
 import Proofs.Conformance.ConfigurationScope
 import Proofs.Conformance.EnrollmentPendingRequests
 import Proofs.Conformance.ClientObservationAdmission
-import Proofs.Conformance.GraphWorkspaceLineage
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
 import Proofs.Conformance.InvalidToolProgress
@@ -82,7 +81,6 @@ import Proofs.Conformance.CoverageLedger
 import Proofs.Identity.Conformance
 import Proofs.Conformance.EventDelivery
 import Proofs.Conformance.TriggerDelivery
-import Proofs.Conformance.GraphPipeline
 import Proofs.Conformance.GoalOperatorResume
 import Proofs.Conformance.GoalClaimedPublication
 import Proofs.Conformance.GoalResetResume
@@ -103,8 +101,6 @@ import Proofs.Conformance.GoalClientMutation
 import Proofs.Conformance.GoalClientStart
 import Proofs.Conformance.GoalObservation
 import Proofs.Conformance.PluginApproval
-import Proofs.Conformance.GraphFailureAttribution
-import Proofs.Conformance.GraphLogicalInvocation
 import Proofs.Conformance.RequestExecutionLease
 import Proofs.Conformance.InferenceRegistry
 import Proofs.Conformance.RootAdmission
@@ -142,8 +138,6 @@ def snapshotJson : String :=
     ++ "\"state_machines\":"
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
     ++ "\"pairing_reconcile_cases\":" ++ pairingReconcileCasesJson ++ ","
-    ++ "\"graph_failure_attribution_traces\":"
-      ++ Conformance.GraphFailureAttributionContracts.traceCasesJson ++ ","
     ++ "\"session_message_goal_input_cases\":"
       ++ Conformance.GoalRequestAssignmentContracts.messageInputCasesJson ++ ","
     ++ "\"goal_delivery_input_cases\":"
@@ -203,10 +197,6 @@ def snapshotJson : String :=
     ++ "\"workspace_command_grant_revocations\":" ++ Conformance.WorkspaceCommandGrants.revocationsJson.compress ++ ","
     ++ "\"goal_objective_whitespace_codepoints\":"
       ++ Conformance.GoalEditContracts.whitespaceCodepointsJson ++ ","
-    ++ "\"graph_logical_invocation_cases\":"
-      ++ Conformance.GraphLogicalInvocationContracts.casesJson ++ ","
-    ++ "\"graph_invocation_publication_cases\":"
-      ++ Conformance.GraphLogicalInvocationContracts.publicationCasesJson ++ ","
     ++ "\"goal_claimed_publication_cases\":"
       ++ Conformance.GoalClaimedPublicationContracts.casesJson ++ ","
     ++ "\"goal_operator_resume_cases\":"
@@ -217,14 +207,6 @@ def snapshotJson : String :=
       ++ Conformance.GoalOperatorResumeContracts.configCasesJson ++ ","
     ++ "\"goal_reset_resume_cases\":"
       ++ Conformance.GoalResetResumeContracts.casesJson ++ ","
-    ++ "\"graph_pipeline_validation_cases\":"
-      ++ Conformance.GraphPipelineContracts.validationCasesJson ++ ","
-    ++ "\"graph_pipeline_revision_gate_cases\":"
-      ++ Conformance.GraphPipelineContracts.revisionGateCasesJson ++ ","
-    ++ "\"graph_pipeline_run_terminal_cases\":"
-      ++ Conformance.GraphPipelineContracts.runTerminalCasesJson ++ ","
-    ++ "\"graph_pipeline_edge_delivery_cases\":"
-      ++ Conformance.GraphPipelineContracts.edgeDeliveryCasesJson ++ ","
     ++ "\"request_transition_cases\":"
       ++ jsonArray (requestTransitionCases.map lifecycleTransitionCaseJson) ++ ","
     ++ "\"provider_eof_cases\":"
@@ -468,9 +450,6 @@ def snapshotJson : String :=
       ++ boundariesJson ++ ","
     ++ "\"deviations\":"
       ++ deviationsJson ++ ","
-    ++ "\"graph_session_continuation_cases\":" ++ Conformance.GraphWorkspaceLineageContracts.SessionCases.casesJson ++ ","
-    ++ "\"graph_assignment_head_cases\":" ++ Conformance.GraphLogicalInvocationContracts.AssignmentCases.casesJson ++ ","
-    ++ "\"graph_workspace_lineage_cases\":" ++ Conformance.GraphWorkspaceLineageContracts.casesJson ++ ","
     ++ "\"artifact_mode_meet_cases\":" ++ artifactModeMeetCasesJson ++ ","
     ++ "\"artifact_admission_cases\":" ++ artifactAdmissionCasesJson ++ ","
     ++ "\"artifact_spawn_cases\":" ++ artifactSpawnCasesJson ++ ","

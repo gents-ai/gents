@@ -5634,7 +5634,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
 }
 
 #[tokio::test]
-#[ignore = "uses the public pack registry; installs into a disposable node, never runs the graph"]
+#[ignore = "uses the public pack registry; installs into a disposable node"]
 async fn published_review_pack_preserves_installation_when_upgrade_needs_authority() {
     let home = tempfile::tempdir().unwrap();
     let plugins = Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
@@ -7269,8 +7269,8 @@ async fn install_chat_account_fences(node: &Arc<EmbeddedNode>, owner: &str) {
     }
 }
 
-/// A documents pack enforces the same inference account authority as the
-/// graph lifecycle: a slot bound to a profile whose backend selects another
+/// A documents pack enforces inference account authority: a slot bound to a
+/// profile whose backend selects another
 /// account of one provider is refused at preview and at commit — before any
 /// schema or installation side effect — while the provider's default account
 /// and an account-free backend install.

@@ -565,8 +565,8 @@ pub struct SelfConfigTools {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub self_config_preview: Option<bool>,
-    /// Opt-in authority to install and activate graph packs from the home store or
-    /// registry for this node. Disabled by absence and never implied by
+    /// Opt-in authority to install packs from the home store or registry for
+    /// this node. Disabled by absence and never implied by
     /// general self-config.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]

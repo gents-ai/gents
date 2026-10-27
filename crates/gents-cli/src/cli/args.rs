@@ -879,12 +879,6 @@ pub(crate) struct PackUpdateArgs {
     #[arg(help = "The installed pack to update; every outdated pack when omitted")]
     pub(crate) package: Option<String>,
     #[arg(
-        long,
-        requires = "package",
-        help = "JSON file containing node_did and an optional inference_slots map, as for install"
-    )]
-    pub(crate) bindings: Option<PathBuf>,
-    #[arg(
         long = "inference-slot",
         value_name = "NAME=PROFILE_ID",
         action = clap::ArgAction::Append,
@@ -938,11 +932,6 @@ pub(crate) struct PackWireArgs {
 pub(crate) struct PackInstallArgs {
     #[arg(help = "A local path/sha256:<hex>, an installed coordinate, or a registry name")]
     pub(crate) package: String,
-    #[arg(
-        long,
-        help = "JSON file containing node_did and an optional inference_slots map"
-    )]
-    pub(crate) bindings: Option<PathBuf>,
     #[arg(
         long = "inference-slot",
         value_name = "NAME=PROFILE_ID",
