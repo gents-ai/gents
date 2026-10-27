@@ -1011,7 +1011,7 @@ theorem job_row_consumes_one_background_slot (ctx : StepContext) (job job' : Job
       rw [hp] at h
       simp only [hpin, Option.isNone_none, Bool.true_and, Bool.and_true] at h
       simp only [if_pos hnone] at h
-      split_ifs at h <;> cases h
+      split_ifs at h
     unfold Background.admitBackground at hb ⊢
     split <;> simp_all
   · unfold admitStep
