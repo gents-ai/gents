@@ -84,7 +84,7 @@ pub(crate) async fn reserve(node: &Arc<EmbeddedNode>, proposal: &Record) -> Resu
 
 fn encode(record: &Record) -> Result<String> {
     Ok(escape_graphql_string(&serde_json::to_string(
-        &Envelope::Goal(record.clone()),
+        &Envelope::Goal(Box::new(record.clone())),
     )?))
 }
 

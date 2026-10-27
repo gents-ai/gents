@@ -867,6 +867,17 @@ export function createDesktopUiHarness(
     async controlGoal() {
       throw new Error("Goal controls are unavailable in this fixture.");
     },
+    async recoverGoalSubmission() {
+      throw new Error("Goal submission recovery is unavailable in this fixture.");
+    },
+    async resumeGoalSubmission() {
+      throw new Error("Goal submission resumption is unavailable in this fixture.");
+    },
+    async acknowledgeGoalSubmission() {
+      throw new Error(
+        "Goal submission acknowledgement is unavailable in this fixture.",
+      );
+    },
     async recoverChatSubmission() {
       throw new Error("Submission recovery is unavailable in this fixture.");
     },
