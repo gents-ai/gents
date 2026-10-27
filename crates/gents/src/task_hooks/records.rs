@@ -2,7 +2,7 @@ use rapidhash::RapidHashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
@@ -354,7 +354,16 @@ pub(crate) async fn recover_task_hook_records(
     if store.shutdown.is_cancelled() {
         return Ok(started);
     }
-    for record in store.list() {
+    let records = {
+        let store = store.clone();
+        tokio::task::spawn_blocking(move || store.list())
+            .await
+            .context("enumerating retained task hook records")?
+    };
+    if store.shutdown.is_cancelled() {
+        return Ok(started);
+    }
+    for record in records {
         if record.node_did != node_did {
             continue;
         }
