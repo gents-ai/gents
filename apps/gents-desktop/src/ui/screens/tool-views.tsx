@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { lazy, Suspense, useRef } from "react";
 import { shortPath } from "@/lib/paths";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import type {
@@ -17,7 +17,6 @@ import { isWorkingNode } from "../lib/nodes";
 import { CopyButton } from "./Markdown";
 import { JobProgressCell } from "./JobProgressCell";
 import {
-  diffShape,
   diffText,
   duration,
   isAbsolutePath,
@@ -91,7 +90,7 @@ function Payload({
         orientation="both"
         className="max-h-72 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]"
       >
-        <pre className="w-max min-w-full px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground">
+        <pre className="w-max min-w-full px-3 py-2 font-mono text-[12px] leading-[18px] text-foreground">
           {text}
         </pre>
       </ScrollArea>
@@ -116,47 +115,42 @@ const GUTTER: Record<ToolDiffLineView["kind"], string> = {
   removed: "\u2212",
   context: " ",
 };
-const TONE: Record<ToolDiffLineView["kind"] | "plain", string> = {
+const TONE: Record<ToolDiffLineView["kind"], string> = {
   added: "bg-diff-added text-diff-added-fg",
   removed: "bg-diff-removed text-diff-removed-fg",
   context: "text-muted-foreground",
-  plain: "text-foreground",
 };
 
-function DiffLines({
+/** Diff lines without highlighting, for while the highlighted view loads
+    or when it cannot. */
+export function DiffLines({
   lines,
-  gutter,
-  tone,
+  className,
 }: {
   lines: readonly ToolDiffLineView[];
-  gutter: boolean;
-  tone?: keyof typeof TONE;
+  className?: string;
 }) {
   return (
     <ScrollArea
       orientation="both"
-      className="max-h-72 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]"
+      className={cn(
+        "max-h-72 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]",
+        className,
+      )}
     >
-      <pre
-        className={cn(
-          "w-max min-w-full py-2 font-mono text-[11px] leading-relaxed",
-          tone && TONE[tone],
-        )}
-      >
+      <pre className="w-max min-w-full py-2 font-mono text-[12px] leading-[18px]">
         {lines.map((line, i) => (
           <span
             key={i}
             data-diff={line.kind}
-            className={cn("block px-3", !tone && TONE[line.kind])}
+            className={cn("block px-3", TONE[line.kind])}
           >
-            {gutter && (
-              <span
-                aria-hidden="true"
-                className="mr-2 inline-block w-2 font-medium opacity-70 select-none"
-              >
-                {GUTTER[line.kind]}
-              </span>
-            )}
+            <span
+              aria-hidden="true"
+              className="mr-2 inline-block w-2 font-medium opacity-70 select-none"
+            >
+              {GUTTER[line.kind]}
+            </span>
             {line.text}
           </span>
         ))}
@@ -165,70 +159,18 @@ function DiffLines({
   );
 }
 
-function DiffBlock({
-  label,
-  lines,
-  tone,
-}: {
-  label: string;
-  lines: readonly ToolDiffLineView[];
-  tone: keyof typeof TONE;
-}) {
+const InlineDiff = lazy(() => import("./InlineDiff"));
+
+function DiffBody({ path, diff }: { path: string; diff: readonly ToolDiffLineView[] }) {
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
-      <div className="flex items-center justify-between">
-        <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
-          {label}
-        </span>
-        <CopyButton getText={() => lines.map((line) => line.text).join("\n")} />
-      </div>
-      <DiffLines lines={lines} gutter={false} tone={tone} />
-    </div>
-  );
-}
-
-function DiffBody({
-  diff,
-  created,
-}: {
-  diff: readonly ToolDiffLineView[];
-  created: boolean;
-}) {
-  const shape = diffShape(diff);
-  const added = diff.filter((line) => line.kind === "added");
-  const removed = diff.filter((line) => line.kind === "removed");
-  if (shape === "unified")
-    return (
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
-        <div className="flex items-center justify-between">
-          <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
-            diff
-          </span>
-          <CopyButton getText={() => diffText([...diff])} />
-        </div>
-        <DiffLines lines={diff} gutter />
-      </div>
-    );
-
-  if (shape === "addition")
-    return created ? (
-      <DiffBlock label="new file" lines={added} tone="plain" />
-    ) : (
-      <DiffBlock label="added" lines={added} tone="added" />
-    );
-  if (shape === "removal")
-    return <DiffBlock label="removed" lines={removed} tone="removed" />;
-
-  return (
-    <div className="@container">
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-2 @2xl:grid-cols-2">
-        <div className="min-w-0">
-          <DiffBlock label="replaced" lines={removed} tone="removed" />
-        </div>
-        <div className="min-w-0">
-          <DiffBlock label="with" lines={added} tone="added" />
-        </div>
-      </div>
+    <div className="relative">
+      <CopyButton
+        getText={() => diffText([...diff])}
+        className="absolute top-1 right-1 z-10"
+      />
+      <Suspense fallback={<DiffLines lines={diff} />}>
+        <InlineDiff path={path} lines={diff} />
+      </Suspense>
     </div>
   );
 }
@@ -294,7 +236,7 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
       )}
       {p.kind === "fileEdit" && (
         <>
-          {p.diff.length > 0 && <DiffBody diff={p.diff} created={p.created === true} />}
+          {p.diff.length > 0 && <DiffBody diff={p.diff} path={p.path ?? "file"} />}
           {(p.revealPath || p.path) && tool.statusKind === "success" && (
             <RevealFile path={p.revealPath || p.path!} />
           )}
@@ -349,7 +291,7 @@ function LiveOutput({ subject, tail }: { subject: string; tail: string }) {
         data-testid={`tool-live-output-${subject}`}
         className="max-h-40 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]"
       >
-        <pre className="w-max min-w-full px-3 py-2 font-mono text-[11px] leading-relaxed">
+        <pre className="w-max min-w-full px-3 py-2 font-mono text-[12px] leading-[18px]">
           {tail}
         </pre>
       </ScrollArea>

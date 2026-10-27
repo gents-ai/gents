@@ -359,7 +359,8 @@ test.describe("kit shell", () => {
       .getByRole("link", { name: /introduction-and-greetings/ })
       .click();
     const transcript = page.getByTestId("transcript-panel");
-    const removed = transcript.locator("[data-diff=removed]");
+    const line = (type: string) =>
+      transcript.locator(`diffs-container [data-line][data-line-type=${type}]`);
     const fileEdit = transcript
       .locator("[data-slot=collapsible]")
       .filter({ hasText: "src/parser.rs" });
@@ -368,13 +369,13 @@ test.describe("kit shell", () => {
     });
     await group.locator(":scope > button[aria-expanded=false]").click();
     await fileEdit.getByRole("button", { name: "Show detail" }).click();
-    await expect(removed).toHaveText(/fn parse\(\) -> Ast \{ todo!\(\) \}/);
-    await expect(transcript.locator("[data-diff=added]")).toHaveText(
+    await expect(line("change-deletion")).toHaveText(
+      /fn parse\(\) -> Ast \{ todo!\(\) \}/,
+    );
+    await expect(line("change-addition")).toHaveText(
       /fn parse\(\) -> Ast \{ Ast::default\(\) \}/,
     );
-    await expect(transcript.locator("[data-diff=context]")).toHaveText(
-      /impl Parser \{/,
-    );
+    await expect(line("context")).toHaveText([/impl Parser \{/, /\}/]);
   });
 
   test("condensed session agent details are keyboard accessible", async ({ page }) => {
