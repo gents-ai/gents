@@ -51,7 +51,7 @@ export function useSlashMenu(
       applySkillSelection(draft, { ...at, items: [] }, item.skill.skillId).draft,
     );
   };
-  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+  const onKeyDown = (e: KeyboardEvent<HTMLElement>) => {
     if (!at) return;
     if (e.key === "Escape") {
       e.preventDefault();
@@ -70,6 +70,8 @@ export function useSlashMenu(
     }
   };
   return {
+    /** the skills a slash can name, which the field draws as chips */
+    names: effectiveContextSkills(skills, context).map((skill) => skill.skillId),
     open: at !== null,
     query: at?.query ?? "",
     items,

@@ -10,11 +10,11 @@ import { useStore } from "zustand";
 import { ArrowDown, Check, Pencil, X } from "lucide-react";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
-import { Composer } from "@gents/ui/conversation";
+import { RichComposer } from "@gents/ui/conversation";
 import { cn } from "@gents/ui/lib/utils";
 import { useApp, useView } from "@/app/AppContext";
 import { useInterruptVisible, useSelectedNode } from "@/hooks/useClient";
-import { focusDraft } from "../../../hooks/draftStore";
+import { focusDraft, useDraftField } from "../../../hooks/draftStore";
 import { agentOf } from "@/lib/agents";
 import { placeholderFor } from "@/lib/send-status";
 import { SelectedChatFolder } from "../ChatFolderPicker";
@@ -62,7 +62,7 @@ export function OpenSessionComposer({
   const inFlight = useInterruptVisible();
   const deployment = useSelectedNode();
   const { draft, setDraft, send, setGoal, error: sendError } = useComposerSend(agentId);
-  const textarea = useRef<HTMLTextAreaElement | null>(null);
+  const textarea = useRef<HTMLDivElement | null>(null);
   const attachmentRoot = useRef<HTMLDivElement | null>(null);
   const { queue, onEdit } = useSessionQueue();
   const edit = useComposerEditing({ queue, onEdit, setDraft, send, textarea });
@@ -107,6 +107,7 @@ export function OpenSessionComposer({
   const blocked = sendStatus.kind === "disabled" && !inFlight;
   const covered = blocked && loadingStatus !== null;
   const draftKey = useView((view) => view.draftKey);
+  const [field, setField] = useDraftField(drafts, draftKey);
   const focusRequested = useStore(drafts, (state) => state.focus === draftKey);
   useEffect(() => {
     if (!focusRequested || blocked) return;
@@ -127,7 +128,7 @@ export function OpenSessionComposer({
   );
   const queueing = status.kind === "queue";
 
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (editing) {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -234,7 +235,10 @@ export function OpenSessionComposer({
           inert={covered || undefined}
           className={cn("[grid-area:1/1]", covered && "invisible")}
         >
-          <Composer
+          <RichComposer
+            key={editing ? `edit ${editing.docId}` : draftKey}
+            editorState={editing ? null : field}
+            onEditorStateChange={editing ? undefined : setField}
             className="text-foreground"
             value={editing ? editing.text : draft}
             onChange={editing ? edit.setText : setDraft}
@@ -289,7 +293,8 @@ export function OpenSessionComposer({
               )
             }
             onKeyDown={onKeyDown}
-            textareaRef={textarea}
+            fieldRef={textarea}
+            commands={slash.names}
             clearable={!editing}
             submitLabel={
               editing

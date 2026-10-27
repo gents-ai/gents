@@ -1,7 +1,7 @@
 import { cn } from "@gents/ui/lib/utils";
 import { AttachmentTray, useAttachmentDraft } from "./attachments";
 import { useRef } from "react";
-import { Composer } from "@gents/ui/conversation";
+import { RichComposer } from "@gents/ui/conversation";
 import { useApp, useView } from "@/app/AppContext";
 import {
   useMailboxCause,
@@ -28,6 +28,7 @@ import {
 import { useAgentChoice, useComposerSend } from "./useComposerSend";
 import { GoalDeliveryFeedback } from "./GoalDeliveryFeedback";
 import { ChatDeliveryFeedback } from "./ChatDeliveryFeedback";
+import { useDraftField } from "../../../hooks/draftStore";
 
 export function NewSession() {
   const mailboxCause = useMailboxCause();
@@ -81,7 +82,9 @@ export function NewSession() {
 }
 
 function NewSessionComposer() {
-  const { stores } = useApp();
+  const { drafts, stores } = useApp();
+  const draftKey = useView((view) => view.draftKey);
+  const [field, setField] = useDraftField(drafts, draftKey);
   const activityStatus = useView((view) => view.shellProjection.activityStatus);
   const sendStatus = useView((view) => view.shellProjection.nonEmptyContentSendStatus);
   const sending = stores.chat.use.sending();
@@ -95,7 +98,7 @@ function NewSessionComposer() {
     error: sendError,
   } = useComposerSend(choice.agentId);
   const attachmentRoot = useRef<HTMLDivElement | null>(null);
-  const textarea = useRef<HTMLTextAreaElement | null>(null);
+  const textarea = useRef<HTMLDivElement | null>(null);
   const attachments = useAttachmentDraft(
     attachmentRoot,
     sendStatus.kind === "disabled",
@@ -132,13 +135,17 @@ function NewSessionComposer() {
         className="hidden"
         aria-label="Choose attachments"
       />
-      <Composer
+      <RichComposer
+        key={draftKey}
+        editorState={field}
+        onEditorStateChange={setField}
         className="text-foreground"
         value={draft}
         onChange={setDraft}
         onSend={goalMode.mode ? (text) => void goalMode.submit(text) : send}
         models={[]}
-        textareaRef={textarea}
+        fieldRef={textarea}
+        commands={slash.names}
         onAttach={attachments.pick}
         hasAttachments={attachments.hasAttachments}
         submitDisabled={attachments.pending}

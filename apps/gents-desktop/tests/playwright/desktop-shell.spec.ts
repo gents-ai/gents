@@ -140,7 +140,9 @@ test.describe("kit shell", () => {
           .querySelector('[data-testid="app-shell"]')!
           .getBoundingClientRect();
         const header = document.querySelector(".app-titlebar")!;
-        const editor = document.querySelector("textarea")!.getBoundingClientRect();
+        const editor = document
+          .querySelector('[data-slot="composer"] [aria-label="Message"]')!
+          .getBoundingClientRect();
         return {
           top: frame.top,
           bottom: frame.bottom,
