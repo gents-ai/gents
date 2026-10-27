@@ -106,7 +106,6 @@ function harnessAssistantItem(
 
 export type DesktopUiHarnessScenario =
   | "default"
-  | "storage-recovery"
   | "empty-fleet"
   | "loading"
   | "bridge-unavailable"
@@ -121,6 +120,7 @@ export type DesktopUiHarnessScenario =
   | "mobile-performance"
   | "session-hydration"
   | "sync-offline"
+  | "storage-recovery"
   | "sync-failed";
 
 export type DesktopUiHarnessOptions = {
@@ -3684,7 +3684,6 @@ function clone<T>(value: T): T {
 
 function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
   switch (value) {
-    case "storage-recovery":
     case "empty-fleet":
     case "loading":
     case "bridge-unavailable":
@@ -3699,6 +3698,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "mobile-performance":
     case "session-hydration":
     case "sync-offline":
+    case "storage-recovery":
     case "sync-failed":
       return value;
     default:
