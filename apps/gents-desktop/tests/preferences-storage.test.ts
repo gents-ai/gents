@@ -19,6 +19,7 @@ const defaults: Preferences = {
   zoom: 1,
   sentTurn: "follow",
   followUp: "steer",
+  pinnedSessions: [],
 };
 
 describe("preferences read back from storage", () => {
@@ -31,6 +32,7 @@ describe("preferences read back from storage", () => {
       zoom: 1,
       sentTurn: "follow",
       followUp: "steer",
+      pinnedSessions: [],
     });
     expect(restorePreferences({ sentTurn: "anchor" }, defaults).sentTurn).toBe(
       "anchor",
@@ -38,6 +40,16 @@ describe("preferences read back from storage", () => {
     expect(restorePreferences({ sentTurn: "top" }, defaults).sentTurn).toBe("follow");
     expect(restorePreferences({ followUp: "queue" }, defaults).followUp).toBe("queue");
     expect(restorePreferences({ followUp: "later" }, defaults).followUp).toBe("steer");
+  });
+
+  it("keeps the pinned sessions' keys, and only those", () => {
+    expect(
+      restorePreferences({ pinnedSessions: ["a", 3, null, "b"] }, defaults)
+        .pinnedSessions,
+    ).toEqual(["a", "b"]);
+    expect(
+      restorePreferences({ pinnedSessions: "a" }, defaults).pinnedSessions,
+    ).toEqual([]);
   });
 
   it("keeps a zoom only when it is one of the steps", () => {

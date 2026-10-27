@@ -5,6 +5,7 @@ import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
 import { PortalContainerProvider } from "@gents/ui/lib/portal-container";
 import { href, type Route } from "@/lib/router";
+import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import type { NavMode } from "@/preferences";
 import { NodeAvatar } from "@/screens/AgentAvatar";
 import { SessionStatus } from "@/screens/SessionStatus";
@@ -15,6 +16,7 @@ import {
   useMailboxCount,
   useNodeCount,
   useOnline,
+  usePinnedSessionList,
   useRecentSessions,
   useSelectedNode,
   useSyncHealth,
@@ -69,6 +71,7 @@ export function NavPanel({
 }) {
   const online = useOnline();
   const mailboxCount = useMailboxCount();
+  const pinned = usePinnedSessionList();
   const recent = useRecentSessions(RECENT);
   const working = useWorkingNode();
   const nodeCount = useNodeCount();
@@ -176,12 +179,28 @@ export function NavPanel({
       </Item>
       <Item
         to={href({ name: "sessions" })}
-        active={route.name === "sessions" || route.name === "sessionsUnder"}
+        active={
+          route.name === "sessions" ||
+          route.name === "sessionsUnder" ||
+          route.name === "sessionsArchived"
+        }
         icon={<ScrollText className="size-4" />}
       >
         Sessions
       </Item>
       {primary.map(contributed)}
+      {pinned.length > 0 && (
+        <>
+          <p className="mt-2 mb-0 px-5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+            Pinned
+          </p>
+          <ul className="px-3">
+            {pinned.map((c) => (
+              <SessionLink key={c.sessionId} session={c} current={currentSession} />
+            ))}
+          </ul>
+        </>
+      )}
       {recent.length > 0 && (
         <>
           <p className="mt-2 mb-0 px-5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
@@ -190,30 +209,7 @@ export function NavPanel({
           <ScrollArea className="min-h-0">
             <ul className="px-3">
               {recent.map((c) => (
-                <li key={c.sessionId}>
-                  <a
-                    href={href({ name: "session", sessionId: c.sessionId })}
-                    aria-current={currentSession === c.sessionId ? "page" : undefined}
-                    className={cn(
-                      "flex h-8 items-center gap-2.5 rounded-lg px-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-                      currentSession === c.sessionId && "text-foreground",
-                    )}
-                  >
-                    <SessionStatus turnState={c.turnState} />
-                    <span className="min-w-0 flex-1 truncate">
-                      {c.title ?? "Untitled session"}
-                    </span>
-                    {c.unreadableReason && (
-                      <Lock
-                        className="size-3 shrink-0"
-                        role="img"
-                        aria-label={c.unreadableReason}
-                      >
-                        <title>{c.unreadableReason}</title>
-                      </Lock>
-                    )}
-                  </a>
-                </li>
+                <SessionLink key={c.sessionId} session={c} current={currentSession} />
               ))}
             </ul>
           </ScrollArea>
@@ -319,5 +315,34 @@ export function RailFlyout({
         </div>
       </PortalContainerProvider>
     </div>
+  );
+}
+
+function SessionLink({
+  session: c,
+  current,
+}: {
+  session: SessionSummary;
+  current: string | null;
+}) {
+  return (
+    <li>
+      <a
+        href={href({ name: "session", sessionId: c.sessionId })}
+        aria-current={current === c.sessionId ? "page" : undefined}
+        className={cn(
+          "flex h-8 items-center gap-2.5 rounded-lg px-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+          current === c.sessionId && "text-foreground",
+        )}
+      >
+        <SessionStatus turnState={c.turnState} />
+        <span className="min-w-0 flex-1 truncate">{c.title ?? "Untitled session"}</span>
+        {c.unreadableReason && (
+          <Lock className="size-3 shrink-0" role="img" aria-label={c.unreadableReason}>
+            <title>{c.unreadableReason}</title>
+          </Lock>
+        )}
+      </a>
+    </li>
   );
 }

@@ -80,18 +80,22 @@ export function StartedByAutomation({
   );
 }
 
-export function Title({
+/** a title edited in place: Enter or leaving it renames, Escape keeps it */
+export function RenameField({
   title,
   onRename,
+  onDone,
+  className,
 }: {
   title: string;
   onRename: (title: string) => Promise<void>;
+  onDone: () => void;
+  className?: string;
 }) {
-  const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(title);
   const submit = async () => {
     const next = draft.trim();
-    setEditing(false);
+    onDone();
     if (!next || next === title) {
       setDraft(title);
       return;
@@ -103,29 +107,54 @@ export function Title({
       setDraft(title);
     }
   };
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+    >
+      <Input
+        autoFocus
+        aria-label={`Rename ${title}`}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => void submit()}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            setDraft(title);
+            onDone();
+          }
+        }}
+        className={className}
+      />
+    </form>
+  );
+}
+
+export function Title({
+  title,
+  onRename,
+  editing: held,
+  onEditingChange,
+}: {
+  title: string;
+  onRename: (title: string) => Promise<void>;
+  /** held by the screen where its menu can start the rename too */
+  editing?: boolean;
+  onEditingChange?: (editing: boolean) => void;
+}) {
+  const [own, setOwn] = useState(false);
+  const editing = held ?? own;
+  const setEditing = onEditingChange ?? setOwn;
   if (editing)
     return (
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          void submit();
-        }}
-      >
-        <Input
-          autoFocus
-          aria-label={`Rename ${title}`}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={() => void submit()}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              setDraft(title);
-              setEditing(false);
-            }
-          }}
-          className="h-8 w-[28rem] max-w-full font-heading text-lg font-medium text-heading"
-        />
-      </form>
+      <RenameField
+        title={title}
+        onRename={onRename}
+        onDone={() => setEditing(false)}
+        className="h-8 w-[28rem] max-w-full font-heading text-lg font-medium text-heading"
+      />
     );
   return (
     <span className="group/title flex items-center gap-1">

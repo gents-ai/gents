@@ -1,5 +1,8 @@
 import { attachmentMetadata } from "./attachmentMetadata";
-import type { RequestAttachment } from "@source-inc/gents-desktop-client";
+import type {
+  RequestAttachment,
+  SessionSummary,
+} from "@source-inc/gents-desktop-client";
 import {
   selectedNodeReadinessDecision,
   type ChatSendResult,
@@ -96,6 +99,8 @@ const GOAL_CONTROL_DOING = {
   resume: "resume the goal",
   stop: "remove the goal",
 } as const;
+const LISTED_ATTEMPTS = 8;
+const LISTED_INTERVAL_MS = 250;
 
 export function createChatActions({
   api,
@@ -445,17 +450,62 @@ export function createChatActions({
     }
   }
 
-  async function renameSession(sessionId: string, title: string) {
-    const nodeDid =
+  /** `nodeDid` names the node of a listed session; the open one is found */
+  /* a write lands on the runtime's copy, and the app's own copy that the
+     lists read catches up over the peer link a moment later */
+  async function untilListed(
+    nodeDid: string,
+    sessionId: string,
+    done: (session: SessionSummary) => boolean,
+  ) {
+    for (let attempt = 0; ; attempt++) {
+      await refreshSnapshot();
+      const listed = Object.values(stores.fleet.getState().sessions).find(
+        (session) => session.nodeDid === nodeDid && session.sessionId === sessionId,
+      );
+      if (!listed || done(listed) || attempt >= LISTED_ATTEMPTS) return;
+      await new Promise((resolve) => setTimeout(resolve, LISTED_INTERVAL_MS));
+    }
+  }
+
+  async function renameSession(sessionId: string, title: string, nodeDid?: string) {
+    const holder =
+      nodeDid ??
       heldFor(readSession(stores.session), sessionId, null)?.nodeDid ??
       store.getState().nodeDid;
     try {
-      if (!nodeDid) throw new Error("no node holds this session");
-      await api.renameSession({ nodeDid, sessionId, title });
-      await refreshSnapshot();
-      await refreshSession(sessionId);
+      if (!holder) throw new Error("no node holds this session");
+      await api.renameSession({ nodeDid: holder, sessionId, title });
+      await untilListed(holder, sessionId, (session) => session.title === title);
+      if (store.getState().sessionId === sessionId) await refreshSession(sessionId);
     } catch (err) {
       reportFailure(actionFailure("rename the session", err));
+      throw shownFailure(err);
+    }
+  }
+
+  async function setSessionArchived(session: SessionSummary, archived: boolean) {
+    try {
+      const receipt = await api.setSessionArchived({
+        nodeDid: session.nodeDid,
+        sessionId: session.sessionId,
+        expectedRevision: session.archiveRevision,
+        archived,
+      });
+      if (receipt.outcome === "conflict") {
+        await refreshSnapshot();
+        throw new Error("it changed elsewhere, try again");
+      }
+      await untilListed(
+        session.nodeDid,
+        session.sessionId,
+        (listed) => (listed.archivedAt !== null) === archived,
+      );
+      return receipt;
+    } catch (err) {
+      reportFailure(
+        actionFailure(archived ? "archive the session" : "unarchive the session", err),
+      );
       throw shownFailure(err);
     }
   }
@@ -484,6 +534,7 @@ export function createChatActions({
     renameSession,
     setGoal,
     controlGoal,
+    setSessionArchived,
     interruptRequest,
     backgroundTool: (request: Parameters<DesktopApiAdapter["backgroundTool"]>[0]) =>
       api.backgroundTool(request),

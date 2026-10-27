@@ -1,6 +1,7 @@
 import type {
   DesktopApiAdapter,
   DesktopSessionSnapshot,
+  RenderedTimelineItem,
   SessionRowsView,
   SessionRowsWindow,
 } from "@source-inc/gents-desktop-client";
@@ -24,6 +25,8 @@ import {
 } from "./sessionStore";
 
 export const SESSION_TIMELINE_PAGE_SIZE = 40;
+/* the bridge's largest rows page */
+const TRANSCRIPT_READ_SIZE = 80;
 
 type SessionReadParams = {
   api: DesktopApiAdapter;
@@ -202,8 +205,39 @@ export function createSessionReads({
     return rows;
   }
 
+  /* every row of a session, open or not, oldest first */
+  async function readTranscript(
+    nodeDid: string,
+    sessionId: string,
+  ): Promise<RenderedTimelineItem[]> {
+    const pages: RenderedTimelineItem[][] = [];
+    let window: SessionRowsWindow = { kind: "tip" };
+    for (;;) {
+      const page = await api.fetchSessionRows({
+        sessionId,
+        nodeDid,
+        window,
+        limit: TRANSCRIPT_READ_SIZE,
+      });
+      if (!page) break;
+      if (page.unreadable) throw new Error(page.unreadable);
+      pages.unshift(page.rows);
+      const from = page.coveredFrom;
+      if (!page.hasOlder || from === null) break;
+      if (window.kind === "before" && from >= window.sequence) break;
+      window = { kind: "before", sequence: from };
+    }
+    const seen = new Set<string>();
+    return pages.flat().filter((row) => {
+      if (seen.has(row.itemKey)) return false;
+      seen.add(row.itemKey);
+      return true;
+    });
+  }
+
   return {
     loadSessionContextDetails,
+    readTranscript,
     invalidateSessionReads() {
       runEpoch += 1;
       refreshSeq += 1;
