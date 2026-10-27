@@ -266,6 +266,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_receivers_follow_signed_inventory_prefixes",
         },
         ConformanceConsumer::RustTest {
+            id: "agent::p2p_reconcile::session_hydration_reconcile::tests::generated_hydration_routes_require_current_enrollment_materialization",
+            package: "gents",
+            source_path: "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/admission_tests.rs",
+            module_path: "agent::p2p_reconcile::session_hydration_reconcile::tests",
+            function: "generated_hydration_routes_require_current_enrollment_materialization",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::p2p_reconcile::enrollment_reconcile::tests::generated_client_observation_admission_matches_lean",
             package: "gents",
             source_path: "crates/gents/src/agent/p2p_reconcile/enrollment_reconcile.rs",

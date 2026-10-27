@@ -226,6 +226,13 @@ pub(super) async fn reconcile_prepared_peer(
     let mut ops_applied = Vec::new();
     let mut replayed_replicators = Vec::new();
 
+    if (!ops.is_empty() || reconnected || force_replay)
+        && applied_record.enrollment != Default::default()
+    {
+        applied_record.enrollment = Default::default();
+        persist_applied_record(store, &peer_id, &mut applied_record).await?;
+    }
+
     // DefraDB's idempotent add_replicator skips initial replay for an existing
     // identity (#664), so after a reconnect force-reinstall every otherwise-
     // converged agent-target replicator whose peer has not acknowledged every
@@ -295,6 +302,22 @@ pub(super) async fn reconcile_prepared_peer(
 
     if desired.is_none() && !applied_record.state.is_empty() {
         applied_record.state = PairingApplied::default();
+        persist_applied_record(store, &peer_id, &mut applied_record).await?;
+    }
+    let materialization = if desired.is_some()
+        && !applied_record.state.is_empty()
+        && live_route_matches
+        && fresh_enrollment_generation_or_close(store, enrollment_generation.as_ref()).await
+    {
+        enrollment_generation
+            .as_ref()
+            .map(Into::into)
+            .unwrap_or_default()
+    } else {
+        Default::default()
+    };
+    if applied_record.enrollment != materialization {
+        applied_record.enrollment = materialization;
         persist_applied_record(store, &peer_id, &mut applied_record).await?;
     }
     Ok(PairingTickOutcome {

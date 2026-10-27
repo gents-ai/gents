@@ -140,6 +140,8 @@ struct EnrollmentFenceStore {
     desired: PairingDesired,
     generation: EnrollmentRouteGeneration,
     applied: Mutex<PairingApplied>,
+    materialization: Mutex<EnrollmentMaterialization>,
+    saved: Mutex<Vec<LoadedPairingApplied>>,
     authority_checks: Mutex<std::collections::VecDeque<Result<bool, String>>>,
 }
 
@@ -171,12 +173,15 @@ impl PairingStateStore for EnrollmentFenceStore {
     async fn load_applied(&self, _peer_id: &str) -> Result<LoadedPairingApplied> {
         Ok(LoadedPairingApplied {
             state: self.applied.lock().unwrap().clone(),
+            enrollment: self.materialization.lock().unwrap().clone(),
             ..Default::default()
         })
     }
 
     async fn persist_applied(&self, _peer_id: &str, applied: &LoadedPairingApplied) -> Result<()> {
+        self.saved.lock().unwrap().push(applied.clone());
         *self.applied.lock().unwrap() = applied.state.clone();
+        *self.materialization.lock().unwrap() = applied.enrollment.clone();
         Ok(())
     }
 
@@ -222,20 +227,23 @@ impl PairingStateStore for MultiPeerStore {
 fn enrolled_live_route_store(
     authority_checks: impl IntoIterator<Item = Result<bool, String>>,
 ) -> EnrollmentFenceStore {
+    let generation = EnrollmentRouteGeneration {
+        member_did: "did:key:member".into(),
+        member_peer: "peer-a".into(),
+        member_ticket: "addr1".into(),
+        request_digest: "digest-1".into(),
+        authorization_sequence: 1,
+        authorization_expires_at: "2099-09-29T00:00:00Z".into(),
+    };
     EnrollmentFenceStore {
         desired: PairingDesired {
             replicator_addresses: set(&["addr1"]),
             replicator_collections: set(&["AgentRequest"]),
             ..Default::default()
         },
-        generation: EnrollmentRouteGeneration {
-            member_did: "did:key:member".into(),
-            member_peer: "peer-a".into(),
-            member_ticket: "addr1".into(),
-            request_digest: "digest-1".into(),
-            authorization_sequence: 1,
-            authorization_expires_at: "2099-09-29T00:00:00Z".into(),
-        },
+        materialization: Mutex::new(EnrollmentMaterialization::from(&generation)),
+        generation,
+        saved: Mutex::new(Vec::new()),
         applied: Mutex::new(PairingApplied {
             replicator_addresses: set(&["addr1"]),
             ..Default::default()

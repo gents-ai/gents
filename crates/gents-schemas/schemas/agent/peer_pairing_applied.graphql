@@ -3,6 +3,9 @@ type PeerPairingApplied {
     collections: [String!]
     replicator_addresses: [String!]
     replicator_filter: String
+    enrollment_request_digest: String
+    enrollment_authorization_sequence: Int
+    enrollment_authorization_expires_at: DateTime
     created_at: DateTime @index(direction: DESC)
     updated_at: DateTime @index(direction: DESC)
 }

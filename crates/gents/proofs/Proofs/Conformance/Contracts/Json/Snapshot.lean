@@ -15,6 +15,7 @@ import Proofs.Conformance.SessionQueueOrderCases
 import Proofs.Conformance.CountCarrier
 import Proofs.Conformance.ConfigurationScope
 import Proofs.Conformance.Initialization
+import Proofs.Conformance.EnrollmentHydrationRoutes
 import Proofs.Conformance.EnrollmentPendingRequests
 import Proofs.Conformance.ClientObservationAdmission
 import Proofs.Conformance.OperatorBaseFreeze
@@ -299,6 +300,8 @@ def snapshotJson : String :=
       ++ enrollmentCasesJson ++ ","
     ++ "\"enrollment_durable_projection_cases\":"
       ++ enrollmentDurableProjectionCasesJson ++ ","
+    ++ "\"enrollment_hydration_route_cases\":"
+      ++ Conformance.EnrollmentHydrationRoutes.casesJson ++ ","
     ++ "\"enrollment_pending_request_cases\":"
       ++ Conformance.EnrollmentPendingRequests.casesJson ++ ","
     ++ "\"client_observation_admission_cases\":"

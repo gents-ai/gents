@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use serde::Deserialize;
 
 use super::{DiffOp, PairingApplied, PairingDesired};
 
@@ -52,6 +53,39 @@ pub struct EnrollmentRouteGeneration {
     pub authorization_expires_at: String,
 }
 
+/// An applied observation carries the generation that finished reconciliation.
+/// Clear it before changing routes; fresh signed authority still gates admission.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct EnrollmentMaterialization {
+    #[serde(rename = "enrollment_request_digest")]
+    pub(super) request_digest: Option<String>,
+    #[serde(rename = "enrollment_authorization_sequence")]
+    pub(super) authorization_sequence: Option<i64>,
+    #[serde(rename = "enrollment_authorization_expires_at")]
+    pub(super) authorization_expires_at: Option<String>,
+}
+
+impl EnrollmentMaterialization {
+    pub(super) fn binds(&self, digest: &str, sequence: u64, expires_at: &str) -> bool {
+        self.request_digest.as_deref() == Some(digest)
+            && self
+                .authorization_sequence
+                .and_then(|value| u64::try_from(value).ok())
+                == Some(sequence)
+            && self.authorization_expires_at.as_deref() == Some(expires_at)
+    }
+}
+
+impl From<&EnrollmentRouteGeneration> for EnrollmentMaterialization {
+    fn from(generation: &EnrollmentRouteGeneration) -> Self {
+        Self {
+            request_digest: Some(generation.request_digest.clone()),
+            authorization_sequence: i64::try_from(generation.authorization_sequence).ok(),
+            authorization_expires_at: Some(generation.authorization_expires_at.clone()),
+        }
+    }
+}
+
 impl From<&super::enrollment_reconcile::EnrollmentAuthorizationFence>
     for EnrollmentRouteGeneration
 {
@@ -88,6 +122,7 @@ pub struct LoadedPairingApplied {
     pub doc_id: Option<String>,
     pub state: PairingApplied,
     pub duplicate_doc_ids: Vec<String>,
+    pub enrollment: EnrollmentMaterialization,
 }
 
 #[async_trait]

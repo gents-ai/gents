@@ -640,7 +640,11 @@ async fn record_applied_route_receipts(
             continue;
         };
         let applied = pairing_store.load_applied(peer_id).await?;
-        if !applied.duplicate_doc_ids.is_empty()
+        if !applied.enrollment.binds(
+            &active.request.request_digest,
+            active.revision.sequence,
+            &active.revision.authorization_expires_at,
+        ) || !applied.duplicate_doc_ids.is_empty()
             || !desired_route_is_applied(&desired, &applied.state)
             || !observe_owned_pairing_live_matches(pairing_admin, &desired, &applied.state).await?
         {

@@ -513,7 +513,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::PEER_PAIRING_APPLIED_NAME,
         gents_protocol::schemas::PEER_PAIRING_APPLIED,
-        "bafyreifunn7vevp6b6rzg232gjfypp2lqviafe5now5ldlwo3na5nfinq4"
+        "bafyreickzo4uxque2a7wdnkp45ya3bsn33vbs4rpj6xglvxrftsxbd3hla"
     ),
     baseline_entry!(
         gents_protocol::schemas::PEER_REGISTRY_NAME,

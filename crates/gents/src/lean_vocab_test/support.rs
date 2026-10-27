@@ -219,6 +219,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) session_hydration_admission_cases: Vec<LeanSessionHydrationAdmissionCase>,
     pub(crate) enrollment_cases: Vec<LeanEnrollmentCase>,
     pub(crate) enrollment_durable_projection_cases: Vec<LeanEnrollmentDurableProjectionCase>,
+    pub(crate) enrollment_hydration_route_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_pending_request_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
     pub(crate) enrollment_digest_cases: Vec<LeanEnrollmentDigestCase>,
