@@ -158,6 +158,17 @@ impl ClientCore {
                 (request, document_id)
             }
         };
+        if let Some(endpoint) = status.get("desktop_graphql").and_then(Value::as_str) {
+            self.sync_state
+                .remember_enrollment_endpoint(
+                    &request.server_peer,
+                    &request.owner_agent,
+                    &request.request_digest,
+                    &request.expires_at,
+                    endpoint,
+                )
+                .await?;
+        }
         push_enrollment_request(&self.p2p, &offer, &request.request_id, &document_id).await?;
         if let Some(label) = advertised_label {
             self.sync_state

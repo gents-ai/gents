@@ -12,6 +12,9 @@ use gents_protocol::enrollment::authorization_lease_is_fresh_at;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+mod enrollment_endpoints;
+use enrollment_endpoints::EnrollmentEndpoint;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PeerRecord {
     pub peer_id: String,
@@ -177,6 +180,8 @@ pub(in crate::client) enum RemovalCause {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct StoredPeerDirectory {
     peers: Vec<PeerRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    enrollment_endpoints: Vec<EnrollmentEndpoint>,
     #[serde(default)]
     pending_removals: Vec<PeerRecord>,
     #[serde(default)]
@@ -189,6 +194,7 @@ pub(crate) struct PeerDirectory {
     peers: Vec<PeerRecord>,
     pending_removals: Vec<PeerRecord>,
     retired_enrollments: Vec<RetiredEnrollment>,
+    enrollment_endpoints: Vec<EnrollmentEndpoint>,
     _lease: Arc<PeerDirectoryLease>,
     #[cfg(test)]
     fail_persist: bool,
@@ -237,6 +243,7 @@ impl PeerDirectory {
                     peers: stored.peers,
                     pending_removals: stored.pending_removals,
                     retired_enrollments: stored.retired_enrollments,
+                    enrollment_endpoints: stored.enrollment_endpoints,
                     _lease: lease,
                     #[cfg(test)]
                     fail_persist: false,
@@ -464,7 +471,14 @@ impl PeerDirectory {
             record.local_node_home.clone_from(&managed.local_node_home);
         }
         if managed.is_none() && !record.is_managed_runtime() {
-            record.graphql = None;
+            record.graphql = candidate
+                .take_enrollment_endpoint(peer_id, node_did, request_digest)
+                .or_else(|| {
+                    existing
+                        .as_ref()
+                        .filter(|prior| prior.peer_id == peer_id && prior.node_did == node_did)
+                        .and_then(|prior| prior.graphql.clone())
+                });
             record.local_node_home = None;
         }
 
@@ -482,7 +496,9 @@ impl PeerDirectory {
                 .retain(|candidate| candidate.peer_id != existing.peer_id);
         }
 
-        if existing.as_ref() == Some(&record) {
+        if existing.as_ref() == Some(&record)
+            && candidate.enrollment_endpoints == self.enrollment_endpoints
+        {
             return Ok(record);
         }
 
@@ -639,6 +655,7 @@ impl PeerDirectory {
             peers: self.peers.clone(),
             pending_removals: self.pending_removals.clone(),
             retired_enrollments: self.retired_enrollments.clone(),
+            enrollment_endpoints: self.enrollment_endpoints.clone(),
         })?;
         let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
         let mut staged = tempfile::NamedTempFile::new_in(parent)
@@ -741,6 +758,7 @@ mod tests {
         assert!(!unscoped.is_chat_ready_at(Utc::now()));
         assert!(validate_fresh_directory(&StoredPeerDirectory {
             peers: vec![unscoped],
+            enrollment_endpoints: Vec::new(),
             pending_removals: Vec::new(),
             retired_enrollments: Vec::new(),
         })
