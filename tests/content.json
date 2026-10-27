@@ -6,8 +6,8 @@
       "expr": "[.assets[]] | all(length > 0)"
     },
     {
-      "name": "the workflow plugin is a js-script job plugin that requires script",
-      "expr": "plugin | .name == \"workflow\" and .job == true and .script_runtime == \"js\" and (.input_schema.required | index(\"script\") != null) and .instructions == \"plugins/workflow/TOOL.md\" and .limits.wall_clock_secs <= 900"
+      "name": "the workflow plugin is a job plugin that declares the run_script import and requires script",
+      "expr": "plugin | .name == \"workflow\" and .job == true and .host_imports == [\"run_script\"] and (.script_runtime == null) and (.input_schema.required | index(\"script\") != null) and .instructions == \"plugins/workflow/TOOL.md\" and .limits.wall_clock_secs <= 900"
     },
     {
       "name": "the caller template names only the read-only worker and ships dynamic as check (a pack may not ship run)",

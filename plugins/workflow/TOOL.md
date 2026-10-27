@@ -12,7 +12,7 @@ once; the result arrives later as a message. End your turn after the call.
 - `args`: an object your step function reads as `input.args`; `args.handle`
   names the run, so use the name the user gave it.
 - `agent_budget`: how many child agents the run may start. Pass the number of
-  children your script spawns; the host default is 8.
+  children your script spawns; the default is 8.
 
 ## The step function
 

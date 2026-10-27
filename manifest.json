@@ -6,6 +6,10 @@
     "plugins/workflow.afb",
     "plugins/workflow/TOOL.md",
     "plugins/workflow/tests/00_no_script_fails.json",
+    "plugins/workflow/tests/01_step0_pins_the_scripts_digest.json",
+    "plugins/workflow/tests/02_later_step_passes_the_output_through.json",
+    "plugins/workflow/tests/03_a_guest_pin_is_restamped.json",
+    "plugins/workflow/tests/04_an_unsized_call_pins_the_handle_from_args.json",
     "tests/content.json",
     "tests/install.json"
   ],
@@ -56,6 +60,9 @@
       },
       "instructions": "plugins/workflow/TOOL.md",
       "job": true,
+      "host_imports": [
+        "run_script"
+      ],
       "language": "rust",
       "limits": {
         "max_output_mib": 4,
@@ -63,7 +70,6 @@
         "wall_clock_secs": 60
       },
       "name": "workflow",
-      "script_runtime": "js",
       "source": "plugins/workflow"
     }
   ],
@@ -71,5 +77,5 @@
     "workflow",
     "dynamic"
   ],
-  "version": "0.1.7"
+  "version": "0.2.0"
 }

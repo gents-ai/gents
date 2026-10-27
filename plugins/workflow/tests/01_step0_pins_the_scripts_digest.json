@@ -1,0 +1,27 @@
+{
+  "input": {
+    "pin": null,
+    "script": "module.exports = (i) => ({effects: {spawn: [{slot: \"s\", attempt: 0, target: \"wf-read-only\", prompt: \"p\", title: \"t\"}]}})",
+    "args": {},
+    "agent_budget": null
+  },
+  "expect": {
+    "effects": {
+      "spawn": [
+        {
+          "slot": "s",
+          "attempt": 0,
+          "target": "wf-read-only",
+          "prompt": "p",
+          "title": "t"
+        }
+      ],
+      "pin": {
+        "script_id": "18ce16f1b8b778aaa216a019e22e81c502222969edb9c9bf7803711c606c14c9",
+        "source_digest": "sha256:18ce16f1b8b778aaa216a019e22e81c502222969edb9c9bf7803711c606c14c9",
+        "agent_budget": 8,
+        "handle": "workflow"
+      }
+    }
+  }
+}

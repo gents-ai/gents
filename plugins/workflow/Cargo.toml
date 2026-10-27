@@ -2,8 +2,12 @@
 
 [package]
 name = "workflow"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+
+[lib]
+name = "workflow"
+path = "source/lib.rs"
 
 [[bin]]
 name = "workflow"
@@ -11,6 +15,7 @@ path = "source/main.rs"
 
 [dependencies]
 serde_json = "1"
+sha2 = "0.10"
 
 [profile.release]
 opt-level = 3
