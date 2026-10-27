@@ -69,7 +69,11 @@ export function declaredPluginId(entry: UxPluginListing): string {
 }
 
 function enabledByListing(entry: UxPluginListing): boolean {
-  return uxPluginActive(declaredPluginId(entry), entry.defaultEnabled ?? true);
+  return uxPluginActive(declaredPluginId(entry), listingDefaultEnabled(entry));
+}
+
+function listingDefaultEnabled(entry: UxPluginListing): boolean {
+  return entry.door === "dev" ? false : (entry.defaultEnabled ?? true);
 }
 
 /* who holds a plugin id: a listing, or the bundled copy the loader shadows
@@ -186,7 +190,7 @@ async function loadListing(entry: UxPluginListing): Promise<void> {
       pack: entry.pack ?? undefined,
       listing: entry.pack ? entry.id : undefined,
       declared: entry.contributes ?? undefined,
-      defaultEnabled: entry.defaultEnabled ?? undefined,
+      defaultEnabled: listingDefaultEnabled(entry),
     },
   );
   known.set(entry.id, id);

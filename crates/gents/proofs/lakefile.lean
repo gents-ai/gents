@@ -24,6 +24,7 @@ def proofRoots : Array Lean.Name := #[
   `Proofs.Conformance.SessionQueueOrder,
   `Proofs.Conformance.ClientPresentationAgreement,
   `Proofs.Conformance.ClientInterruptControl,
+  `Proofs.Conformance.DesktopShellSecurity,
   `Proofs.Conformance.StorageWriteGate,
   `Proofs.Conformance.StorageWriteGateAdmission,
   `Proofs.Conformance.NativeCompletion,

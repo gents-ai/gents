@@ -112,6 +112,24 @@ const reads = () =>
   call.mock.calls.filter(([command]) => command === "desktop_ux_plugin_source");
 
 describe("discovery runs nothing that is off", () => {
+  it.each([null, true, false])(
+    "requires opt-in for development code despite manifest default %s",
+    async (defaultEnabled) => {
+      listings = [{ ...clock("clock"), defaultEnabled }];
+      sources.set("clock", chipPlugin("clock"));
+      await scanRuntimeUxPlugins();
+      await reloadRuntimeUxPlugins();
+      expect(reads()).toHaveLength(0);
+      expect(uxPluginRecords().clock?.status).toBe("disabled");
+      await setUxPluginEnabled("clock", true);
+      expect(reads()).toHaveLength(1);
+      expect(chips()).toEqual(["clock:chip"]);
+      await setUxPluginEnabled("clock", false);
+      await reloadRuntimeUxPlugins();
+      expect(reads()).toHaveLength(1);
+      expect(chips()).toEqual([]);
+    },
+  );
   it("lists a pack plugin that ships off from its manifest alone, and loads it on the switch", async () => {
     listings = [packed("widget", false)];
     sources.set("acme/tools/widget", chipPlugin("widget"));
@@ -167,6 +185,9 @@ describe("discovery runs nothing that is off", () => {
 });
 
 describe("the runtime door", () => {
+  beforeEach(async () => {
+    await setUxPluginEnabled("clock", true);
+  });
   it("keeps a broken dev plugin on its row, registrations gone, and loads it again once fixed", async () => {
     listings = [clock("clock")];
     sources.set("clock", chipPlugin("clock"));

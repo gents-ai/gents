@@ -5,7 +5,7 @@ use tauri::{AppHandle, Manager, Runtime, State, WebviewUrl, WebviewWindowBuilder
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::DesktopAppState;
 
-const DB_EXPLORER_WINDOW_LABEL: &str = "db-explorer";
+use crate::navigation::{restrict_window, EXPLORER_WINDOW as DB_EXPLORER_WINDOW_LABEL};
 
 #[tauri::command]
 pub async fn desktop_open_db_explorer<R>(
@@ -69,6 +69,10 @@ where
     let parsed: tauri::Url = url
         .parse()
         .map_err(|error| BridgeError::new(BridgeErrorCode::InvalidArgument, format!("{error}")))?;
+    *app.state::<DesktopAppState>()
+        .explorer_origin
+        .lock()
+        .expect("explorer origin lock poisoned") = Some(parsed.clone());
     if let Some(existing) = app.get_webview_window(DB_EXPLORER_WINDOW_LABEL) {
         existing
             .navigate(parsed)
@@ -83,7 +87,7 @@ where
         WebviewWindowBuilder::new(app, DB_EXPLORER_WINDOW_LABEL, WebviewUrl::External(parsed));
     #[cfg(not(any(target_os = "ios", target_os = "android")))]
     let builder = builder.title("DB Explorer").inner_size(1280.0, 860.0);
-    builder.build().map_err(|error| {
+    restrict_window(builder).build().map_err(|error| {
         BridgeError::new(
             BridgeErrorCode::Backend,
             format!("opening the DB explorer window failed: {error}"),
