@@ -8,7 +8,6 @@ use tracing_subscriber::{Layer, Registry};
 pub(crate) struct ReadCapture {
     operation: &'static str,
     count: Arc<AtomicUsize>,
-    changed: Arc<tokio::sync::Notify>,
 }
 
 impl ReadCapture {
@@ -16,7 +15,6 @@ impl ReadCapture {
         Self {
             operation,
             count: Arc::new(AtomicUsize::new(0)),
-            changed: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -26,12 +24,6 @@ impl ReadCapture {
 
     pub(crate) fn count(&self) -> usize {
         self.count.load(Ordering::Relaxed)
-    }
-
-    pub(crate) async fn wait_for(&self, count: usize) {
-        while self.count() < count {
-            self.changed.notified().await;
-        }
     }
 }
 
@@ -64,7 +56,6 @@ where
         event.record(&mut operation);
         if operation.matched {
             self.count.fetch_add(1, Ordering::Relaxed);
-            self.changed.notify_one();
         }
     }
 }
