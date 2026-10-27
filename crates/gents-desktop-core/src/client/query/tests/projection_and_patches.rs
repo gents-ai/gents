@@ -111,10 +111,12 @@ async fn pending_edit_request_patch_reads_only_selected_and_replacement_document
         ..ClientStoreRows::default()
     }));
     assert_eq!(merged.requests.len(), 3);
-    assert!(merged
-        .requests
-        .iter()
-        .any(|row| row.request_id == "already-local"));
+    assert!(
+        merged
+            .requests
+            .iter()
+            .any(|row| row.request_id == "already-local")
+    );
 }
 
 #[tokio::test]
@@ -397,10 +399,10 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
     let response = node.execute(mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let selected_doc_id = response.data.as_ref().expect("mutation data")["first_request"][0]
-        ["_docID"]
-        .as_str()
-        .expect("physical request identity");
+    let selected_doc_id =
+        response.data.as_ref().expect("mutation data")["first_request"][0]["_docID"]
+            .as_str()
+            .expect("physical request identity");
     let observation = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
         "last_activity_at": "2026-07-24T00:00:01Z",
         "latest_request": {
@@ -511,11 +513,13 @@ fn canonical_head_waits_for_its_exact_physical_row_without_fallback() {
         );
     }
     let duplicated = serde_json::json!({"AgentRequest": [row.clone(), row.clone()]});
-    assert!(lookup()
-        .decode(&duplicated, "did:test:agent", "session", None)
-        .unwrap_err()
-        .downcast_ref::<BridgeError>()
-        .is_none());
+    assert!(
+        lookup()
+            .decode(&duplicated, "did:test:agent", "session", None)
+            .unwrap_err()
+            .downcast_ref::<BridgeError>()
+            .is_none()
+    );
     let arrived = serde_json::json!({"AgentRequest": [row]});
     let rows = lookup()
         .decode(&arrived, "did:test:agent", "session", None)
@@ -703,10 +707,12 @@ async fn title_request_patch_preserves_existence_without_public_projection() {
         .await
         .expect("title-only patch");
     assert_eq!(title_only.observed_documents, 1);
-    assert!(title_only
-        .missing_doc_ids
-        .as_ref()
-        .is_some_and(Vec::is_empty));
+    assert!(
+        title_only
+            .missing_doc_ids
+            .as_ref()
+            .is_some_and(Vec::is_empty)
+    );
     assert!(title_only.store.requests.is_empty());
 
     let mixed = fetch_doc_patch(node.as_ref(), AGENT_REQUEST_NAME, &[normal_id, title_id])
@@ -747,6 +753,9 @@ fn request_projection_retains_every_field_needed_to_verify_signed_ancestry() {
     let projected: std::collections::BTreeSet<_> =
         AGENT_REQUEST_FIELDS.split_whitespace().collect();
     for field in gents::SIGNED_REQUEST_FIELDS.split_whitespace() {
-        assert!(projected.contains(field), "request projection omits {field}");
+        assert!(
+            projected.contains(field),
+            "request projection omits {field}"
+        );
     }
 }
