@@ -553,7 +553,13 @@ impl PendingAgent {
                 .await?
                 .ok_or_else(|| anyhow!("backend {} disappeared during assembly", backend_id))?;
         let admission_config = BackendAdmissionConfig::from_backend(&backend, &observation)?
-            .with_measured_unhealthy(backend_health.measured_blocks_routing(&backend_id).await);
+            .with_measured_unhealthy(
+                backend_health
+                    .get(&backend_id)
+                    .await
+                    .and_then(|health| health.state_for(&backend))
+                    .is_some_and(|state| state.blocks_routing()),
+            );
         if !admission_config.is_available() {
             anyhow::bail!(
                 "agent '{}' backend {} is unavailable (enabled={} probe_status={} measured_unhealthy={})",

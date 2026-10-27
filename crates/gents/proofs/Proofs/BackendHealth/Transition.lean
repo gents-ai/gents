@@ -15,9 +15,13 @@ end Threshold
 def step (m : Model) (e : Event) (K : Threshold) : Model :=
   match e with
   | .probeSuccess => { state := .healthy, failureCount := 0 }
+  | .credentialsRejected => { state := .credentialsRequired, failureCount := m.failureCount + 1 }
+  | .subscriptionNotEntitled => { state := .subscriptionNotEntitled, failureCount := m.failureCount + 1 }
+  | .configurationChanged => Model.initial
   | .probeFail =>
       let n := m.failureCount + 1
-      if n ≥ K.val then { state := .unhealthy, failureCount := n }
+      if m.state.needsAccountRecovery then { state := m.state, failureCount := n }
+      else if n ≥ K.val then { state := .unhealthy, failureCount := n }
       else { state := .degraded, failureCount := n }
 
 def run (m : Model) (events : List Event) (K : Threshold) : Model :=

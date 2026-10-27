@@ -519,6 +519,36 @@ describe("configuration panels", () => {
       label: `label-${credentialId}`,
     });
 
+    it.each([
+      ["credentials_required", "Sign in to continue", "reconnect"],
+      ["subscription_not_entitled", "Subscription access unavailable", "API key"],
+    ] as const)(
+      "shows native account recovery in Inference for %s",
+      async (reason, title, nextStep) => {
+        const { api, app } = harness();
+        api.listProviderAccounts.mockResolvedValue([
+          claudeAccount("cred-original", null, "original-identity"),
+        ]);
+        const selectedAgent =
+          claudeDeployment.node?.defaultAgentId ?? claudeDeployment.agents[0]!.agentId;
+        const blocked = {
+          ...claudeDeployment,
+          nodeReadiness: {
+            ...claudeDeployment.nodeReadiness,
+            source: { state: "current" as const },
+            activeGeneration: 4,
+            routerGeneration: 4,
+            agents: [{ state: "unavailable" as const, agentId: selectedAgent, reason }],
+          },
+        };
+        renderIn(app, <InferencePanel deployment={blocked} />);
+        const recovery = await screen.findByTestId("inference-account-recovery");
+        expect(within(recovery).getByText(title)).toBeVisible();
+        expect(recovery).toHaveTextContent(nextStep);
+        expect(recovery).not.toHaveTextContent("temporarily unavailable");
+      },
+    );
+
     it("never borrows another account for a backend in the list", async () => {
       const { api, app } = harness();
       api.listProviderAccounts.mockResolvedValue([

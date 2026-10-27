@@ -116,7 +116,8 @@ def backendHealthCaseJson (witness : Proofs.BackendHealth.TransitionCase) : Stri
     ++ "\"threshold_k\":" ++ toString witness.thresholdK ++ ","
     ++ "\"next_state\":" ++ jsonString witness.nextState.toDefraDB ++ ","
     ++ "\"next_count\":" ++ toString witness.nextCount ++ ","
-    ++ "\"blocks_routing\":" ++ boolString witness.blocksRouting
+    ++ "\"blocks_routing\":" ++ boolString witness.blocksRouting ++ ","
+    ++ "\"readiness_reason\":" ++ jsonOptionalString witness.readinessReason
     ++ "}"
 
 def backendProbeConfigurationJson (config : Proofs.BackendHealth.ProbeConfiguration) : String :=

@@ -50,6 +50,7 @@ pub enum AgentReadinessUnavailableReason {
     BackendDisabled,
     BackendTemporarilyUnavailable,
     CredentialsRequired,
+    SubscriptionNotEntitled,
     InferenceProfileInvalid,
     ToolConfigurationInvalid,
     ToolSurfaceUnavailable,
@@ -65,6 +66,9 @@ impl AgentReadinessUnavailableReason {
             Self::BackendDisabled => "inference backend is disabled",
             Self::BackendTemporarilyUnavailable => "inference backend is temporarily unavailable",
             Self::CredentialsRequired => "inference credentials are required",
+            Self::SubscriptionNotEntitled => {
+                "the subscription account is not eligible for inference"
+            }
             Self::InferenceProfileInvalid => "inference profile is invalid",
             Self::ToolConfigurationInvalid => "tool configuration is invalid",
             Self::ToolSurfaceUnavailable => "tool surface is unavailable",
@@ -72,13 +76,14 @@ impl AgentReadinessUnavailableReason {
         }
     }
 
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::AgentDisabled,
         Self::RuntimeConfigurationInvalid,
         Self::BackendNotConfigured,
         Self::BackendDisabled,
         Self::BackendTemporarilyUnavailable,
         Self::CredentialsRequired,
+        Self::SubscriptionNotEntitled,
         Self::InferenceProfileInvalid,
         Self::ToolConfigurationInvalid,
         Self::ToolSurfaceUnavailable,

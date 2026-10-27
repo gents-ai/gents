@@ -63,6 +63,7 @@ pub enum AgentUnavailableReasonView {
     BackendDisabled,
     BackendTemporarilyUnavailable,
     CredentialsRequired,
+    SubscriptionNotEntitled,
     InferenceProfileInvalid,
     ToolConfigurationInvalid,
     ToolSurfaceUnavailable,

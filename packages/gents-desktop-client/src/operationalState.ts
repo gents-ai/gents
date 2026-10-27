@@ -168,6 +168,7 @@ export function nodeReadinessIsInferenceFailure(
     decision.reason === "backend_disabled" ||
     decision.reason === "backend_temporarily_unavailable" ||
     decision.reason === "credentials_required" ||
+    decision.reason === "subscription_not_entitled" ||
     decision.reason === "inference_profile_invalid"
   );
 }
@@ -210,7 +211,9 @@ export function nodeReadinessDetail(
     case "backend_temporarily_unavailable":
       return `Inference backend for “${decision.agentLabel}” is temporarily unavailable`;
     case "credentials_required":
-      return `Agent “${decision.agentLabel}” requires inference credentials`;
+      return `Agent “${decision.agentLabel}” needs a signed-in account. Open Inference to sign in or select another account.`;
+    case "subscription_not_entitled":
+      return `The subscription account for “${decision.agentLabel}” is not eligible for inference. Select an eligible account or configure an API key; signing in again will not change account eligibility.`;
     case "inference_profile_invalid":
       return `Agent “${decision.agentLabel}” has an invalid inference profile`;
     case "tool_configuration_invalid":
@@ -246,20 +249,30 @@ export function projectAgentOperationalStatus(
     kind: decision.kind === "unknown" && !incompatible ? "waiting" : "blocked",
     layer: inferenceFailure ? "inference" : "runtime",
     reason: decision.reason,
-    label: inferenceFailure
-      ? "Inference is unavailable"
-      : incompatible
-        ? "Runtime is incompatible"
-        : decision.kind === "unavailable"
-          ? "This agent is unavailable"
-          : "Waiting for the node runtime",
-    shortLabel: inferenceFailure
-      ? "Inference unavailable"
-      : incompatible
-        ? "Runtime incompatible"
-        : decision.kind === "unavailable"
-          ? "Unavailable"
-          : "Waiting for runtime",
+    label:
+      decision.reason === "credentials_required"
+        ? "Sign in to continue"
+        : decision.reason === "subscription_not_entitled"
+          ? "Subscription access unavailable"
+          : inferenceFailure
+            ? "Inference is unavailable"
+            : incompatible
+              ? "Runtime is incompatible"
+              : decision.kind === "unavailable"
+                ? "This agent is unavailable"
+                : "Waiting for the node runtime",
+    shortLabel:
+      decision.reason === "credentials_required"
+        ? "Sign-in required"
+        : decision.reason === "subscription_not_entitled"
+          ? "Account unavailable"
+          : inferenceFailure
+            ? "Inference unavailable"
+            : incompatible
+              ? "Runtime incompatible"
+              : decision.kind === "unavailable"
+                ? "Unavailable"
+                : "Waiting for runtime",
     detail: nodeReadinessDetail(decision),
     action: inferenceFailure && localRuntime ? "configureInference" : null,
   });

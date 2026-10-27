@@ -259,6 +259,8 @@ def clientAgentReadinessCases : List ClientAgentReadinessCase :=
   , clientAgentReadinessCase "missing_backend_is_unavailable" "observed" .ready 4 4 false true false .backendNotConfigured
   , clientAgentReadinessCase "disabled_backend_is_unavailable" "observed" .ready 4 4 false true false .backendDisabled
   , clientAgentReadinessCase "missing_credential_is_unavailable" "observed" .ready 4 4 false true false .credentialsRequired
+  , clientAgentReadinessCase "rejected_subscription_credential_is_unavailable" "observed" .ready 4 4 false true false .credentialsRequired
+  , clientAgentReadinessCase "subscription_not_entitled_is_unavailable" "observed" .ready 4 4 false true false .subscriptionNotEntitled
   , clientAgentReadinessCase "invalid_inference_profile_is_unavailable" "observed" .ready 4 4 false true false .inferenceProfileInvalid
   , clientAgentReadinessCase "invalid_tool_configuration_is_unavailable" "observed" .ready 4 4 false true false .toolConfigurationInvalid
   , clientAgentReadinessCase "invalid_tool_surface_is_unavailable" "observed" .ready 4 4 false true false .toolSurfaceUnavailable
