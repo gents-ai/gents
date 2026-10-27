@@ -7,6 +7,7 @@ pub mod effects;
 pub mod input;
 pub mod keys;
 pub mod origin;
+pub mod promote;
 pub mod records;
 pub mod recovery;
 pub mod settings;
