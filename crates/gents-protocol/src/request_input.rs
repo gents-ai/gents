@@ -74,8 +74,14 @@ impl RequestInput {
     }
 
     pub fn question_reply_compatible(&self, runtime_version: Option<u64>) -> bool {
-        self.question_reply.is_none()
-            || runtime_version == Some(u64::from(crate::mailbox_question::MAILBOX_QUESTION_VERSION))
+        self.question_reply.as_ref().is_none_or(|reply| {
+            let required = u64::from(reply.question_version.unwrap_or(2));
+            runtime_version.is_some_and(|version| {
+                required >= 2
+                    && required <= version
+                    && version <= u64::from(crate::mailbox_question::MAILBOX_QUESTION_VERSION)
+            })
+        })
     }
 
     pub fn has_authored_input(&self, prose: &str) -> bool {

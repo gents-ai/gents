@@ -196,11 +196,13 @@ async fn an_optional_question_skip_reaches_the_asking_session() {
                 id: id.into(),
                 label: id.to_uppercase(),
                 description: None,
+                prompt: None,
             })
             .to_vec(),
         multi_select: false,
         allow_free_text: true,
         optional: Some(true),
+        recommended_order: None,
     };
     let mut answer = MailboxQuestionAnswer {
         skip: Some(true),
@@ -378,11 +380,13 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
                 id: id.into(),
                 label: id.to_uppercase(),
                 description: None,
+                prompt: None,
             })
             .to_vec(),
         multi_select: false,
         allow_free_text: false,
         optional: None,
+        recommended_order: None,
     };
     let reply = question
         .reply_content(

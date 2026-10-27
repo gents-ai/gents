@@ -80,7 +80,7 @@ mod tests {
         let input: RequestInput = serde_json::from_value(json!({ "question_reply": {
             "source_doc_id": "question", "question_hash": "sha256:original", "answer": {"skip": true}
         }})).unwrap();
-        for version in [None, Some(1), Some(2)] {
+        for version in [None, Some(1), Some(2), Some(3), Some(4)] {
             server.reset().await;
             Mock::given(method("GET"))
                 .and(path("/status"))
@@ -95,7 +95,7 @@ mod tests {
                 ensure_request_input_supported(Some(&record), &input)
                     .await
                     .is_ok(),
-                version == Some(2)
+                matches!(version, Some(2 | 3))
             );
             server.verify().await;
         }

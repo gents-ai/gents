@@ -11,8 +11,21 @@ pub fn awaiting_question_ids(
     now: DateTime<Utc>,
 ) -> Vec<String> {
     let mut ids = Vec::new();
+    if parent.lifecycle_state != Some(RequestLifecycleState::Completed) {
+        return ids;
+    }
     for item in items {
-        if item.kind != "ask" || item.action != "start_request" {
+        if item.kind != "ask" || item.action != "start_request" || item.status != "open" {
+            continue;
+        }
+        let same_parent = item.request_id.as_deref() == Some(parent.request_id.as_str())
+            && parent.node_did.as_deref() == Some(item.node_did.as_str())
+            && parent.node_did.as_deref() == Some(item.target_node_did.as_str())
+            && parent.requester_did.as_deref() == Some(item.requester_did.as_str())
+            && item.session_id.is_some()
+            && item.session_id == parent.session_id
+            && parent.agent_id.as_deref() == Some(item.target_agent_id.as_str());
+        if !same_parent {
             continue;
         }
         let Some(question) = item
@@ -22,13 +35,6 @@ pub fn awaiting_question_ids(
         else {
             continue;
         };
-        let same_parent = item.request_id.as_deref() == Some(parent.request_id.as_str())
-            && parent.node_did.as_deref() == Some(item.node_did.as_str())
-            && parent.node_did.as_deref() == Some(item.target_node_did.as_str())
-            && parent.requester_did.as_deref() == Some(item.requester_did.as_str())
-            && item.session_id.is_some()
-            && item.session_id == parent.session_id
-            && parent.agent_id.as_deref() == Some(item.target_agent_id.as_str());
         let is_open = item.status == "open"
             && item.deadline_at.as_deref().is_none_or(|deadline| {
                 DateTime::parse_from_rfc3339(deadline).is_ok_and(|deadline| deadline > now)
@@ -50,6 +56,9 @@ pub(crate) async fn required_question_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     parent: &AgentRequestRow,
 ) -> anyhow::Result<bool> {
+    if parent.lifecycle_state != Some(RequestLifecycleState::Completed) {
+        return Ok(false);
+    }
     let query = format!(
         "{{ MailboxItem(filter: {{ node_did: {{_eq: \"{}\"}}, request_id: {{_eq: \"{}\"}}, status: {{_eq: \"open\"}} }}) {{ {} }} }}",
         crate::graphql::escape_graphql_string(parent.node_did.as_deref().unwrap_or_default()),

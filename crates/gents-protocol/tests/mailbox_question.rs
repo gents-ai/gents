@@ -17,6 +17,9 @@ struct Case {
     accepted: bool,
     dismissible: bool,
     waits: Vec<WaitCase>,
+    presentations: Vec<PresentationCase>,
+    receipt_versions: Vec<ReceiptVersionCase>,
+    runtimes: Vec<RuntimeCase>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -25,6 +28,28 @@ struct WaitCase {
     same_parent: bool,
     completed: bool,
     waiting: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct PresentationCase {
+    multi_select: bool,
+    has_prompt: bool,
+    nonempty_prompt: bool,
+    order: Option<Vec<usize>>,
+    valid: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReceiptVersionCase {
+    version: Option<u32>,
+    current: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeCase {
+    version: Option<u64>,
+    reply_version: Option<u32>,
+    supported: bool,
 }
 
 #[test]
@@ -190,6 +215,88 @@ fn question_policy_follows_the_executable_model() {
                     )),
                 wait.waiting,
                 "{case:?}: {wait:?}",
+            );
+        }
+        for presentation in &case.presentations {
+            let mut value: serde_json::Value = serde_json::from_str(&payload).unwrap();
+            value["multi_select"] = json!(presentation.multi_select);
+            if presentation.has_prompt {
+                value["options"][0]["prompt"] = json!(if presentation.nonempty_prompt {
+                    "Review this focused change and report the result."
+                } else {
+                    " "
+                });
+            }
+            if let Some(order) = &presentation.order {
+                value["recommended_order"] = json!(order
+                    .iter()
+                    .map(|index| format!("choice-{index}"))
+                    .collect::<Vec<_>>());
+            }
+            assert_eq!(
+                MailboxQuestion::from_payload(&value.to_string()).is_ok(),
+                presentation.valid,
+                "{case:?}: {presentation:?}"
+            );
+        }
+        let observed_hash = gents_protocol::mailbox_question::question_source_hash(
+            "Plan",
+            None,
+            &payload,
+            Some("request"),
+        )
+        .unwrap();
+        let valid_answer = MailboxQuestionAnswer {
+            option_ids: if case.option_count > 0 {
+                vec!["choice-0".into()]
+            } else {
+                Vec::new()
+            },
+            free_text: (case.option_count == 0).then(|| "My answer".into()),
+            question_hash: Some(observed_hash),
+            ..Default::default()
+        };
+        let receipt = gents_protocol::mailbox_question::MailboxQuestionReply::new(
+            "question",
+            "Plan",
+            None,
+            &payload,
+            Some("request"),
+            valid_answer.clone(),
+        );
+        for version in &case.receipt_versions {
+            let current = receipt.as_ref().ok().is_some_and(|original| {
+                let mut evidence = original.clone();
+                evidence.question_version = version.version;
+                let content = MailboxQuestion::from_payload(&payload)
+                    .unwrap()
+                    .reply_content("Plan", &valid_answer)
+                    .unwrap();
+                evidence
+                    .validate_for(
+                        "question",
+                        "Plan",
+                        None,
+                        &payload,
+                        Some("request"),
+                        &content,
+                    )
+                    .is_ok()
+            });
+            assert_eq!(current, version.current, "{case:?}: {version:?}");
+        }
+        for runtime in &case.runtimes {
+            let mut input = gents_protocol::request_input::RequestInput::default();
+            input.question_reply = Some(gents_protocol::mailbox_question::MailboxQuestionReply {
+                question_version: runtime.reply_version,
+                source_doc_id: "question".into(),
+                question_hash: "source".into(),
+                answer: Default::default(),
+            });
+            assert_eq!(
+                input.question_reply_compatible(runtime.version),
+                runtime.supported,
+                "{case:?}: {runtime:?}"
             );
         }
         let answer = serde_json::from_value::<MailboxQuestionAnswer>(json!({
