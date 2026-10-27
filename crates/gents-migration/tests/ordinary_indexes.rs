@@ -226,7 +226,7 @@ async fn existing_and_fresh_stores_reconcile_the_same_index_without_changing_doc
     let registry = registry_with_request_index(&indexes);
     let existing = fresh_node().await;
     existing
-        .add_schema(AGENT_REQUEST)
+        .add_collection(AGENT_REQUEST)
         .await
         .expect("register pre-index AgentRequest schema");
     let first_doc = create_request(existing.as_ref(), "request-twin", "session-a", "first").await;
@@ -464,7 +464,7 @@ async fn existing_and_fresh_stores_reconcile_the_same_index_without_changing_doc
 #[tokio::test]
 async fn mailbox_cursor_index_reconciles_on_an_existing_collection() {
     let node = fresh_node().await;
-    node.add_schema(MAILBOX_ITEM)
+    node.add_collection(MAILBOX_ITEM)
         .await
         .expect("register pre-index MailboxItem schema");
     let before = node
@@ -511,7 +511,7 @@ async fn output_source_index_backfills_existing_rows_and_retains_conflicts() {
     use gents_protocol::schemas::{AGENT_OUTPUT_SEGMENT, AGENT_OUTPUT_SEGMENT_NAME};
 
     let node = fresh_node().await;
-    node.add_schema(AGENT_OUTPUT_SEGMENT).await.unwrap();
+    node.add_collection(AGENT_OUTPUT_SEGMENT).await.unwrap();
     let before = node
         .get_collection(AGENT_OUTPUT_SEGMENT_NAME)
         .unwrap()
@@ -587,7 +587,7 @@ async fn output_source_index_backfills_existing_rows_and_retains_conflicts() {
 async fn background_completion_recovery_seeks_pending_status_range() {
     use gents_protocol::schemas::{AGENT_TOOL_CALL, AGENT_TOOL_CALL_NAME};
     let node = fresh_node().await;
-    node.add_schema(AGENT_TOOL_CALL).await.unwrap();
+    node.add_collection(AGENT_TOOL_CALL).await.unwrap();
     let before = node.get_collection(AGENT_TOOL_CALL_NAME).unwrap().unwrap();
     let historical = (0..160)
         .map(|i| {
@@ -669,7 +669,7 @@ async fn background_completion_recovery_seeks_pending_status_range() {
 async fn session_only_message_page_uses_ordered_index_with_tiebreaker() {
     use gents_protocol::schemas::{AGENT_MESSAGE, AGENT_MESSAGE_NAME};
     let node = fresh_node().await;
-    node.add_schema(AGENT_MESSAGE).await.unwrap();
+    node.add_collection(AGENT_MESSAGE).await.unwrap();
     let before = node.get_collection(AGENT_MESSAGE_NAME).unwrap().unwrap();
     let input=Value::Array((0..160).map(|i|serde_json::json!({"message_key":format!("message-{i}"),"node_did":"n","session_id":"s","sequence":i})).collect());
     let input = gents_protocol::graphql::graphql_input_literal(&input).unwrap();
@@ -716,7 +716,7 @@ async fn session_only_message_page_uses_ordered_index_with_tiebreaker() {
 async fn transcript_tool_page_streams_sequence_and_key_order() {
     use gents_protocol::schemas::{AGENT_TOOL_CALL, AGENT_TOOL_CALL_NAME};
     let node = fresh_node().await;
-    node.add_schema(AGENT_TOOL_CALL).await.unwrap();
+    node.add_collection(AGENT_TOOL_CALL).await.unwrap();
     let before = node.get_collection(AGENT_TOOL_CALL_NAME).unwrap().unwrap();
     let rows = (0..160).map(|i| serde_json::json!({
         "tool_call_key": format!("tool-{i:03}"),
@@ -787,7 +787,7 @@ async fn transcript_tool_page_streams_sequence_and_key_order() {
 async fn inference_metrics_window_seeks_recent_terminal_calls() {
     use gents_protocol::schemas::{INFERENCE_CALL, INFERENCE_CALL_NAME};
     let node = fresh_node().await;
-    node.add_schema(INFERENCE_CALL).await.unwrap();
+    node.add_collection(INFERENCE_CALL).await.unwrap();
     let call = |id: String, state: &str, ended_at: &str| {
         serde_json::json!({
             "call_id": id, "call_kind": "inference", "call_state": state, "ended_at": ended_at
@@ -859,7 +859,7 @@ async fn inference_metrics_window_seeks_recent_terminal_calls() {
 async fn rendered_request_context_details_lookup_is_bounded_to_one_call() {
     use gents_protocol::schemas::{RENDERED_REQUEST, RENDERED_REQUEST_NAME};
     let node = fresh_node().await;
-    node.add_schema(RENDERED_REQUEST).await.unwrap();
+    node.add_collection(RENDERED_REQUEST).await.unwrap();
     let before = node.get_collection(RENDERED_REQUEST_NAME).unwrap().unwrap();
     let rows = (0..100)
         .map(|turn| {

@@ -391,7 +391,7 @@ async fn caller_receipt_survives_competing_reservations_and_reopen() -> Result<(
             .build()
             .await?,
     );
-    node.add_schema(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
+    node.add_collection(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
         .await?;
     let (left, right) = tokio::join!(
         journal::caller::reserve(&node, &proposal),
@@ -499,7 +499,7 @@ async fn owner_outcomes_are_retained_before_the_caller_reply() -> Result<()> {
             expected
         };
         let node = Arc::new(crate::test_support::node_builder().build().await?);
-        node.add_schema(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
+        node.add_collection(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
             .await?;
         let server = MockServer::start().await;
         let stored = Arc::new(AtomicBool::new(false));

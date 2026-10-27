@@ -26,7 +26,7 @@ async fn runtime_seal_case(unowned: bool) {
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    node.add_schema("type CapabilityReviewVerdict { workspace_id: String accepted: Boolean }")
+    node.add_collection("type CapabilityReviewVerdict { workspace_id: String accepted: Boolean }")
         .await
         .unwrap();
     let mut memory = MemoryWorkspaceDocuments::default();

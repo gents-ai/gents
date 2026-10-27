@@ -118,7 +118,7 @@ async fn create_owned_request_with_times_and_requester(
     };
     let execution_fields = if matches!(lifecycle_state, "claimed" | "processing") {
         format!(
-            r#", execution_generation: "{}", execution_lease_expires_at: "{CONVERGENCE_CREATED_AT}", execution_progress_seq: 0"#,
+            r#", execution_generation: "{}", execution_lease_expires_at: "{CONVERGENCE_CREATED_AT}""#,
             uuid::Uuid::new_v4()
         )
     } else {

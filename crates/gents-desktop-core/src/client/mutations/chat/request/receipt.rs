@@ -476,7 +476,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        node.add_schema(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
+        node.add_collection(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
             .await
             .unwrap();
         let pending = test_pending();
@@ -780,7 +780,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        node.add_schema(gents_protocol::schemas::AGENT_REQUEST)
+        node.add_collection(gents_protocol::schemas::AGENT_REQUEST)
             .await
             .unwrap();
         let access = ConfigAccess::local(std::sync::Arc::clone(&node));

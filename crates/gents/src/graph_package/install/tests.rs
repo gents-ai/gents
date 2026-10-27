@@ -116,7 +116,7 @@ async fn existing_package_schema_must_match_types_indexes_and_immutability() {
         "run_id: Int",
     );
     assert_ne!(incompatible, expected);
-    node.add_schema(&incompatible).await.unwrap();
+    node.add_collection(&incompatible).await.unwrap();
     let error = install_test_graph_package(&access, &options.node_did, "review_graph", &options)
         .await
         .unwrap_err();

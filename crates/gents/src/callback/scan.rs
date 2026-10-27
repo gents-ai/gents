@@ -840,9 +840,9 @@ mod grouped_tests {
             gents_protocol::schemas::CALLBACK_INVOCATION,
             gents_protocol::schemas::EVENT_GROUP_STATE,
         ] {
-            node.add_schema(sdl).await.unwrap();
+            node.add_collection(sdl).await.unwrap();
         }
-        node.add_schema("type CallbackMember { batch:String value:String hidden:String }")
+        node.add_collection("type CallbackMember { batch:String value:String hidden:String }")
             .await
             .unwrap();
         let response=node.execute(r#"mutation {create_Callback(input:{node_did:"owner",callback_id:"callback",enabled:true,handler:{kind:"built_in",emitter:"create_workspace"}}){_docID}}"#).await;

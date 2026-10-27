@@ -7,8 +7,7 @@ use serde_json::{json, Value};
 
 use crate::cli::args::P2pTransportArg;
 use crate::shared::{
-    P2pCollectionSubscriptionRow, P2pPeerRow, P2pReplicatorOutputRow, P2pReplicatorRow,
-    StoredRuntimeState,
+    P2pCollectionSubscriptionRow, P2pReplicatorOutputRow, P2pReplicatorRow, StoredRuntimeState,
 };
 
 use crate::{http_get_json, normalize_optional_string, read_runtime_state, resolve_home_dir};
@@ -58,8 +57,10 @@ pub(super) async fn load_collection_name_by_id(
     client: &reqwest::Client,
     api_base: &str,
 ) -> BTreeMap<String, String> {
-    let Ok(collections) =
-        http_get_json::<Vec<Value>>(client.get(format!("{api_base}/collections/versions"))).await
+    let Ok(collections) = http_get_json::<Vec<Value>>(
+        client.get(format!("{api_base}/collections?get_inactive=true")),
+    )
+    .await
     else {
         return BTreeMap::new();
     };
@@ -170,9 +171,8 @@ pub(crate) async fn fetch_live_http_p2p_status(
             .and_then(|state| state.p2p_peer_id.as_deref()),
     )
     .context("runtime reported a shareable P2P address but no usable peer id")?;
-    let peer_rows: Vec<P2pPeerRow> =
-        get_authorized_json(graphql, &format!("{api_base}/p2p/peers")).await?;
-    let connected_peers = peer_rows.into_iter().map(|row| row.id).collect::<Vec<_>>();
+    let connected_peers: Vec<String> =
+        get_authorized_json(graphql, &format!("{api_base}/p2p/active-peers")).await?;
     let replicator_count =
         match get_authorized_json::<Vec<Value>>(graphql, &format!("{api_base}/p2p/replicators"))
             .await
@@ -208,9 +208,7 @@ pub(crate) async fn fetch_live_http_p2p_status(
 
 pub(super) async fn fetch_connected_peer_ids(graphql: &GraphqlEndpoint) -> Result<Vec<String>> {
     let api_base = crate::graphql_access::graphql_api_base(graphql.url())?;
-    let peer_rows: Vec<P2pPeerRow> =
-        get_authorized_json(graphql, &format!("{api_base}/p2p/peers")).await?;
-    Ok(peer_rows.into_iter().map(|row| row.id).collect())
+    get_authorized_json(graphql, &format!("{api_base}/p2p/active-peers")).await
 }
 
 pub(crate) fn persisted_p2p_status(runtime_state: Option<&StoredRuntimeState>) -> Value {

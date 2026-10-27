@@ -140,11 +140,6 @@ fn default_p2p_transport() -> String {
     "iroh".to_string()
 }
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct P2pPeerRow {
-    pub(crate) id: String,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct P2pCollectionSubscriptionRow {
     pub(crate) id: String,

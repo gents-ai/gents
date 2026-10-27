@@ -931,7 +931,7 @@ mod tests {
             "type PipelineInput { graph_run_id: String @index(unique: true) payload: String }",
             "type PipelineResult { graph_run_id: String @index report: String }",
         ] {
-            node.add_schema(schema).await.unwrap();
+            node.add_collection(schema).await.unwrap();
         }
         gents::ensure_node(node, owner).await.unwrap();
         let plan = DesiredStateApplyPlan::new(

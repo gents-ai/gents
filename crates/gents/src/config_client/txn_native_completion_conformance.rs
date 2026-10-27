@@ -121,7 +121,7 @@ async fn signed_node() -> (Arc<EmbeddedNode>, Arc<BlockingSigner>, ReleaseSigner
             .unwrap(),
     );
     ConfigAccess::local(node.clone())
-        .add_schema("type NativeCompletionProbe { value: String }")
+        .add_collection("type NativeCompletionProbe { value: String }")
         .await
         .unwrap();
     (node, signer, release)

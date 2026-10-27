@@ -11,4 +11,5 @@ type EthTool @branchable @index(fields: ["node_did", "tool_id"], unique: true) {
     key_binding_id: String
     created_at: String
     tags: [String!]
+    updated_at: DateTime
 }

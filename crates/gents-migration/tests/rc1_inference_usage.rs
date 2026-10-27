@@ -34,7 +34,7 @@ async fn rc1_inference_usage_upgrade_preserves_rows_and_field_ids() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    node.add_schema(&previous).await.unwrap();
+    node.add_collection(&previous).await.unwrap();
     let before = node.get_collection("InferenceCall").unwrap().unwrap();
     assert_eq!(
         before.version_id,
@@ -178,7 +178,7 @@ async fn rc1_inference_usage_upgrade_preserves_rows_and_field_ids() {
 #[tokio::test]
 async fn fresh_inference_usage_keeps_its_canonical_root_and_single_indexes() {
     let node = common::fresh_node().await;
-    node.add_schema(schemas::INFERENCE_CALL).await.unwrap();
+    node.add_collection(schemas::INFERENCE_CALL).await.unwrap();
     let before = node.get_collection("InferenceCall").unwrap().unwrap();
     ensure_migrations(node.as_ref()).await.unwrap();
     let after = node.get_collection("InferenceCall").unwrap().unwrap();
@@ -206,7 +206,7 @@ async fn incompatible_inference_usage_stays_refused_without_schema_changes() {
     let node = common::fresh_node().await;
     let incompatible =
         schemas::INFERENCE_CALL.replace("prompt_tokens: Int", "prompt_tokens: String");
-    node.add_schema(&incompatible).await.unwrap();
+    node.add_collection(&incompatible).await.unwrap();
     let before = node.get_collection("InferenceCall").unwrap().unwrap();
     let error = ensure_migrations(node.as_ref()).await.unwrap_err();
     assert!(matches!(

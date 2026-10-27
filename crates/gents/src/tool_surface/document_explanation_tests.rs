@@ -42,7 +42,7 @@ fn document_explanation_resolves_target_owner_separately_from_destination() {
 #[tokio::test]
 async fn measured_explanation_uses_scoped_endpoint_health_not_registry_presence() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-    node.add_schema(gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE)
+    node.add_collection(gents_protocol::schemas::TOOL_SERVICE_HEALTH_STATE)
         .await
         .unwrap();
     let access = ConfigAccess::local(node.clone());

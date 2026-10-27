@@ -43,7 +43,7 @@ pub(super) async fn p2p_diagnose(args: P2pAccessArgs) -> Result<()> {
     let checks = json!({
         "info": p2p_probe_get(&graphql, &format!("{api_base}/p2p/info")).await,
         "shareable_address": p2p_probe_get(&graphql, &format!("{api_base}/p2p/shareable-address")).await,
-        "peers": p2p_probe_get(&graphql, &format!("{api_base}/p2p/peers")).await,
+        "peers": p2p_probe_get(&graphql, &format!("{api_base}/p2p/active-peers")).await,
         "collections": p2p_probe_get(&graphql, &format!("{api_base}/p2p/collections")).await,
         "replicators": p2p_probe_get(&graphql, &format!("{api_base}/p2p/replicators")).await,
         "documents": p2p_probe_get(&graphql, &format!("{api_base}/p2p/documents")).await,

@@ -156,7 +156,7 @@ async fn signed_claimed_access(
     let claim = crate::home::lock_store(home, data).unwrap();
     let access = ConfigAccess::claimed_local(node.clone(), claim).unwrap();
     access
-        .add_schema("type NativeClaimLifetimeProbe { value: String }")
+        .add_collection("type NativeClaimLifetimeProbe { value: String }")
         .await
         .unwrap();
     (node, access, signer.clone(), ReleaseSignerOnDrop(signer))
@@ -212,7 +212,7 @@ async fn run_paused_owned_schema(
         async move {
             tokio::time::timeout(
                 Duration::from_millis(25),
-                access.add_schema("type NativeClaimLifetimeSchemaProbe { value: String }"),
+                access.add_collection("type NativeClaimLifetimeSchemaProbe { value: String }"),
             )
             .await
             .map_err(anyhow::Error::from)?

@@ -1608,7 +1608,7 @@ mod tests {
     #[tokio::test]
     async fn unavailable_package_revisions_fail_closed_without_failing_the_runtime_view() {
         let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        node.add_schema(gents_protocol::schemas::GRAPH_REVISION)
+        node.add_collection(gents_protocol::schemas::GRAPH_REVISION)
             .await
             .unwrap();
         let created_at = chrono::Utc::now().to_rfc3339();
@@ -1655,7 +1655,7 @@ mod tests {
     #[tokio::test]
     async fn package_schema_readiness_reuses_live_schema_introspection_and_fails_closed() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        node.add_schema("type ReadyInput { graph_run_id: String }")
+        node.add_collection("type ReadyInput { graph_run_id: String }")
             .await
             .unwrap();
         let txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
@@ -2075,7 +2075,7 @@ mod tests {
                 report: String
             }"#,
         ] {
-            node.add_schema(schema).await.unwrap();
+            node.add_collection(schema).await.unwrap();
         }
 
         let first = test_plan("first");
@@ -2411,7 +2411,7 @@ mod tests {
             "type PipelineInput { graph_run_id: String @index(unique: true) payload: String }",
             "type PipelineResult { graph_run_id: String @index report: String }",
         ] {
-            node.add_schema(schema).await.unwrap();
+            node.add_collection(schema).await.unwrap();
         }
         let plan = test_plan_with_entry("prepare-guard", None, Some(test_prepare("prepare-guard")));
         install_plan_tasks(&node, &plan).await;
@@ -2461,7 +2461,7 @@ mod tests {
             "type PipelineInput { graph_run_id: String @index(unique: true) payload: String }",
             "type PipelineResult { graph_run_id: String @index report: String }",
         ] {
-            node.add_schema(schema).await.unwrap();
+            node.add_collection(schema).await.unwrap();
         }
         let plan = test_plan("no-prepare-guard");
         install_plan_tasks(&node, &plan).await;
@@ -2507,7 +2507,7 @@ mod tests {
             "type PipelineInput { graph_run_id: String @index(unique: true) payload: String }",
             "type PipelineResult { graph_run_id: String @index report: String }",
         ] {
-            node.add_schema(schema).await.unwrap();
+            node.add_collection(schema).await.unwrap();
         }
         let schema = json!({
             "type": "object",
@@ -2586,7 +2586,7 @@ mod tests {
                 report: String
             }"#,
         ] {
-            node.add_schema(schema).await.unwrap();
+            node.add_collection(schema).await.unwrap();
         }
         let plan = result_test_plan();
         install_plan_tasks(&node, &plan).await;
@@ -2913,7 +2913,7 @@ mod tests {
             "type PipelineInput { graph_run_id: String @index(unique: true) payload: String }",
             "type PipelineResult { graph_run_id: String @index report: String }",
         ] {
-            node.add_schema(schema).await.unwrap();
+            node.add_collection(schema).await.unwrap();
         }
         let mut plan = result_test_plan();
         plan.limits.max_total_invocations = max_invocations;

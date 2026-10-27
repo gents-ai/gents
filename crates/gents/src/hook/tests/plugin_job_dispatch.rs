@@ -191,7 +191,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    node.add_schema("type Plain { body: String }")
+    node.add_collection("type Plain { body: String }")
         .await
         .unwrap();
     crate::test_support::install_test_agent(&node, identity.did(), "general").await;

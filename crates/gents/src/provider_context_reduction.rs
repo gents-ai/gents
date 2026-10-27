@@ -1685,8 +1685,6 @@ mod tests {
                     session_id: "session-boundary"
                     sequence: {sequence}
                     role: "user"
-                    content: "message {sequence}"
-                    timestamp: "2026-08-14T00:00:0{sequence}Z"
                 }}) {{ _docID }} }}"#
             );
             let response = node.execute(&mutation).await;
@@ -1705,8 +1703,6 @@ mod tests {
                 session_id: "session-boundary"
                 sequence: 3
                 role: "user"
-                content: "unrelated"
-                timestamp: "2026-08-14T00:00:03Z"
             }) { _docID } }"#,
             )
             .await;

@@ -34,6 +34,26 @@ const SESSION_ARCHIVE_AFTER_STOP: &str =
     "bafyreih2muyccdxla5ox6f32aoriserpdko45a5fxqsb6zgrkkg2yeenrm";
 const SESSION_ARCHIVE_PATCH: &str = r#"[{"op":"add","path":"/AgentSession/Fields/-","value":{"Name":"archived_at","Kind":"String"}},{"op":"add","path":"/AgentSession/Fields/-","value":{"Name":"archive_revision","Kind":"Int"}}]"#;
 
+/// Desired-state apply stamps `updated_at` on every create so a document
+/// recreated after deletion gets a fresh content-addressed docID. DefraDB
+/// refuses fields a collection does not declare, so these collections append it.
+macro_rules! updated_at_upgrade {
+    ($name:literal, $id:literal, $root:literal, $target:literal) => {
+        (
+            $name,
+            $root,
+            $target,
+            $id,
+            concat!(
+                r#"[{"op":"add","path":"/"#,
+                $name,
+                r#"/Fields/-","value":{"Name":"updated_at","Kind":"DateTime"}}]"#
+            ),
+            &["updated_at"][..],
+        )
+    };
+}
+
 /// DefraDB field positions are persistent identifiers. Existing RC1 lineages
 /// append fields through versioned patches; fresh stores retain the current
 /// canonical roots. Only these exact source and destination versions qualify.
@@ -98,6 +118,48 @@ pub(crate) fn include_existing(
             "agent-session-add-stopped-at",
             r#"[{"op":"add","path":"/AgentSession/Fields/-","value":{"Name":"stopped_at","Kind":"String"}}]"#,
             &["stopped_at"][..],
+        ),
+        updated_at_upgrade!(
+            "AgentTarget",
+            "agent-target-add-updated-at",
+            "bafyreieqevckhv5c6eli4ceysd3p2wlfhdzjeve2r2mn2v37arv3vn6hti",
+            "bafyreierhwy2pombqxf2ufiqih275phvgdxj2w3h6e7wnuwme2tsllgoje"
+        ),
+        updated_at_upgrade!(
+            "Tools",
+            "tools-add-updated-at",
+            "bafyreih62xjqp376qygv2wgbfpvlu4juroh4oqfufem37koomf6bzgny5q",
+            "bafyreibrawpzq3wv3gm6ew2gd26k75rfi6xm64fp4x55njpfdics6xx26e"
+        ),
+        updated_at_upgrade!(
+            "ChainKeyBinding",
+            "chain-key-binding-add-updated-at",
+            "bafyreigkgc7vx3bacpnoop5ouryihgdckohdnkjzitapw3xqgakmimxd6a",
+            "bafyreias5umbmxkuo6iguihj6tvovbuzgjscwj7wjcmz23pirgk7jo4uom"
+        ),
+        updated_at_upgrade!(
+            "EthTool",
+            "eth-tool-add-updated-at",
+            "bafyreieeavm747hdfwfrlm524uilhmnokwz3wodn22x4daidndbyg3pz6a",
+            "bafyreie24fvfqig33silif6nxrf4jfua2yokujyqbf4ydvstrifvhweaca"
+        ),
+        updated_at_upgrade!(
+            "Callback",
+            "callback-add-updated-at",
+            "bafyreigwyv5fj5jfy2evxtq5ca4xz6bqd7eq2q5mcw5moiize4gpgusu2q",
+            "bafyreibijc44aul7l2m7kmvlojizbze7236sjixhi57osoqkevsreda5p4"
+        ),
+        updated_at_upgrade!(
+            "CallbackModule",
+            "callback-module-add-updated-at",
+            "bafyreib7haitwuad7wkxrermsm4nyrtvjc5asva3ubms34kspq3psfmjde",
+            "bafyreiceftkewzvdjuylk3djznmbw656qbopzikxneqq3v7krigoqsvqtu"
+        ),
+        updated_at_upgrade!(
+            "CallbackBinding",
+            "callback-binding-add-updated-at",
+            "bafyreiepwxqpz5fakzqk34hw3w7psrgvpqi2n4q7remzsrxidzskfdvk3y",
+            "bafyreigvksodxohqggry2u7dr65xak5kvlyp65rvfm62pgxvp4vlnfgody"
         ),
     ] {
         let Some(current) = node

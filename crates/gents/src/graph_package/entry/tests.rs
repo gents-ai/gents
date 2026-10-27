@@ -134,7 +134,7 @@ async fn prepare_entry_run_runs_host_steps_and_persists_the_plugins_documents() 
     let plan = fixture_plan(entry);
 
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
-    node.add_schema("type FixtureEvidence { note: String }")
+    node.add_collection("type FixtureEvidence { note: String }")
         .await
         .unwrap();
     let access = ConfigAccess::local(std::sync::Arc::new(node));
@@ -226,7 +226,7 @@ async fn prepare_entry_run_refuses_a_document_outside_declared_writes() {
 #[tokio::test]
 async fn persist_prepared_documents_batches_and_never_drops_a_document() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
-    node.add_schema("type FixtureEvidence { note: String }")
+    node.add_collection("type FixtureEvidence { note: String }")
         .await
         .unwrap();
     let access = ConfigAccess::local(std::sync::Arc::new(node));

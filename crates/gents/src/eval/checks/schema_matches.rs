@@ -276,7 +276,7 @@ mod tests {
             coordinates: [Float32!] @index(vector: {dimensions:3})
           }
         "#;
-        access.add_schema(sdl).await.unwrap();
+        access.add_collection(sdl).await.unwrap();
         let mut stage = ScriptedExecutor::passed_evidence("did:test", "schema", "unused", vec![])
             .stages
             .remove(0);

@@ -226,4 +226,22 @@ mod tests {
             assert!(c.file_name().is_some() ^ c.dir_name().is_some());
         }
     }
+
+    #[test]
+    fn every_apply_collection_declares_the_recreate_identity_stamp() {
+        for collection in Collection::ALL {
+            let name = collection.graphql_type();
+            let baseline = crate::migration::DEFAULT_BASELINE
+                .iter()
+                .find(|entry| entry.name == name)
+                .unwrap_or_else(|| panic!("{name} has no baseline schema"));
+            assert!(
+                baseline
+                    .sdl
+                    .lines()
+                    .any(|line| line.trim_start().starts_with("updated_at:")),
+                "{name} must declare the updated_at that mint_recreate_identity stamps"
+            );
+        }
+    }
 }

@@ -26,9 +26,9 @@ async fn register_webhook_event_schema(node: &EmbeddedNode) {
             kind: String @index
         }
     "#;
-    node.add_schema(sdl)
+    node.add_collection(sdl)
         .await
-        .expect("add_schema for WebhookEvent");
+        .expect("add_collection for WebhookEvent");
 }
 
 async fn create_task(

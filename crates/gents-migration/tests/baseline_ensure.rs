@@ -117,7 +117,7 @@ async fn existing_agent_session_schema_upgrades_in_place_and_preserves_rows() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    node.add_schema(&legacy_sdl)
+    node.add_collection(&legacy_sdl)
         .await
         .expect("register pre-stop AgentSession schema");
     let legacy = node
@@ -267,7 +267,7 @@ async fn agent_request_baseline_is_chain_free_and_migrations_are_idempotent() {
         .iter()
         .find(|entry| entry.name == gents_protocol::schemas::AGENT_REQUEST_NAME)
         .expect("AgentRequest baseline");
-    node.add_schema(baseline.sdl)
+    node.add_collection(baseline.sdl)
         .await
         .expect("register request baseline");
 
@@ -384,7 +384,7 @@ async fn rendered_request_reaches_a_pre_existing_store_through_the_baseline() {
         if entry.name == gents_protocol::schemas::RENDERED_REQUEST_NAME {
             continue;
         }
-        node.add_schema(entry.sdl)
+        node.add_collection(entry.sdl)
             .await
             .unwrap_or_else(|error| panic!("register {}: {error}", entry.name));
     }
@@ -534,7 +534,7 @@ async fn single_version_unknown_root_is_rejected() {
 
     let authoring_node = fresh_node().await;
     authoring_node
-        .add_schema(EXPECTED_SDL)
+        .add_collection(EXPECTED_SDL)
         .await
         .expect("register expected root");
     let expected_root = authoring_node
@@ -545,7 +545,7 @@ async fn single_version_unknown_root_is_rejected() {
     authoring_node.shutdown().await;
 
     let node = fresh_node().await;
-    node.add_schema(FOREIGN_SDL)
+    node.add_collection(FOREIGN_SDL)
         .await
         .expect("register foreign root");
     let registry = DynamicRegistry {
@@ -577,7 +577,7 @@ async fn unknown_lineage_is_rejected_before_the_baseline_writes_the_store() {
 
     let authoring_node = fresh_node().await;
     authoring_node
-        .add_schema(EXPECTED_SDL)
+        .add_collection(EXPECTED_SDL)
         .await
         .expect("register expected root");
     let expected_root = authoring_node
@@ -588,7 +588,9 @@ async fn unknown_lineage_is_rejected_before_the_baseline_writes_the_store() {
     authoring_node.shutdown().await;
 
     let node = fresh_node().await;
-    node.add_schema(OLD_SDL).await.expect("register old root");
+    node.add_collection(OLD_SDL)
+        .await
+        .expect("register old root");
     let before = node
         .get_all_collection_versions()
         .await
@@ -684,7 +686,7 @@ async fn unprotected_file_images_are_rejected_without_changing_retained_data() {
         gents_protocol::schemas::TOOL_FILE_CHANGE_POLICY_RESOURCE
     );
     let unprotected = gents_protocol::schemas::TOOL_FILE_CHANGE.replace(&directive, "");
-    node.add_schema(&unprotected).await.unwrap();
+    node.add_collection(&unprotected).await.unwrap();
     let created = node.execute("mutation { create_ToolFileChange(input: { tool_call_doc_id: \"retained-tool\" }) { _docID } }").await;
     assert!(!created.has_errors(), "{:?}", created.errors);
     let before = node
@@ -820,7 +822,9 @@ async fn file_image_receipt_is_local_and_matches_its_pinned_root() {
         TOOL_FILE_CHANGE_POLICY_ID, TOOL_FILE_CHANGE_POLICY_RESOURCE,
     };
     let node = fresh_node().await;
-    node.add_schema(FILE_IMAGE_HYDRATION_RECEIPT).await.unwrap();
+    node.add_collection(FILE_IMAGE_HYDRATION_RECEIPT)
+        .await
+        .unwrap();
     let collection = node
         .get_collection(FILE_IMAGE_HYDRATION_RECEIPT_NAME)
         .unwrap()
@@ -865,7 +869,7 @@ async fn archive_columns_preserve_existing_sessions_and_field_identities() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    node.add_schema(&previous).await.unwrap();
+    node.add_collection(&previous).await.unwrap();
     let before = node.get_collection("AgentSession").unwrap().unwrap();
     let created = node
         .execute(

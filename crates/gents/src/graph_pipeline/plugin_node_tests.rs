@@ -90,7 +90,7 @@ async fn run_echo_graph(
     let (home, record) = crate::plugin::tests::executor::installed_echo();
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    node.add_schema(
+    node.add_collection(
         "type EchoInput { graph_run_id: String @index(unique: true) payload: String }
          type EchoOutput { graph_run_id: String @index payload: String }",
     )
@@ -211,7 +211,7 @@ async fn a_failed_plugin_node_is_retried_and_the_run_then_succeeds() {
     let (home, record) = crate::plugin::tests::executor::installed_echo();
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    node.add_schema(
+    node.add_collection(
         "type EchoInput { graph_run_id: String @index(unique: true) payload: String }
          type EchoOutput { graph_run_id: String @index payload: String }",
     )
@@ -318,7 +318,7 @@ async fn seed_interrupted_echo_invocation(
     let (home, record) = crate::plugin::tests::executor::installed_echo();
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    node.add_schema(
+    node.add_collection(
         "type EchoInput { graph_run_id: String @index(unique: true) payload: String }
          type EchoOutput { graph_run_id: String @index payload: String }",
     )
@@ -492,7 +492,7 @@ async fn a_run_started_before_its_routes_are_noticed_still_runs() {
     let (home, record) = crate::plugin::tests::executor::installed_echo();
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    node.add_schema(
+    node.add_collection(
         "type EchoInput { graph_run_id: String @index(unique: true) payload: String }
          type EchoOutput { graph_run_id: String @index payload: String }",
     )

@@ -20,7 +20,7 @@ async fn native_pairing_sync_and_revoke_preserve_enrollment_and_scope() {
     let identity = local.node_identity.clone();
     for node in [&local.node, &remote.node] {
         ConfigAccess::local(node.clone())
-            .add_schema("type DeploymentNote @branchable { text: String }")
+            .add_collection("type DeploymentNote @branchable { text: String }")
             .await
             .unwrap();
     }
@@ -241,7 +241,7 @@ async fn node_requested_enrollment_is_approved_and_paired_by_the_offering_node()
     let candidate = crate::support::test_p2p_db("engineer-enroll-candidate").await;
     for node in [&server.node, &candidate.node] {
         ConfigAccess::local(node.clone())
-            .add_schema("type DeploymentNote @branchable { text: String }")
+            .add_collection("type DeploymentNote @branchable { text: String }")
             .await
             .unwrap();
     }

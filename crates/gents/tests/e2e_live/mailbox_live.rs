@@ -55,7 +55,7 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
     .await;
 
     db.node
-        .add_schema("type MailboxLiveAgentAttention { owner: String @immutable }")
+        .add_collection("type MailboxLiveAgentAttention { owner: String @immutable }")
         .await
         .unwrap();
     let source = db

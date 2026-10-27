@@ -790,8 +790,6 @@ pub async fn create_agent_tool_call(
     message_sequence: u32,
     tool_call_id: &str,
     tool_name: &str,
-    args: &str,
-    result: &str,
     status: &str,
     started_at: &str,
     completed_at: &str,
@@ -799,8 +797,6 @@ pub async fn create_agent_tool_call(
     let session_id_escaped = escape_graphql_string(session_id);
     let tool_call_id_escaped = escape_graphql_string(tool_call_id);
     let tool_name_escaped = escape_graphql_string(tool_name);
-    let args_escaped = escape_graphql_string(args);
-    let result_escaped = escape_graphql_string(result);
     let status_escaped = escape_graphql_string(status);
     let started_escaped = escape_graphql_string(started_at);
     let completed_escaped = escape_graphql_string(completed_at);
@@ -815,8 +811,6 @@ pub async fn create_agent_tool_call(
                 message_sequence: {message_sequence},
                 tool_name: "{tool_name_escaped}",
                 tool_call_id: "{tool_call_id_escaped}",
-                args: "{args_escaped}",
-                result: "{result_escaped}",
                 status: "{status_escaped}",
                 started_at: "{started_escaped}",
                 completed_at: "{completed_escaped}"

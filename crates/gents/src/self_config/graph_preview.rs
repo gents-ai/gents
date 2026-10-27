@@ -259,12 +259,12 @@ mod tests {
     }
 
     async fn install_materialization_schemas(node: &defra_node::EmbeddedNode) {
-        node.add_schema(
+        node.add_collection(
             "type SessionInput { run_id: String @index(unique: true) payload: String }",
         )
         .await
         .unwrap();
-        node.add_schema("type SessionScore { run_id: String @index score: Int }")
+        node.add_collection("type SessionScore { run_id: String @index score: Int }")
             .await
             .unwrap();
     }

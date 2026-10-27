@@ -304,7 +304,7 @@ async fn own_tools_refuse_a_group_set_that_silently_drops_existing_settings() {
 #[tokio::test]
 async fn automation_validation_refuses_what_every_fire_would_reject() {
     let (node, _owner, tools) = setup("automation-gaps", &["automation"]).await;
-    node.add_schema("type GapInput { message: String reply_session_id: String }")
+    node.add_collection("type GapInput { message: String reply_session_id: String }")
         .await
         .unwrap();
     let edit = |kind: &str, id: &str, set: Value| json!({"argv":["automation","edit",kind],"target_id":id,"set":set});
@@ -1492,7 +1492,7 @@ async fn composition_help_and_field_placement_match_the_accepted_calls() {
 #[tokio::test]
 async fn saved_config_audit_checks_selected_schema_fields_and_accepts_updates() {
     let (node, _owner, tools) = setup("saved-schema-audit", &["node", "tools"]).await;
-    node.add_schema("type AuditRecord { message: String }")
+    node.add_collection("type AuditRecord { message: String }")
         .await
         .unwrap();
     let entries = json!([

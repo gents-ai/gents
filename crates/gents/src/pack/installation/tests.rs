@@ -504,7 +504,7 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
         r#"@index(fields: ["node_did", "coordinate"], unique: true)"#,
         "",
     );
-    node.add_schema(&schema).await.unwrap();
+    node.add_collection(&schema).await.unwrap();
     let access = ConfigAccess::local(node);
 
     for digest_seed in ["1", "2"] {

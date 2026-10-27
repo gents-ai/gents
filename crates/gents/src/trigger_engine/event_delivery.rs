@@ -617,10 +617,10 @@ mod tests {
     #[tokio::test]
     async fn shared_clock_survives_restart_and_quiescence_is_owner_scoped() {
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-        node.add_schema(gents_protocol::schemas::EVENT_GROUP_STATE)
+        node.add_collection(gents_protocol::schemas::EVENT_GROUP_STATE)
             .await
             .unwrap();
-        node.add_schema("type GroupMember { batch:String expected:Int value:String }")
+        node.add_collection("type GroupMember { batch:String expected:Int value:String }")
             .await
             .unwrap();
         let response=node.execute("mutation {create_GroupMember(input:{batch:\"one\",expected:2,value:\"first\"}){_docID}}").await;

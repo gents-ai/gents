@@ -355,7 +355,7 @@ async fn native_same_behavior_graph_continues_session_with_distinct_stage_roots(
         "ContinueSummary",
         "ContinueResult",
     ] {
-        node.add_schema(&format!("type {collection} {{run_id: String @index}} "))
+        node.add_collection(&format!("type {collection} {{run_id: String @index}} "))
             .await
             .unwrap();
     }

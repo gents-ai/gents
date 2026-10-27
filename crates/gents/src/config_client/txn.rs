@@ -1729,7 +1729,10 @@ impl<'a> ConfigApplyTxn<'a> {
             TxnBackend::Http {
                 endpoint, client, ..
             } => {
-                let url = format!("{}/collections/versions", graphql_api_base(endpoint.url())?);
+                let url = format!(
+                    "{}/collections?get_inactive=true",
+                    graphql_api_base(endpoint.url())?
+                );
                 let versions: Value = endpoint
                     .authorize(client.get(&url))?
                     .send()
@@ -1925,7 +1928,7 @@ impl<'a> ConfigApplyTxn<'a> {
                         EmbeddedFinalizationBoundary::BeforeRollback,
                     )
                     .await;
-                    node.rollback_transaction(handle).await
+                    node.discard_transaction(handle).await
                 })
                 .await
                 {
@@ -3127,7 +3130,7 @@ mod variable_tests {
     #[tokio::test]
     async fn whole_input_variables_update_upsert_and_rollback_losslessly() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        node.add_schema("type MutationVariableProbe { key: String label: String enabled: Boolean count: Int tags: [String] payload: JSON }").await.unwrap();
+        node.add_collection("type MutationVariableProbe { key: String label: String enabled: Boolean count: Int tags: [String] payload: JSON }").await.unwrap();
         let payload = json!({"a-b": [], "nested": [{"": {}, "雪": [null, []]}]});
         for (query, input) in [
             (
@@ -3188,7 +3191,7 @@ mod variable_tests {
     #[tokio::test]
     async fn embedded_transaction_preserves_json_variables_and_rollback() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        node.add_schema("type TransactionJsonProbe { key: String payload: JSON }")
+        node.add_collection("type TransactionJsonProbe { key: String payload: JSON }")
             .await
             .unwrap();
         let variables = json!({"payload": {"a-b": [], "nested": [{"": {}, "雪": [null, []]}]}});

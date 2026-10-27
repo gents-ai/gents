@@ -9,4 +9,5 @@ type ChainKeyBinding @branchable
     created_at: String
     revoked_at: String
     tags: [String!]
+    updated_at: DateTime
 }

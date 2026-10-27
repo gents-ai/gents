@@ -258,7 +258,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
         let remote_did = remote.node_identity.did().to_owned();
         for db in [&local, &remote] {
             ConfigAccess::local(db.node.clone())
-                .add_schema("type DeploymentNote @branchable { text: String }")
+                .add_collection("type DeploymentNote @branchable { text: String }")
                 .await?;
         }
         let (peer, address) = wait_for_peer_identity(&remote.node).await;

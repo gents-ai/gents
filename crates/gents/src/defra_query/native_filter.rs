@@ -172,7 +172,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        node.add_schema("type FilterAuthor { name: String } type FilterBook { title: String score: Int tags: [String] payload: JSON author: FilterAuthor }").await.unwrap();
+        node.add_collection("type FilterAuthor { name: String } type FilterBook { title: String score: Int tags: [String] payload: JSON author: FilterAuthor }").await.unwrap();
         let access = ConfigAccess::local(node.clone());
         for filter in [
             json!({"_and":[{"score":{"_geq":0}},{"author":{"name":{"_eq":"Ada"}}}]}),
@@ -199,7 +199,7 @@ mod tests {
                 "invalid filter was accepted: {filter}"
             );
         }
-        node.add_schema("type OAuthCredential { credential_id: String access_token: String refresh_token: String id_token: String }").await.unwrap();
+        node.add_collection("type OAuthCredential { credential_id: String access_token: String refresh_token: String id_token: String }").await.unwrap();
         let error = validate_filter(&access, "OAuthCredential", &json!({"unknown_field":"x"}))
             .await
             .unwrap_err();
@@ -222,7 +222,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        node.add_schema("type CountFilterProbe { name: String score: Int }")
+        node.add_collection("type CountFilterProbe { name: String score: Int }")
             .await
             .unwrap();
         ConfigAccess::write_local(&node,"seed_count_filter_probe","mutation { add_CountFilterProbe(input:[{name:\"ready\",score:0},{name:\"ready\",score:1}]){_docID} }").await.unwrap();

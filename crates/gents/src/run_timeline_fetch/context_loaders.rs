@@ -96,7 +96,7 @@ mod tests {
     #[tokio::test]
     async fn canonical_session_reads_require_exact_owner_and_requester_scope() {
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-        node.add_schema(gents_protocol::schemas::AGENT_SESSION)
+        node.add_collection(gents_protocol::schemas::AGENT_SESSION)
             .await
             .unwrap();
         for (owner, requester, behavior) in [

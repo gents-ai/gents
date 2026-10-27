@@ -37,7 +37,7 @@ impl Fixture {
                 .unwrap(),
         );
         crate::schema::ensure_runtime_schemas(&node).await.unwrap();
-        node.add_schema("type BoardTask { title: String lane: String }")
+        node.add_collection("type BoardTask { title: String lane: String }")
             .await
             .unwrap();
         let access = ConfigAccess::local(node.clone());

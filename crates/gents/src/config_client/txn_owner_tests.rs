@@ -51,7 +51,7 @@ async fn http_transaction_cursors_keep_all_pages() {
             .unwrap(),
     );
     ConfigAccess::local(node.clone())
-        .add_schema("type CursorTransportProbe { value: Int }")
+        .add_collection("type CursorTransportProbe { value: Int }")
         .await
         .unwrap();
     let rows = (0..66)
@@ -92,7 +92,7 @@ async fn http_transaction_cursors_keep_all_pages() {
 async fn config_access_readonly_does_not_wait_for_the_embedded_mutation_gate() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     ConfigAccess::local(Arc::clone(&node))
-        .add_schema("type ReadGateProbe { value: String }")
+        .add_collection("type ReadGateProbe { value: String }")
         .await
         .unwrap();
     ConfigAccess::write_local(
@@ -195,7 +195,7 @@ where
 #[tokio::test]
 async fn clean_known_noop_commit_is_debug_but_mutation_is_info() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_schema("type WriteTelemetryLevelProbe { value: String }")
+    node.add_collection("type WriteTelemetryLevelProbe { value: String }")
         .await
         .unwrap();
     let telemetry = EventCapture::default();
@@ -279,7 +279,7 @@ async fn queued_auto_commit_cancellation_is_not_reported_as_native_pending() {
 #[tokio::test]
 async fn successful_mutation_pause_is_one_shot_and_task_scoped() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_schema("type MutationPauseProbe { value: String }")
+    node.add_collection("type MutationPauseProbe { value: String }")
         .await
         .unwrap();
     let reached = Arc::new(Notify::new());
@@ -422,7 +422,7 @@ async fn successful_mutation_pause_is_one_shot_and_task_scoped() {
 #[tokio::test]
 async fn armed_mutation_pause_does_not_consume_an_out_of_scope_write() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_schema("type ArmedMutationPauseProbe { value: String }")
+    node.add_collection("type ArmedMutationPauseProbe { value: String }")
         .await
         .unwrap();
     let armed = Arc::new(Notify::new());
@@ -582,7 +582,7 @@ async fn cancellation_after_embedded_begin_abandons_before_releasing_the_gate() 
     .expect("write gate acquisition succeeds");
     drop(next_guard);
     let error = node
-        .rollback_transaction(&handle)
+        .discard_transaction(&handle)
         .await
         .expect_err("cancelled begin already removed the registered transaction");
     assert!(matches!(error, query::TransactionError::NotFound(_)));
@@ -613,7 +613,7 @@ async fn abandoned_signed_statement_abandons_registry_but_holds_gate_until_drain
             .await
             .unwrap(),
     );
-    node.add_schema("type NativeCompletionProbe { value: String }")
+    node.add_collection("type NativeCompletionProbe { value: String }")
         .await
         .unwrap();
 
@@ -749,7 +749,7 @@ async fn swallowed_abandoned_statement_cannot_start_another_statement_or_commit(
             .await
             .unwrap(),
     );
-    node.add_schema("type NativeCompletionSwallowProbe { value: String }")
+    node.add_collection("type NativeCompletionSwallowProbe { value: String }")
         .await
         .unwrap();
 
@@ -873,7 +873,7 @@ async fn cancellation_before_begin_reports_no_scheduled_rollback() {
 #[tokio::test]
 async fn stalled_callback_releases_the_embedded_write_gate() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_schema("type WriteAfterStall { value: String }")
+    node.add_collection("type WriteAfterStall { value: String }")
         .await
         .unwrap();
     let entered = Arc::new(Notify::new());
@@ -926,7 +926,7 @@ async fn stalled_callback_releases_the_embedded_write_gate() {
 #[tokio::test]
 async fn nested_canonical_write_fails_fast_and_releases_the_embedded_write_gate() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_schema("type NestedWriteProbe { value: String }")
+    node.add_collection("type NestedWriteProbe { value: String }")
         .await
         .unwrap();
 
@@ -1611,7 +1611,7 @@ async fn lean_write_admission_traces_match_native_independent_leases_and_capacit
 #[tokio::test]
 async fn embedded_conflict_replays_complete_callback_with_fresh_snapshot() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-    node.add_schema("type OwnedWriteFact { value: String }")
+    node.add_collection("type OwnedWriteFact { value: String }")
         .await
         .unwrap();
     ConfigAccess::write_local(
@@ -1684,7 +1684,7 @@ async fn thirty_two_hot_document_writers_converge_without_event_loss() {
     const WORKERS: usize = 32;
 
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_schema(
+    node.add_collection(
         "type HotMutationState { key: String @index(unique: true) @immutable value: Int }",
     )
     .await
@@ -1785,7 +1785,7 @@ resources:
 
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     let policy_id = node.add_dac_policy(OWNER, POLICY).await.unwrap();
-    node.add_schema(&format!(
+    node.add_collection(&format!(
         "type IdentityFact @policy(id: \"{policy_id}\", resource: \"facts\") {{ value: String }}"
     ))
     .await
@@ -1884,7 +1884,7 @@ resources:
 async fn readonly_transaction_preserves_snapshot_and_rejects_native_mutation() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     ConfigAccess::local(Arc::clone(&node))
-        .add_schema("type ReadSnapshotProbe { value: String }")
+        .add_collection("type ReadSnapshotProbe { value: String }")
         .await
         .unwrap();
     ConfigAccess::write_local(
@@ -2320,7 +2320,7 @@ async fn assert_native_transaction_abandoned(
     handle: &query::TransactionHandle,
 ) {
     let error = node
-        .rollback_transaction(handle)
+        .discard_transaction(handle)
         .await
         .expect_err("native owner already removed the registered transaction");
     assert!(
@@ -2333,7 +2333,7 @@ async fn assert_native_transaction_abandoned(
 async fn aborting_embedded_callback_discards_writes_and_releases_the_gate() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     ConfigAccess::local(Arc::clone(&node))
-        .add_schema("type AbortedTransactionProbe { value: String }")
+        .add_collection("type AbortedTransactionProbe { value: String }")
         .await
         .unwrap();
     let telemetry = EventCapture::default();
@@ -2404,7 +2404,7 @@ fn dropping_embedded_transaction_after_runtime_shutdown_abandons_synchronously()
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let node = runtime.block_on(async {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        node.add_schema("type RuntimeShutdownProbe { value: String }")
+        node.add_collection("type RuntimeShutdownProbe { value: String }")
             .await
             .unwrap();
         node
@@ -2455,7 +2455,7 @@ async fn cancellation_at_embedded_finalization_boundaries_preserves_commit_outco
     for boundary in [BeforeCommit, BeforeRollback, AfterCommit] {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         ConfigAccess::local(Arc::clone(&node))
-            .add_schema("type FinalizationCancellationProbe { value: String }")
+            .add_collection("type FinalizationCancellationProbe { value: String }")
             .await
             .unwrap();
         let txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();

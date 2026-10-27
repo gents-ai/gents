@@ -8,7 +8,7 @@ mod common;
 #[tokio::test]
 async fn inventory_metadata_has_its_pinned_fresh_schema() {
     let node = common::fresh_node().await;
-    node.add_schema(TOOL_FILE_INVENTORY).await.unwrap();
+    node.add_collection(TOOL_FILE_INVENTORY).await.unwrap();
     let collection = node
         .get_collection(TOOL_FILE_INVENTORY_NAME)
         .unwrap()
@@ -72,7 +72,9 @@ async fn inventory_metadata_refuses_an_unprotected_collection() {
             "@policy(id: \"{}\", resource: \"{}\")",
             TOOL_FILE_CHANGE_POLICY_ID, TOOL_FILE_CHANGE_POLICY_RESOURCE
         );
-        node.add_schema(&sdl.replace(&directive, "")).await.unwrap();
+        node.add_collection(&sdl.replace(&directive, ""))
+            .await
+            .unwrap();
         let before = node.get_collection(name).unwrap().unwrap();
         assert!(before.policy.is_none());
         let error = gents_migration::ensure_migrations(&node).await.unwrap_err();
@@ -91,7 +93,7 @@ async fn inventory_metadata_refuses_an_unprotected_collection() {
 async fn inventory_reply_has_its_pinned_protected_local_schema() {
     use gents_protocol::schemas::{FILE_INVENTORY_REPLY, FILE_INVENTORY_REPLY_NAME};
     let node = common::fresh_node().await;
-    node.add_schema(FILE_INVENTORY_REPLY).await.unwrap();
+    node.add_collection(FILE_INVENTORY_REPLY).await.unwrap();
     let collection = node
         .get_collection(FILE_INVENTORY_REPLY_NAME)
         .unwrap()
@@ -119,7 +121,7 @@ async fn inventory_transport_has_its_pinned_fresh_schemas() {
         (FILE_INVENTORY_REQUEST_NAME, FILE_INVENTORY_REQUEST),
         (FILE_INVENTORY_PAGE_NAME, FILE_INVENTORY_PAGE),
     ] {
-        node.add_schema(sdl).await.unwrap();
+        node.add_collection(sdl).await.unwrap();
         let collection = node.get_collection(name).unwrap().unwrap();
         let entry = gents_migration::DEFAULT_BASELINE
             .iter()
@@ -141,7 +143,7 @@ async fn inventory_transport_has_its_pinned_fresh_schemas() {
 async fn inventory_client_progress_has_its_pinned_protected_local_schema() {
     use gents_protocol::schemas::{FILE_INVENTORY_PROGRESS, FILE_INVENTORY_PROGRESS_NAME};
     let node = common::fresh_node().await;
-    node.add_schema(FILE_INVENTORY_PROGRESS).await.unwrap();
+    node.add_collection(FILE_INVENTORY_PROGRESS).await.unwrap();
     let collection = node
         .get_collection(FILE_INVENTORY_PROGRESS_NAME)
         .unwrap()

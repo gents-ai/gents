@@ -8,7 +8,7 @@ use super::*;
 #[tokio::test]
 async fn keyword_search_ranks_native_rows_and_preserves_query_boundaries() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-    node.add_schema("type Reports { duty: String @fulltext rank: String }")
+    node.add_collection("type Reports { duty: String @fulltext rank: String }")
         .await
         .unwrap();
     for (duty, rank) in [
@@ -565,7 +565,7 @@ async fn wildcard_mixed_with_fields_is_rejected_with_hint() {
 #[tokio::test]
 async fn count_is_filtered_total_and_find_is_a_stable_page() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-    node.add_schema("type Ticket { name: String priority: Int status: String }")
+    node.add_collection("type Ticket { name: String priority: Int status: String }")
         .await
         .unwrap();
     for n in 0..73 {
@@ -606,7 +606,7 @@ async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
             .unwrap(),
     );
     let policy = node.add_dac_policy(alice_did, "name: Private query rows\nresources:\n  - name: records\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n").await.unwrap();
-    node.add_schema(&format!(
+    node.add_collection(&format!(
         "type PrivateRecord @policy(id: \"{}\", resource: \"records\") {{ label: String @fulltext }}",
         crate::graphql::escape_graphql_string(&policy)
     ))
@@ -716,7 +716,7 @@ async fn explain_preserves_native_plan_and_requires_explicit_execution() {
             .await
             .unwrap(),
     );
-    node.add_schema("type PlanTicket { reference: String status: String @index }")
+    node.add_collection("type PlanTicket { reference: String status: String @index }")
         .await
         .unwrap();
     crate::config_client::ConfigAccess::write_local(
@@ -745,7 +745,7 @@ async fn explain_preserves_native_plan_and_requires_explicit_execution() {
     assert_eq!(result["mode"], "simple");
     assert!(result["plan"].get("executionSuccess").is_none());
     assert!(result["plan"].to_string().contains("indexName"));
-    node.add_schema("type PlainTicket { reference: String status: String }")
+    node.add_collection("type PlainTicket { reference: String status: String }")
         .await
         .unwrap();
     let plain_scope = CollectionScope::restricted(vec!["PlainTicket".into()]);

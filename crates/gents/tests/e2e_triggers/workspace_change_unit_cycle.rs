@@ -1018,7 +1018,7 @@ async fn install_pack(access: &ConfigAccess, owner: &str, repo: &Path) {
 
     for path in document_pack_schema_paths(&manifest).unwrap() {
         access
-            .add_schema(std::str::from_utf8(assets[path].as_slice()).unwrap())
+            .add_collection(std::str::from_utf8(assets[path].as_slice()).unwrap())
             .await
             .unwrap();
     }

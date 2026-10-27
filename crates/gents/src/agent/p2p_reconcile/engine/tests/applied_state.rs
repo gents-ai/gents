@@ -1,7 +1,7 @@
 #[tokio::test]
 async fn applied_state_persist_collapses_duplicates_and_recovers_a_missing_row() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_schema(
+    node.add_collection(
         r#"
         type PeerPairingApplied {
             peer_id: String

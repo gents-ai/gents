@@ -115,7 +115,7 @@ async fn schema_publication_matches_executable_lean_contract() {
         let artifact = case["artifact"].as_bool().unwrap();
         if !compatible {
             access
-                .add_schema("type Probe { value: Int }")
+                .add_collection("type Probe { value: Int }")
                 .await
                 .unwrap();
         }

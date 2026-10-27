@@ -44,7 +44,7 @@ fn native_input_admission_matches_lean() {
 
 async fn node_with_actionrequest() -> Arc<EmbeddedNode> {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_schema(
+    node.add_collection(
         r#"
         type ActionRequest {
             drift_sig: String
@@ -147,7 +147,7 @@ async fn writes_one_bounded_doc() {
 #[tokio::test]
 async fn writes_native_measurements_without_string_coercion() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_schema("type HostMeasurement { disk: Int healthy: Boolean }")
+    node.add_collection("type HostMeasurement { disk: Int healthy: Boolean }")
         .await
         .unwrap();
     let declaration = WriteToolDecl {
@@ -391,7 +391,7 @@ async fn runtime_fills_are_hidden_rejected_from_model_input_and_stamped_at_call_
 #[tokio::test]
 async fn native_schema_and_receipts_preserve_lists_json_and_null() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_schema(
+    node.add_collection(
         "type TypedRecord { count: Int flag: Boolean score: Float64 labels: [String] data: JSON }",
     )
     .await
@@ -448,7 +448,7 @@ async fn count_field_type_decides_whether_a_refused_obligation_can_register() {
     use crate::document_config::{WriteToolOutputObligation, WriteToolOutputObligationScope};
 
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_schema(
+    node.add_collection(
         r#"
         type CountOwner {
             flag: Boolean
@@ -543,7 +543,7 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
         let collection = format!("CountCarrier{index}");
         if let Some(expected_error) = case["schema_error"].as_str() {
             let error = node
-                .add_schema(&format!("type {collection} {{ count: {schema} }}"))
+                .add_collection(&format!("type {collection} {{ count: {schema} }}"))
                 .await
                 .unwrap_err();
             assert!(format!("{error:#}").contains(expected_error), "{error:#}");
@@ -552,7 +552,7 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
         if case["storage"] != true {
             continue;
         }
-        node.add_schema(&format!("type {collection} {{ count: {schema} }}"))
+        node.add_collection(&format!("type {collection} {{ count: {schema} }}"))
             .await
             .unwrap();
         let declaration = WriteToolDecl {

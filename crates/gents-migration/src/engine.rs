@@ -270,7 +270,7 @@ async fn register_baseline(
         .map(|entry| entry.sdl)
         .collect::<Vec<_>>()
         .join("\n");
-    node.add_schema(&batch)
+    node.add_collection(&batch)
         .await
         .map_err(|source| Error::BaselineRegister {
             collection: missing
@@ -366,7 +366,7 @@ async fn apply_add_collection(
     expected_state: &crate::expectation::CollectionExpectation,
     report: &mut MigrationReport,
 ) -> Result<()> {
-    match node.add_schema(sdl).await {
+    match node.add_collection(sdl).await {
         Ok(()) => report.steps_applied += 1,
         Err(error) if error.to_string().contains("already exists") => {
             report.steps_already_current += 1;

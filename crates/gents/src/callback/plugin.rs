@@ -493,9 +493,9 @@ mod tests {
         }
         let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        node.add_schema(
+        node.add_collection(
             "type Job { job_run: String text: String path: String origin: String }
-             type Echoed { job_run: String text: String path: String origin: String run_ref: String }
+             type Echoed { job_run: String text: String path: String origin: String run_ref: String data_calls: Boolean }
              type PluginNote { body: String }
              type PluginOwned { body: String owner: String }
              type PluginJobbed { body: String job_row_doc_id: String }",

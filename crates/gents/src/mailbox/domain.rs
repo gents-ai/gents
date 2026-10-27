@@ -141,7 +141,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_response_schema_cannot_create_an_attention_item() {
         let node = super::super::tests::test_node().await;
-        node.add_schema("type InvalidResponse { mailbox_item_key: String }")
+        node.add_collection("type InvalidResponse { mailbox_item_key: String }")
             .await
             .unwrap();
         let context = super::super::tests::context("did:test:owner");

@@ -629,7 +629,7 @@ mod tests {
             .await
             .unwrap();
             for sdl in schemas {
-                node.add_schema(sdl).await.unwrap();
+                node.add_collection(sdl).await.unwrap();
             }
             node
         }

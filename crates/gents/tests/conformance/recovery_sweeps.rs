@@ -695,12 +695,15 @@ async fn own_child_fixture(
 }
 
 async fn seed_expired_execution_tuple(node: &EmbeddedNode, request_doc_id: &str) {
-    let response = node.execute(&format!(
-        r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{
-            execution_generation: "{}", execution_lease_expires_at: "{RECOVERY_CREATED_AT}", execution_progress_seq: 0
+    let response = node
+        .execute(&format!(
+            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{
+            execution_generation: "{}", execution_lease_expires_at: "{RECOVERY_CREATED_AT}"
         }}) {{ _docID }} }}"#,
-        escape_graphql_string(request_doc_id), uuid::Uuid::new_v4(),
-    )).await;
+            escape_graphql_string(request_doc_id),
+            uuid::Uuid::new_v4(),
+        ))
+        .await;
     assert!(
         !response.has_errors(),
         "seed expired execution tuple: {:?}",

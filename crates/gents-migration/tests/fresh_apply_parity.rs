@@ -1,5 +1,5 @@
 //! Guard for #1123/#1125: client-authored collections MUST remain fresh-apply
-//! compatible. `EmbeddedNode::add_schema` here and a paired client's FFI both
+//! compatible. `EmbeddedNode::add_collection` here and a paired client's FFI both
 //! ingest SDL into an empty store and converge on the same collection-creation
 //! path in the pinned defradb, so the genesis CIDs minted here stand in for
 //! what a phone mints. The two apply paths seed their SDL parsers with
@@ -75,7 +75,7 @@ async fn client_authored_collections_stay_fresh_apply_compatible() {
         let client = fresh_node().await;
         for &name in CLIENT_AUTHORED_COLLECTIONS {
             client
-                .add_schema(current_sdl(name))
+                .add_collection(current_sdl(name))
                 .await
                 .unwrap_or_else(|error| panic!("client fresh-apply {name}: {error}"));
         }

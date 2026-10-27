@@ -33,7 +33,7 @@ fn ping_snapshot(generation: u64, emit_outcome: bool) -> Arc<ActiveRuntimeSnapsh
 async fn seeded_arrival_delivery_does_not_wait_for_the_mutation_gate() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
-    node.add_schema("type OutcomePing { message: String }")
+    node.add_collection("type OutcomePing { message: String }")
         .await
         .unwrap();
     let snapshot = ping_snapshot(1, false);
@@ -71,7 +71,7 @@ async fn first_delivery(emit_outcome: bool) -> (Delivery, FireIntent) {
 async fn first_delivery_on(schema: &str, emit_outcome: bool) -> (Delivery, FireIntent) {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    node.add_schema(schema).await.unwrap();
+    node.add_collection(schema).await.unwrap();
     let snapshot = ping_snapshot(1, emit_outcome);
     persist_event_bindings(&node, snapshot.as_ref()).await;
     let (snapshot_tx, rx) = watch::channel(snapshot.clone());

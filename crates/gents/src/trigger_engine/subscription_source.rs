@@ -73,7 +73,7 @@ mod tests {
     #[tokio::test]
     async fn scoped_changes_survive_a_schema_patch_and_ignore_other_collections() {
         let node = EmbeddedNode::builder().build().await.unwrap();
-        node.add_schema("type Watched { value: String } type Unwatched { value: String }")
+        node.add_collection("type Watched { value: String } type Unwatched { value: String }")
             .await
             .unwrap();
         assert!(collection_ids(&node, ["Missing"]).is_err());

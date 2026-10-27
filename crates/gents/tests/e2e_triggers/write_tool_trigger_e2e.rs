@@ -30,9 +30,9 @@ async fn register_action_request_schema(node: &EmbeddedNode) {
             status: String @index
         }
     "#;
-    node.add_schema(sdl)
+    node.add_collection(sdl)
         .await
-        .expect("add_schema for ActionRequest");
+        .expect("add_collection for ActionRequest");
 }
 
 async fn apply_documents(

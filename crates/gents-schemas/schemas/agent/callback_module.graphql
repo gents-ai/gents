@@ -16,4 +16,5 @@ type CallbackModule @branchable @index(fields: ["node_did", "module_id"], unique
     max_input_bytes: Int
     max_output_bytes: Int
     tags: [String!]
+    updated_at: DateTime
 }

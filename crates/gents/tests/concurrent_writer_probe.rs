@@ -21,7 +21,9 @@ async fn node() -> Result<(tempfile::TempDir, Arc<EmbeddedNode>)> {
             .build()
             .await?,
     );
-    ConfigAccess::local(node.clone()).add_schema(SCHEMA).await?;
+    ConfigAccess::local(node.clone())
+        .add_collection(SCHEMA)
+        .await?;
     Ok((home, node))
 }
 
@@ -215,7 +217,7 @@ async fn measure_encrypted_admission(
                 .await?,
         );
         ConfigAccess::local(node.clone())
-            .add_schema("type AdmissionDocument @branchable { writer: Int @immutable iteration: Int @immutable body: String @immutable }")
+            .add_collection("type AdmissionDocument @branchable { writer: Int @immutable iteration: Int @immutable body: String @immutable }")
             .await?;
         let admission = Arc::new(Semaphore::new(capacity));
         let barrier = Arc::new(Barrier::new(writers));

@@ -91,7 +91,7 @@ async fn assert_access_control(
         "unexpected refusal: {refused:#}"
     );
     let refused_schema = anonymous
-        .add_schema("type NodeAccessIntruder { name: String }")
+        .add_collection("type NodeAccessIntruder { name: String }")
         .await
         .expect_err("an anonymous HTTP schema change must be refused");
     assert!(
@@ -159,7 +159,7 @@ fn served_home_admits_only_its_principal_across_restart() -> Result<()> {
     serve_phase(&data_dir, &principal, |node, address| {
         let principal = principal.clone();
         Box::pin(async move {
-            node.add_schema(SCHEMA).await?;
+            node.add_collection(SCHEMA).await?;
             assert_access_control(node, &principal, address, "first").await;
             Ok(())
         })

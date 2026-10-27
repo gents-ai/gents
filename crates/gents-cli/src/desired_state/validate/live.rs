@@ -169,7 +169,7 @@ mod tests {
                 .await?,
         );
         let access = ConfigAccess::local(node);
-        access.add_schema(PROBE_SDL).await?;
+        access.add_collection(PROBE_SDL).await?;
         Ok(access)
     }
 
