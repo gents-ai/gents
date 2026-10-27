@@ -1246,6 +1246,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                     "snapshot": snapshot, "requests": requests,
                 }))?,
             )?;
+            #[cfg(feature = "editor-e2e")]
             copy_editor_evidence(root, name)?;
         }
         editor?;
