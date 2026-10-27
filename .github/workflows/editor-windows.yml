@@ -46,7 +46,7 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 120
     env:
-      CARGO_BUILD_JOBS: 2
+      CARGO_BUILD_JOBS: 4
       CARGO_INCREMENTAL: "0"
       RUST_MIN_STACK: 16777216
       RUST_TEST_THREADS: "2"
@@ -72,10 +72,14 @@ jobs:
           cache-workspace-crates: "false"
           cache-bin: "false"
       - name: Compile native binaries and transport tests in one feature graph
-        run: python .github/scripts/editor-native-tests.py compile --manifest "$env:RUNNER_TEMP/editor-native-tests.json"
+        run: python .github/scripts/editor-native-tests.py compile --profile ci-native --manifest "$env:RUNNER_TEMP/editor-native-tests.json"
       - name: Check the native protocol descriptor
         run: |
-          $hostInfo = & .\target\debug\gents-client-host.exe --describe | ConvertFrom-Json
+          $artifacts = Get-Content -Raw "$env:RUNNER_TEMP/editor-native-tests.json" | ConvertFrom-Json
+          $hosts = @($artifacts | Where-Object { $_.role -eq 'binary' -and $_.name -eq 'gents-client-host' })
+          if ($hosts.Count -ne 1) { throw "Expected one compiled native host." }
+          $hostPath = $hosts[0].path
+          $hostInfo = & $hostPath --describe | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ($hostInfo.os -ne "windows" -or $hostInfo.arch -ne "x86_64" -or -not $hostInfo.transportSupported) {
             throw "The native host did not advertise its Windows transport."

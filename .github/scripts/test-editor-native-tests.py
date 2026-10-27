@@ -89,6 +89,17 @@ class ArtifactTests(unittest.TestCase):
         self.assertNotIn('--all-features', command)
         self.assertEqual(run.call_count, 1)
 
+    def test_compile_forwards_the_native_ci_profile_without_changing_targets(self):
+        manifest = self.root / 'manifest.json'
+        with patch.object(e.subprocess, 'run') as run, patch.object(e, 'artifacts', return_value=[]), \
+                patch.object(e, 'transport_targets', return_value=['runtime']):
+            e.compile_tests(self.root, manifest, profile='ci-native')
+        command = run.call_args.args[0]
+        self.assertEqual(command[command.index('--profile') + 1], 'ci-native')
+        self.assertIn('--no-run', command)
+        self.assertIn('--lib', command)
+        self.assertEqual(run.call_count, 1)
+
     def test_result_rejects_false_green_and_zero_required_cases(self):
         runtime = {'role': 'host', 'name': 'runtime'}
         output = 'test result: ok. 2 passed; 0 failed; 0 ignored;'

@@ -83,11 +83,14 @@ jobs:
           bash -n scripts/harbor/run_gents.sh
           bash -n scripts/measure-gents-binary.sh
           bash -n scripts/measure-gents-build-attribution.sh
-          bash -n .github/scripts/compile-rust-ci-suite.sh .github/scripts/desktop-runtime-journey.sh
+          bash -n .github/scripts/compile-rust-ci-suite.sh .github/scripts/desktop-runtime-journey.sh .github/scripts/desktop-rust-suite.sh
           shellcheck -s sh scripts/harbor/run_gents.sh
           shellcheck scripts/measure-gents-binary.sh
           shellcheck scripts/measure-gents-build-attribution.sh
-          shellcheck .github/scripts/compile-rust-ci-suite.sh .github/scripts/desktop-runtime-journey.sh
+          shellcheck .github/scripts/compile-rust-ci-suite.sh .github/scripts/desktop-runtime-journey.sh .github/scripts/desktop-rust-suite.sh
+
+      - name: Check desktop Rust build and test graph routing
+        run: python3 .github/scripts/test-desktop-rust-suite.py
 
       - name: Run Harbor runner self-test
         run: scripts/harbor/run_gents.sh self-test
@@ -379,19 +382,7 @@ jobs:
 
       - name: Run desktop Rust package tests
         if: matrix.suite == 'desktop'
-        # --no-fail-fast: the client_core iroh dial must not mask the 15
-        # binaries and the tauri lib tests that run after it.
-        run: |
-          cargo test --no-fail-fast \
-            -p gents-desktop-core \
-            -p gents-desktop \
-            -p gents-desktop-bridge \
-            -p gents-client-host \
-            -p gents-media-host \
-            -p fixture-domain-plugin \
-            -p gents-fixture-host
-          cargo test --no-fail-fast -p gents-desktop-tauri --lib
-          cargo test -p gents-desktop-bridge --lib --features notify/macos_kqueue approvals_watch::tests::
+        run: .github/scripts/desktop-rust-suite.sh test
 
       - name: Run native client runtime journey
         if: matrix.suite == 'desktop'
