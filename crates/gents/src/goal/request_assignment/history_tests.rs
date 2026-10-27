@@ -201,6 +201,21 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
         }).await.unwrap();
         documents.insert(model_doc, response);
     }
+    if case["name"] == "later_complete_goal_cannot_complete_older_active_assignment" {
+        let first_document = case["versions"][0]["document"].as_u64().unwrap();
+        let doc = crate::graphql::escape_graphql_string(&documents[&first_document]);
+        for index in 0..65 {
+            access
+                .write(
+                    "test.goal_history_many_revisions",
+                    &format!(
+                        r#"mutation {{ update_Goal(docID: "{doc}", input: {{objective: "History observation {index}"}}) {{_docID}} }}"#
+                    ),
+                )
+                .await
+                .unwrap();
+        }
+    }
     for doc in case["retire_documents"].as_array().unwrap() {
         access
             .write(
