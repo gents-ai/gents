@@ -1285,7 +1285,7 @@ pub(crate) async fn read_step_row_in_txn(
 }
 
 /// [`read_step_row_in_txn`] in a read-only transaction of `access`.
-pub async fn read_step_row(access: &ConfigAccess, row_doc_id: &str) -> Result<StepRow> {
+pub(crate) async fn read_step_row(access: &ConfigAccess, row_doc_id: &str) -> Result<StepRow> {
     access
         .transact_readonly("plugin_job.read_step_row", |txn| {
             Box::pin(read_step_row_in_txn(txn, row_doc_id))

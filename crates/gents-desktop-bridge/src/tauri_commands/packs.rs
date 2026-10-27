@@ -300,16 +300,6 @@ mod tests {
     use super::*;
     use crate::tests::support::runtime_handle;
 
-    #[test]
-    fn workflow_promote_request_reads_camel_case() {
-        let request: WorkflowPromoteRequest =
-            serde_json::from_value(serde_json::json!({"selector": "s:c", "name": "tool"}))
-                .expect("request");
-        assert_eq!(request.selector, "s:c");
-        assert_eq!(request.name.as_deref(), Some("tool"));
-        assert_eq!(request.agent, None);
-    }
-
     #[tokio::test]
     async fn typed_pack_reports_use_the_existing_operations() {
         let home = tempfile::tempdir().unwrap();

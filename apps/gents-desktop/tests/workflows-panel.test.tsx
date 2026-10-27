@@ -10,7 +10,6 @@ const summary = (over: Partial<DynamicWorkflowSummary>): DynamicWorkflowSummary 
   script_id: "sha256:a",
   handle: "rome_debate",
   runs: 3,
-  first_run_at: 1,
   last_run_at: 1_760_000_000_000,
   agent_id: "agent-1",
   latest_address: "session-1:call-1",

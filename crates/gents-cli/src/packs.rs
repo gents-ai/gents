@@ -132,14 +132,14 @@ pub async fn promote(
 /// timed out are not promotable (`promote::gate`) and are left out.
 pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
     use gents::plugin_job::view::{list_jobs, JobFilter, StateFilter};
-    use gents_protocol::job::JobView;
+    use gents_protocol::job::{JobState, JobView};
     let (access, home) = crate::resolve_config_access(Some(&home), None).await?;
     let views = list_jobs(
         &access,
         &JobFilter {
             session_id: None,
             requester: None,
-            state: StateFilter::States(crate::commands::job::ALL_STATES.to_vec()),
+            state: StateFilter::States(vec![JobState::Completed]),
             plugin: None,
         },
     )
@@ -159,7 +159,6 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
             .iter()
             .max_by_key(|view| view.created_at)
             .expect("a group has a run");
-        let first = runs.iter().map(|view| view.created_at).min();
         let agent_id = gents::session_origin::load_session(
             &access,
             &latest.session_id,
@@ -171,7 +170,6 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
             "script_id": script_id,
             "handle": latest.handle,
             "runs": runs.len(),
-            "first_run_at": first,
             "last_run_at": latest.created_at,
             "agent_id": agent_id,
             "latest_address": latest.address,
@@ -196,7 +194,7 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
 }
 
 /// One dynamic run, selected by its address (SESSION_ID:TOOL_CALL_ID) or tool
-/// call id: its view, script, targets, owner packs and promotions.
+/// call id: its view, script and promotions.
 pub async fn dynamic_workflow(home: PathBuf, selector: String) -> Result<Value> {
     let actor = crate::home_state::resolve_node_did(Some(&home), None)?;
     let (access, home) = crate::resolve_config_access(Some(&home), None).await?;
@@ -211,8 +209,6 @@ pub async fn dynamic_workflow(home: PathBuf, selector: String) -> Result<Value> 
         "promoted_as": promoted_as(&promotions, &run.view.pin.script_id),
         "view": run.view,
         "script": run.script,
-        "targets": run.targets,
-        "owners": run.owners,
     }))
 }
 

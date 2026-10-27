@@ -113,7 +113,10 @@ export function PromoteWorkflowDialog({
                   id="promote-name"
                   value={name}
                   disabled={busy || !!promoted}
-                  onChange={(e) => setName(e.target.value)}
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    setError(null);
+                  }}
                 />
                 {name && !TOOL_NAME.test(name) && (
                   <FieldError>

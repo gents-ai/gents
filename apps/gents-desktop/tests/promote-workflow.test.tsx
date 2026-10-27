@@ -26,8 +26,6 @@ const workflow = (handle: string, script = "export default 1;"): DynamicWorkflow
       ],
     },
     script,
-    targets: ["local:debater"],
-    owners: [],
     promoted_as: [],
   }) as unknown as DynamicWorkflow;
 
@@ -111,5 +109,19 @@ describe("PromoteWorkflowDialog", () => {
     expect(await screen.findByText(message)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Promote" })).toBeNull();
     expect(screen.queryByText(/Installed as/)).toBeNull();
+  });
+
+  it("clears a refusal and brings Promote back when the name changes", async () => {
+    const message = "promote_name_taken: gents/rome_debate is already a pack or plugin";
+    mount({
+      getDynamicWorkflow: vi.fn().mockResolvedValue(workflow("rome_debate")),
+      promoteWorkflow: vi.fn().mockRejectedValue(new Error(message)),
+    });
+    const field = await nameField();
+    fireEvent.click(promote());
+    expect(await screen.findByText(message)).toBeTruthy();
+    fireEvent.change(field, { target: { value: "rome_debate_2" } });
+    expect(screen.queryByText(message)).toBeNull();
+    expect(promote()).toBeEnabled();
   });
 });

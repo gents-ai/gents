@@ -31,7 +31,7 @@ pub(crate) mod promote;
 
 pub(crate) const ACTIVE_STATES: [JobState; 3] =
     [JobState::Running, JobState::Paused, JobState::AwaitingUser];
-pub(crate) const ALL_STATES: [JobState; 7] = [
+const ALL_STATES: [JobState; 7] = [
     JobState::Running,
     JobState::Paused,
     JobState::AwaitingUser,

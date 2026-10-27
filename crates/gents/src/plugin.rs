@@ -721,7 +721,7 @@ pub mod model_calls;
 pub mod mounts;
 mod rounds;
 mod service;
-mod source_runner;
+pub(crate) mod source_runner;
 pub mod store;
 pub mod tool;
 pub mod tool_calls;

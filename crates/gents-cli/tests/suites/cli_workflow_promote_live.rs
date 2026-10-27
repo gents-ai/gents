@@ -99,7 +99,7 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
             &format!("worker={profile_id}"),
         ],
     )?;
-    write_evidence(&evidence, "install.json", &install)?;
+    write_json_file(&evidence.join("install.json"), &install)?;
 
     let port = allocate_port()?;
     let graphql = graphql_url(port);
@@ -146,7 +146,7 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
             "Call the workflow tool exactly once with agent_budget 2, args {{\"handle\": \"pong_flow\"}} and this exact script (a JSON string): {script}. Then end your turn."
         ),
     )?;
-    write_evidence(&evidence, "chat-workflow.json", &reply)?;
+    write_json_file(&evidence.join("chat-workflow.json"), &reply)?;
     let dynamic = finished_job(&home_dir, &graphql, &first_session, &evidence, "dynamic").await?;
     anyhow::ensure!(
         dynamic.view.pointer("/pin/origin").and_then(Value::as_str) == Some("dynamic"),
@@ -175,9 +175,9 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
             "json",
         ],
     )?;
-    write_evidence(&evidence, "promote.json", &promote)?;
+    write_json_file(&evidence.join("promote.json"), &promote)?;
     let record = read_json_file(&home_dir.join("plugins/installed/gents/pong_flow.json"))?;
-    write_evidence(&evidence, "pong_flow-record.json", &record)?;
+    write_json_file(&evidence.join("pong_flow-record.json"), &record)?;
     anyhow::ensure!(
         record.pointer("/declaration/job").and_then(Value::as_bool) == Some(true),
         "the installed pong_flow record does not declare a job: {record}"
@@ -190,7 +190,7 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
         &second_session,
         "Call the pong_flow tool exactly once with agent_budget 2. Then end your turn.",
     )?;
-    write_evidence(&evidence, "chat-pong_flow.json", &reply)?;
+    write_json_file(&evidence.join("chat-pong_flow.json"), &reply)?;
     let installed =
         finished_job(&home_dir, &graphql, &second_session, &evidence, "installed").await?;
     anyhow::ensure!(
@@ -364,7 +364,7 @@ async fn finished_job(
             "json",
         ],
     )?;
-    write_evidence(evidence, &format!("{label}-job.json"), &view)?;
+    write_json_file(&evidence.join(format!("{label}-job.json")), &view)?;
     anyhow::ensure!(
         view.get("state").and_then(Value::as_str) == Some("completed"),
         "job {address} did not complete: {view}"
@@ -452,8 +452,4 @@ fn is_pong(result: &Value) -> bool {
                 .trim_end_matches('.')
                 .eq_ignore_ascii_case("pong")
         })
-}
-
-fn write_evidence(dir: &Path, name: &str, value: &Value) -> Result<()> {
-    write_json_file(&dir.join(name), value)
 }

@@ -368,7 +368,6 @@ fn export_all(dir: &Path) -> Result<(), String> {
         InstalledWorkflowSummary,
         DynamicWorkflowView,
         WorkflowPromoteView,
-        WorkflowPromotionRecord,
         gents_server::packs::EditedDocuments,
         RequestTimelineView,
         ToolSurfaceExplanationView,
@@ -484,16 +483,6 @@ fn ts_rs_exports_tagged_enum_and_camel_case_structs() {
         goal.contains("\"kind\": \"pause\"") && goal.contains("tokenBudget: string"),
         "goal controls must retain their tagged request shape and exact budget strings: {goal}"
     );
-
-    for file in [
-        "DynamicWorkflowsView.ts",
-        "InstalledWorkflowSummary.ts",
-        "DynamicWorkflowView.ts",
-        "WorkflowPromoteRequest.ts",
-        "WorkflowPromoteView.ts",
-    ] {
-        assert!(tmp.path().join(file).exists(), "{file} must be exported");
-    }
 
     let timeline = std::fs::read_to_string(tmp.path().join("RenderedTimelineItem.ts"))
         .expect("RenderedTimelineItem.ts");

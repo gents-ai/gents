@@ -2,6 +2,6 @@
 import type { JobView } from "./JobView.js";
 
 /**
- * One dynamic run: its job view, script source and promotion inputs.
+ * One dynamic run: its job view, script source and promotions.
  */
-export type DynamicWorkflowView = { view: JobView, script: string, targets: Array<string>, owners: Array<string>, promoted_as: Array<string>, };
+export type DynamicWorkflowView = { view: JobView, script: string, promoted_as: Array<string>, };

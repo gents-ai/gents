@@ -3,4 +3,4 @@
 /**
  * One dynamic script that ran, with its runs and the tools it became.
  */
-export type DynamicWorkflowSummary = { script_id: string, handle: string, runs: number, first_run_at: number | null, last_run_at: number, agent_id: string | null, latest_address: string, promoted_as: Array<string>, };
+export type DynamicWorkflowSummary = { script_id: string, handle: string, runs: number, last_run_at: number, agent_id: string | null, latest_address: string, promoted_as: Array<string>, };

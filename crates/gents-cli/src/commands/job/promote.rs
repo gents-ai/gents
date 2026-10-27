@@ -22,8 +22,7 @@ use crate::commands::pack::wire::{wire_in, WireRequest};
 use crate::output_format::OutputFormat;
 
 /// A stage of a promotion; `promote` reports each one before it starts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromoteStep {
     Javy,
     Load,
@@ -187,6 +186,7 @@ pub async fn promote(
     // The held access, not `pack install`'s own: a second local access would
     // contend for the home's store claim.
     let install = PackInstallArgs {
+        bindings: None,
         package: dir.display().to_string(),
         inference_slots: Vec::new(),
         preview: false,
