@@ -1240,6 +1240,10 @@ fn sandboxed_workspace_write_command(
 }
 
 #[cfg(target_os = "macos")]
+/// Chromium registers its parent/child rendezvous before opening a page. These
+/// bootstrap names include its bundle ID and PID; permit only the rendezvous
+/// namespaces, not unrelated global services or additional filesystem access.
+/// See [Chromium's rendezvous owner](https://chromium.googlesource.com/chromium/src/+/main/base/apple/mach_port_rendezvous_mac.cc).
 fn macos_workspace_write_policy(network_mode: CommandNetworkMode) -> String {
     let network_policy = if network_mode.allows_network() {
         "(allow network-outbound)\n(allow network-inbound)\n"
@@ -1255,6 +1259,9 @@ fn macos_workspace_write_policy(network_mode: CommandNetworkMode) -> String {
 (allow process-info* (target same-sandbox))
 (allow sysctl-read)
 (allow mach-lookup)
+(allow mach-register
+    (global-name-prefix "org.chromium.Chromium.MachPortRendezvousServer.")
+    (global-name-prefix "com.google.chrome.for.testing.MachPortRendezvousServer."))
 (allow ipc-posix-sem)
 (allow ipc-posix-shm-read*)
 (allow ipc-posix-shm-write*)
