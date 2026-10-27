@@ -221,7 +221,7 @@ not permission to restore rejected abstractions.
   Keep its description current with baseline, owners, deletions and validation.
 - Trace removed concepts through writers, readers and contracts. Preserve their
   guarantees through existing owners; delete obsolete implementations in their
-  owning layer. Do not duplicate configuration types or graph selection paths.
+  owning layer. Do not duplicate configuration types or selection paths.
 - Remove historical migration steps, frozen old schemas and transition-specific
   tests; retain useful migration infrastructure. No legacy conversions or data wipes.
 - Resolve spec conflicts in #1430 before propagating them. Validate each descendant
