@@ -528,7 +528,10 @@ def stateMachineCoverage : List CoverageEntry :=
   ]
 
 def caseCoverage : List CoverageEntry :=
-  [ tagged (consumerCoverage
+  [ tagged (consumerCoverage "goal_client_delivery_cases" "GoalClientDeliveryCases"
+      "client::mutations::chat::request::receipt::goal_delivery::tests::generated_goal_delivery_histories_bind_native_signed_preparations")
+      "durable-goals" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "root_admission_cases"
       "RootAdmissionCases"
       "conformance::root_admission::generated_root_admission_cases_drive_production_root_policy")

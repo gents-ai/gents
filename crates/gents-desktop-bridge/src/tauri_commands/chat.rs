@@ -26,6 +26,41 @@ pub async fn desktop_goal_control(
         .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
     crate::commands::control_goal(&core, request).await
 }
+
+#[tauri::command]
+pub async fn desktop_goal_submission_recover(
+    query: crate::types::GoalSubmissionQuery,
+    state: State<'_, DesktopAppState>,
+) -> Result<crate::types::GoalSubmissionRecovery, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    crate::commands::recover_goal_submission(&core, query)
+        .await
+        .map_err(BridgeError::classify_transport_error)
+}
+
+#[tauri::command]
+pub async fn desktop_goal_submission_resume(
+    request: crate::types::GoalControlRequest,
+    receipt: crate::types::GoalSubmissionReceipt,
+    state: State<'_, DesktopAppState>,
+) -> Result<crate::types::GoalControlResult, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    crate::commands::resume_goal_submission(&core, request, receipt).await
+}
+
+#[tauri::command]
+pub async fn desktop_goal_submission_acknowledge(
+    receipt: crate::types::GoalSubmissionReceipt,
+    state: State<'_, DesktopAppState>,
+) -> Result<(), BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
+    crate::commands::acknowledge_goal_submission(&core, receipt)
+        .await
+        .map_err(BridgeError::classify_transport_error)
+}
 use crate::snapshot::build_session_live_delta;
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{

@@ -137,5 +137,3 @@ def casesJson : Json := toJson <| cases.map fun c => Json.mkObj
 example : cases.length = 21 := by native_decide
 
 end Conformance.GoalClientDeliveryContracts
-
-def main : IO Unit := IO.println Conformance.GoalClientDeliveryContracts.casesJson

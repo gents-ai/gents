@@ -55,6 +55,8 @@ mod editor_workspace;
 #[allow(dead_code)]
 #[path = "../../gents-cli/tests/support/mocks/fake_llm.rs"]
 mod fake_llm;
+#[path = "support/goal_delivery.rs"]
+mod goal_delivery;
 #[path = "support/initialization.rs"]
 mod initialization;
 #[allow(dead_code)]
@@ -1024,9 +1026,30 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         } else {
             "Return the fixture response.".to_owned()
         };
-    let receipt = if matches!(
+    let receipt = if matches!(journey, Journey::Goal) {
+        let mut recovery = EditRecoveryHost {
+            process: &mut host,
+            binary: &host_binary,
+            root,
+            paths: &paths,
+            access: &access,
+            editor_store: false,
+        };
+        let (reconnected, result) = goal_delivery::exercise(
+            client,
+            &mut id,
+            node_did,
+            &client_did,
+            agent_id,
+            &identity,
+            &mut recovery,
+        )
+        .await?;
+        client = reconnected;
+        result
+    } else if matches!(
         journey,
-        Journey::Goal | Journey::EditorGoalRecovery | Journey::EditorGoalSteering
+        Journey::EditorGoalRecovery | Journey::EditorGoalSteering
     ) {
         client.call(id, "desktop_goal_control", json!({"request": {
             "nodeDid":node_did, "agentId":agent_id,

@@ -30,6 +30,12 @@ export function createDesktopApiAdapter(
       invokeDesktop("desktop_session_goal", { nodeDid, sessionId }),
     controlGoal: (request) =>
       invokeDesktop("desktop_goal_control", { request }),
+    recoverGoalSubmission: (query) =>
+      invokeDesktop("desktop_goal_submission_recover", { query }),
+    resumeGoalSubmission: (request, receipt) =>
+      invokeDesktop("desktop_goal_submission_resume", { request, receipt }),
+    acknowledgeGoalSubmission: (receipt) =>
+      invokeDesktop("desktop_goal_submission_acknowledge", { receipt }),
     fetchDesktopSnapshot: () => invokeDesktop("desktop_client_snapshot"),
     initLocalStandardRuntime: (request) =>
       invokeDesktop("desktop_init_local_standard", { request }),

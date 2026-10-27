@@ -17,8 +17,9 @@ pub use collection_resolver::CollectionResolver;
 pub use core::{
     ClientCore, ClientCoreOptions, ClientObservationAttachment, ClientPeerStatus,
     ClientRouteStatus, ClientStoreKeyProvider, ClientSyncStateSnapshot, EnrollmentRequestResult,
-    P2PHealth, P2PHealthStatus, PairingCollectionStatus, RefreshedRequestProjection,
-    RuntimeSchemaObservation, STUCK_THRESHOLD_ATTEMPTS,
+    GoalSubmissionReference, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
+    RefreshedRequestProjection, RetainedGoalSubmission, RuntimeSchemaObservation,
+    STUCK_THRESHOLD_ATTEMPTS,
 };
 pub use gents::P2pSyncStatusSnapshot;
 pub use mutations::{ConfigEditorDocument, ConfigEditorRevision};

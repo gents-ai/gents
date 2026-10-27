@@ -52,6 +52,43 @@ pub async fn control_goal(
     core: &ClientCore,
     request: GoalControlRequest,
 ) -> Result<GoalControlResult, BridgeError> {
+    control_goal_with_reference(core, request, None).await
+}
+
+pub(super) async fn control_goal_with_reference(
+    core: &ClientCore,
+    request: GoalControlRequest,
+    resume: Option<crate::types::GoalSubmissionReceipt>,
+) -> Result<GoalControlResult, BridgeError> {
+    if let Some(submission) = &resume {
+        if request.client_did.as_deref() != Some(submission.client_did.as_str())
+            || request.command_id.as_deref() != Some(submission.reference.command_id.as_str())
+            || request.node_did != submission.node_did
+            || request.session_id.as_deref() != Some(submission.session_id.as_str())
+        {
+            return Err(invalid_goal_argument(anyhow::anyhow!(
+                "Goal resume differs from its original caller, runtime or destination"
+            )));
+        }
+    }
+    let command_id = match (request.client_did.as_deref(), request.command_id.as_deref()) {
+        (None, None) => None,
+        (Some(client), Some(command))
+            if client == core.node_identity().did() && !command.trim().is_empty() =>
+        {
+            if request.session_id.is_none() {
+                return Err(invalid_goal_argument(anyhow::anyhow!(
+                    "a retained Goal command requires its destination session"
+                )));
+            }
+            Some(command.to_owned())
+        }
+        _ => {
+            return Err(invalid_goal_argument(anyhow::anyhow!(
+            "a retained Goal command requires its original native client and command identities"
+        )))
+        }
+    };
     let operation = match request.action {
         GoalControlAction::Create {
             objective,
@@ -103,8 +140,21 @@ pub async fn control_goal(
         ..Default::default()
     };
     let starts_goal = matches!(operation, GoalOperation::Create { .. });
-    let receipt = core
-        .control_session_goal(
+    let receipt = if let Some(command_id) = &command_id {
+        core.control_session_goal_correlated(
+            command_id,
+            &request.node_did,
+            &session_id,
+            request.session_doc_id,
+            request.expected,
+            operation,
+            request.agent_id.as_deref(),
+            input,
+            resume.as_ref().map(|submission| &submission.reference),
+        )
+        .await
+    } else {
+        core.control_session_goal(
             &request.node_did,
             &session_id,
             request.session_doc_id,
@@ -114,7 +164,20 @@ pub async fn control_goal(
             input,
         )
         .await
-        .map_err(BridgeError::classify_transport_error)?;
+    }
+    .map_err(BridgeError::classify_transport_error)?;
+    if let Some(command_id) = command_id {
+        let retained = core
+            .recover_goal_submission(&request.node_did, &command_id)
+            .await
+            .map_err(BridgeError::classify_transport_error)?
+            .context("confirmed Goal command has no retained caller binding")
+            .map_err(invalid_goal_argument)?;
+        return super::goal_submission::applied(
+            &retained,
+            super::goal_submission::reference(core, &retained),
+        );
+    }
     goal_control_result(session_id, starts_goal, receipt.outcome)
 }
 
@@ -122,7 +185,7 @@ fn invalid_goal_argument(error: anyhow::Error) -> BridgeError {
     BridgeError::new(BridgeErrorCode::InvalidArgument, error.to_string())
 }
 
-fn goal_control_result(
+pub(super) fn goal_control_result(
     session_id: String,
     starts_goal: bool,
     outcome: GoalControlOutcome,
@@ -132,6 +195,7 @@ fn goal_control_result(
             goal_id,
             request_id,
         } => Ok(GoalControlResult {
+            submission_receipt: None,
             started_goal_id: (starts_goal && request_id.is_some()).then(|| goal_id.clone()),
             goal_id,
             session_id,

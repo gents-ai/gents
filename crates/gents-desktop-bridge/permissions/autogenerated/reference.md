@@ -752,6 +752,84 @@ Denies the desktop_goal_control command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-goal-submission-acknowledge`
+
+</td>
+<td>
+
+Enables the desktop_goal_submission_acknowledge command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-goal-submission-acknowledge`
+
+</td>
+<td>
+
+Denies the desktop_goal_submission_acknowledge command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-goal-submission-recover`
+
+</td>
+<td>
+
+Enables the desktop_goal_submission_recover command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-goal-submission-recover`
+
+</td>
+<td>
+
+Denies the desktop_goal_submission_recover command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-goal-submission-resume`
+
+</td>
+<td>
+
+Enables the desktop_goal_submission_resume command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-goal-submission-resume`
+
+</td>
+<td>
+
+Denies the desktop_goal_submission_resume command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-grok-login`
 
 </td>
