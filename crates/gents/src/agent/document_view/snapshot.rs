@@ -87,7 +87,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         enabled: view.node.value.enabled,
     };
 
-    let measured_vetoed = context.backend_health.vetoed_backend_ids().await;
+    let measured_health = context.backend_health.snapshot().await;
     let mut backend_admission_configs = RapidHashMap::new();
     for record in view.backends.values() {
         let backend = &record.value;
@@ -95,7 +95,12 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
             backend_admission_configs.insert(
                 backend.backend_id.clone(),
                 crate::admission::BackendAdmissionConfig::from_backend(backend, observation)?
-                    .with_measured_unhealthy(measured_vetoed.contains(&backend.backend_id)),
+                    .with_measured_unhealthy(
+                        measured_health
+                            .get(&backend.backend_id)
+                            .and_then(|health| health.state_for(backend))
+                            .is_some_and(|state| state.blocks_routing()),
+                    ),
             );
         }
     }
@@ -127,7 +132,12 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                         error,
                     )
                 })?;
-            ensure_inference_available(view, &inference, &backend_admission_configs)?;
+            ensure_inference_available(
+                view,
+                &inference,
+                &backend_admission_configs,
+                &measured_health,
+            )?;
             let context_result: Result<_> = (|| {
                 anyhow::ensure!(agent_config.node_did == scope, "agent owner mismatch");
                 let context = agent_config
@@ -153,8 +163,13 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                     .map(|id| resolve_inference(view, id))
                     .transpose()?;
                 if let Some(summary) = &summary {
-                    ensure_inference_available(view, summary, &backend_admission_configs)
-                        .map_err(|error| error.detail)?;
+                    ensure_inference_available(
+                        view,
+                        summary,
+                        &backend_admission_configs,
+                        &measured_health,
+                    )
+                    .map_err(|error| error.detail)?;
                 }
                 let tools = context
                     .as_ref()
@@ -343,6 +358,7 @@ fn ensure_inference_available(
     view: &DocumentRuntimeView,
     inference: &crate::config::ResolvedInference,
     admission_configs: &RapidHashMap<String, crate::admission::BackendAdmissionConfig>,
+    measured_health: &RapidHashMap<String, crate::backend_health::BackendHealthSnapshot>,
 ) -> std::result::Result<(), AgentResolutionError> {
     let scope = view.node.value.node_did.as_str();
     let backend = &inference.backend;
@@ -355,24 +371,20 @@ fn ensure_inference_available(
     let unavailable = match admission.availability() {
         BackendAvailability::Available => None,
         BackendAvailability::Disabled => Some(AgentReadinessUnavailableReason::BackendDisabled),
-        BackendAvailability::ProbeNotHealthy | BackendAvailability::MeasuredUnhealthy => {
-            Some(AgentReadinessUnavailableReason::BackendTemporarilyUnavailable)
-        }
+        BackendAvailability::ProbeNotHealthy | BackendAvailability::MeasuredUnhealthy => Some(
+            measured_health
+                .get(&backend.backend_id)
+                .and_then(|health| health.state_for(backend))
+                .and_then(|state| state.readiness_reason())
+                .unwrap_or(AgentReadinessUnavailableReason::BackendTemporarilyUnavailable),
+        ),
     };
-    if let Some(code) = unavailable {
-        return Err(AgentResolutionError::new(
-            code,
-            anyhow!(
-                "backend {} is unavailable: {:?}",
-                backend.backend_id,
-                admission.availability()
-            ),
-        ));
-    }
-    if matches!(
-        backend.auth,
-        crate::document_config::BackendAuth::NodeOAuth { .. }
-    ) {
+    if admission.availability() != BackendAvailability::Disabled
+        && matches!(
+            backend.auth,
+            crate::document_config::BackendAuth::NodeOAuth { .. }
+        )
+    {
         let provider = match backend.provider_kind {
             crate::backend_provider::BackendProviderKind::ChatGptCodex => {
                 crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER
@@ -402,6 +414,16 @@ fn ensure_inference_available(
                 ),
             ));
         }
+    }
+    if let Some(code) = unavailable {
+        return Err(AgentResolutionError::new(
+            code,
+            anyhow!(
+                "backend {} is unavailable: {:?}",
+                backend.backend_id,
+                admission.availability()
+            ),
+        ));
     }
     Ok(())
 }

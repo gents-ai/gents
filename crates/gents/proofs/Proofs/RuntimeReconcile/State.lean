@@ -271,6 +271,7 @@ inductive AgentUnavailableReason where
   | backendDisabled
   | backendTemporarilyUnavailable
   | credentialsRequired
+  | subscriptionNotEntitled
   | inferenceProfileInvalid
   | toolConfigurationInvalid
   | toolSurfaceUnavailable
@@ -285,6 +286,7 @@ def code : AgentUnavailableReason → String
   | .backendDisabled => "backend_disabled"
   | .backendTemporarilyUnavailable => "backend_temporarily_unavailable"
   | .credentialsRequired => "credentials_required"
+  | .subscriptionNotEntitled => "subscription_not_entitled"
   | .inferenceProfileInvalid => "inference_profile_invalid"
   | .toolConfigurationInvalid => "tool_configuration_invalid"
   | .toolSurfaceUnavailable => "tool_surface_unavailable"

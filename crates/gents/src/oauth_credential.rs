@@ -76,6 +76,13 @@ pub enum OAuthAuthProblem {
     Other(String),
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub(crate) struct OAuthCredentialAuthError {
+    pub(crate) problem: OAuthAuthProblem,
+    pub(crate) message: String,
+}
+
 pub fn classify_oauth_auth_error(
     product: &OAuthProduct,
     node_did: &str,
@@ -1629,29 +1636,39 @@ impl DbCredentialBearer {
                 || self.product.name.to_owned(),
                 |cached| effective_account_label(&cached),
             );
-            anyhow::bail!(
-                "{} {MOVE_OFF_ACCOUNT} Signing in again adds a new account; it does not restore \
-                 this one.",
-                account_failure(&self.product, &label, "removed from this node"),
-            );
+            return Err(OAuthCredentialAuthError {
+                problem: OAuthAuthProblem::Missing,
+                message: format!(
+                    "{} {MOVE_OFF_ACCOUNT} Signing in again adds a new account; it does not restore \
+                     this one.",
+                    account_failure(&self.product, &label, "removed from this node"),
+                ),
+            }
+            .into());
         };
         if !credential.enabled {
-            anyhow::bail!(
-                "{}\n{}\n{MOVE_OFF_ACCOUNT}",
-                account_failure(
-                    &self.product,
-                    &effective_account_label(&credential),
-                    "disabled"
+            return Err(OAuthCredentialAuthError {
+                problem: OAuthAuthProblem::WrongMode {
+                    found_mode: "disabled".into(),
+                },
+                message: format!(
+                    "{}\n{}\n{MOVE_OFF_ACCOUNT}",
+                    account_failure(
+                        &self.product,
+                        &effective_account_label(&credential),
+                        "disabled"
+                    ),
+                    classify_oauth_auth_error(
+                        &self.product,
+                        &self.node_did,
+                        &self.provider,
+                        &OAuthAuthProblem::WrongMode {
+                            found_mode: "disabled".to_string(),
+                        },
+                    )
                 ),
-                classify_oauth_auth_error(
-                    &self.product,
-                    &self.node_did,
-                    &self.provider,
-                    &OAuthAuthProblem::WrongMode {
-                        found_mode: "disabled".to_string(),
-                    },
-                )
-            );
+            }
+            .into());
         }
         Ok(credential)
     }
@@ -1726,11 +1743,15 @@ impl DbCredentialBearer {
             OAuthAuthProblem::NotEntitled => "not entitled",
             _ => "unusable",
         };
-        anyhow::anyhow!(
-            "{}\n{}\n{MOVE_OFF_ACCOUNT}",
-            account_failure(&self.product, &effective_account_label(credential), state),
-            classify_oauth_auth_error(&self.product, &self.node_did, &self.provider, problem),
-        )
+        OAuthCredentialAuthError {
+            problem: problem.clone(),
+            message: format!(
+                "{}\n{}\n{MOVE_OFF_ACCOUNT}",
+                account_failure(&self.product, &effective_account_label(credential), state),
+                classify_oauth_auth_error(&self.product, &self.node_did, &self.provider, problem),
+            ),
+        }
+        .into()
     }
 
     async fn refresh_tokens(

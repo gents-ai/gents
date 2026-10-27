@@ -1841,6 +1841,35 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
         "a ClaudeCliSubscription agent_config with an enabled OAuthCredential must be runnable; unavailable: {:?}",
         snapshot.unavailable_agents
     );
+    for state in [
+        crate::backend_health::BackendHealthState::CredentialsRequired,
+        crate::backend_health::BackendHealthState::SubscriptionNotEntitled,
+        crate::backend_health::BackendHealthState::Unhealthy,
+        crate::backend_health::BackendHealthState::Healthy,
+    ] {
+        for backend in view.backends.values() {
+            resolve_context
+                .backend_health
+                .set_for_test(&backend.value.backend_id, state, 1)
+                .await;
+        }
+        let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
+            .await
+            .unwrap();
+        let expected = state.readiness_reason().or_else(|| state.blocks_routing().then_some(
+            gents_protocol::node_readiness::AgentReadinessUnavailableReason::BackendTemporarilyUnavailable));
+        assert_eq!(
+            snapshot
+                .unavailable_agents
+                .get(&default_agent_id)
+                .map(|agent| agent.public_reason),
+            expected
+        );
+        assert_eq!(
+            snapshot.agents.contains_key(&default_agent_id),
+            expected.is_none()
+        );
+    }
 }
 
 #[tokio::test]

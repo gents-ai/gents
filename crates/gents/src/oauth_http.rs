@@ -289,13 +289,14 @@ pub async fn bootstrap_oauth_client(
     )
     .await
     .with_context(|| format!("loading OAuthCredential for node {node_did}"))?
-    .ok_or_else(|| {
-        anyhow::anyhow!(classify_oauth_auth_error(
+    .ok_or_else(|| crate::oauth_credential::OAuthCredentialAuthError {
+        problem: OAuthAuthProblem::Missing,
+        message: classify_oauth_auth_error(
             &product,
             node_did,
             provider,
             &OAuthAuthProblem::Missing,
-        ))
+        ),
     })?;
     let credential_id = credential.credential_id.clone();
     let provider = provider.to_string();
