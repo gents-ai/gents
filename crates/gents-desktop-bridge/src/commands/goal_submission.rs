@@ -62,7 +62,7 @@ pub async fn recover_goal_submission(
     let outcome = match retained.receipt.as_ref().map(|receipt| &receipt.outcome) {
         None => None,
         Some(GoalControlOutcome::Applied { .. }) => Some(GoalSubmissionOutcome::Applied {
-            result: applied(&retained, submission.clone())?,
+            result: Box::new(applied(&retained, submission.clone())?),
         }),
         Some(GoalControlOutcome::Rejected { reason }) => Some(GoalSubmissionOutcome::Rejected {
             reason: reason.clone(),
