@@ -488,7 +488,7 @@ pub(crate) async fn resolve_scope_owner(
 /// The documents pack install: the CLI's single site that writes a documents
 /// pack and its dependencies. `explicit` is false only when the pack is
 /// installed as another pack's dependency.
-async fn install_documents_pack(
+pub(crate) async fn install_documents_pack(
     access: &gents::config_client::ConfigAccess,
     owner: &str,
     pack: &PackSource,
