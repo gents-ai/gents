@@ -72,6 +72,21 @@ impl DefraSessionHook {
                     .await;
             }
         };
+        if matches!(context.assignment, RequestAssignmentObservation::Unknown) {
+            let result = super::helpers::json_string(json!({
+                "accepted": false,
+                "disposition": "error",
+                "error": "Goal caller attribution is unknown; continue from a verified request",
+            }));
+            return self
+                .fail_control_tool_call(
+                    &mut lifecycle,
+                    CREATE_GOAL_TOOL_NAME,
+                    result,
+                    crate::tool_call_lifecycle::FailureClass::ServiceUnavailable,
+                )
+                .await;
+        }
         let outcome = match create_goal_for_request(
             &self.node,
             &context.request,
@@ -285,12 +300,23 @@ impl DefraSessionHook {
             }
         };
         if !context.can_write() {
+            let unavailable = matches!(context.assignment, RequestAssignmentObservation::Unknown);
             let error = match context.assignment {
                 RequestAssignmentObservation::None => "the calling request has no Goal assignment",
                 RequestAssignmentObservation::Unknown => "Goal caller attribution is unknown; continue from a verified request",
                 RequestAssignmentObservation::Assigned(_) => "the calling request's retained Goal assignment is read-only; a new request is required to work on the current Goal",
             };
             let result = super::helpers::json_string(json!({"accepted": false, "error": error}));
+            if unavailable {
+                return self
+                    .fail_control_tool_call(
+                        &mut lifecycle,
+                        UPDATE_GOAL_TOOL_NAME,
+                        result,
+                        crate::tool_call_lifecycle::FailureClass::ServiceUnavailable,
+                    )
+                    .await;
+            }
             return self
                 .complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
                 .await;
