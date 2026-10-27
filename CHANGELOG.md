@@ -20,6 +20,11 @@ source consistency checks, not a separate runtime compatibility version.
   `promote_not_completed` and a script with no completed run is not listed.
 - `JobChildRow.target` is reported by `gents job show --output json` and
   carried in the desktop bindings.
+- `gents init --workflows` is removed and `gents init` no longer suggests
+  installing `gents/rhai_workflows`: a workflow is an ordinary job plugin a
+  content pack ships (`gents pack install <pack> --grant-authority`, then
+  `gents pack wire <ns>/<plugin> --agent <agent> --targets-from <pack>`), and
+  `gents pack new <name> --template workflow` scaffolds one.
 
 ## 0.21.0 - 2026-10-23
 
