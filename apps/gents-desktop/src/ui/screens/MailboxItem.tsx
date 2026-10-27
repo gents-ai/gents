@@ -244,7 +244,9 @@ export function Item({
             )}
             {question && (
               <QuestionAnswer
+                key={m.questionHash ?? m.payload ?? m.itemId}
                 question={question}
+                questionHash={m.questionHash}
                 onAnswer={(answer) => answerMailboxQuestion(m, answer)}
               />
             )}
@@ -273,19 +275,21 @@ export function Item({
           </div>
         </div>
       </article>
-      <Button
-        size="sm"
-        variant="raised"
-        className="-mt-3.5 mr-4 ml-auto flex h-7 w-fit rounded-full px-3 text-xs"
-        onClick={() =>
-          dismissMailboxItem(m.itemId).then(
-            () => onSelect(false),
-            (e: unknown) => toastFailure("dismiss the item", e),
-          )
-        }
-      >
-        <X className="size-3" /> Dismiss
-      </Button>
+      {question?.version !== 2 && (
+        <Button
+          size="sm"
+          variant="raised"
+          className="-mt-3.5 mr-4 ml-auto flex h-7 w-fit rounded-full px-3 text-xs"
+          onClick={() =>
+            dismissMailboxItem(m.itemId).then(
+              () => onSelect(false),
+              (e: unknown) => toastFailure("dismiss the item", e),
+            )
+          }
+        >
+          <X className="size-3" /> Dismiss
+        </Button>
+      )}
     </li>
   );
 }
