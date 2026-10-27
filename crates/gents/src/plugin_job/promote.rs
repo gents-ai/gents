@@ -102,10 +102,9 @@ impl std::fmt::Display for PromoteRefusal {
 
 impl std::error::Error for PromoteRefusal {}
 
-/// The run's `script_id`: sha256 of the script as the executor runs it,
-/// which is trimmed (`plugin::executor::script_of`).
+/// The run's `script_id`: sha256 of the exact script bytes the executor runs.
 pub fn script_digest(script: &str) -> String {
-    format!("{:x}", Sha256::digest(script.trim().as_bytes()))
+    format!("{:x}", Sha256::digest(script.as_bytes()))
 }
 
 /// Reads the run at `key` as the node's operator and refuses one that is not a
@@ -126,7 +125,6 @@ pub async fn load_dynamic_run(
         .call
         .script
         .as_deref()
-        .map(str::trim)
         .ok_or(PromoteRefusal::NotDynamic)?
         .to_owned();
     let actual = script_digest(&script);
@@ -572,11 +570,10 @@ mod tests {
     }
 
     #[test]
-    fn a_trailing_newline_does_not_change_the_script_digest() {
-        assert_eq!(
-            script_digest("module.exports = (i) => i;\n"),
-            sha("module.exports = (i) => i;")
-        );
+    fn script_digest_preserves_leading_trailing_whitespace_and_newlines() {
+        let source = " \nmodule.exports = (i) => i;\n \t";
+        assert_eq!(script_digest(source), sha(source));
+        assert_ne!(script_digest(source), sha(source.trim()));
     }
 
     fn sha(text: &str) -> String {

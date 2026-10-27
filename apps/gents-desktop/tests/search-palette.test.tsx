@@ -56,7 +56,6 @@ const question = {
   sourceId: "r1",
   sessionId: "release",
   requestId: null,
-  graphRunId: null,
   causeDocId: null,
   targetNodeDid: NODE,
   targetAgentId: "default",

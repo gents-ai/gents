@@ -44,7 +44,6 @@ function item(id = "question"): MailboxItemView {
     sourceId: "session",
     sessionId: "session",
     requestId: null,
-    graphRunId: null,
     causeDocId: null,
     targetNodeDid: NODE,
     targetAgentId: "engineer",

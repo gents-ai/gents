@@ -329,7 +329,6 @@ export function createDesktopUiHarness(
           sourceId: "session-intro",
           sessionId: "session-intro",
           requestId: null,
-          graphRunId: null,
           causeDocId: null,
           targetNodeDid: NODE_DID,
           targetAgentId: DEFAULT_AGENT_ID,
