@@ -34,6 +34,9 @@ export default defineConfig(async ({ mode }) => ({
   optimizeDeps: {
     include: ["@gents/shell"],
   },
+  /* the diff view's worker loads its highlighter in pieces, which only
+     module workers can split */
+  worker: { format: "es" as const },
 
   clearScreen: false,
   server: {

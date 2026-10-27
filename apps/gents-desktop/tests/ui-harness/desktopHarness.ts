@@ -1,4 +1,4 @@
-import type { RequestAttachment } from "@source-inc/gents-desktop-client";
+import type { FileImage, RequestAttachment } from "@source-inc/gents-desktop-client";
 import type { BackendHealth } from "@source-inc/gents-desktop-client";
 import { deriveDisplayState } from "@source-inc/gents-desktop-operations";
 import type {
@@ -230,6 +230,40 @@ function harnessSequenceOf(item: RenderedTimelineItem): number | null {
       : null;
 }
 
+const HARNESS_EDIT_CALL = "call-intro-edit";
+const PARSER_BEFORE =
+  "pub struct Parser;\n\nimpl Parser {\n    fn parse() -> Ast { todo!() }\n}\n";
+const HARNESS_LEXER_CALL = "call-intro-edit-lexer";
+const LEXER_BEFORE = "pub fn tokens(source: &str) -> Vec<Token> {\n    Vec::new()\n}\n";
+const LEXER_AFTER =
+  "pub fn tokens(source: &str) -> Vec<Token> {\n    source.split_whitespace().map(Token::from).collect()\n}\n";
+
+const HARNESS_FILE_CHANGES_UNREACHABLE = "harness.fileChangesUnreachable";
+
+function harnessFileChangesUnreachable() {
+  try {
+    return localStorage.getItem(HARNESS_FILE_CHANGES_UNREACHABLE) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** A file version as core records it: base64 bytes and their SHA-256. */
+async function recordedImage(text: string): Promise<FileImage> {
+  const bytes = new TextEncoder().encode(text);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return {
+    kind: "file",
+    content_hash: `sha256:${[...digest].map((b) => b.toString(16).padStart(2, "0")).join("")}`,
+    data: btoa(String.fromCharCode(...bytes)),
+    permissions: { mode: 0o644 } as unknown as Extract<
+      FileImage,
+      { kind: "file" }
+    >["permissions"],
+    links: 1,
+  };
+}
+
 export function createDesktopUiHarness(
   options: DesktopUiHarnessOptions = {},
 ): DesktopUiHarness {
@@ -451,11 +485,14 @@ export function createDesktopUiHarness(
                   itemKey: "intro-edit-file",
                   toolName: "edit_file",
                   statusKind: "success",
+                  requestId: "request-intro",
+                  toolCallDocId: HARNESS_EDIT_CALL,
                   reconstruction: HARNESS_READY_RECONSTRUCTION,
                   presentation: {
                     kind: "fileEdit" as const,
                     operation: "edit_file",
                     path: "src/parser.rs",
+                    applied: true,
                     created: false,
                     replacementsApplied: 1,
                     diff: [
@@ -467,6 +504,30 @@ export function createDesktopUiHarness(
                       {
                         kind: "added" as const,
                         text: "fn parse() -> Ast { Ast::default() }",
+                      },
+                    ],
+                    fallbackOutput: null,
+                  },
+                },
+                {
+                  itemKey: "intro-edit-lexer",
+                  toolName: "edit_file",
+                  statusKind: "success",
+                  requestId: "request-intro",
+                  toolCallDocId: HARNESS_LEXER_CALL,
+                  reconstruction: HARNESS_READY_RECONSTRUCTION,
+                  presentation: {
+                    kind: "fileEdit" as const,
+                    operation: "edit_file",
+                    path: "src/lexer.rs",
+                    applied: true,
+                    created: false,
+                    replacementsApplied: 1,
+                    diff: [
+                      { kind: "removed" as const, text: "Vec::new()" },
+                      {
+                        kind: "added" as const,
+                        text: "source.split_whitespace().map(Token::from).collect()",
                       },
                     ],
                     fallbackOutput: null,
@@ -537,6 +598,13 @@ export function createDesktopUiHarness(
                 },
               ],
             },
+            harnessAssistantItem({
+              itemKey: "intro-code-reply",
+              sequence: 2,
+              content: "The parser now returns an empty tree instead of panicking.",
+              reasoning: null,
+              timestamp: "2026-06-03T14:06:00Z",
+            }),
           ]
         : []),
     ],
@@ -861,6 +929,37 @@ export function createDesktopUiHarness(
     },
     requestAttachments: async (_node, _session, requestId) =>
       attachmentPayloads.get(requestId) ?? [],
+    async fetchToolFileChanges({ toolCallDocId }) {
+      /* a test can make the node holding the copies unreachable; it gives up
+         after a while, as the bridge does */
+      if (harnessFileChangesUnreachable()) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        throw new Error("Reconnect this runtime to load new file versions.");
+      }
+      const [path, before, after] =
+        toolCallDocId === HARNESS_EDIT_CALL
+          ? [
+              "src/parser.rs",
+              PARSER_BEFORE,
+              PARSER_BEFORE.replace("todo!()", "Ast::default()"),
+            ]
+          : toolCallDocId === HARNESS_LEXER_CALL
+            ? ["src/lexer.rs", LEXER_BEFORE, LEXER_AFTER]
+            : [];
+      if (!path) return null;
+      return {
+        version: 1,
+        tool_call_doc_id: toolCallDocId,
+        changes: [
+          {
+            root: "/work",
+            path,
+            before: await recordedImage(before!),
+            after: await recordedImage(after!),
+          },
+        ],
+      };
+    },
     async fetchSessionGoal() {
       return null;
     },

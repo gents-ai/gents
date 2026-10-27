@@ -1,6 +1,7 @@
-import { ListTree, SquareStack } from "lucide-react";
+import { FileDiff, ListTree, SquareStack } from "lucide-react";
 import { registerSurface } from "@/app/surfaces";
 import { workersOfId } from "@/hooks/useFleet";
+import { ChangesSurface } from "./ChangesSurface";
 import { TraceSurface } from "./TracePanel";
 import { WorkersSurface } from "./WorkersSurface";
 
@@ -21,4 +22,13 @@ registerSurface({
   routes: ["session"],
   render: WorkersSurface,
   badge: (fleet, sessionId) => workersOfId(fleet, sessionId).length || null,
+});
+
+registerSurface({
+  id: "changes",
+  title: "Changes",
+  icon: FileDiff,
+  placements: ["dock", "sheet"],
+  routes: ["session"],
+  render: ChangesSurface,
 });

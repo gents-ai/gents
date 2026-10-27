@@ -58,6 +58,9 @@ import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
 import { readableReasoning, reasoningWithheld } from "./tool-summary";
 import { groupTranscript, type TranscriptEntry } from "./transcript-groups";
 import { useCopied } from "@/lib/clipboard";
+import type { SessionScope } from "../../lib/recordedFiles";
+import { sameChangedFiles, turnChanges, type ChangedFile } from "@/lib/turnChanges";
+import { TurnChanges } from "./TurnChanges";
 import { toastFailure } from "@/lib/failure";
 import { sessionViews } from "@/app/sessionViews";
 import { createHeightLearner, guessHeight, type RowShape } from "@/lib/rowHeights";
@@ -365,15 +368,20 @@ function ResponseActions({ text }: { text: string }) {
   );
 }
 
+type ItemChanges = { scope: SessionScope; files: readonly ChangedFile[] };
+
 const ItemRow = memo(function ItemRow({
   rowKey,
   item,
   final,
+  changes,
 }: {
   /** the key the row is drawn under, shared by every row for the message */
   rowKey: string;
   item: RenderedTimelineItem;
   final: boolean;
+  /** the files the turn this row ends changed, in its session */
+  changes?: ItemChanges;
 }) {
   return (
     <div
@@ -384,6 +392,9 @@ const ItemRow = memo(function ItemRow({
       className="group/response min-w-0 pb-5"
     >
       <TranscriptItem item={item} final={final} />
+      {changes && (
+        <TurnChanges scope={changes.scope} turn={rowKey} files={changes.files} />
+      )}
     </div>
   );
 });
@@ -430,8 +441,9 @@ export type TranscriptOwner = {
 
 const EMPTY_ITEMS: RenderedTimelineItem[] = [];
 
-/* what a row's height is guessed from before it is drawn */
-function shapeOf(entry: TranscriptEntry): RowShape {
+/* what a row's height is guessed from before it is drawn, with the files
+   its turn changed when it ends one */
+function shapeOf(entry: TranscriptEntry, changedFiles = 0): RowShape {
   if (entry.kind === "group")
     return { kind: "group", open: !entry.settled, steps: entry.members.length };
   const item = entry.item;
@@ -446,7 +458,7 @@ function shapeOf(entry: TranscriptEntry): RowShape {
       };
     case "assistantMessage":
     case "liveAssistant":
-      return { kind: "reply", text: item.content ?? "" };
+      return { kind: "reply", text: item.content ?? "", changedFiles };
     default:
       return { kind: "other" };
   }
@@ -571,6 +583,31 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     if (last && !inFlight) keys.add(last);
     return keys;
   }, [entries, inFlight]);
+  const nodeDid = session?.nodeDid ?? null;
+  /* A finished turn's changes keep their identity while later turns stream,
+     so its memoised row is not drawn again on every update. */
+  const keptChanges = useRef(new Map<string, ItemChanges>());
+  const changes = useMemo(() => {
+    const was = keptChanges.current;
+    const next = new Map<string, ItemChanges>();
+    if (nodeDid && sessionKey) {
+      const scope = { nodeDid, sessionId: sessionKey };
+      for (const [key, files] of turnChanges(entries, finalKeys)) {
+        const held = was.get(key);
+        next.set(
+          key,
+          held &&
+            held.scope.nodeDid === nodeDid &&
+            held.scope.sessionId === sessionKey &&
+            sameChangedFiles(held.files, files)
+            ? held
+            : { scope, files },
+        );
+      }
+    }
+    keptChanges.current = next;
+    return next;
+  }, [entries, finalKeys, nodeDid, sessionKey]);
   const groupState = useGroupState(sessionKey);
 
   const entryKey = useCallback(
@@ -616,16 +653,22 @@ export const TranscriptPanel = memo(function TranscriptPanel({
 
   /* the guesses, corrected by what this session's first rows measure */
   const heights = useMemo(() => createHeightLearner(), [sessionKey]);
+  /* read through a ref so the estimates keep their identity while a turn
+     streams and its changes are worked out anew */
+  const changesNow = useRef(changes);
+  changesNow.current = changes;
+  const filesUnder = (entry: TranscriptEntry) =>
+    changesNow.current.get(entry.key)?.files.length ?? 0;
   const estimateOf = useCallback(
     (entry: TranscriptEntry, width: number) => {
-      const shape = shapeOf(entry);
+      const shape = shapeOf(entry, filesUnder(entry));
       return Math.round(guessHeight(shape, width) * heights.scale(shape.kind));
     },
     [heights],
   );
   const onMeasured = useCallback(
     (entry: TranscriptEntry, height: number, width: number) => {
-      const shape = shapeOf(entry);
+      const shape = shapeOf(entry, filesUnder(entry));
       heights.learn(shape.kind, guessHeight(shape, width), height);
     },
     [heights],
@@ -749,6 +792,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
                         rowKey={drawKey(keys, entry.item)}
                         item={entry.item}
                         final={finalKeys.has(entry.key)}
+                        changes={changes.get(entry.key)}
                       />
                     ) : (
                       <GroupRow entry={entry} workers={workers} />
