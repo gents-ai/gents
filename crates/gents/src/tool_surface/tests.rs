@@ -1,5 +1,48 @@
 use super::*;
 
+#[test]
+fn empty_mcp_tool_selection_explains_why_no_tools_are_attached() {
+    for style in [
+        crate::document_config::RemoteToolStyle::Discovery,
+        crate::document_config::RemoteToolStyle::Flat,
+    ] {
+        let config = AgentToolSurfaceConfig::from_selection(
+            "worker",
+            ResolvedToolSelection {
+                enable_meta_tools: true,
+                allowed_mcp_service_ids: vec!["research".into()],
+                remote_tools: Some(crate::document_config::RemoteTools {
+                    services: vec![crate::document_config::RemoteServiceTools {
+                        mcp_service_id: "research".into(),
+                        style,
+                        ..Default::default()
+                    }],
+                }),
+                ..Default::default()
+            },
+            &ToolCeiling::meta_only(),
+            Vec::new(),
+        )
+        .unwrap();
+        let explanation = config.explain_with_runtime(true, "did:test:owner", &Default::default());
+        assert!(!explanation
+            .tool_names
+            .iter()
+            .any(|name| crate::meta_tools::META_TOOL_NAMES.contains(&name.as_str())));
+        let warning = explanation
+            .warnings
+            .iter()
+            .find(|warning| warning.code == "mcp_service_has_no_selected_tools")
+            .expect("an available service with no selected names needs a selection diagnostic");
+        assert!(warning.message.contains("research"));
+        assert!(warning.message.contains("tool_names"));
+        assert!(!explanation
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "meta_requested_no_online_mcp"));
+    }
+}
+
 fn temp_root(name: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("{name}-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&path).unwrap();

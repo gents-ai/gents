@@ -233,6 +233,24 @@ fn explain_meta(
     surface: &ToolSurface,
     builder: &mut ExplanationBuilder,
 ) {
+    let mut empty_selections = config
+        .remote_tools()
+        .into_iter()
+        .flat_map(|remote| &remote.services)
+        .filter(|service| service.tool_names.is_empty())
+        .map(|service| service.mcp_service_id.clone())
+        .collect::<Vec<_>>();
+    empty_selections.sort();
+    empty_selections.dedup();
+    if !empty_selections.is_empty() {
+        builder.warn(
+            "mcp_service_has_no_selected_tools",
+            format!(
+                "No tool_names are selected for MCP services: {}. Empty lists grant no tools in either presentation style; configure exact tool_names in remote.services.",
+                empty_selections.join(", "),
+            ),
+        );
+    }
     if surface.include_meta_tools {
         builder.include_many(
             "meta_mcp",

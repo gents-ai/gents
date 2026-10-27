@@ -1541,4 +1541,23 @@ def providerToolIdentityCases : List ProviderToolIdentityCase :=
       [⟨"toolu_first", none⟩, ⟨"fc_native", some "call_native"⟩]⟩
   , ⟨"no_tools", true, []⟩ ]
 
+structure DiscoveryGuidanceCase where
+  name : String
+  enabled : Bool
+  presented : List String
+
+def DiscoveryGuidanceCase.expected (row : DiscoveryGuidanceCase) : Bool :=
+  PromptAssembly.Template.discoveryGuidance row.enabled row.presented.toFinset
+
+def discoveryGuidanceCases : List DiscoveryGuidanceCase :=
+  [ ⟨"empty_selection", true, []⟩
+  , ⟨"flat_tools_only", true, ["mcp_selected"]⟩
+  , ⟨"incomplete_discovery", true, ["discover_tools", "call_tool"]⟩
+  , ⟨"complete_discovery", true, ["discover_tools", "describe_tool", "call_tool"]⟩
+  , ⟨"disabled_discovery", false, ["discover_tools", "describe_tool", "call_tool"]⟩
+  , ⟨"mixed_flat_and_discovery", true,
+      ["mcp_selected", "describe_tool", "call_tool", "discover_tools"]⟩
+  , ⟨"duplicates_do_not_fill_missing_operation", true,
+      ["discover_tools", "discover_tools", "call_tool"]⟩ ]
+
 end Conformance.ContractCases

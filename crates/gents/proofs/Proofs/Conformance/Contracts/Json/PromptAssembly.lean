@@ -595,4 +595,11 @@ def providerToolIdentityCasesJson : String :=
     ",\"input\":" ++ jsonArray (row.input.map providerToolIdentityJson) ++
     ",\"expected\":" ++ jsonArray (row.expected.map providerToolIdentityJson) ++ "}")
 
+def discoveryGuidanceCasesJson : String :=
+  jsonArray (discoveryGuidanceCases.map fun row =>
+    "{\"name\":" ++ jsonString row.name ++
+    ",\"enabled\":" ++ toString row.enabled ++
+    ",\"presented\":" ++ jsonArray (row.presented.map jsonString) ++
+    ",\"expected\":" ++ toString row.expected ++ "}")
+
 end Conformance.Contracts

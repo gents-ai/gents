@@ -188,6 +188,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) background_wake_row_cases: Vec<serde_json::Value>,
     pub(crate) configuration_scope_cases: serde_json::Value,
     pub(crate) discovery_scope_cases: Vec<serde_json::Value>,
+    pub(crate) discovery_guidance_cases: Vec<serde_json::Value>,
     pub(crate) budget_rehydration_cases: Vec<LeanBudgetRehydrationCase>,
     pub(crate) goal_decision_cases: Vec<LeanGoalDecisionCase>,
     pub(crate) goal_readiness_gate_cases: Vec<LeanGoalReadinessGateCase>,

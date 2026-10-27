@@ -1638,6 +1638,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CurrentInputCases".to_string(),
         ));
     }
+    assert!(!snapshot.discovery_guidance_cases.is_empty());
+    emitted.insert((
+        "prompt_assembly_cases".into(),
+        "DiscoveryGuidanceCases".into(),
+    ));
     if !snapshot.prompt_assembly_sanitize_cases.is_empty() {
         emitted.insert((
             "prompt_assembly_cases".to_string(),
