@@ -10,7 +10,9 @@ use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::identity::NodeIdentity;
 
 use super::super::enrollment_reconcile::EnrollmentAuthorityHandle;
-use super::super::graphql_helpers::{first_row, graphql_string_list_literal, rows};
+use super::super::graphql_helpers::{
+    first_row, graphql_nullable_string_literal, graphql_string_list_literal, rows,
+};
 use super::super::PairingDesired;
 use super::desired::{data_plane_desired_from_pairing_row, merge_layered_desired};
 use super::enrollment::{
@@ -139,6 +141,9 @@ impl GraphqlPairingStateStore {
                 collections
                 replicator_addresses
                 replicator_filter
+                enrollment_request_digest
+                enrollment_authorization_sequence
+                enrollment_authorization_expires_at
             }
         }"#;
         let response =
@@ -268,6 +273,7 @@ impl PairingStateStore for GraphqlPairingStateStore {
                     peer_id,
                     LoadedPairingApplied {
                         doc_id: Some(canonical.doc_id.clone()),
+                        enrollment: canonical.enrollment.clone(),
                         state: canonical.into_applied(),
                         duplicate_doc_ids: rows.map(|row| row.doc_id).collect(),
                     },
@@ -311,6 +317,14 @@ impl PairingStateStore for GraphqlPairingStateStore {
         let replicator_addresses =
             graphql_nullable_string_array(&applied.state.replicator_addresses);
         let replicator_filter = graphql_nullable_filter_literal(&applied.state.replicator_filter);
+        let digest = graphql_nullable_string_literal(applied.enrollment.request_digest.as_deref());
+        let sequence = applied
+            .enrollment
+            .authorization_sequence
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "null".into());
+        let expires_at =
+            graphql_nullable_string_literal(applied.enrollment.authorization_expires_at.as_deref());
         let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let save = format!(
             r#"upsert_PeerPairingApplied(
@@ -320,6 +334,9 @@ impl PairingStateStore for GraphqlPairingStateStore {
                         collections: {collections},
                         replicator_addresses: {replicator_addresses},
                         replicator_filter: {replicator_filter},
+                        enrollment_request_digest: {digest},
+                        enrollment_authorization_sequence: {sequence},
+                        enrollment_authorization_expires_at: {expires_at},
                         created_at: "{now}",
                         updated_at: "{now}"
                     }},
@@ -327,6 +344,9 @@ impl PairingStateStore for GraphqlPairingStateStore {
                         collections: {collections},
                         replicator_addresses: {replicator_addresses},
                         replicator_filter: {replicator_filter},
+                        enrollment_request_digest: {digest},
+                        enrollment_authorization_sequence: {sequence},
+                        enrollment_authorization_expires_at: {expires_at},
                         updated_at: "{now}"
                     }}
                 ) {{ _docID }}"#,

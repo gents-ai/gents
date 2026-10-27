@@ -2135,6 +2135,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "EnrollmentDurableProjectionCases".into(),
         ));
     }
+    if !snapshot.enrollment_hydration_route_cases.is_empty() {
+        emitted.insert((
+            "enrollment_hydration_route_cases".into(),
+            "EnrollmentHydrationRoutes".into(),
+        ));
+    }
     if !snapshot.enrollment_pending_request_cases.is_empty() {
         emitted.insert((
             "enrollment_pending_request_cases".into(),

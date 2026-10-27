@@ -38,6 +38,8 @@ pub(super) struct AppliedStateRow {
     pub(super) replicator_addresses: Option<Vec<String>>,
     #[serde(default)]
     replicator_filter: Option<String>,
+    #[serde(flatten)]
+    pub(super) enrollment: super::EnrollmentMaterialization,
 }
 
 impl AppliedStateRow {

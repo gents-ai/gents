@@ -12,6 +12,7 @@ use gents_protocol::session_hydration::{
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
+use super::engine::EnrollmentMaterialization;
 use super::enrollment_reconcile::{EnrollmentAuthorityHandle, EnrollmentAuthorizationFence};
 use super::graphql_helpers::rows;
 use super::session_hydration::{
@@ -567,12 +568,26 @@ struct PendingRow {
 struct DesiredPairingRow {
     peer_id: Option<String>,
     node_did: Option<String>,
+    #[serde(flatten)]
+    enrollment: EnrollmentMaterialization,
+}
+
+impl DesiredPairingRow {
+    fn materializes(&self, authorization: &EnrollmentAuthorizationFence) -> bool {
+        self.enrollment.binds(
+            &authorization.request_digest,
+            authorization.authorization_sequence,
+            &authorization.authorization_expires_at,
+        )
+    }
 }
 
 #[derive(Deserialize)]
 struct AppliedPairingRow {
     peer_id: Option<String>,
     replicator_filter: Option<String>,
+    #[serde(flatten)]
+    enrollment: EnrollmentMaterialization,
 }
 
 #[derive(Deserialize)]
@@ -712,6 +727,11 @@ impl GraphqlHydrationStore {
 
         let desired_agents = rows::<DesiredPairingRow>(&response, "PeerPairingDesired")?
             .into_iter()
+            .filter(|row| {
+                authorization
+                    .as_ref()
+                    .is_some_and(|authorization| row.materializes(authorization))
+            })
             .filter_map(|row| {
                 Some((
                     row.peer_id.filter(|value| !value.is_empty())?,
@@ -719,10 +739,31 @@ impl GraphqlHydrationStore {
                 ))
             })
             .collect::<BTreeMap<_, _>>();
-        let applied_pairing_routes = rows::<AppliedPairingRow>(&response, "PeerPairingApplied")?
+        let applied_rows = rows::<AppliedPairingRow>(&response, "PeerPairingApplied")?;
+        let applied_count = applied_rows.len();
+        let applied_pairing_routes: BTreeSet<_> = applied_rows
             .into_iter()
+            .filter(|row| {
+                authorization.as_ref().is_some_and(|authorization| {
+                    row.enrollment.binds(
+                        &authorization.request_digest,
+                        authorization.authorization_sequence,
+                        &authorization.authorization_expires_at,
+                    )
+                })
+            })
             .filter_map(|row| applied_pairing_route(row, &desired_agents, collection))
             .collect();
+        if authorization.is_some() && applied_pairing_routes.is_empty() {
+            tracing::debug!(
+                request_key = %request.request_key,
+                collection,
+                sequence = ?authorization.as_ref().map(|value| value.authorization_sequence),
+                current_materializations = desired_agents.len(),
+                applied_count,
+                "hydration route has no current materialization"
+            );
+        }
         let sessions = rows::<SessionRow>(&response, "AgentSession")?
             .into_iter()
             .filter_map(|row| {
@@ -789,10 +830,12 @@ fn hydration_admission_query(session_id: &str, peer_id: &str) -> String {
     format!(
         r#"{{
             PeerPairingDesired(filter: {{ peer_id: {{ _eq: "{peer_id}" }}, source: {{ _eq: "enrollment" }} }}) {{
-                peer_id node_did
+                peer_id node_did enrollment_request_digest
+                enrollment_authorization_sequence enrollment_authorization_expires_at
             }}
             PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{peer_id}" }} }}) {{
-                peer_id replicator_filter
+                peer_id replicator_filter enrollment_request_digest
+                enrollment_authorization_sequence enrollment_authorization_expires_at
             }}
             AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
                 session_id requester_did node_did
@@ -864,6 +907,7 @@ fn terminal_mutation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("session_hydration_reconcile/admission_tests.rs");
     use crate::agent::p2p_reconcile::templates::{combine_filters, equality_filter};
     use crate::graphql::ensure_no_errors;
 
@@ -1503,6 +1547,7 @@ mod tests {
             let row = || AppliedPairingRow {
                 peer_id: Some("peer-1".into()),
                 replicator_filter: Some(raw.clone()),
+                enrollment: Default::default(),
             };
             let desired = BTreeMap::from([("peer-1".to_string(), "did:key:agent-1".to_string())]);
             let route = applied_pairing_route(row(), &desired, collection).expect("exact route");

@@ -8,6 +8,9 @@ async fn applied_state_persist_collapses_duplicates_and_recovers_a_missing_row()
             collections: [String!]
             replicator_addresses: [String!]
             replicator_filter: String
+            enrollment_request_digest: String
+            enrollment_authorization_sequence: Int
+            enrollment_authorization_expires_at: DateTime
             created_at: DateTime
             updated_at: DateTime
         }

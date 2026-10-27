@@ -44,6 +44,18 @@ pub(crate) fn include_existing(
 ) -> Result<()> {
     for (name, root, target, id, patch, fields) in [
         (
+            "PeerPairingApplied",
+            "bafyreifunn7vevp6b6rzg232gjfypp2lqviafe5now5ldlwo3na5nfinq4",
+            "bafyreifiujskeayi7adradcst2jit3srboodcd6ejy2m6gppwy2mv6k7ri",
+            "peer-pairing-applied-bind-enrollment-generation",
+            r#"[{"op":"add","path":"/PeerPairingApplied/Fields/-","value":{"Name":"enrollment_request_digest","Kind":"String"}},{"op":"add","path":"/PeerPairingApplied/Fields/-","value":{"Name":"enrollment_authorization_sequence","Kind":"Int"}},{"op":"add","path":"/PeerPairingApplied/Fields/-","value":{"Name":"enrollment_authorization_expires_at","Kind":"DateTime"}}]"#,
+            &[
+                "enrollment_request_digest",
+                "enrollment_authorization_sequence",
+                "enrollment_authorization_expires_at",
+            ][..],
+        ),
+        (
             "InferenceCall",
             INFERENCE_CALL_ROOT,
             INFERENCE_CALL_TARGET,

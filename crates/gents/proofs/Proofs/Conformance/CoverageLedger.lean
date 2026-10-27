@@ -734,6 +734,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::enrollment::generated_enrollment_durable_cases_drive_current_projection")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "enrollment_hydration_route_cases"
+      "EnrollmentHydrationRoutes"
+      "agent::p2p_reconcile::session_hydration_reconcile::tests::generated_hydration_routes_require_current_enrollment_materialization")
+      "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "enrollment_pending_request_cases"
       "EnrollmentPendingRequests"
       "client::core::enrollment::tests::generated_pending_request_satisfaction_matches_lean")
