@@ -9,6 +9,28 @@ set_option linter.dupNamespace false
 
 namespace PromptAssembly.Template
 
+def discoveryToolNames : Finset String :=
+  {"discover_tools", "describe_tool", "call_tool"}
+
+/-- MCP policy enablement alone does not establish the discovery interface:
+flat selections expose direct tools and empty exact-name selections grant none.
+The prompt may describe the discovery workflow only when all its operations
+are actually presented. This predicate grants no service or tool permission. -/
+def discoveryGuidance (enabled : Bool) (presented : Finset String) : Bool :=
+  enabled && decide (discoveryToolNames ⊆ presented)
+
+theorem discovery_guidance_requires_presented_tools (enabled : Bool)
+    (presented : Finset String) (h : discoveryGuidance enabled presented = true) :
+    discoveryToolNames ⊆ presented := by
+  exact of_decide_eq_true (Bool.and_eq_true_iff.mp h).2
+
+theorem disabled_discovery_has_no_guidance (presented : Finset String) :
+    discoveryGuidance false presented = false := rfl
+
+theorem complete_discovery_has_guidance :
+    discoveryGuidance true discoveryToolNames = true := by
+  simp [discoveryGuidance]
+
 abbrev VarRef := String
 
 abbrev Binding := VarRef → String

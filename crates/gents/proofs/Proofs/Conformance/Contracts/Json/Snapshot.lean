@@ -668,6 +668,7 @@ def snapshotJson : String :=
     ++ "\"wake_input_cases\":" ++ wakeInputCasesJson ++ ","
     ++ "\"prompt_assembly_sanitize_cases\":"
       ++ promptAssemblySanitizeCasesJson ++ ","
+    ++ "\"discovery_guidance_cases\":" ++ discoveryGuidanceCasesJson ++ ","
     ++ "\"prompt_assembly_assistant_order_cases\":"
       ++ promptAssemblyAssistantOrderCasesJson ++ ","
     ++ "\"prompt_assembly_mode_sanitize_cases\":"

@@ -24,6 +24,39 @@ fn user_msg(text: &str) -> Message {
 }
 
 #[test]
+fn mcp_discovery_guidance_matches_presented_operations_model() {
+    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let cases = snapshot["discovery_guidance_cases"].as_array().unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let tools = case["presented"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|name| name.as_str().unwrap())
+            .collect::<Vec<_>>();
+        let preamble = build_preamble(
+            "Instructions",
+            "worker",
+            &tools,
+            case["enabled"].as_bool().unwrap(),
+        );
+        assert_eq!(
+            preamble.contains("## Tool Discovery"),
+            case["expected"].as_bool().unwrap(),
+            "{}",
+            case["name"]
+        );
+        for name in tools {
+            assert!(
+                preamble.contains(name),
+                "direct tool {name} must remain visible"
+            );
+        }
+    }
+}
+
+#[test]
 fn preamble_strips_title_generation_suffix() {
     for suffix in [
         super::TITLE_GENERATION_SUFFIX,
