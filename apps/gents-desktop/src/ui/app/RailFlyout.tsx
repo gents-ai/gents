@@ -8,7 +8,7 @@ import { href, type Route } from "@/lib/router";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import type { NavMode } from "@/preferences";
 import { NodeAvatar } from "@/screens/AgentAvatar";
-import { SessionStatus } from "@/screens/SessionStatus";
+import { ListedSessionStatus } from "@/screens/SessionStatus";
 import { SyncHealth } from "./SyncHealth";
 import { RecentFilter } from "./RecentFilter";
 import { listViews, useListViews } from "./listViews";
@@ -356,7 +356,7 @@ function SessionLink({
           current === c.sessionId && "text-foreground",
         )}
       >
-        <SessionStatus turnState={c.turnState} />
+        <ListedSessionStatus session={c} />
         <span className="min-w-0 flex-1 truncate">{c.title ?? "Untitled session"}</span>
         {c.unreadableReason && (
           <Lock className="size-3 shrink-0" role="img" aria-label={c.unreadableReason}>
