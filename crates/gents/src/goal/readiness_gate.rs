@@ -36,6 +36,7 @@ pub enum GoalAgentReadiness {
 pub enum GoalFailureCause {
     Attempt,
     AgentUnavailable,
+    GoalControlUnavailable,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +88,18 @@ fn base_goal_decision(cause: GoalFailureCause, facts: &GoalContinuationFacts) ->
             facts.child_exists,
             facts.budget_reached,
             facts.has_activity,
+            facts.request_is_wrapup,
+            facts.infrastructure_retries,
+            facts.wrapup_requested,
+            facts.wrapup_completed,
+        ),
+        GoalFailureCause::GoalControlUnavailable => decide_goal_continuation(
+            facts.status,
+            GoalRequestTerminal::Failed,
+            facts.session_idle,
+            facts.child_exists,
+            facts.budget_reached,
+            false,
             facts.request_is_wrapup,
             facts.infrastructure_retries,
             facts.wrapup_requested,

@@ -62,6 +62,10 @@ def observe : Observation → Bool → Readiness
 inductive Cause where
   | attempt
   | agentUnavailable
+  /-- A native Goal control could not establish its authenticated caller scope.
+  A generated response and the failed tool invocation do not establish recovered
+  control-plane progress; use the existing bounded infrastructure retry owner. -/
+  | goalControlUnavailable
   deriving DecidableEq, Repr
 
 structure Input where
@@ -85,6 +89,9 @@ def baseDecision (cause : Cause) (i : Input) : Decision :=
   | .attempt =>
       Goals.decide i.status i.terminal i.sessionIdle i.childExists i.budgetReached
         i.hasActivity i.requestIsWrapup i.retries i.wrapupRequested i.wrapupCompleted
+  | .goalControlUnavailable =>
+      Goals.decide i.status .failed i.sessionIdle i.childExists i.budgetReached
+        false i.requestIsWrapup i.retries i.wrapupRequested i.wrapupCompleted
   | .agentUnavailable =>
       Goals.decide i.status .completed i.sessionIdle i.childExists i.budgetReached
         true false i.retries i.wrapupRequested i.wrapupCompleted
@@ -331,10 +338,11 @@ theorem unavailable_agent_rejection_is_never_charged
   | agentUnavailable => simp [nextRetries]
 
 
-theorem charge_requires_ready_attempt
+theorem charge_requires_ready_failure
     (observation : Observation) (settled : Bool) (cause : Cause) (i : Input)
     (h : i.retries < nextRetries cause i (gate observation settled cause i)) :
-    observe observation settled = .ready ∧ cause = .attempt := by
+    observe observation settled = .ready ∧
+      (cause = .attempt ∨ cause = .goalControlUnavailable) := by
   constructor
   · cases hr : observe observation settled
     · rfl
@@ -343,9 +351,10 @@ theorem charge_requires_ready_attempt
         (by rw [hr]; intro hc; cases hc)] at h
       omega
   · cases cause
-    · rfl
+    · exact Or.inl rfl
     · rw [unavailable_agent_rejection_is_never_charged] at h
       omega
+    · exact Or.inr rfl
 
 
 theorem retry_budget_is_bounded
@@ -362,6 +371,10 @@ theorem retry_budget_is_bounded
           · have := decide_retry_within_budget _ _ _ _ _ _ _ _ _ _ hbase
             omega
           · exact absurd hbase (unavailable_agent_never_retries i)
+          · have := decide_retry_within_budget i.status .failed i.sessionIdle i.childExists
+              i.budgetReached false i.requestIsWrapup i.retries i.wrapupRequested
+              i.wrapupCompleted hbase
+            omega
       | «continue» =>
           simp only [nextRetries]
           split <;> omega
@@ -549,5 +562,17 @@ theorem reissues_bounded_by_readiness_writes (events : List RaceEvent) :
   unfold raceInvariant at h
   simp only
   omega
+
+end GoalAutomation.ReadinessGate
+
+namespace GoalAutomation.ReadinessGate
+
+theorem unavailable_control_exhausts_existing_retry_budget (activity : Bool) :
+    gate (.ready true) true .goalControlUnavailable
+      { status := .active, terminal := .completed, sessionIdle := true,
+        childExists := false, budgetReached := false, hasActivity := activity,
+        requestIsWrapup := false, retries := 2, wrapupRequested := false,
+        wrapupCompleted := false } = .decided .pause := by
+  cases activity <;> decide
 
 end GoalAutomation.ReadinessGate
