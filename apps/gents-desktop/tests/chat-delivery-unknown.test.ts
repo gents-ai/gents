@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { createMailboxActions } from "../src/hooks/mailboxActions";
-import { loadUnresolvedSubmissions } from "../src/hooks/unresolvedSubmissions";
+import {
+  loadUnresolvedSubmissions,
+  contentKey,
+  rememberUnresolvedSubmission,
+} from "../src/hooks/unresolvedSubmissions";
 import { shellStores } from "./shell-fixture";
 import { goalDeliveryStorage } from "./goal-delivery-storage";
 
@@ -15,12 +19,20 @@ const unknownOutcome = {
   outcome: "deliveryUnknown",
 };
 
-it("reconciles a mailbox answer whose delivery is unknown", async () => {
+it("preserves exact resolution of an already saved uncertain mailbox answer", async () => {
   const sendChatMessage = vi
     .fn()
     .mockResolvedValueOnce(unknownOutcome)
     .mockResolvedValueOnce({ ...unknownOutcome, outcome: null });
+  rememberUnresolvedSubmission({
+    nodeDid: "agent",
+    sessionId: "session-1",
+    selectedSessionId: "session-1",
+    requestId: "request-unknown",
+    contentKey: contentKey("mailbox-answer:question-1"),
+  });
   const stores = shellStores({
+    deployments: [],
     selection: { nodeDid: "agent", agentId: "setup", sessionId: "session-1" },
   });
   const reportFailure = vi.fn();

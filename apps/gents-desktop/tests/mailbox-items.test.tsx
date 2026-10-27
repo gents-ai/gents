@@ -1,6 +1,8 @@
+import { acceptedChatReply } from "./chat-delivery-fixture";
+import { goalDeliveryStorage } from "./goal-delivery-storage";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import type { DesktopApp } from "../src/hooks/desktopApp";
@@ -40,8 +42,15 @@ const item = (over: Partial<MailboxItemView> = {}): MailboxItemView => ({
 
 const mailboxWith = (
   items: MailboxItemView[],
-  send: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({}),
-) => testApp({ api: { sendChatMessage: send }, deployments: [deploymentWith(items)] });
+  send: ReturnType<typeof vi.fn> = vi.fn(acceptedChatReply),
+) =>
+  testApp({
+    api: {
+      sendChatMessage: send,
+      acknowledgeChatSubmission: vi.fn().mockResolvedValue(undefined),
+    },
+    deployments: [deploymentWith(items)],
+  });
 const deploymentWith = (items: MailboxItemView[]) =>
   node({
     nodeDid: "did:key:node",
@@ -53,6 +62,7 @@ const deploymentWith = (items: MailboxItemView[]) =>
 const renderMailbox = (app: DesktopApp) =>
   render(<MailboxScreen />, { wrapper: withApp(app) });
 
+beforeEach(() => vi.stubGlobal("localStorage", goalDeliveryStorage()));
 afterEach(() => vi.unstubAllGlobals());
 
 describe("mailbox item", () => {
@@ -150,7 +160,7 @@ const questionItem = (question: Record<string, unknown>) =>
 
 describe("mailbox question", () => {
   it("sends a single choice on click and hides the raw payload", async () => {
-    const answer = vi.fn().mockResolvedValue(undefined);
+    const answer = vi.fn(acceptedChatReply);
     const ask = questionItem({});
     renderMailbox(mailboxWith([ask], answer));
     expect(screen.getByText("Which backend should the crew use?")).toBeVisible();
@@ -172,7 +182,7 @@ describe("mailbox question", () => {
   });
 
   it("toggles several choices and sends them with an Other note", () => {
-    const answer = vi.fn().mockResolvedValue(undefined);
+    const answer = vi.fn(acceptedChatReply);
     const ask = questionItem({ multi_select: true, allow_free_text: true });
     renderMailbox(mailboxWith([ask], answer));
     const send = screen.getByRole("button", { name: "Send" });
@@ -198,7 +208,7 @@ describe("mailbox question", () => {
   });
 
   it("sends a free-text-only answer", () => {
-    const answer = vi.fn().mockResolvedValue(undefined);
+    const answer = vi.fn(acceptedChatReply);
     const ask = questionItem({ allow_free_text: true });
     renderMailbox(mailboxWith([ask], answer));
     fireEvent.change(screen.getByLabelText("Other"), { target: { value: "Ollama" } });
