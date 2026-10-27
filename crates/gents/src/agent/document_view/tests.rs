@@ -711,7 +711,7 @@ async fn retired_reserved_ids_are_never_visible() {
         .await
         .expect("document view should load");
 
-    fn ids<T>(map: &HashMap<String, DocumentRecord<T>>) -> Vec<&str> {
+    fn ids<T>(map: &RapidHashMap<String, DocumentRecord<T>>) -> Vec<&str> {
         let mut ids: Vec<&str> = map.keys().map(String::as_str).collect();
         ids.sort_unstable();
         ids
