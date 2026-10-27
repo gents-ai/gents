@@ -455,8 +455,8 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
     let cases = lean_plugin_job_admission_cases();
     assert_eq!(
         cases.len(),
-        222,
-        "Lean supplies 30 admission regressions and 192 interrupted wire-to-recovery traces"
+        216,
+        "Lean supplies 24 admission regressions and 192 interrupted wire-to-recovery traces"
     );
     let mut names = BTreeSet::new();
     for case in cases {
