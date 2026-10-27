@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "provider_input::tool_call_identity_tests::modeled_tool_identity_projection_is_idempotent_and_preserves_other_fields",
+            package: "gents-loop",
+            source_path: "crates/gents-loop/src/provider_input/tool_call_identity_tests.rs",
+            module_path: "provider_input::tool_call_identity_tests",
+            function: "modeled_tool_identity_projection_is_idempotent_and_preserves_other_fields",
+        },
+        ConformanceConsumer::RustTest {
             id: "plugin_job::control::tests::kill_reads_children_that_committed_after_the_recovery_snapshot",
             package: "gents",
             source_path: "crates/gents/src/plugin_job/control.rs",
