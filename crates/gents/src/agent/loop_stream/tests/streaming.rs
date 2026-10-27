@@ -146,6 +146,49 @@ async fn managed_terminal_tool_result_terminates_loop() {
 }
 
 #[tokio::test]
+async fn unavailable_goal_attribution_stops_the_provider_before_another_turn() {
+    let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
+    let hook = hook.with_goal_tool_authority(true, true);
+    let model = ScriptedModel::new_turns(vec![
+        vec![
+            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                "goal-call".into(),
+                crate::goal::GET_GOAL_TOOL_NAME.into(),
+                serde_json::json!({}),
+            )),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+        vec![
+            RawStreamingChoice::Message("repeat the failed status".into()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ]);
+    let stream = run_loop_stream(
+        model.clone(),
+        Some(hook.clone()),
+        TaggedMessage::unassociated(Message::user("check the Goal")),
+        Vec::new(),
+        Arc::new(vec![Box::new(FixedTool {
+            name: crate::goal::GET_GOAL_TOOL_NAME.into(),
+            output: "must be intercepted".into(),
+        }) as Box<dyn ToolDyn>]),
+        owned_config(4),
+    );
+    let collected = collect_owned_scripted_stream(
+        stream,
+        &hook,
+        &writer,
+        &mut lifecycle,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    )
+    .await;
+    let error = collected.error.expect("unavailable attribution must terminate");
+    assert!(error.contains("PromptCancelled"), "{error}");
+    assert!(error.contains("attribution"), "{error}");
+    assert_eq!(model.seen_histories().await.len(), 1);
+}
+
+#[tokio::test]
 async fn threaded_assistant_turn_carries_provider_message_id() {
     let model = ScriptedModel::new_turns(vec![
         vec![
