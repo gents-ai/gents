@@ -157,7 +157,7 @@ async fn missing_and_removed_plugins_demote_then_readmit_the_agent() {
         &node_did,
         &agent_id,
         AgentReadinessState::Unavailable,
-        Some(AgentReadinessUnavailableReason::ExecutorStartFailed),
+        Some(AgentReadinessUnavailableReason::ToolSurfaceUnavailable),
     )
     .await;
     assert_eq!(removed.process_state, NodeReadinessProcessState::Ready);
