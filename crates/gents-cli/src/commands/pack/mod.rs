@@ -425,7 +425,12 @@ pub(crate) async fn record_plugin_store_change(
         node_did: None,
     })
     .await?;
-    gents::pack::record_plugin_store_change(&access, &owner, home, coordinate, installed).await
+    let result =
+        gents::pack::record_plugin_store_change(&access, &owner, home, coordinate, installed).await;
+    if let Some(node) = access.local_node() {
+        node.shutdown().await;
+    }
+    result
 }
 
 pub(crate) fn warn_on_unrecorded_removal(coordinate: &str, recorded: Result<()>) {
@@ -1128,6 +1133,26 @@ mod tests {
         };
         crate::commands::init::init(init_args).await.unwrap();
         home
+    }
+
+    #[tokio::test]
+    async fn plugin_store_record_error_releases_the_owned_offline_store() {
+        let home = initialized_home().await;
+        let error = record_plugin_store_change(home.path(), "invalid coordinate", None)
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("invalid pack coordinate"));
+        let (reopened, _) = crate::resolve_config_access(Some(home.path()), None)
+            .await
+            .expect("a failed record must drain its owned store before returning");
+        let records = reopened
+            .execute("{ PackInstallation(limit: 1) { coordinate } }")
+            .await;
+        reopened.local_node().unwrap().shutdown().await;
+        assert_eq!(
+            records.unwrap()["data"]["PackInstallation"],
+            serde_json::json!([])
+        );
     }
 
     fn document_install_args(
