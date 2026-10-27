@@ -23,6 +23,30 @@ def accepts (policy : Policy) (skip selected text : Bool) : Bool :=
     else (!text || policy.freeText) &&
       ((!selected || policy.optionCount > 0) && (selected || text))
 
+/-- A required modern question holds only its completed asking request's
+automatic continuation. Optional prompts, other requests and cancelled work do
+not hold independent work. An accepted reply closes the item through its
+existing signed owner; merely showing a question grants no access. -/
+def awaitingAnswer (policy : Policy) (isOpen sameParent completed : Bool) : Bool :=
+  valid policy && policy.version == 2 && !policy.optional &&
+    isOpen && sameParent && completed
+
+theorem optional_does_not_hold_work (policy : Policy) (isOpen sameParent completed : Bool)
+    (h : policy.optional = true) : awaitingAnswer policy isOpen sameParent completed = false := by
+  simp [awaitingAnswer, h]
+
+theorem answered_does_not_hold_work (policy : Policy) (sameParent completed : Bool) :
+    awaitingAnswer policy false sameParent completed = false := by
+  simp [awaitingAnswer]
+
+theorem another_request_does_not_hold_work (policy : Policy) (isOpen completed : Bool) :
+    awaitingAnswer policy isOpen false completed = false := by
+  simp [awaitingAnswer]
+
+theorem unfinished_or_cancelled_does_not_hold_work (policy : Policy) (isOpen sameParent : Bool) :
+    awaitingAnswer policy isOpen sameParent false = false := by
+  simp [awaitingAnswer]
+
 /-- A modern question is consumed through its correlated signed reply, including
 an explicit optional Skip. Generic dismissal supplies no such reply receipt. -/
 def dismiss? (version : Nat) (item : Item) (principalDid : String) : Option Item :=

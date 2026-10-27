@@ -16,6 +16,15 @@ struct Case {
     valid: bool,
     accepted: bool,
     dismissible: bool,
+    waits: Vec<WaitCase>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WaitCase {
+    open: bool,
+    same_parent: bool,
+    completed: bool,
+    waiting: bool,
 }
 
 #[test]
@@ -169,6 +178,20 @@ fn question_policy_follows_the_executable_model() {
         );
         let question = MailboxQuestion::from_payload(&payload);
         assert_eq!(question.is_ok(), case.valid, "{case:?}");
+        assert_eq!(case.waits.len(), 8);
+        for wait in &case.waits {
+            assert_eq!(
+                question
+                    .as_ref()
+                    .is_ok_and(|question| question.awaiting_answer(
+                        wait.open,
+                        wait.same_parent,
+                        wait.completed,
+                    )),
+                wait.waiting,
+                "{case:?}: {wait:?}",
+            );
+        }
         let answer = serde_json::from_value::<MailboxQuestionAnswer>(json!({
             "skip": case.skip,
             "option_ids": if case.selected { vec!["choice-0"] } else { vec![] },

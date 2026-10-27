@@ -9,6 +9,9 @@ pub struct SessionGoalView {
     pub session_doc_id: String,
     pub observed_at: String,
     pub goal: Option<GoalControlView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub waiting_question_ids: Option<Vec<String>>,
 }
 
 /// Decimal strings preserve the runtime's signed 64-bit budgets and counters

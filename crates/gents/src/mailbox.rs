@@ -20,7 +20,10 @@ mod domain;
 pub use dismiss::dismiss_mailbox_item;
 mod notification;
 mod reply;
+mod waiting;
 pub(crate) use reply::claim_reply_in_txn;
+pub use waiting::awaiting_question_ids;
+pub(crate) use waiting::required_question_in_txn;
 #[cfg(test)]
 mod reply_tests;
 pub use notification::{
