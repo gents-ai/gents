@@ -545,6 +545,7 @@ pub async fn seed_session_observation_from_request(
     );
     let row = &rows[0];
     let observation = gents_protocol::session::SessionObservation {
+        reply_preview: None,
         last_activity_at: row["created_at"]
             .as_str()
             .expect("creation time")

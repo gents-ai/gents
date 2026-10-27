@@ -1102,9 +1102,9 @@ pub(super) async fn apply_request_session_projection(
                 && fact.observed.request_id == request.request_id
         })
         .context("claimed request missing from its exact session scope")?;
+    let preview = session::request_preview_in_txn(txn, request).await?;
     let advanced =
-        session::advance_session_request_observation_in_txn(txn, incoming, &request.content, now)
-            .await?;
+        session::advance_session_request_observation_in_txn(txn, incoming, preview, now).await?;
     if !reopened && !advanced {
         session::touch_session_in_txn(txn, &owner, now).await?;
     }
@@ -1170,19 +1170,21 @@ async fn project_refused_request_onto_session_in_txn(
     )
     .await?
     .context("refused session disappeared")?;
-    let incoming = async {
+    let incoming: Result<_> = async {
         let facts = session::load_scoped_request_facts_in_txn(txn, &owner.session, false).await?;
-        facts
+        let incoming = facts
             .iter()
             .find(|fact| {
                 fact.observed.request_doc_id == request.doc_id
                     && fact.observed.request_id == request.request_id
             })
             .cloned()
-            .context("refused request missing from its exact session scope")
+            .context("refused request missing from its exact session scope")?;
+        let preview = session::request_preview_in_txn(txn, request).await?;
+        Ok((incoming, preview))
     }
     .await;
-    let incoming = match incoming {
+    let (incoming, preview) = match incoming {
         Ok(incoming) => incoming,
         Err(error) => {
             tracing::warn!(
@@ -1196,8 +1198,7 @@ async fn project_refused_request_onto_session_in_txn(
             return Ok(());
         }
     };
-    session::advance_refused_request_observation_in_txn(txn, &incoming, &request.content, now)
-        .await?;
+    session::advance_refused_request_observation_in_txn(txn, &incoming, preview, now).await?;
     Ok(())
 }
 

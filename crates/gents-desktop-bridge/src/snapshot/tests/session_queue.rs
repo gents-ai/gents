@@ -17,6 +17,7 @@ fn session_observing(newest: &str, state: RequestLifecycleState) -> AgentSession
         tags: Vec::new(),
         provenance: None,
         observation: Some(SessionObservation {
+            reply_preview: None,
             last_activity_at: "2026-04-21T12:00:09Z".into(),
             preview: None,
             latest_request: Some(SessionRequestObservation {

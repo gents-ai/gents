@@ -2385,6 +2385,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "ConfigurationScopeCases".into(),
     ));
     let sessions = &snapshot.session_document_cases;
+    assert!(!snapshot.session_reply_preview_cases.is_empty());
+    emitted.insert((
+        "session_reply_preview_cases".into(),
+        "SessionReplyPreviewCases".into(),
+    ));
     assert!(
         !sessions.selection.is_empty()
             && !sessions.projection.is_empty()
