@@ -2616,6 +2616,9 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage "discovery_scope_cases" "DiscoveryScopeCases"
       "Exercise backend-owner and credential-scoped catalog selection in the production discovery owner, including shared/OAuth and foreign-owner rejection.")
       "apply-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "initial_inference_cases" "InitialInferenceCases"
+      "commands::init::inference_seed_tests::generated_initial_inference_keeps_unselected_models_and_limits_unpinned")
+      "apply-reconcile" [Surface.operatorCli]
   , tagged (followUpCoverage "event_group_clock_cases" "EventGroupClockCases"
       "Drive the existing durable group clock owner after typed trigger/callback identity migration; preserve first-seen and quiescence across restart.")
       "triggers" [Surface.runtimeInternal]

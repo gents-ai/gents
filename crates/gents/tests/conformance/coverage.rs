@@ -2363,6 +2363,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         assert!(present, "{category} must emit rows");
         emitted.insert((category.into(), domain.into()));
     }
+    assert!(!snapshot.initial_inference_cases.is_empty());
+    emitted.insert((
+        "initial_inference_cases".into(),
+        "InitialInferenceCases".into(),
+    ));
     assert!(snapshot.configuration_scope_cases["cases"]
         .as_array()
         .is_some_and(|rows| !rows.is_empty()));

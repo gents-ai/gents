@@ -14,6 +14,7 @@ import Proofs.Conformance.ClientRequestCacheIdentityCases
 import Proofs.Conformance.SessionQueueOrderCases
 import Proofs.Conformance.CountCarrier
 import Proofs.Conformance.ConfigurationScope
+import Proofs.Conformance.Initialization
 import Proofs.Conformance.EnrollmentPendingRequests
 import Proofs.Conformance.ClientObservationAdmission
 import Proofs.Conformance.GraphWorkspaceLineage
@@ -323,6 +324,7 @@ def snapshotJson : String :=
     ++ "\"discovery_scope_cases\":" ++ Conformance.ConfigurationScope.discoveryCasesJson ++ ","
     ++ "\"budget_rehydration_cases\":" ++ budgetRehydrationCasesJson ++ ","
     ++ "\"configuration_scope_cases\":" ++ Conformance.ConfigurationScope.casesJson ++ ","
+    ++ "\"initial_inference_cases\":" ++ Conformance.Initialization.casesJson ++ ","
     ++ "\"session_document_cases\":" ++ sessionDocumentsJson ++ ","
     ++ "\"background_wake_row_cases\":" ++ backgroundWakeRowsCasesJson ++ ","
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
