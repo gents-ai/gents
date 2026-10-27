@@ -198,3 +198,29 @@ it("keeps successful stderr warnings and cancelled commands out of failure count
   });
   expect(summary.querySelector(".tool-activity-errors")).toBeNull();
 });
+
+it.each([
+  `python3 -c '${"x".repeat(32 * 1024)}'`,
+  `${"x".repeat(246)}🔧${"y".repeat(1024)}`,
+])(
+  "bounds automatic activity text while retaining the complete command in details %#",
+  (command) => {
+    const entry = tool("large", "running");
+    if (entry.presentation.kind !== "command")
+      throw new Error("command fixture");
+    entry.presentation.command = command;
+    render(<CompactToolGroup tools={[entry]} />);
+    const row = screen.getByRole("button", { name: /^View actions: Running / });
+    expect(row.textContent!.length).toBeLessThanOrEqual(256);
+    expect(row.getAttribute("aria-label")!.length).toBeLessThanOrEqual(270);
+    expect(
+      row.querySelector(".tool-activity-label")!.getAttribute("title")!.length,
+    ).toBeLessThanOrEqual(256);
+    expect(row.textContent).toMatch(/…$/u);
+    expect(row.textContent).not.toMatch(/[\uD800-\uDBFF]…$/u);
+    fireEvent.click(row);
+    const dialog = screen.getByRole("dialog", { name: /Actions 1/ });
+    expect(dialog.textContent).toContain(command);
+    expect(entry.presentation.command).toBe(command);
+  },
+);
