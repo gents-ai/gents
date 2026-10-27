@@ -1,0 +1,11 @@
+{
+  "input": {
+    "args": {}
+  },
+  "expect": {
+    "fail": {
+      "code": "workflow_invalid_input",
+      "message": "pass the workflow as `script`: a JavaScript module whose `module.exports` is the step function `(input) => output`; see the tool description"
+    }
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "assets": [
+    "README.md",
+    "agent_behaviors/wf_read_only/system_prompt.md",
+    "pack_config.json",
+    "plugins/workflow.afb",
+    "plugins/workflow/TOOL.md",
+    "plugins/workflow/tests/00_no_script_fails.json",
+    "tests/content.json",
+    "tests/install.json"
+  ],
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "config": "pack_config.json",
+  "dependencies": [],
+  "description": "Agent-authored workflows: the workflow tool runs a JavaScript step function you pass as script, as a background job under the job policy, with a read-only worker persona to spawn.",
+  "inference_slots": [
+    {
+      "agents": [
+        "wf-read-only"
+      ],
+      "description": "The read-only worker the workflows spawn. A fast, capable profile is appropriate.",
+      "name": "worker"
+    }
+  ],
+  "kind": "documents",
+  "manifest_version": 1,
+  "name": "dynamic_workflows",
+  "namespace": "gents",
+  "plugins": [
+    {
+      "artifact": "plugins/workflow.afb",
+      "description": "Run a workflow you write as a JavaScript step function (passed as script) as a background job.",
+      "input_schema": {
+        "properties": {
+          "agent_budget": {
+            "maximum": 1024,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "args": {
+            "description": "Read by the step function as input.args; args.handle names the run",
+            "type": "object"
+          },
+          "script": {
+            "description": "A JavaScript module whose module.exports is the step function (input) => output",
+            "type": "string"
+          }
+        },
+        "required": [
+          "script"
+        ],
+        "type": "object"
+      },
+      "instructions": "plugins/workflow/TOOL.md",
+      "job": true,
+      "language": "rust",
+      "limits": {
+        "max_output_mib": 4,
+        "memory_mib": 256,
+        "wall_clock_secs": 60
+      },
+      "name": "workflow",
+      "script_runtime": "js",
+      "source": "plugins/workflow"
+    }
+  ],
+  "tags": [
+    "workflow",
+    "dynamic"
+  ],
+  "version": "0.1.0"
+}

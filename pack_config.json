@@ -1,0 +1,74 @@
+{
+  "node": {},
+  "agents": [
+    {
+      "agent_id": "wf-read-only",
+      "context_id": "wf-read-only-context",
+      "display_name": "Workflow read-only worker",
+      "description": "Does one read-only task a workflow step gives it and answers in the shape asked.",
+      "inference_profile_id": "gents:inference-slot:worker"
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "wf-read-only-context",
+      "system_prompt": "./agent_behaviors/wf_read_only/system_prompt.md",
+      "tools_id": "wf-read-only-tools"
+    }
+  ],
+  "tools": [
+    {
+      "tools_id": "wf-read-only-tools",
+      "display_name": "Read-only files and bash for workflow workers",
+      "host": {
+        "bash": {
+          "mode": "ReadOnly",
+          "network_mode": "disabled"
+        },
+        "files": {
+          "mode": "ReadOnly"
+        }
+      },
+      "built_ins": {
+        "enable_session_history_tool": false
+      }
+    },
+    {
+      "tools_id": "workflow-caller",
+      "display_name": "Workflow caller: the dynamic workflow tool over the read-only worker (ships as check; the operator sets run)",
+      "integrations": {
+        "plugins": [
+          {
+            "plugin": "gents/workflow",
+            "job": {
+              "agent_targets": [
+                "wf-read-only"
+              ],
+              "max_live": 8,
+              "max_spawns": 64,
+              "max_messages_per_slot": 4,
+              "result_bytes": 65536,
+              "max_wall_secs": 3600,
+              "policy": {
+                "dynamic": "check",
+                "dynamic_targets": [
+                  "wf-read-only"
+                ],
+                "trusted_packs": []
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "agent_targets": [
+    {
+      "agent_id": "wf-read-only",
+      "name": "wf-read-only",
+      "target_id": "wf-read-only",
+      "target_node_did": "${GENTS_PACK_NODE_DID}",
+      "description": "A read-only worker for agent-authored workflows."
+    }
+  ]
+}
