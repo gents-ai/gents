@@ -939,7 +939,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         );
     }
     let mut id = 2;
-    let deployment = wait_chat_deployment(&mut client, &mut id, node_did).await?;
+    let deployment = wait_chat_deployment(&mut client, &mut id, node_did, &access).await?;
     let agent_id = deployment["agents"]
         .as_array()
         .and_then(|agents| agents.iter().find(|agent| agent["isDefault"] == true))
@@ -954,7 +954,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
                 .call(id, "client_connect_local", json!({"nodeHome":node_home}))
                 .await;
             id += 1;
-            wait_chat_deployment(&mut client, &mut id, node_did).await?;
+            wait_chat_deployment(&mut client, &mut id, node_did, &access).await?;
         }
         configure_inference(
             &mut client,
@@ -1159,7 +1159,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
-        run_editor_journey(
+        let editor = run_editor_journey(
             root,
             &paths,
             &host_binary,
@@ -1167,7 +1167,26 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             provider.endpoint(),
             journey.editor_scenario().context("steering scenario")?,
         )
-        .await?;
+        .await;
+        if editor.is_err() {
+            let snapshot = read_session(&mut client, &mut id, node_did, session).await?;
+            let requests = access.execute(&format!(
+                r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} superseded_by_request_doc_id }} }}"#,
+                gents::graphql::escape_graphql_string(node_did),
+                gents::graphql::escape_graphql_string(session),
+                gents::SIGNED_REQUEST_FIELDS,
+            )).await?;
+            let name = "editor-steering-failure.json";
+            std::fs::write(
+                root.join(name),
+                serde_json::to_vec_pretty(&json!({
+                    "snapshot": snapshot, "requests": requests,
+                }))?,
+            )?;
+            #[cfg(feature = "editor-e2e")]
+            copy_editor_evidence(root, name)?;
+        }
+        editor?;
         id += 1;
     }
     if matches!(journey, Journey::EditorGoalRecovery) {
@@ -2288,9 +2307,10 @@ async fn wait_chat_deployment(
     client: &mut Attachment,
     id: &mut u32,
     node_did: &str,
+    access: &gents::ConfigAccess,
 ) -> Result<Value> {
     let mut last_snapshot = Value::Null;
-    tokio::time::timeout(Duration::from_secs(30), async {
+    let observed = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let snapshot = client.snapshot(*id).await;
             *id += 1;
@@ -2311,10 +2331,22 @@ async fn wait_chat_deployment(
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
-    .await
-    .with_context(|| {
-        format!("client did not observe its authorized runtime route: {last_snapshot}")
-    })
+    .await;
+    match observed {
+        Ok(deployment) => Ok(deployment),
+        Err(error) => {
+            let query = format!(
+                "{{ NodeReadiness(filter: {{node_did: {{_eq: \"{}\"}}}}, limit: 2) {{_docID node_did snapshot_json updated_at}} }}",
+                gents::graphql::escape_graphql_string(node_did),
+            );
+            let source = tokio::time::timeout(Duration::from_secs(2), access.execute(&query)).await;
+            Err(error).with_context(|| {
+                format!(
+                    "client did not observe its authorized runtime route; runtime readiness: {source:?}; client snapshot: {last_snapshot}"
+                )
+            })
+        }
+    }
 }
 
 struct EditRecoveryHost<'a> {
@@ -2445,7 +2477,9 @@ async fn exercise_message_edit(
     client.close().await;
     recovery.restart().await?;
     client = Attachment::start(paths).await;
-    wait_chat_deployment(&mut client, id, node_did).await?;
+    wait_chat_deployment(&mut client, id, node_did, access)
+        .await
+        .context("restoring the runtime route after the fork helper restart")?;
     let fork = client
         .call(*id, "desktop_session_fork_before_message", args)
         .await;
@@ -2506,7 +2540,9 @@ async fn exercise_message_edit(
     client.close().await;
     recovery.restart().await?;
     client = Attachment::start(paths).await;
-    wait_chat_deployment(&mut client, id, node_did).await?;
+    wait_chat_deployment(&mut client, id, node_did, access)
+        .await
+        .context("restoring the runtime route after the send helper restart")?;
     let recovered = client
         .call(
             *id,
@@ -2547,7 +2583,9 @@ async fn exercise_message_edit(
     client.close().await;
     recovery.restart().await?;
     client = Attachment::start(paths).await;
-    wait_chat_deployment(&mut client, id, node_did).await?;
+    wait_chat_deployment(&mut client, id, node_did, access)
+        .await
+        .context("restoring the runtime route after the acknowledgement helper restart")?;
     let acknowledged = client
         .call(
             *id,
