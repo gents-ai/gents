@@ -12,14 +12,25 @@ import { writeDraft } from "../../hooks/draftStore";
 import { toastFailure } from "../lib/failure";
 import { useApp } from "../app/AppContext";
 import { PromoteWorkflowDialog } from "./PromoteWorkflowDialog";
+import { nodeOf } from "../../hooks/fleetStore";
+import { useFleet } from "../hooks/useFleet";
+import { useHomeDid } from "../hooks/useClient";
+import { isLocalNode } from "../lib/firstRun";
 
 const words = (value: string) => value.replace(/_/g, " ");
 
 export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
   const { actions, drafts, stores, view } = useApp();
   const sessionId = stores.selection.use.sessionId();
-  const [promoting, setPromoting] = useState(false);
-  const [promotedAs, setPromotedAs] = useState<string[]>([]);
+  const sessionNodeDid = stores.selection.use.nodeDid();
+  const homeDid = useHomeDid();
+  const sessionNode = useFleet((fleet) => nodeOf(fleet, sessionNodeDid));
+  const sessionIsLocal = !!sessionNode && isLocalNode(sessionNode, homeDid);
+  const [promotingKey, setPromotingKey] = useState<string | null>(null);
+  const [promotion, setPromotion] = useState<{ key: string; names: string[] }>({
+    key: "",
+    names: [],
+  });
   const state = tool.jobState;
   const progress = tool.jobProgress;
   const terminal =
@@ -32,20 +43,24 @@ export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
   const promotable =
     state === "completed" &&
     tool.jobOrigin === "dynamic" &&
+    sessionIsLocal &&
+    tool.nodeDid === sessionNodeDid &&
     !!sessionId &&
     !!tool.toolCallId;
   const selector = `${sessionId}:${tool.toolCallId}`;
+  const promotionKey = `${sessionNodeDid ?? ""}\u0000${selector}`;
+  const promotedAs = promotion.key === promotionKey ? promotion.names : [];
   useEffect(() => {
     if (!promotable) return;
     let current = true;
     actions.getDynamicWorkflow(selector).then(
-      (run) => current && setPromotedAs(run.promoted_as),
+      (run) => current && setPromotion({ key: promotionKey, names: run.promoted_as }),
       () => {},
     );
     return () => {
       current = false;
     };
-  }, [actions, promotable, selector]);
+  }, [actions, promotable, promotionKey, selector, sessionNodeDid]);
   const control = (action: JobControlKind) => {
     if (!tool.toolCallDocId || !tool.nodeDid) return;
     actions
@@ -154,18 +169,23 @@ export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
               : words(state)}
           </p>
           {promotable && promotedAs.length === 0 && (
-            <Button size="sm" variant="outline" onClick={() => setPromoting(true)}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setPromotingKey(promotionKey)}
+            >
               Promote
             </Button>
           )}
         </div>
       )}
-      {promoting && (
+      {promotingKey === promotionKey && promotable && (
         <PromoteWorkflowDialog
+          key={promotionKey}
           selector={selector}
           onClose={(promoted) => {
-            setPromoting(false);
-            if (promoted) setPromotedAs([promoted.tool]);
+            setPromotingKey(null);
+            if (promoted) setPromotion({ key: promotionKey, names: [promoted.tool] });
           }}
         />
       )}

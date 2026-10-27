@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { DynamicWorkflowSummary } from "@source-inc/gents-desktop-client";
 
 import { WorkflowsPanel } from "../src/ui/screens/agent/WorkflowsPanel";
-import { renderIn, testApp } from "./app-fixture";
+import { node, renderIn, testApp } from "./app-fixture";
 
 const summary = (over: Partial<DynamicWorkflowSummary>): DynamicWorkflowSummary => ({
   script_id: "sha256:a",
@@ -38,7 +38,10 @@ describe("WorkflowsPanel", () => {
         },
       ],
     });
-    renderIn(testApp({ api: { listDynamicWorkflows } }), <WorkflowsPanel />);
+    renderIn(
+      testApp({ api: { listDynamicWorkflows } }),
+      <WorkflowsPanel deployment={node()} />,
+    );
     const rows = await screen.findAllByTestId("workflow-row");
     expect(rows).toHaveLength(2);
     expect(rows[0]!.textContent).toContain("rome_debate");
@@ -53,5 +56,17 @@ describe("WorkflowsPanel", () => {
     expect(installed[0]!.textContent).toContain("gents/code_review");
     expect(within(installed[0]!).queryByRole("button")).toBeNull();
     expect(rows[1]!.textContent).toContain("promoted as gents/triage, gents/triage_v2");
+  });
+
+  it("does not query or show local workflows while viewing a remote node", () => {
+    const listDynamicWorkflows = vi.fn();
+    const { container } = renderIn(
+      testApp({ api: { listDynamicWorkflows } }),
+      <WorkflowsPanel
+        deployment={node({ nodeDid: "did:test:remote", source: "enrollment" })}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+    expect(listDynamicWorkflows).not.toHaveBeenCalled();
   });
 });
