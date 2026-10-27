@@ -19,6 +19,13 @@ describe("a row's height before it is drawn", () => {
     );
   });
 
+  it("counts the card of changed files under a reply, which stops growing", () => {
+    const reply = (changedFiles: number) =>
+      guessHeight({ kind: "reply", text: "done", changedFiles }, 600);
+    expect(reply(2) - reply(0)).toBe(100);
+    expect(reply(500)).toBe(reply(6));
+  });
+
   it("learns each kind's error from the first rows drawn, then holds it", () => {
     const learner = createHeightLearner();
     expect(learner.scale("reply")).toBe(1);
