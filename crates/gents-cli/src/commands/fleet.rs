@@ -17,7 +17,7 @@ async fn fleet_slots(args: FleetSlotsArgs) -> Result<()> {
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .context("building HTTP client")?;
-    let snapshot: Value = http_get_json(client.get(&url)).await?;
+    let snapshot: Value = http_get_json(graphql.authorize(client.get(&url))?).await?;
     print_json(&snapshot)?;
     Ok(())
 }

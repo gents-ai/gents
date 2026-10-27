@@ -36,7 +36,12 @@ async fn websocket_handshake_requires_configured_bearer_token() -> Result<()> {
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;
     let url = format!("ws://127.0.0.1:{shim_port}/");
-    let health = reqwest::get(format!("http://127.0.0.1:{server_port}/healthz"))
+    let endpoint = crate::support::graphql::served_endpoint(&format!(
+        "http://127.0.0.1:{server_port}/api/v0/graphql"
+    ));
+    let health = endpoint
+        .authorize(reqwest::Client::new().get(format!("http://127.0.0.1:{server_port}/healthz")))?
+        .send()
         .await?
         .json::<Value>()
         .await?;
