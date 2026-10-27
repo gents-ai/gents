@@ -128,40 +128,48 @@ async fn load_goal_document_versions(
         }
     }
 
-    // The CID collection query reconstructs each historical document through
-    // DefraDB's DocumentACP; input CID order is preserved by the runner.
-    let cid_list = commits
-        .iter()
-        .map(|commit| format!(r#""{}""#, escape_graphql_string(&commit.cid)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let response = access
-        .execute_read(&format!(
-            r#"query {{
-                Goal(
-                    cid: [{cid_list}],
-                    docID: "{escaped_doc_id}",
-                    showDeleted: true
-                ) {{
-                    {GOAL_FIELDS}
-                }}
-            }}"#
-        ))
-        .await
-        .with_context(|| format!("reconstructing native Goal versions for {doc_id}"))?;
-    let snapshots: Vec<GoalDocument> = serde_json::from_value(
-        response
-            .pointer("/data/Goal")
-            .cloned()
-            .context("Goal version query omitted its rows")?,
-    )
-    .context("decoding historical Goal versions")?;
-    if snapshots.len() != commits.len() {
-        anyhow::bail!(
-            "Goal {doc_id} history reconstruction returned {} snapshots for {} visible commits",
-            snapshots.len(),
-            commits.len()
+    let mut snapshots = Vec::with_capacity(commits.len());
+    for (batch_index, batch) in commits.chunks(32).enumerate() {
+        let cid_list = batch
+            .iter()
+            .map(|commit| format!(r#""{}""#, escape_graphql_string(&commit.cid)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let response = access
+            .execute_read(&format!(
+                r#"query {{
+                    Goal(
+                        cid: [{cid_list}],
+                        docID: "{escaped_doc_id}",
+                        showDeleted: true
+                    ) {{
+                        {GOAL_FIELDS}
+                    }}
+                }}"#
+            ))
+            .await
+            .with_context(|| {
+                format!(
+                    "reconstructing native Goal versions for {doc_id}, batch {} ({} commits)",
+                    batch_index + 1,
+                    batch.len()
+                )
+            })?;
+        let rows: Vec<GoalDocument> = serde_json::from_value(
+            response
+                .pointer("/data/Goal")
+                .cloned()
+                .context("Goal version query omitted its rows")?,
+        )
+        .context("decoding historical Goal versions")?;
+        anyhow::ensure!(
+            rows.len() == batch.len(),
+            "Goal {doc_id} history batch {} returned {} snapshots for {} visible commits",
+            batch_index + 1,
+            rows.len(),
+            batch.len()
         );
+        snapshots.extend(rows);
     }
 
     commits
@@ -211,3 +219,6 @@ async fn load_goal_document_versions(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests;
