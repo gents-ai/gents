@@ -1,6 +1,8 @@
+import { acceptedChatReply } from "./chat-delivery-fixture";
+import { goalDeliveryStorage } from "./goal-delivery-storage";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   DesktopSessionSnapshot,
   PendingQueueEntryView,
@@ -19,13 +21,15 @@ vi.mock("../src/ui/screens/Markdown", () => ({
   Markdown: ({ children }: { children: string }) => <div>{children}</div>,
 }));
 vi.mock("../src/ui/screens/BehaviorPicker", () => ({ AgentPicker: () => null }));
-vi.stubGlobal(
-  "IntersectionObserver",
-  class {
-    observe() {}
-    disconnect() {}
-  },
-);
+beforeEach(() => {
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+});
 
 const NODE = deployment.nodeDid;
 const entry = (id: string, group: string | null = "same"): PendingQueueEntryView => ({
@@ -162,10 +166,7 @@ describe("editing a waiting message in the composer", () => {
 
   it("holds an edit the agent took as already sent, sending it only on a click", async () => {
     const user = userEvent.setup();
-    const sendChatMessage = vi.fn().mockResolvedValue({
-      sessionId: "session",
-      requestId: "follow-up",
-    });
+    const sendChatMessage = vi.fn(acceptedChatReply);
     const { app } = setup([entry("a")], vi.fn(), sendChatMessage);
     await user.click(within(rowFor("a")).getByRole("button", { name: "Edit" }));
     await user.type(composerBox(), " and more");
@@ -230,3 +231,6 @@ describe("editing a waiting message in the composer", () => {
     await waitFor(() => expect(screen.queryByTestId("editing-message")).toBeNull());
   });
 });
+
+beforeEach(() => vi.stubGlobal("localStorage", goalDeliveryStorage()));
+afterEach(() => vi.unstubAllGlobals());

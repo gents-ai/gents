@@ -42,6 +42,7 @@ import {
 } from "./composerParts";
 import { useAgentChoice, useComposerSend } from "./useComposerSend";
 import { GoalDeliveryFeedback } from "./GoalDeliveryFeedback";
+import { ChatDeliveryFeedback } from "./ChatDeliveryFeedback";
 
 export function NewSession() {
   const { selectNode } = useApp().actions;
@@ -215,6 +216,7 @@ function NewSessionComposer() {
         }
       />
       <GoalDeliveryFeedback />
+      <ChatDeliveryFeedback />
       {sendError && (
         <p role="alert" className="mt-2 text-xs text-destructive">
           {sendError}

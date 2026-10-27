@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { acceptedChatReply } from "./chat-delivery-fixture";
+import { goalDeliveryStorage } from "./goal-delivery-storage";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   adoptNewChatFolder,
   loadChatFolders,
@@ -56,12 +58,7 @@ describe("chat folders", () => {
 
 describe("sending with a chat folder", () => {
   it("sends the new chat's folder as cwd and hands it to the session the send created", async () => {
-    const sendChatMessage = vi.fn(async () => ({
-      sessionId: "s9",
-      requestId: "r1",
-      nodeDid: "agent",
-      agentId: "coding",
-    }));
+    const sendChatMessage = vi.fn(acceptedChatReply);
     const stores = shellStores({
       deployments: [{ nodeDid: "agent", sessions: [], mailboxItems: [] }],
       selection: { nodeDid: "agent" },
@@ -79,6 +76,11 @@ describe("sending with a chat folder", () => {
     expect(sendChatMessage).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: "/work/notes" }),
     );
-    expect(stores.chat.getState().folders).toEqual({ s9: "/work/notes" });
+    expect(stores.chat.getState().folders).toMatchObject({
+      [sendChatMessage.mock.calls[0][0].sessionId!]: "/work/notes",
+    });
   });
 });
+
+beforeEach(() => vi.stubGlobal("localStorage", goalDeliveryStorage()));
+afterEach(() => vi.unstubAllGlobals());

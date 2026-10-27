@@ -15,24 +15,19 @@ import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
 import type { DesktopJobControlRequest } from "@source-inc/gents-desktop-client/generated/DesktopJobControlRequest";
 import type { QueueDelivery } from "@source-inc/gents-desktop-client/generated/QueueDelivery";
 
-import {
-  adoptNewChatFolder,
-  folderOf,
-  withFolder,
-  writeChatFolders,
-} from "./chatFolders";
+import { folderOf, withFolder, writeChatFolders } from "./chatFolders";
 import { chat } from "./chatStore";
 import { firstNode, nodeOf } from "./fleetStore";
 import { actionFailure, shownFailure } from "./actionFailure";
 import { selection } from "./selectionStore";
 import { heldFor, readSession } from "./sessionStore";
 import {
-  contentKey,
-  forgetUnresolvedSubmission,
-  rememberUnresolvedSubmission,
   unresolvedSubmissionFor,
+  forgetUnresolvedSubmission,
 } from "./unresolvedSubmissions";
 import type { ShellProjection, ShellStores } from "./shellProjection";
+import { createChatDelivery } from "./chatDelivery";
+import { chatDraftRequest, retainChatDraft, type ChatDraft } from "./chatDrafts";
 import { createGoalDelivery } from "./goalDelivery";
 import { goalDraftCommand, type GoalDraft } from "./goalDrafts";
 
@@ -48,7 +43,7 @@ type ChatActionParams = {
 };
 
 export const DELIVERY_UNKNOWN_HINT =
-  "Your message may have been delivered. Check the session before resending; sending the same message again checks delivery instead of creating a duplicate.";
+  "Your message may have been delivered. Use Check message delivery or Resume saved message to resolve the original send.";
 export const EARLIER_SEND_NOT_DELIVERED_HINT =
   "Your earlier message was not delivered. Send it again.";
 
@@ -110,6 +105,7 @@ export function createChatActions({
   const store = stores.selection;
   let submissionInFlight = false;
   const goalDelivery = createGoalDelivery(api, stores);
+  const chatDelivery = createChatDelivery(api, stores);
 
   const selectedNode = () => nodeOf(stores.fleet.getState(), store.getState().nodeDid);
 
@@ -161,20 +157,88 @@ export function createChatActions({
     return true;
   }
 
+  async function applyChatResult(
+    result: ChatSendResult,
+    draft: ChatDraft,
+    intent: number,
+    acceptsView: () => boolean,
+  ) {
+    const showing = () =>
+      acceptsView() &&
+      selection.acceptsIntent(store, intent) &&
+      store.getState().nodeDid === draft.nodeDid &&
+      (store.getState().sessionId === draft.selectedSessionId ||
+        store.getState().sessionId === draft.sessionId) &&
+      stores.client.getState().snapshot?.client?.clientDid === draft.clientDid;
+    if (!showing()) return false;
+    let request = null;
+    try {
+      request = chatDraftRequest(draft);
+    } catch {}
+    const attachmentViews = request?.attachments?.length
+      ? await Promise.all(request.attachments.map(attachmentMetadata))
+      : [];
+    if (!showing()) return false;
+    if (draft.selectedSessionId === null) {
+      if (request)
+        writeChatFolders(stores.chat, (folders) =>
+          withFolder(folders, result.sessionId, request.cwd ?? null),
+        );
+      selection.adoptSession(store, result.sessionId);
+    }
+    if (
+      request &&
+      !stores.chat
+        .getState()
+        .sentTurns.some(
+          (turn) =>
+            turn.requestId === result.requestId && turn.sessionId === result.sessionId,
+        )
+    )
+      chat.showPendingTurn(
+        stores.chat,
+        {
+          sessionId: result.sessionId,
+          requestId: result.requestId,
+          content: request.content,
+          attachments: attachmentViews,
+          selectedSkillIds: [],
+          lifecycleState: "pending",
+          foldedIntoRequestId: null,
+          origin: null,
+          createdAt: new Date().toISOString(),
+        },
+        draft.queued,
+      );
+    chat.awaitObservation(stores.chat, {
+      nodeDid: draft.nodeDid,
+      sessionId: result.sessionId,
+      requestId: result.requestId,
+    });
+    return true;
+  }
+
   async function sendMessage(
     content: string,
     agentId?: string | null,
     attachments: RequestAttachment[] = [],
     followUp?: QueueDelivery,
+    acceptsView: () => boolean = () => true,
   ): Promise<ChatSendResult | null> {
     if (submissionInFlight) return null;
     const node = selectedNode() ?? firstNode(stores.fleet.getState());
     if (!node || (!content.trim() && !attachments.length)) return null;
-
-    const errorSessionId = store.getState().sessionId;
+    const { sessionId: selectedSessionId, mailboxRoute } = store.getState();
+    const callerDid = stores.client.getState().snapshot?.client?.clientDid;
+    const cwd = folderOf(stores.chat.getState().folders, selectedSessionId);
+    const intent = selection.captureIntent(store);
     const reportSendFailure = (message: string) => {
       stores.chat.setState({
-        submissionError: { nodeDid: node.nodeDid, sessionId: errorSessionId, message },
+        submissionError: {
+          nodeDid: node.nodeDid,
+          sessionId: selectedSessionId,
+          message,
+        },
       });
       reportFailure(message);
     };
@@ -193,106 +257,108 @@ export function createChatActions({
       reportSendFailure("The selected agent is unavailable");
       return null;
     }
-
     submissionInFlight = true;
-    const intentGeneration = selection.captureIntent(store);
-    const { sessionId: selectedSessionId, mailboxRoute } = store.getState();
     const ownedWorkflow: ChatWorkflowState = {
       kind: "submittingRequest",
       nodeDid: node.nodeDid,
       sessionId: selectedSessionId,
     };
-    // A send whose delivery is unknown is reconciled, never re-sent under a
-    // fresh identity: the owner may already hold the original request.
-    let earlier = unresolvedSubmissionFor(
-      node.nodeDid,
-      selectedSessionId,
-      content,
-      attachments,
-    );
-    if (
-      earlier &&
-      sessionShowsRequest(
-        heldFor(readSession(stores.session), earlier.sessionId, node.nodeDid),
-        earlier.requestId,
-      )
-    ) {
-      // The session already shows the earlier request, so it was delivered and
-      // this identical message is a deliberate new send.
-      forgetUnresolvedSubmission(earlier.requestId);
-      earlier = undefined;
-    }
     chat.beginSubmission(stores.chat, ownedWorkflow);
     try {
-      const attachmentViews = attachments.length
-        ? await Promise.all(attachments.map(attachmentMetadata))
-        : [];
-      const result = await api.sendChatMessage({
-        nodeDid: node.nodeDid,
-        agentId: admission.agentId,
-        sessionId: earlier?.sessionId ?? selectedSessionId,
+      if (!callerDid) throw new Error("Connect this client before sending a message.");
+      let earlier = unresolvedSubmissionFor(
+        node.nodeDid,
+        selectedSessionId,
         content,
         attachments,
-        /* how a message behind a running turn waits; the bridge steers when
-           it is not said */
-        delivery: status.kind === "queue" ? (followUp ?? null) : null,
-        causedBySourceDocId: mailboxRoute?.itemId ?? null,
-        cwd: folderOf(stores.chat.getState().folders, selectedSessionId),
-        resolveRequestId: earlier?.requestId ?? null,
-      });
-      if (earlier) forgetUnresolvedSubmission(earlier.requestId);
-      if (result.outcome === "notDelivered") {
-        // The owner definitely rejected the retained, byte-identical signed
-        // request, so it was not delivered.
-        if (!selection.acceptsIntent(store, intentGeneration)) return null;
-        chat.resetWorkflow(stores.chat);
-        reportSendFailure(EARLIER_SEND_NOT_DELIVERED_HINT);
-        return null;
-      }
-      if (result.outcome === "deliveryUnknown") {
-        rememberUnresolvedSubmission({
-          nodeDid: result.nodeDid,
-          requestId: result.requestId,
-          sessionId: result.sessionId,
-          selectedSessionId,
-          contentKey: contentKey(content, attachments),
-        });
-        reportSendFailure(DELIVERY_UNKNOWN_HINT);
-        if (selection.acceptsIntent(store, intentGeneration))
-          chat.resetWorkflow(stores.chat);
-        return null;
-      }
-      if (selectedSessionId === null)
-        writeChatFolders(stores.chat, (folders) =>
-          adoptNewChatFolder(folders, result.sessionId),
-        );
-      if (!selection.acceptsIntent(store, intentGeneration)) return result;
-      selection.adoptSession(store, result.sessionId);
-      chat.showPendingTurn(
-        stores.chat,
-        {
-          sessionId: result.sessionId,
-          requestId: result.requestId,
-          content,
-          attachments: attachmentViews,
-          selectedSkillIds: [],
-          lifecycleState: "pending",
-          foldedIntoRequestId: null,
-          origin: null,
-          createdAt: new Date().toISOString(),
-        },
-        status.kind === "queue",
       );
-      chat.awaitObservation(stores.chat, {
-        nodeDid: node.nodeDid,
-        sessionId: result.sessionId,
-        requestId: result.requestId,
-      });
+      if (
+        earlier &&
+        sessionShowsRequest(
+          heldFor(readSession(stores.session), earlier.sessionId, node.nodeDid),
+          earlier.requestId,
+        )
+      ) {
+        forgetUnresolvedSubmission(earlier.requestId);
+        earlier = undefined;
+      }
+      if (earlier) {
+        const reply = await api.sendChatMessage({
+          nodeDid: node.nodeDid,
+          agentId: admission.agentId,
+          sessionId: earlier.sessionId,
+          content,
+          attachments,
+          resolveRequestId: earlier.requestId,
+        });
+        if (
+          reply.nodeDid !== earlier.nodeDid ||
+          reply.sessionId !== earlier.sessionId ||
+          reply.requestId !== earlier.requestId
+        )
+          throw new Error("The reply does not match the earlier saved message.");
+        if (reply.outcome !== "deliveryUnknown")
+          forgetUnresolvedSubmission(earlier.requestId);
+        if (reply.outcome) {
+          if (acceptsView() && selection.acceptsIntent(store, intent)) {
+            chat.resetWorkflow(stores.chat);
+            reportSendFailure(
+              reply.outcome === "notDelivered"
+                ? EARLIER_SEND_NOT_DELIVERED_HINT
+                : DELIVERY_UNKNOWN_HINT,
+            );
+          }
+          return null;
+        }
+        const draft = retainChatDraft(
+          {
+            clientDid: callerDid,
+            requestId: reply.requestId,
+            nodeDid: reply.nodeDid,
+            sessionId: reply.sessionId,
+            agentId: reply.agentId,
+            content,
+            attachments,
+            cwd,
+          },
+          selectedSessionId,
+          status.kind === "queue",
+        );
+        await applyChatResult(reply, draft, intent, acceptsView);
+        return reply;
+      }
+      const result = await chatDelivery.submit(
+        {
+          clientDid: callerDid,
+          nodeDid: node.nodeDid,
+          agentId: admission.agentId,
+          sessionId: selectedSessionId,
+          content,
+          attachments,
+          delivery: status.kind === "queue" ? (followUp ?? null) : null,
+          causedBySourceDocId: mailboxRoute?.itemId ?? null,
+          cwd,
+        },
+        selectedSessionId,
+        status.kind === "queue",
+        (result, draft) => applyChatResult(result, draft, intent, acceptsView),
+      );
+      if (result.outcome) {
+        if (acceptsView() && selection.acceptsIntent(store, intent)) {
+          chat.resetWorkflow(stores.chat);
+          reportSendFailure(
+            result.outcome === "notDelivered"
+              ? EARLIER_SEND_NOT_DELIVERED_HINT
+              : DELIVERY_UNKNOWN_HINT,
+          );
+        }
+        return null;
+      }
       return result;
-    } catch (err) {
-      if (!selection.acceptsIntent(store, intentGeneration)) return null;
+    } catch (error) {
+      if (!acceptsView() || !selection.acceptsIntent(store, intent)) return null;
       chat.resetWorkflow(stores.chat);
-      reportSendFailure(actionFailure("send the message", err));
+      reportSendFailure(actionFailure("send the message", error));
       return null;
     } finally {
       chat.endSubmission(stores.chat, ownedWorkflow);
@@ -572,6 +638,37 @@ export function createChatActions({
       return result;
     },
     dismissGoalChange: goalDelivery.dismiss,
+    async recoverChatMessage(
+      requestId: string,
+      resume = false,
+      acceptsView: () => boolean = () => true,
+    ) {
+      const intent = selection.captureIntent(store);
+      const result = await chatDelivery.recover(requestId, resume, (result, draft) =>
+        applyChatResult(result, draft, intent, acceptsView),
+      );
+      if (
+        result &&
+        !result.outcome &&
+        acceptsView() &&
+        selection.acceptsIntent(store, intent) &&
+        store.getState().sessionId === result.sessionId &&
+        store.getState().nodeDid === result.nodeDid
+      ) {
+        stores.chat.setState((state) =>
+          state.submissionError?.nodeDid === result.nodeDid &&
+          (state.submissionError.sessionId === result.sessionId ||
+            state.submissionError.sessionId === null)
+            ? { submissionError: null }
+            : {},
+        );
+        void Promise.resolve()
+          .then(() => refreshSession(result.sessionId))
+          .catch(() => {});
+      }
+      return result;
+    },
+    dismissChatMessage: chatDelivery.dismiss,
     interruptRequest,
     backgroundTool: (request: Parameters<DesktopApiAdapter["backgroundTool"]>[0]) =>
       api.backgroundTool(request),

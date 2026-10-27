@@ -1,4 +1,8 @@
-import type { RequestAttachment } from "@source-inc/gents-desktop-client";
+import type {
+  ChatSendRequest,
+  ChatSendResult,
+  RequestAttachment,
+} from "@source-inc/gents-desktop-client";
 import type { BackendHealth } from "@source-inc/gents-desktop-client";
 import { deriveDisplayState } from "@source-inc/gents-desktop-operations";
 import type {
@@ -253,6 +257,8 @@ export function createDesktopUiHarness(
   const listeners = new Set<DesktopClientUpdatedHandler>();
   const sessions = new Map<string, DesktopSessionSnapshot>();
   let sendsHeld = false;
+  let heldRequestId = LARGE_SENT_REQUEST_ID;
+  const chatReplies = new Map<string, ChatSendResult>();
   const sessionLineage = new Map<
     string,
     {
@@ -801,9 +807,10 @@ export function createDesktopUiHarness(
       triggerId?: string | null;
       triggerKind?: string | null;
     },
+    identity?: Pick<ChatSendRequest, "sessionId" | "requestId">,
   ) {
-    const sessionId = `session-${++sessionSeq}`;
-    const requestId = `request-${++requestSeq}`;
+    const sessionId = identity?.sessionId ?? `session-${++sessionSeq}`;
+    const requestId = identity?.requestId ?? `request-${++requestSeq}`;
     const title = prompt.trim().slice(0, 48) || "manual-task-run";
     const response = `Bombadil harness response ${requestSeq}: received "${title}".`;
     const now = new Date().toISOString();
@@ -878,12 +885,13 @@ export function createDesktopUiHarness(
         "Goal submission acknowledgement is unavailable in this fixture.",
       );
     },
-    async recoverChatSubmission() {
-      throw new Error("Submission recovery is unavailable in this fixture.");
+    async recoverChatSubmission(query) {
+      const result = chatReplies.get(query.requestId);
+      return result
+        ? { kind: "prepared", result }
+        : { kind: "unconfirmed", nodeDid: query.nodeDid, requestId: query.requestId };
     },
-    async acknowledgeChatSubmission() {
-      throw new Error("Submission acknowledgement is unavailable in this fixture.");
-    },
+    async acknowledgeChatSubmission() {},
     async steerPendingMessage() {
       throw new Error("Steering is unavailable in this fixture.");
     },
@@ -1460,9 +1468,10 @@ export function createDesktopUiHarness(
       );
 
       if (sendsHeld && request.sessionId === "session-large") {
+        heldRequestId = request.requestId ?? LARGE_SENT_REQUEST_ID;
         return {
           sessionId: request.sessionId,
-          requestId: LARGE_SENT_REQUEST_ID,
+          requestId: heldRequestId,
           nodeDid: request.nodeDid,
           agentId: request.agentId ?? null,
         };
@@ -1470,7 +1479,7 @@ export function createDesktopUiHarness(
       if (request.sessionId && sessions.has(request.sessionId)) {
         const existing = sessions.get(request.sessionId)!;
         const nextSequence = existing.timelineItems.length + 1;
-        const requestId = `request-${++requestSeq}`;
+        const requestId = request.requestId ?? `request-${++requestSeq}`;
         attachmentPayloads.set(requestId, request.attachments ?? []);
         if (
           existing.turnState === "running" ||
@@ -1547,7 +1556,12 @@ export function createDesktopUiHarness(
         };
       }
 
-      const { session, requestId } = createSessionFromPrompt(content, request.agentId);
+      const { session, requestId } = createSessionFromPrompt(
+        content,
+        request.agentId,
+        undefined,
+        request,
+      );
       attachmentPayloads.set(requestId, request.attachments ?? []);
       session.timelineItems = session.timelineItems.map((item) =>
         item.kind === "userMessage" ? { ...item, requestId, attachments } : item,
@@ -2695,6 +2709,26 @@ export function createDesktopUiHarness(
     },
   };
 
+  const sendChatMessage = adapter.sendChatMessage;
+  adapter.sendChatMessage = async (request) => {
+    if (request.requestId && chatReplies.has(request.requestId))
+      return chatReplies.get(request.requestId)!;
+    const result = await sendChatMessage(request);
+    const reply: ChatSendResult = {
+      ...result,
+      submissionReceipt: {
+        nodeDid: result.nodeDid,
+        requestId: result.requestId,
+        sessionId: result.sessionId,
+        agentId: result.agentId,
+        envelopeHash: "sha256:" + "a".repeat(64),
+        signedPayloadHash: "sha256:" + "b".repeat(64),
+      },
+    };
+    chatReplies.set(reply.requestId, reply);
+    return reply;
+  };
+
   const listenerFactory: DesktopClientUpdatedListenerFactory = async (handler) => {
     listeners.add(handler);
     return () => {
@@ -2862,7 +2896,7 @@ export function createDesktopUiHarness(
             if (!session) {
               throw new Error("mobile performance fixture lost session-large");
             }
-            const requestId = LARGE_SENT_REQUEST_ID;
+            const requestId = heldRequestId;
             const turn =
               stage === "pending"
                 ? {

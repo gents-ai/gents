@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { acceptedChat } from "./chat-delivery-fixture";
+import { goalDeliveryStorage } from "./goal-delivery-storage";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   projectChatShell,
   type ChatWorkflowState,
@@ -6,7 +8,10 @@ import {
 import { projectDeploymentOperationalState } from "@source-inc/gents-desktop-client";
 import { releaseOwnedSubmissionWorkflow } from "../src/hooks/chatStore";
 import { createChatActions } from "../src/hooks/chatActions";
-import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import type {
+  ChatSendRequest,
+  DesktopApiAdapter,
+} from "@source-inc/gents-desktop-client";
 import { selection } from "../src/hooks/selectionStore";
 import { admittingProjection, historyOf, shellStores } from "./shell-fixture";
 import { deferred } from "./deferred";
@@ -31,15 +36,24 @@ function fixture(
     }),
   };
   const sending = historyOf(stores, "sending");
+  let lastRequest: ChatSendRequest;
   const actions = createChatActions({
     ...effects,
-    api: { sendChatMessage: send, retryRequest: retry } as unknown as DesktopApiAdapter,
+    api: {
+      sendChatMessage: async (request: ChatSendRequest) => {
+        lastRequest = request;
+        await send();
+        return acceptedChat(request);
+      },
+      retryRequest: retry,
+    } as unknown as DesktopApiAdapter,
     stores,
     project: () =>
       admittingProjection("coding", blocked ? "Agent is unavailable" : undefined),
   });
   return {
     actions,
+    accepted: () => acceptedChat(lastRequest),
     store,
     sending,
     advanceComposeIntent: () => selection.advanceIntent(store),
@@ -140,10 +154,11 @@ describe("canonical chat submission acceptance", () => {
       agentId: "coding",
     };
     const f = fixture(async () => accepted);
-    await expect(f.actions.sendMessage("review this")).resolves.toEqual(accepted);
+    await f.actions.sendMessage("review this");
+    expect(f.accepted()).toMatchObject({ sessionId: "session", nodeDid: "agent" });
     expect(f.pendingTurn()).toEqual(
       expect.objectContaining({
-        requestId: "request",
+        requestId: f.accepted().requestId,
         lifecycleState: "pending",
         content: "review this",
       }),
@@ -152,7 +167,7 @@ describe("canonical chat submission acceptance", () => {
       kind: "awaitingObservation",
       nodeDid: "agent",
       sessionId: "session",
-      requestId: "request",
+      requestId: f.accepted().requestId,
     });
     expect(f.refreshSession).not.toHaveBeenCalled();
     expect(f.refreshSnapshot).not.toHaveBeenCalled();
@@ -192,7 +207,8 @@ describe("canonical chat submission acceptance", () => {
     };
     pending.resolve(accepted);
 
-    await expect(submitted).resolves.toEqual(accepted);
+    await submitted;
+    expect(f.accepted().requestId).toEqual(expect.any(String));
     expect(f.store.getState().sessionId).toBe("session");
     expect(f.pendingTurn()).toBeNull();
     expect(f.getWorkflow()).toEqual({ kind: "ready" });
@@ -256,3 +272,6 @@ describe("canonical chat submission acceptance", () => {
     expect(f.sending).toEqual([true, false]);
   });
 });
+
+beforeEach(() => vi.stubGlobal("localStorage", goalDeliveryStorage()));
+afterEach(() => vi.unstubAllGlobals());

@@ -59,6 +59,7 @@ export function useComposerSend(agentId: string | null | undefined) {
   };
 
   const goal = async (text: string, objective = text) => {
+    const clientDid = stores.client.getState().snapshot?.client?.clientDid;
     const pending = setGoal(
       objective.replace(GOAL_COMMAND, "").trim(),
       agentId,
@@ -66,7 +67,11 @@ export function useComposerSend(agentId: string | null | undefined) {
     );
     const intentGeneration = captureComposeIntent();
     const result = await pending;
-    if (!mounted.current) return Boolean(result);
+    if (
+      !mounted.current ||
+      stores.client.getState().snapshot?.client?.clientDid !== clientDid
+    )
+      return Boolean(result);
     if (result) setDraft((current) => (current === text ? "" : current));
     follow(intentGeneration, result);
     return Boolean(result);
@@ -83,9 +88,18 @@ export function useComposerSend(agentId: string | null | undefined) {
     const attachments =
       supplied ?? selected.flatMap((a) => (a.content ? [a.content] : []));
     const ids = new Set(selected.map((a) => a.id));
-    const pending = sendMessage(text, agentId, attachments, followUp);
+    const clientDid = stores.client.getState().snapshot?.client?.clientDid;
+    const pending = sendMessage(
+      text,
+      agentId,
+      attachments,
+      followUp,
+      () => mounted.current,
+    );
     const intentGeneration = captureComposeIntent();
     const result = await pending;
+    if (stores.client.getState().snapshot?.client?.clientDid !== clientDid)
+      return Boolean(result);
     if (result) {
       if (!supplied) setDraft((current) => (current === text ? "" : current));
       if (!supplied)

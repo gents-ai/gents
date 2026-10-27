@@ -148,6 +148,7 @@ export function createBridgeHttpAdapter(
       client.postJson<SessionLiveDeltaView>("/desktop/session/live-delta", request),
     sendChatMessage: async (request) => {
       const normalized: TauriDriverChatRequest = {
+        ...request,
         nodeDid: request.nodeDid,
         agentId: request.agentId ?? null,
         sessionId: request.sessionId ?? null,

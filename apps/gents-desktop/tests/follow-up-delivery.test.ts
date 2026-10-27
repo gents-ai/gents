@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { acceptedChatReply } from "./chat-delivery-fixture";
+import { goalDeliveryStorage } from "./goal-delivery-storage";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   DeploymentView,
   DesktopApiAdapter,
@@ -25,12 +27,10 @@ function send(running: boolean) {
     bootstrap: {},
     client: { deployments: [deployment] },
   } as unknown as DesktopClientSnapshot);
-  const sendChatMessage = vi.fn().mockResolvedValue({
-    nodeDid: "agent",
-    agentId: "setup",
-    sessionId: "session-1",
-    requestId: "request-1",
+  stores.client.setState({
+    snapshot: { client: { clientDid: "test-client" } } as DesktopClientSnapshot,
   });
+  const sendChatMessage = vi.fn(acceptedChatReply);
   const projection = admittingProjection("setup");
   const actions = createChatActions({
     api: { sendChatMessage } as unknown as DesktopApiAdapter,
@@ -73,3 +73,6 @@ describe("a follow-up sent while a turn runs", () => {
     );
   });
 });
+
+beforeEach(() => vi.stubGlobal("localStorage", goalDeliveryStorage()));
+afterEach(() => vi.unstubAllGlobals());

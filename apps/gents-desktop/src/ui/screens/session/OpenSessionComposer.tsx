@@ -26,6 +26,7 @@ import { GoalChip, goalCommand, goalIsEditable, useGoalMode } from "./goalMode";
 import { useComposerSend } from "./useComposerSend";
 import { useFollowUp } from "@/preferences";
 import { GoalDeliveryFeedback } from "./GoalDeliveryFeedback";
+import { ChatDeliveryFeedback } from "./ChatDeliveryFeedback";
 
 export function OpenSessionComposer({
   roomRef,
@@ -189,6 +190,7 @@ export function OpenSessionComposer({
         <SelectedPendingTray />
       </ComposerEditContext.Provider>
       <GoalDeliveryFeedback />
+      <ChatDeliveryFeedback />
       <div
         data-testid="composer"
         ref={attachmentRoot}
