@@ -105,8 +105,8 @@ pub async fn verify(
     }
     let evidence = answer
         .input
-        .question_reply
         .as_ref()
+        .and_then(|input| input.question_reply.as_ref())
         .context("signed answer evidence")?;
     ensure!(
         evidence.question_version == Some(3)
@@ -133,7 +133,10 @@ pub async fn verify(
             row.content
                 .as_deref()
                 .is_some_and(|text| text.ends_with(EDITED_PROMPT))
-                && row.input.question_reply.is_none()
+                && row
+                    .input
+                    .as_ref()
+                    .is_none_or(|input| input.question_reply.is_none())
         })
         .collect();
     let [worker] = workers.as_slice() else {

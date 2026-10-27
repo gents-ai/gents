@@ -126,3 +126,76 @@ async fn paired_model_settings_use_the_authenticated_client_endpoint() {
     assert!(host.require_configured_runtime("did:paired").await.is_err());
     core.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn private_snapshot_keeps_the_current_requesters_questions_without_config_authority() {
+    use gents_desktop_core::client::{
+        ClientCore, ClientCoreOptions, ClientStore, ClientStoreRows, DesktopPaths, PeerRecord,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let paths = DesktopPaths::from_root(directory.path());
+    let mut peer = PeerRecord::local_standard(
+        "Paired runtime",
+        "iroh://remote-runtime",
+        "did:paired",
+        "http://127.0.0.1:1/api/v0/graphql",
+    );
+    peer.source = Some("enrollment".into());
+    peer.graphql = None;
+    std::fs::write(
+        paths.peer_directory_path(),
+        json!({"peers":[peer]}).to_string(),
+    )
+    .unwrap();
+    let core = Arc::new(
+        ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
+            .await
+            .unwrap(),
+    );
+    let requester = core.node_identity().did();
+    let mailbox_items = [
+        ("current", requester, "did:paired", "open"),
+        ("other-requester", "did:other", "did:paired", "open"),
+        ("other-node", requester, "did:other-node", "open"),
+        ("closed", requester, "did:paired", "acted"),
+    ].map(|(id, requester, node, status)| serde_json::from_value(json!({
+        "_docID":id,"item_key":id,"requester_did":requester,"node_did":node,"status":status,"kind":"ask","action":"start_request","title":"Choose work",
+        "source_kind":"agent","source_id":"request","session_id":"chat","request_id":"request","target_node_did":node,"target_agent_id":"agent","created_at":"2026-10-27T00:00:00Z",
+        "payload":json!({"version":3,"prompt":"What should happen next?","options":[],"allow_free_text":true}).to_string()
+    })).unwrap()).to_vec();
+    core.store()
+        .merge_snapshot(ClientStore::from_rows(ClientStoreRows {
+            mailbox_items,
+            ..Default::default()
+        }));
+    let host = ClientHost::new(core.clone());
+    let result = host
+        .execute(
+            protocol::ClientCommand::Snapshot {},
+            &AttachmentApprovals::default(),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let deployments = result["client"]["deployments"].as_array().unwrap();
+    let [deployment] = deployments.as_slice() else {
+        panic!("one paired runtime: {result}")
+    };
+    let items = deployment["mailboxItems"].as_array().unwrap();
+    assert_eq!(
+        items.len(),
+        1,
+        "private snapshot must preserve only the current requester's open question: {result}"
+    );
+    assert_eq!(items[0]["itemId"], "current");
+    assert!(items[0]["questionHash"]
+        .as_str()
+        .is_some_and(|hash| !hash.is_empty()));
+    assert!(result["bootstrap"]["desktopHome"]
+        .as_str()
+        .unwrap()
+        .is_empty());
+    assert!(!host.policy.snapshot_grants.config_read);
+    assert!(!host.policy.snapshot_grants.runtime_admin);
+    core.shutdown().await.unwrap();
+}

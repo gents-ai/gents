@@ -833,6 +833,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             "--inference-url",
         ])
         .arg(provider.endpoint());
+    if matches!(journey, Journey::EditorQuestions) {
+        init.arg("--engineer");
+    }
     let output = initialization::Initialization::spawn(&mut init, root)?
         .wait(Duration::from_secs(30))
         .await?;
@@ -1840,7 +1843,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
-        run_editor_journey(
+        let editor_result = run_editor_journey(
             root,
             &paths,
             &host_binary,
@@ -1848,7 +1851,24 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             provider.endpoint(),
             "questions",
         )
-        .await?;
+        .await;
+        let captured = provider.captured_chat_requests();
+        std::fs::write(
+            root.join("editor-questions-provider.json"),
+            serde_json::to_vec_pretty(&captured)?,
+        )?;
+        #[cfg(feature = "editor-e2e")]
+        copy_editor_evidence(root, "editor-questions-provider.json")?;
+        ensure!(
+            captured
+                .iter()
+                .any(|body| body["tools"]
+                    .as_array()
+                    .is_some_and(|tools| tools.iter().any(|tool| tool["function"]["name"]
+                        == gents::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME))),
+            "the default Engineer must advertise its question tool"
+        );
+        editor_result?;
         let evidence = editor_questions::verify(&access, node_did, session, &client_did).await?;
         std::fs::write(
             root.join("editor-questions-canonical.json"),
