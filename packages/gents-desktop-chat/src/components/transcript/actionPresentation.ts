@@ -156,6 +156,11 @@ export function actionTitle(entry: ActionEntry): string {
 }
 
 export function actionKind(entry: ActionEntry): string | null {
+  if (
+    entry.tool.reconstruction.state === "ready" &&
+    entry.tool.presentation.kind === "command"
+  )
+    return "command";
   if (actionCommand(entry)) return "command";
   const { tool } = entry;
   if (tool.reconstruction.state !== "ready") return null;
