@@ -252,8 +252,8 @@ mod tests {
         MetricsBackendRow {
             backend_id: "backend-1".to_string(),
             enabled: true,
-            max_concurrent: 1,
-            max_queue_depth: 4,
+            max_concurrent: Some(1),
+            max_queue_depth: Some(4),
             probe_status: "healthy".to_string(),
             last_probe: Some("2026-05-13T11:59:30Z".to_string()),
         }
