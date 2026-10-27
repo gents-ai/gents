@@ -16,12 +16,7 @@ vi.mock("../src/ui/screens/Markdown", () => ({
 import { BackgroundToolButton } from "../src/ui/screens/BackgroundToolButton";
 import { TranscriptPanel } from "../src/ui/screens/Transcript";
 import { ToolBody } from "../src/ui/screens/tool-views";
-import {
-  diffShape,
-  diffText,
-  lineCount,
-  toolSummary,
-} from "../src/ui/screens/tool-summary";
+import { diffText, lineCount, toolSummary } from "../src/ui/screens/tool-summary";
 import {
   activityStatus,
   interruptTarget,
@@ -122,43 +117,6 @@ const interruptEvidence = {
 };
 
 describe("file edit diff", () => {
-  const editWith = (
-    diff: { kind: "added" | "removed" | "context"; text: string }[],
-    created = false,
-  ) => tool({ ...edit.presentation, created, diff } as never);
-
-  it("shows a replacement as what was replaced and what replaced it", () => {
-    render(
-      <ToolBody
-        tool={editWith([
-          { kind: "removed", text: "old line" },
-          { kind: "added", text: "new line" },
-        ])}
-      />,
-    );
-    expect(screen.getByText("replaced")).toBeInTheDocument();
-    expect(screen.getByText("with")).toBeInTheDocument();
-    expect(screen.getByText("old line").closest("[data-diff]")).toHaveAttribute(
-      "data-diff",
-      "removed",
-    );
-  });
-
-  it("shows a new file as code, and an addition to a file in the added colour", () => {
-    const lines = [{ kind: "added" as const, text: "fn main() {}" }];
-    const { unmount } = render(<ToolBody tool={editWith(lines, true)} />);
-    expect(screen.getByText("new file")).toBeInTheDocument();
-    expect(screen.getByText("fn main() {}").closest("pre")).not.toHaveClass(
-      "bg-diff-added",
-    );
-    unmount();
-    render(<ToolBody tool={editWith(lines)} />);
-    expect(screen.getByText("added")).toBeInTheDocument();
-    expect(screen.getByText("fn main() {}").closest("pre")).toHaveClass(
-      "bg-diff-added",
-    );
-  });
-
   it("keeps a unified diff's gutter, in the diff colours", () => {
     render(<ToolBody tool={edit} />);
     const mark = (text: string) =>
@@ -175,18 +133,6 @@ describe("file edit diff", () => {
     expect(screen.getByText("fn c() {}").closest("[data-diff]")).toHaveClass(
       "bg-diff-removed",
     );
-  });
-
-  it("takes the shape of the edit", () => {
-    const of = (...kinds: ("added" | "removed" | "context")[]) =>
-      diffShape(kinds.map((kind) => ({ kind })));
-    expect(of("added", "added")).toBe("addition");
-    expect(of("removed")).toBe("removal");
-    expect(of("removed", "removed", "added")).toBe("replacement");
-    expect(of("removed", "added", "removed")).toBe("unified");
-    expect(of("added", "removed")).toBe("unified");
-    expect(of("context", "added")).toBe("unified");
-    expect(of("context")).toBe("unified");
   });
 
   it("marks added, removed and unchanged lines by kind", () => {

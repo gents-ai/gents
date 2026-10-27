@@ -31,6 +31,9 @@ export type {
 } from "./api/types.js";
 export type { IncompatibleStoreView } from "./generated/IncompatibleStoreView.js";
 export type { ManagedServerToolCeiling } from "./generated/ManagedServerToolCeiling.js";
+export type { FileChangeImages } from "./generated/FileChangeImages.js";
+export type { FileImage } from "./generated/FileImage.js";
+export type { ToolFileChanges } from "./generated/ToolFileChanges.js";
 export * from "./events.js";
 export * from "./operationalState.js";
 export * from "./turnState.js";

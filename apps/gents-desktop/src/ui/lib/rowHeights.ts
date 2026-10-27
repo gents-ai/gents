@@ -5,7 +5,7 @@
 
 export type RowShape =
   | { kind: "user"; text: string; attachments?: number }
-  | { kind: "reply"; text: string }
+  | { kind: "reply"; text: string; changedFiles?: number }
   | { kind: "group"; open: boolean; steps: number }
   | { kind: "other" };
 
@@ -32,6 +32,15 @@ export function linesOf(text: string, width: number): { prose: number; code: num
   return { prose: Math.max(1, prose), code };
 }
 
+/* the card of files a turn changed, under its final reply: a gap, its
+   padding and header, a row a file up to the few it lists, and a link to
+   the rest */
+export const CARD_FILES = 5;
+const changesCardHeight = (files: number) =>
+  files === 0
+    ? 0
+    : 8 + 12 + 24 + 28 * Math.min(files, CARD_FILES) + (files > CARD_FILES ? 24 : 0);
+
 export function guessHeight(shape: RowShape, width: number): number {
   switch (shape.kind) {
     case "user": {
@@ -47,7 +56,12 @@ export function guessHeight(shape: RowShape, width: number): number {
     }
     case "reply": {
       const { prose, code } = linesOf(shape.text, width);
-      return 52 + LINE_PX * prose + (code ? 24 + CODE_LINE_PX * code : 0);
+      return (
+        52 +
+        LINE_PX * prose +
+        (code ? 24 + CODE_LINE_PX * code : 0) +
+        changesCardHeight(shape.changedFiles ?? 0)
+      );
     }
     case "group":
       return shape.open ? 48 + 36 * Math.min(shape.steps, 8) : 48;

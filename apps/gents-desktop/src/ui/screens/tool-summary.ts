@@ -28,21 +28,6 @@ const DIFF_MARK: Record<ToolDiffLineKind, string> = {
 export const diffText = (diff: ToolDiffLineView[]) =>
   diff.map((line) => `${DIFF_MARK[line.kind]}${line.text}`).join("\n");
 
-export type DiffShape = "addition" | "removal" | "replacement" | "unified";
-
-export function diffShape(diff: readonly { kind: ToolDiffLineKind }[]): DiffShape {
-  const kinds = diff.map((line) => line.kind);
-  if (kinds.includes("context")) return "unified";
-  const firstAdded = kinds.indexOf("added");
-  const lastRemoved = kinds.lastIndexOf("removed");
-
-  if (firstAdded !== -1 && lastRemoved !== -1 && firstAdded < lastRemoved)
-    return "unified";
-  if (lastRemoved === -1) return "addition";
-  if (firstAdded === -1) return "removal";
-  return "replacement";
-}
-
 export const lineCount = (text: string) =>
   text ? text.replace(/\r?\n$/, "").split("\n").length : 0;
 

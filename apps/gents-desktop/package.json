@@ -54,6 +54,7 @@
     "@gents/shell": "file:../../third_party/gents-design/gents-shell-0.0.0.tgz",
     "@gents/tokens": "file:../../third_party/gents-design/gents-tokens-0.0.0.tgz",
     "@gents/ui": "file:../../third_party/gents-design/gents-ui-0.0.0.tgz",
+    "@pierre/diffs": "^1.6.2",
     "@source-inc/gents-desktop-chat": "0.21.0",
     "@source-inc/gents-desktop-client": "0.21.0",
     "@source-inc/gents-desktop-fleet": "0.21.0",

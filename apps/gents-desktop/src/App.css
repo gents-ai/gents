@@ -61,6 +61,13 @@ body,
   ) {
   pointer-events: auto;
 }
+/* a placeholder for a quick load stays hidden, so it does not flash */
+@keyframes appear-late {
+  from {
+    opacity: 0;
+  }
+}
+
 @keyframes tray-row-leave {
   from {
     grid-template-rows: 1fr;

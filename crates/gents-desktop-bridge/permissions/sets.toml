@@ -33,6 +33,7 @@ permissions = [
   "allow-desktop-session-context-details",
   "allow-desktop-session-live-delta",
   "allow-desktop-session-rows",
+  "allow-desktop-tool-file-changes",
   "allow-desktop-session-history",
   "allow-desktop-session-goal",
 ]
