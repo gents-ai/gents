@@ -73,15 +73,11 @@ impl NetworkSettings {
         Ok(true)
     }
 
-    /// The HTTP surface authenticates callers by DID-signed bearer under node
-    /// access control, but `/status`, `/version`, `/healthz` and `/metrics`
-    /// answer anyone who can connect. Like the Codex shim, a persisted bind
-    /// names loopback or one interface rather than every interface.
+    /// The public identity/enrollment surface also binds one interface rather
+    /// than every interface; operator views require the owning DID bearer.
     pub(crate) fn validate(&self) -> Result<()> {
-        if let Some(addr) = self.http_addr.filter(IpAddr::is_unspecified) {
-            bail!(
-                "refusing to bind the service HTTP listener on unspecified address {addr}; bind loopback or a specific interface, such as this host's tailnet address, instead"
-            );
+        if let Some(addr) = self.http_addr {
+            validate_http_bind(addr)?;
         }
         if self.http_port == Some(0) {
             bail!("HTTP port 0 is not supported; choose an explicit non-zero port");
@@ -179,6 +175,14 @@ where
         );
     }
     Ok(settings)
+}
+
+/// Persisted settings and explicit server flags have the same listener boundary.
+pub(crate) fn validate_http_bind(addr: IpAddr) -> Result<()> {
+    if addr.is_unspecified() {
+        bail!("refusing to bind the service HTTP listener on unspecified address {addr}; bind loopback or a specific interface, such as this host's tailnet address, instead");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
