@@ -1537,6 +1537,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_0_21_graph_sourced_item_still_lists() {
+        let node = test_node().await;
+        let now = Utc::now().to_rfc3339();
+        let stored = format!(
+            r#"mutation {{ create_MailboxItem(input: {{
+                item_key: "graph:wait-1:ask:1", requester_did: "did:test:owner",
+                node_did: "did:test:agent", status: "open", kind: "ask", action: "ack",
+                title: "from a graph run", source_kind: "graph", source_id: "wait-1",
+                graph_run_id: "run-1", target_node_did: "did:test:agent",
+                target_agent_id: "operator", created_at: "{now}", updated_at: "{now}"
+            }}) {{ _docID }} }}"#
+        );
+        assert!(!node.execute(&stored).await.has_errors());
+
+        let items = list_mailbox_items(&node, "did:test:owner", None)
+            .await
+            .unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].source_kind, "graph");
+    }
+
+    #[tokio::test]
     async fn poisoned_item_does_not_block_later_expiry() {
         let node = test_node().await;
         let now = Utc::now().to_rfc3339();

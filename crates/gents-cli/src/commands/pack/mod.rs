@@ -223,12 +223,11 @@ pub(crate) fn split_namespace(name: &str) -> (&str, &str) {
 async fn list(args: PackListArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let store = gents::pack_store::PackStore::new(&home);
-    let installed: std::collections::BTreeSet<String> =
-        gents::pack::installed_packs(Some(&home), None)
-            .await?
-            .into_iter()
-            .map(|pack| pack.coordinate)
-            .collect();
+    let (records, skipped) = gents::pack::list_home_installs_with_skips(&home)?;
+    let installed: std::collections::BTreeSet<String> = records
+        .into_iter()
+        .map(|record| record.coordinate)
+        .collect();
     let mut entries = Vec::new();
     for (coordinate, versions) in store.names()? {
         let (namespace, name) = coordinate
@@ -250,7 +249,14 @@ async fn list(args: PackListArgs) -> Result<()> {
             "installed": installed.contains(&coordinate),
         }));
     }
-    crate::print_json(&json!({ "packs": entries }))
+    let mut output = json!({ "packs": entries });
+    if !skipped.is_empty() {
+        output["skipped_installs"] = skipped
+            .iter()
+            .map(|skip| json!({ "path": skip.path.display().to_string(), "reason": skip.reason }))
+            .collect();
+    }
+    crate::print_json(&output)
 }
 
 pub(crate) async fn resolve_pack_source(

@@ -1329,6 +1329,27 @@ impl Backlog {
         backlog
     }
 
+    async fn add_binding(&self, binding_id: &str) {
+        use crate::config_client::{
+            apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+        };
+        let value = json!({"binding_id":binding_id,"event_source_id":"backlog","callback_id":"cb-backlog",
+            "input_fields":["label"],"enabled":true,"node_did":BACKLOG_OWNER});
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: crate::Collection::CallbackBinding,
+            add: value.clone(),
+            update: value,
+        }])
+        .unwrap();
+        self.access
+            .transact_write("test.backlog_binding", |txn| {
+                let plan = &plan;
+                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            })
+            .await
+            .unwrap();
+    }
+
     async fn create(&self, label: &str) -> String {
         let response = self
             .access
@@ -1503,4 +1524,19 @@ fn callback_artifact_identity_and_output_are_host_validated() {
     let malformed = wat_returns_json("not JSON");
     let module = module_doc(&malformed, &json!({}), "did:key:zTrusted");
     assert!(plan_from_module(&module, &json!({}), &BTreeSet::new()).is_err());
+}
+
+#[tokio::test]
+async fn retired_reserved_bindings_do_not_scan() {
+    let backlog = Backlog::registered().await;
+    let reserved = format!("graph-trigger-{}-{}", "a".repeat(64), "b".repeat(16));
+    backlog.add_binding(&reserved).await;
+    backlog.add_binding("ordinary").await;
+    let ids: Vec<String> = super::documents::list_enabled_bindings(&backlog.node, BACKLOG_OWNER)
+        .await
+        .expect("bindings")
+        .into_iter()
+        .map(|binding| binding.binding_id)
+        .collect();
+    assert_eq!(ids, vec!["bind-backlog".to_owned(), "ordinary".to_owned()]);
 }

@@ -81,8 +81,6 @@ impl CallbackEngine {
         let mut desired = RapidHashSet::new();
         let mut cursor_bindings = RapidHashMap::new();
         let mut group_collections = RapidHashSet::new();
-        let mut consumers: RapidHashMap<String, Vec<(String, Option<String>)>> =
-            RapidHashMap::new();
         for binding in &bindings {
             match load_event_source(&self.node, &binding.event_source_id, &binding.node_did).await {
                 Ok(Some(source)) => {
@@ -93,10 +91,6 @@ impl CallbackEngine {
                         cursor_bindings
                             .insert(binding.binding_id.clone(), source.source_collection.clone());
                     } else {
-                        consumers
-                            .entry(source.source_collection.clone())
-                            .or_default()
-                            .push((binding.binding_id.clone(), source.correlation_field.clone()));
                         group_collections.insert(source.source_collection.clone());
                     }
                     desired.insert(source.source_collection);

@@ -179,11 +179,27 @@ pub fn forget_home_install(home: &Path, coordinate: &str) -> Result<()> {
 /// does not parse (one a newer gents wrote) is skipped with a warning, so
 /// one bad install cannot hide the rest from a listing.
 pub fn list_readable_home_installs(home: &Path) -> Result<Vec<HomePackInstall>> {
+    Ok(list_home_installs_with_skips(home)?.0)
+}
+
+/// A HomePackInstall file a listing skipped because it did not parse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedHomeInstall {
+    pub path: PathBuf,
+    pub reason: String,
+}
+
+/// Every readable record under `home`, sorted by coordinate, and every
+/// record file that did not parse; a listing never fails on one bad file.
+pub fn list_home_installs_with_skips(
+    home: &Path,
+) -> Result<(Vec<HomePackInstall>, Vec<SkippedHomeInstall>)> {
     let root = home.join(crate::home::PACK_INSTALLS_DIR_NAME);
     if !root.is_dir() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
     let mut records = Vec::new();
+    let mut skipped = Vec::new();
     for namespace_entry in
         std::fs::read_dir(&root).with_context(|| format!("reading {}", root.display()))?
     {
@@ -207,13 +223,15 @@ pub fn list_readable_home_installs(home: &Path) -> Result<Vec<HomePackInstall>> 
             match parsed {
                 Ok(record) => records.push(record),
                 Err(error) => {
-                    tracing::warn!(path = %path.display(), error = %format!("{error:#}"), "unreadable pack install record; skipped")
+                    let reason = format!("{error:#}");
+                    tracing::warn!(path = %path.display(), error = %reason, "unreadable pack install record; skipped");
+                    skipped.push(SkippedHomeInstall { path, reason });
                 }
             }
         }
     }
     records.sort_by(|a, b| a.coordinate.cmp(&b.coordinate));
-    Ok(records)
+    Ok((records, skipped))
 }
 
 pub fn list_home_installs(home: &Path) -> Result<Vec<HomePackInstall>> {
@@ -295,6 +313,39 @@ mod tests {
         );
         let strict = list_home_installs(home.path()).unwrap_err();
         assert!(format!("{strict:#}").contains("future.json"), "{strict:#}");
+    }
+
+    #[test]
+    fn home_install_with_retired_kind_is_skipped() {
+        let home = tempfile::tempdir().unwrap();
+        write_home_install(home.path(), &sample("fixture/kept")).unwrap();
+        let mut json = serde_json::to_value(sample("fixture/retired")).unwrap();
+        json["kind"] = "retired_fixture".into();
+        let retired = home
+            .path()
+            .join(crate::home::PACK_INSTALLS_DIR_NAME)
+            .join("fixture")
+            .join("retired.json");
+        std::fs::write(&retired, serde_json::to_vec(&json).unwrap()).unwrap();
+
+        let (records, skipped) = list_home_installs_with_skips(home.path()).unwrap();
+        assert_eq!(
+            records
+                .iter()
+                .map(|r| r.coordinate.as_str())
+                .collect::<Vec<_>>(),
+            vec!["fixture/kept"]
+        );
+        assert_eq!(skipped.len(), 1, "{skipped:?}");
+        assert_eq!(skipped[0].path, retired);
+        assert!(
+            skipped[0].reason.contains("unknown variant"),
+            "{}",
+            skipped[0].reason
+        );
+        assert_eq!(list_readable_home_installs(home.path()).unwrap(), records);
+        let strict = list_home_installs(home.path()).unwrap_err();
+        assert!(format!("{strict:#}").contains("retired.json"), "{strict:#}");
     }
 
     #[test]

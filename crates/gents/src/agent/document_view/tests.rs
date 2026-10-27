@@ -656,6 +656,72 @@ async fn create_event_trigger(
     event_source_id
 }
 
+#[test]
+fn retired_reserved_id_predicate_matches_both_namespaces() {
+    let graph_trigger = format!("graph-trigger-{}-{}", "a".repeat(64), "b".repeat(16));
+    assert!(is_retired_reserved_id(&graph_trigger));
+    assert!(is_retired_reserved_id("pkg-x"));
+    assert!(!is_retired_reserved_id("ordinary"));
+}
+
+#[tokio::test]
+async fn retired_reserved_ids_are_never_visible() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("document-view-retired-ids"));
+    let node_did = identity.did();
+    bind_default_agent_backend(&node, node_did, &crate::default_agent_id_for_node(node_did)).await;
+
+    let graph_trigger = format!("graph-trigger-{}-{}", "a".repeat(64), "b".repeat(16));
+    let mut documents = Vec::new();
+    for id in [graph_trigger.as_str(), "pkg-x", "ordinary"] {
+        documents.push((
+            crate::Collection::Trigger,
+            serde_json::json!({
+                "node_did": node_did, "trigger_id": id, "task_id": "task-1",
+                "source": {"kind": "event", "event_source_id": id}, "enabled": false,
+                "concurrency": "serial",
+            }),
+        ));
+        documents.push((
+            crate::Collection::EventSource,
+            serde_json::json!({
+                "node_did": node_did, "event_source_id": id,
+                "source_collection": "CustomerSignup", "event_kind": "created",
+            }),
+        ));
+        documents.push((
+            crate::Collection::Callback,
+            serde_json::json!({
+                "node_did": node_did, "callback_id": id,
+                "handler": {"kind": "built_in", "emitter": "create_workspace"},
+            }),
+        ));
+        documents.push((
+            crate::Collection::CallbackBinding,
+            serde_json::json!({
+                "node_did": node_did, "binding_id": id, "event_source_id": id,
+                "callback_id": id,
+            }),
+        ));
+    }
+    seed_automation(&node, documents).await;
+
+    let view = load_document_runtime_view(&node, node_did)
+        .await
+        .expect("document view should load");
+
+    fn ids<T>(map: &HashMap<String, DocumentRecord<T>>) -> Vec<&str> {
+        let mut ids: Vec<&str> = map.keys().map(String::as_str).collect();
+        ids.sort_unstable();
+        ids
+    }
+    assert_eq!(ids(&view.triggers), ["ordinary"]);
+    assert_eq!(ids(&view.event_sources), ["ordinary"]);
+
+    node.shutdown().await;
+}
+
 #[tokio::test]
 async fn usage_collection_write_never_reloads_the_runtime_view() {
     let node = test_node().await;

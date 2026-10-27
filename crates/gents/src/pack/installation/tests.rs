@@ -384,6 +384,119 @@ async fn a_documentless_pack_install_is_not_a_plugin_store_record() {
         .unwrap();
 }
 
+async fn create_raw_tools(access: &ConfigAccess, id: &str) {
+    let response = access
+        .transact_write("test.create_raw_tools", |txn| {
+            Box::pin(async move {
+                txn.execute(&format!(
+                    r#"mutation {{ create_Tools(input: {{ tools_id: "{id}", display_name: "Leftover", node_did: "{OWNER}" }}) {{ _docID }} }}"#
+                ))
+                .await
+            })
+        })
+        .await
+        .unwrap();
+    assert!(
+        response.get("errors").is_none_or(Value::is_null),
+        "{response}"
+    );
+}
+
+fn recorded_entry(collection: &str, id: &str) -> Value {
+    json!({"collection": collection, "id": id, "digest": "sha256:stale", "created": true})
+}
+
+async fn record_with_unmanaged_entries(access: &ConfigAccess) {
+    create_raw_tools(access, "pkg-leftover").await;
+    let doc_id = installation_doc_id(access).await;
+    let current = access
+        .execute("{ PackInstallation { documents } }")
+        .await
+        .unwrap();
+    let mut documents: Vec<Value> =
+        serde_json::from_value(current["data"]["PackInstallation"][0]["documents"].clone())
+            .unwrap();
+    documents.push(recorded_entry("Tools", "pkg-leftover"));
+    documents.push(recorded_entry("RetiredFixture", "old"));
+    corrupt_installation_field(access, &doc_id, "documents", json!(documents)).await;
+}
+
+#[tokio::test]
+async fn remove_tolerates_unmanaged_collections() {
+    let access = access().await;
+    install(&access, "1", &config(&[("t1", "T1")]), DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    record_with_unmanaged_entries(&access).await;
+
+    let report = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    assert!(report
+        .documents
+        .removed
+        .contains(&"Tools/pkg-leftover".to_owned()));
+    assert_eq!(report.retained.len(), 1);
+    assert_eq!(report.retained[0].item, "RetiredFixture old");
+    assert_eq!(
+        report.retained[0].reason,
+        "collection is no longer managed; the document stays dormant"
+    );
+    assert!(tools_ids(&access).await.is_empty());
+    let record = access
+        .execute("{ PackInstallation { _docID } }")
+        .await
+        .unwrap();
+    assert_eq!(record["data"]["PackInstallation"], json!([]));
+}
+
+#[tokio::test]
+async fn update_over_unmanaged_record() {
+    let access = access().await;
+    install(&access, "1", &config(&[("t1", "T1")]), DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    record_with_unmanaged_entries(&access).await;
+
+    install(&access, "2", &config(&[("t1", "T1")]), DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    assert_eq!(tools_ids(&access).await, vec!["t1"]);
+    let record = access
+        .execute("{ PackInstallation { documents } }")
+        .await
+        .unwrap();
+    let documents = record["data"]["PackInstallation"][0]["documents"].to_string();
+    assert!(!documents.contains("RetiredFixture"), "{documents}");
+    assert!(!documents.contains("pkg-leftover"), "{documents}");
+}
+
+#[tokio::test]
+async fn installed_pack_documents_skips_unmanaged_collections() {
+    let access = access().await;
+    install(&access, "1", &config(&[("t1", "T1")]), DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    let doc_id = installation_doc_id(&access).await;
+    corrupt_installation_field(
+        &access,
+        &doc_id,
+        "documents",
+        json!([
+            recorded_entry("RetiredFixture", "old"),
+            recorded_entry("Trigger", "trig"),
+        ]),
+    )
+    .await;
+
+    assert_eq!(
+        installed_pack_documents(&access, OWNER, "acme/demo")
+            .await
+            .unwrap(),
+        vec![(Collection::Trigger, "trig".to_owned())]
+    );
+}
+
 async fn installation_doc_id(access: &ConfigAccess) -> String {
     access
         .execute("{ PackInstallation { _docID } }")

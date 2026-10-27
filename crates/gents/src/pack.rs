@@ -16,8 +16,9 @@ mod provenance;
 #[cfg(test)]
 mod publication_contract_tests;
 pub use home_install::{
-    forget_home_install, list_home_installs, list_readable_home_installs, read_home_install,
-    record_after_install, write_home_install, HomePackInstall, InstalledVia,
+    forget_home_install, list_home_installs, list_home_installs_with_skips,
+    list_readable_home_installs, read_home_install, record_after_install, write_home_install,
+    HomePackInstall, InstalledVia, SkippedHomeInstall,
 };
 pub use inference::{
     bind_pack_install_config, inference_profile_options, inspect_pack_inference_bindings,
@@ -823,6 +824,29 @@ pub struct PackManifest {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub external_dependencies: Vec<PackageExternalDependency>,
+}
+
+impl PackManifest {
+    /// The one manifest decode. A retired `graph` kind is refused before the
+    /// typed decode so the error names the next step instead of serde's
+    /// unknown-variant message.
+    pub fn from_slice(bytes: &[u8]) -> Result<Self> {
+        let raw: serde_json::Value = serde_json::from_slice(bytes)?;
+        if raw.get("kind").and_then(serde_json::Value::as_str) == Some("graph") {
+            let text = |key: &str, fallback: &str| {
+                raw.get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(fallback)
+                    .to_owned()
+            };
+            anyhow::bail!(
+                "graph packs are retired; run `gents pack remove {}/{}` and install the 2.x version",
+                text("namespace", crate::pack_archive::DEFAULT_NAMESPACE),
+                text("name", "<name>")
+            );
+        }
+        Ok(serde_json::from_value(raw)?)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1650,6 +1674,28 @@ mod tests {
         );
         let back: PackManifest = serde_json::from_value(json).unwrap();
         assert!(back.metadata.ux.is_empty());
+    }
+
+    #[test]
+    fn retired_graph_kind_is_refused_with_next_step() {
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "manifest_version": 1,
+            "name": "code_review",
+            "version": "1.7.0",
+            "description": "a retired graph pack",
+            "kind": "graph",
+            "namespace": "acme",
+            "authors": ["a"],
+            "compiler_version": "1"
+        }))
+        .unwrap();
+        let error = format!("{:#}", PackManifest::from_slice(&bytes).unwrap_err());
+        assert!(
+            error.contains(
+                "graph packs are retired; run `gents pack remove acme/code_review` and install the 2.x version"
+            ),
+            "{error}"
+        );
     }
 
     #[test]

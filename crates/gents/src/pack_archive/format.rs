@@ -180,8 +180,8 @@ pub fn read_pack(
         header.with_context(|| format!("this file is empty, so it is not a .{EXTENSION} file"))?;
     let manifest_bytes =
         manifest_bytes.context("this pack carries no manifest.json, so it is not a pack")?;
-    let manifest: PackManifest =
-        serde_json::from_slice(&manifest_bytes).context("the pack manifest is not valid JSON")?;
+    let manifest =
+        PackManifest::from_slice(&manifest_bytes).context("the pack manifest is not valid JSON")?;
     validate_manifest(&manifest.name.clone(), &manifest)?;
 
     let declared = declared_paths(&manifest);
@@ -287,8 +287,7 @@ fn write_pack_bounded(dir: &Path, out: impl Write, bounds: Bounds) -> Result<Pac
     manifest_file
         .read_to_end(&mut manifest_bytes)
         .context("reading manifest.json")?;
-    let manifest: PackManifest =
-        serde_json::from_slice(&manifest_bytes).context("parsing manifest.json")?;
+    let manifest = PackManifest::from_slice(&manifest_bytes).context("parsing manifest.json")?;
     validate_manifest(&manifest.name.clone(), &manifest)?;
     let paths = declared_paths(&manifest);
     ensure!(

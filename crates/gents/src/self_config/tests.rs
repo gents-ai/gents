@@ -189,11 +189,13 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
         canonical_struct_fields::<AgentTools>().unwrap(),
         "agents",
     );
-    assert_fields(
-        &shapes["built_ins"],
-        canonical_struct_fields::<BuiltInTools>().unwrap(),
-        "built_ins",
-    );
+    let built_in_fields = canonical_struct_fields::<BuiltInTools>()
+        .unwrap()
+        .iter()
+        .copied()
+        .filter(|field| !field.ends_with("_graph_tools"))
+        .collect::<Vec<_>>();
+    assert_fields(&shapes["built_ins"], &built_in_fields, "built_ins");
     assert_fields(
         &shapes["datastore"],
         canonical_struct_fields::<DatastoreTools>().unwrap(),

@@ -119,12 +119,22 @@ fn key(collection: &str, id: &str) -> String {
     format!("{collection}/{id}")
 }
 
-fn collection_named(name: &str) -> Result<Collection> {
+/// A record can name a collection this build no longer manages; callers
+/// leave such documents dormant instead of failing.
+fn managed_collection(name: &str) -> Option<Collection> {
     Collection::ALL
         .iter()
         .copied()
         .find(|collection| collection.graphql_type() == name)
+}
+
+fn collection_named(name: &str) -> Result<Collection> {
+    managed_collection(name)
         .with_context(|| format!("installation record names unknown collection {name:?}"))
+}
+
+fn is_reserved(document: &RecordedDocument) -> bool {
+    crate::agent::document_view::is_retired_reserved_id(&document.id)
 }
 
 async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) -> Result<Record> {
@@ -361,13 +371,13 @@ pub(crate) async fn install_in_txn(
         .documents
         .iter()
         .filter(|(name, previous)| !recorded.contains_key(*name) && previous.created)
-        .map(|(_, previous)| {
-            Ok((
-                collection_named(&previous.collection)?,
+        .filter_map(|(_, previous)| {
+            Some((
+                managed_collection(&previous.collection)?,
                 previous.id.as_str(),
             ))
         })
-        .collect::<Result<_>>()?;
+        .collect();
     let live_stale = live_digests(txn, owner, stale).await?;
 
     let mut removals = Vec::new();
@@ -375,9 +385,15 @@ pub(crate) async fn install_in_txn(
         if recorded.contains_key(name) || !previous.created {
             continue;
         }
-        let collection = collection_named(&previous.collection)?;
+        let Some(collection) = managed_collection(&previous.collection) else {
+            continue;
+        };
         match live_stale.get(&(collection, previous.id.clone())).cloned() {
             None => {}
+            Some(_) if is_reserved(previous) => {
+                report.removed.push(name.clone());
+                removals.push((collection, owner.to_owned(), previous.id.clone()));
+            }
             Some(live) if live != previous.digest && policy == DriftPolicy::Refuse => {
                 edited.push(name.clone());
             }
@@ -588,13 +604,13 @@ async fn remove_record_in_txn(
         .documents
         .values()
         .filter(|document| document.created)
-        .map(|document| {
-            Ok((
-                collection_named(&document.collection)?,
+        .filter_map(|document| {
+            Some((
+                managed_collection(&document.collection)?,
                 document.id.as_str(),
             ))
         })
-        .collect::<Result<_>>()?;
+        .collect();
     let live = live_digests(txn, owner, checked).await?;
 
     for (name, document) in &record.documents {
@@ -602,9 +618,16 @@ async fn remove_record_in_txn(
             report.documents.adopted.push(name.clone());
             continue;
         }
-        let collection = collection_named(&document.collection)?;
+        let Some(collection) = managed_collection(&document.collection) else {
+            report.retained.push(Retained {
+                item: format!("{} {}", document.collection, document.id),
+                reason: "collection is no longer managed; the document stays dormant".to_owned(),
+            });
+            continue;
+        };
         match live.get(&(collection, document.id.clone())).cloned() {
             None => continue,
+            Some(_) if is_reserved(document) => {}
             Some(live) if live != document.digest => match policy {
                 DriftPolicy::Refuse => {
                     edited.push(name.clone());
@@ -764,10 +787,12 @@ pub async fn installed_pack_documents(
     let Some(row) = rows.first().filter(|row| !is_plugin_store_row(row)) else {
         return Ok(Vec::new());
     };
-    decode_record_field::<Vec<RecordedDocument>>(row, "documents", owner, coordinate)?
-        .into_iter()
-        .map(|document| Ok((collection_named(&document.collection)?, document.id)))
-        .collect()
+    Ok(
+        decode_record_field::<Vec<RecordedDocument>>(row, "documents", owner, coordinate)?
+            .into_iter()
+            .filter_map(|document| Some((managed_collection(&document.collection)?, document.id)))
+            .collect(),
+    )
 }
 
 pub async fn installed_packs(

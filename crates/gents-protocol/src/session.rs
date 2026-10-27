@@ -95,6 +95,11 @@ pub struct SessionProvenance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub task_id: Option<String>,
+    /// Sessions stored before graph runs were removed may carry this key;
+    /// it is accepted and ignored, and never written again.
+    #[serde(default, rename = "graph_run_id", skip_serializing)]
+    #[cfg_attr(feature = "typescript", ts(skip))]
+    pub retired_graph_run_id: crate::row::RetiredKey,
     /// Exact causal request document for a session started by `agent_new`,
     /// copied from its first request's `caused_by_parent_request_doc_id`. It is
     /// provenance only: no hierarchy, cascade or authority follows from it.
@@ -197,5 +202,23 @@ impl SessionArchiveVisibility {
             Self::Archived => archived,
             Self::All => true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_0_21_provenance_with_graph_run_id_decodes_and_drops_it() {
+        let stored: SessionProvenance = serde_json::from_value(serde_json::json!({
+            "task_id": "task", "graph_run_id": "graph",
+            "fork": {"source_session_id": "parent", "at_user_turn": 2}
+        }))
+        .expect("a stored provenance with the retired key decodes");
+        assert_eq!(
+            serde_json::to_value(&stored).unwrap(),
+            serde_json::json!({"task_id": "task", "fork": {"source_session_id": "parent", "at_user_turn": 2}})
+        );
     }
 }

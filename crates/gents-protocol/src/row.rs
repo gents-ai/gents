@@ -29,6 +29,18 @@ where
     Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
+/// A stored key that is decoded and discarded; every value compares equal.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct RetiredKey(serde::de::IgnoredAny);
+
+impl PartialEq for RetiredKey {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for RetiredKey {}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeRuntimeRow {
     pub node_did: String,

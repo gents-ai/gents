@@ -30,7 +30,7 @@ pub(crate) async fn load_document_runtime_view(
                     .remove(&owner)
                     .context("scoped principal is missing")?;
                 let mut unknown_kind_backends = RapidHashMap::new();
-                let view = DocumentRuntimeView {
+                let mut view = DocumentRuntimeView {
                     node: principal,
                     agents: load_records(txn, &owner, Collection::Agent).await?,
                     contexts: load_records(txn, &owner, Collection::AgentContext).await?,
@@ -74,6 +74,31 @@ pub(crate) async fn load_document_runtime_view(
                     unknown_kind_backends,
                     oauth_credentials: RapidHashMap::new(),
                 };
+                let visible = |id: &str| !super::is_retired_reserved_id(id);
+                macro_rules! retain_visible {
+                    ($($field:ident),+ $(,)?) => { $(view.$field.retain(|id, _| visible(id));)+ };
+                }
+                retain_visible!(
+                    agents,
+                    contexts,
+                    compactions,
+                    tools,
+                    agent_targets,
+                    skills,
+                    datastore_tool_surfaces,
+                    eth_tools,
+                    inference_profiles,
+                    inference_sampling,
+                    inference_execution,
+                    inference_retry_policies,
+                    backends,
+                    unknown_kind_backends,
+                    tasks,
+                    schedules,
+                    triggers,
+                    event_sources,
+                    tool_services,
+                );
                 Ok(view)
             })
         },
