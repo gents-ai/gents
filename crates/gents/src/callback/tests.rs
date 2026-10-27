@@ -640,7 +640,7 @@ async fn test_node() -> Arc<defra_node::EmbeddedNode> {
 async fn first_seen_source_create_materializes_owner_invocation() {
     let node = test_node().await;
     let owner_node_did = "did:key:zWriter".to_owned();
-    node.add_schema(
+    node.add_collection(
         r#"
         type WorkUnit {
             work_unit_id: String
@@ -1280,7 +1280,7 @@ impl Backlog {
         let node = test_node().await;
         let access = ConfigAccess::local(node.clone());
         access
-            .add_schema("type BacklogWork { label: String }")
+            .add_collection("type BacklogWork { label: String }")
             .await
             .unwrap();
         let mut backlog = Self {

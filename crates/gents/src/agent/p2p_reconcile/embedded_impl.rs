@@ -563,7 +563,7 @@ pub(super) mod tests {
     async fn test_node() -> TestNode {
         let test = p2p_node().await;
         test.node
-            .add_schema(TEST_SCHEMA)
+            .add_collection(TEST_SCHEMA)
             .await
             .expect("test schema");
         tokio::time::timeout(Duration::from_secs(5), async {

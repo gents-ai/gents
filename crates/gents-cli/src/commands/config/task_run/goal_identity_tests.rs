@@ -111,7 +111,7 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
             &access,
             signer.did(),
             &session,
-            case["current_task_goal"].as_str().map(&goal_id).as_deref(),
+            case["current_task_goal"].as_str().map(goal_id).as_deref(),
         )
         .await?;
         access.transact_write("test.manual_task.session", |txn| {
@@ -137,7 +137,7 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
             &access,
             signer.did(),
             &session,
-            case["observed_task_goal"].as_str().map(&goal_id).as_deref(),
+            case["observed_task_goal"].as_str().map(goal_id).as_deref(),
         )
         .await?;
         let identity = FireIdentity {

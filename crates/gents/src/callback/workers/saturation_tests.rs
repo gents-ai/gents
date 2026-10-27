@@ -212,7 +212,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let access = ConfigAccess::local(node.clone());
     access
-        .add_schema(
+        .add_collection(
             "type SaturationInput { item: Int correlation: String }
              type SaturationOutput { item: Int correlation: String http_calls: Boolean
                  state: JSON http_results: JSON }",

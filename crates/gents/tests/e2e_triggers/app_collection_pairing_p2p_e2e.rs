@@ -33,9 +33,9 @@ async fn register_change_proposed_schema(node: &EmbeddedNode) {
             kind: String @index
         }
     "#;
-    node.add_schema(sdl)
+    node.add_collection(sdl)
         .await
-        .expect("add_schema ChangeProposed");
+        .expect("add_collection ChangeProposed");
 }
 
 async fn create_task(

@@ -233,9 +233,9 @@ impl SchemaTool {
                     !config.lenses.is_empty(),
                     "config.Lenses must contain inline WASM modules"
                 );
-                let source = find_version(&access, &config.source_schema_version_id).await?;
+                let source = find_version(&access, &config.source_collection_version_id).await?;
                 let destination =
-                    find_version(&access, &config.destination_schema_version_id).await?;
+                    find_version(&access, &config.destination_collection_version_id).await?;
                 for v in [&source, &destination] {
                     ensure_application_collection(
                         v["Name"]

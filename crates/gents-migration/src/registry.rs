@@ -233,7 +233,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_TARGET_NAME,
         gents_protocol::schemas::AGENT_TARGET,
-        "bafyreieqevckhv5c6eli4ceysd3p2wlfhdzjeve2r2mn2v37arv3vn6hti"
+        "bafyreige3ypigxsb6qslngqeriy3jqaijcaqes7qw6p7kaubju4z6gaaoa"
     ),
     baseline_entry!(
         gents_protocol::schemas::NODE_RUNTIME_NAME,
@@ -258,7 +258,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::TOOLS_NAME,
         gents_protocol::schemas::TOOLS,
-        "bafyreih62xjqp376qygv2wgbfpvlu4juroh4oqfufem37koomf6bzgny5q"
+        "bafyreiay45qi2chkcus5wfycrsumq5vr6igrydc3ebsqqr2qrkb3qfgo6a"
     ),
     baseline_entry!(
         gents_protocol::schemas::SKILL_NAME,
@@ -273,12 +273,12 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::CHAIN_KEY_BINDING_NAME,
         gents_protocol::schemas::CHAIN_KEY_BINDING,
-        "bafyreigkgc7vx3bacpnoop5ouryihgdckohdnkjzitapw3xqgakmimxd6a"
+        "bafyreifodyidkqdtrcdunrerxw36lyupvmmu2p7pwryimt3lf2jpvg3cyu"
     ),
     baseline_entry!(
         gents_protocol::schemas::ETH_TOOL_NAME,
         gents_protocol::schemas::ETH_TOOL,
-        "bafyreieeavm747hdfwfrlm524uilhmnokwz3wodn22x4daidndbyg3pz6a"
+        "bafyreifnrjq5wqrw4sx33s4b2x2n2vdtxy4zole2ywukhmo35hf3mucnbi"
     ),
     baseline_entry!(
         gents_protocol::schemas::ETH_SUBMISSION_NAME,
@@ -323,7 +323,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::CALLBACK_NAME,
         gents_protocol::schemas::CALLBACK,
-        "bafyreigwyv5fj5jfy2evxtq5ca4xz6bqd7eq2q5mcw5moiize4gpgusu2q"
+        "bafyreihet57wzgngc6iylbyga23pnzpgueos5sgz36vkg4uzc3hpn6kgmi"
     ),
     baseline_entry!(
         gents_protocol::schemas::EVENT_SOURCE_NAME,
@@ -353,12 +353,12 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::CALLBACK_MODULE_NAME,
         gents_protocol::schemas::CALLBACK_MODULE,
-        "bafyreib7haitwuad7wkxrermsm4nyrtvjc5asva3ubms34kspq3psfmjde"
+        "bafyreihyynxed2unvgkpm3cypzzodcm2ryy3q4hd6wghks5ur74b4hd73i"
     ),
     baseline_entry!(
         gents_protocol::schemas::CALLBACK_BINDING_NAME,
         gents_protocol::schemas::CALLBACK_BINDING,
-        "bafyreiepwxqpz5fakzqk34hw3w7psrgvpqi2n4q7remzsrxidzskfdvk3y"
+        "bafyreihy6g5xb4ygljpve7g2g7fiwixiyaiyndw4ua5h57zha5b5mpmljq"
     ),
     baseline_entry!(
         gents_protocol::schemas::CALLBACK_INVOCATION_NAME,

@@ -252,7 +252,7 @@ async fn two_lead_sessions_route_64_real_worker_outcomes_without_chaining() -> R
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let owner = identity.did().to_owned();
     let access = ConfigAccess::local(db.node.clone());
-    access.add_schema(SCHEMA).await?;
+    access.add_collection(SCHEMA).await?;
     configure(&access, &db.node, &owner, &endpoints).await?;
     let runtime = boot_live_agent(&db, identity).await?;
     support::interrupt::wait_for_runtime_ready(&db.node, &owner).await;

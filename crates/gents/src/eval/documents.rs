@@ -601,7 +601,7 @@ mod tests {
             gents_protocol::schemas::EVAL_TRIAL,
             gents_protocol::schemas::EVAL_VERDICT,
         ] {
-            node.add_schema(sdl).await.unwrap();
+            node.add_collection(sdl).await.unwrap();
         }
         ConfigAccess::local(node)
     }

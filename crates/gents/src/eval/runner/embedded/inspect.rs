@@ -195,7 +195,7 @@ resources:
             .await
             .unwrap();
         ConfigAccess::local(node.clone())
-            .add_schema(&crate::schema::AGENT_REQUEST_SCHEMA.replace(
+            .add_collection(&crate::schema::AGENT_REQUEST_SCHEMA.replace(
                 "type AgentRequest ",
                 &format!(
                     "type AgentRequest @policy(id: \"{}\", resource: \"requests\") ",

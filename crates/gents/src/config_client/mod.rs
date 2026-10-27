@@ -291,11 +291,11 @@ impl ConfigAccess {
     }
 
     /// Apply schema SDL; callers must perform their own structural compatibility check first.
-    pub async fn add_schema(&self, sdl: &str) -> Result<()> {
+    pub async fn add_collection(&self, sdl: &str) -> Result<()> {
         match self {
             Self::Graphql(graphql) => {
                 let api_base = graphql_api_base(graphql.url())?;
-                let url = format!("{api_base}/schema");
+                let url = format!("{api_base}/collections");
                 let client = graphql::http_client().await?;
                 let response = graphql
                     .authorize(client.post(&url))?
@@ -321,7 +321,7 @@ impl ConfigAccess {
                 let sdl = sdl.to_owned();
                 local
                     .run_owned(move |node| async move {
-                        node.add_schema(&sdl).await.context("adding schema SDL")
+                        node.add_collection(&sdl).await.context("adding schema SDL")
                     })
                     .await
             }
@@ -346,7 +346,7 @@ impl ConfigAccess {
             Self::Local(local) => Ok(local.node().list_collections()?.into_iter().collect()),
             Self::Graphql(graphql) => {
                 let api_base = graphql_api_base(graphql.url())?;
-                let url = format!("{api_base}/collections/versions");
+                let url = format!("{api_base}/collections?get_inactive=true");
                 let client = graphql::http_client().await?;
                 let versions: Value = graphql
                     .authorize(client.get(&url))?
@@ -386,7 +386,7 @@ impl ConfigAccess {
                 .context("serializing active collection version"),
             Self::Graphql(graphql) => {
                 let api_base = graphql_api_base(graphql.url())?;
-                let url = format!("{api_base}/collections/versions");
+                let url = format!("{api_base}/collections?get_inactive=true");
                 let client = graphql::http_client().await?;
                 let versions: Value = graphql
                     .authorize(client.get(&url))?

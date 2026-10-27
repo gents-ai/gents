@@ -374,8 +374,6 @@ async fn fork_never_copies_executable_tool_rows() {
         1,
         "call",
         "read_file",
-        "{}",
-        "done",
         "completed",
         "2026-04-21T10:00:01Z",
         "2026-04-21T10:00:02Z",

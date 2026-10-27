@@ -29,7 +29,7 @@ async fn stored(node: &defra_node::EmbeddedNode) -> Result<Vec<Record>> {
 async fn generated_goal_delivery_histories_survive_the_existing_journal() -> Result<()> {
     let cases = tokio::task::spawn_blocking(model_cases).await??;
     let node = Arc::new(crate::test_support::node_builder().build().await?);
-    node.add_schema(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
+    node.add_collection(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
         .await?;
     let checked = async {
         let mut count = 0;
@@ -187,7 +187,7 @@ async fn competing_goal_reservations_and_acknowledgement_survive_reopen() -> Res
         Ok::<_, anyhow::Error>(node)
     };
     let node = open().await?;
-    node.add_schema(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
+    node.add_collection(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
         .await?;
     let (left, right) = tokio::join!(
         journal::goal::reserve(&node, &proposal),
@@ -254,7 +254,7 @@ async fn competing_distinct_signed_proposals_share_one_committed_goal_preparatio
         );
     }
     let node = Arc::new(crate::test_support::node_builder().build().await?);
-    node.add_schema(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
+    node.add_collection(gents_protocol::schemas::PENDING_CHAT_SUBMISSION)
         .await?;
     let checked = async {
         assert_ne!(proposals[0].reference, proposals[1].reference);

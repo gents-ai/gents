@@ -654,9 +654,9 @@ async fn install_event_delivery_source_schema(node: &EmbeddedNode) {
             payload: String
         }
     "#;
-    node.add_schema(schema)
+    node.add_collection(schema)
         .await
-        .expect("add_schema for EventDeliveryDoc");
+        .expect("add_collection for EventDeliveryDoc");
 }
 
 fn active_snapshot_with_event_trigger() -> Arc<ActiveRuntimeSnapshot> {

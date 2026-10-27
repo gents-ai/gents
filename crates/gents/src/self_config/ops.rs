@@ -909,7 +909,7 @@ pub(crate) async fn guard_reselection_keeps_grants_in_txn(
             .filter(|id| !id.is_empty())
             .map(ToOwned::to_owned)
     };
-    let before = stored.and_then(&selected);
+    let before = stored.and_then(selected);
     let after = selected(candidate);
     if before == after {
         return Ok(());

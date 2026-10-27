@@ -92,9 +92,9 @@ async fn goal_task_waits_for_claim_and_emits_only_after_model_completion() -> Re
     let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
     let owner = identity.did().to_owned();
     let access = ConfigAccess::local(db.node.clone());
-    access.add_schema(SCHEMA).await?;
+    access.add_collection(SCHEMA).await?;
     access
-        .add_schema(
+        .add_collection(
             "type DeliveryGoalWork { handoff_id: String @immutable kind: String @immutable session_id: String @immutable }",
         )
         .await?;

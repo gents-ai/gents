@@ -701,7 +701,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
         ensure_runtime_schemas(&node).await.unwrap();
         let access = ConfigAccess::local(node.clone());
         access
-            .add_schema("type Work { label: String eligible: Boolean }")
+            .add_collection("type Work { label: String eligible: Boolean }")
             .await
             .unwrap();
         let source: Vec<Arrival> = decode(&case["source"]);
@@ -958,7 +958,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
         ensure_runtime_schemas(&node).await.unwrap();
         let access = ConfigAccess::local(node.clone());
         access
-            .add_schema("type Work { label: String eligible: Boolean }")
+            .add_collection("type Work { label: String eligible: Boolean }")
             .await
             .unwrap();
         let source: Vec<Arrival> = decode(&case["source"]);

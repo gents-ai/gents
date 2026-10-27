@@ -542,16 +542,6 @@ mod platform {
         })
     }
 
-    #[cfg(test)]
-    mod tests {
-        #[test]
-        fn unreadable_boot_id_proves_no_start_identity() {
-            let pid = std::process::id() as i32;
-            assert!(super::process_info_with_boot_id(pid, None).is_none());
-            assert!(super::process_info_with_boot_id(pid, Some("boot".into())).is_some());
-        }
-    }
-
     pub(super) fn group_has_live_member(pgid: i32) -> Option<bool> {
         let entries = std::fs::read_dir("/proc").ok()?;
         Some(entries.filter_map(Result::ok).any(|entry| {
@@ -568,6 +558,16 @@ mod platform {
         if pgid > 0 {
             // SAFETY: plain kill(2) on a process group this owner proved.
             let _ = unsafe { libc::kill(-pgid, signal) };
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn unreadable_boot_id_proves_no_start_identity() {
+            let pid = std::process::id() as i32;
+            assert!(super::process_info_with_boot_id(pid, None).is_none());
+            assert!(super::process_info_with_boot_id(pid, Some("boot".into())).is_some());
         }
     }
 }

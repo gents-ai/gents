@@ -326,7 +326,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        node.add_schema("type OneshotOutput { message: String }")
+        node.add_collection("type OneshotOutput { message: String }")
             .await
             .unwrap();
         let mut behavior = crate::agent::PendingAgent::new("oneshot-output")

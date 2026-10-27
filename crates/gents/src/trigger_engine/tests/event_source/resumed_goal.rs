@@ -18,7 +18,7 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
             .unwrap(),
     );
     ensure_runtime_schemas(&node).await.unwrap();
-    node.add_schema("type ResumedGoalOutput { run_id: String @index summary: String }")
+    node.add_collection("type ResumedGoalOutput { run_id: String @index summary: String }")
         .await
         .unwrap();
     crate::goal::set_goal(

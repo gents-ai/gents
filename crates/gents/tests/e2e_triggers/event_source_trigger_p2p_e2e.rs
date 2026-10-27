@@ -35,9 +35,9 @@ async fn register_replicated_event_schema(node: &EmbeddedNode) {
             kind: String @index
         }
     "#;
-    node.add_schema(sdl)
+    node.add_collection(sdl)
         .await
-        .expect("add_schema for ReplicatedEvent");
+        .expect("add_collection for ReplicatedEvent");
 }
 
 async fn create_task(

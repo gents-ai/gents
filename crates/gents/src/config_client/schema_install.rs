@@ -132,7 +132,7 @@ async fn apply_schema(
         "schema artifact changed; preview again"
     );
     if plan.requires_publication {
-        access.add_schema(sdl).await?;
+        access.add_collection(sdl).await?;
     }
     let observed = preview_schema(access, sdl, additive).await?;
     ensure!(

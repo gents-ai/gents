@@ -266,7 +266,7 @@ async fn concurrent_mutations_share_the_node_write_path() {
     const WRITES: usize = 32;
 
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_schema("type GateWrite { write_id: String }")
+    node.add_collection("type GateWrite { write_id: String }")
         .await
         .unwrap();
     let barrier = Arc::new(tokio::sync::Barrier::new(WRITES));
@@ -305,7 +305,7 @@ async fn concurrent_mutations_share_the_node_write_path() {
 #[tokio::test]
 async fn public_graphql_read_helpers_reject_mutations_before_execution() {
     let node = EmbeddedNode::builder().build().await.unwrap();
-    node.add_schema("type ReadBoundaryFact { value: String }")
+    node.add_collection("type ReadBoundaryFact { value: String }")
         .await
         .unwrap();
     let mutation = r#"mutation { create_ReadBoundaryFact(input: {value: "bypass"}) { _docID } }"#;

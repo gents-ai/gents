@@ -13,7 +13,7 @@ async fn rc1_upgrade_preserves_rows_field_ids_and_restarts() {
         .replace("    job_pin: JSON\n", "")
         .replace("    job_progress: JSON\n", "")
         .replace("    job_step_state: JSON\n", "");
-    node.add_schema(&format!("{profile}\n{tool}"))
+    node.add_collection(&format!("{profile}\n{tool}"))
         .await
         .unwrap();
     let names = [
@@ -90,7 +90,7 @@ async fn rc1_upgrade_preserves_rows_field_ids_and_restarts() {
 async fn current_tool_schema_adds_background_control_without_moving_fields() {
     let node = fresh_node().await;
     let previous = schemas::AGENT_TOOL_CALL.replace("    background_requested_at: DateTime\n", "");
-    node.add_schema(&previous).await.unwrap();
+    node.add_collection(&previous).await.unwrap();
     let before = node.get_collection("AgentToolCall").unwrap().unwrap();
     assert_eq!(
         before.version_id,
@@ -124,5 +124,84 @@ async fn current_tool_schema_adds_background_control_without_moving_fields() {
             .steps_applied,
         0
     );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn apply_collections_declare_updated_at_without_moving_fields() {
+    let node = fresh_node().await;
+    let collections = [
+        (
+            schemas::AGENT_TARGET_NAME,
+            schemas::AGENT_TARGET,
+            "target_id",
+            "bafyreierhwy2pombqxf2ufiqih275phvgdxj2w3h6e7wnuwme2tsllgoje",
+        ),
+        (
+            schemas::TOOLS_NAME,
+            schemas::TOOLS,
+            "tools_id",
+            "bafyreibrawpzq3wv3gm6ew2gd26k75rfi6xm64fp4x55njpfdics6xx26e",
+        ),
+        (
+            schemas::CHAIN_KEY_BINDING_NAME,
+            schemas::CHAIN_KEY_BINDING,
+            "binding_id",
+            "bafyreias5umbmxkuo6iguihj6tvovbuzgjscwj7wjcmz23pirgk7jo4uom",
+        ),
+        (
+            schemas::ETH_TOOL_NAME,
+            schemas::ETH_TOOL,
+            "tool_id",
+            "bafyreie24fvfqig33silif6nxrf4jfua2yokujyqbf4ydvstrifvhweaca",
+        ),
+        (
+            schemas::CALLBACK_NAME,
+            schemas::CALLBACK,
+            "callback_id",
+            "bafyreibijc44aul7l2m7kmvlojizbze7236sjixhi57osoqkevsreda5p4",
+        ),
+        (
+            schemas::CALLBACK_MODULE_NAME,
+            schemas::CALLBACK_MODULE,
+            "module_id",
+            "bafyreiceftkewzvdjuylk3djznmbw656qbopzikxneqq3v7krigoqsvqtu",
+        ),
+        (
+            schemas::CALLBACK_BINDING_NAME,
+            schemas::CALLBACK_BINDING,
+            "binding_id",
+            "bafyreigvksodxohqggry2u7dr65xak5kvlyp65rvfm62pgxvp4vlnfgody",
+        ),
+    ];
+    let mut before = Vec::new();
+    for (name, sdl, _, _) in collections {
+        let previous = sdl.replace("    updated_at: DateTime\n", "");
+        assert_ne!(previous, sdl, "{name} must declare updated_at");
+        node.add_collection(&previous).await.unwrap();
+        before.push(node.get_collection(name).unwrap().unwrap());
+    }
+    let report = ensure_migrations(node.as_ref()).await.unwrap();
+    assert_eq!(report.steps_applied, collections.len());
+    for ((name, _, key, target), previous) in collections.into_iter().zip(before) {
+        let current = node.get_collection(name).unwrap().unwrap();
+        assert_eq!(current.version_id, target, "{name}");
+        for field in previous.fields {
+            let retained = current
+                .fields
+                .iter()
+                .find(|value| value.name == field.name)
+                .unwrap();
+            assert_eq!(retained.id, field.id, "{name}.{} moved", field.name);
+        }
+        let created = node
+            .execute(&format!(
+                r#"mutation {{ add_{name}(input: {{{key}: "stamped", node_did: "owner", updated_at: "2026-10-27T00:00:00.000000001Z"}}) {{ _docID }} }}"#
+            ))
+            .await;
+        assert!(!created.has_errors(), "{name}: {created:?}");
+    }
+    let rerun = ensure_migrations(node.as_ref()).await.unwrap();
+    assert_eq!(rerun.steps_applied, 0);
     node.shutdown().await;
 }

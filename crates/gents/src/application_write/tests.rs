@@ -42,7 +42,7 @@ async fn fixture() -> (Arc<crate::defra_node::EmbeddedNode>, WriteTool) {
             .await
             .unwrap(),
     );
-    node.add_schema(
+    node.add_collection(
         "type Parcel { reference: String status: String tags: [String] payload: JSON }",
     )
     .await
@@ -212,7 +212,7 @@ async fn native_relationship_input_uses_the_target_document_id() {
             .await
             .unwrap(),
     );
-    node.add_schema(
+    node.add_collection(
         "type Writer { name: String books: [Volume] } type Volume { title: String author: Writer }",
     )
     .await
@@ -250,7 +250,7 @@ async fn a_collection_grant_cannot_bypass_native_document_acp() {
             .unwrap(),
     );
     let policy = node.add_dac_policy(OWNER, "name: Application write ACP\nresources:\n  - name: parcels\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n").await.unwrap();
-    node.add_schema(&format!("type Parcel @policy(id: \"{}\", resource: \"parcels\") {{ reference: String status: String }}",crate::graphql::escape_graphql_string(&policy))).await.unwrap();
+    node.add_collection(&format!("type Parcel @policy(id: \"{}\", resource: \"parcels\") {{ reference: String status: String }}",crate::graphql::escape_graphql_string(&policy))).await.unwrap();
     let owner = WriteTool::new(
         ConfigAccess::local(node.clone()),
         BTreeSet::from(["Parcel".into()]),
@@ -314,7 +314,7 @@ mod plugin {
                 .await
                 .unwrap(),
         );
-        node.add_schema(
+        node.add_collection(
             "type Note { owner: String body: String tags: [String] }
              type Keyed { owner: String key: String @index(unique: true) body: String created_at: String }
              type Twin { owner: String key: String body: String created_at: String }",

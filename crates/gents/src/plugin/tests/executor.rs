@@ -1406,7 +1406,7 @@ mod data_calls {
                 .await
                 .unwrap(),
         );
-        node.add_schema("type Note { owner: String body: String }")
+        node.add_collection("type Note { owner: String body: String }")
             .await
             .unwrap();
         for (owner, body) in rows {
@@ -1741,7 +1741,7 @@ mod tool_writes {
         transient_terminal: bool,
     ) -> Finished {
         let (node, path, mut call) = published_spawn_parent(name).await;
-        node.add_schema(
+        node.add_collection(
             "type Stamped { body: String job_row_doc_id: String } type Plain { body: String }",
         )
         .await

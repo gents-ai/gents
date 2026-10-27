@@ -337,7 +337,7 @@ async fn overlapping_resume_and_native_goal_write_conflict_atomically() {
             local.commit().await.unwrap_err().to_string()
         };
         assert!(conflict.contains("transaction conflict"), "{conflict}");
-        let _ = f.node.rollback_transaction(&remote).await;
+        let _ = f.node.discard_transaction(&remote).await;
         let observed = f.observe().await;
         assert_eq!(
             observed["status"],

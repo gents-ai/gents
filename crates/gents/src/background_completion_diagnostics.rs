@@ -783,9 +783,9 @@ mod tests {
     async fn diagnostics_reads_actual_scoped_head_across_requesters_without_session_cache(
     ) -> Result<()> {
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await?);
-        node.add_schema(gents_protocol::schemas::AGENT_REQUEST)
+        node.add_collection(gents_protocol::schemas::AGENT_REQUEST)
             .await?;
-        node.add_schema(gents_protocol::schemas::AGENT_MESSAGE)
+        node.add_collection(gents_protocol::schemas::AGENT_MESSAGE)
             .await?;
         let access = ConfigAccess::local(node.clone());
         let owner = "did:test:diagnostics\"owner";

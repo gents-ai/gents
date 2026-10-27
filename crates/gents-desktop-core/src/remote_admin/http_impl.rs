@@ -872,7 +872,7 @@ mod tests {
                 .await
                 .expect("embedded node"),
         );
-        node.add_schema("type DesktopResolveThing { name: String }")
+        node.add_collection("type DesktopResolveThing { name: String }")
             .await
             .expect("test schema");
         let definition = node

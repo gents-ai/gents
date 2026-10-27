@@ -28,7 +28,7 @@ type TxnAtomicityNote @index(fields: ["chain_root_doc_id", "note_id"], unique: t
 
 async fn disposable_node() -> Result<Arc<EmbeddedNode>> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
-    node.add_schema(ATOMICITY_SCHEMA).await?;
+    node.add_collection(ATOMICITY_SCHEMA).await?;
     Ok(node)
 }
 

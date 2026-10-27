@@ -6,7 +6,7 @@ use gents_protocol::output::{
 #[tokio::test]
 async fn canonical_segment_create_returns_physical_identity_and_exact_json() {
     let node = EmbeddedNode::builder().build().await.unwrap();
-    node.add_schema(gents_schemas::AGENT_OUTPUT_SEGMENT)
+    node.add_collection(gents_schemas::AGENT_OUTPUT_SEGMENT)
         .await
         .unwrap();
     let segment = OutputSegment {

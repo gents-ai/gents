@@ -76,7 +76,7 @@ impl crate::UpdateSubscriptionSource for FakeUpdateSubscriptionSource {
 async fn a_collection_level_update_with_an_empty_doc_id_fires_nothing_but_a_real_one_does() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    node.add_schema("type BranchableProbe { value: String }")
+    node.add_collection("type BranchableProbe { value: String }")
         .await
         .unwrap();
 
@@ -197,7 +197,7 @@ impl crate::RuntimeSnapshotObserver for SubscriptionObserver {
 async fn event_source_acknowledges_exact_configuration_after_subscription_setup() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    node.add_schema("type ReadyInput { value: String }")
+    node.add_collection("type ReadyInput { value: String }")
         .await
         .unwrap();
     assert!(!node
@@ -259,7 +259,7 @@ async fn event_source_retries_schema_visibility_before_subscription_readiness() 
     let install = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(50)).await;
         schema_node
-            .add_schema("type DelayedSchemaInput { value: String }")
+            .add_collection("type DelayedSchemaInput { value: String }")
             .await
             .unwrap();
     });
@@ -318,7 +318,7 @@ async fn event_source_repairs_failed_seed_on_later_reconcile_before_readiness() 
         .with_runtime_observer(Some(observer.clone()));
 
     source.reconcile_subscriptions(&first).await;
-    node.add_schema("type EventualInput { value: String }")
+    node.add_collection("type EventualInput { value: String }")
         .await
         .unwrap();
     let second = snapshot_with_event_triggers(2, triggers);
@@ -541,9 +541,9 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
             payload: String
         }
     "#;
-    node.add_schema(webhook_sdl)
+    node.add_collection(webhook_sdl)
         .await
-        .expect("add_schema for WebhookEvent");
+        .expect("add_collection for WebhookEvent");
     let task = ResolvedTask {
         emit_outcome: false,
         task_id: "task-webhook".to_string(),
@@ -693,7 +693,7 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
 async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_scope() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    node.add_schema(
+    node.add_collection(
         r#"type GroupMember {
             run_id: String
             expected_total: Int
@@ -762,7 +762,7 @@ async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_s
 async fn per_group_timeout_uses_durable_first_seen_clock() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    node.add_schema(
+    node.add_collection(
         r#"type DurableGroupMember {
             run_id: String
             value: String
@@ -833,7 +833,7 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
 async fn correlation_populated_after_create_remains_eligible_for_delivery() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    node.add_schema(
+    node.add_collection(
         r#"type DeferredCorrelationMember {
             run_id: String @index
             value: String
@@ -940,7 +940,7 @@ async fn generated_sibling_delivery_case_preserves_pending_correlation() {
     );
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    node.add_schema(
+    node.add_collection(
         r#"type MixedCorrelationMember {
             run_id: String @index
             value: String
@@ -1040,7 +1040,7 @@ async fn generated_sibling_delivery_case_preserves_pending_correlation() {
 async fn startup_seed_defers_only_the_incomplete_trigger_on_a_shared_document() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    node.add_schema(
+    node.add_collection(
         r#"type SeededMixedCorrelationMember {
             run_id: String @index
             value: String
@@ -1115,7 +1115,7 @@ async fn startup_seed_defers_only_the_incomplete_trigger_on_a_shared_document() 
 async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    node.add_schema(
+    node.add_collection(
         r#"type QuiescedGroupMember {
             run_id: String @index
             value: String
@@ -1218,7 +1218,7 @@ fn group_state_identity_changes_only_with_membership_definition() {
 async fn generation_bump_recovers_only_when_group_membership_definition_changes() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    node.add_schema(
+    node.add_collection(
         r#"type RecoveryFingerprintMember {
             run_id: String
             kind: String
@@ -1300,9 +1300,9 @@ async fn event_source_filter_probe_gates_fire_on_operator_filter() {
             email: String
         }
     "#;
-    node.add_schema(webhook_sdl)
+    node.add_collection(webhook_sdl)
         .await
-        .expect("add_schema for WebhookEvent");
+        .expect("add_collection for WebhookEvent");
 
     let task = ResolvedTask {
         emit_outcome: false,
@@ -1398,9 +1398,9 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
             email: String
         }
     "#;
-    node.add_schema(webhook_sdl)
+    node.add_collection(webhook_sdl)
         .await
-        .expect("add_schema for WebhookEvent");
+        .expect("add_collection for WebhookEvent");
 
     let task = ResolvedTask {
         emit_outcome: false,
@@ -1567,9 +1567,9 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
             payload: String
         }
     "#;
-    node.add_schema(webhook_sdl)
+    node.add_collection(webhook_sdl)
         .await
-        .expect("add_schema for WebhookEvent");
+        .expect("add_collection for WebhookEvent");
 
     create_event_trigger_doc(&node, "trigger-fired", "task-webhook", "WebhookEvent").await;
 
@@ -1663,9 +1663,9 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
             payload: String
         }
     "#;
-    node.add_schema(webhook_sdl)
+    node.add_collection(webhook_sdl)
         .await
-        .expect("add_schema for WebhookEvent");
+        .expect("add_collection for WebhookEvent");
 
     create_event_trigger_doc(&node, "trigger-skip-err", "task-webhook", "WebhookEvent").await;
 
@@ -1788,9 +1788,9 @@ async fn event_source_skips_event_for_doc_already_seen_at_subscribe() {
             payload: String
         }
     "#;
-    node.add_schema(webhook_sdl)
+    node.add_collection(webhook_sdl)
         .await
-        .expect("add_schema for WebhookEvent");
+        .expect("add_collection for WebhookEvent");
 
     let seed_mutation = r#"mutation {
         create_WebhookEvent(input: {
@@ -1876,9 +1876,9 @@ async fn event_source_fires_for_first_seen_doc_then_skips_updates() {
             payload: String
         }
     "#;
-    node.add_schema(webhook_sdl)
+    node.add_collection(webhook_sdl)
         .await
-        .expect("add_schema for WebhookEvent");
+        .expect("add_collection for WebhookEvent");
     let task = resolved_task("ignored");
     let trigger = resolved_event_trigger("trigger-firstseen", "WebhookEvent", task);
     let snapshot = snapshot_with_event_triggers(
@@ -1954,9 +1954,9 @@ async fn event_source_fans_out_one_event_across_multiple_matching_triggers() {
             payload: String
         }
     "#;
-    node.add_schema(webhook_sdl)
+    node.add_collection(webhook_sdl)
         .await
-        .expect("add_schema for WebhookEvent");
+        .expect("add_collection for WebhookEvent");
     let task = resolved_task("ignored");
     let trigger_alpha = resolved_event_trigger("trigger-alpha", "WebhookEvent", task.clone());
     let trigger_beta = resolved_event_trigger("trigger-beta", "WebhookEvent", task);
@@ -2023,9 +2023,9 @@ async fn event_source_tries_all_triggers_when_first_filter_misses() {
             kind: String @index
         }
     "#;
-    node.add_schema(webhook_sdl)
+    node.add_collection(webhook_sdl)
         .await
-        .expect("add_schema for WebhookEvent");
+        .expect("add_collection for WebhookEvent");
     let task = resolved_task("ignored");
     let trigger_a = resolved_event_trigger_with_filter(
         "trigger-a-lex-first",

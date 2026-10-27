@@ -630,7 +630,7 @@ mod tests {
         let node = std::sync::Arc::new(defra_node::NodeBuilder::default().build().await.unwrap());
         let access = ConfigAccess::local(node.clone());
         access
-            .add_schema(gents_protocol::schemas::AGENT_MESSAGE)
+            .add_collection(gents_protocol::schemas::AGENT_MESSAGE)
             .await
             .unwrap();
         for start in (0..2_112).step_by(128) {

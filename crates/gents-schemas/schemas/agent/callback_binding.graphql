@@ -6,4 +6,5 @@ type CallbackBinding @branchable @index(fields: ["node_did", "binding_id"], uniq
     input_fields: [String!]
     enabled: Boolean @index
     tags: [String!]
+    updated_at: DateTime
 }

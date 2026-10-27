@@ -6,4 +6,5 @@ type AgentTarget @branchable @index(fields: ["node_did", "target_id"], unique: t
     name: String
     description: String
     tags: [String!]
+    updated_at: DateTime
 }

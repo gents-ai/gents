@@ -18,7 +18,7 @@ impl ConfigAccess {
                     .await
             }
             Self::Graphql(_) => serde_json::from_value(
-                self.schema_request(reqwest::Method::GET, "collections/versions", None)
+                self.schema_request(reqwest::Method::GET, "collections?get_inactive=true", None)
                     .await?,
             )
             .map_err(Into::into),
@@ -100,7 +100,7 @@ impl ConfigAccess {
             Self::Graphql(_) => {
                 self.schema_request(
                     reqwest::Method::POST,
-                    "lens/set",
+                    "collections/migrations",
                     Some(serde_json::to_value(config)?),
                 )
                 .await

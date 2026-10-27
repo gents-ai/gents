@@ -266,7 +266,7 @@ resources:
         &format!("type AgentSession @policy(id: \"{policy}\", resource: \"sessions\") "),
     );
     ConfigAccess::local(Arc::clone(&node))
-        .add_schema(&schema)
+        .add_collection(&schema)
         .await
         .unwrap();
     let id = create_session(&node, &owner).await.unwrap();
@@ -305,7 +305,7 @@ async fn concurrent_archive_calls_commit_one_revision() {
     let home = tempfile::tempdir().unwrap();
     let actor = key(home.path(), "owner").await;
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_schema(gents_protocol::schemas::AGENT_SESSION)
+    node.add_collection(gents_protocol::schemas::AGENT_SESSION)
         .await
         .unwrap();
     create_session(&node, &actor).await.unwrap();
@@ -344,7 +344,7 @@ async fn authenticated_http_archive_uses_the_same_durable_transaction_owner() {
             .await
             .unwrap(),
     );
-    node.add_schema(gents_protocol::schemas::AGENT_SESSION)
+    node.add_collection(gents_protocol::schemas::AGENT_SESSION)
         .await
         .unwrap();
     create_session(&node, &actor).await.unwrap();

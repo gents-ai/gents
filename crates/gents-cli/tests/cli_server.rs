@@ -2792,7 +2792,7 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     let _identity = identity_from_init(&init)?;
     let access = gents::config_client::ConfigAccess::graphql_as(graphql.clone(), node_did.clone());
     access
-        .add_schema("type McpParcel { reference: String status: String }")
+        .add_collection("type McpParcel { reference: String status: String }")
         .await?;
     let bearer =
         gents::identity::defradb_bearer_authorization(&node_did, &format!("127.0.0.1:{port}"))?;

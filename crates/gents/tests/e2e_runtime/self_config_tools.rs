@@ -396,7 +396,7 @@ async fn configure_event_source_rejects_filter_and_collection_injection() {
     assert!(rows["data"]["EventSource"].as_array().unwrap().is_empty());
     assert_eq!(rows["data"]["Agent"].as_array().unwrap().len(), 1);
     db.node
-        .add_schema("type CustomerSignup { kind: String }")
+        .add_collection("type CustomerSignup { kind: String }")
         .await
         .unwrap();
     call_tool(&tools,"configure_automation",json!({"kind":"event_source","id":"source","patch":{"source_collection":"CustomerSignup","filter":r#"{ kind: { _eq: "signup" } }"#}})).await.unwrap();

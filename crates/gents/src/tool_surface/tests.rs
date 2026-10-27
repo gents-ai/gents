@@ -1270,7 +1270,7 @@ async fn write_tools_register_under_declared_names() {
 
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    node.add_schema("type ActionRequest { summary: String }")
+    node.add_collection("type ActionRequest { summary: String }")
         .await
         .unwrap();
 
@@ -1322,7 +1322,7 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
 
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    node.add_schema(
+    node.add_collection(
         "type TallyOwner { label: String tallies: [Tally] } type Tally { label: String owner: TallyOwner @primary }",
     )
         .await

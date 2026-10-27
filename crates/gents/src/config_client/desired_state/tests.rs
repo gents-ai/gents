@@ -67,7 +67,7 @@ async fn register_config_schemas_dropping_unique_indexes(
                     );
                 }
             }
-            node.add_schema(&schema).await?;
+            node.add_collection(&schema).await?;
         }
     }
     Ok(())
@@ -1178,7 +1178,7 @@ fn obligation_surface(
 async fn obligation_node() -> Result<Arc<EmbeddedNode>> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
-    node.add_schema(
+    node.add_collection(
         "type ObligationOutcome { text: String result: String expected_total: String total: Int ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime required_observed_at: DateTime! attachment: Blob marker: ID flag: Boolean tags: [String] required_total: Int! required_label: String! required_tags: [String!] }",
     )
     .await?;
@@ -1499,7 +1499,7 @@ async fn replacement_judges_the_count_field_of_the_update_payload() -> Result<()
 async fn event_source_node() -> Result<Arc<EmbeddedNode>> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
     register_config_schemas(&node).await?;
-    node.add_schema(
+    node.add_collection(
         "type EventProbeSource { batch: String required_batch: String! result: String flag: Boolean tags: [String] total: Int expected_total: Int! ratio: Float32 amount: Float64 payload: JSON observed_at: DateTime required_observed_at: DateTime! attachment: Blob marker: ID }",
     )
     .await?;
@@ -1921,7 +1921,7 @@ async fn replacement_judges_the_count_field_of_the_event_source_update_payload()
 async fn outcome_delivery_requires_a_string_handoff_id_on_its_source_collection() -> Result<()> {
     let node = Arc::new(crate::test_support::node_builder().build().await?);
     crate::ensure_runtime_schemas(&node).await?;
-    node.add_schema(
+    node.add_collection(
         "type PlainPing { message: String } type HandoffPing { handoff_id: String message: String } type NumberedPing { handoff_id: Int }",
     )
     .await?;

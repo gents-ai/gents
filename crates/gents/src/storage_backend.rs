@@ -321,7 +321,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        node.add_schema(&format!(
+        node.add_collection(&format!(
             "type {} {{ backend_id: String }}",
             gents_protocol::schemas::INFERENCE_BACKEND_NAME
         ))

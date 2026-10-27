@@ -10,4 +10,5 @@ type Tools @branchable @index(fields: ["node_did", "tools_id"], unique: true) {
     integrations: JSON
     self_config: JSON
     tags: [String!]
+    updated_at: DateTime
 }

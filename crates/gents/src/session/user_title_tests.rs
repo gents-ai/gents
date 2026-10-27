@@ -9,7 +9,7 @@ use gents_protocol::session::{SessionTitle, SessionTitleSource};
 #[tokio::test]
 async fn title_transitions_preserve_session_and_request_observation() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    node.add_schema(gents_protocol::schemas::AGENT_SESSION)
+    node.add_collection(gents_protocol::schemas::AGENT_SESSION)
         .await
         .unwrap();
     let response = node.execute(r#"mutation { create_AgentSession(input: {
@@ -190,7 +190,7 @@ async fn generated_user_title_cases_drive_the_shared_session_owner() {
         let before = model_session(&case["before"]);
         let expected = model_session(&case["after"]);
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        node.add_schema(gents_protocol::schemas::AGENT_SESSION)
+        node.add_collection(gents_protocol::schemas::AGENT_SESSION)
             .await
             .unwrap();
         crate::config_client::ConfigAccess::transact_local_write(&node, None, "test.seed_model_title", |txn| {

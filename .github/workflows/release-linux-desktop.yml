@@ -41,7 +41,7 @@ jobs:
             libclang-dev libssl-dev pkg-config protobuf-compiler \
             libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
             patchelf file libfuse2 xdg-utils xvfb xauth dbus-x11 ca-certificates
-      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: wasm32-unknown-unknown
       - uses: actions/setup-node@v6

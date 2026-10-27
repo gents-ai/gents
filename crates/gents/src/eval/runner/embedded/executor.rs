@@ -1974,7 +1974,7 @@ mod tests {
     async fn schema_capture_reads_active_indexes_and_records_absent_collections() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         ConfigAccess::local(node.clone())
-            .add_schema("type SearchNote { body: String @fulltext(language: \"english\") }")
+            .add_collection("type SearchNote { body: String @fulltext(language: \"english\") }")
             .await
             .unwrap();
         let workspace = tempfile::tempdir().unwrap();
@@ -2068,7 +2068,7 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         let access = ConfigAccess::local(node.clone());
         access
-            .add_schema("type CaptureHeader { session_id: String sequence: Int }")
+            .add_collection("type CaptureHeader { session_id: String sequence: Int }")
             .await
             .unwrap();
         let session_id = "trial\"session";

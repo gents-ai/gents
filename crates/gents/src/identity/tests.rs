@@ -44,7 +44,7 @@ async fn key_identity_signs_embedded_node_commits() {
         .build()
         .await
         .unwrap();
-    node.add_schema("type SignedFact { value: String }")
+    node.add_collection("type SignedFact { value: String }")
         .await
         .unwrap();
 

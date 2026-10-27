@@ -1172,7 +1172,7 @@ async fn automation_rejects_a_count_field_the_runtime_cannot_read_and_can_recove
     let identity = node_identity("event-source-config");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    node.add_schema("type SelfConfigProbe { batch: String flag: Boolean total: Int }")
+    node.add_collection("type SelfConfigProbe { batch: String flag: Boolean total: Int }")
         .await
         .unwrap();
     let mut grants = config(&["automation"]);
@@ -1929,7 +1929,7 @@ async fn datastore_preview_create_and_sparse_edit_use_owned_patch_path() {
     assert!(actual.contains("Jobs"));
     assert!(actual.contains("user:keep"));
     assert!(!actual.contains("Duplicate"));
-    node.add_schema("type ConfiguredWork { message: String }")
+    node.add_collection("type ConfiguredWork { message: String }")
         .await
         .unwrap();
     let entries = r#"entries=[{"tool_name":"submit_work","collection":"ConfiguredWork","fields":[{"name":"message","required":true}]}]"#;
@@ -2061,7 +2061,7 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
     let access = crate::config_client::ConfigAccess::local(node.clone());
     access
-        .add_schema("type Delivery { body: String }")
+        .add_collection("type Delivery { body: String }")
         .await
         .unwrap();
     let tools = build_self_config_tools(

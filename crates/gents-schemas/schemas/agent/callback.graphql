@@ -7,4 +7,5 @@ type Callback @branchable @index(fields: ["node_did", "callback_id"], unique: tr
     capabilities: [String!]
     enabled: Boolean @index
     tags: [String!]
+    updated_at: DateTime
 }

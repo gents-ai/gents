@@ -98,7 +98,7 @@ async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
     );
     let access = ConfigAccess::local(node.clone());
     access
-        .add_schema("type BudgetDocument { payload: String }")
+        .add_collection("type BudgetDocument { payload: String }")
         .await
         .unwrap();
     let payload = "large durable transcript ".repeat(44_000);

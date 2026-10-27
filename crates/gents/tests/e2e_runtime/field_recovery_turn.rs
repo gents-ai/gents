@@ -17,7 +17,7 @@ async fn writer_recovers_complete_large_task_contract_in_provider_input() {
     let did = db.node_identity.did().to_owned();
     let access = gents::config_client::ConfigAccess::local(db.node.clone());
     access
-        .add_schema("type ReaderWork { instructions: String owned_files: String }")
+        .add_collection("type ReaderWork { instructions: String owned_files: String }")
         .await
         .unwrap();
     let instructions = "é".repeat(2436);

@@ -83,7 +83,7 @@ pub(crate) mod tests {
     pub(crate) async fn create_source_documents(node: &Arc<EmbeddedNode>) -> BTreeSet<String> {
         let access = ConfigAccess::local(node.clone());
         access
-            .add_schema("type RescanSource { correlation: String }")
+            .add_collection("type RescanSource { correlation: String }")
             .await
             .unwrap();
         let mut inserted = BTreeSet::new();

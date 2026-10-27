@@ -138,7 +138,7 @@ async fn lean_independent_completion_releases_native_canonical_gate() {
     assert!(!scenario.expected_gate_held);
 
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-    node.add_schema("type StreamGateFact { value: String }")
+    node.add_collection("type StreamGateFact { value: String }")
         .await
         .unwrap();
     let entered = Arc::new(tokio::sync::Notify::new());

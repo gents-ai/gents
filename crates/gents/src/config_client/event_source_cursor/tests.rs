@@ -50,7 +50,7 @@ async fn fixture(enabled: bool) -> Result<(Arc<defra_node::EmbeddedNode>, Config
     crate::ensure_runtime_schemas(&node).await?;
     let access = ConfigAccess::local(node.clone());
     access
-        .add_schema(
+        .add_collection(
             "type WorkA { label: String @immutable } type WorkB { label: String @immutable }",
         )
         .await?;
@@ -227,7 +227,7 @@ async fn source_registered_before_collection_retains_its_first_arrival() -> Resu
     publish(&access, vec![source("FutureWork")]).await?;
     assert_eq!(cursor(&access, "FutureWork").await?, "0");
     access
-        .add_schema("type FutureWork { label: String @immutable }")
+        .add_collection("type FutureWork { label: String @immutable }")
         .await?;
     let first = create_source(&access, "FutureWork", "first").await?;
     publish(&access, vec![trigger(true)]).await?;

@@ -29,7 +29,7 @@ async fn probe_db() -> ProbeDb {
             .await
             .expect("embedded node"),
     );
-    node.add_schema(PROBE_SCHEMA)
+    node.add_collection(PROBE_SCHEMA)
         .await
         .expect("add probe schema");
     ProbeDb {

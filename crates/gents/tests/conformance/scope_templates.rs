@@ -573,7 +573,7 @@ async fn sixteen_peer_request_wave_is_reduced_to_one_target() {
         .build()
         .await
         .expect("route evaluation node");
-    node.add_schema(gents_protocol::schemas::AGENT_REQUEST)
+    node.add_collection(gents_protocol::schemas::AGENT_REQUEST)
         .await
         .expect("AgentRequest schema");
     let request = store_request_row(

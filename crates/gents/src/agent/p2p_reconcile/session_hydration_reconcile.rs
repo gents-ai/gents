@@ -958,7 +958,7 @@ mod tests {
         ) -> Result<()> {
             if self
                 .terminal_write_failures_remaining
-                .fetch_update(
+                .try_update(
                     std::sync::atomic::Ordering::SeqCst,
                     std::sync::atomic::Ordering::SeqCst,
                     |remaining| remaining.checked_sub(1),
@@ -976,7 +976,7 @@ mod tests {
         async fn mark_rejected(&self, request: &HydrationRequestRow, detail: &str) -> Result<()> {
             if self
                 .terminal_write_failures_remaining
-                .fetch_update(
+                .try_update(
                     std::sync::atomic::Ordering::SeqCst,
                     std::sync::atomic::Ordering::SeqCst,
                     |remaining| remaining.checked_sub(1),

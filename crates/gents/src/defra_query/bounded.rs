@@ -554,7 +554,7 @@ mod tests {
     #[tokio::test]
     async fn native_scalar_filters_match_lean_admission() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        node.add_schema(
+        node.add_collection(
             "type ScalarRecord { text: String count: Int measure: Float64 enabled: Boolean }",
         )
         .await
@@ -622,7 +622,7 @@ mod tests {
 
     async fn node_with_findings() -> Arc<EmbeddedNode> {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        node.add_schema(
+        node.add_collection(
             r#"
             type CandidateFinding {
                 run_id: String
@@ -867,7 +867,7 @@ mod tests {
 
     async fn node_with_many_findings(rows: usize) -> Arc<EmbeddedNode> {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        node.add_schema(
+        node.add_collection(
             "type CandidateFinding { run_id: String finding_id: String title: String }",
         )
         .await

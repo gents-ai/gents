@@ -441,6 +441,7 @@ async fn p2p_terminal_redrive_pushes_once_per_routed_request() {
     let peer = test_p2p_db("convergence-p2p-wave-peer").await;
     install_one_way_replicator(&owner.node, &peer.node, &["AgentRequest"], true).await;
 
+    let mut doc_ids = Vec::with_capacity(REQUESTS);
     for index in 0..REQUESTS {
         let request_id = format!("convergence-p2p-wave-{index:02}");
         let session_id = format!("convergence-p2p-wave-session-{index:02}");
@@ -452,7 +453,7 @@ async fn p2p_terminal_redrive_pushes_once_per_routed_request() {
             "completed",
         )
         .await;
-        wait_for_request_lifecycle(
+        let on_peer = wait_for_request_lifecycle(
             peer.node.as_ref(),
             &request_id,
             RequestLifecycleState::Completed,
@@ -460,7 +461,9 @@ async fn p2p_terminal_redrive_pushes_once_per_routed_request() {
             "peer (wave seed)",
         )
         .await;
+        doc_ids.push(on_peer.doc_id.expect("peer doc id"));
     }
+    wait_for_acknowledged(&owner.node, peer.node.as_ref(), &doc_ids).await;
 
     let baseline = wait_for_push_backlog_idle(owner.node.as_ref()).await;
     let enqueued_before = baseline["push_backlog"]["enqueued_total"]
@@ -469,7 +472,11 @@ async fn p2p_terminal_redrive_pushes_once_per_routed_request() {
     let report = RequestLifecycle::redrive_terminal_convergence(&owner.node, OWNER_DID)
         .await
         .expect("terminal redrive wave");
-    assert_eq!(report.reasserted, REQUESTS);
+    assert_eq!(
+        (report.acknowledged, report.reasserted),
+        (REQUESTS, 0),
+        "acknowledged terminal requests are retired, never re-asserted; report={report:?}"
+    );
 
     let after =
         wait_for_push_enqueues(owner.node.as_ref(), enqueued_before + REQUESTS as u64).await;
@@ -479,7 +486,7 @@ async fn p2p_terminal_redrive_pushes_once_per_routed_request() {
     let measured_pushes = enqueued_after - enqueued_before;
     assert_eq!(
         measured_pushes, REQUESTS as u64,
-        "one request-party route must enqueue one outbound push per re-driven document"
+        "one request-party route must enqueue one outbound push per document the wave writes"
     );
 
     let former_pushes = REQUESTS as u64 * FORMER_PAIRINGS;

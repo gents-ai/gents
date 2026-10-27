@@ -303,7 +303,7 @@ async fn delivery_crash_child() -> Result<()> {
             std::env::var("GENTS_DELIVERY_ENDPOINT_1")?,
             std::env::var("GENTS_DELIVERY_ENDPOINT_2")?,
         ];
-        access.add_schema(SCHEMA).await?;
+        access.add_collection(SCHEMA).await?;
         configure(&access, &db.node, &owner, &endpoints).await?;
         configure_worker(&access, &owner, false).await?;
         apply(&access, &owner, vec![(Collection::Trigger, json!({
