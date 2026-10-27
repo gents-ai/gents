@@ -197,6 +197,15 @@ pub fn question_requires_reply_receipt(payload: &str) -> bool {
 }
 
 impl MailboxQuestion {
+    pub fn awaiting_answer(&self, is_open: bool, same_parent: bool, completed: bool) -> bool {
+        self.validate().is_ok()
+            && self.version == 2
+            && self.optional != Some(true)
+            && is_open
+            && same_parent
+            && completed
+    }
+
     pub fn validate(&self) -> Result<(), MailboxQuestionError> {
         if !(1..=MAILBOX_QUESTION_VERSION).contains(&self.version)
             || (self.version == 1 && self.optional == Some(true))

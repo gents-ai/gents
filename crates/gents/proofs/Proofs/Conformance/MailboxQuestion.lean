@@ -17,6 +17,15 @@ private def baseline : Mailbox.Item :=
     status := .open
     resolvedDocId := "" }
 
+private def waitsJson (policy : Policy) : String := jsonArray <|
+  [false, true].flatMap fun isOpen =>
+    [false, true].flatMap fun sameParent =>
+      [false, true].map fun completed =>
+        "{\"open\":" ++ boolJson isOpen ++
+        ",\"same_parent\":" ++ boolJson sameParent ++
+        ",\"completed\":" ++ boolJson completed ++
+        ",\"waiting\":" ++ boolJson (awaitingAnswer policy isOpen sameParent completed) ++ "}"
+
 private def caseJson (policy : Policy) (skip selected text : Bool) : String :=
   "{\"version\":" ++ toString policy.version ++
   ",\"optional\":" ++ boolJson policy.optional ++
@@ -27,7 +36,8 @@ private def caseJson (policy : Policy) (skip selected text : Bool) : String :=
   ",\"text\":" ++ boolJson text ++
   ",\"valid\":" ++ boolJson (valid policy) ++
   ",\"accepted\":" ++ boolJson (accepts policy skip selected text) ++
-  ",\"dismissible\":" ++ boolJson ((dismiss? policy.version baseline "owner").isSome) ++ "}"
+  ",\"dismissible\":" ++ boolJson ((dismiss? policy.version baseline "owner").isSome) ++
+  ",\"waits\":" ++ waitsJson policy ++ "}"
 
 def casesJson : String := jsonArray <|
   [0, 1, 2, 3].flatMap fun version =>
