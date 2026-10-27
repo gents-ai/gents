@@ -81,7 +81,7 @@ pub(super) async fn exercise(
     client.close().await;
     recovery.restart().await?;
     client = Attachment::start_with_binary(recovery.paths, recovery.binary).await;
-    wait_chat_deployment(&mut client, id, node).await?;
+    wait_chat_deployment(&mut client, id, node, recovery.access).await?;
     let lookup = json!({"query":{"clientDid":client_did,"nodeDid":node,"commandId":command}});
     let recovered = client
         .call(*id, "desktop_goal_submission_recover", lookup.clone())
@@ -129,7 +129,7 @@ pub(super) async fn exercise(
     client.close().await;
     recovery.restart().await?;
     client = Attachment::start_with_binary(recovery.paths, recovery.binary).await;
-    wait_chat_deployment(&mut client, id, node).await?;
+    wait_chat_deployment(&mut client, id, node, recovery.access).await?;
     let acknowledged = client
         .call(*id, "desktop_goal_submission_recover", lookup)
         .await;

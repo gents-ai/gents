@@ -355,7 +355,7 @@ mod tests {
             Some(value) => std::env::set_var("JAVY", value),
             None => std::env::remove_var("JAVY"),
         }
-        let error = result.err().expect("a missing javy refuses");
+        let error = result.expect_err("a missing javy refuses");
         assert_eq!(refusal_code(&error), Some("promote_javy_missing"));
         let missing = error.downcast_ref::<JavyMissing>().expect("a JavyMissing");
         let message = missing.to_string();

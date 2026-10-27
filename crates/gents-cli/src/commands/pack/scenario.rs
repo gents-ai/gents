@@ -3807,20 +3807,15 @@ mod tests {
 
     #[test]
     fn scenario_manifest_reads_the_dependency_environment_key() {
-        for key in ["dependency_environment"] {
-            let manifest: ScenarioManifest = serde_json::from_value(serde_json::json!({
-                "name": "t",
-                "init": {"inference_url": "http://x", "model_name": "m"},
-                "seed": {"collection": "J", "job_id_field": "run_id", "prompt_field": "focus"},
-                "expect": {"trigger_ids": []},
-                key: {"dep": {"TOKEN": "value"}}
-            }))
-            .unwrap();
-            assert_eq!(
-                manifest.dependency_environment["dep"]["TOKEN"], "value",
-                "{key}"
-            );
-        }
+        let manifest: ScenarioManifest = serde_json::from_value(serde_json::json!({
+            "name": "t",
+            "init": {"inference_url": "http://x", "model_name": "m"},
+            "seed": {"collection": "J", "job_id_field": "run_id", "prompt_field": "focus"},
+            "expect": {"trigger_ids": []},
+            "dependency_environment": {"dep": {"TOKEN": "value"}}
+        }))
+        .unwrap();
+        assert_eq!(manifest.dependency_environment["dep"]["TOKEN"], "value");
     }
 
     #[test]
