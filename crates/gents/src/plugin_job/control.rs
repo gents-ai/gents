@@ -1178,8 +1178,10 @@ mod tests {
         ConfigAccess::transact_local_write(&admission.node, None, "test.control.step", |txn| {
             let (doc_id, evidence) = (doc_id.clone(), evidence.clone());
             Box::pin(async move {
-                crate::plugin_job::records::write_step_state_in_txn(txn, &doc_id, &evidence, None)
-                    .await
+                crate::plugin_job::records::write_step_state_in_txn(
+                    txn, &doc_id, &evidence, None, None,
+                )
+                .await
             })
         })
         .await

@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::job::{
     DataWrite, JobControlKind, JobFailure, JobPauseReason, JobPin, JobProgress, JobScratch,
-    JobState, JobStepInput, JobStepOutput, JobSuspend, JobSuspendKind,
+    JobState, JobStepInput, JobStepOutput, JobSuspend, JobSuspendKind, JOB_GUEST_STATE_MAX_BYTES,
 };
 use gents_protocol::plugin::PluginExecutionReceipt;
 use serde::Deserialize;
@@ -370,6 +370,20 @@ async fn step_on(
         anyhow::Error::new(StepFailure::MalformedOutput(error.to_string()))
             .context(format!("decoding the step output of job row {row_doc_id}"))
     })?;
+    // Checked before the step transaction so the driver counts it.
+    if let Some(bytes) = guest_state_of(&output)
+        .map(|state| state.to_string().len())
+        .filter(|bytes| *bytes > JOB_GUEST_STATE_MAX_BYTES)
+    {
+        let too_large = RecordError::GuestStateTooLarge {
+            bytes,
+            max: JOB_GUEST_STATE_MAX_BYTES,
+        };
+        return Err(
+            anyhow::Error::new(StepFailure::MalformedOutput(too_large.to_string()))
+                .context(format!("the step output of job row {row_doc_id}")),
+        );
+    }
 
     let scratch = scratch_of(&output);
     if !scratch.is_empty() {
@@ -595,7 +609,7 @@ async fn step_transaction(
         },
     )
     .await?;
-    write_step_state_in_txn(txn, row_doc_id, receipt, None).await?;
+    write_step_state_in_txn(txn, row_doc_id, receipt, None, guest_state_of(output)).await?;
     // (f)
     let Some(settlement) = settlement_of(output) else {
         return Ok(Stepped::Committed(None));
@@ -1197,6 +1211,16 @@ pub(super) fn scratch_of(output: &JobStepOutput) -> &[JobScratch] {
     }
 }
 
+/// The guest state a step carries for its next step: on `effects`, or on a
+/// `suspend` so a resume starts from it. Terminal results carry none.
+pub(super) fn guest_state_of(output: &JobStepOutput) -> Option<&serde_json::Value> {
+    match output {
+        JobStepOutput::Effects { effects } => effects.state.as_ref(),
+        JobStepOutput::Suspend { state, .. } => state.as_ref(),
+        JobStepOutput::Result { .. } | JobStepOutput::Fail { .. } => None,
+    }
+}
+
 pub(super) fn progress_of(output: &JobStepOutput) -> Option<&JobProgress> {
     match output {
         JobStepOutput::Result { progress, .. }
@@ -1775,8 +1799,10 @@ pub(crate) mod tests {
             |txn| {
                 let doc_id = doc_id.clone();
                 Box::pin(async move {
-                    super::super::records::write_step_state_in_txn(txn, &doc_id, evidence, None)
-                        .await
+                    super::super::records::write_step_state_in_txn(
+                        txn, &doc_id, evidence, None, None,
+                    )
+                    .await
                 })
             },
         )
@@ -2544,7 +2570,7 @@ pub(crate) mod tests {
         let earlier = evidence("persisted");
         ConfigAccess::transact_local_write(&step.job.node, None, "test.driver.earlier", |txn| {
             let (row, earlier) = (step.row.clone(), earlier.clone());
-            Box::pin(async move { write_step_state_in_txn(txn, &row, &earlier, None).await })
+            Box::pin(async move { write_step_state_in_txn(txn, &row, &earlier, None, None).await })
         })
         .await
         .unwrap();
@@ -2845,7 +2871,7 @@ pub(crate) mod tests {
         let earlier = evidence("earlier");
         ConfigAccess::transact_local_write(&step.job.node, None, "test.driver.earlier", |txn| {
             let (row, earlier) = (step.row.clone(), earlier.clone());
-            Box::pin(async move { write_step_state_in_txn(txn, &row, &earlier, None).await })
+            Box::pin(async move { write_step_state_in_txn(txn, &row, &earlier, None, None).await })
         })
         .await
         .unwrap();
@@ -2984,6 +3010,82 @@ pub(crate) mod tests {
             sweep(&driver).await.unwrap(),
             0,
             "a failed row is not re-stepped"
+        );
+        step.close().await;
+    }
+
+    /// Lean `guest_state_opaque`: the state a step carries is stored beside
+    /// its records and echoed to the next step's input, untouched by the host.
+    #[tokio::test]
+    async fn a_steps_guest_state_is_stored_and_echoed_to_the_next_step() {
+        let step = stepper(json!({"effects": {
+            "spawn": [{"slot": "1:a", "attempt": 0, "target": "t-a", "prompt": "p", "title": "a"}],
+            "state": {"phase": "scan", "paths": ["src/lib.rs"]},
+        }}))
+        .await;
+        assert_eq!(step.run(&step.row).await, StepOutcome::Committed);
+        let stored = step.state(&step.row).await.unwrap();
+        assert_eq!(
+            stored.guest,
+            Some(json!({"phase": "scan", "paths": ["src/lib.rs"]}))
+        );
+        let (input, _) = step.input(&step.row).await;
+        assert_eq!(
+            input.state,
+            Some(json!({"phase": "scan", "paths": ["src/lib.rs"]}))
+        );
+        step.close().await;
+    }
+
+    /// A step that carries no state keeps the stored one.
+    #[tokio::test]
+    async fn a_step_without_state_keeps_the_stored_one() {
+        let step = stepper(json!({"effects": {
+            "spawn": [{"slot": "1:a", "attempt": 0, "target": "t-a", "prompt": "p", "title": "a"}],
+        }}))
+        .await;
+        step.job
+            .write_guest_state(&step.row, &json!({"phase": "recon"}))
+            .await;
+        assert_eq!(step.run(&step.row).await, StepOutcome::Committed);
+        assert_eq!(
+            step.state(&step.row).await.unwrap().guest,
+            Some(json!({"phase": "recon"}))
+        );
+        step.close().await;
+    }
+
+    /// A state over `JOB_GUEST_STATE_MAX_BYTES` is a malformed output: nothing
+    /// is stored, and the driver counts it until the row fails closed.
+    #[tokio::test]
+    async fn a_guest_state_over_the_cap_fails_the_step_and_stores_nothing() {
+        let big = "x".repeat(gents_protocol::job::JOB_GUEST_STATE_MAX_BYTES + 1);
+        let step = stepper(json!({"effects": {
+            "spawn": [{"slot": "1:a", "attempt": 0, "target": "t-a", "prompt": "p", "title": "a"}],
+            "state": {"blob": big},
+        }}))
+        .await;
+        let outcome = run_step(&step.job.runtime, &step.row).await;
+        assert!(
+            matches!(
+                outcome
+                    .as_ref()
+                    .map_err(|error| error.downcast_ref::<StepFailure>()),
+                Err(Some(StepFailure::MalformedOutput(_)))
+            ),
+            "an over-cap state is a malformed output: {outcome:?}"
+        );
+        assert_eq!(
+            step.state(&step.row).await.and_then(|state| state.guest),
+            None
+        );
+        let driver = JobDriver::new(step.job.runtime.clone());
+        driver.kick(&step.row);
+        idle(&driver).await;
+        assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "failed");
+        assert_eq!(
+            step.output(&step.row).await["code"],
+            "plugin_job_step_failed"
         );
         step.close().await;
     }

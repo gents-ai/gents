@@ -295,6 +295,7 @@ fn output(o: &LeanPluginJobOutput) -> JobStepOutput {
             pin,
             resume: r,
         } => JobStepOutput::Suspend {
+            state: None,
             suspend: JobSuspend {
                 kind: spelled(suspend),
                 reason: reason.as_deref().map(spelled),
@@ -316,6 +317,7 @@ fn output(o: &LeanPluginJobOutput) -> JobStepOutput {
             extras: x,
         } => JobStepOutput::Effects {
             effects: JobEffects {
+                state: None,
                 pin: pin.as_ref().map(guest_pin),
                 resume: r.as_ref().map(resume),
                 spawn: spawns

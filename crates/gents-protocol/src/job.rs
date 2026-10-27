@@ -96,6 +96,9 @@ pub enum JobResumeEngine {
 
 /// Size cap of a serialized `JobProgress`.
 pub const JOB_PROGRESS_MAX_BYTES: usize = 16 * 1024;
+/// The cap on a guest's own step state (`JobStepInput.state`, `JobEffects.state`), which the
+/// host stores verbatim and never reads.
+pub const JOB_GUEST_STATE_MAX_BYTES: usize = 64 * 1024;
 /// Size cap of one `JobProgress` title or event string.
 pub const JOB_PROGRESS_TEXT_MAX_BYTES: usize = 256;
 
@@ -398,6 +401,11 @@ pub struct JobStepInput {
     pub control: Option<JobControlEcho>,
     pub scratch: BTreeMap<String, String>,
     pub jobs: Vec<JobRowView>,
+    /// The guest's own state from its last step that carried one, stored verbatim and never
+    /// read by the host; absent before the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(type = "unknown | null", optional = nullable))]
+    pub state: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -587,6 +595,10 @@ pub struct JobEffects {
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<JobScratch>>", optional = nullable))]
     pub scratch: Vec<JobScratch>,
+    /// The guest's own state for its next step, stored verbatim; absent keeps the stored one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(type = "unknown | null", optional = nullable))]
+    pub state: Option<serde_json::Value>,
 }
 
 /// The output of one job step: exactly one of `result`, `fail`, `suspend` or
@@ -618,6 +630,7 @@ pub enum JobStepOutput {
         progress: Option<JobProgress>,
         pin: Option<JobGuestPin>,
         resume: Option<JobResume>,
+        state: Option<serde_json::Value>,
     },
     Effects {
         effects: JobEffects,
@@ -669,6 +682,7 @@ fn step_output_variant(kind: &str, o: &mut StepObject) -> Result<JobStepOutput, 
             progress: rider(o, "progress")?,
             pin: rider(o, "pin")?,
             resume: rider(o, "resume")?,
+            state: rider(o, "state")?,
         },
         _ => JobStepOutput::Effects {
             effects: required(o, "effects")?,
@@ -701,7 +715,7 @@ impl<'de> Deserialize<'de> for JobStepOutput {
         let riders: &[&str] = match kind {
             "result" => &["writes", "scratch", "progress", "control", "pin", "resume"],
             "fail" => &["writes", "progress"],
-            "suspend" => &["writes", "scratch", "progress", "pin", "resume"],
+            "suspend" => &["writes", "scratch", "progress", "pin", "resume", "state"],
             _ => &[],
         };
         if let Some(unknown) = object
@@ -778,6 +792,7 @@ impl Serialize for JobStepOutput {
                 progress,
                 pin,
                 resume,
+                state,
             } => {
                 m.serialize_entry("suspend", suspend)?;
                 list(&mut m, "writes", writes)?;
@@ -785,6 +800,7 @@ impl Serialize for JobStepOutput {
                 opt(&mut m, "progress", progress)?;
                 opt(&mut m, "pin", pin)?;
                 opt(&mut m, "resume", resume)?;
+                opt(&mut m, "state", state)?;
             }
             Self::Effects { effects } => m.serialize_entry("effects", effects)?,
         }
@@ -1268,6 +1284,25 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&output).expect("encode"),
             json!({ "effects": {} })
+        );
+    }
+
+    #[test]
+    fn guest_state_rides_on_effects_and_suspend_only() {
+        let effects = effects_of(decode(json!({"effects": {"state": {"phase": "scan"}}})).unwrap());
+        assert_eq!(effects.state, Some(json!({"phase": "scan"})));
+        let suspend =
+            decode(json!({"suspend": {"kind": "pause", "message": "m"}, "state": [1, 2]})).unwrap();
+        assert!(
+            matches!(&suspend, JobStepOutput::Suspend { state, .. } if *state == Some(json!([1, 2])))
+        );
+        assert_eq!(
+            serde_json::to_value(&suspend).unwrap()["state"],
+            json!([1, 2])
+        );
+        assert!(
+            decode(json!({"result": {}, "state": 1})).is_err(),
+            "a terminal result carries no state for a next step"
         );
     }
 

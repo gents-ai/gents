@@ -13,18 +13,23 @@ pub(crate) fn constant_output_wat(json: &[u8]) -> String {
         escaped.push_str(&format!("\\{byte:02x}"));
     }
     let len = json.len();
+    // The iovec sits past the output, so an output over 8 KiB stays whole.
+    let iov = len.next_multiple_of(8).max(8192);
+    let pages = (iov + 16).div_ceil(65536);
     format!(
         r#"(module
   (import "wasi_snapshot_preview1" "fd_write"
 (func $fd_write (param i32 i32 i32 i32) (result i32)))
-  (memory (export "memory") 1)
+  (memory (export "memory") {pages})
   (data (i32.const 0) "{escaped}")
   (func (export "_start")
-(i32.store (i32.const 8192) (i32.const 0))
-(i32.store (i32.const 8196) (i32.const {len}))
-(call $fd_write (i32.const 1) (i32.const 8192) (i32.const 1) (i32.const 8200))
+(i32.store (i32.const {iov}) (i32.const 0))
+(i32.store (i32.const {iov_len}) (i32.const {len}))
+(call $fd_write (i32.const 1) (i32.const {iov}) (i32.const 1) (i32.const {written}))
 drop))
-"#
+"#,
+        iov_len = iov + 4,
+        written = iov + 8,
     )
 }
 

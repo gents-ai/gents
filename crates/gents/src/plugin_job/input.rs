@@ -706,9 +706,9 @@ pub async fn build_step_input(
             children.insert(child.slot, view);
         }
     }
-    let resume = read_step_state(access, row_doc_id)
-        .await?
-        .and_then(|state| state.resume);
+    let step_state = read_step_state(access, row_doc_id).await?;
+    let state = step_state.as_ref().and_then(|state| state.guest.clone());
+    let resume = step_state.and_then(|state| state.resume);
     let root_call = match (&pin, &resume) {
         (Some(pin), Some(_)) => {
             let (_, root) = read_call(access, &pin.chain_root_doc_id).await?;
@@ -763,6 +763,7 @@ pub async fn build_step_input(
         control,
         scratch: scratch_files(cwd_path.as_deref(), &row.tool_call_id),
         jobs: session_jobs(access, &row.session_id, &row.tool_name).await?,
+        state,
     };
     Ok((input, revision))
 }
@@ -1789,9 +1790,19 @@ pub(crate) mod tests {
 
         pub(crate) async fn write_step_state(&self, row: &str, resume: Option<&JobResume>) {
             ConfigAccess::transact_local_write(&self.node, None, "test.input.step_state", |txn| {
-                Box::pin(
-                    async move { write_step_state_in_txn(txn, row, &evidence(), resume).await },
-                )
+                Box::pin(async move {
+                    write_step_state_in_txn(txn, row, &evidence(), resume, None).await
+                })
+            })
+            .await
+            .unwrap();
+        }
+
+        pub(crate) async fn write_guest_state(&self, row: &str, guest: &serde_json::Value) {
+            ConfigAccess::transact_local_write(&self.node, None, "test.input.guest_state", |txn| {
+                Box::pin(async move {
+                    write_step_state_in_txn(txn, row, &evidence(), None, Some(guest)).await
+                })
             })
             .await
             .unwrap();
@@ -2157,6 +2168,7 @@ pub(crate) mod tests {
             revision: 3,
         };
         let input = JobStepInput {
+            state: None,
             protocol: 1,
             job: gents_protocol::job::JobRef {
                 row_doc_id: "row".into(),
