@@ -12,6 +12,12 @@ pub mod budget;
 
 pub mod replay_frontier;
 pub mod routing_affinity;
+mod tool_call_identity;
+
+pub(crate) use tool_call_identity::normalize_tool_call_ids;
+
+#[cfg(all(test, feature = "native"))]
+pub(crate) mod tool_call_identity_tests;
 
 /// Native capture metadata belongs to immutable documents. Convert each typed
 /// snapshot to provider text before request accounting and durable HTTP capture;
@@ -377,12 +383,20 @@ impl ProviderInputCounter {
 
     #[cfg(feature = "native")]
     fn responses_body(&self, request: &CompletionRequest) -> Result<Value> {
+        let mut request = request.clone();
+        for message in request.chat_history.iter_mut() {
+            normalize_tool_call_ids(self.profile, message);
+        }
         let dto = rig::providers::openai::responses_api::CompletionRequest::try_from((
             self.model.clone(),
-            request.clone(),
+            request,
         ))
         .context("projecting OpenAI Responses request")?;
-        serde_json::to_value(dto).context("serializing OpenAI Responses request")
+        let mut body = serde_json::to_value(dto).context("serializing OpenAI Responses request")?;
+        if self.profile != ProviderInputProfile::XaiResponses {
+            crate::responses_normalize::normalize_function_call_item_ids(&mut body);
+        }
+        Ok(body)
     }
 
     #[cfg(feature = "native")]

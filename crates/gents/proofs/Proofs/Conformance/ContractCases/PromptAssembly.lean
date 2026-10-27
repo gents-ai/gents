@@ -1521,4 +1521,24 @@ def routingAffinityCases : List RoutingAffinityCase :=
   , ⟨"other_provider", false, true, some "session", [some "other"]⟩
   , ⟨"session_absent", true, true, none, [some "unscoped"]⟩ ]
 
+structure ProviderToolIdentityCase where
+  name : String
+  responses : Bool
+  input : List PromptAssembly.ToolCallIdentity.Identity
+
+def ProviderToolIdentityCase.expected (row : ProviderToolIdentityCase) :
+    List PromptAssembly.ToolCallIdentity.Identity :=
+  row.input.map (PromptAssembly.ToolCallIdentity.project row.responses)
+
+def providerToolIdentityCases : List ProviderToolIdentityCase :=
+  [ ⟨"foreign_tool_use_ids", true, [⟨"toolu_first", none⟩, ⟨"toolu_second", none⟩]⟩
+  , ⟨"chat_completion_call_id", true, [⟨"call_chat", none⟩]⟩
+  , ⟨"explicit_responses_ids", true, [⟨"fc_native", some "call_native"⟩]⟩
+  , ⟨"foreign_item_explicit_call_id", true, [⟨"toolu_explicit", some "call_stable"⟩]⟩
+  , ⟨"mixed_provider_history", true,
+      [⟨"toolu_first", none⟩, ⟨"fc_native", some "call_native"⟩, ⟨"call_chat", none⟩]⟩
+  , ⟨"other_wires_preserve_absence", false,
+      [⟨"toolu_first", none⟩, ⟨"fc_native", some "call_native"⟩]⟩
+  , ⟨"no_tools", true, []⟩ ]
+
 end Conformance.ContractCases

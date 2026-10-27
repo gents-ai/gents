@@ -582,4 +582,17 @@ def promptAssemblyServiceTierCasesJson : String :=
     ",\"wire\":" ++ jsonOptionalString expected.wire ++ "}")
 
 
+def providerToolIdentityJson (identity : PromptAssembly.ToolCallIdentity.Identity) : String :=
+  "{\"id\":" ++ jsonString identity.nativeId ++
+    ",\"call_id\":" ++ jsonOptionalString identity.callId ++
+    ",\"openai_item_id\":" ++ jsonOptionalString
+      (PromptAssembly.ToolCallIdentity.openAiItemId identity.nativeId) ++ "}"
+
+def providerToolIdentityCasesJson : String :=
+  jsonArray (providerToolIdentityCases.map fun row =>
+    "{\"name\":" ++ jsonString row.name ++
+    ",\"responses\":" ++ toString row.responses ++
+    ",\"input\":" ++ jsonArray (row.input.map providerToolIdentityJson) ++
+    ",\"expected\":" ++ jsonArray (row.expected.map providerToolIdentityJson) ++ "}")
+
 end Conformance.Contracts
