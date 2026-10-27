@@ -77,6 +77,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "terminal_reply_projection_follows_the_model",
         },
         ConformanceConsumer::RustTest {
+            id: "commands::init::inference_seed_tests::generated_initial_inference_keeps_unselected_models_and_limits_unpinned",
+            package: "gents-cli",
+            source_path: "crates/gents-cli/src/commands/init/inference_seed_tests.rs",
+            module_path: "commands::init::inference_seed_tests",
+            function: "generated_initial_inference_keeps_unselected_models_and_limits_unpinned",
+        },
+        ConformanceConsumer::RustTest {
             id: "plugin_job::control::tests::kill_reads_children_that_committed_after_the_recovery_snapshot",
             package: "gents",
             source_path: "crates/gents/src/plugin_job/control.rs",
