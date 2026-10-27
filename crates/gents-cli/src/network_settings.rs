@@ -160,13 +160,17 @@ pub(crate) fn install_service<R>(
     manager: &NativeServiceManager<R>,
     home: &Path,
     network: &ServiceNetworkArgs,
+    environment: Option<&std::collections::BTreeMap<String, String>>,
 ) -> Result<NetworkSettings>
 where
     R: CommandRunner,
 {
     let settings = NetworkSettings::read(home)?.apply(network);
     settings.validate()?;
-    manager.install()?;
+    match environment {
+        Some(environment) => manager.install_with_environment(environment)?,
+        None => manager.install()?,
+    }
     if settings.persist(home)? && manager.status()?.running {
         tracing::warn!(
             home = %home.display(),
@@ -250,7 +254,7 @@ mod tests {
             .command
         {
             Command::Service { command } => match command.into_parts().2 {
-                ServiceAction::Install { network } => network,
+                ServiceAction::Install { network, .. } => network,
                 _ => panic!("expected install"),
             },
             _ => panic!("expected service"),
@@ -407,7 +411,7 @@ mod tests {
             platform,
             StoppedSupervisor::default(),
         );
-        install_service(&manager, &config.home, &install_network(argv)).unwrap();
+        install_service(&manager, &config.home, &install_network(argv), None).unwrap();
         let definition = fs::read_to_string(config.definition_path(platform)).unwrap();
         (temp, config, definition)
     }
@@ -473,6 +477,7 @@ mod tests {
             &manager,
             &config.home,
             &install_network(&["--http-addr", "0.0.0.0"]),
+            None,
         )
         .unwrap_err();
         assert!(error.to_string().contains("unspecified address"));
@@ -481,5 +486,30 @@ mod tests {
             .exists());
         assert!(!network_settings_path(&config.home).exists());
         assert!(runner.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn install_accepts_an_explicit_environment_file() {
+        let cli = Cli::try_parse_from([
+            "gents",
+            "service",
+            "install",
+            "--environment-file",
+            "operator.json",
+        ])
+        .unwrap();
+        let Command::Service { command } = cli.command else {
+            panic!("service command");
+        };
+        let ServiceAction::Install {
+            environment_file, ..
+        } = command.into_parts().2
+        else {
+            panic!("service install");
+        };
+        assert_eq!(
+            environment_file.as_deref(),
+            Some(Path::new("operator.json"))
+        );
     }
 }

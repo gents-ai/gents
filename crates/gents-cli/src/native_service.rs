@@ -6,6 +6,9 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 
+mod environment;
+pub use environment::read_environment_file;
+
 #[cfg(not(all(feature = "native-e2e", debug_assertions)))]
 pub const SERVICE_LABEL: &str = "ai.gents.runtime";
 #[cfg(all(feature = "native-e2e", debug_assertions))]
@@ -446,6 +449,22 @@ where
     }
 
     pub fn install(&self) -> Result<()> {
+        self.install_environment(None)
+    }
+
+    /// Explicit replacement of custom entries; an empty map clears them.
+    /// Ordinary reinstalls and desktop updates preserve its custom entries.
+    pub fn install_with_environment(
+        &self,
+        environment: &std::collections::BTreeMap<String, String>,
+    ) -> Result<()> {
+        self.install_environment(Some(environment))
+    }
+
+    fn install_environment(
+        &self,
+        replacement: Option<&std::collections::BTreeMap<String, String>>,
+    ) -> Result<()> {
         validate_config(&self.config)?;
         ensure_durable_service_executable(
             &self.config.executable,
@@ -458,12 +477,22 @@ where
             .context("native service definition has no parent")?;
         fs::create_dir_all(parent)
             .with_context(|| format!("creating service directory {}", parent.display()))?;
+        let installed = match fs::read(&path) {
+            Ok(installed) => {
+                self.ensure_owned_definition(&installed)?;
+                Some(installed)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error).context("reading the installed native service"),
+        };
+        let contents = environment::apply(
+            self.platform,
+            self.render_definition()?,
+            installed.as_deref(),
+            replacement,
+        )?;
         self.prepare_stderr_log()?;
-        let contents = self.render_definition()?;
-        if path.exists() {
-            let installed = fs::read(&path)
-                .with_context(|| format!("reading installed native service {}", path.display()))?;
-            self.ensure_owned_definition(&installed)?;
+        if let Some(installed) = installed {
             if installed != contents.as_bytes() {
                 let status = self.status()?;
                 if status.running
