@@ -4,6 +4,7 @@ use gents::ConfigAccess;
 use gents_protocol::{request_lifecycle::RequestLifecycleState, row::AgentRequestRow};
 use serde_json::{json, Value};
 
+pub const CANCEL_PROMPT: &str = "Ask a question then wait for cancellation.";
 pub const PROMPT: &str = "Ask me which worker approach to use.";
 pub const EDITED_PROMPT: &str = "Inspect only the parser and report QUESTION_WORKER_EDGE_CASES.";
 pub const ANSWER_USED: &str = "Using your edited worker prompt.";
@@ -30,6 +31,23 @@ pub fn reply(request: &Value) -> Option<ChatAction> {
             .iter()
             .any(|message| message["role"] == "tool" && message["tool_call_id"] == id)
     };
+    if content.ends_with(CANCEL_PROMPT) {
+        return Some(if returned("question-cancel") {
+            ChatAction::Hang
+        } else {
+            ChatAction::Sse(fake_llm::tool_call_sse_with_id(
+                "question-cancel",
+                gents::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME,
+                &json!({
+                    "title":"Interrupted plan", "question": {
+                        "version":3, "prompt":"Should this cancelled task proceed?",
+                        "allow_free_text":true, "options":[]
+                    }
+                })
+                .to_string(),
+            ))
+        });
+    }
     if content.contains(&format!(
         "<goal-objective-json>{}",
         serde_json::to_string(PROMPT).ok()?
@@ -81,8 +99,16 @@ pub async fn verify(
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;
     let questions: Vec<gents::mailbox::MailboxItem> =
         serde_json::from_value(response["data"]["MailboxItem"].clone())?;
-    let [question] = questions.as_slice() else {
-        anyhow::bail!("expected one native question");
+    ensure!(
+        questions.len() == 2,
+        "expected the answered and interrupted questions"
+    );
+    let answered_questions: Vec<_> = questions
+        .iter()
+        .filter(|item| item.title == "Worker approach")
+        .collect();
+    let [question] = answered_questions.as_slice() else {
+        anyhow::bail!("expected one native worker question");
     };
     ensure!(
         question.status == "acted",
@@ -215,7 +241,38 @@ pub async fn verify(
         intent["operation"]["kind"] == "create",
         "the Goal must resume without an explicit pause or resume"
     );
+    let cancelled: Vec<_> = rows
+        .iter()
+        .filter(|row| row.content.as_deref() == Some(CANCEL_PROMPT))
+        .collect();
+    let [cancelled] = cancelled.as_slice() else {
+        anyhow::bail!("expected one cancelled asking request");
+    };
+    gents::verify_request_receipt_signature(cancelled)?;
+    ensure!(
+        cancelled.lifecycle_state == Some(RequestLifecycleState::Interrupted),
+        "Stop must interrupt the asking turn"
+    );
+    let pending: Vec<_> = questions
+        .iter()
+        .filter(|item| item.title == "Interrupted plan")
+        .collect();
+    let [pending] = pending.as_slice() else {
+        anyhow::bail!("expected the interrupted question to remain unconsumed");
+    };
+    ensure!(
+        pending.status == "open"
+            && pending.resolved_doc_id.is_none()
+            && pending.request_id.as_deref() == Some(cancelled.request_id.as_str()),
+        "cancellation must not fabricate an answer or replace question scope"
+    );
+    ensure!(
+        rows.iter().all(|row| row.caused_by_source_doc_id.as_deref()
+            != Some(pending.doc_id.as_str())
+            && row.caused_by_parent_request_doc_id != cancelled.doc_id),
+        "the cancelled question must not answer, delegate or resume itself after reload"
+    );
     Ok(
-        json!({"question":question.doc_id,"answer":answer.doc_id,"worker":worker.doc_id,"goal":goal["goal_id"],"signedSourceVerified":true,"editedPromptUsedByWorker":true,"automaticGoalContinuationVerified":true}),
+        json!({"question":question.doc_id,"answer":answer.doc_id,"worker":worker.doc_id,"goal":goal["goal_id"],"signedSourceVerified":true,"editedPromptUsedByWorker":true,"automaticGoalContinuationVerified":true,"cancelledSourcePreservedWithoutAutomaticDispatch":true}),
     )
 }
