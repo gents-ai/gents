@@ -199,6 +199,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) goal_transition_cases: Vec<LeanGoalTransitionCase>,
     pub(crate) goal_create_cases: Vec<LeanGoalCreateCase>,
     pub(crate) goal_edit_cases: Vec<serde_json::Value>,
+    pub(crate) goal_client_delivery_cases: Vec<serde_json::Value>,
     pub(crate) goal_client_control_cases: Vec<serde_json::Value>,
     pub(crate) goal_client_start_cases: Vec<serde_json::Value>,
     pub(crate) goal_client_receipt_cases: Vec<serde_json::Value>,

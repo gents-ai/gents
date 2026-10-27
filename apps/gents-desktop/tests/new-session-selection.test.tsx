@@ -1,6 +1,8 @@
+import { acceptedChatReply } from "./chat-delivery-fixture";
+import { goalDeliveryStorage } from "./goal-delivery-storage";
 import { act, renderHook } from "@testing-library/react";
 import { useRef, useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   DeploymentView,
   DesktopApiAdapter,
@@ -51,14 +53,10 @@ function useHarness(
     client: { deployments },
   } as unknown as DesktopClientSnapshot);
   const current = useSelection(store);
-  const sendChatMessage = useRef(
-    vi.fn(async () => ({
-      nodeDid: "agent",
-      agentId: "setup",
-      sessionId: "new-setup",
-      requestId: "new-request",
-    })),
-  ).current;
+  stores.client.setState({
+    snapshot: { client: { clientDid: "test-client" } } as DesktopClientSnapshot,
+  });
+  const sendChatMessage = useRef(vi.fn(acceptedChatReply)).current;
   const api = useRef({ sendChatMessage }).current as unknown as DesktopApiAdapter;
   const [route] = useState(() => createSelectionActions({ stores }));
   const [actions] = useState(() => ({
@@ -206,16 +204,20 @@ describe("explicit session selection", () => {
     });
     expect(result.current.sendChatMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionId: null,
+        sessionId: expect.any(String),
         agentId: "setup",
         content: "new Setup chat",
       }),
     );
-    expect(result.current.selected).toBe("new-setup");
+    expect(result.current.selected).toBe(
+      result.current.sendChatMessage.mock.calls[0][0].sessionId,
+    );
     rerender({
       deployment: { ...initialDeployment, sessions: [...initialDeployment.sessions] },
     });
-    expect(result.current.selected).toBe("new-setup");
+    expect(result.current.selected).toBe(
+      result.current.sendChatMessage.mock.calls[0][0].sessionId,
+    );
   });
 
   it("does not select the first session when a deployment first becomes available", () => {
@@ -237,3 +239,6 @@ describe("explicit session selection", () => {
     expect(result.current.selected).toBe("first-setup");
   });
 });
+
+beforeEach(() => vi.stubGlobal("localStorage", goalDeliveryStorage()));
+afterEach(() => vi.unstubAllGlobals());

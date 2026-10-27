@@ -13,6 +13,9 @@ import type { PendingQueueEditRequest } from "../generated/PendingQueueEditReque
 import type { PendingQueueEditResult } from "../generated/PendingQueueEditResult.js";
 import type { GoalControlRequest } from "../generated/GoalControlRequest.js";
 import type { GoalControlResult } from "../generated/GoalControlResult.js";
+import type { GoalSubmissionQuery } from "../generated/GoalSubmissionQuery.js";
+import type { GoalSubmissionReceipt } from "../generated/GoalSubmissionReceipt.js";
+import type { GoalSubmissionRecovery } from "../generated/GoalSubmissionRecovery.js";
 import type { SessionGoalView } from "../generated/SessionGoalView.js";
 import type { OauthProvider } from "../transport.js";
 import type { DesktopJobControlRequest } from "../generated/DesktopJobControlRequest.js";
@@ -143,6 +146,14 @@ export type DesktopApiAdapter = {
     sessionId: string,
   ) => Promise<SessionGoalView | null>;
   controlGoal: (request: GoalControlRequest) => Promise<GoalControlResult>;
+  recoverGoalSubmission: (
+    query: GoalSubmissionQuery,
+  ) => Promise<GoalSubmissionRecovery>;
+  resumeGoalSubmission: (
+    request: GoalControlRequest,
+    receipt: GoalSubmissionReceipt,
+  ) => Promise<GoalControlResult>;
+  acknowledgeGoalSubmission: (receipt: GoalSubmissionReceipt) => Promise<void>;
   fetchDesktopSnapshot: () => Promise<DesktopClientSnapshot>;
   initLocalStandardRuntime: (request: {
     label: string;

@@ -656,6 +656,19 @@ impl ClientHost {
             ClientCommand::GoalControl { request } => {
                 encode(crate::commands::control_goal(&self.core, *request).await?)
             }
+            ClientCommand::RecoverGoalSubmission { query } => encode(
+                crate::commands::recover_goal_submission(&self.core, query)
+                    .await
+                    .map_err(backend_error)?,
+            ),
+            ClientCommand::ResumeGoalSubmission { request, receipt } => encode(
+                crate::commands::resume_goal_submission(&self.core, *request, receipt).await?,
+            ),
+            ClientCommand::AcknowledgeGoalSubmission { receipt } => encode(
+                crate::commands::acknowledge_goal_submission(&self.core, receipt)
+                    .await
+                    .map_err(backend_error)?,
+            ),
             ClientCommand::SteerPending { request } => encode(
                 crate::commands::steer_pending_message(&self.core, request)
                     .await

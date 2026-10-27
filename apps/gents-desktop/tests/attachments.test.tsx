@@ -1,3 +1,5 @@
+import { acceptedChatReply } from "./chat-delivery-fixture";
+import { goalDeliveryStorage } from "./goal-delivery-storage";
 import {
   act,
   fireEvent,
@@ -53,11 +55,7 @@ function file(read?: () => Promise<ArrayBuffer>) {
   return value;
 }
 function setup() {
-  const sendChatMessage = vi.fn().mockResolvedValue({
-    sessionId: "accepted-session",
-    requestId: "request",
-    outcome: "delivered",
-  });
+  const sendChatMessage = vi.fn(acceptedChatReply);
   const app = testApp({
     api: {
       sendChatMessage,
@@ -76,13 +74,7 @@ function setup() {
   return { app, sendChatMessage };
 }
 beforeEach(() => {
-  const storage = new Map<string, string>();
-  vi.stubGlobal("localStorage", {
-    getItem: (key: string) => storage.get(key) ?? null,
-    setItem: (key: string, value: string) => storage.set(key, value),
-    removeItem: (key: string) => storage.delete(key),
-    clear: () => storage.clear(),
-  });
+  vi.stubGlobal("localStorage", goalDeliveryStorage());
   vi.stubGlobal("crypto", { subtle: webcrypto.subtle, randomUUID });
   URL.createObjectURL = vi.fn(() => "blob:preview");
   URL.revokeObjectURL = vi.fn();

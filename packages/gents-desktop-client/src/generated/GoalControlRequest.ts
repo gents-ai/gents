@@ -3,4 +3,4 @@ import type { CapturedContext } from "./CapturedContext.js";
 import type { GoalControlAction } from "./GoalControlAction.js";
 import type { GoalRevision } from "./GoalRevision.js";
 
-export type GoalControlRequest = { nodeDid: string, sessionId: string | null, sessionDocId: string | null, expected: GoalRevision | null, agentId: string | null, action: GoalControlAction, cwd: string | null, capturedContext?: Array<CapturedContext> | null, };
+export type GoalControlRequest = { clientDid?: string | null, commandId?: string | null, nodeDid: string, sessionId: string | null, sessionDocId: string | null, expected: GoalRevision | null, agentId: string | null, action: GoalControlAction, cwd: string | null, capturedContext?: Array<CapturedContext> | null, };

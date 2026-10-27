@@ -42,6 +42,28 @@ async fn submission_returns_verified_rejection_after_ignoring_invalid_receipts()
         initial_request: None,
         signature: Vec::new(),
     };
+    let prepared = prepare_session_goal_control(identity.as_ref(), command.clone())
+        .await
+        .unwrap();
+    let before = access
+        .execute("{ AgentSessionGoalControl { _docID } }")
+        .await
+        .unwrap();
+    assert_eq!(before["data"]["AgentSessionGoalControl"], json!([]));
+    assert!(
+        recover_session_goal_control(&access, identity.as_ref(), &prepared)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        access
+            .execute("{ AgentSessionGoalControl { _docID } }")
+            .await
+            .unwrap(),
+        before,
+        "preparation and observation must not publish an intent"
+    );
     let submission = submit_session_goal_control(&access, identity.as_ref(), command);
     tokio::pin!(submission);
     let (doc_id, command): (String, SessionGoalControl) =
@@ -66,6 +88,10 @@ async fn submission_returns_verified_rejection_after_ignoring_invalid_receipts()
         })
         .await
         .unwrap();
+    assert_eq!(
+        command, prepared,
+        "publication must retain its prepared bytes"
+    );
     let mut invalid = SessionGoalControlReceipt {
         version: SESSION_GOAL_CONTROL_VERSION,
         command_id: command.command_id.clone(),
@@ -107,6 +133,12 @@ async fn submission_returns_verified_rejection_after_ignoring_invalid_receipts()
                 .is_err(),
             "untrusted receipt ended the wait (foreign scope: {foreign_scope})"
         );
+        assert!(
+            recover_session_goal_control(&access, identity.as_ref(), &prepared)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
     process_command(&node, &identity, &doc_id).await.unwrap();
     let response = access
@@ -140,6 +172,48 @@ async fn submission_returns_verified_rejection_after_ignoring_invalid_receipts()
         .unwrap()
         .expect("verified runtime rejection remains a typed receipt");
     assert_eq!(received, expected);
+    let query = "{ AgentSessionGoalControl { _docID intent_json receipt_json } }";
+    let before = access.execute(query).await.unwrap();
+    assert_eq!(
+        recover_session_goal_control(&access, identity.as_ref(), &prepared)
+            .await
+            .unwrap(),
+        Some(expected.clone())
+    );
+    assert_eq!(
+        submit_prepared_session_goal_control(&access, identity.as_ref(), &prepared)
+            .await
+            .unwrap(),
+        expected
+    );
+    let mut changed = prepared.clone();
+    changed.operation = GoalOperation::Stop {};
+    let changed = prepare_session_goal_control(identity.as_ref(), changed)
+        .await
+        .unwrap();
+    assert!(
+        recover_session_goal_control(&access, identity.as_ref(), &changed)
+            .await
+            .is_err()
+    );
+    assert!(
+        submit_prepared_session_goal_control(&access, identity.as_ref(), &changed)
+            .await
+            .is_err()
+    );
+    let mut corrupted = prepared;
+    corrupted.signature[0] ^= 1;
+    assert!(
+        recover_session_goal_control(&access, identity.as_ref(), &corrupted)
+            .await
+            .is_err()
+    );
+    assert!(
+        submit_prepared_session_goal_control(&access, identity.as_ref(), &corrupted)
+            .await
+            .is_err()
+    );
+    assert_eq!(access.execute(query).await.unwrap(), before);
     let response = access
         .execute("{ AgentRequest { _docID } AgentSessionGoalControl { _docID } }")
         .await

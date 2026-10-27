@@ -84,6 +84,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_initial_inference_keeps_unselected_models_and_limits_unpinned",
         },
         ConformanceConsumer::RustTest {
+            id: "client::mutations::chat::request::receipt::goal_delivery::tests::generated_goal_delivery_histories_bind_native_signed_preparations",
+            package: "gents-desktop-core",
+            source_path: "crates/gents-desktop-core/src/client/mutations/chat/request/receipt/goal_delivery/tests.rs",
+            module_path: "client::mutations::chat::request::receipt::goal_delivery::tests",
+            function: "generated_goal_delivery_histories_bind_native_signed_preparations",
+        },
+        ConformanceConsumer::RustTest {
             id: "plugin_job::control::tests::kill_reads_children_that_committed_after_the_recovery_snapshot",
             package: "gents",
             source_path: "crates/gents/src/plugin_job/control.rs",
