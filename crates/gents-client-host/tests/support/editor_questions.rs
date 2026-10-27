@@ -101,7 +101,13 @@ pub async fn verify(
     );
     let answers: Vec<_> = rows
         .iter()
-        .filter(|row| row.caused_by_source_doc_id.as_deref() == Some(question.doc_id.as_str()))
+        .filter(|row| {
+            row.caused_by_source_doc_id.as_deref() == Some(question.doc_id.as_str())
+                && row.session_id.as_deref() == Some(session)
+                && row.input.as_ref().is_some_and(|input| {
+                    input.question_reply.is_some() && input.goal_continuation.is_none()
+                })
+        })
         .collect();
     let [answer] = answers.as_slice() else {
         anyhow::bail!("expected one correlated answer");
