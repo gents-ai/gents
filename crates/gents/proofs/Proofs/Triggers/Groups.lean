@@ -33,14 +33,6 @@ def ExpectedCount.resolve (e : ExpectedCount) (fields : String → Option Int) :
     | .sourceField field => fields field
   value.bind (fun n => if 0 < n then some n.toNat else none)
 
-def GroupConfig.validForGraph (g : GroupConfig) (correlation : String)
-    (concurrency : ConcurrencyMode) : Bool :=
-  g.valid correlation && concurrency != .latestOnly &&
-    match g.expected with
-    | none => false
-    | some (.fixed n) => 2 <= n
-    | some (.sourceField field) => !field.isEmpty
-
 theorem empty_group_rejected (correlation : String) :
     (GroupConfig.mk none none none).valid correlation = false := by
   simp [GroupConfig.valid]
@@ -54,16 +46,6 @@ theorem oversized_fixed_group_rejected (g : GroupConfig) (correlation : String) 
 theorem missing_correlation_rejected (g : GroupConfig) : g.valid "" = false := by
   have h : "".isEmpty = true := rfl
   simp [GroupConfig.valid, h]
-
-theorem latest_only_graph_rejected (g : GroupConfig) (correlation : String) :
-    g.validForGraph correlation .latestOnly = false := by
-  simp [GroupConfig.validForGraph]
-
-theorem graph_validation_implies_shared (g : GroupConfig) (correlation : String)
-    (mode : ConcurrencyMode) (h : g.validForGraph correlation mode = true) :
-    g.valid correlation = true := by
-  simp only [GroupConfig.validForGraph, Bool.and_eq_true] at h
-  exact h.1.1
 
 theorem fixed_nonpositive_rejected (n : Int) (h : n <= 0)
     (fields : String → Option Int) :

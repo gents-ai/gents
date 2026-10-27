@@ -32,7 +32,6 @@
             ],
             "forbidden": [
               "bash",
-              "run_graph",
               "agent_message",
               "agent_new"
             ]
@@ -98,7 +97,6 @@
             ],
             "forbidden": [
               "bash",
-              "run_graph",
               "agent_message",
               "agent_new"
             ]

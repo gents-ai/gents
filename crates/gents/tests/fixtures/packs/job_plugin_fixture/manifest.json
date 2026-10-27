@@ -38,9 +38,7 @@
           "job_row_doc_id": "job_row_doc_id",
           "chain_root_doc_id": "chain_root_doc_id"
         }
-      },
-      "asset_mounts": [{"class": "fixture_assets"}],
-      "catalog": {"argv": ["catalog"]}
+      }
     }
   ]
 }

@@ -11,6 +11,12 @@ use crate::document_config::*;
 use crate::oauth_credential::OAuthCredential;
 use rapidhash::RapidHashMap;
 
+/// Ids in these namespaces were minted only by the retired graph publisher and
+/// are never authored; a stored document carrying one stays inert forever.
+pub(crate) fn is_retired_reserved_id(id: &str) -> bool {
+    id.starts_with("graph-trigger-") || id.starts_with("pkg-")
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentRecord<T> {
     pub(crate) doc_id: String,
@@ -38,13 +44,7 @@ pub(crate) struct DocumentRuntimeView {
     pub(crate) schedules: RapidHashMap<String, DocumentRecord<Schedule>>,
     pub(crate) triggers: RapidHashMap<String, DocumentRecord<Trigger>>,
     pub(crate) event_sources: RapidHashMap<String, DocumentRecord<EventSource>>,
-    pub(crate) callbacks: RapidHashMap<String, DocumentRecord<Callback>>,
-    pub(crate) callback_bindings: RapidHashMap<String, DocumentRecord<CallbackBinding>>,
-    pub(crate) chain_key_bindings: RapidHashMap<String, DocumentRecord<ChainKeyBindingDocument>>,
     pub(crate) tool_services: RapidHashMap<String, DocumentRecord<ToolServiceRegistry>>,
-    pub(crate) projection_acp_bindings: RapidHashMap<String, DocumentRecord<ProjectionAcpBinding>>,
-    pub(crate) callback_modules: RapidHashMap<String, DocumentRecord<CallbackModule>>,
-    pub(crate) repository_placements: RapidHashMap<String, DocumentRecord<RepositoryPlacement>>,
     pub(crate) backend_observations: RapidHashMap<String, InferenceBackendObservation>,
     pub(crate) unknown_kind_backends: RapidHashMap<String, String>,
     pub(crate) oauth_credentials: RapidHashMap<String, DocumentRecord<OAuthCredential>>,

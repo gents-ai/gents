@@ -33,7 +33,7 @@ use gents::plugin_job::admit::{
 use gents::plugin_job::control::{self, KillAction, KillCause, KillObservation};
 use gents::plugin_job::dispatch::{host_pin, split_address, unique_handle, Delivery, ToolCallView};
 use gents::plugin_job::driver;
-use gents::plugin_job::origin::{call_origin, scriptless, trusted_hint};
+use gents::plugin_job::origin::call_origin;
 use gents::plugin_job::settings::{job_block_admissible, policy_valid, wire_targets_from};
 use gents::tool_call_lifecycle::{AwaitMode, ToolCallState, ToolRowKind};
 use gents::tool_surface::EndpointScope;
@@ -41,14 +41,13 @@ use gents_protocol::job::keys::{
     decode_job_retry_key, job_message_key, job_session_id, job_spawn_key,
 };
 use gents_protocol::job::{
-    AssetMountDeclaration, CatalogEntry, CatalogSource, ChildOutputRequest, ChildOutputResponse,
-    ChildOutputSlice, DataCall, DataOp, DataQuery, DataQueryResponse, DataWrite, JobBudget,
-    JobCall, JobCeiling, JobControlEcho, JobControlKind, JobControlOutcome, JobControlRequest,
-    JobEffects, JobFailure, JobGuestPin, JobInterrupt, JobMessage, JobOrigin, JobOutcome, JobPin,
-    JobPolicy, JobProgress, JobReadError, JobResultRequest, JobResultResponse, JobResume,
-    JobResumeEngine, JobScratch, JobSpawn, JobState, JobStepInput, JobStepOutput, JobSuspend,
-    JobView, PluginCatalogDeclaration, PluginDataDeclaration, PluginJobDeclaration,
-    PluginJobSettings, RoundResult, StampedField,
+    ChildOutputRequest, ChildOutputResponse, ChildOutputSlice, DataCall, DataOp, DataQuery,
+    DataQueryResponse, DataWrite, JobBudget, JobCall, JobCeiling, JobControlEcho, JobControlKind,
+    JobControlOutcome, JobControlRequest, JobEffects, JobFailure, JobGuestPin, JobInterrupt,
+    JobMessage, JobOrigin, JobOutcome, JobPin, JobPolicy, JobProgress, JobReadError,
+    JobResultRequest, JobResultResponse, JobResume, JobResumeEngine, JobScratch, JobSpawn,
+    JobState, JobStepInput, JobStepOutput, JobSuspend, JobView, PluginDataDeclaration,
+    PluginJobDeclaration, PluginJobSettings, RoundResult, StampedField,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -170,7 +169,6 @@ fn root_call(c: &LeanPluginJobRootCall) -> RootCall {
     RootCall {
         argv: c.argv.clone(),
         args: c.args.clone(),
-        path: c.path.clone(),
         agent_budget: c.agent_budget,
     }
 }
@@ -186,7 +184,6 @@ fn row(r: &LeanPluginJobRow) -> StepRow {
         call: StepCall {
             argv: r.call.argv.clone(),
             args: r.call.args.clone(),
-            path: r.call.path.clone(),
             script: r.call.script.clone(),
             agent_budget: r.call.agent_budget,
         },
@@ -354,7 +351,6 @@ fn job_policy(p: &LeanPluginJobPolicy) -> JobPolicy {
         dynamic: spelled(&p.mode),
         dynamic_targets: p.dynamic_targets.clone(),
         trusted_packs: p.trusted_packs.clone(),
-        project_roots: p.project_roots.clone(),
     }
 }
 
@@ -375,7 +371,6 @@ fn context(
         policy: job_policy(&c.policy),
         engine_digest: c.engine_digest.clone(),
         engine_provenance_operator: c.engine_provenance_operator,
-        installed_trusted_sources: c.installed_trusted_sources.clone(),
         max_hop: c.max_hop,
         target_hops: c
             .target_hops
@@ -395,7 +390,6 @@ fn context(
             .iter()
             .map(|w| (w.base.clone(), w.cwd.clone()))
             .collect(),
-        named_origin: c.named_origin.as_deref().map(spelled),
         adoption_facts: host_facts(&c.adoption_facts),
         caller_scope: process_scope(&c.caller_scope),
         control_targets: c
@@ -461,8 +455,8 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
     let cases = lean_plugin_job_admission_cases();
     assert_eq!(
         cases.len(),
-        222,
-        "Lean supplies 30 admission regressions and 192 interrupted wire-to-recovery traces"
+        216,
+        "Lean supplies 24 admission regressions and 192 interrupted wire-to-recovery traces"
     );
     let mut names = BTreeSet::new();
     for case in cases {
@@ -1027,13 +1021,11 @@ fn home_record(r: &LeanPluginJobRecord) -> Option<Option<InstalledVia>> {
     }
 }
 
-/// Lean `originOf`, `trustedHint`, `provenanceOf`, `recordAfterInstall`,
+/// Lean `callOrigin`, `provenanceOf`, `recordAfterInstall`,
 /// `packJobBlockAdmissible`, `Policy.valid` and `wireTargetsFrom` through the
-/// pure cores `origin::{classify_origin, trusted_hint}`,
+/// pure cores `origin::call_origin`,
 /// `home_install::{recorded_provenance, record_after_install_via}` and
-/// `settings::{job_block_admissible, policy_valid, wire_targets_from}`. Origin
-/// and hint get every mount's files as (sha256, pack, path, class) and the
-/// owner excludes project mounts; nothing is filtered here.
+/// `settings::{job_block_admissible, policy_valid, wire_targets_from}`.
 #[test]
 fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
     let cases = lean_plugin_job_authority_cases();
@@ -1081,43 +1073,15 @@ fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
             }
             LeanPluginJobAuthorityCase::Origin {
                 name,
-                digest,
-                mounts,
-                trusted_packs,
                 call,
                 expected,
             } => {
                 *kinds.entry("origin").or_default() += 1;
-                let index: Vec<(String, String, String, String)> = mounts
-                    .iter()
-                    .flat_map(|m| {
-                        m.files
-                            .iter()
-                            .map(|f| (f.clone(), m.pack.clone(), m.path.clone(), m.class.clone()))
-                    })
-                    .collect();
-                let installed_via: BTreeMap<&str, InstalledVia> = mounts
-                    .iter()
-                    .map(|m| (m.pack.as_str(), spelled(&m.via)))
-                    .collect();
                 assert_eq!(
-                    call_origin(
-                        scriptless(&call.argv, call.script.as_deref(), call.path.as_deref()),
-                        digest,
-                        &index,
-                        &installed_via,
-                        trusted_packs.as_slice()
-                    ),
+                    call_origin(call.script.as_deref()),
                     spelled::<JobOrigin>(&expected.origin),
                     "{name}: origin"
                 );
-                let hints: Vec<bool> = mounts
-                    .iter()
-                    .map(|m| {
-                        trusted_hint(&m.pack, &m.class, &installed_via, trusted_packs.as_slice())
-                    })
-                    .collect();
-                assert_eq!(hints, expected.trusted_hints, "{name}: trusted hints");
             }
             LeanPluginJobAuthorityCase::PackJobBlock {
                 name,
@@ -1134,7 +1098,6 @@ fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
                         &block.targets_from,
                         &block.trusted,
                         spelled(&block.dynamic),
-                        &block.project_roots,
                     ),
                     expected.admissible,
                     "{name}: admissible"
@@ -1185,8 +1148,8 @@ fn generated_plugin_job_authority_cases_drive_origin_and_provenance() {
         kinds,
         BTreeMap::from([
             ("install", 6),
-            ("origin", 9),
-            ("pack_job_block", 6),
+            ("origin", 4),
+            ("pack_job_block", 5),
             ("policy_valid", 4),
             ("provenance", 12),
             ("wire_targets_from", 2),
@@ -1392,13 +1355,6 @@ fn plugin_job_protocol_field_names_are_secret_free() {
         serde_json::to_value(RoundResult::<u32>::Error {
             error: "e".to_owned(),
         }),
-        serde_json::to_value(CatalogEntry {
-            name: "n".to_owned(),
-            description: "d".to_owned(),
-            when_to_use: "w".to_owned(),
-            source: CatalogSource::Kept,
-            path: Some("p".to_owned()),
-        }),
         serde_json::to_value(JobControlOutcome::Applied {
             state: JobState::Running,
             killed_children: 1,
@@ -1418,12 +1374,6 @@ fn plugin_job_protocol_field_names_are_secret_free() {
             collections: vec!["c".to_owned()],
             ops: vec!["query".to_owned()],
             stamped: BTreeMap::from([("f".to_owned(), StampedField::NodeDid)]),
-        }),
-        serde_json::to_value(AssetMountDeclaration {
-            class: "workflows".to_owned(),
-        }),
-        serde_json::to_value(PluginCatalogDeclaration {
-            argv: vec!["catalog".to_owned()],
         }),
     ] {
         collect_field_names(&constructed.expect("constructed value encodes"), &mut names);

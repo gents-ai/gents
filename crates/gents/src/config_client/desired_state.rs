@@ -115,7 +115,6 @@ pub fn config_projection(
         Collection::CallbackBinding => project::<CallbackBinding>(value),
         Collection::CallbackModule => project::<CallbackModule>(value),
         Collection::RepositoryPlacement => project::<RepositoryPlacement>(value),
-        Collection::GraphDefinition => project::<GraphDefinition>(value),
         Collection::EvalDefinition => project::<EvalDefinition>(value),
     }
 }

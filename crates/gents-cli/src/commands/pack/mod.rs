@@ -63,7 +63,6 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         PackCommand::Diff(args) => inspect::diff(args).await,
         PackCommand::Test(args) => test::test(args).await,
         PackCommand::Check(args) => check::check(args).await,
-        PackCommand::Graph(args) => check::graph(args),
         PackCommand::Install(args) => install(args).await,
         PackCommand::Wire(args) => wire::wire(args).await,
         PackCommand::Remove(args) => remove::remove(args).await,
@@ -224,12 +223,11 @@ pub(crate) fn split_namespace(name: &str) -> (&str, &str) {
 async fn list(args: PackListArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let store = gents::pack_store::PackStore::new(&home);
-    let installed: std::collections::BTreeSet<String> =
-        gents::pack::installed_packs(Some(&home), None)
-            .await?
-            .into_iter()
-            .map(|pack| pack.coordinate)
-            .collect();
+    let (records, skipped) = gents::pack::list_home_installs_with_skips(&home)?;
+    let installed: std::collections::BTreeSet<String> = records
+        .into_iter()
+        .map(|record| record.coordinate)
+        .collect();
     let mut entries = Vec::new();
     for (coordinate, versions) in store.names()? {
         let (namespace, name) = coordinate
@@ -251,7 +249,14 @@ async fn list(args: PackListArgs) -> Result<()> {
             "installed": installed.contains(&coordinate),
         }));
     }
-    crate::print_json(&json!({ "packs": entries }))
+    let mut output = json!({ "packs": entries });
+    if !skipped.is_empty() {
+        output["skipped_installs"] = skipped
+            .iter()
+            .map(|skip| json!({ "path": skip.path.display().to_string(), "reason": skip.reason }))
+            .collect();
+    }
+    crate::print_json(&output)
 }
 
 pub(crate) async fn resolve_pack_source(
@@ -609,7 +614,6 @@ pub(crate) async fn install_documents_pack(
             .collect();
         let dependency_args = PackInstallArgs {
             package: dependency.manifest().name.clone(),
-            bindings: None,
             inference_slots: dependency_slots,
             preview: false,
             scope: args.scope.clone(),
@@ -623,16 +627,6 @@ pub(crate) async fn install_documents_pack(
             explicit: false,
         };
         match dependency.manifest().metadata.kind {
-            PackKind::Graph => {
-                super::graph::install_with_access(
-                    access,
-                    owner,
-                    dependency,
-                    dependency_args,
-                    false,
-                )
-                .await?;
-            }
             // A dependency installs exactly as `gents pack install <dep>`
             // would; the boxed future breaks the async recursion.
             PackKind::Documents => {
@@ -842,30 +836,12 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
     tracing::info!(package = %args.package, source = %pack.describe(), "resolved pack");
     check_expected_digest(args.expect_digest.as_deref(), pack.digest())?;
     check_wire_target(pack.manifest(), &args.wire)?;
-    let supported_outputs: &[crate::cli::output_format::OutputFormat] =
-        if pack.manifest().metadata.kind == PackKind::Graph {
-            &[
-                crate::cli::output_format::OutputFormat::Text,
-                crate::cli::output_format::OutputFormat::Json,
-            ]
-        } else {
-            &[crate::cli::output_format::OutputFormat::Json]
-        };
-    args.output
-        .ensure_supported("pack install", supported_outputs)?;
+    args.output.ensure_supported(
+        "pack install",
+        &[crate::cli::output_format::OutputFormat::Json],
+    )?;
     match pack.manifest().metadata.kind {
-        PackKind::Graph => {
-            anyhow::ensure!(
-                !args.force_rebind_concrete_did,
-                "--force-rebind-concrete-did applies only to document packs"
-            );
-            super::graph::install(&pack, args, true).await
-        }
         PackKind::Documents => {
-            anyhow::ensure!(
-                args.bindings.is_none(),
-                "document packs use --inference-slot; --bindings is a graph installation option"
-            );
             let (access, _) = crate::resolve_config_access(
                 args.scope.home.as_deref(),
                 args.scope.graphql.as_deref(),
@@ -876,11 +852,10 @@ pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
         PackKind::Assets | PackKind::Plugins => {
             let requested = parse_inference_slot_bindings(&args.inference_slots)?;
             anyhow::ensure!(
-                args.bindings.is_none()
-                    && args.scope.graphql.is_none()
+                args.scope.graphql.is_none()
                     && (args.scope.node_did.is_none() || !requested.is_empty())
                     && !args.force_rebind_concrete_did,
-                "asset and plugins packs install locally with --home; identity and graph binding flags do not apply"
+                "asset and plugins packs install locally with --home; identity flags do not apply"
             );
             if args.preview {
                 return crate::print_json(&json!({
@@ -1162,7 +1137,6 @@ mod tests {
     ) -> PackInstallArgs {
         PackInstallArgs {
             package: spec.to_str().unwrap().to_owned(),
-            bindings: None,
             inference_slots,
             preview: false,
             scope: ScopeArgs {
@@ -1310,25 +1284,6 @@ mod tests {
         assert_eq!(via, gents::pack::InstalledVia::Operator);
     }
 
-    #[tokio::test]
-    async fn graph_install_writes_no_home_record() {
-        let home = initialized_home().await;
-        let owner = crate::resolve_node_did(Some(home.path()), None).unwrap();
-        let slots = ["coordinator", "worker", "verifier"]
-            .map(|slot| format!("{slot}={owner}:default-profile"))
-            .to_vec();
-        install_from(
-            home.path(),
-            &test_support::fixture_dir("review_graph"),
-            slots,
-        )
-        .await
-        .unwrap();
-
-        let record = gents::pack::read_home_install(home.path(), "fixture/review_graph");
-        assert!(record.unwrap().is_none());
-    }
-
     #[test]
     fn local_publication_failure_restores_exactly_the_previous_records() {
         let home = tempfile::tempdir().unwrap();
@@ -1427,15 +1382,11 @@ mod tests {
     }
 
     #[test]
-    fn wire_refuses_a_graph_or_pluginless_pack() {
+    fn wire_refuses_a_pluginless_pack() {
         let wire = vec!["agent".to_owned()];
         let plugins = plugin_manifest("acme", "echo_pack", "echo", "1.0.0");
         check_wire_target(&plugins, &wire).unwrap();
         check_wire_target(&plugins, &[]).unwrap();
-
-        let mut graph = plugins.clone();
-        graph.metadata.kind = PackKind::Graph;
-        assert!(check_wire_target(&graph, &wire).is_err());
 
         let mut pluginless = plugins;
         pluginless.metadata.plugins.clear();

@@ -12,8 +12,7 @@ Executable formal model of the configuration refactor contracts:
 * A agent composes context and inference into one session configuration.
   `Task -> Agent -> {Context, InferenceProfile -> Backend}` resolution fails
   closed on missing or foreign references and disabled executable documents.
-  `resolveTask` is the single Task resolver (owner-checked Task record); graph
-  invocation reuses exactly this resolver.
+  `resolveTask` is the single Task resolver (owner-checked Task record).
 * Discovery observations cannot rewrite the selected model/effort.
 * Absent context means no instructions, no skills, no tools, and runtime-default
   compaction; absent compaction selection means `StripThenSummarize` at 3/4.
@@ -165,7 +164,7 @@ structure Context where
 def defaultContext : Context := {}
 
 /-- A session derives both its context and inference from one agent. There
-is no independent context defaulting or graph-specific model selection path. -/
+is no independent context defaulting or model selection path. -/
 structure ResolvedSessionConfig where
   context : Context
   inference : SelectedModel
@@ -253,8 +252,8 @@ def resolveAgent (reg : Registry) (scope agentId : String) :
     if !backend.enabled then .error .disabledBackend
     else .ok ⟨context, inference⟩
 
-/-- The single Task entrance supplies the same combined configuration to ordinary
-requests and graph stages. No TaskRun or session lifecycle is introduced here. -/
+/-- The single Task entrance supplies the same combined configuration to every
+request. No TaskRun or session lifecycle is introduced here. -/
 def resolveTask (reg : Registry) (scope taskId : String) :
     Except ResolveError ResolvedSessionConfig := do
   let task ← lookupOwned reg.tasks scope taskId .missingTask .foreignTask

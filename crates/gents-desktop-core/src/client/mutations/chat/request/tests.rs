@@ -143,14 +143,14 @@ async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
         .execute(
             r#"mutation {
                 create_MailboxItem(input: {
-                    item_key: "graph:wait-submit:ask:1",
+                    item_key: "session:wait-submit:ask:1",
                     requester_did: "did:test:owner",
                     node_did: "did:test:node",
                     status: "open",
                     kind: "ask",
                     action: "start_request",
                     title: "Continue",
-                    source_kind: "graph",
+                    source_kind: "session",
                     source_id: "wait-submit",
                     session_id: "session-one",
                     target_node_did: "did:test:node",
@@ -165,7 +165,7 @@ async fn mailbox_submission_cause_is_owner_and_route_scoped() -> Result<()> {
     let lookup = node
         .execute(
             r#"query {
-                MailboxItem(filter: { item_key: { _eq: "graph:wait-submit:ask:1" } }) {
+                MailboxItem(filter: { item_key: { _eq: "session:wait-submit:ask:1" } }) {
                     _docID
                 }
             }"#,

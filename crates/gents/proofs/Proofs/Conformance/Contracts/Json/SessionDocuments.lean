@@ -14,7 +14,7 @@ def requestJson (r : AgentSession.RequestFact) : Json := Json.mkObj
    ("created_at", toJson r.createdAt), ("doc_id", toJson r.observed.docId),
    ("request_id", toJson r.observed.requestId), ("state", toJson r.observed.state.toDefraDB)]
 private def provenanceJson (p : AgentSession.Provenance) : Json := Json.mkObj
-  [("task_id", toJson p.task), ("graph_run_id", toJson p.graphRun),
+  [("task_id", toJson p.task),
    ("parent_request_doc_id", toJson p.parentRequestDoc),
    ("opening_request_doc_id", toJson p.openingRequestDoc),
    ("fork", p.fork.map (fun f => Json.mkObj

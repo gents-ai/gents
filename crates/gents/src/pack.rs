@@ -1,7 +1,5 @@
 use anyhow::{Context, Result};
-use gents_protocol::job::{
-    AssetMountDeclaration, PluginCatalogDeclaration, PluginDataDeclaration, PluginJobDeclaration,
-};
+use gents_protocol::job::{PluginDataDeclaration, PluginJobDeclaration};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -18,8 +16,9 @@ mod provenance;
 #[cfg(test)]
 mod publication_contract_tests;
 pub use home_install::{
-    forget_home_install, list_home_installs, list_readable_home_installs, read_home_install,
-    record_after_install, write_home_install, HomePackInstall, InstalledVia,
+    forget_home_install, list_home_installs, list_home_installs_with_skips,
+    list_readable_home_installs, read_home_install, record_after_install, write_home_install,
+    HomePackInstall, InstalledVia, SkippedHomeInstall,
 };
 pub use inference::{
     bind_pack_install_config, inference_profile_options, inspect_pack_inference_bindings,
@@ -34,11 +33,10 @@ pub use installation::{
     InstalledPackPlugin, PackIdentity, PreparedDependency, PreparedDocumentPackInstall,
     RemoveReport, Retained,
 };
-pub(crate) use installation::{observe_graph_install_in_txn, record_graph_install_in_txn};
 pub use loader::{
     decode_pack_config, ensure_pack_leaves_default_unselected, load_pack_config, pin_pack_plugins,
 };
-pub(crate) use provenance::{pack_artifact_document_digest, prepare_pack_plan_in_txn};
+pub(crate) use provenance::pack_artifact_document_digest;
 pub use provenance::{pack_document_digests, pack_origin_from_tags, pack_origin_tag};
 
 #[path = "pack_asset_path.rs"]
@@ -47,7 +45,6 @@ mod asset_path;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PackKind {
-    Graph,
     Documents,
     Assets,
     Plugins,
@@ -145,14 +142,6 @@ pub struct PackPlugin {
     /// calls and writes may use; absent means it has no data access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<PluginDataDeclaration>,
-    /// The asset classes the plugin reads through read-only mounts; absent
-    /// means none.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub asset_mounts: Vec<AssetMountDeclaration>,
-    /// The argv of the plugin's catalog call; absent means it lists no
-    /// catalog.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub catalog: Option<PluginCatalogDeclaration>,
     /// When set, a call that carries `script` runs that source as the step
     /// through the host's embedded engine instead of the artifact (a job
     /// plugin only); absent means the artifact runs every call.
@@ -186,8 +175,6 @@ impl Default for PackPlugin {
             service: None,
             job: undeclared_job(),
             data: None,
-            asset_mounts: Vec::new(),
-            catalog: None,
             script_runtime: None,
         }
     }
@@ -738,7 +725,7 @@ impl PackPlugin {
         self.validate_job_manifest_fields()
     }
 
-    /// The static rules for the `data`, `asset_mounts` and `catalog` fields;
+    /// The static rules for the `data` field;
     /// checks against the archive itself belong to install.
     fn validate_job_manifest_fields(&self) -> Result<()> {
         let name = &self.name;
@@ -774,25 +761,6 @@ impl PackPlugin {
                      rename the field"
                 );
             }
-        }
-        let mut classes = BTreeSet::new();
-        for mount in &self.asset_mounts {
-            anyhow::ensure!(
-                asset_path::is_snake_case_name(&mount.class),
-                "plugin {name:?} asset_mounts class {:?} must be snake_case",
-                mount.class
-            );
-            anyhow::ensure!(
-                classes.insert(&mount.class),
-                "plugin {name:?} asset_mounts lists class {:?} twice; list each once",
-                mount.class
-            );
-        }
-        if let Some(catalog) = &self.catalog {
-            anyhow::ensure!(
-                !catalog.argv.is_empty() && catalog.argv.iter().all(|arg| !arg.is_empty()),
-                "plugin {name:?} catalog.argv must be non-empty and hold non-empty strings"
-            );
         }
         Ok(())
     }
@@ -850,14 +818,35 @@ pub struct PackManifest {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub schemas: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub compiler_version: Option<String>,
     #[serde(
         default,
         deserialize_with = "crate::document_config::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
     pub external_dependencies: Vec<PackageExternalDependency>,
+}
+
+impl PackManifest {
+    /// The one manifest decode. A retired `graph` kind is refused before the
+    /// typed decode so the error names the next step instead of serde's
+    /// unknown-variant message.
+    pub fn from_slice(bytes: &[u8]) -> Result<Self> {
+        let raw: serde_json::Value = serde_json::from_slice(bytes)?;
+        if raw.get("kind").and_then(serde_json::Value::as_str) == Some("graph") {
+            let text = |key: &str, fallback: &str| {
+                raw.get(key)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(fallback)
+                    .to_owned()
+            };
+            anyhow::bail!(
+                "graph packs are retired; run `gents pack remove {}/{}` and install the 2.x version",
+                text("namespace", crate::pack_archive::DEFAULT_NAMESPACE),
+                text("name", "<name>")
+            );
+        }
+        Ok(serde_json::from_value(raw)?)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -975,7 +964,7 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
     );
 
     // Only a pack that installs as a home file record (assets, plugins) is
-    // scanned for UX plugins; a documents or graph pack installs into a
+    // scanned for UX plugins; a documents pack installs into a
     // node, where its ux[] would never be listed.
     anyhow::ensure!(
         manifest.metadata.ux.is_empty()
@@ -1043,7 +1032,6 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
     }
     anyhow::ensure!(
         manifest.metadata.kind == PackKind::Documents
-            || manifest.metadata.kind == PackKind::Graph
             || manifest
                 .metadata
                 .inference_slots
@@ -1083,11 +1071,11 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
     }
 
     match manifest.metadata.kind {
-        PackKind::Documents | PackKind::Graph => {
+        PackKind::Documents => {
             let config = manifest
                 .config
                 .as_deref()
-                .context("document/graph pack requires a config asset")?;
+                .context("document pack requires a config asset")?;
             anyhow::ensure!(
                 manifest.metadata.assets.iter().any(|asset| asset == config),
                 "config asset must be declared"
@@ -1111,17 +1099,6 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
             "schema asset must be declared: {schema}"
         );
         anyhow::ensure!(schemas.insert(schema), "duplicate schema asset: {schema}");
-    }
-    if manifest.metadata.kind == PackKind::Graph {
-        anyhow::ensure!(
-            manifest.compiler_version.as_deref() == Some(crate::graph_pipeline::COMPILER_VERSION),
-            "graph pack compiler version does not match runtime"
-        );
-    } else {
-        anyhow::ensure!(
-            manifest.compiler_version.is_none(),
-            "non-graph pack cannot select a graph compiler"
-        );
     }
     Ok(())
 }
@@ -1210,16 +1187,6 @@ mod tests {
             data.stamped.get("chain_root_doc_id"),
             Some(&StampedField::ChainRootDocId)
         );
-        assert_eq!(
-            plugin.asset_mounts,
-            [AssetMountDeclaration {
-                class: "fixture_assets".to_owned()
-            }]
-        );
-        assert_eq!(
-            plugin.catalog.map(|catalog| catalog.argv),
-            Some(vec!["catalog".to_owned()])
-        );
     }
 
     #[test]
@@ -1234,8 +1201,6 @@ mod tests {
         let plugin: PackPlugin = serde_json::from_value(plain.clone()).unwrap();
         assert_eq!(plugin.job, PluginJobDeclaration(false));
         assert!(plugin.data.is_none());
-        assert!(plugin.asset_mounts.is_empty());
-        assert!(plugin.catalog.is_none());
         assert_eq!(serde_json::to_value(&plugin).unwrap(), plain);
     }
 
@@ -1327,46 +1292,6 @@ mod tests {
             let message = refusal(&plugin);
             assert!(message.contains("format_check"), "{message}");
             assert!(message.contains(field), "{message}");
-        }
-    }
-
-    #[test]
-    fn asset_mount_classes_must_be_unique_snake_case() {
-        let mounts = |classes: &[&str]| PackPlugin {
-            asset_mounts: classes
-                .iter()
-                .map(|class| AssetMountDeclaration {
-                    class: (*class).to_owned(),
-                })
-                .collect(),
-            ..valid_plugin()
-        };
-        mounts(&["fixture_assets", "docs2"]).validate().unwrap();
-        for classes in [
-            &["Fixture"][..],
-            &[""][..],
-            &["a-b"][..],
-            &["a_b", "a_b"][..],
-        ] {
-            let message = refusal(&mounts(classes));
-            assert!(message.contains("format_check"), "{message}");
-            assert!(message.contains("asset_mounts"), "{message}");
-        }
-    }
-
-    #[test]
-    fn empty_catalog_argv_is_refused() {
-        let catalog = |argv: &[&str]| PackPlugin {
-            catalog: Some(PluginCatalogDeclaration {
-                argv: argv.iter().map(|arg| (*arg).to_owned()).collect(),
-            }),
-            ..valid_plugin()
-        };
-        catalog(&["catalog"]).validate().unwrap();
-        for argv in [&[][..], &["catalog", ""][..]] {
-            let message = refusal(&catalog(argv));
-            assert!(message.contains("format_check"), "{message}");
-            assert!(message.contains("catalog.argv"), "{message}");
         }
     }
 
@@ -1749,6 +1674,28 @@ mod tests {
         );
         let back: PackManifest = serde_json::from_value(json).unwrap();
         assert!(back.metadata.ux.is_empty());
+    }
+
+    #[test]
+    fn retired_graph_kind_is_refused_with_next_step() {
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "manifest_version": 1,
+            "name": "code_review",
+            "version": "1.7.0",
+            "description": "a retired graph pack",
+            "kind": "graph",
+            "namespace": "acme",
+            "authors": ["a"],
+            "compiler_version": "1"
+        }))
+        .unwrap();
+        let error = format!("{:#}", PackManifest::from_slice(&bytes).unwrap_err());
+        assert!(
+            error.contains(
+                "graph packs are retired; run `gents pack remove acme/code_review` and install the 2.x version"
+            ),
+            "{error}"
+        );
     }
 
     #[test]

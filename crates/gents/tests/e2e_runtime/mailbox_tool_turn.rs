@@ -67,7 +67,6 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
             }),
             built_ins: Some(gents::document_config::BuiltInTools {
                 enable_session_history_tool: Some(true),
-                enable_graph_tools: Some(true),
                 ..Default::default()
             }),
             self_config: Some(gents::self_config::engineer_self_config()),

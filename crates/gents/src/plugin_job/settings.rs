@@ -33,14 +33,13 @@ pub fn policy_valid(agent_targets: &[String], policy: &JobPolicy) -> bool {
 
 /// Lean `packJobBlockAdmissible`: a pack-shipped job block installs only on an
 /// operator install, with targets and trusted packs drawn from the pack and its
-/// dependencies, dynamic scripts off or check, and no project roots.
+/// dependencies, and dynamic scripts off or check.
 pub fn job_block_admissible(
     via: InstalledVia,
     closure: &[String],
     targets_from: &[String],
     trusted: &[String],
     dynamic: DynamicMode,
-    project_roots: &[String],
 ) -> bool {
     via == InstalledVia::Operator
         && targets_from
@@ -48,7 +47,6 @@ pub fn job_block_admissible(
             .chain(trusted)
             .all(|coordinate| closure.contains(coordinate))
         && matches!(dynamic, DynamicMode::Off | DynamicMode::Check)
-        && project_roots.is_empty()
 }
 
 /// Decides every job block of a pack's Tools document through
@@ -92,13 +90,12 @@ pub fn pack_job_block_admissible(
                 &targets_from,
                 &job.policy.trusted_packs,
                 job.policy.dynamic,
-                &job.policy.project_roots,
             ),
             "plugin {:?} ships a job block this install cannot grant. A pack-shipped job \
              block needs an operator install, job.agent_targets that name AgentTargets shipped \
              by {coordinate} or its dependencies, job.policy.trusted_packs within {coordinate} \
-             and its dependencies, job.policy.dynamic off or check, and no \
-             job.policy.project_roots. Next: drop the job block from the pack, or install the \
+             and its dependencies, and job.policy.dynamic off or check. Next: drop the job \
+             block from the pack, or install the \
              pack with `gents pack install` and wire the block into Tools as the operator",
             plugin.plugin
         );
@@ -187,13 +184,6 @@ pub fn validate(settings: &PluginJobSettings) -> Vec<String> {
             errors.push(format!(
                 "job.policy.trusted_packs entry {pack:?} is not a pack coordinate; name it as \
                  name or namespace/name in snake_case, without @version"
-            ));
-        }
-    }
-    for root in &policy.project_roots {
-        if !std::path::Path::new(root).is_absolute() {
-            errors.push(format!(
-                "job.policy.project_roots entry {root:?} is not absolute; give the full path"
             ));
         }
     }
@@ -343,16 +333,6 @@ mod tests {
     }
 
     #[test]
-    fn relative_project_roots_are_refused() {
-        let message = errors(json!({"policy": {"project_roots": ["work/repo"]}}));
-        assert!(message.contains("job.policy.project_roots"), "{message}");
-        assert_eq!(
-            errors(json!({"policy": {"project_roots": ["/work/repo"]}})),
-            ""
-        );
-    }
-
-    #[test]
     fn policy_valid_is_dynamic_off_or_dynamic_targets_within_agent_targets() {
         let agent_targets = vec!["a".to_owned(), "b".to_owned()];
         let policy = |dynamic, targets: &[&str]| JobPolicy {
@@ -379,18 +359,17 @@ mod tests {
     fn job_block_admissible_is_lean_pack_job_block_admissible() {
         use DynamicMode::{Check, Off, Run};
         use InstalledVia::{Operator, SelfConfig};
-        let case = |via, from: &[&str], trusted: &[&str], dynamic, roots: &[&str]| {
+        let case = |via, from: &[&str], trusted: &[&str], dynamic| {
             let closure = names(&["p", "q"]);
-            let (from, trusted, roots) = (names(from), names(trusted), names(roots));
-            job_block_admissible(via, &closure, &from, &trusted, dynamic, &roots)
+            let (from, trusted) = (names(from), names(trusted));
+            job_block_admissible(via, &closure, &from, &trusted, dynamic)
         };
-        assert!(case(Operator, &["p", "q"], &["p"], Off, &[]));
-        assert!(case(Operator, &[], &[], Check, &[]));
-        assert!(!case(SelfConfig, &["p"], &["p"], Check, &[]));
-        assert!(!case(Operator, &["z"], &[], Check, &[]));
-        assert!(!case(Operator, &[], &["z"], Check, &[]));
-        assert!(!case(Operator, &[], &[], Run, &[]));
-        assert!(!case(Operator, &[], &[], Check, &["/work/repo"]));
+        assert!(case(Operator, &["p", "q"], &["p"], Off));
+        assert!(case(Operator, &[], &[], Check));
+        assert!(!case(SelfConfig, &["p"], &["p"], Check));
+        assert!(!case(Operator, &["z"], &[], Check));
+        assert!(!case(Operator, &[], &["z"], Check));
+        assert!(!case(Operator, &[], &[], Run));
     }
 
     #[test]

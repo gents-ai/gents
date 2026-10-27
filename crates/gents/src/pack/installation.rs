@@ -7,8 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::config_client::{
-    read_desired_state_record_in_txn, ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument,
-    DesiredStateApplyPlan,
+    ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::document_config::PackConfig;
 use crate::graphql::escape_graphql_string;
@@ -20,10 +19,6 @@ pub use documents::{
     document_pack_schema_paths, install_prepared_document_pack, plugin_data_unique_keys,
     prepare_document_pack_install, PreparedDependency, PreparedDocumentPackInstall,
 };
-mod graph;
-
-pub(crate) use graph::{observe_graph_install_in_txn, record_graph_install_in_txn};
-
 const RECORD: &str = "PackInstallation";
 const HISTORY_LIMIT: usize = 32;
 
@@ -124,12 +119,22 @@ fn key(collection: &str, id: &str) -> String {
     format!("{collection}/{id}")
 }
 
-fn collection_named(name: &str) -> Result<Collection> {
+/// A record can name a collection this build no longer manages; callers
+/// leave such documents dormant instead of failing.
+fn managed_collection(name: &str) -> Option<Collection> {
     Collection::ALL
         .iter()
         .copied()
         .find(|collection| collection.graphql_type() == name)
+}
+
+fn collection_named(name: &str) -> Result<Collection> {
+    managed_collection(name)
         .with_context(|| format!("installation record names unknown collection {name:?}"))
+}
+
+fn is_reserved(document: &RecordedDocument) -> bool {
+    crate::agent::document_view::is_retired_reserved_id(&document.id)
 }
 
 async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) -> Result<Record> {
@@ -180,18 +185,6 @@ where
                 "installation record {coordinate:?} for {owner:?} has a malformed {field} field"
             )
         }),
-    }
-}
-
-async fn live_digest(
-    txn: &ConfigApplyTxn<'_>,
-    collection: Collection,
-    owner: &str,
-    id: &str,
-) -> Result<Option<String>> {
-    match read_desired_state_record_in_txn(txn, collection, owner, id).await? {
-        Some((_, live)) => Ok(Some(super::pack_artifact_document_digest(&live)?)),
-        None => Ok(None),
     }
 }
 
@@ -378,13 +371,13 @@ pub(crate) async fn install_in_txn(
         .documents
         .iter()
         .filter(|(name, previous)| !recorded.contains_key(*name) && previous.created)
-        .map(|(_, previous)| {
-            Ok((
-                collection_named(&previous.collection)?,
+        .filter_map(|(_, previous)| {
+            Some((
+                managed_collection(&previous.collection)?,
                 previous.id.as_str(),
             ))
         })
-        .collect::<Result<_>>()?;
+        .collect();
     let live_stale = live_digests(txn, owner, stale).await?;
 
     let mut removals = Vec::new();
@@ -392,9 +385,15 @@ pub(crate) async fn install_in_txn(
         if recorded.contains_key(name) || !previous.created {
             continue;
         }
-        let collection = collection_named(&previous.collection)?;
+        let Some(collection) = managed_collection(&previous.collection) else {
+            continue;
+        };
         match live_stale.get(&(collection, previous.id.clone())).cloned() {
             None => {}
+            Some(_) if is_reserved(previous) => {
+                report.removed.push(name.clone());
+                removals.push((collection, owner.to_owned(), previous.id.clone()));
+            }
             Some(live) if live != previous.digest && policy == DriftPolicy::Refuse => {
                 edited.push(name.clone());
             }
@@ -420,7 +419,7 @@ pub(crate) async fn install_in_txn(
             !keep.contains(&key(document.collection.graphql_type(), id))
         })
         .collect();
-    let plan = super::provenance::prepare_pack_plan_in_txn(txn, &applied, false)
+    let plan = super::provenance::prepare_pack_plan_in_txn(txn, &applied)
         .await?
         .with_removals(removals)?;
     crate::config_client::validate_desired_state_plan(txn, &plan).await?;
@@ -585,16 +584,6 @@ async fn remove_record_in_txn(
         .clone()
         .with_context(|| format!("{coordinate} is not installed for {owner}"))?;
 
-    let graph_ids: BTreeSet<String> = record
-        .documents
-        .values()
-        .filter(|document| document.collection == "GraphDefinition")
-        .map(|document| document.id.clone())
-        .collect();
-    if !graph_ids.is_empty() {
-        graph::ensure_no_unfinished_runs_in_txn(txn, owner, &graph_ids).await?;
-    }
-
     let mut report = RemoveReport {
         pack: coordinate.to_owned(),
         documents: InstallReport {
@@ -610,45 +599,35 @@ async fn remove_record_in_txn(
     };
     let mut edited = Vec::new();
     let mut removals = Vec::new();
-    let mut revision_digests = Vec::new();
 
     let checked: Vec<(Collection, &str)> = record
         .documents
         .values()
-        .filter(|document| document.created && document.collection != "GraphRevision")
-        .map(|document| {
-            Ok((
-                collection_named(&document.collection)?,
+        .filter(|document| document.created)
+        .filter_map(|document| {
+            Some((
+                managed_collection(&document.collection)?,
                 document.id.as_str(),
             ))
         })
-        .collect::<Result<_>>()?;
+        .collect();
     let live = live_digests(txn, owner, checked).await?;
 
     for (name, document) in &record.documents {
-        if graph::is_graph_owned(document) {
-            if !document.created {
-                report.documents.adopted.push(name.clone());
-                continue;
-            }
-            if document.collection == "GraphRevision" {
-                revision_digests.push(document.id.clone());
-                continue;
-            }
-            let collection = collection_named(&document.collection)?;
-            if live.contains_key(&(collection, document.id.clone())) {
-                report.documents.removed.push(name.clone());
-                removals.push((collection, owner.to_owned(), document.id.clone()));
-            }
-            continue;
-        }
         if !document.created {
             report.documents.adopted.push(name.clone());
             continue;
         }
-        let collection = collection_named(&document.collection)?;
+        let Some(collection) = managed_collection(&document.collection) else {
+            report.retained.push(Retained {
+                item: format!("{} {}", document.collection, document.id),
+                reason: "collection is no longer managed; the document stays dormant".to_owned(),
+            });
+            continue;
+        };
         match live.get(&(collection, document.id.clone())).cloned() {
             None => continue,
+            Some(_) if is_reserved(document) => {}
             Some(live) if live != document.digest => match policy {
                 DriftPolicy::Refuse => {
                     edited.push(name.clone());
@@ -672,13 +651,6 @@ async fn remove_record_in_txn(
     let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(removals)?;
     crate::config_client::validate_desired_state_plan(txn, &plan).await?;
     report.documents.applied = crate::config_client::apply_desired_state_plan(txn, &plan).await?;
-
-    if !revision_digests.is_empty() {
-        let (removed, retained) =
-            graph::delete_revisions_in_txn(txn, owner, &revision_digests).await?;
-        report.documents.removed.extend(removed);
-        report.retained.extend(retained);
-    }
 
     txn.execute(&format!(
         r#"mutation {{ delete_{RECORD}(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
@@ -815,10 +787,12 @@ pub async fn installed_pack_documents(
     let Some(row) = rows.first().filter(|row| !is_plugin_store_row(row)) else {
         return Ok(Vec::new());
     };
-    decode_record_field::<Vec<RecordedDocument>>(row, "documents", owner, coordinate)?
-        .into_iter()
-        .map(|document| Ok((collection_named(&document.collection)?, document.id)))
-        .collect()
+    Ok(
+        decode_record_field::<Vec<RecordedDocument>>(row, "documents", owner, coordinate)?
+            .into_iter()
+            .filter_map(|document| Some((managed_collection(&document.collection)?, document.id)))
+            .collect(),
+    )
 }
 
 pub async fn installed_packs(

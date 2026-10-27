@@ -457,6 +457,19 @@ fn write_tools_deserialize_trims_whitespace() {
     assert_eq!(decl.fields[0].name, "summary");
 }
 
+#[test]
+fn stored_built_ins_with_retired_key_decode() {
+    let stored: BuiltInTools = serde_json::from_value(
+        serde_json::json!({"enable_graph_tools": true, "enable_memory": true}),
+    )
+    .expect("a stored built_ins with the retired key decodes");
+    let written = serde_json::to_value(&stored).unwrap();
+    assert_eq!(written, serde_json::json!({"enable_memory": true}));
+    let without: BuiltInTools =
+        serde_json::from_value(serde_json::json!({"enable_memory": true})).unwrap();
+    assert_eq!(stored, without);
+}
+
 #[tokio::test]
 async fn tools_document_round_trips_defra_query_fields() {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());

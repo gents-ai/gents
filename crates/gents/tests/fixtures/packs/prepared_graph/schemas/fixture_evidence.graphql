@@ -1,5 +1,0 @@
-type FixtureEvidence {
-  evidence_id: String @index(unique: true) @immutable
-  head_ref: String @immutable
-  note: String
-}

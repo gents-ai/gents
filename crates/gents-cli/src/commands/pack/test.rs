@@ -36,7 +36,6 @@ pub(crate) async fn test(args: PackTestArgs) -> Result<()> {
     crate::print_json(&json!({
         "pack": check.pack,
         "digest": built.digest,
-        "graphs": check.graphs,
         "plugins": plugins,
         "scenario": scenario,
     }))?;

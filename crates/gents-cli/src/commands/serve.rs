@@ -728,7 +728,6 @@ async fn serve_foreground(
                 gents::defra_query::CollectionScope::restricted(args.mcp_query_collections.clone())
             },
             write_collections: args.mcp_write_collections.iter().cloned().collect(),
-            graph_reads: args.mcp_graph_tools,
         });
     let (activation_tx, activation_rx) = watch::channel(RuntimeActivationObservation::default());
     let replicated_schema = Arc::new(tokio::sync::OnceCell::new());

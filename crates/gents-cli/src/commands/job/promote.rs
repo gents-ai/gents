@@ -189,7 +189,6 @@ pub async fn promote(
     // The held access, not `pack install`'s own: a second local access would
     // contend for the home's store claim.
     let install = PackInstallArgs {
-        bindings: None,
         package: dir.display().to_string(),
         inference_slots: Vec::new(),
         preview: false,

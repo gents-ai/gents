@@ -1,17 +1,13 @@
 use crate::lean_vocab_test::{
-    lean_goal_capability_resolution_cases, lean_plugin_asset_mount_cases,
-    lean_plugin_calls_route_cases, lean_plugin_data_cases, lean_plugin_project_tier_cases,
-    lean_plugin_scratch_cases, lean_tool_policy_cases, LeanPluginAccess,
-    LeanPluginDataInsertOutcome, LeanPluginDataInvocation, LeanPluginDataOnConflict,
-    LeanPluginDataOperation, LeanPluginDataRefusal, LeanPluginDataStamp, LeanPluginDataWriteFacts,
-    LeanPluginMount,
+    lean_goal_capability_resolution_cases, lean_plugin_calls_route_cases, lean_plugin_data_cases,
+    lean_plugin_scratch_cases, lean_tool_policy_cases, LeanPluginDataInsertOutcome,
+    LeanPluginDataInvocation, LeanPluginDataOnConflict, LeanPluginDataOperation,
+    LeanPluginDataRefusal, LeanPluginDataStamp, LeanPluginDataWriteFacts,
 };
 use gents::application_write::Observation as WriteFacts;
 use gents::plugin::data::{
     self as plugin_data, InsertOutcome, Invocation, OnConflict, Stamp, WriteRefusal,
 };
-use gents::plugin::mounts::MountAccess;
-use gents_protocol::job::AssetMount;
 use std::collections::BTreeSet;
 
 #[path = "tool_policy_codec.rs"]
@@ -201,61 +197,10 @@ fn generated_plugin_data_cases_drive_admit_write() {
     }
 }
 
-fn mount(lean: &LeanPluginMount) -> (AssetMount, bool) {
-    (
-        AssetMount {
-            pack: lean.pack.clone(),
-            class: lean.class.clone(),
-            digest: lean.digest.clone(),
-            path: lean.path.clone(),
-            trusted: lean.trusted,
-        },
-        lean.installed,
-    )
-}
-
-/// Lean `mountAccess`, `mountCallAdmitted`, `projectPreopen` and
-/// `scratchAdmitted` through the pure core `plugin::mounts::resolve_access`
-/// beside the frozen file-bound `plugin::mounts::resolve`,
-/// `plugin::mounts::project_preopen` and the scratch admission
+/// Lean `scratchAdmitted` through the scratch admission
 /// `plugin_job::effects::admit_scratch`.
 #[test]
-fn generated_plugin_job_resource_cases_drive_mounts_and_scratch() {
-    let mounts = lean_plugin_asset_mount_cases();
-    assert_eq!(mounts.len(), 12, "Lean asset-mount rows drifted");
-    for (index, row) in mounts.iter().enumerate() {
-        let resolution = gents::plugin::mounts::resolve_access(
-            row.rw_bind,
-            &row.mounts.iter().map(mount).collect::<Vec<_>>(),
-        );
-        let expected = row
-            .access
-            .iter()
-            .map(|access| {
-                access.map(|access| match access {
-                    LeanPluginAccess::Read => MountAccess::Read,
-                    LeanPluginAccess::ReadWrite => {
-                        panic!("asset_mount {index}: a mount is never read-write")
-                    }
-                })
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(resolution.access, expected, "asset_mount {index}: access");
-        assert_eq!(resolution.admitted, row.admitted, "asset_mount {index}");
-    }
-
-    let tiers = lean_plugin_project_tier_cases();
-    assert_eq!(tiers.len(), 16, "Lean project-tier rows drifted");
-    for (index, row) in tiers.iter().enumerate() {
-        assert_eq!(
-            gents::plugin::mounts::project_preopen(&row.cwd, &row.project_roots),
-            row.expected,
-            "project_tier {index}: {} under {:?}",
-            row.cwd,
-            row.project_roots
-        );
-    }
-
+fn generated_plugin_job_resource_cases_drive_scratch() {
     let scratch = lean_plugin_scratch_cases();
     assert_eq!(scratch.len(), 13, "Lean scratch rows drifted");
     for (index, row) in scratch.iter().enumerate() {

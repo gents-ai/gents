@@ -11,8 +11,8 @@ use crate::plugin_job::records::{read_pin, read_progress, read_step_state, write
 use crate::plugin_job::JobBinding;
 use crate::tool_call_lifecycle::admission_fixture::{fixture_job_pin, write_fixture_job_pin};
 use gents_protocol::job::{
-    AssetMountDeclaration, DynamicMode, JobPin, JobPolicy, JobState, PluginDataDeclaration,
-    PluginJobDeclaration, PluginJobSettings,
+    DynamicMode, JobPin, JobPolicy, JobState, PluginDataDeclaration, PluginJobDeclaration,
+    PluginJobSettings,
 };
 use serde_json::Value;
 
@@ -149,9 +149,6 @@ fn install_plugin(
     let hex = record.digest.strip_prefix("sha256:").unwrap().to_owned();
     store::store_bytes(home, &hex, &store::read_bytes(source.path(), &hex).unwrap()).unwrap();
     record.declaration.job = PluginJobDeclaration(true);
-    record.declaration.asset_mounts = vec![AssetMountDeclaration {
-        class: "workflows".into(),
-    }];
     record.owner_pack_coordinate = Some("team/plugin".into());
     if script {
         record.declaration.script_runtime = Some(crate::pack::ScriptRuntime::Js);
@@ -501,12 +498,9 @@ async fn named_run_source_boundaries_follow_the_model_and_preserve_accepted_argu
     for (index, name) in [
         "absent_sources_under_off",
         "empty_script_under_off",
-        "empty_path_under_off",
-        "both_empty_under_off",
         "nonempty_script_under_off",
-        "nonempty_path_under_off",
         "whitespace_script_is_source",
-        "whitespace_path_is_source",
+        "inline_script_without_argv_under_off",
     ]
     .into_iter()
     .enumerate()
@@ -518,7 +512,6 @@ async fn named_run_source_boundaries_follow_the_model_and_preserve_accepted_argu
         let arguments = json!({
             "argv": case.job.call.argv,
             "script": case.job.call.script,
-            "path": case.job.call.path,
         });
         let call = format!("source-boundary-{index}");
         let answer = step.call_as(&call, &arguments.to_string()).await;
@@ -544,7 +537,7 @@ async fn named_run_source_boundaries_follow_the_model_and_preserve_accepted_argu
                 answer["next"]
                     .as_str()
                     .unwrap()
-                    .contains("operator-installed script"),
+                    .contains("without a `script`"),
                 "{name}: {answer}"
             );
             failed(&row, "policyDenied");
@@ -806,7 +799,8 @@ async fn host_facts_overwrite_guest_pin_fields() {
     let installed = store::read_record(step.home.path(), "team", "plugin").unwrap();
     assert_eq!(pin.plugin_ref, "team/plugin");
     assert_eq!(pin.engine_digest, installed.digest);
-    assert_eq!(pin.origin, gents_protocol::job::JobOrigin::Dynamic);
+    // `ARGS` carries no script, so the call's origin is installed.
+    assert_eq!(pin.origin, gents_protocol::job::JobOrigin::Installed);
     assert_eq!(pin.chain_root_doc_id, first["_docID"].as_str().unwrap());
     assert_eq!(
         (pin.resume_of.clone(), pin.replayed_from.clone()),
@@ -899,6 +893,11 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
         .call_as("call-2", r#"{"argv": ["resume", "root"]}"#)
         .await;
     assert_eq!(answer["status"], "running", "{answer}");
+    assert_eq!(
+        answer["next"],
+        format!("Next: `gents job show {}:call-2`", step.session_id),
+        "{answer}"
+    );
     let next = step.row_of("call-2").await;
     let pin = step.pin_of(&next).await;
     assert_eq!(pin.handle, root_pin.handle);
@@ -928,7 +927,7 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
     );
     assert_eq!(
         again["next"],
-        format!("Next: `{TOOL} resume {address}`"),
+        format!("Next: `gents job show {address}`; the `{TOOL}` help says how a run is resumed"),
         "{again}"
     );
     failed(&step.row_of("call-3").await, "policyDenied");
@@ -994,10 +993,8 @@ async fn a_js_script_spawn_is_refused_under_the_check_policy() {
     step.finish().await;
 }
 
-/// A call without `argv`, `script` or `path` runs the plugin artifact itself:
-/// its pin is `installed` whatever digest it names (Lean `callOrigin`), so the
-/// `check` policy, which refuses a dynamic run's first spawn, admits it and no
-/// `workflows` mount or marker file is needed.
+/// A call without a `script` is `installed` (Lean `callOrigin`), so the `check`
+/// policy, which refuses a dynamic run's first spawn, admits it.
 #[tokio::test]
 async fn a_scriptless_call_adopts_as_installed_under_check() {
     let step = step0(
@@ -1044,7 +1041,9 @@ async fn resume_of_a_missing_row_names_the_cause_and_the_next_call() {
     );
     assert_eq!(
         refused["next"],
-        format!("Next: `{TOOL} resume <address>` with the address the run's receipt printed"),
+        format!(
+            "Next: `gents job show <address>` with the address the run's receipt printed; the `{TOOL}` help says how a run is resumed"
+        ),
         "{refused}"
     );
     failed(&step.row_of("call-1").await, "policyDenied");
@@ -1132,128 +1131,6 @@ async fn background_receipt_shows_address_handle_script_id_and_tier_line() {
         .unwrap();
     assert_eq!(progress.title, "flow");
     assert_eq!(progress.last_event, "dynamic script, run mode");
-    step.finish().await;
-}
-
-#[tokio::test]
-async fn adopted_origin_follows_classify() {
-    const SCRIPT: &[u8] = b"fn step(input) { input }";
-    let digest = format!(
-        "sha256:{:x}",
-        <sha2::Sha256 as sha2::Digest>::digest(SCRIPT)
-    );
-    let installed = json!({"effects": {
-        "pin": {"script_id": "s", "source_digest": digest, "agent_budget": 2, "handle": "h"},
-        "spawn": [{"slot": "s", "attempt": 0, "target": "t-worker", "prompt": "go", "title": "t"}],
-    }});
-    let step = step0(
-        installed,
-        Options {
-            settings: Some(worker_settings(JobPolicy {
-                trusted_packs: vec!["acme/op".into()],
-                ..running_policy()
-            })),
-            ..Default::default()
-        },
-    )
-    .await;
-    install_trusted_script(&step, SCRIPT);
-    step.call_as("call-1", ARGS).await;
-    assert_eq!(
-        step.pin_of(&step.row_of("call-1").await).await.origin,
-        gents_protocol::job::JobOrigin::Installed
-    );
-    step.reinstall(&adopting());
-    step.call_as("call-2", ARGS).await;
-    assert_eq!(
-        step.pin_of(&step.row_of("call-2").await).await.origin,
-        gents_protocol::job::JobOrigin::Dynamic
-    );
-    step.finish().await;
-}
-
-/// Installs `script` as a workflow file of the operator pack `acme/op`.
-fn install_trusted_script(step: &Step0, script: &[u8]) {
-    let assets = "packs/.materialized/acme/op/22";
-    let dir = step.home.path().join(assets).join("workflows");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("flow.rhai"), script).unwrap();
-    write_home_install(
-        step.home.path(),
-        &HomePackInstall {
-            coordinate: "acme/op".into(),
-            version: "1.0.0".into(),
-            digest: "sha256:22".into(),
-            kind: PackKind::Documents,
-            assets: assets.into(),
-            dependency_assets: vec![],
-            plugins: vec![],
-            ux: Vec::new(),
-            installed_at: "2026-01-01T00:00:00Z".into(),
-            installed_via: Some(InstalledVia::Operator),
-        },
-    )
-    .unwrap();
-}
-
-/// A JS script cannot name a trusted file's digest as its own: the host pins
-/// the digest of the source that ran, so the run stays dynamic.
-#[tokio::test]
-async fn a_js_script_cannot_forge_a_trusted_source_digest() {
-    const TRUSTED: &[u8] = b"fn step(input) { input }";
-    let trusted = format!(
-        "sha256:{:x}",
-        <sha2::Sha256 as sha2::Digest>::digest(TRUSTED)
-    );
-    let step = step0(
-        adopting(),
-        Options {
-            script: true,
-            settings: Some(worker_settings(JobPolicy {
-                trusted_packs: vec!["acme/op".into()],
-                ..running_policy()
-            })),
-            ..Default::default()
-        },
-    )
-    .await;
-    install_trusted_script(&step, TRUSTED);
-    let script = format!(
-        "module.exports = (i) => i.pin ? {{effects: {{}}}} : {{effects: {{pin: {{script_id: \"s\", source_digest: \"{trusted}\", agent_budget: 2, handle: \"h\"}}, spawn: [{{slot: \"s\", attempt: 0, target: \"t-worker\", prompt: \"go\", title: \"t\"}}]}}}};"
-    );
-    let call = json!({"script": script, "agent_budget": 2});
-    let answer = step.call_as("call-1", &call.to_string()).await;
-    assert_eq!(answer["status"], "running", "{answer}");
-    let pin = step.pin_of(&step.row_of("call-1").await).await;
-    let digest = format!(
-        "{:x}",
-        <sha2::Sha256 as sha2::Digest>::digest(script.as_bytes())
-    );
-    assert_eq!(pin.source_digest, format!("sha256:{digest}"));
-    assert_eq!(pin.script_id, digest);
-    assert_eq!(pin.origin, gents_protocol::job::JobOrigin::Dynamic);
-    step.finish().await;
-}
-
-/// Under `policy.dynamic: off` a call that carries a `script` runs dynamic
-/// code whatever its `argv`, so a pinless script answer is refused.
-#[tokio::test]
-async fn a_js_script_without_argv_is_refused_under_off() {
-    let step = step0(
-        adopting(),
-        Options {
-            script: true,
-            settings: Some(worker_settings(JobPolicy {
-                dynamic: DynamicMode::Off,
-                ..Default::default()
-            })),
-            ..Default::default()
-        },
-    )
-    .await;
-    let call = json!({"script": "module.exports = () => ({result: {answer: 42}})"});
-    let answer = step.call_as("call-1", &call.to_string()).await;
-    assert_eq!(answer["code"], "plugin_job_policy_denied", "{answer}");
     step.finish().await;
 }
 

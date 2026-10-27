@@ -332,8 +332,7 @@ Historical bridge references below are not evidence that this target already run
 | Surface | Contract and retained owner |
 | --- | --- |
 | Document vocabulary | `ConfigDocuments` supplies apply, self-config, and sync projections with canonical names and field lists. Nested groups are values, not new documents. |
-| Authoring and inference | `Configuration` resolves a agent into one `ResolvedSessionConfig`: actual context content plus inference. Typed document lookups use `(node_did, logical ID)` and share one owner check; Task and graph stages reuse this result. `defaultAgentPublishable` requires a node's default agent to be owned and enabled, so a publishable default never resolves to `disabledAgent`. Compact defaults, explicit auth, and backend/credential-scoped discovery retain their own boundaries. |
-| Graph selection | `GraphPipeline/Configuration` resolves authorized installed capabilities through that same Task resolver. Foreign capability ownership is preserved. Event groups reuse `Triggers/Groups` validation and candidate resolution, with graph bounds checked at delivery. `graphEdgeValid` refuses `latest_only` on every edge (`graphEdgeConcurrencyValid`) and applies the group narrowing to grouped edges; `graph_pipeline_edge_delivery_cases` binds the compiler. |
+| Authoring and inference | `Configuration` resolves a agent into one `ResolvedSessionConfig`: actual context content plus inference. Typed document lookups use `(node_did, logical ID)` and share one owner check; Tasks reuse this result. `defaultAgentPublishable` requires a node's default agent to be owned and enabled, so a publishable default never resolves to `disabledAgent`. Compact defaults, explicit auth, and backend/credential-scoped discovery retain their own boundaries. |
 | Context and permissions | `Skills` uses an explicit context whitelist and preserves tool authority exactly. `PromptAssembly/Template` retains task rendering only; its existing assembler carries literal context text, with task substitutions confined to the task slot. `ToolPolicy/Configuration` enforces exact service/tool selection, independent presentation, background subsets, and tool-local limits alongside the existing ceiling lattice; its `effective*` owners clamp admitted document timeouts to host and fixed ceilings, and `tool_timeout_cases` binds the native resolution to them. Its `pluginCallAccess` owner gives each bound plugin call `read` unless it sets a declared write field, and `pluginCallAdmitted` runs it only where the operator's grant covers that call's access; `plugin_resource_cases.call_access` drives the executor's bind admission. `ToolPolicy/PluginNetwork` admits host-mediated plugin HTTP: a granted allow-list, HTTPS unless an entry names plaintext, and public addresses unless an entry names the IP literal; `plugin_resource_cases.network` drives the native admission and address classifier. `ToolPolicy/WriteInput` enforces typed scalar input, nullability, required fields, and caller exclusion from runtime-filled fields; 256 generated cases exercise the bounded writer's input validator. |
 | Plugin access answers | `ToolPolicy/PluginApproval` admits an answer only for the same unanswered question before its waiter deadline. Cancellation removes the question while preserving existing grants; duplicate answers cannot widen access. `plugin_approval_cases` drives the native queue and grant files. Native locks serialize filesystem operations; cross-file I/O atomicity is not modeled. |
 | Event groups | Trigger and callback consumers share `EventGroupKey`, candidate eligibility and the durable clock in `EventDelivery/Group`. Callback input and group origin live on the existing invocation and survive its transitions; retries do not reproject live sources. |
@@ -514,15 +513,10 @@ The current proof suite covers twenty practical areas:
 17. Agent self-configuration writes: per-collection writable/protected field
     partitions, patch-merge identity immutability and containment,
     transactional accept/reject totality, and no-lockout recoverability
-18. Graph-pipeline publication and terminal runs: whole-graph validation before
-    activation, complete-artifact visibility, immutable revision identity,
-    active-pointer alignment, atomic running-run plus seed creation, run pinning,
-    result-contract-gated success, durable cancellation intent, and single-winner
-    terminal transitions
-19. Human-attention mailbox: requester/agent identity stamping, owner-only
+18. Human-attention mailbox: requester/agent identity stamping, owner-only
     dismissal, at-most-one open item per owner/source tuple, fresh occurrence
     allocation after terminal rows, terminal-state immutability, deadline
-    expiry, and proof that mailbox close states do not create graph edges.
+    expiry.
     Reply consumption binds an authenticated interactive request to the explicit
     target and requester; a consumed item admits only its recorded request
     (`Mailbox/Reply`). This does not grant host execution authority.
@@ -546,7 +540,7 @@ The current proof suite covers twenty practical areas:
     requester/node DIDs are not covered. Negative handoff guards remain
     model-only; generic Ask/Gate notifications do not automatically complete
     a request.
-20. Request execution leases (#1341, #1571): opaque fresh ownership generations,
+19. Request execution leases (#1341, #1571): opaque fresh ownership generations,
     explicit deadlines independent of output, bounded owner renewal,
     atomic expiry recovery, drop recovery, matching-generation terminal CAS,
     and bounded winner-owned continuation/token-charge effects. Canonical
@@ -641,7 +635,6 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/Triggers/Refinement.lean` | Fresh queued document admission refines the legacy dispatch model after erasing durable identity and claim details; execution exclusion belongs to the shared claim predicate. |
 | `Proofs/Triggers/Durable.lean` | Atomic admission, configured outcome-chain rejection, shared session Goal assignments, separate terminal/publication transitions and idempotent outcome recovery. |
 | `Proofs/EventDelivery/Durable.lean` | Receiving-node arrival journal checkpoints and complete-prefix admission/disposition invariant for trigger and callback-binding consumers (version-free invocation receipts; a callback binding is enabled only with its callback), including disabled delivery, registration-time seeding and crash replay. |
-| `Proofs/GraphPipeline/WorkspaceLineage.lean` | Pinned graph session selection for #1445, sharing authenticated existing session and ancestry owners. |
 | `Proofs/Workspace.lean` | Isolated workspace lifecycle, append-only bindings, seal/owner routing, and authority meet |
 | `Proofs/Callback.lean` | Callback invocation lifecycle, action-journal prefix, and claim uniqueness |
 | `Proofs/Client.lean` | Barrel for client turn-state derivation and client theorems |
@@ -664,10 +657,7 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/CommandPolicy.lean` | Barrel for command/tool execution policy validation, sandbox, env, and safety proofs |
 | `Proofs/ToolExecution.lean` | MCP/tool preflight and retry eligibility boundary model. `ToolOperation.pluginJob` is a detached operation (`isDetached`) whose row never foregrounds (`plugin_job_row_never_foregrounds`) |
 | `Proofs/ManagedExec.lean` | Barrel for managed native executor state, executable transitions, liveness properties, and tool composition |
-| `Proofs/GraphPipeline.lean` | Model-callable graph publication and run lifecycle: validation/materialization gates, active-pointer alignment, immutable revision identity, atomic seed/run start, cancellation suppression, result-commit-gated success, and terminal CAS safety |
-| `Proofs/GraphPipeline/FailureAttribution.lean` | Existing GraphRun transaction refinement: capture the first durable failure before interrupting siblings, preserve it through drain/restart, reject stale generation writes, and retain explicit cancellation precedence. “First” means the first committed fail-fast decision; evidence discovery and logical continuation eligibility remain separate inputs. |
-| `Proofs/GraphPipeline/LogicalInvocation.lean` | Derived authenticated physical ancestry, conservative committed Goal obligations, logical tip outcome and physical limits; existing GraphRun publication generation fence. Projection cases and publication traces target signed-row and transaction tests; new cases require consumer migration in the conformance layer. |
-| `Proofs/GoalAutomation/RequestAncestry.lean` | Authenticated physical request ancestry (`Doc`, `Attempt`, `Edge`, `parents`, `rootsAt`, `roots`, `members`, `ambiguous`, `tips`) for Goal and graph invocation entries; Rust owner `goal::authenticated_goal_request_members`. Exhausted or ambiguous paths fail closed. `GraphPipeline.LogicalInvocation` re-exports it. |
+| `Proofs/GoalAutomation/RequestAncestry.lean` | Authenticated physical request ancestry (`Doc`, `Attempt`, `Edge`, `parents`, `rootsAt`, `roots`, `members`, `ambiguous`, `tips`) for Goal invocation entries; Rust owner `goal::authenticated_goal_request_members`. Exhausted or ambiguous paths fail closed. `GraphPipeline.LogicalInvocation` re-exports it. |
 | `Proofs/PromptAssembly/` | Provider-view sanitation and prompt assembly, per-turn context budgeting, and the request-wide aggregate token ledger. Fences: generated cases consumed by `agent::loop_stream::tests`. |
 | `Proofs/PromptAssembly/CurrentInput.lean` | Request membership alone never identifies admission input. `current_input_cases` derives retained header indices from the model; `session::output::tests::current_input_selection_matches_lean_owner` binds the canonical prompt/context key classification. Current-request tool results, notifications and assistant output remain history. The separate database regression exercises actual reconstruction; neither test claims reachability of arbitrary imported facts. |
 | `Proofs/PromptAssembly/ClaudeMap.lean` | Claude tool-name map and Messages provider-input assembly: advertised reasoning metadata gates `selectedEffort` (unknown/unsupported efforts are omitted), plus `splitSystem_partition`, `systemBlocks_head`, `systemBlocks_tail_verbatim`, `toolsField_empty`, `accumulate_ignores_start_when_streamed`, `runStream_*`. Fences: `tests/conformance/prompt_assembly.rs::generated_claude_{map,stream,body}_cases_*`; the identity pin lives in `claude_messages::tests`. |
@@ -684,10 +674,10 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/PluginJob/Adoption.lean` | Adoption is the existing background transition: step 0's `pin` flips the call to the background and writes `job_pin` and the admitted effects atomically, with no execution receipt; a pinned step-0 terminal is adopted, terminalized and delivered inline |
 | `Proofs/PluginJob/Step.lean` | Idempotent step writes (keyed spawns, latched interrupts, first-wins pin, host-owned progress revision), stale-step subsumption for prefix-monotone guests, the termination measure `jobMeasure`, and the three-consecutive-failure rule |
 | `Proofs/PluginJob/Control.lean` | Stop, pause and the wall-clock deadline share one kill path over the row's own live children and end the row at once; a single terminal winner; resume starts a new row under the prior row's scope and inherits its chain root; job result reads require scope, plugin and a terminal row |
-| `Proofs/PluginJob/Authority.lean` | Install provenance and the host-decided script origin (`originOf`, `origin_is_host_fact`), the operator-installed engine (`self_config_engine_refused`), the dynamic-origin policy, pack-shipped job blocks within what the operator installed, nested jobs refused at any depth, and `script_grants_nothing` |
+| `Proofs/PluginJob/Authority.lean` | Install provenance and the call-decided origin (`callOrigin`: a `script` is dynamic, anything else installed), the operator-installed plugin pack (`self_config_engine_refused`), the dynamic-origin policy, pack-shipped job blocks within what the operator installed, nested jobs refused at any depth, and `script_grants_nothing` |
 | `Proofs/Recovery/Sweeps/PluginJob.lean` | `pluginJobRecoverySweep`, the registered sweep for running plugin-job rows: a tick re-drives one step and then applies the stall rule, which reads the step's new effects; deadline expiry and an unavailable tool, plugin, job block or install record end the row |
 | `Proofs/ToolPolicy/PluginData.lean` | Plugin data seam: `data_calls` and `writes` stay in the plugin's own SDL, never touch runtime or protected collections, act as the invoking principal, and carry host-only stamps; bounded writes, first-wins notes and identical-replay no-ops, with one admission predicate for tool calls, job steps and callbacks. Scope: `boundary.plugin-data.transaction` |
-| `Proofs/ToolPolicy/Configuration.lean` | Mount axis: read-only `AssetMount`s pinned to the install digest, the operator's project tier (off by default, never trusted), refusal of a read-write bind combined with mounts, and the bounded per-row scratch directory named by `tool_call_id` |
+| `Proofs/ToolPolicy/Configuration.lean` | Install provenance and the bounded per-row scratch directory named by `tool_call_id` |
 | `Proofs/ToolPolicy/PluginCalls.lean` | `routeOf`: job-bound tool names are hook-owned and never composable (`job_tool_not_composable`) |
 | `Proofs/Session/` | Session queue model: queue sources (`background_completion`, steering), coalesce policy/keys, automated wake-up drain |
 | `Proofs/Compaction/` | Transcript reduction (#993) plus durable request-local provider reduction (#1127): canonical provider-view sanitation, pair-safe split correspondence, immutable create-and-compare identity, persist-before-activate, and exact crash restoration. Fences: `tests/conformance/streaming_compaction.rs` and `tests/conformance/durable_reduction.rs`. |
@@ -1175,7 +1165,7 @@ fixture implementation remains in the formal layer.
 
 - disabled triggers cannot accept work
 - scheduled/event triggers select their configured task; `resolveDispatch` uses
-  the same owned context/inference resolver as direct tasks and graph stages
+  the same owned context/inference resolver as direct tasks
 - serial triggers accept at most one active request
 - `T3_latest_only_convergence` proves latest-only supersession directly from
   `dispatchStep`
@@ -1629,51 +1619,6 @@ remain unchanged. Eight explicit conformance cases accompany the general laws.
 The older claimed-phase convergence theorem assumes publication remains
 authorized; a historical claim alone cannot override a later pause.
 
-### Graph logical invocation boundary (#1357)
-
-The logical identity is the authenticated pinned root; no invocation row is added.
-Active Goals and unfinished BudgetLimited wrap-up defer graph completion. Graph
-does not duplicate GoalSource retry/activity/budget decisions. An unsuccessful
-tip cannot succeed merely because results exist. Physical descendants still
-count individually. Authentication booleans in the model must be discharged by
-real signed-row consumers, including physical parent, owner and pinned route.
-
-DefraDB ACP remains the access-control owner. Root attribution reuses the
-verified GraphRun/revision owner DID and existing signed receipt; it does not
-recompute Task/agent permissions from mutable configuration. Foreign roots
-cannot contribute counts or failure witnesses. Unrelated interactive session
-rows do not erase an invocation's Goal obligation; authenticated replacement
-Goal chains retain their distinct association semantics.
-
-Publication and terminal/failure transactions write the existing GraphRun key.
-This refinement assumes same-native-store write conflict validation; scans do
-not establish predicate/phantom protection, and independent replicas do not gain
-consensus. Fresh unassociated Goal/first-root discovery and Goal-creation
-association policy remain explicit unresolved boundaries, not proven fixed by
-this model. Finite path/case proofs establish safety for admitted identities and
-edges, not provider progress or scheduler fairness.
-
-Ambiguous multiple-root input remains a fail-closed abstract theorem. It is not
-an emitted DB fixture: one immutable child row cannot authenticate two distinct
-physical parents. The branching-tip case uses two independently signed historical
-Goal identities; distinct retry keys make both physical children representable.
-
-The generated `graph_logical_invocation_cases` consumer exercises persisted
-signed roots/children and reads the actual GraphRun projection. Its historical
-head case verifies that canonical Goal replacement cannot relabel a root ahead
-of its same-second child; the emitted association guard abstracts that validated
-binding and does not prove signature verification itself. The generated
-`graph_invocation_publication_cases` consumer drives the existing publication,
-capture, cancellation and terminal transaction owners and reads durable state.
-
-`overlapping_native_graph_publication_and_closure_conflict_atomically` additionally
-opens two native handles before either commits, bypassing only the local gents
-mutation gate. Both match the same GraphRun generation; in both commit orders
-the loser reports a storage transaction conflict and only the winner's child
-effect survives. This establishes the tested same-store owner-key conflict
-mechanism, not absent-range protection or cross-replica consensus. Caller tests
-separately cover typed resume, automatic continuation and fresh Goal opening.
-
 ### Immutable workspace path capability (#1349)
 
 `Workspace/PathCapability.lean` refines the existing host executor and receipt
@@ -1790,7 +1735,7 @@ budgets. `repeated_tool_failure_cases` and the composed fields of
 ### Logical invocation output obligations
 
 `CompletionRetry.LogicalOutputObligation` reuses the authenticated physical ancestry of
-`GoalAutomation.RequestAncestry` for both graph and non-graph invocation entries.
+`GoalAutomation.RequestAncestry` for invocation entries.
 Trigger activation follows the root; the contract remains the current configured
 tool surface shared by the loop and model hook, with no new configuration pin.
 Completed calls from validated members are unioned by physical tool-call ID and
@@ -1828,36 +1773,5 @@ cleaning/cleaned lifecycle cannot replay. The model proves receipt/capability
 preservation and denial of dirty or actively written ready workspaces. Git
 commit-to-tree resolution, filesystem identity, operator capability/placement
 checks and active-binding observation are adapter facts, not cryptographic,
-filesystem or native predicate-lock proofs. Existing graph workspace lineage
-only transports the seal produced by this owner; Ready creation is not sealing.
-
-### Pinned graph entry workspace lineage
-
-`GraphPipeline/WorkspaceLineage.lean` derives one entry-root workspace tuple using
-verified run/plan/route and authenticated immutable physical request evidence.
-Destination authority comes from the pinned plan. Explicit conflicting workspace ID,
-seal or authority denies; absent/untrusted/ambiguous roots cannot grant. The node
-owner comes from verified workspace state, not a caller-supplied owner hint. Bootstrap
-requires the workspace ID in controller-stored input; the existing workspace owner
-may stamp an omitted seal. The helper
-never changes workspace state: ordinary creation is Ready, while operator quickstart freezes its unchanged base
-through that owner before ArtifactWrite admission.
-
-Twenty-five generated `graph_workspace_lineage_cases` drive the production
-resolver with installed plans, real signatures, persisted workspace rows, and
-native publication transactions. The stale-publication case overlaps two native
-transactions and checks rollback of the losing child. A separate materializer
-consumer exercises the actual bounded Area write and event handoff to a scanner. Publication
-composes the existing GraphRun generation/cancel/first-cause fence and adds no
-transaction, registry or status owner. Authentication and physical seed uniqueness
-are observed adapter facts, not proofs of cryptography or native phantom locking.
-Only single selected-entry runs are covered; arbitrary multiple independent entry
-roots fail closed. A successful lineage projection is distinct from successful
-publication if the run changes before commit.
-
-A pinned destination with no workspace authority (code-review triage or an
-unbound generic graph) receives no workspace binding. Root provenance and
-explicit conflicts are checked before this attenuation; no ReadOnly fallback
-is invented. Exact root identity inheritance applies only to destinations with
-a workspace authority. Matching identity hints are discarded for a no-authority
-destination; an explicit nonempty authority conflicts and is denied.
+filesystem or native predicate-lock proofs. Workspace lineage only
+transports the seal produced by this owner; Ready creation is not sealing.

@@ -2,19 +2,15 @@
 import type { SessionFork } from "./SessionFork.js";
 
 /**
- * These origins can coexist: a graph stage invokes a task, and that work can
- * start another session with `agent_new`. References record actual creation facts; they
- * neither select configuration nor confer graph membership or authorization.
+ * These origins can coexist: a task runs, and that work can start another
+ * session with `agent_new`. References record actual creation facts; they
+ * neither select configuration nor confer authorization.
  */
 export type SessionProvenance = {
 /**
  * Task invoked to create this session, scoped to the session's node_did.
  */
 task_id?: string | null,
-/**
- * Existing graph execution, not a second graph definition or stage config.
- */
-graph_run_id?: string | null,
 /**
  * Exact causal request document for a session started by `agent_new`,
  * copied from its first request's `caused_by_parent_request_doc_id`. It is

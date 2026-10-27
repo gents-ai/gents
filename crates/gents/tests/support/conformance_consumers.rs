@@ -469,20 +469,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_terminal_outcome_action_traces_use_native_owners",
         },
         ConformanceConsumer::RustTest {
-            id: "graph_pipeline::session_continuation_contract_tests::session_selection_matches_executable_graph_owner",
-            package: "gents",
-            source_path: "crates/gents/src/graph_pipeline/session_continuation_contract_tests.rs",
-            module_path: "graph_pipeline::session_continuation_contract_tests",
-            function: "session_selection_matches_executable_graph_owner",
-        },
-        ConformanceConsumer::RustTest {
-            id: "graph_pipeline::session_continuation_contract_tests::applied_assignment_heads_match_executable_graph_owner",
-            package: "gents",
-            source_path: "crates/gents/src/graph_pipeline/session_continuation_contract_tests.rs",
-            module_path: "graph_pipeline::session_continuation_contract_tests",
-            function: "applied_assignment_heads_match_executable_graph_owner",
-        },
-        ConformanceConsumer::RustTest {
             id: "conformance::prompt_assembly::generated_protected_replay_compaction_cases_bind_native_split_and_checkpoint",
             package: "gents",
             source_path: "crates/gents/tests/conformance/prompt_assembly.rs",
@@ -924,13 +910,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_artifact_spawn_cases_drive_live_foreground_and_background_launches",
         },
         ConformanceConsumer::RustTest {
-            id: "graph_pipeline::run::workspace_lineage_contract_tests::generated_graph_workspace_cases_drive_installed_plan_and_signed_receipts",
-            package: "gents",
-            source_path: "crates/gents/src/graph_pipeline/workspace_lineage_contract_tests.rs",
-            module_path: "graph_pipeline::run::workspace_lineage_contract_tests",
-            function: "generated_graph_workspace_cases_drive_installed_plan_and_signed_receipts",
-        },
-        ConformanceConsumer::RustTest {
             id: "workspace::tests::operator_base_freeze::generated_operator_base_freeze_cases_drive_real_git_executor",
             package: "gents",
             source_path: "crates/gents/src/workspace/tests/operator_base_freeze.rs",
@@ -1155,20 +1134,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_workspace_path_alias_cases_drive_real_git_delta",
         },
         ConformanceConsumer::RustTest {
-            id: "graph_pipeline::run::publication_contract_tests::generated_graph_invocation_publication_traces_drive_real_transactions",
-            package: "gents",
-            source_path: "crates/gents/src/graph_pipeline/publication_contract_tests.rs",
-            module_path: "graph_pipeline::run::publication_contract_tests",
-            function: "generated_graph_invocation_publication_traces_drive_real_transactions",
-        },
-        ConformanceConsumer::RustTest {
-            id: "graph_pipeline::logical_invocation_contract_tests::generated_graph_logical_invocations_drive_persisted_run_projection",
-            package: "gents",
-            source_path: "crates/gents/src/graph_pipeline/logical_invocation_contract_tests.rs",
-            module_path: "graph_pipeline::logical_invocation_contract_tests",
-            function: "generated_graph_logical_invocations_drive_persisted_run_projection",
-        },
-        ConformanceConsumer::RustTest {
             id: "goal::first_request_binding::contract_tests::generated_first_request_bindings_commit_exact_physical_roots",
             package: "gents",
             source_path: "crates/gents/src/goal/first_request_binding/contract_tests.rs",
@@ -1372,13 +1337,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "goal_resume_request_reuses_signed_predecessor_and_returns_same_child",
         },
         ConformanceConsumer::RustTest {
-            id: "graph_pipeline::run::attribution_contract_tests::generated_graph_failure_attribution_traces_drive_real_transactions",
-            package: "gents",
-            source_path: "crates/gents/src/graph_pipeline/attribution_contract_tests.rs",
-            module_path: "graph_pipeline::run::attribution_contract_tests",
-            function: "generated_graph_failure_attribution_traces_drive_real_transactions",
-        },
-        ConformanceConsumer::RustTest {
             id: "admission::registry::contract_tests::generated_inference_registry_cases_drive_real_permits",
             package: "gents",
             source_path: "crates/gents/src/admission/registry_contract_tests.rs",
@@ -1442,39 +1400,11 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_task_hook_sweep_cases_drive_the_record_sweep",
         },
         ConformanceConsumer::RustTest {
-            id: "conformance::graph_pipeline::generated_validation_cases_fence_whole_graph_compilation_gate",
-            package: "gents",
-            source_path: "crates/gents/tests/conformance/graph_pipeline.rs",
-            module_path: "conformance::graph_pipeline",
-            function: "generated_validation_cases_fence_whole_graph_compilation_gate",
-        },
-        ConformanceConsumer::RustTest {
             id: "conformance::mailbox::rust_mailbox_vocabularies_and_machine_match_lean_contract",
             package: "gents",
             source_path: "crates/gents/tests/conformance/mailbox.rs",
             module_path: "conformance::mailbox",
             function: "rust_mailbox_vocabularies_and_machine_match_lean_contract",
-        },
-        ConformanceConsumer::RustTest {
-            id: "conformance::graph_pipeline::generated_revision_gate_cases_fence_publication_and_start_readiness",
-            package: "gents",
-            source_path: "crates/gents/tests/conformance/graph_pipeline.rs",
-            module_path: "conformance::graph_pipeline",
-            function: "generated_revision_gate_cases_fence_publication_and_start_readiness",
-        },
-        ConformanceConsumer::RustTest {
-            id: "conformance::graph_pipeline::generated_run_terminal_cases_fence_completion_cas",
-            package: "gents",
-            source_path: "crates/gents/tests/conformance/graph_pipeline.rs",
-            module_path: "conformance::graph_pipeline",
-            function: "generated_run_terminal_cases_fence_completion_cas",
-        },
-        ConformanceConsumer::RustTest {
-            id: "conformance::graph_pipeline::generated_edge_delivery_cases_fence_graph_edge_admission",
-            package: "gents",
-            source_path: "crates/gents/tests/conformance/graph_pipeline.rs",
-            module_path: "conformance::graph_pipeline",
-            function: "generated_edge_delivery_cases_fence_graph_edge_admission",
         },
         ConformanceConsumer::RustTest {
             id: "conformance::goals::rust_goal_status_vocabulary_and_machine_match_lean_contract",
@@ -1834,11 +1764,11 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_plugin_data_cases_drive_admit_write",
         },
         ConformanceConsumer::RustTest {
-            id: "conformance::tool_policy::generated_plugin_job_resource_cases_drive_mounts_and_scratch",
+            id: "conformance::tool_policy::generated_plugin_job_resource_cases_drive_scratch",
             package: "gents",
             source_path: "crates/gents/tests/conformance/tool_policy.rs",
             module_path: "conformance::tool_policy",
-            function: "generated_plugin_job_resource_cases_drive_mounts_and_scratch",
+            function: "generated_plugin_job_resource_cases_drive_scratch",
         },
         ConformanceConsumer::RustTest {
             id: "conformance::tool_policy::generated_plugin_calls_route_cases_drive_supported",

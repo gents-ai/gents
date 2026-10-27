@@ -1699,7 +1699,7 @@ mod tests {
         .await;
         let reply = host_reply(&service, "wf-pause", "/workflow pause alpha").await;
         assert!(reply.contains("alpha"), "{reply}");
-        assert!(reply.contains("/workflow resume alpha"), "{reply}");
+        assert!(reply.contains("how a paused run is resumed"), "{reply}");
         assert_eq!(
             job_state(&service, "wf-pause", "call-a").await,
             JobState::Paused
@@ -2985,7 +2985,7 @@ mod tests {
             .await;
         let response = parse_response(dispatch.response.as_deref().expect("response line"));
         assert!(response.get("error").is_none(), "{response}");
-        assert_eq!(response["result"], json!({"workflows": []}));
+        assert_eq!(response["result"], json!({"result": {"workflows": []}}));
     }
 
     #[tokio::test]

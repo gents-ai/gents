@@ -60,8 +60,7 @@ pub(crate) use request_assignment::{
 pub(crate) use request_head::assignment_allows;
 pub(crate) use request_head::{
     assignment_request_id_in_txn, authenticated_goal_request_members, goal_session_is_idle,
-    latest_authenticated_session_request, latest_goal_request, request_selection_fields,
-    verify_goal_continuation_edge,
+    latest_goal_request, request_selection_fields, verify_goal_continuation_edge,
 };
 pub use reset_resume::resume_at_reset;
 mod question_wait;
@@ -362,13 +361,6 @@ pub struct GoalState {
 }
 
 impl GoalState {
-    pub(crate) fn has_continuation_obligation(self) -> bool {
-        self.status == GoalStatus::Active
-            || (self.status == GoalStatus::BudgetLimited
-                && self.wrapup_requested
-                && !self.wrapup_completed)
-    }
-
     pub fn step(self, action: GoalAction) -> Option<Self> {
         match action {
             GoalAction::Pause
@@ -967,60 +959,6 @@ struct StagedGoal {
     goal: GoalDocument,
 }
 
-async fn fence_opened_graph_goal_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
-    previous: Option<GoalState>,
-    goal: &GoalDocument,
-) -> Result<()> {
-    let current = goal
-        .state()
-        .context("graph Goal opening has unknown status")?;
-    if !current.has_continuation_obligation()
-        || previous.is_some_and(GoalState::has_continuation_obligation)
-    {
-        return Ok(());
-    }
-    let did = escape_graphql_string(&goal.node_did);
-    let session = escape_graphql_string(&goal.session_id);
-    let fields = request_selection_fields();
-    let response = txn
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{
-        node_did: {{ _eq: "{did}" }}, session_id: {{ _eq: "{session}" }}
-    }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {fields} }} }}"#
-        ))
-        .await?;
-    let requests: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(
-        response
-            .pointer("/data/AgentRequest")
-            .cloned()
-            .context("Goal opening request query omitted rows")?,
-    )?;
-    let Some(head) = latest_goal_request(goal, &requests) else {
-        return Ok(());
-    };
-    if head.caused_by_trigger_kind.as_deref() == Some(GOAL_TRIGGER_KIND)
-        && head.caused_by_trigger_id.as_deref() != Some(goal.goal_id.as_str())
-    {
-        return Ok(());
-    }
-    let head_doc = head
-        .doc_id
-        .as_deref()
-        .context("Goal opening head has no physical document ID")?;
-    if let Some(binding) =
-        crate::graph_pipeline::graph_binding_for_request_in_txn(txn, head_doc).await?
-    {
-        crate::graph_pipeline::fence_graph_publication_in_txn(
-            txn,
-            &binding.run_id,
-            &binding.revision_digest,
-        )
-        .await?;
-    }
-    Ok(())
-}
-
 #[doc(hidden)]
 pub struct GoalCreationIdentity {
     pub goal_id: String,
@@ -1229,7 +1167,6 @@ async fn stage_goal_and_claim(
             updated_at: Some(now.to_string()),
         },
     };
-    fence_opened_graph_goal_in_txn(txn, None, &staged.goal).await?;
     Ok(staged)
 }
 
@@ -1689,7 +1626,6 @@ async fn stage_goal_backed_request(
         staged_goal.goal.parsed_status() == Some(GoalStatus::Active),
         "the session already has a non-active goal"
     );
-    crate::graph_pipeline::fence_graph_root_request_in_txn(txn, request).await?;
     let request_fields = request.graphql_input_fields().map_err(anyhow::Error::msg)?;
     let created = txn
         .execute(&format!(
@@ -2467,12 +2403,6 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
         .await?
         .context("assigned Task Goal disappeared")?;
     request_head::retire_stale_assignment_continuations_in_txn(txn, &updated, None, now).await?;
-    fence_opened_graph_goal_in_txn(
-        txn,
-        previous.as_ref().and_then(GoalDocument::state),
-        &updated,
-    )
-    .await?;
     let receipt_doc_id = escape_graphql_string(&assignment.doc_id);
     txn.execute(&format!(
         r#"mutation {{ update_TriggerFire(filter: {{_docID: {{_eq: "{receipt_doc_id}"}}}},
@@ -2577,7 +2507,6 @@ async fn set_goal_in_txn(
         let updated = load_canonical_goal_in_txn(txn, node_did, session_id)
             .await?
             .context("updated Goal row disappeared")?;
-        fence_opened_graph_goal_in_txn(txn, Some(pre), &updated).await?;
         crate::trigger_engine::durable::publish_goal_outcomes(
             txn,
             node_did,
@@ -2646,7 +2575,6 @@ async fn set_goal_in_txn(
     let created = load_canonical_goal_in_txn(txn, node_did, session_id)
         .await?
         .context("created Goal row not found")?;
-    fence_opened_graph_goal_in_txn(txn, None, &created).await?;
     Ok(created)
 }
 

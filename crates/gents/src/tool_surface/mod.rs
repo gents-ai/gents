@@ -109,7 +109,6 @@ pub struct SelfConfigToolConfig {
     pub no_lockout: bool,
     pub preview: bool,
     pub enable_pack_install: bool,
-    pub enable_graph_tools: bool,
     pub process_ceiling: SelfConfigProcessCeiling,
 }
 

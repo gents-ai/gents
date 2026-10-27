@@ -42,7 +42,7 @@ struct ScenarioManifest {
     prepare: Vec<ScenarioPrepareStep>,
     #[serde(default)]
     allowed_folders: Vec<ScenarioAllowedFolder>,
-    #[serde(default, alias = "graph_dependency_environment")]
+    #[serde(default)]
     dependency_environment: BTreeMap<String, BTreeMap<String, String>>,
     #[serde(skip)]
     dependencies: Vec<String>,
@@ -327,7 +327,7 @@ async fn resolve_scenario_dir(
         gents::pack::declared_paths(pack.manifest())
             .iter()
             .any(|path| path == "experiment.json"),
-        "pack {target} has no scenario; use graph run for installed graphs"
+        "pack {target} has no scenario (experiment.json)"
     );
     let (root, lease) = super::materialize_cached_pack(&home, &pack)?;
     Ok((root, Some(lease), pack.manifest().clone()))
@@ -745,13 +745,13 @@ fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
         bail!("expect.source_edges requires expect.signed_provenance=true");
     }
     validate_tool_package(&manifest.init.tool_package)?;
-    let mut graph_packages = BTreeSet::new();
+    let mut dependency_packages = BTreeSet::new();
     for package in &manifest.dependencies {
         let package = package.trim();
         if package.is_empty() {
             bail!("manifest dependencies entries must not be empty");
         }
-        if !graph_packages.insert(package) {
+        if !dependency_packages.insert(package) {
             bail!("manifest dependencies contain duplicate {package}");
         }
     }
@@ -939,8 +939,8 @@ async fn install_dependencies(
         if ctx.grant_authority {
             args.push("--grant-authority".to_owned());
         }
-        let graph_pack = super::resolve_pack_source(package, ctx.registry, ctx.home).await?;
-        for slot in &graph_pack.manifest().metadata.inference_slots {
+        let dependency_pack = super::resolve_pack_source(package, ctx.registry, ctx.home).await?;
+        for slot in &dependency_pack.manifest().metadata.inference_slots {
             args.push("--inference-slot".to_owned());
             args.push(format!("{}={}", slot.name, ctx.inference_profile_id));
         }
@@ -3806,8 +3806,8 @@ mod tests {
     }
 
     #[test]
-    fn scenario_manifest_reads_the_old_and_new_dependency_environment_keys() {
-        for key in ["graph_dependency_environment", "dependency_environment"] {
+    fn scenario_manifest_reads_the_dependency_environment_key() {
+        for key in ["dependency_environment"] {
             let manifest: ScenarioManifest = serde_json::from_value(serde_json::json!({
                 "name": "t",
                 "init": {"inference_url": "http://x", "model_name": "m"},

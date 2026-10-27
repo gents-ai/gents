@@ -29,7 +29,6 @@ const item = (over: Partial<MailboxItemView> = {}): MailboxItemView => ({
   sourceId: "session-1",
   sessionId: "session-1",
   requestId: null,
-  graphRunId: null,
   causeDocId: null,
   targetNodeDid: "did:key:worker",
   targetAgentId: "engineer",

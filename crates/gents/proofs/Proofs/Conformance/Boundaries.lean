@@ -71,9 +71,6 @@ def boundaryModelNatTypedIdsTimeId : String :=
 def boundaryP2pBackpressureObligationModelId : String :=
   "boundary.p2p-backpressure.obligation-model"
 
-def boundaryGraphPipelineFoundationId : String :=
-  "boundary.graph-pipeline.foundation"
-
 def boundaryRenderedCaptureAssembledRequestArtifactId : String :=
   "boundary.rendered-capture.assembled-request-artifact"
 
@@ -244,14 +241,6 @@ def boundaries : List Boundary :=
     , acceptedFollowUp :=
         some "Extend the distributed model to bounded multi-wave queue admission plus durable retry and pending-DAG restart recovery, bind its witness rows to the pinned DefraDB adapter, and TLC-check MCP2PBackpressure*. Tracked under #630."
     }
-  , { id := boundaryGraphPipelineFoundationId
-    , domain := "GraphPipeline"
-    , subject := "compiler and existing-runtime publication adapter"
-    , statement :=
-        "Proofs.GraphPipeline establishes that only wholly valid proposals may cross the publication boundary. The next conformance layer must exercise the shared configuration resolver and atomic publication owner for tasks and triggers. DefraDB transaction serializability and runtime reconciliation readiness remain assumed platform boundaries rather than theorems of this repository."
-    , acceptedFollowUp :=
-        some "Before graduation, add a live model evaluation that waits for normal reconciliation, writes an entry document through an existing bounded write tool, and observes the existing task/trigger runtime end to end."
-    }
   , { id := boundaryRenderedCaptureAssembledRequestArtifactId
     , domain := "RenderedCapture"
     , subject := "the captured artifact is the transport body, parsed as canonical JSON"
@@ -276,7 +265,7 @@ def boundaries : List Boundary :=
     , domain := "PluginJob"
     , subject := "arbitrary guest step function"
     , statement :=
-        "Proofs.PluginJob quantifies every core guarantee over an arbitrary guest step function, so admission, keyed spawns, budgets, ceilings and the kill path hold whatever the guest returns. The workflow engine pack carries the remaining premises: Rhai determinism (=1.25.1/=1.26.1), replay, its output schema, script and meta validation, and prefix monotonicity. Step-0 engine honesty is a premise too: step 0 emits effects before the host has classified the script's origin, so verified_script covers steps >= 1 only. The host still admits step-0 effects under the computed origin, and the engine pack must be operator-installed (self_config_engine_refused)."
+        "Proofs.PluginJob quantifies every core guarantee over an arbitrary guest step function, so admission, keyed spawns, budgets, ceilings and the kill path hold whatever the guest returns. A workflow plugin carries the remaining premises: its step function's determinism, its output schema and its own phase bookkeeping (fixtures under `gents pack test` fence them). The host admits step-0 effects under the origin the call decides (callOrigin), and the plugin's pack must be operator-installed (self_config_engine_refused)."
     , acceptedFailureMode :=
         some "A guest that breaks these premises can over-spawn within its ceilings and budget, or diverge on resume."
     , acceptedFollowUp :=

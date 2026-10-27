@@ -98,19 +98,6 @@ theorem sibling_tools_operation_narrows_network (op : SiblingToolsOperation)
       simp [SiblingToolsOperation.resultNetwork, selectedNetworkMode, hop,
         ToolPolicy.networkRank]
 
-/-! ## Graph tool presentation -/
-
-/-- Native graph tool presentation is an independent opt-in: presentation is
-not graph caller admission and does not grant installation or configuration. -/
-def graphToolPresented (requested : Bool) (_selfConfig _packInstall : Bool) : Bool :=
-  requested
-
-theorem graph_tools_without_configuration :
-    graphToolPresented true false false = true := rfl
-
-theorem configuration_does_not_grant_graph_tools :
-    graphToolPresented false true true = false := rfl
-
 /-! ## Job-guard selection rows -/
 
 /-- A self-config write of a Tools `integrations` text: `stored = none` is a

@@ -5,8 +5,8 @@ namespace CompletionRetry.OutputObligation.Logical
 open GoalAutomation.RequestAncestry
 
 /-- Membership reuses the existing finite physical ancestry projection.
-`Attempt.pinnedRoot` means an admitted invocation entry in this instantiation;
-non-graph automated roots are supported. No run record of any kind is required.
+`Attempt.pinnedRoot` means an admitted invocation entry in this instantiation.
+No run record of any kind is required.
 The runtime must verify existing request signatures/physical links; booleans
 are validation facts, not a new ACL or a cryptographic proof. -/
 

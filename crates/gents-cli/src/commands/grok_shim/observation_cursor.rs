@@ -321,7 +321,7 @@ mod tests {
     fn set_of(ids: &[&str]) -> ObservationSet {
         let mut set = ObservationSet::default();
         for id in ids {
-            set.insert((*id).to_owned(), Observed::new("graph"));
+            set.insert((*id).to_owned(), Observed::new("job"));
         }
         set
     }

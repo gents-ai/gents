@@ -30,7 +30,6 @@ structure ForkOrigin where
   deriving DecidableEq, Repr
 structure Provenance where
   task : Option Nat := none
-  graphRun : Option Nat := none
   parentRequestDoc : Option Nat := none
   /-- The request whose claim or refusal created this session through a
       calling tool call. It is written once, with `parentRequestDoc`, and

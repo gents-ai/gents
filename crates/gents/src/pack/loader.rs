@@ -45,16 +45,8 @@ pub fn pin_pack_plugins(
     read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
     config: &mut PackConfig,
 ) -> Result<()> {
-    for capability in &mut config.graph_capabilities {
-        pin_pack_plugin(manifest, read_asset, capability)?;
-    }
     for callback in &mut config.callbacks {
         pin_callback_plugin(manifest, read_asset, callback)?;
-    }
-    for intent in &mut config.graph_intents {
-        for entry in &mut intent.entries {
-            pin_entry_prepare_plugin(manifest, read_asset, entry)?;
-        }
     }
     Ok(())
 }
@@ -107,7 +99,6 @@ pub fn decode_pack_config(
     for collection in crate::Collection::ALL
         .into_iter()
         .filter_map(|collection| collection.dir_name())
-        .chain(["graph_intents", "graph_capabilities"])
     {
         if let Some(values) = root.get_mut(collection) {
             if values.is_null() {
@@ -152,25 +143,6 @@ pub fn decode_pack_config(
     Ok(config)
 }
 
-fn pin_pack_plugin(
-    manifest: &PackManifest,
-    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
-    capability: &mut crate::graph_pipeline::StageCapability,
-) -> Result<()> {
-    let crate::graph_pipeline::StageTarget::Plugin { plugin, digest, .. } = &mut capability.target
-    else {
-        return Ok(());
-    };
-    let what = format!("graph capability {}", capability.capability_id);
-    if let Some((qualified, pinned)) =
-        own_plugin(manifest, read_asset, plugin, digest.as_deref(), &what)?
-    {
-        *digest = Some(pinned);
-        *plugin = qualified;
-    }
-    Ok(())
-}
-
 fn pin_callback_plugin(
     manifest: &PackManifest,
     read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
@@ -186,32 +158,6 @@ fn pin_callback_plugin(
     if let Some((qualified, pinned)) = own_plugin(manifest, read_asset, plugin, authored, &what)? {
         *digest = pinned;
         *plugin = qualified;
-    }
-    Ok(())
-}
-
-fn pin_entry_prepare_plugin(
-    manifest: &PackManifest,
-    read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
-    entry: &mut crate::graph_pipeline::EntryBinding,
-) -> Result<()> {
-    if let Some(schema) = &entry.input_schema {
-        crate::graph_pipeline::validate_input_schema(schema)
-            .with_context(|| format!("entry {:?} input_schema", entry.name))?;
-    }
-    let Some(prepare) = &mut entry.prepare else {
-        return Ok(());
-    };
-    let what = format!("entry {:?} prepare", entry.name);
-    if let Some((qualified, pinned)) = own_plugin(
-        manifest,
-        read_asset,
-        &prepare.plugin,
-        prepare.digest.as_deref(),
-        &what,
-    )? {
-        prepare.digest = Some(pinned);
-        prepare.plugin = qualified;
     }
     Ok(())
 }

@@ -80,7 +80,7 @@ help:
 	@echo
 	@echo "Packs (published from gents-ai/packs):"
 	@echo "  gents pack install gents/code_review"
-	@echo "  gents graph run code_review --repo DIR --base origin/main --head HEAD"
+	@echo "  gents pack wire gents/review_changes --agent AGENT --targets-from gents/code_review"
 	@echo
 	@echo "Worktrees:"
 	@echo "  make worktree BRANCH=<branch> [DIR=<dest>] [BASE=<ref>]"

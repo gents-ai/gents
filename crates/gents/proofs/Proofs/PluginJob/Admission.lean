@@ -29,11 +29,6 @@ structure StepContext where
   policy : Policy
   engineDigest : String
   engineProvenanceOperator : Bool
-  /-- Whether a source digest is still installed-origin under the mounts,
-  install records and `policy.trustedPacks` re-read in this step's transaction
-  (`originOf`): a file of a pack-tier mount whose pack has `operator` install
-  provenance and is trusted. Read on every step. -/
-  installedTrusted : String → Bool
   maxHop : Option Nat
   /-- The target session's current hop. -/
   targetHop : Target → Nat
@@ -43,11 +38,6 @@ structure StepContext where
   liveBackground : Nat
   /-- The host's cross-session ancestry walk; read on step 0. -/
   startedByJob : Bool
-  /-- The origin the host resolves for the script a call names without a
-  `script` or a `path` (`originOf` over its source digest): a kept or
-  project-tier script is `dynamic`. `none` when the call names no script.
-  Read on step 0. -/
-  namedOrigin : Option Origin
   /-- The facts the host writes into the pin it adopts from a step-0 guest pin
   with no `resume`. The guest supplies only the `GuestPin` fields; the origin
   and every other field are host facts, so step-0 effects are admitted under
@@ -369,42 +359,21 @@ def admitNonJob (ctx : StepContext) (job : Job) : StepOutput → Except Refusal 
   | .suspend .. => .ok job
   | .effects _ => .error .policyDenied
 
-/-- The workflow verbs that run script code: `run`, the `check` smoke run and
-`import`, which checks the file it binds. -/
-def scriptVerbs : List String := ["run", "check", "import"]
-
-/-- A call runs dynamic script code when it carries its source with the call:
-a non-empty inline `script`, which the host runs whatever the `argv`, or a
-non-empty `path` under a script verb. Empty optional strings carry no source
-bytes; whitespace remains source and is never trimmed. A pinless call presents
-no source digest, so the host treats a carried source as dynamic. A named run
-of an installed script and the workflow control, status, result and help
-verbs carry neither. -/
-def CallArgs.runsDynamicScript (c : CallArgs) : Bool :=
-  c.script.any (!·.isEmpty) ||
-    (c.argv.head?.any scriptVerbs.contains && c.path.any (!·.isEmpty))
+/-- A call carries model-authored code when its `script` is non-empty. An empty
+string carries none: models fill unused fields with `""`; whitespace remains
+source and is never trimmed. A call without one runs the plugin artifact itself
+(`callOrigin`). -/
+def CallArgs.carriesScript (c : CallArgs) : Bool :=
+  c.script.any (!·.isEmpty)
 
 theorem empty_source_fields_preserve_dynamic_classification (c : CallArgs) :
-    ({ c with script := some "", path := some "" }).runsDynamicScript =
-      ({ c with script := none, path := none }).runsDynamicScript := by
+    ({ c with script := some "" }).carriesScript =
+      ({ c with script := none }).carriesScript := by
   have empty : "".isEmpty = true := by decide
-  simp [CallArgs.runsDynamicScript, empty]
-
-/-- A script-less call names nothing to run: no `argv`, no non-empty `script`
-and no non-empty `path`. Its code is the plugin artifact the engine guard and
-`engineChanged` check, so the host keeps no file digest for it (`callOrigin`). -/
-def CallArgs.scriptless (c : CallArgs) : Bool :=
-  c.argv.isEmpty && c.script.all String.isEmpty && c.path.all String.isEmpty
-
-/-- A pinless call runs dynamic code when it carries a dynamic source
-(`CallArgs.runsDynamicScript`) or when a script verb names a script whose
-resolved origin is dynamic (`StepContext.namedOrigin`). -/
-def runsDynamicCode (ctx : StepContext) (c : CallArgs) : Bool :=
-  c.runsDynamicScript ||
-    (c.argv.head?.any scriptVerbs.contains && decide (ctx.namedOrigin = some .dynamic))
+  simp [CallArgs.carriesScript, empty]
 
 /-- `policy.dynamic` for a dynamic-origin script: `off` admits no step of it
-(`admitStep` also refuses under `off` a pinless call that runs dynamic code, `runsDynamicCode`),
+(`admitStep` also refuses under `off` a pinless call that carries a script, `carriesScript`),
 `check` admits it but no fresh spawn (a re-served key is a no-op) and no message (it would start an agent request in a child session), and `run` admits spawns within
 `dynamicTargets`, which `effectiveTargets` applies. An installed-origin script
 is not gated by the mode. `admitStep` applies it to the pin's origin, so the host refuses with
@@ -427,14 +396,10 @@ accepts it (`resumeAdmitted`), otherwise refused with the cause `resumeRefusal`
 names, and its effects are admitted against the resumed chain row (`stepRow`).
 Under `policy.mode = off` a dynamic-origin pin is refused with `policyDenied`
 by `dynamicModeRefusal`. A pinless step 0 is refused with `dynamicCodeDisabled`
-here, before `admitNonJob`, when its call runs dynamic code (`runsDynamicCode`):
-it carries a nonempty `script` or `path`, or a script verb names
-a script whose resolved origin is dynamic. Any other pinless call is not
-refused by the mode. A step whose pin has installed origin is refused with
-`policyDenied` once the step-0 rules pass when `installedTrusted` no longer
-holds for its source digest, unless its call is script-less
-(`CallArgs.scriptless`): that pin names the artifact, which `engineChanged`
-already checks. -/
+here, before `admitNonJob`, when its call carries a non-empty `script`
+(`CallArgs.carriesScript`). Any other pinless call is not refused by the mode.
+An installed pin names the artifact, which `engineChanged` already checks on
+every step. -/
 def admitStep (ctx : StepContext) (job : Job) (out : StepOutput) : Except Refusal Job :=
   if job.state ≠ .running then .error .terminal
   else if !ctx.available || !ctx.engineProvenanceOperator then .error .notAvailable
@@ -444,7 +409,7 @@ def admitStep (ctx : StepContext) (job : Job) (out : StepOutput) : Except Refusa
   else
     match stepPin ctx job out with
     | none =>
-      if ctx.policy.mode = .off ∧ runsDynamicCode ctx job.call = true then .error .dynamicCodeDisabled
+      if ctx.policy.mode = .off ∧ job.call.carriesScript = true then .error .dynamicCodeDisabled
       else admitNonJob ctx job out
     | some pin =>
       if (dynamicModeRefusal ctx.policy pin.origin (stepRow ctx job out) out).isSome then
@@ -453,9 +418,6 @@ def admitStep (ctx : StepContext) (job : Job) (out : StepOutput) : Except Refusa
       else if job.pin.isNone && (Background.admitBackground ctx.liveBackground).isNone then
         .error .backgroundBudgetExceeded
       else if job.pin.isNone && ctx.startedByJob then .error .depthExceeded
-      else if pin.origin = .installed ∧ ctx.installedTrusted pin.sourceDigest = false ∧
-          job.call.scriptless = false then
-        .error .policyDenied
       else admitJobOutput ctx pin { stepRow ctx job out with pin := some pin, consecutiveFailures := 0 } out
 
 /-- An admitted step replaces the row. `.terminal` changes nothing. Every
@@ -1049,7 +1011,7 @@ theorem job_row_consumes_one_background_slot (ctx : StepContext) (job job' : Job
       rw [hp] at h
       simp only [hpin, Option.isNone_none, Bool.true_and, Bool.and_true] at h
       simp only [if_pos hnone] at h
-      split_ifs at h <;> cases h
+      split_ifs at h
     unfold Background.admitBackground at hb ⊢
     split <;> simp_all
   · unfold admitStep

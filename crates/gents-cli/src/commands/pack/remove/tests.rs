@@ -16,7 +16,6 @@ fn scope(home: &Path) -> ScopeArgs {
 async fn install(home: &Path, package: String) -> anyhow::Result<Value> {
     crate::request_helpers::capture_report(super::super::install(PackInstallArgs {
         package,
-        bindings: None,
         inference_slots: Vec::new(),
         preview: false,
         scope: scope(home),

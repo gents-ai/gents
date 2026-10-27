@@ -51,7 +51,6 @@ pub const MAILBOX_FIELDS: &str = r#"
     source_id
     session_id
     request_id
-    graph_run_id
     cause_doc_id
     target_node_did
     target_agent_id
@@ -157,7 +156,6 @@ impl MailboxAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MailboxSourceKind {
-    Graph,
     Session,
     Agent,
     Runtime,
@@ -165,17 +163,10 @@ pub enum MailboxSourceKind {
 }
 
 impl MailboxSourceKind {
-    pub const ALL: [Self; 5] = [
-        Self::Graph,
-        Self::Session,
-        Self::Agent,
-        Self::Runtime,
-        Self::Tool,
-    ];
+    pub const ALL: [Self; 4] = [Self::Session, Self::Agent, Self::Runtime, Self::Tool];
 
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Graph => "graph",
             Self::Session => "session",
             Self::Agent => "agent",
             Self::Runtime => "runtime",
@@ -205,8 +196,6 @@ pub struct MailboxItem {
     pub session_id: Option<String>,
     #[serde(default)]
     pub request_id: Option<String>,
-    #[serde(default)]
-    pub graph_run_id: Option<String>,
     #[serde(default)]
     pub cause_doc_id: Option<String>,
     pub target_node_did: String,
@@ -275,8 +264,6 @@ pub struct FileMailboxItemArgs {
     pub session_id: Option<String>,
     #[serde(default)]
     pub request_id: Option<String>,
-    #[serde(default)]
-    pub graph_run_id: Option<String>,
     #[serde(default)]
     pub cause_doc_id: Option<String>,
     #[serde(default)]
@@ -419,7 +406,6 @@ fn validate_file_args(
     args.payload = nonempty(args.payload.take());
     args.session_id = nonempty(args.session_id.take()).or_else(|| context.session_id.clone());
     args.request_id = nonempty(args.request_id.take());
-    args.graph_run_id = nonempty(args.graph_run_id.take());
     args.cause_doc_id = nonempty(args.cause_doc_id.take());
     args.expected_collection = nonempty(args.expected_collection.take());
     args.parent_item_id = nonempty(args.parent_item_id.take());
@@ -534,7 +520,6 @@ async fn stamp_notification(
                 source_id: "{source_id}",
                 {session_id}
                 {request_id}
-                {graph_run_id}
                 {cause_doc_id}
                 target_node_did: "{target_node_did}",
                 target_agent_id: "{target_agent_id}",
@@ -559,7 +544,6 @@ async fn stamp_notification(
         source_id = escape_graphql_string(&args.source_id),
         session_id = optional_string_field("session_id", args.session_id.as_deref()),
         request_id = optional_string_field("request_id", args.request_id.as_deref()),
-        graph_run_id = optional_string_field("graph_run_id", args.graph_run_id.as_deref()),
         cause_doc_id = optional_string_field("cause_doc_id", args.cause_doc_id.as_deref()),
         target_node_did = escape_graphql_string(&context.node_did),
         target_agent_id = escape_graphql_string(&context.agent_id),
@@ -737,7 +721,6 @@ impl crate::llm::tool::Tool for MailboxCreateTool {
                 source_id,
                 session_id: None,
                 request_id: Some(request_id),
-                graph_run_id: None,
                 cause_doc_id: request.caused_by_source_doc_id,
                 expected_collection,
                 parent_item_id: None,
@@ -1189,11 +1172,10 @@ mod tests {
             title: "Review the result".into(),
             summary: Some("A durable attention envelope".into()),
             payload: None,
-            source_kind: MailboxSourceKind::Graph,
+            source_kind: MailboxSourceKind::Session,
             source_id: source_id.into(),
             session_id: None,
             request_id: None,
-            graph_run_id: Some("run-1".into()),
             cause_doc_id: None,
             expected_collection: (action == MailboxAction::WriteDocument)
                 .then(|| "MailboxFixture".into()),
@@ -1220,7 +1202,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(first.doc_id, retry.doc_id);
-        assert_eq!(first.item_key, "graph:wait-1:ask:1");
+        assert_eq!(first.item_key, "session:wait-1:ask:1");
 
         let collision = stamp_create(
             &node,
@@ -1244,15 +1226,15 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(second.item_key, "graph:wait-1:ask:2");
+        assert_eq!(second.item_key, "session:wait-1:ask:2");
         assert_ne!(second.doc_id, first.doc_id);
 
         let duplicate_open = format!(
             r#"mutation {{ create_MailboxItem(input: {{
-                item_key: "graph:wait-1:ask:3", requester_did: "did:test:owner-a",
+                item_key: "session:wait-1:ask:3", requester_did: "did:test:owner-a",
                 node_did: "did:test:agent", status: "open", kind: "ask", action: "ack",
-                title: "duplicate", summary: null, payload: null, source_kind: "graph",
-                source_id: "wait-1", session_id: null, request_id: null, graph_run_id: null,
+                title: "duplicate", summary: null, payload: null, source_kind: "session",
+                source_id: "wait-1", session_id: null, request_id: null,
                 cause_doc_id: null, target_node_did: "did:test:agent",
                 target_agent_id: "operator", expected_collection: null, parent_item_id: null,
                 deadline_at: null, created_at: "{}", updated_at: "{}",
@@ -1284,7 +1266,7 @@ mod tests {
                 .is_err()
         );
         assert!(serde_json::from_value::<FileMailboxItemArgs>(json!({
-            "kind": "ask", "action": "ack", "title": "x", "source_kind": "graph",
+            "kind": "ask", "action": "ack", "title": "x", "source_kind": "session",
             "source_id": "wait-2", "requester_did": "did:test:forged"
         }))
         .is_err());
@@ -1338,7 +1320,7 @@ mod tests {
             ::identity::Did::new(identity.did().to_owned()).expect("fixture creator DID"),
             identity.did(),
             "operator",
-            "continue the graph",
+            "continue the run",
             crate::lifecycle::ExecutionOrigin::Scheduled,
             crate::lifecycle::TriggerLineage {
                 trigger_id: Some("event-trigger-1".into()),
@@ -1541,14 +1523,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_0_21_graph_sourced_item_still_lists() {
+        let node = test_node().await;
+        let now = Utc::now().to_rfc3339();
+        let stored = format!(
+            r#"mutation {{ create_MailboxItem(input: {{
+                item_key: "graph:wait-1:ask:1", requester_did: "did:test:owner",
+                node_did: "did:test:agent", status: "open", kind: "ask", action: "ack",
+                title: "from a graph run", source_kind: "graph", source_id: "wait-1",
+                graph_run_id: "run-1", target_node_did: "did:test:agent",
+                target_agent_id: "operator", created_at: "{now}", updated_at: "{now}"
+            }}) {{ _docID }} }}"#
+        );
+        assert!(!node.execute(&stored).await.has_errors());
+
+        let items = list_mailbox_items(&node, "did:test:owner", None)
+            .await
+            .unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].source_kind, "graph");
+    }
+
+    #[tokio::test]
     async fn poisoned_item_does_not_block_later_expiry() {
         let node = test_node().await;
         let now = Utc::now().to_rfc3339();
         let hostile = format!(
             r#"mutation {{ create_MailboxItem(input: {{
-                item_key: "graph:hostile:gate:1", requester_did: "did:test:owner",
+                item_key: "session:hostile:gate:1", requester_did: "did:test:owner",
                 node_did: "did:test:agent", status: "open", kind: "gate",
-                action: "write_document", title: "hostile", source_kind: "graph",
+                action: "write_document", title: "hostile", source_kind: "session",
                 source_id: "hostile", target_node_did: "did:test:agent",
                 target_agent_id: "operator", created_at: "{now}", updated_at: "{now}"
             }}) {{ _docID }} }}"#
@@ -1556,9 +1560,9 @@ mod tests {
         assert!(!node.execute(&hostile).await.has_errors());
         let undecodable = format!(
             r#"mutation {{ create_MailboxItem(input: {{
-                item_key: "graph:undecodable:gate:1", requester_did: "did:test:owner",
+                item_key: "session:undecodable:gate:1", requester_did: "did:test:owner",
                 node_did: "did:test:agent", status: "open", kind: "gate",
-                action: "ack", source_kind: "graph", source_id: "undecodable",
+                action: "ack", source_kind: "session", source_id: "undecodable",
                 target_node_did: "did:test:agent", target_agent_id: "operator",
                 created_at: "{now}", updated_at: "{now}"
             }}) {{ _docID }} }}"#

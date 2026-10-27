@@ -69,10 +69,6 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) vocabularies: Vec<LeanVocabularyContract>,
     pub(crate) state_machines: Vec<LeanStateMachineContract>,
     pub(crate) pairing_reconcile_cases: Vec<LeanPairingReconcileCase>,
-    pub(crate) graph_pipeline_validation_cases: Vec<LeanGraphPipelineValidationCase>,
-    pub(crate) graph_pipeline_revision_gate_cases: Vec<LeanGraphPipelineRevisionGateCase>,
-    pub(crate) graph_pipeline_run_terminal_cases: Vec<LeanGraphPipelineRunTerminalCase>,
-    pub(crate) graph_pipeline_edge_delivery_cases: Vec<LeanGraphPipelineEdgeDeliveryCase>,
     pub(crate) goal_claimed_publication_cases: Vec<serde_json::Value>,
     pub(crate) goal_wake_coalescing_cases: Vec<serde_json::Value>,
     pub(crate) goal_wake_ancestry_cases: Vec<serde_json::Value>,
@@ -99,10 +95,6 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) goal_operator_resume_on_cases: Vec<serde_json::Value>,
     pub(crate) goal_config_reactivation_cases: Vec<serde_json::Value>,
     pub(crate) goal_reset_resume_cases: Vec<serde_json::Value>,
-    pub(crate) graph_logical_invocation_cases: Vec<serde_json::Value>,
-    pub(crate) graph_workspace_lineage_cases: Vec<serde_json::Value>,
-    pub(crate) graph_session_continuation_cases: Vec<serde_json::Value>,
-    pub(crate) graph_assignment_head_cases: Vec<serde_json::Value>,
     pub(crate) trigger_delivery: serde_json::Value,
     pub(crate) operator_base_freeze_cases: Vec<serde_json::Value>,
     pub(crate) workspace_path_capability_cases: Vec<serde_json::Value>,
@@ -165,8 +157,6 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) client_request_closure_cases: Vec<serde_json::Value>,
     pub(crate) client_request_cache_identity_cases: Vec<serde_json::Value>,
     pub(crate) client_session_queue_order_cases: Vec<serde_json::Value>,
-    pub(crate) graph_invocation_publication_cases: Vec<serde_json::Value>,
-    pub(crate) graph_failure_attribution_traces: Vec<serde_json::Value>,
     pub(crate) request_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub(crate) process_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub(crate) provider_eof_cases: Vec<LeanProviderEofCase>,
@@ -821,7 +811,6 @@ pub(crate) struct LeanPluginJobChild {
 pub(crate) struct LeanPluginJobCall {
     pub(crate) argv: Vec<String>,
     pub(crate) args: Option<String>,
-    pub(crate) path: Option<String>,
     pub(crate) script: Option<String>,
     pub(crate) agent_budget: Option<u32>,
 }
@@ -831,7 +820,6 @@ pub(crate) struct LeanPluginJobCall {
 pub(crate) struct LeanPluginJobRootCall {
     pub(crate) argv: Vec<String>,
     pub(crate) args: Option<String>,
-    pub(crate) path: Option<String>,
     pub(crate) agent_budget: Option<u32>,
 }
 
@@ -924,11 +912,10 @@ pub(crate) struct LeanPluginJobPolicy {
     pub(crate) mode: String,
     pub(crate) dynamic_targets: Vec<String>,
     pub(crate) trusted_packs: Vec<String>,
-    pub(crate) project_roots: Vec<String>,
 }
 
 /// `Conformance.PluginJob.authorityCasesJson`, tagged by `kind`: provenance
-/// reads, install records, origin and mount trust hints, pack-shipped job
+/// reads, install records, call origin, pack-shipped job
 /// blocks, `Policy.valid` and `wireTargetsFrom`.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -949,9 +936,6 @@ pub(crate) enum LeanPluginJobAuthorityCase {
     },
     Origin {
         name: String,
-        digest: String,
-        mounts: Vec<LeanPluginJobMount>,
-        trusted_packs: Vec<String>,
         call: LeanPluginJobCall,
         expected: Box<LeanPluginJobOriginExpected>,
     },
@@ -1014,25 +998,10 @@ pub(crate) struct LeanPluginJobInstallExpected {
     pub(crate) provenance: String,
 }
 
-/// A model mount. `files` is the sha256 of each file in the mount: the
-/// install-cache index the native origin check builds, never on the wire.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanPluginJobMount {
-    pub(crate) pack: String,
-    pub(crate) class: String,
-    pub(crate) digest: String,
-    pub(crate) path: String,
-    pub(crate) trusted: bool,
-    pub(crate) via: String,
-    pub(crate) files: Vec<String>,
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanPluginJobOriginExpected {
     pub(crate) origin: String,
-    pub(crate) trusted_hints: Vec<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1041,7 +1010,6 @@ pub(crate) struct LeanPluginJobPackBlock {
     pub(crate) targets_from: Vec<String>,
     pub(crate) trusted: Vec<String>,
     pub(crate) dynamic: String,
-    pub(crate) project_roots: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1273,46 +1241,6 @@ pub(crate) struct LeanPluginCallsRouteCase {
     pub(crate) expected: bool,
 }
 
-/// `plugin_resource_cases.asset_mount`: `mountAccess` per mount and
-/// `mountCallAdmitted` for the call.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanPluginAssetMountCase {
-    pub(crate) rw_bind: bool,
-    pub(crate) mounts: Vec<LeanPluginMount>,
-    pub(crate) access: Vec<Option<LeanPluginAccess>>,
-    pub(crate) admitted: bool,
-}
-
-/// The pack tier spells `class` as the asset class; the project tier as
-/// `project` with empty `pack` and `digest`.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanPluginMount {
-    pub(crate) pack: String,
-    pub(crate) class: String,
-    pub(crate) digest: String,
-    pub(crate) path: String,
-    pub(crate) trusted: bool,
-    pub(crate) installed: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum LeanPluginAccess {
-    Read,
-    ReadWrite,
-}
-
-/// `plugin_resource_cases.project_tier`: `projectPreopen cwd roots within`.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LeanPluginProjectTierCase {
-    pub(crate) cwd: String,
-    pub(crate) project_roots: Vec<String>,
-    pub(crate) expected: bool,
-}
-
 /// `plugin_resource_cases.scratch`: `scratchAdmitted`. `handle` is not an
 /// owner input; rows that differ only in it share a path.
 #[derive(Debug, Deserialize)]
@@ -1412,14 +1340,12 @@ pub(crate) struct LeanPluginJobContext {
     pub(crate) policy: LeanPluginJobPolicy,
     pub(crate) engine_digest: String,
     pub(crate) engine_provenance_operator: bool,
-    pub(crate) installed_trusted_sources: Vec<String>,
     pub(crate) max_hop: Option<u32>,
     pub(crate) target_hops: Vec<LeanPluginJobTargetHop>,
     pub(crate) live_background: u32,
     pub(crate) started_by_job: bool,
     pub(crate) cwd_allowed: Vec<String>,
     pub(crate) within: Vec<LeanPluginJobWithin>,
-    pub(crate) named_origin: Option<String>,
     pub(crate) adoption_facts: LeanPluginJobHostFacts,
     pub(crate) caller_scope: LeanPluginJobProcessScope,
     pub(crate) control_targets: Vec<LeanPluginJobControlTarget>,
@@ -1494,75 +1420,6 @@ pub(crate) struct LeanPairingReconcileCase {
     pub(crate) after: LeanPairingReconcileSnapshot,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum LeanGraphTopologyFault {
-    Valid,
-    MissingInputBinding,
-    Cycle,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum LeanGraphBoundsFault {
-    Within,
-    NodeLimit,
-    InvocationCeiling,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct LeanGraphPipelineValidationCase {
-    pub(crate) name: String,
-    pub(crate) types_valid: bool,
-    pub(crate) topology_fault: LeanGraphTopologyFault,
-    pub(crate) capabilities_authorized: bool,
-    pub(crate) bounds_fault: LeanGraphBoundsFault,
-    pub(crate) terminal_result_declared: bool,
-    pub(crate) expected_valid: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum LeanGraphActivePointer {
-    Empty,
-    Current,
-    Other,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct LeanGraphPipelineRevisionGateCase {
-    pub(crate) name: String,
-    pub(crate) status: String,
-    pub(crate) artifacts_complete: bool,
-    pub(crate) active_pointer: LeanGraphActivePointer,
-    pub(crate) activation_precondition_met: bool,
-    pub(crate) pointer_matches: bool,
-    pub(crate) expected_activate: bool,
-    pub(crate) expected_start: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct LeanGraphPipelineRunTerminalCase {
-    pub(crate) name: String,
-    pub(crate) status: String,
-    pub(crate) cancellation_requested: bool,
-    pub(crate) result_contract_satisfied: bool,
-    pub(crate) active_work_terminal: bool,
-    pub(crate) failure_proven: bool,
-    pub(crate) expected_succeed: bool,
-    pub(crate) expected_fail: bool,
-    pub(crate) expected_cancel: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct LeanGraphPipelineEdgeDeliveryCase {
-    pub(crate) name: String,
-    pub(crate) concurrency: String,
-    #[serde(deserialize_with = "required_nullable")]
-    pub(crate) delivery: Option<serde_json::Value>,
-    pub(crate) expected_concurrency_valid: bool,
-    pub(crate) expected_valid: bool,
-}
 #[derive(Debug, Deserialize)]
 pub(crate) struct LeanVocabularyContract {
     pub(crate) domain: String,
@@ -2512,16 +2369,6 @@ where
 {
     serde_json::from_value(lean_contract_snapshot().plugin_resource_cases[group].clone())
         .unwrap_or_else(|error| panic!("plugin_resource_cases.{group}: {error}"))
-}
-
-pub(crate) fn lean_plugin_asset_mount_cases() -> &'static [LeanPluginAssetMountCase] {
-    static CASES: OnceLock<Vec<LeanPluginAssetMountCase>> = OnceLock::new();
-    CASES.get_or_init(|| lean_plugin_resource_group("asset_mount"))
-}
-
-pub(crate) fn lean_plugin_project_tier_cases() -> &'static [LeanPluginProjectTierCase] {
-    static CASES: OnceLock<Vec<LeanPluginProjectTierCase>> = OnceLock::new();
-    CASES.get_or_init(|| lean_plugin_resource_group("project_tier"))
 }
 
 pub(crate) fn lean_plugin_scratch_cases() -> &'static [LeanPluginScratchCase] {

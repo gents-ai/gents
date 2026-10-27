@@ -1,22 +1,18 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gents::pack_archive::{pack_dir, PackArchive};
 use gents::NodeIdentity;
 use serde::Serialize;
 use serde_json::json;
 
-use crate::cli::{PackCheckArgs, PackGraphArgs};
-
-#[cfg(test)]
-const TOPOLOGY_START: &str = "<!-- pack-topology:start -->";
+use crate::cli::PackCheckArgs;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct CheckReport {
     pub(crate) dir: PathBuf,
     pub(crate) pack: Option<String>,
     pub(crate) digest: Option<String>,
-    pub(crate) graphs: Vec<String>,
     pub(crate) problems: Vec<String>,
 }
 
@@ -49,7 +45,6 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
         dir: shared.dir,
         pack: shared.pack,
         digest: shared.digest,
-        graphs: shared.graphs,
         problems: shared.problems,
     };
     if !report.problems.is_empty() || report.digest.is_none() {
@@ -70,10 +65,7 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
             return report;
         }
     };
-    if matches!(
-        manifest.metadata.kind,
-        gents::pack::PackKind::Documents | gents::pack::PackKind::Graph
-    ) {
+    if manifest.metadata.kind == gents::pack::PackKind::Documents {
         match load_config(&archive) {
             Ok(config) => {
                 if let Err(error) = check_filters(dir, &config, &mut report.problems).await {
@@ -138,30 +130,6 @@ async fn check_filters(
         }
     }
     Ok(())
-}
-
-pub(crate) fn topology_block(config: &gents::document_config::PackConfig) -> String {
-    gents::pack::authoring::topology_block(config)
-}
-
-pub(crate) fn graph(args: PackGraphArgs) -> Result<()> {
-    let dir = args.dir.unwrap_or_else(|| PathBuf::from("."));
-    let (bytes, _) = pack_dir(&dir).with_context(|| format!("packing {}", dir.display()))?;
-    let archive = PackArchive::from_bytes(&bytes)?;
-    anyhow::ensure!(
-        archive.manifest().metadata.kind == gents::pack::PackKind::Graph,
-        "{} is not a graph pack",
-        archive.manifest().name
-    );
-    if !args.write_readme {
-        println!("{}", topology_block(&load_config(&archive)?));
-        return Ok(());
-    }
-    write_topology(&dir)
-}
-
-pub(crate) fn write_topology(dir: &Path) -> Result<()> {
-    gents::pack::authoring::write_topology(dir)
 }
 
 #[cfg(test)]
@@ -264,28 +232,6 @@ mod tests {
             "{:#?}",
             report.problems
         );
-    }
-
-    #[tokio::test]
-    async fn a_stale_topology_diagram_is_reported_and_rewritten() {
-        let dir = copy_pack(&super::super::test_support::fixture_dir("review_graph"));
-        let readme = dir.path().join("README.md");
-        let text = std::fs::read_to_string(&readme).unwrap();
-        let start = text.find(TOPOLOGY_START).unwrap();
-        std::fs::write(&readme, &text[..start]).unwrap();
-        assert!(check_dir(dir.path())
-            .await
-            .problems
-            .iter()
-            .any(|problem| problem.contains("topology diagram is stale")));
-
-        graph(PackGraphArgs {
-            dir: Some(dir.path().to_path_buf()),
-            write_readme: true,
-        })
-        .unwrap();
-        let report = check_dir(dir.path()).await;
-        assert!(report.problems.is_empty(), "{:#?}", report.problems);
     }
 
     #[tokio::test]

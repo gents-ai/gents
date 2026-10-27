@@ -40,8 +40,6 @@ const BACKEND_ID: &str = "plugin-job-backend";
 pub(crate) struct PlanEntry {
     pub when: Value,
     pub output: JobStepOutput,
-    pub note: bool,
-    pub scratch: bool,
     pub control: Option<JobControlRequest>,
 }
 
@@ -51,12 +49,6 @@ impl PlanEntry {
             "when": self.when,
             "output": serde_json::to_value(&self.output).expect("serialize the step output"),
         });
-        if self.note {
-            entry["note"] = json!(true);
-        }
-        if self.scratch {
-            entry["scratch"] = json!(true);
-        }
         if let Some(control) = &self.control {
             entry["control"] = serde_json::to_value(control).expect("serialize the control");
         }
@@ -398,22 +390,16 @@ async fn scripted_job_adopts_one_child_and_completes() {
                 Some(guest_pin("job-1-handle")),
                 vec![spawn("a", "job child a")],
             ),
-            note: false,
-            scratch: false,
             control: None,
         },
         PlanEntry {
             when: json!({"children": {"a": "completed"}}),
             output: result(json!("done")),
-            note: false,
-            scratch: false,
             control: None,
         },
         PlanEntry {
             when: json!({"children": {"a": "live"}}),
             output: effects(None, Vec::new()),
-            note: false,
-            scratch: false,
             control: None,
         },
     ];

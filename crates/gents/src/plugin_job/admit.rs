@@ -4,7 +4,7 @@ use crate::background_tools::ProcessControlScope;
 use crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
 use crate::lifecycle::materialize::{next_request_hop, request_hop_within_bound, RequestHopCause};
 use crate::plugin_job::keys::job_spawn_key;
-use crate::plugin_job::origin::scriptless;
+use crate::plugin_job::origin::call_origin;
 use crate::tool_surface::EndpointScope;
 use gents_protocol::job::{
     DynamicMode, JobCeiling, JobChildState, JobControlRequest, JobEffects, JobGuestPin,
@@ -17,7 +17,6 @@ use gents_protocol::job::{
 pub struct StepCall {
     pub argv: Vec<String>,
     pub args: Option<String>,
-    pub path: Option<String>,
     pub script: Option<String>,
     pub agent_budget: Option<u32>,
 }
@@ -27,7 +26,6 @@ pub struct StepCall {
 pub struct RootCall {
     pub argv: Vec<String>,
     pub args: Option<String>,
-    pub path: Option<String>,
     pub agent_budget: Option<u32>,
 }
 
@@ -94,7 +92,6 @@ pub struct StepContext {
     pub policy: JobPolicy,
     pub engine_digest: String,
     pub engine_provenance_operator: bool,
-    pub installed_trusted_sources: Vec<String>,
     pub max_hop: Option<u32>,
     pub target_hops: Vec<((String, String), u32)>,
     /// The host's resolution of the AgentTarget ids the caller can see to
@@ -105,7 +102,6 @@ pub struct StepContext {
     pub started_by_job: bool,
     pub cwd_allowed: Vec<String>,
     pub within: Vec<(String, String)>,
-    pub named_origin: Option<JobOrigin>,
     pub adoption_facts: HostFacts,
     pub caller_scope: ProcessControlScope,
     pub control_targets: Vec<(String, Option<(ProcessControlScope, bool)>)>,
@@ -290,7 +286,9 @@ fn admit(ctx: &StepContext, job: &StepRow, out: &JobStepOutput) -> Result<StepRo
         return Err(resume_refusal(ctx, out));
     }
     let Some(pin) = step_pin(ctx, job, out) else {
-        if ctx.policy.dynamic == DynamicMode::Off && runs_dynamic_code(ctx, &job.call) {
+        if ctx.policy.dynamic == DynamicMode::Off
+            && call_origin(job.call.script.as_deref()) == JobOrigin::Dynamic
+        {
             return Err(Refusal::DynamicCodeDisabled);
         }
         return admit_non_job(ctx, job, out);
@@ -309,16 +307,6 @@ fn admit(ctx: &StepContext, job: &StepRow, out: &JobStepOutput) -> Result<StepRo
         if ctx.started_by_job {
             return Err(Refusal::DepthExceeded);
         }
-    }
-    if pin.origin == JobOrigin::Installed
-        && !ctx.installed_trusted_sources.contains(&pin.source_digest)
-        && !scriptless(
-            &job.call.argv,
-            job.call.script.as_deref(),
-            job.call.path.as_deref(),
-        )
-    {
-        return Err(Refusal::PolicyDenied);
     }
     admit_job_output(
         ctx,
@@ -443,7 +431,6 @@ pub fn root_call_of(root: &StepRow) -> RootCall {
     RootCall {
         argv: root.call.argv.clone(),
         args: root.call.args.clone(),
-        path: root.call.path.clone(),
         agent_budget: root.call.agent_budget,
     }
 }
@@ -861,20 +848,6 @@ fn admit_non_job(
     }
 }
 
-/// Lean `scriptVerbs`: the workflow verbs that run script code.
-const SCRIPT_VERBS: [&str; 3] = ["run", "check", "import"];
-
-/// Lean `runsDynamicCode`: a non-empty `script` runs whatever the `argv`.
-fn runs_dynamic_code(ctx: &StepContext, call: &StepCall) -> bool {
-    call.script.as_deref().is_some_and(|s| !s.is_empty())
-        || call
-            .argv
-            .first()
-            .is_some_and(|verb| SCRIPT_VERBS.contains(&verb.as_str()))
-            && (call.path.as_deref().is_some_and(|p| !p.is_empty())
-                || ctx.named_origin == Some(JobOrigin::Dynamic))
-}
-
 fn dynamic_mode_refusal(
     policy: &JobPolicy,
     origin: JobOrigin,
@@ -950,11 +923,9 @@ mod tests {
                 dynamic: DynamicMode::Run,
                 dynamic_targets: vec!["a".to_owned(), "b".to_owned()],
                 trusted_packs: Vec::new(),
-                project_roots: Vec::new(),
             },
             engine_digest: "engine".to_owned(),
             engine_provenance_operator: true,
-            installed_trusted_sources: vec!["source".to_owned()],
             max_hop: Some(8),
             target_hops: vec![(pair("a"), 0), (pair("b"), 0)],
             target_ids: vec![("a".to_owned(), pair("a")), ("b".to_owned(), pair("b"))],
@@ -962,7 +933,6 @@ mod tests {
             started_by_job: false,
             cwd_allowed: Vec::new(),
             within: Vec::new(),
-            named_origin: None,
             adoption_facts: facts(),
             caller_scope: scope("session"),
             control_targets: Vec::new(),
@@ -1042,7 +1012,6 @@ mod tests {
             call: StepCall {
                 argv: vec!["run".to_owned()],
                 args: None,
-                path: None,
                 script: None,
                 agent_budget: None,
             },
@@ -1485,12 +1454,6 @@ mod tests {
             ..base_context()
         };
         assert_eq!(code(&nested, &job, &out), Some("plugin_job_depth_exceeded"));
-
-        let untrusted = StepContext {
-            installed_trusted_sources: Vec::new(),
-            ..base_context()
-        };
-        assert_eq!(code(&untrusted, &job, &out), DENIED);
     }
 
     #[test]
@@ -1524,34 +1487,16 @@ mod tests {
 
         let mut off = base_context();
         off.policy.dynamic = DynamicMode::Off;
-        let call = |argv: &str, script: Option<&str>, path: Option<&str>| StepRow {
+        let call = |script: Option<&str>| StepRow {
             call: StepCall {
-                argv: vec![argv.to_owned()],
+                argv: vec!["run".to_owned()],
                 args: None,
-                path: path.map(str::to_owned),
                 script: script.map(str::to_owned),
                 agent_budget: None,
             },
             ..job.clone()
         };
-        assert_eq!(
-            code(&off, &call("run", Some("inline"), None), &result(&[])),
-            DENIED
-        );
-        assert_eq!(
-            code(&off, &call("check", None, Some("a.rhai")), &result(&[])),
-            DENIED
-        );
-        assert!(admit_step(&off, &call("run", None, None), &result(&[])).is_ok());
-        let named = StepContext {
-            named_origin: Some(JobOrigin::Dynamic),
-            ..off.clone()
-        };
-        assert_eq!(
-            code(&named, &call("import", None, None), &result(&[])),
-            DENIED
-        );
-        assert!(admit_step(&named, &call("status", None, None), &result(&[])).is_ok());
+        assert!(admit_step(&off, &call(None), &result(&[])).is_ok());
     }
 
     fn pinless() -> StepRow {
@@ -1617,7 +1562,6 @@ mod tests {
         root.call = StepCall {
             argv: vec!["run".to_owned(), "saved".to_owned()],
             args: Some("{}".to_owned()),
-            path: Some("a.rhai".to_owned()),
             script: None,
             agent_budget: Some(3),
         };
@@ -1845,7 +1789,6 @@ mod tests {
             Some(RootCall {
                 argv: root.call.argv.clone(),
                 args: root.call.args.clone(),
-                path: root.call.path.clone(),
                 agent_budget: root.call.agent_budget,
             })
         );

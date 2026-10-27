@@ -4,11 +4,9 @@ import Proofs.PluginJob.Admission
 /-!
 # Plugin-job authority: install provenance and script origin
 
-Origin is a host fact. A script is `installed` only when its source digest is a
-file of a pack-tier mount whose pack the operator installed and the job policy
-trusts; every other script is `dynamic`. A script-less call (no `argv`,
-`script` or `path`) runs the plugin artifact itself and is `installed`
-(`callOrigin`). The engine pack itself must be
+Origin is a host fact decided by the call (`callOrigin`): a call that carries a
+`script` runs model-authored code and is `dynamic`; any other call runs the
+plugin artifact itself and is `installed`. The artifact's pack must be
 operator-installed, or every step is refused. The dynamic policy gates
 dynamic-origin scripts, pack-shipped job blocks stay within what the operator
 installed, a job-descended caller cannot start a job, and a script reaches
@@ -19,8 +17,7 @@ namespace PluginJob
 
 open ToolPolicy
 
-/-- The pack kinds that write an install record. Graph-kind installs and graph
-dependencies write no record, so there is no graph constructor. -/
+/-- The pack kinds that write an install record. -/
 inductive PackKind | documents | assets | plugins
   deriving DecidableEq, Repr
 
@@ -54,80 +51,12 @@ def recordAfterInstall (prior : Record) (kind : PackKind) (explicit : Bool)
   else if provenanceOf kind prior = .operator then .written .operator
   else .written via
 
-/-- The host decides origin: `installed` exactly when `digest`, the
-sha256 of the script source, is a file of a pack-tier mount whose pack the
-operator installed and `trusted_packs` lists; otherwise `dynamic`. -/
-def originOf (digest : String) (mounts : List ToolPolicy.AssetMount) (trusted : List String) : Origin :=
-  if mounts.any (fun m => m.klass != .project && m.files.contains digest &&
-      m.via == .operator && trusted.contains m.pack) then .installed else .dynamic
-
-/-- `JobStepInput.mounts[].trusted`: lets the engine predict origin; the host still decides. -/
-def trustedHint (m : ToolPolicy.AssetMount) (trusted : List String) : Bool :=
-  m.klass != .project && m.via == .operator && trusted.contains m.pack
-
-/-- The origin of one call. A script-less call (`CallArgs.scriptless`) is
-`installed`: its code is the operator-installed artifact the engine guard and
-`engineChanged` check, so no file digest is needed. Every other call is
-`originOf` its pinned source digest. -/
-def callOrigin (c : CallArgs) (digest : String) (mounts : List ToolPolicy.AssetMount)
-    (trusted : List String) : Origin :=
-  if c.scriptless then .installed else originOf digest mounts trusted
-
-theorem scriptless_call_is_installed (c : CallArgs) (digest : String)
-    (mounts : List ToolPolicy.AssetMount) (trusted : List String) (h : c.scriptless = true) :
-    callOrigin c digest mounts trusted = .installed := by
-  simp [callOrigin, h]
-
-theorem scripted_call_origin_is_the_digests (c : CallArgs) (digest : String)
-    (mounts : List ToolPolicy.AssetMount) (trusted : List String) (h : c.scriptless = false) :
-    callOrigin c digest mounts trusted = originOf digest mounts trusted := by
-  simp [callOrigin, h]
-
-/-- `JobStepInput.verified_script`. -/
-structure VerifiedScript where
-  (source digest : String)
-  deriving DecidableEq, Repr
-
-/-- The host passes the verified bytes of an installed-origin script on every
-step after step 0, under the pinned source digest. Step 0 runs before the host
-has classified origin, so it carries none. -/
-def verifiedScript (pin : Pin) (step : Nat) (source : String) : Option VerifiedScript :=
-  if pin.origin = .installed && decide (1 ≤ step) then
-    some { source := source, digest := pin.sourceDigest }
-  else none
-
-theorem origin_is_host_fact (digest : String) (mounts : List ToolPolicy.AssetMount)
-    (trusted : List String) :
-    originOf digest mounts trusted = .installed ↔
-      ∃ m ∈ mounts, m.klass ≠ .project ∧ digest ∈ m.files ∧ m.via = .operator ∧
-        m.pack ∈ trusted := by
-  unfold originOf
-  split
-  · rename_i h
-    simp only [List.any_eq_true, Bool.and_eq_true, bne_iff_ne, ne_eq, beq_iff_eq,
-      List.elem_iff, List.contains_iff_mem] at h
-    obtain ⟨m, hm, ⟨⟨⟨h1, h2⟩, h3⟩, h4⟩⟩ := h
-    exact ⟨fun _ => ⟨m, hm, h1, h2, h3, h4⟩, fun _ => rfl⟩
-  · rename_i h
-    simp only [List.any_eq_true, Bool.and_eq_true, bne_iff_ne, ne_eq, beq_iff_eq,
-      List.elem_iff, List.contains_iff_mem, not_exists, not_and] at h
-    refine ⟨fun e => (nomatch e), fun ⟨m, hm, h1, h2, h3, h4⟩ => ?_⟩
-    exact absurd h4 (h m hm ⟨⟨h1, h2⟩, h3⟩)
-
-theorem trusted_hint_predicts_installed_origin (digest : String)
-    (mounts : List ToolPolicy.AssetMount) (trusted : List String)
-    (h : originOf digest mounts trusted = .installed) :
-    ∃ m ∈ mounts, digest ∈ m.files ∧ trustedHint m trusted = true := by
-  obtain ⟨m, hm, h1, h2, h3, h4⟩ := (origin_is_host_fact digest mounts trusted).mp h
-  refine ⟨m, hm, h2, ?_⟩
-  simp [trustedHint, h1, h3, h4]
-
-/-- Installed origin, step ≥ 1: the engine is handed the verified bytes under
-the pinned source digest. -/
-theorem installed_origin_runs_verified_bytes (pin : Pin) (step : Nat) (source : String)
-    (h : pin.origin = .installed) (hs : 1 ≤ step) :
-    (verifiedScript pin step source).map VerifiedScript.digest = some pin.sourceDigest := by
-  simp [verifiedScript, h, hs]
+/-- The origin of one call: a call that carries a `script`
+(`CallArgs.carriesScript`) runs model-authored code and is `dynamic`; any
+other call runs the operator-installed artifact the engine guard and
+`engineChanged` check, and is `installed`. -/
+def callOrigin (c : CallArgs) : Origin :=
+  if c.carriesScript then .dynamic else .installed
 
 /-- A missing record, and a legacy documents record, read as `selfConfig`. -/
 theorem missing_record_is_self_config (k : PackKind) :
@@ -153,18 +82,6 @@ theorem explicit_install_decides (prior : Record) (k : PackKind) (v : InstallPro
       provenanceOf k (recordAfterInstall prior k true v) = v := by
   simp [recordAfterInstall, provenanceOf]
 
-/-- A pack the model installed through self-configuration never
-yields an installed origin. -/
-theorem model_installed_pack_is_dynamic (digest : String)
-    (mounts : List ToolPolicy.AssetMount) (trusted : List String)
-    (h : ∀ m ∈ mounts, digest ∈ m.files → m.via = .selfConfig) :
-    originOf digest mounts trusted = .dynamic := by
-  cases ho : originOf digest mounts trusted with
-  | dynamic => rfl
-  | installed =>
-    obtain ⟨m, hm, _, h2, h3, _⟩ := (origin_is_host_fact digest mounts trusted).mp ho
-    exact nomatch (h m hm h2).symm.trans h3
-
 /-- An engine pack whose provenance is not `operator` refuses every step of a
 running row with `plugin_job_not_available`. -/
 theorem self_config_engine_refused (ctx : StepContext) (k : PackKind) (r : Record)
@@ -188,23 +105,21 @@ structure PackJobBlock where
   targetsFrom : List String
   trusted : List String
   dynamic : DynamicMode
-  projectRoots : List String
   deriving DecidableEq, Repr
 
 /-- A pack-shipped block installs only through an operator install; its
 targets and trusted packs come from `closure`, the pack and its dependencies;
-it never runs dynamic scripts; and only the operator's own Tools writes may set
-project roots. -/
+and it never runs dynamic scripts. -/
 def packJobBlockAdmissible (via : InstallProvenance) (closure : List String)
     (b : PackJobBlock) : Bool :=
   decide (via = .operator ∧ b.targetsFrom ⊆ closure ∧ b.trusted ⊆ closure ∧
-    b.dynamic ∈ [.off, .check] ∧ b.projectRoots = [])
+    b.dynamic ∈ [.off, .check])
 
 /-- `gents pack wire … --targets-from <pack>`: the pack's targets join
 the job targets, every job target joins the caller's AgentTools target list,
 and the pack joins `trusted_packs`. Content packs ship no job block, so
-this operator wiring, not a pack-shipped block, makes their scripts
-installed-origin. -/
+this operator wiring, not a pack-shipped block, grants their targets.
+`trusted_packs` does not decide origin: the call does (`callOrigin`). -/
 def wireTargetsFrom (pack : String) (packTargets : List Target) (p : Policy)
     (jobTargets callerTargets : List Target) : Policy × List Target × List Target :=
   let job := jobTargets ∪ packTargets
@@ -225,9 +140,9 @@ theorem dynamic_off_refuses_run (ctx : StepContext) (job : Job) (out : StepOutpu
   simp [admitStep, hr, ha.1, ha.2, he, hres, hadm, hp, dynamicModeRefusal, ho, h]
 
 /-- Under `policy.mode = off`, a step that carries no installed pin (no pin at
-all, or a dynamic-origin one) and whose call runs dynamic code
-(`runsDynamicCode`) is refused with `dynamicCodeDisabled` for a pinless call,
-or `policyDenied` for a pinned step, once rules 1-4 pass. -/
+all, or a dynamic-origin one) and whose call carries a `script`
+(`CallArgs.carriesScript`) is refused with `dynamicCodeDisabled` for a pinless
+call, or `policyDenied` for a pinned step, once rules 1-4 pass. -/
 theorem dynamic_off_refuses_pinless_step (ctx : StepContext) (job : Job) (out : StepOutput)
     (h : ctx.policy.mode = .off) (hr : job.state = .running)
     (ha : (ctx.available && ctx.engineProvenanceOperator) = true)
@@ -235,7 +150,7 @@ theorem dynamic_off_refuses_pinless_step (ctx : StepContext) (job : Job) (out : 
     (hres : (out.resume.isSome && !resumePlaced job out) = false)
     (hadm : resumeAdmitted ctx out = true)
     (hp : ∀ p, stepPin ctx job out = some p → p.origin = .dynamic)
-    (hs : runsDynamicCode ctx job.call = true) :
+    (hs : job.call.carriesScript = true) :
     admitStep ctx job out = .error .dynamicCodeDisabled ∨
       admitStep ctx job out = .error .policyDenied := by
   cases hstep : stepPin ctx job out with
@@ -247,20 +162,16 @@ theorem dynamic_off_refuses_pinless_step (ctx : StepContext) (job : Job) (out : 
     right
     exact dynamic_off_refuses_run ctx job out p h hr ha he hres hadm hstep (hp p hstep)
 
-/-- Under `policy.mode = off`, a pinless call that carries no `script` and no
-`path` and names no dynamic-origin script (a named run of an installed script
-that ends inline, or a workflow control, status, result or help call) is
-admitted as the non-job call it is: `off` refuses dynamic origin only. -/
+/-- Under `policy.mode = off`, a pinless call that carries no `script` (an
+artifact call that ends inline) is admitted as the non-job call it is: `off`
+refuses dynamic origin only. -/
 theorem dynamic_off_admits_sourceless_call (ctx : StepContext) (job : Job)
     (out : StepOutput) (h : ctx.policy.mode = .off)
     (hr : job.state = .running)
     (ha : (ctx.available && ctx.engineProvenanceOperator) = true)
     (he : engineChanged ctx job out = false) (hres : out.resume = none)
-    (hp : stepPin ctx job out = none) (hscript : job.call.script = none)
-    (hpath : job.call.path = none) (hnamed : ctx.namedOrigin ≠ some .dynamic) :
+    (hp : stepPin ctx job out = none) (hs : job.call.carriesScript = false) :
     admitStep ctx job out = admitNonJob ctx job out := by
-  have hs : runsDynamicCode ctx job.call = false := by
-    simp [runsDynamicCode, CallArgs.runsDynamicScript, hscript, hpath, hnamed]
   simp only [Bool.and_eq_true] at ha
   simp [admitStep, hr, ha.1, ha.2, he, hres, resumeAdmitted, hp, h, hs]
 
@@ -303,32 +214,6 @@ theorem installed_ignores_mode (ctx : StepContext) (job : Job) (out : StepOutput
   simp only [dynamicModeRefusal, ho]
   rfl
 
-/-- A running job whose pin has installed origin and whose call names a script
-re-checks its source on every step: once the source is no longer a file of an
-operator-installed mount of a pack in `policy.trustedPacks` (`originOf` is
-`dynamic`), the step is refused with `policyDenied`, the row ends `failed` and
-kill runs over its own children. -/
-theorem installed_job_refused_when_untrusted (ctx : StepContext) (job : Job) (out : StepOutput)
-    (p : Pin) (mounts : List ToolPolicy.AssetMount) (obs : SpawnKey → Recovery.KillObservation)
-    (hctx : ∀ d, ctx.installedTrusted d = (originOf d mounts ctx.policy.trustedPacks == .installed))
-    (hr : job.state = .running)
-    (ha : (ctx.available && ctx.engineProvenanceOperator) = true)
-    (he : engineChanged ctx job out = false)
-    (hpin : job.pin = some p) (ho : p.origin = .installed)
-    (hc : job.call.scriptless = false)
-    (hadm : resumeAdmitted ctx out = true)
-    (hu : originOf p.sourceDigest mounts ctx.policy.trustedPacks = .dynamic) :
-    admitStep ctx job out = .error .policyDenied ∧
-      settleStep ctx job out obs =
-        ({ job with state := .failed },
-          (liveOwnChildren job).map fun ch => (ch.key, Recovery.killAction (obs ch.key))) := by
-  have ht : ctx.installedTrusted p.sourceDigest = false := by rw [hctx, hu]; rfl
-  have hs : stepPin ctx job out = some p := by simp [stepPin, hpin]
-  simp only [Bool.and_eq_true] at ha
-  have hd : admitStep ctx job out = .error .policyDenied := by
-    simp [admitStep, hr, ha.1, ha.2, he, hs, hpin, ho, ht, hc, hadm, dynamicModeRefusal]
-  exact ⟨hd, (panel_refusal_fails_closed ctx p job out obs).2 hd⟩
-
 /-- `Policy.valid` ignores `dynamicTargets` when the mode is `off`, bounds them
 by `agentTargets` otherwise, and the default empty list is valid for any
 `agentTargets`. -/
@@ -361,29 +246,17 @@ theorem pack_job_block_never_run (via : InstallProvenance) (closure : List Strin
   intro hr
   simp [hr] at h
 
-theorem pack_job_block_no_project_roots (via : InstallProvenance) (closure : List String)
-    (b : PackJobBlock) (h : packJobBlockAdmissible via closure b = true) :
-    b.projectRoots = [] := by
-  simp only [packJobBlockAdmissible, decide_eq_true_eq] at h
-  exact h.2.2.2.2
-
 /-- After `wireTargetsFrom pack`, the pack is trusted and the job targets are
-within the caller's targets. So a script whose digest is a file of the pack's
-operator-installed pack-tier mount has origin `installed`
-(`origin_is_host_fact`), and it spawns exactly the live ∩ pinned ∩ job targets
-(`wiring_makes_job_targets_spawnable`). -/
+within the caller's targets, so an installed-origin pin spawns exactly the
+live ∩ pinned ∩ job targets (`wiring_makes_job_targets_spawnable`). -/
 theorem targets_from_wiring_trusts_pack (pack : String) (packTargets : List Target)
     (p p' : Policy) (jobTargets callerTargets job' caller' : List Target)
     (hw : wireTargetsFrom pack packTargets p jobTargets callerTargets = (p', job', caller')) :
     pack ∈ p'.trustedPacks ∧ packTargets ⊆ job' ∧ job' ⊆ caller' ∧
-      ∀ (ctx : StepContext) (pin : Pin) (mounts : List ToolPolicy.AssetMount)
-        (m : ToolPolicy.AssetMount),
-        ctx.policy = p' → ctx.jobTargets = .only job'.toFinset (fun _ => ()) →
+      ∀ (ctx : StepContext) (pin : Pin),
+        ctx.jobTargets = .only job'.toFinset (fun _ => ()) →
         ctx.callerTargets = .only caller'.toFinset (fun _ => ()) →
-        pin.origin = originOf pin.sourceDigest mounts ctx.policy.trustedPacks →
-        m ∈ mounts → m.pack = pack → m.klass ≠ .project → pin.sourceDigest ∈ m.files →
-        m.via = .operator →
-        pin.origin = .installed ∧
+        pin.origin = .installed →
           ∀ t, (effectiveTargets ctx pin).permits t ↔
             ((TargetResolution.scope ctx.bindings (ctx.live.meet pin.ceilingAtPin).targets).meet
               unitVM ctx.jobTargets).permits t := by
@@ -393,13 +266,8 @@ theorem targets_from_wiring_trusts_pack (pack : String) (packTargets : List Targ
   have hsub : jobTargets ∪ packTargets ⊆ callerTargets ∪ (jobTargets ∪ packTargets) :=
     fun t ht => List.mem_union_iff.mpr (Or.inr ht)
   refine ⟨htrust, fun t ht => List.mem_union_iff.mpr (Or.inr ht), hsub, ?_⟩
-  intro ctx pin mounts m hp hj hc ho hm hpk hk hf hv
-  have hi : pin.origin = .installed := by
-    rw [ho]
-    refine (origin_is_host_fact _ _ _).mpr ⟨m, hm, hk, hf, hv, ?_⟩
-    rw [hp, hpk]
-    exact htrust
-  refine ⟨hi, wiring_makes_job_targets_spawnable ctx pin ?_ hi⟩
+  intro ctx pin hj hc hi
+  refine wiring_makes_job_targets_spawnable ctx pin ?_ hi
   rw [hj, hc]
   simp only [scopeLe, decide_eq_true_eq]
   intro t ht

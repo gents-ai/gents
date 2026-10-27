@@ -444,21 +444,6 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/graph_pipeline/run.rs",
-      "collection": "EventGroupState",
-      "arguments": "filter: { node_did: {_eq: \"$GENTS_0$\"}, correlation: {_eq: \"$GENTS_1$\"}, consumer: {_in: [$GENTS_consumers$]} }, order: {first_seen_at: ASC}, limit: $GENTS_limit$"
-    },
-    "bindings": [
-      {
-        "0": "probe",
-        "1": "probe",
-        "consumers": "\"probe\"",
-        "limit": "1"
-      }
-    ]
-  },
-  {
-    "read": {
       "path": "crates/gents/src/lifecycle/claim.rs",
       "collection": "AgentMessage",
       "arguments": "filter: { $GENTS_scope$ }, order: { sequence: DESC }, limit: 1"

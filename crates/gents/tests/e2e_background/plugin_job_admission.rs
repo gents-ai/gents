@@ -26,8 +26,6 @@ fn entry(when: Value, output: JobStepOutput) -> PlanEntry {
     PlanEntry {
         when,
         output,
-        note: false,
-        scratch: false,
         control: None,
     }
 }

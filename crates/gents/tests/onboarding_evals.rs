@@ -15,6 +15,3 @@ mod p2p;
 mod schema;
 #[path = "onboarding_evals/sessions.rs"]
 mod sessions;
-
-#[path = "onboarding_evals/packs.rs"]
-mod packs;
