@@ -42,13 +42,21 @@ pub async fn refresh_chatgpt_token(
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| token_endpoint(DEFAULT_ISSUER));
+    refresh_chatgpt_token_at(&endpoint, refresh_token, http).await
+}
+
+async fn refresh_chatgpt_token_at(
+    endpoint: &str,
+    refresh_token: &str,
+    http: &reqwest::Client,
+) -> Result<RefreshedTokens, OAuthAuthProblem> {
     let request = RefreshRequest {
         client_id: CHATGPT_OAUTH_CLIENT_ID,
         grant_type: "refresh_token",
         refresh_token,
     };
     let response = http
-        .post(&endpoint)
+        .post(endpoint)
         .header("Content-Type", "application/json")
         .json(&request)
         .send()
@@ -60,7 +68,10 @@ pub async fn refresh_chatgpt_token(
     let status = response.status();
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
-        if status == reqwest::StatusCode::UNAUTHORIZED {
+        if status == reqwest::StatusCode::UNAUTHORIZED
+            || (status == reqwest::StatusCode::BAD_REQUEST
+                && error_code(&body).as_deref() == Some("invalid_grant"))
+        {
             return Err(OAuthAuthProblem::Expired);
         }
         return Err(OAuthAuthProblem::Other(format!(
@@ -218,6 +229,17 @@ pub(crate) fn jwt_payload(jwt: &str) -> Option<Value> {
     serde_json::from_slice(&bytes).ok()
 }
 
+/// Credential rejection comes from the token endpoint's structured code;
+/// human-readable messages do not determine whether sign-in is required.
+fn error_code(body: &str) -> Option<String> {
+    let value = serde_json::from_str::<Value>(body).ok()?;
+    let error = value.get("error")?;
+    error
+        .as_str()
+        .or_else(|| error.get("code").and_then(Value::as_str))
+        .map(str::to_owned)
+}
+
 fn parse_error_message(body: &str) -> String {
     let Ok(value) = serde_json::from_str::<Value>(body) else {
         return body.to_string();
@@ -234,7 +256,36 @@ fn parse_error_message(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::oauth_credential::test_support::unsigned_jwt;
+    use crate::oauth_credential::test_support::{one_shot_token_server, unsigned_jwt};
+
+    #[tokio::test]
+    async fn refresh_classifies_invalid_grant_without_using_display_text() {
+        for (status, body, expired) in [
+            (401, r#"{"error":"unauthorized"}"#, true),
+            (400, r#"{"error":"invalid_grant"}"#, true),
+            (400, r#"{"error":{"code":"invalid_grant"}}"#, true),
+            (
+                400,
+                r#"{"error":{"code":"invalid_request","message":"invalid_grant"}}"#,
+                false,
+            ),
+            (400, r#"{"error":"invalid_client"}"#, false),
+            (500, r#"{"error":"invalid_grant"}"#, false),
+        ] {
+            let (url, server) = one_shot_token_server(status, body).await;
+            let result =
+                refresh_chatgpt_token_at(&url, "refresh-TEST", &reqwest::Client::new()).await;
+            server.await.unwrap();
+            assert_eq!(
+                matches!(result, Err(OAuthAuthProblem::Expired)),
+                expired,
+                "{status}: {body}: {result:?}"
+            );
+            if !expired {
+                assert!(matches!(result, Err(OAuthAuthProblem::Other(_))));
+            }
+        }
+    }
 
     #[test]
     fn decodes_nested_chatgpt_claims() {

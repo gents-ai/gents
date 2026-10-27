@@ -14,17 +14,21 @@ export type ShownChanges = {
 
 const store = createStore<Record<string, ShownChanges>>(() => ({}));
 
+const scopeKey = ({ nodeDid, sessionId }: SessionScope) =>
+  JSON.stringify([nodeDid, sessionId]);
+
 export const changesView = {
   show(shown: ShownChanges) {
     preferFile(shown.scope, shown.path);
-    store.setState({ [shown.scope.sessionId]: shown });
+    store.setState({ [scopeKey(shown.scope)]: shown });
   },
   /** choosing the chosen file again brings it back to the top and opens it */
-  choose(sessionId: string, path: string) {
-    const shown = store.getState()[sessionId];
+  choose(scope: SessionScope, path: string) {
+    const key = scopeKey(scope);
+    const shown = store.getState()[key];
     if (!shown) return;
     preferFile(shown.scope, path);
-    store.setState({ [sessionId]: { ...shown, path } });
+    store.setState({ [key]: { ...shown, path } });
   },
 };
 
@@ -62,13 +66,16 @@ export function keepFileListWidth() {
   } catch {}
 }
 
-export const useShownChanges = (sessionId: string | null) =>
-  useStore(store, (s) => (sessionId ? s[sessionId] : undefined));
+export const useShownChanges = (scope: SessionScope | null) =>
+  useStore(store, (s) => (scope ? s[scopeKey(scope)] : undefined));
 
 /** The file chosen in the panel when it shows `turn`, else null: a card
     follows only its own turn, so choosing a file redraws no other card. */
-export const useChosenPath = (sessionId: string, turn: string) =>
-  useStore(store, (s) => (s[sessionId]?.turn === turn ? s[sessionId].path : null));
+export const useChosenPath = (scope: SessionScope, turn: string) =>
+  useStore(store, (s) => {
+    const shown = s[scopeKey(scope)];
+    return shown?.turn === turn ? shown.path : null;
+  });
 
 export const resetChangesView = () => {
   store.setState({}, true);

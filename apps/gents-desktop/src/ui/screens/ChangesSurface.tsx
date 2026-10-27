@@ -3,6 +3,7 @@ import { cn } from "@gents/ui/lib/utils";
 import type { SurfaceContext } from "@/app/surfaces";
 import { useRecordedDiffReader } from "../../hooks/fileChanges";
 import { useHomeDid } from "@/hooks/useClient";
+import { useSelectedSessionValue } from "@/hooks/useSelectedSession";
 import { thinScrollbar } from "@/lib/scrollbar";
 import { sharedFolder } from "@/lib/turnChanges";
 import { ChangedFileSection } from "./ChangedFileSection";
@@ -16,14 +17,23 @@ import {
 } from "./changes";
 
 export function ChangesSurface({ sessionId }: SurfaceContext) {
-  const shown = useShownChanges(sessionId);
-  if (!sessionId || !shown)
+  const nodeDid = useSelectedSessionValue((session) =>
+    session && session.sessionId === sessionId ? session.nodeDid : null,
+  );
+  const scope = sessionId && nodeDid ? { nodeDid, sessionId } : null;
+  const shown = useShownChanges(scope);
+  if (!scope || !shown)
     return (
       <p className="p-4 text-sm text-muted-foreground">
         Choose a file under a reply to see what the turn changed.
       </p>
     );
-  return <TurnDiffs key={shown.turn} sessionId={sessionId} shown={shown} />;
+  return (
+    <TurnDiffs
+      key={JSON.stringify([scope.nodeDid, scope.sessionId, shown.turn])}
+      shown={shown}
+    />
+  );
 }
 
 /* how far beyond the visible part of the panel a file's diff is drawn, and
@@ -36,7 +46,7 @@ const withPath = (set: ReadonlySet<string>, path: string) =>
 
 /** Every file the turn changed, in one scroll; the file chosen under the
     reply, or in the picker, is opened and brought to the top. */
-function TurnDiffs({ sessionId, shown }: { sessionId: string; shown: ShownChanges }) {
+function TurnDiffs({ shown }: { shown: ShownChanges }) {
   const { files } = shown;
   const within = useMemo(() => sharedFolder(files.map((f) => f.path)), [files]);
   const row = useRef<HTMLDivElement>(null);
@@ -147,7 +157,7 @@ function TurnDiffs({ sessionId, shown }: { sessionId: string; shown: ShownChange
     align.current();
   }, [shown]);
 
-  const choose = (path: string) => changesView.choose(sessionId, path);
+  const choose = (path: string) => changesView.choose(shown.scope, path);
   const toggle = useCallback(
     (path: string) =>
       setClosed((was) => {

@@ -2138,55 +2138,65 @@ mod tests {
         let node = test_node().await;
         let models = ModelsListener::start();
         let _env = TOKEN_URL_ENV.lock().await;
-        let _guard =
-            TokenUrlOverrideGuard(crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
-        for (status, body, event) in [
-            (401, r#"{"error":"invalid_grant"}"#, "credentialsRejected"),
-            (400, r#"{"error":"invalid_grant"}"#, "credentialsRejected"),
-            (403, r#"{"error":"forbidden"}"#, "subscriptionNotEntitled"),
-            (500, r#"{"error":"unavailable"}"#, "probeFail"),
-        ] {
-            let did = format!("did:key:z6MkRejectedRefresh{status}");
-            seed_credential(
-                &node,
-                &did,
+        for (provider, override_env, kind, forbidden_event) in [
+            (
                 crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
-                Utc::now() - chrono::Duration::minutes(1),
-            )
-            .await;
-            let mut backend = claude_backend();
-            backend.node_did = did.clone();
-            backend.endpoint = models.endpoint();
-            let (url, server) = one_shot_token_server(status, body).await;
-            std::env::set_var(
                 crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
-                url,
-            );
-            let health = BackendHealthMap::new();
-            let outcome = probe_backends_cycle(
-                &node,
-                &reqwest::Client::new(),
-                &[backend],
-                Utc::now(),
-                &health,
-                &probe_options(),
-                Some(OAuthProbeContext {
-                    node: node.clone(),
-                    node_did: &did,
-                }),
-            )
-            .await;
-            server.await.unwrap();
-            let snapshot = health.get("claude").await.unwrap();
-            assert_modeled_probe(None, &snapshot, event);
-            assert_eq!(!outcome.flipped.is_empty(), snapshot.state.blocks_routing());
-            assert_eq!(
-                models.requests(),
-                0,
-                "a failed credential resolution must not call discovery"
-            );
-            let error = snapshot.last_error.as_deref().unwrap();
-            assert!(!error.contains("refresh-TEST") && !error.contains("access-TEST"));
+                crate::backend_provider::BackendProviderKind::ClaudeCliSubscription,
+                "subscriptionNotEntitled",
+            ),
+            (
+                crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+                gents_protocol::chatgpt_oauth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
+                crate::backend_provider::BackendProviderKind::ChatGptCodex,
+                "probeFail",
+            ),
+        ] {
+            let _guard = TokenUrlOverrideGuard(override_env);
+            for (status, body, event) in [
+                (401, r#"{"error":"invalid_grant"}"#, "credentialsRejected"),
+                (400, r#"{"error":"invalid_grant"}"#, "credentialsRejected"),
+                (403, r#"{"error":"forbidden"}"#, forbidden_event),
+                (500, r#"{"error":"unavailable"}"#, "probeFail"),
+            ] {
+                let did = format!("did:key:z6MkRejectedRefresh{provider}{status}");
+                seed_credential(
+                    &node,
+                    &did,
+                    provider,
+                    Utc::now() - chrono::Duration::minutes(1),
+                )
+                .await;
+                let mut backend = oauth_backend(kind, provider, &models.endpoint());
+                backend.node_did = did.clone();
+                let (url, server) = one_shot_token_server(status, body).await;
+                std::env::set_var(override_env, url);
+                let health = BackendHealthMap::new();
+                let outcome = probe_backends_cycle(
+                    &node,
+                    &reqwest::Client::new(),
+                    &[backend],
+                    Utc::now(),
+                    &health,
+                    &probe_options(),
+                    Some(OAuthProbeContext {
+                        node: node.clone(),
+                        node_did: &did,
+                    }),
+                )
+                .await;
+                server.await.unwrap();
+                let snapshot = health.get(provider).await.unwrap();
+                assert_modeled_probe(None, &snapshot, event);
+                assert_eq!(!outcome.flipped.is_empty(), snapshot.state.blocks_routing());
+                assert_eq!(
+                    models.requests(),
+                    0,
+                    "a failed credential resolution must not call discovery"
+                );
+                let error = snapshot.last_error.as_deref().unwrap();
+                assert!(!error.contains("refresh-TEST") && !error.contains("access-TEST"));
+            }
         }
         models.shutdown().await;
         node.shutdown().await;

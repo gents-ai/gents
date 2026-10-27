@@ -37,7 +37,7 @@ import { Markdown } from "./Markdown";
 import { span, when } from "./time";
 import { useApp } from "@/app/AppContext";
 import { toastFailure } from "@/lib/failure";
-import { nodeOf } from "../../hooks/fleetStore";
+import { listedSession, nodeOf } from "../../hooks/fleetStore";
 import { useFleet } from "@/hooks/useFleet";
 
 type BadgeVariant = ComponentProps<typeof Badge>["variant"];
@@ -84,9 +84,7 @@ export function Item({
 }) {
   // The filer names the agent; a session may be listed by another node.
   const filer = useFleet((state) => nodeOf(state, m.nodeDid));
-  const session = useFleet((state) =>
-    m.sessionId ? state.bySessionId[m.sessionId] : undefined,
-  );
+  const session = useFleet((state) => listedSession(state, m.nodeDid, m.sessionId));
   const {
     actions: { answerMailboxQuestion, dismissMailboxItem, openMailboxItem },
     stores,

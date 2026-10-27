@@ -226,7 +226,6 @@ describe("a session's menu in the sessions list", () => {
   it("renames in the row, asking the session's own node", async () => {
     const renameSession = vi.fn().mockResolvedValue(undefined);
     const app = listApp([first], { renameSession });
-    app.stores.selection.setState({ nodeDid: "did:key:other" });
     renderRouted(app, { name: "sessions" }, page);
 
     const { u, menu } = await openRowMenu("First");

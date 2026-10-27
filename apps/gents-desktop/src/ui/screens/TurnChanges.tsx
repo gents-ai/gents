@@ -83,7 +83,7 @@ export function TurnChanges({
   files: readonly ChangedFile[];
 }) {
   const { openSurface } = useDock();
-  const chosen = useChosenPath(scope.sessionId, turn);
+  const chosen = useChosenPath(scope, turn);
   const listed = files.slice(0, SHOWN);
   const added = files.reduce((n, f) => n + f.added, 0);
   const removed = files.reduce((n, f) => n + f.removed, 0);
