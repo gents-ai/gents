@@ -643,7 +643,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                             later.doc_id.is_some() && later.doc_id == row.message.request_doc_id
                         })
                         && !message_is_runtime_control(
-                            row,
+                            &row.message,
                             input_request_for_message(row)
                                 .or_else(|| execution_request_for_message(row)),
                         )
@@ -1655,8 +1655,35 @@ pub(super) fn project_transcript_rows(
         .iter()
         .copied()
         .map(|row| {
+            let resolved_origin = gents_protocol::output::origin::resolve_origin(
+                &observed_messages,
+                denied_headers,
+                &row.doc_id,
+                &row.message.node_did,
+                row.message.requester_did.as_deref(),
+            )
+            .ok();
+            let origin_message = resolved_origin
+                .map(|origin| origin.message)
+                .unwrap_or(&row.message);
             let input_request = input_request_for_message(row);
-            let source_request = input_request.or_else(|| execution_request_for_message(row));
+            let source_request = input_request
+                .or_else(|| execution_request_for_message(row))
+                .or_else(|| {
+                    let origin = resolved_origin.filter(|origin| origin.doc_id != row.doc_id)?;
+                    let request_doc_id = origin.message.request_doc_id.as_deref()?;
+                    canonical_dependencies?
+                        .origin_requests
+                        .iter()
+                        .find(|request| {
+                            request.doc_id.as_deref() == Some(request_doc_id)
+                                && request.node_did.as_deref()
+                                    == Some(origin.message.node_did.as_str())
+                                && request.session_id.as_deref()
+                                    == Some(origin.message.session_id.as_str())
+                                && request.requester_did == origin.message.requester_did
+                        })
+                });
             let projection = project_message_with_dependencies(
                 row,
                 &observed_messages,
@@ -1690,6 +1717,16 @@ pub(super) fn project_transcript_rows(
                     None,
                 ),
             };
+            if resolved_origin.is_some_and(|origin| origin.doc_id != row.doc_id)
+                && origin_message.role == gents_protocol::output::MessageRole::User
+                && origin_message.request_doc_id.is_some()
+                && source_request.is_none()
+                && reconstruction_state == ReconstructionState::Ready
+            {
+                reconstructed = None;
+                reconstruction_state = ReconstructionState::Loading;
+                reconstruction_error = Some("fork input attribution is not yet available".into());
+            }
             let captured_context = match reconstructed
                 .as_ref()
                 .map(gents_protocol::request_input::CapturedContext::from_message)
@@ -1703,15 +1740,7 @@ pub(super) fn project_transcript_rows(
                     Vec::new()
                 }
             };
-            let runtime_context = gents_protocol::output::origin::resolve_origin(
-                &observed_messages,
-                denied_headers,
-                &row.doc_id,
-                &row.message.node_did,
-                row.message.requester_did.as_deref(),
-            )
-            .ok()
-            .is_some_and(|origin| {
+            let runtime_context = resolved_origin.is_some_and(|origin| {
                 origin.message.role == gents_protocol::output::MessageRole::User
                     && origin
                         .message
@@ -1793,12 +1822,13 @@ pub(super) fn project_transcript_rows(
                 reconstruction_state,
                 reconstruction_error,
                 denied_dependency_doc_id,
-                runtime_control: runtime_context || message_is_runtime_control(row, source_request),
+                runtime_control: runtime_context
+                    || message_is_runtime_control(origin_message, source_request),
                 input_request_id: input_request.map(|request| request.request_id.clone()),
                 origin: if runtime_context {
                     None
                 } else {
-                    message_origin(store, row, source_request)
+                    message_origin(store, origin_message, source_request)
                 },
                 input_text,
                 timestamp: Some(row.message.created_at.clone()),
@@ -1945,3 +1975,7 @@ pub(crate) fn render_transcript_rows(
     );
     super::super::timeline::build_rendered_timeline(&messages, &tool_calls, &[])
 }
+
+#[cfg(test)]
+#[path = "fork_input_tests.rs"]
+mod fork_input_tests;
