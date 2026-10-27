@@ -34,6 +34,11 @@ pub(crate) fn writable_root(root: &Path, policy: &CommandExecutionPolicy) -> Res
 /// Command admission must enforce the configured ceiling before consent is
 /// requested. A working directory alone does not constrain command effects;
 /// admitted read-only commands are routine, while broader effects need consent.
+/// Workspace consent is an optional restriction on native tool authority, not
+/// its source. Headless/configured invocations without a selected workspace keep
+/// their configured ceiling; bounded command isolation is enforced independently
+/// by the shared launch owner. A supplied but unavailable approval home is an
+/// error at request setup, never evidence of an unconfigured workspace.
 pub(crate) async fn authorize_command(
     argv: &[String],
     cwd: &Path,

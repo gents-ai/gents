@@ -14,6 +14,8 @@ mod file;
 mod review_task;
 pub(crate) use command::guard_home as command_guard_home;
 pub(crate) use command::{authorize_command, writable_root as command_writable_root};
+#[cfg(target_os = "macos")]
+pub(crate) use context::current_home as command_context_home;
 pub(crate) use context::{carry, for_request, scope, ReviewInvocation, Reviewer};
 pub(crate) use file::authorize_file_mutation;
 pub use review_task::{

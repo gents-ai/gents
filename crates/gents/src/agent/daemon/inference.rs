@@ -183,12 +183,13 @@ where
         request_token: &tokio_util::sync::CancellationToken,
         aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
         effective_seed: Option<i64>,
-        workspace: crate::tool_call_lifecycle::runtime::ToolWorkspaceScope,
+        mut workspace: crate::tool_call_lifecycle::runtime::ToolWorkspaceScope,
         request_context_message: Option<crate::llm::message::Message>,
         resume_from_history: bool,
         consumed_prompts: Vec<crate::agent::loop_stream::FoldedPrompt>,
         folded_prompts: Vec<crate::agent::loop_stream::FoldedPrompt>,
     ) -> Result<HandleRequestOutcome> {
+        workspace.runtime_home = self.approval_home.clone();
         let request_deadline = lifecycle.claimed_deadline_at();
         let trigger_context = crate::lifecycle::TriggerExecutionContext::parse(
             request.caused_by_trigger_context.as_deref(),

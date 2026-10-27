@@ -4,6 +4,7 @@ import Proofs.Conformance.RequestPatchPublicationCases
 import Proofs.Conformance.AccessReview
 import Proofs.Conformance.OperatorPaths
 import Proofs.Conformance.WorkspaceCommandRoot
+import Proofs.Conformance.CommandIsolation
 import Proofs.Conformance.ClientDataPublicationCases
 import Proofs.Conformance.ClientObservationScope
 import Proofs.Conformance.ClientInstallation
@@ -467,6 +468,7 @@ def snapshotJson : String :=
       ++ jsonArray (CommandPolicy.commandPolicyCases.map commandPolicyCaseJson) ++ ","
     ++ "\"command_sandbox_cases\":"
       ++ jsonArray (CommandPolicy.commandSandboxCases.map commandSandboxCaseJson) ++ ","
+    ++ "\"command_isolation_cases\":" ++ Conformance.CommandIsolation.casesJson.compress ++ ","
     ++ "\"command_env_cases\":"
       ++ jsonArray (CommandPolicy.commandEnvCases.map commandEnvCaseJson) ++ ","
     ++ "\"live_overlay_cases\":"

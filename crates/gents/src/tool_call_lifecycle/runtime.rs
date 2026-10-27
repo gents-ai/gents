@@ -8,6 +8,9 @@ use gents_loop::tool_policy::WorkspaceAuthority;
 
 #[derive(Clone, Default)]
 pub(crate) struct ToolWorkspaceScope {
+    /// Host namespace for negative credential exclusions, never portable identity
+    /// or authority to read/write the runtime home.
+    pub runtime_home: Option<PathBuf>,
     pub workspace_cwd: Option<PathBuf>,
     pub workspace_root: Option<PathBuf>,
     pub workspace_authority: Option<WorkspaceAuthority>,
@@ -17,6 +20,7 @@ pub(crate) struct ToolWorkspaceScope {
 impl ToolWorkspaceScope {
     pub(crate) fn cwd_only(workspace_cwd: Option<PathBuf>) -> Self {
         Self {
+            runtime_home: None,
             workspace_cwd,
             workspace_root: None,
             workspace_authority: None,
@@ -31,6 +35,7 @@ tokio::task_local! {
 
 #[derive(Clone)]
 pub(crate) struct CurrentToolRuntimeContext {
+    pub(crate) runtime_home: Option<PathBuf>,
     pub(crate) deadline_at: Option<DateTime<Utc>>,
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) workspace_cwd: Option<PathBuf>,
@@ -91,6 +96,9 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
     let scope = gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context()?;
     let overlay = WORKSPACE_OVERLAY.try_with(Clone::clone).ok();
     Some(CurrentToolRuntimeContext {
+        runtime_home: overlay
+            .as_ref()
+            .and_then(|overlay| overlay.runtime_home.clone()),
         deadline_at: scope.deadline_at,
         cancellation_token: scope.cancellation_token,
         workspace_cwd: scope.workspace_cwd,

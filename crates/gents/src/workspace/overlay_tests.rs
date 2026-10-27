@@ -957,6 +957,7 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
             None,
             tokio_util::sync::CancellationToken::new(),
             ToolWorkspaceScope {
+                runtime_home: None,
                 workspace_cwd: Some(root.clone()),
                 workspace_root: Some(root.clone()),
                 workspace_authority: authority,

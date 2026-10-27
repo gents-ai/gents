@@ -25,11 +25,19 @@ pub struct PoolKey {
     pub workspace_root: std::path::PathBuf,
     pub server_name: String,
     pub config_digest: String,
+    /// Bounded servers must retain the runtime credential namespace under which
+    /// they were launched, including when workspace consent is unconfigured.
+    pub runtime_home: Option<std::path::PathBuf>,
     pub operator_guard_home: Option<std::path::PathBuf>,
 }
 
 impl PoolKey {
     fn validate_operator_guard(&self) -> Result<(), String> {
+        let runtime_home = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+            .and_then(|context| context.runtime_home);
+        if runtime_home != self.runtime_home {
+            return Err("language-server runtime protection changed; retry the action".into());
+        }
         let current = crate::plugin::approval::workspace::command_guard_home()
             .map_err(|error| format!("{error:#}"))?;
         if current != self.operator_guard_home {
@@ -586,6 +594,8 @@ impl LspPool {
         workspace: &std::path::Path,
         digest: &str,
     ) -> Result<RapidHashMap<String, PoolServerState>, String> {
+        let runtime_home = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+            .and_then(|context| context.runtime_home);
         let operator_guard_home = crate::plugin::approval::workspace::command_guard_home()
             .map_err(|error| format!("{error:#}"))?;
         let guard_error = operator_guard_home.as_ref().and_then(|home| {
@@ -604,6 +614,7 @@ impl LspPool {
                 && key.workspace_root == workspace
                 && key.config_digest == digest
                 && key.operator_guard_home == operator_guard_home
+                && key.runtime_home == runtime_home
             {
                 let entry = slot.lock().await;
                 if let Some(error) = &guard_error {
@@ -639,6 +650,7 @@ impl LspPool {
                 && key.workspace_root == workspace
                 && key.config_digest == digest
                 && key.operator_guard_home == operator_guard_home
+                && key.runtime_home == runtime_home
                 && at.elapsed() < INIT_BACKOFF
             {
                 states.insert(

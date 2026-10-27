@@ -276,6 +276,7 @@ where
                 );
                 let workspace = match overlay {
                     Some(overlay) => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+                        runtime_home: None,
                         workspace_cwd: Some(overlay.cwd),
                         workspace_root: Some(overlay.root),
                         workspace_authority: Some(overlay.authority),
