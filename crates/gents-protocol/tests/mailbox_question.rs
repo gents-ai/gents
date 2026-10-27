@@ -286,13 +286,15 @@ fn question_policy_follows_the_executable_model() {
             assert_eq!(current, version.current, "{case:?}: {version:?}");
         }
         for runtime in &case.runtimes {
-            let mut input = gents_protocol::request_input::RequestInput::default();
-            input.question_reply = Some(gents_protocol::mailbox_question::MailboxQuestionReply {
-                question_version: runtime.reply_version,
-                source_doc_id: "question".into(),
-                question_hash: "source".into(),
-                answer: Default::default(),
-            });
+            let input = gents_protocol::request_input::RequestInput {
+                question_reply: Some(gents_protocol::mailbox_question::MailboxQuestionReply {
+                    question_version: runtime.reply_version,
+                    source_doc_id: "question".into(),
+                    question_hash: "source".into(),
+                    answer: Default::default(),
+                }),
+                ..Default::default()
+            };
             assert_eq!(
                 input.question_reply_compatible(runtime.version),
                 runtime.supported,
