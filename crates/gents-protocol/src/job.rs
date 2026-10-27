@@ -976,6 +976,7 @@ pub struct JobChildRow {
     pub title: String,
     pub usage: JobUsage,
     pub duration_ms: u64,
+    pub target: String,
 }
 
 /// A client's view of one job row.

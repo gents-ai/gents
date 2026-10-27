@@ -500,6 +500,7 @@ mod tests {
                 total: 7,
             },
             duration_ms: 1_500,
+            target: "agent-a".to_owned(),
         }
     }
 

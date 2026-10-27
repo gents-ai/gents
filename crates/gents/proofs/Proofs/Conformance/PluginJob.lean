@@ -1454,7 +1454,8 @@ private def viewJson : Json :=
     ("children", toJson (j.children.map fun ch => Json.mkObj [("slot", toJson ch.key.slot),
       ("attempt", toJson ch.key.attempt), ("session_id", toJson ch.key.sessionId),
       ("request_id", toJson ("request-" ++ ch.key.slot)), ("state", childStateJson ch.state),
-      ("title", toJson ch.key.slot), ("usage", usageJson), ("duration_ms", toJson (1500 : Nat))])),
+      ("title", toJson ch.key.slot), ("usage", usageJson), ("duration_ms", toJson (1500 : Nat)),
+      ("target", toJson ch.target.2)])),
     ("created_at", toJson (1000 : Nat)), ("adopted_at", toJson p.adoptedAt),
     ("completed_at", toJson (2000 : Nat))]
 

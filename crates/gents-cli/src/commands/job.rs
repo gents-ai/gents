@@ -1045,6 +1045,7 @@ mod tests {
                 total: 4242,
             },
             duration_ms: 3_000,
+            target: "agent-a".to_owned(),
         }];
         let text = shown(&parent);
         assert!(text.contains("interrupted"), "{text}");
@@ -1071,6 +1072,7 @@ mod tests {
                 total: 2,
             },
             duration_ms: 1,
+            target: "agent-a".to_owned(),
         }];
         let text = shown(&waiting);
         let at = |needle: &str| {
