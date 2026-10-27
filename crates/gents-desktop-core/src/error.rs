@@ -107,6 +107,9 @@ impl BridgeError {
         if gents::graphql::is_storage_full(&error) {
             return Self::storage_full();
         }
+        if let Some(classified) = error.chain().find_map(|cause| cause.downcast_ref::<Self>()) {
+            return classified.clone();
+        }
         let transport = error
             .chain()
             .find_map(|cause| cause.downcast_ref::<reqwest::Error>())

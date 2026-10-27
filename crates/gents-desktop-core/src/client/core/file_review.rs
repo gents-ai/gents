@@ -13,12 +13,14 @@ use gents_protocol::session_hydration::HydrationRequest;
 use serde_json::Value;
 
 use super::bootstrap::normalize_required;
-use super::writes::{ensure_peer_chat_ready_at, find_request_in_scope};
+use super::writes::ensure_peer_chat_ready_at;
 use super::ClientCore;
+use crate::error::{BridgeError, BridgeErrorCode};
 
 const DEMAND_FIELDS: &str = "_docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id status status_detail observation_doc_id processed_at outcome_signer_did outcome_signature";
 
 mod inventory;
+mod scope;
 
 impl ClientCore {
     pub async fn tool_file_changes(
@@ -34,35 +36,46 @@ impl ClientCore {
         let request_id = normalize_required("request_id", request_id)?;
         let tool_call_doc_id = normalize_required("tool_call_doc_id", tool_call_doc_id)?;
         let retry_id = retry_id.map(uuid::Uuid::parse_str).transpose()?;
-        let Some(projection) = self
-            .refresh_local_request(node_did, session_id, Some(request_id), None, &[])
-            .await?
-        else {
-            return Ok(None);
+        let operator = self.operator_observation_graphql(node_did);
+        let access = match operator.as_ref() {
+            Some(endpoint) => ConfigAccess::Graphql(endpoint.clone()),
+            None => self
+                .store_access
+                .lock()
+                .await
+                .as_ref()
+                .context("local store access is unavailable")?
+                .clone(),
         };
-        let Some(row) = find_request_in_scope(&projection.requests, request_id, Some(node_did))?
-        else {
-            return Ok(None);
-        };
-        anyhow::ensure!(
-            row.session_id.as_deref() == Some(session_id)
-                && row.requester_did == projection.requester_did,
-            "file changes crossed the selected request scope"
-        );
+        let row = scope::load_request_scope(&access, node_did, session_id, request_id).await?;
         let request_doc_id = row
             .doc_id
             .as_deref()
             .context("request lacks physical identity")?;
-        if let Some(graphql) = self.operator_observation_graphql(node_did) {
-            return gents::tool_call_lifecycle::load_tool_call_file_changes(
-                &ConfigAccess::Graphql(graphql),
+        if operator.is_some() {
+            return match load_tool_file_change_observation(
+                &access,
                 tool_call_doc_id,
                 request_doc_id,
                 node_did,
                 session_id,
                 row.requester_did.as_deref(),
             )
-            .await;
+            .await?
+            {
+                ToolFileChangeRead::Retained { changes, .. } => Ok(Some(changes)),
+                ToolFileChangeRead::Missing => Ok(None),
+                ToolFileChangeRead::Pending => Err(BridgeError::new(
+                    BridgeErrorCode::ProjectionPending,
+                    "This edit is still running. Open its changes again when it finishes.",
+                )
+                .into()),
+                ToolFileChangeRead::Unsupported => Err(BridgeError::new(
+                    BridgeErrorCode::Unsupported,
+                    "This runtime does not support recorded file versions.",
+                )
+                .into()),
+            };
         }
         let requester_did = row
             .requester_did
@@ -89,13 +102,6 @@ impl ClientCore {
         };
         demand.validate_reference()?;
         if retry_id.is_none() {
-            let access = self
-                .store_access
-                .lock()
-                .await
-                .as_ref()
-                .context("local store access is unavailable")?
-                .clone();
             demand = resumable_image_demand(&access, &demand, &self.node_identity).await?;
         }
         self.remote_file_images(demand).await
@@ -185,7 +191,10 @@ impl ClientCore {
                     .iter()
                     .find(|record| record.node_did == demand.admission.node_did);
                 ensure_peer_chat_ready_at(&demand.admission.node_did, peer, chrono::Utc::now())
-                    .context("Reconnect this runtime to load new file versions.")?;
+                    .context(BridgeError::new(
+                        BridgeErrorCode::EndpointUnreachable,
+                        "Reconnect this runtime to load new file versions.",
+                    ))?;
                 if row.is_none() {
                     admit_image_demand(&self.node, &demand).await?;
                     observed_demand = true;
@@ -198,7 +207,10 @@ impl ClientCore {
             }
         };
         tokio::time::timeout(std::time::Duration::from_secs(30), read).await
-            .context("File review is waiting for the runtime. Open the changes again when the connection is ready.")?
+            .context(BridgeError::new(
+                BridgeErrorCode::EndpointUnreachable,
+                "File review is waiting for the runtime. Open the changes again when the connection is ready.",
+            ))?
     }
 }
 
