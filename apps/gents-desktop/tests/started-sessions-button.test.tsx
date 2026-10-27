@@ -72,6 +72,17 @@ describe("the started sessions button", () => {
     expect(screen.getByTestId("started-sessions-running")).toBeInTheDocument();
   });
 
+  it("shows each started session's agent once", () => {
+    renderWith([
+      session({}),
+      { ...worker("a", "completed"), agentId: "writer" },
+      { ...worker("b", "completed"), agentId: "writer" },
+      { ...worker("c", "completed"), agentId: "reviewer" },
+    ]);
+    const button = screen.getByRole("button", { name: "3 started sessions" });
+    expect(button.querySelectorAll("span.rounded-full.border")).toHaveLength(2);
+  });
+
   it("is not marked as running once its sessions are done", () => {
     renderWith([session({}), worker("a", "completed")]);
     expect(

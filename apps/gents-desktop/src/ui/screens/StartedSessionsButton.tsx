@@ -6,6 +6,7 @@ import { dockScopeOf, useDockFor } from "@/app/workspace";
 import { isLive } from "@/lib/live";
 import { Hint } from "@/screens/Hint";
 import { useFleet, workersOfId } from "../hooks/useFleet";
+import { useWorkerAgents, WorkerAgents } from "./WorkerAgents";
 
 const SURFACE = "workers";
 
@@ -25,6 +26,7 @@ export function StartedSessionsButton({
       };
     }),
   );
+  const agents = useWorkerAgents((state) => workersOfId(state, sessionId));
   const { dock, openSurface, closeTab } = useDockFor(dockScopeOf("session", sessionId));
   if (started === 0) return null;
   const showing = dock.open && dock.active === SURFACE;
@@ -45,7 +47,11 @@ export function StartedSessionsButton({
         )}
         onClick={() => (showing ? closeTab(SURFACE) : openSurface(SURFACE))}
       >
-        <SquareStack className="size-3.5" />
+        {agents.length > 0 ? (
+          <WorkerAgents names={agents} />
+        ) : (
+          <SquareStack className="size-3.5" />
+        )}
         {started}
         {running > 0 && (
           <span
