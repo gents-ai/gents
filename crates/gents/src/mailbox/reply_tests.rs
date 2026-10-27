@@ -514,6 +514,7 @@ fn generated_reply_cases_drive_claim_validation() {
         if case["question_current"] == false {
             request.input.question_reply =
                 Some(gents_protocol::mailbox_question::MailboxQuestionReply {
+                    question_version: None,
                     source_doc_id: "other-question".into(),
                     question_hash: "invalid".into(),
                     answer: Default::default(),

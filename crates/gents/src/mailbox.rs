@@ -655,7 +655,7 @@ impl crate::llm::tool::Tool for MailboxCreateTool {
                         "type": "object",
                         "additionalProperties": false,
                         "properties": {
-                            "version": {"type": "integer", "enum": [1, gents_protocol::mailbox_question::MAILBOX_QUESTION_VERSION], "description": "Use 1 for ordinary choices; use 2 for optional Skip or a free-text-only question. The recipient needs version 2 support for those features."},
+                            "version": {"type": "integer", "enum": [1, 2, gents_protocol::mailbox_question::MAILBOX_QUESTION_VERSION], "description": "Use 1 for ordinary choices, 2 for optional Skip or free-text-only questions, and 3 for editable delegation prompts or suggested ranks. The recipient must support the chosen version."},
                             "prompt": {"type": "string"},
                             "options": {
                                 "type": "array",
@@ -668,12 +668,14 @@ impl crate::llm::tool::Tool for MailboxCreateTool {
                                     "properties": {
                                         "id": {"type": "string"},
                                         "label": {"type": "string"},
-                                        "description": {"type": "string"}
+                                        "description": {"type": "string", "description": "Short rationale and tradeoffs."},
+                                        "prompt": {"type": "string", "description": "Version 3: proposed editable worker prompt. Requires allow_free_text and a single-select question; answering is a preference, not permission or direct worker dispatch."}
                                     },
                                     "required": ["id", "label"]
                                 }
                             },
                             "multi_select": {"type": "boolean"},
+                            "recommended_order": {"type": "array", "items": {"type": "string"}, "description": "Version 3 ranked question: every option id once, best first. Requires multi_select. Suggestions never select or submit an answer."},
                             "optional": {"type": "boolean", "description": "Allow an explicit Skip. Omit or set false when an answer is required."},
                             "allow_free_text": {"type": "boolean", "description": "Offer an \"Other\" free-text answer."}
                         },
