@@ -34,7 +34,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: dtolnay/rust-toolchain@1.99.1
 
       - name: Install protobuf compiler
         run: .github/scripts/setup-protoc.sh

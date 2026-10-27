@@ -159,7 +159,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             }
         };
         let selected = task_assignment_goal_id(
-            case["current_task_goal"].as_str().map(&task_id).as_deref(),
+            case["current_task_goal"].as_str().map(task_id).as_deref(),
             signer.did(),
             task_session,
         );

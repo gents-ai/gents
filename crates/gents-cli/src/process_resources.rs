@@ -20,9 +20,11 @@ pub(crate) fn prevent_keychain_prompts(
         .context("disable process Keychain access dialogs")
 }
 
+/// Other platforms have no process Keychain policy; the empty guard keeps every
+/// call site holding the same binding as on macOS.
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn prevent_keychain_prompts(_prevent: bool) -> Result<()> {
-    Ok(())
+pub(crate) fn prevent_keychain_prompts(_prevent: bool) -> Result<Option<std::convert::Infallible>> {
+    Ok(None)
 }
 
 /// Embedded DefraDB runtimes need a usable descriptor budget when launched
