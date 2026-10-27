@@ -8,6 +8,7 @@ import {
   applyFleetSnapshot,
   createFleetStore,
   listedSession,
+  nodeOrFirst,
   sessionKeyOf,
 } from "../src/hooks/fleetStore";
 
@@ -146,4 +147,11 @@ describe("the fleet store", () => {
     expect(listedSession(observed, "a", "absent")).toBeNull();
     expect(listReads).toBe(0);
   });
+});
+
+it("does not display a different node when an explicitly selected node is unavailable", () => {
+  const store = createFleetStore();
+  applyFleetSnapshot(store, read());
+  expect(nodeOrFirst(store.getState(), null)?.nodeDid).toBe("a");
+  expect(nodeOrFirst(store.getState(), "not-loaded")).toBeNull();
 });

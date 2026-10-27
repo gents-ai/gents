@@ -61,3 +61,59 @@ describe("following the route", () => {
     });
   });
 });
+
+describe("explicit node routing", () => {
+  it("keeps a shared session on the node named by its route", () => {
+    const stores = shellStores({
+      deployments: [node("a", ["shared"]), node("b", ["shared"])],
+      selection: { nodeDid: "a", sessionId: null },
+    });
+    const route = createSelectionActions({ stores });
+    route.followRoute("shared", false, "b");
+    expect(stores.selection.getState()).toMatchObject({
+      nodeDid: "b",
+      sessionId: "shared",
+    });
+    const intent = stores.selection.getState().intent;
+    route.followRoute("shared", true, "b");
+    expect(stores.selection.getState()).toMatchObject({
+      nodeDid: "b",
+      sessionId: "shared",
+      intent,
+    });
+  });
+
+  it("prefers the active node for an unqualified shared-session route", () => {
+    const stores = shellStores({
+      deployments: [node("a", ["shared"]), node("b", ["shared"])],
+      selection: { nodeDid: "b", sessionId: null },
+    });
+    createSelectionActions({ stores }).followRoute("shared");
+    expect(stores.selection.getState()).toMatchObject({
+      nodeDid: "b",
+      sessionId: "shared",
+    });
+  });
+
+  it("retains the explicit destination while its session metadata is missing", () => {
+    const { store, route } = routeOwner();
+    route.followRoute("a-1", false, "not-loaded");
+    expect(store.getState()).toMatchObject({ nodeDid: "not-loaded", sessionId: "a-1" });
+    route.startNewSession();
+    expect(store.getState()).toMatchObject({ nodeDid: "not-loaded", sessionId: "a-1" });
+  });
+});
+
+it("keeps an already open remote session when only its local replica is listed", () => {
+  const stores = shellStores({
+    deployments: [node("a", ["shared"]), node("b", [])],
+    selection: { nodeDid: "b", sessionId: "shared" },
+  });
+  const intent = stores.selection.getState().intent;
+  createSelectionActions({ stores }).followRoute("shared", true);
+  expect(stores.selection.getState()).toMatchObject({
+    nodeDid: "b",
+    sessionId: "shared",
+    intent,
+  });
+});

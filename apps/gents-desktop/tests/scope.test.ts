@@ -52,19 +52,16 @@ const ctx = {
 };
 
 describe("nodes in scope", () => {
-  it("sessions and the mailbox default to every node; recents to the working node whatever is selected", () => {
-    expect(nodesInScope(defaultScope("sessions"), ctx)).toEqual([local, peer]);
-    expect(nodesInScope(defaultScope("mailbox"), ctx)).toEqual([local, peer]);
-    expect(nodesInScope(defaultScope("recents"), ctx)).toEqual([local]);
-    expect(
-      nodesInScope(defaultScope("recents"), { ...ctx, selectedNodeDid: "did:peer" }),
-    ).toEqual([local]);
-    expect(
-      nodesInScope(
-        { nodes: "selected", agents: [] },
-        { ...ctx, selectedNodeDid: "did:peer" },
-      ),
-    ).toEqual([peer]);
+  it("every list follows the active node, including a remote selection", () => {
+    for (const view of ["sessions", "mailbox", "recents"] as const) {
+      expect(nodesInScope(defaultScope(view), ctx)).toEqual([local]);
+      expect(
+        nodesInScope(defaultScope(view), { ...ctx, selectedNodeDid: "did:peer" }),
+      ).toEqual([peer]);
+      expect(
+        nodesInScope(defaultScope(view), { ...ctx, selectedNodeDid: "did:gone" }),
+      ).toEqual([]);
+    }
   });
   it("working is the node this machine runs, or the selection when it runs none", () => {
     expect(nodesInScope({ nodes: "working", agents: [] }, ctx)).toEqual([local]);
@@ -114,7 +111,6 @@ describe("lists in scope", () => {
     ).toEqual(["m1", "m3"]);
     expect(mailboxInScope(defaultScope("mailbox"), ctx).map((m) => m.itemId)).toEqual([
       "m1",
-      "m3",
     ]);
   });
   it("recents are newest first across the scope", () => {

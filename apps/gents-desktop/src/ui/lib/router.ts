@@ -60,9 +60,37 @@ export function href(route: Route) {
   return pathFor(route);
 }
 
+type NavigationGuard = (
+  route: Route,
+  proceed: () => void,
+  cancel?: () => void,
+) => boolean;
+let navigationGuard: NavigationGuard | null = null;
+
+export function bindNavigationGuard(guard: NavigationGuard): () => void {
+  navigationGuard = guard;
+  return () => {
+    if (navigationGuard === guard) navigationGuard = null;
+  };
+}
+
+export function reviewNavigation(
+  route: Route,
+  proceed: () => void,
+  cancel?: () => void,
+): boolean {
+  if (navigationGuard && !navigationGuard(route, proceed, cancel)) return false;
+  proceed();
+  return true;
+}
+
+function navigateReviewed(route: Route): boolean {
+  if (!current || pathFor(route) === pathFor(current.route)) return true;
+  return reviewNavigation(route, () => current?.navigate(route));
+}
+
 export function navigate(route: Route) {
-  if (!current || pathFor(route) === pathFor(current.route)) return;
-  current.navigate(route);
+  navigateReviewed(route);
 }
 
 /* a draft's save can settle after the person has left it, and must not
@@ -123,7 +151,7 @@ export function interceptNavClicks(root: ParentNode = document): () => void {
     if (/^(https?:|mailto:|tel:)/i.test(raw)) return;
     if (!(raw.startsWith("/") || raw.startsWith("#/"))) return;
     mouse.preventDefault();
-    navigate(parseRoute(raw));
+    if (!navigateReviewed(parseRoute(raw))) mouse.stopImmediatePropagation();
   };
   root.addEventListener("click", onClick, true);
   return () => root.removeEventListener("click", onClick, true);

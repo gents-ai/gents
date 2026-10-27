@@ -9,6 +9,7 @@ import { AgentSheet } from "./agent/BehaviorSheet";
 import { shortAccess } from "./behavior";
 import { AgentInitials } from "./parts";
 import { agentReadiness } from "@/lib/agent-readiness";
+import { useNodeConfigReadOnly } from "@/hooks/useClient";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 
 export function AgentPicker({
@@ -45,6 +46,7 @@ function MountedAgentPicker({
   chosen: NodeView["agents"][number];
   onChange: (agentId: string) => void;
 }) {
+  const readOnly = useNodeConfigReadOnly(deployment);
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -208,11 +210,13 @@ function MountedAgentPicker({
           <div className="flex items-center border-t border-border/60 p-1">
             <button
               type="button"
+              disabled={Boolean(readOnly)}
+              title={readOnly ?? undefined}
               onClick={() => {
                 createAfterClose.current = true;
                 popover.onOpenChange(false);
               }}
-              className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left text-sm hover:bg-accent"
+              className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left text-sm hover:bg-accent disabled:cursor-default disabled:opacity-50"
             >
               <span className="grid size-7 place-items-center rounded-full border border-dashed border-border text-muted-foreground">
                 <Plus className="size-3.5" />
@@ -232,7 +236,7 @@ function MountedAgentPicker({
           </div>
         </PopoverContent>
       </Popover>
-      {deployment && (
+      {!readOnly && (
         <AgentSheet
           deployment={deployment}
           open={creating}

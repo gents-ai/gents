@@ -1,4 +1,5 @@
 import { href, navigate } from "@/lib/router";
+import { useNodeConfigReadOnly } from "@/hooks/useClient";
 import { useFleet } from "@/hooks/useFleet";
 import { nodeOf } from "../../../hooks/fleetStore";
 import { SectionedScreen } from "../SectionedScreen";
@@ -22,6 +23,29 @@ export function AgentScreen({
       </p>
     );
   }
+  return (
+    <NodeSettings
+      deployment={deployment}
+      sections={sections}
+      section={section}
+      item={item}
+    />
+  );
+}
+
+function NodeSettings({
+  deployment,
+  sections,
+  section,
+  item,
+}: {
+  deployment: NonNullable<ReturnType<typeof nodeOf>>;
+  sections: ReturnType<typeof useAgentSections>;
+  section: string;
+  item?: string;
+}) {
+  const nodeDid = deployment.nodeDid;
+  const readOnly = useNodeConfigReadOnly(deployment);
   const current = sections.find((s) => s.id === section) ?? null;
   const entry = current && !isListed(current) ? current.under : section;
   const Panel = current?.Panel;
@@ -41,7 +65,17 @@ export function AgentScreen({
       pageKey={deployment.nodeDid}
       testId="agent-screen"
     >
-      {Panel && <Panel deployment={deployment} item={item} />}
+      {readOnly && (
+        <p
+          role="status"
+          className="mx-6 mt-4 rounded-lg border border-border/60 bg-raised px-3 py-2 text-xs text-muted-foreground"
+        >
+          {readOnly}
+        </p>
+      )}
+      <fieldset disabled={Boolean(readOnly)} className="m-0 min-w-0 border-0 p-0">
+        {Panel && <Panel deployment={deployment} item={item} />}
+      </fieldset>
     </SectionedScreen>
   );
 }

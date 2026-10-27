@@ -21,7 +21,7 @@ import type { SessionForkResult } from "@source-inc/gents-desktop-client/generat
 
 import { folderOf, withFolder, writeChatFolders } from "./chatFolders";
 import { chat } from "./chatStore";
-import { firstNode, nodeOf } from "./fleetStore";
+import { nodeOrFirst, nodeOf } from "./fleetStore";
 import { actionFailure, shownFailure } from "./actionFailure";
 import { selection } from "./selectionStore";
 import { heldFor, readSession } from "./sessionStore";
@@ -233,7 +233,7 @@ export function createChatActions({
     acceptsView: () => boolean = () => true,
   ): Promise<ChatSendResult | null> {
     if (submissionInFlight) return null;
-    const node = selectedNode() ?? firstNode(stores.fleet.getState());
+    const node = nodeOrFirst(stores.fleet.getState(), store.getState().nodeDid);
     if (!node || (!content.trim() && !attachments.length)) return null;
     const { sessionId: selectedSessionId, mailboxRoute } = store.getState();
     const callerDid = stores.client.getState().snapshot?.client?.clientDid;
@@ -381,7 +381,7 @@ export function createChatActions({
     acceptsView: () => boolean = () => true,
   ): Promise<GoalControlResult | null> {
     if (submissionInFlight) return null;
-    const node = selectedNode() ?? firstNode(stores.fleet.getState());
+    const node = nodeOrFirst(stores.fleet.getState(), store.getState().nodeDid);
     if (!node || !objective.trim()) return null;
     const projection = project();
     const status = projection.shellProjection.nonEmptyContentSendStatus;

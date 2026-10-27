@@ -4,6 +4,7 @@ import { ChevronRight, Inbox, Lock, Plus, ScrollText, Waypoints } from "lucide-r
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
 import { PortalContainerProvider } from "@gents/ui/lib/portal-container";
+import { isLocalNode } from "@/lib/firstRun";
 import { href, type Route } from "@/lib/router";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import type { NavMode } from "@/preferences";
@@ -24,7 +25,7 @@ import {
   useRecentSessions,
   useSelectedNode,
   useSyncHealth,
-  useWorkingNode,
+  useHomeDid,
 } from "@/hooks/useClient";
 
 const OPEN_AFTER = 80;
@@ -79,7 +80,7 @@ export function NavPanel({
   const recent = useRecentSessions(RECENT);
   const recentCandidates = useRecentCandidates();
   const recentFiltered = useListViews((views) => hasFilter(views.recentFilter));
-  const working = useWorkingNode();
+  const homeDid = useHomeDid();
   const nodeCount = useNodeCount();
   const syncHealth = useSyncHealth();
   const selected = useSelectedNode();
@@ -105,32 +106,33 @@ export function NavPanel({
     );
   };
   const currentSession = route.name === "session" ? route.sessionId : null;
-  const workingCurrent =
-    working !== null && route.name === "agent" && route.nodeDid === working.nodeDid;
+  const selectedCurrent =
+    selected !== null && route.name === "agent" && route.nodeDid === selected.nodeDid;
   return (
     <>
-      {working ? (
+      {selected ? (
         <a
           href={href({
             name: "agent",
-            nodeDid: working.nodeDid,
+            nodeDid: selected.nodeDid,
             section: "agent",
           })}
-          aria-current={workingCurrent ? "page" : undefined}
+          aria-current={selectedCurrent ? "page" : undefined}
+          title={`${selected.node.displayName ?? selected.label} · ${selected.nodeDid}`}
           data-testid="working-node"
           className={cn(
             "group mr-3 mb-2 ml-[14px] flex h-9 items-center gap-3 rounded-lg text-sm transition-colors",
-            workingCurrent && "text-ink",
+            selectedCurrent && "text-ink",
           )}
         >
           <span
             className={cn(
               "relative block size-7 shrink-0 rounded-full ring-1 ring-border ring-offset-2 ring-offset-raised transition-shadow group-hover:ring-muted-foreground",
-              workingCurrent && "ring-2 ring-ink",
+              selectedCurrent && "ring-2 ring-ink",
             )}
           >
             <NodeAvatar
-              name={working.node.displayName ?? working.label}
+              name={selected.node.displayName ?? selected.label}
               className="size-7"
             />
             <span
@@ -143,10 +145,11 @@ export function NavPanel({
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate font-heading font-medium text-heading">
-              {working.node.displayName ?? working.label}
+              {selected.node.displayName ?? selected.label}
             </span>
             <span className="block text-xs text-muted-foreground">
-              Local node · Configure
+              {isLocalNode(selected, homeDid) ? "Local node" : "Remote node"} ·{" "}
+              {selected.nodeDid.slice(-8)}
             </span>
           </span>
         </a>
@@ -161,9 +164,9 @@ export function NavPanel({
           </span>
           <span className="min-w-0 flex-1">
             <span className="block truncate font-heading font-medium">
-              No local node
+              No active node
             </span>
-            <span className="block text-xs">Working on remote nodes</span>
+            <span className="block text-xs">Choose a node to continue</span>
           </span>
         </a>
       )}

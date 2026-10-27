@@ -64,8 +64,8 @@ function RailNode({ route }: { route: Route }) {
     return (
       <a
         href={href({ name: "nodes" })}
-        aria-label="No local node"
-        title="No local node"
+        aria-label="No active node"
+        title="No active node"
         className="mb-2 grid size-7 place-items-center rounded-full border border-dashed border-border text-muted-foreground hover:text-foreground"
       >
         <Waypoints className="size-3.5" />

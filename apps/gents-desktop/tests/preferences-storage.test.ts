@@ -143,14 +143,17 @@ describe("list views read back from storage", () => {
     });
   });
 
-  it("leaves out what is not a list of strings, and keeps an empty node pick", () => {
-    expect(restoreListViews({ sessionNodes: "a", mailboxNodes: ["a", 1] })).toEqual({
+  it("discards obsolete per-list node picks while retaining content filters", () => {
+    expect(
+      restoreListViews({
+        sessionNodes: ["a"],
+        mailboxNodes: ["b"],
+        mailboxKinds: ["failed", 1],
+      }),
+    ).toEqual({
       sessionFilter: emptyFilter,
       recentFilter: emptyFilter,
-      sessionNodes: null,
-      mailboxNodes: ["a"],
-      mailboxKinds: [],
+      mailboxKinds: ["failed"],
     });
-    expect(restoreListViews({ sessionNodes: [] }).sessionNodes).toEqual([]);
   });
 });

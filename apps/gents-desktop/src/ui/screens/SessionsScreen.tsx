@@ -3,14 +3,12 @@ import {
   memo,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useState,
   type ComponentProps,
   type CSSProperties,
 } from "react";
 import { toast } from "sonner";
-import { useShallow } from "zustand/react/shallow";
 import {
   ChevronsDownUp,
   ChevronsUpDown,
@@ -47,22 +45,14 @@ import {
 import { cn } from "@gents/ui/lib/utils";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
-import { href, navigate } from "@/lib/router";
+import { href } from "@/lib/router";
 import { useListWindow } from "@source-inc/gents-desktop-ui";
 import { Age } from "./time";
-import {
-  defaultScope,
-  fleetNodes,
-  knownNodeIds,
-  nodesInScope,
-  sessionsInScope,
-  type Scope,
-} from "@/lib/scope";
-import { useHomeDid, useInScope, useSelectedNodeDid } from "@/hooks/useClient";
+import { defaultScope, sessionsInScope, type Scope } from "@/lib/scope";
+import { useInScope, useSelectedNodeDid } from "@/hooks/useClient";
 import { sessionKeyOf } from "../../hooks/fleetStore";
-import { nodeDidOf, nodeOfSession } from "@/lib/nodes";
+import { nodeOfSession } from "@/lib/nodes";
 import { NodeAgentStack } from "./NodeBehaviorStack";
-import { NodeAxis } from "./NodeAxis";
 import { ListedSessionStatus } from "./SessionStatus";
 import { StartedCount } from "./StartedCount";
 import { SessionFilters, matchesView } from "./SessionFilters";
@@ -97,12 +87,10 @@ const titleOf = (session: SessionSummary) => session.title ?? "Untitled";
 const isArchived = (session: SessionSummary) => session.archivedAt !== null;
 
 export function SessionsScreen({
-  nodeDid,
   under,
   archived = false,
   entry,
 }: {
-  nodeDid?: string;
   /** the session whose started sessions the list shows */
   under?: string;
   /** list the archived sessions instead of the rest */
@@ -110,33 +98,12 @@ export function SessionsScreen({
   /** the history entry showing the list, which keeps the rows opened on it */
   entry?: object;
 }) {
-  const nodes = useFleet(useShallow(fleetNodes));
-  const homeDid = useHomeDid();
   const selectedNodeDid = useSelectedNodeDid();
   const [query, setQuery] = useState<string | null>(null);
   const filter = useListViews((v) => v.sessionFilter);
   const opened = useOpened(entry);
 
-  const placement = { nodes, selectedNodeDid, homeDid };
-  const defaultNodeIds = nodesInScope(defaultScope("sessions"), placement).map(
-    nodeDidOf,
-  );
-  const storedNodeIds = useListViews((v) => v.sessionNodes);
-  useLayoutEffect(() => {
-    if (nodeDid) listViews.setSessionNodes([nodeDid]);
-  }, [nodeDid]);
-
-  const knownIds = storedNodeIds && knownNodeIds(storedNodeIds, placement);
-  const nodeIds =
-    !knownIds || (knownIds.length === 0 && storedNodeIds!.length > 0)
-      ? defaultNodeIds
-      : knownIds;
-
-  const shownNodeIds = nodeIds.length ? nodeIds : nodes.map(nodeDidOf);
-  const nodesPicked =
-    shownNodeIds.length !== defaultNodeIds.length ||
-    shownNodeIds.some((id) => !defaultNodeIds.includes(id));
-  const scope: Scope = { nodes: nodeIds.length ? nodeIds : "all", agents: [] };
+  const scope: Scope = defaultScope("sessions");
   const scoped = useInScope((ctx) => sessionsInScope(scope, ctx));
   /* archived sessions leave the list for their own; the runtime still
      lists them */
@@ -148,16 +115,6 @@ export function SessionsScreen({
           ? scoped.filter((c) => !isArchived(c))
           : scoped,
     [scoped, archived],
-  );
-  const nodeCounts = useFleet(
-    useShallow((s) =>
-      Object.fromEntries(
-        s.nodeKeys.map((key) => [
-          key,
-          s.sessionsOf[key]?.filter((c) => !isArchived(c)).length ?? 0,
-        ]),
-      ),
-    ),
   );
   const pinnedKeys = usePinnedSessions();
   const pinned = useMemo(() => new Set(pinnedKeys), [pinnedKeys]);
@@ -206,15 +163,7 @@ export function SessionsScreen({
   );
 
   const narrowed =
-    filtering || (!archived && Object.values(nodeCounts).some((count) => count > 0));
-  const pickedNames = nodesPicked
-    ? nodes
-        .filter((n) => nodeIds.includes(nodeDidOf(n)))
-        .map((n) => n.node.displayName ?? n.label)
-    : [];
-  const leaveNode = () => {
-    if (nodeDid) navigate({ name: "sessions" });
-  };
+    filtering || (!archived && scoped.some((session) => !isArchived(session)));
 
   const [scroller, setScroller] = useState<HTMLElement | null>(null);
   const scrollRoot = useCallback((root: HTMLDivElement | null) => {
@@ -247,21 +196,9 @@ export function SessionsScreen({
               <SessionTrail trail={trail} />
             )}
             <div className="ml-auto flex shrink-0 items-center gap-2">
-              <NodeAxis
-                nodes={nodes}
-                homeDid={homeDid}
-                counts={nodeCounts}
-                /* every node is the picker's open state, "All nodes", however
-                 the list came to show them all */
-                value={nodesPicked ? nodeIds : []}
-                onChange={(next) => {
-                  listViews.setSessionNodes(next);
-                  leaveNode();
-                }}
-              />
               <SessionFilters
                 sessions={inScope}
-                nodeDids={nodesInScope(scope, placement).map(nodeDidOf)}
+                nodeDids={selectedNodeDid ? [selectedNodeDid] : []}
                 value={filter}
                 onChange={listViews.setSessionFilter}
               />
@@ -347,19 +284,13 @@ export function SessionsScreen({
             filter restored from the last visit included; the region stays
             mounted so a change in it is announced */}
           <div role="status">
-            {(filtering || nodesPicked) && (
+            {filtering && (
               <div
                 data-testid="sessions-narrowed"
                 className="mt-2 flex items-center justify-end gap-2 text-xs text-muted-foreground"
               >
                 <span className="min-w-0 truncate">
-                  {filtering
-                    ? `${shown} of ${total} session${total === 1 ? "" : "s"}`
-                    : `${inScope.length} session${inScope.length === 1 ? "" : "s"}`}
-                  {nodesPicked &&
-                    (pickedNames.length
-                      ? ` on ${pickedNames.join(", ")}`
-                      : ` on ${nodeIds.length} node${nodeIds.length === 1 ? "" : "s"}`)}
+                  {`${shown} of ${total} session${total === 1 ? "" : "s"}`}{" "}
                 </span>
                 <Button
                   variant="quiet"
@@ -368,9 +299,7 @@ export function SessionsScreen({
                   aria-label="Clear filters"
                   onClick={() => {
                     listViews.setSessionFilter(emptyFilter);
-                    listViews.setSessionNodes(null);
                     setQuery(null);
-                    leaveNode();
                   }}
                 >
                   Clear
@@ -781,6 +710,7 @@ const SessionRow = memo(function SessionRow({
                 href={href({
                   name: "session",
                   sessionId: session.sessionId,
+                  nodeDid: session.nodeDid ?? undefined,
                 })}
                 data-testid={`session-${session.sessionId}`}
                 className={cn(
