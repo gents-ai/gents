@@ -94,7 +94,10 @@ export function createProjectionController({
   };
 
   const drain = async () => {
-    const snapshots: Promise<void>[] = [];
+    /* a snapshot refresh is shared while it runs and the next starts only
+       after it ends, so the latest is the only one still to wait for; a loop
+       kept busy by requests must not hold one per pass */
+    let snapshot: Promise<void> | null = null;
     while (!disposed && pending !== 0) {
       const work = pending;
       pending = 0;
@@ -108,10 +111,10 @@ export function createProjectionController({
             next?.turnState &&
             isTerminalTurnState(next.turnState)
           ) {
-            snapshots.push(refreshIndex());
+            snapshot = refreshIndex();
           }
           if (!sessionId && !(work & SNAPSHOT)) {
-            snapshots.push(refreshIndex());
+            snapshot = refreshIndex();
           }
         } else if (sessionId && work & SESSION_DELTA) {
           if (!(await refreshSessionLiveDelta())) {
@@ -123,13 +126,14 @@ export function createProjectionController({
       }
       if (work & SNAPSHOT) {
         try {
-          snapshots.push(refreshIndex());
+          snapshot = refreshIndex();
         } catch (error) {
           onError(error);
         }
       }
     }
-    return snapshots;
+    /* wrapped: an async function returning a promise would wait for it */
+    return { snapshot };
   };
 
   return {
@@ -142,8 +146,8 @@ export function createProjectionController({
           .finally(() => {
             active = null;
           })
-          .then(async (snapshots) => {
-            await Promise.all(snapshots);
+          .then(async ({ snapshot }) => {
+            await snapshot;
           });
       }
       return active;
