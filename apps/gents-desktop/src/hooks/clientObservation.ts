@@ -74,7 +74,9 @@ export function startClientObservation(
       pollTimer = undefined;
       if (key === null || pollMs === null) return;
       const nextPollMs = () =>
-        readSession(stores.session)?.liveCursor ? Math.min(250, pollMs) : pollMs;
+        readSession(stores.session)?.liveCursor
+          ? Math.min(250, pollMs)
+          : (actions.sessionReadGapMs() ?? pollMs);
       const poll = async () => {
         await controller.request("sessionDelta");
         if (!stopped && polled === key) pollTimer = setTimeout(poll, nextPollMs());
