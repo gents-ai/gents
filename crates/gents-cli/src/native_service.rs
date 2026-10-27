@@ -1042,6 +1042,8 @@ pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
 /// Adaptive classification follows XPC activity, while the desktop bridge uses
 /// loopback HTTP, so it cannot reflect active requests; keep this service in
 /// the Interactive class intended for jobs whose responsiveness is user-facing.
+/// A successful child exit is not an operator Stop. Supervision ends when the
+/// job is unloaded; repeated exits remain subject to launchd's restart throttle.
 fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
     let executable = xml_path(&config.executable, "executable")?;
     let home = xml_path(&config.home, "home")?;
@@ -1089,7 +1091,8 @@ fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
     <string>{executable}</string><string>server</string><string>--home</string><string>{home}</string>
   </array>{environment}{associated_bundle}{stderr}
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
   <key>ProcessType</key><string>Interactive</string>
 </dict></plist>
 "#
@@ -1122,7 +1125,7 @@ fn render_systemd(config: &NativeServiceConfig) -> Result<String> {
         .map(systemd_append_target)
         .transpose()?
         .unwrap_or_else(|| "journal".to_string());
-    Ok(format!("[Unit]\nDescription=Gents node runtime\n\n[Service]\nType=simple\nExecStart={executable} \"server\" \"--home\" {home}\nEnvironment=\"GENTS_SYSTEM_LOG=1\"\n{search_path}StandardOutput=journal\nStandardError={stderr}\nRestart=on-failure\nRestartPreventExitStatus={INCOMPATIBLE_STORE_EXIT_CODE} {INSECURE_KEY_EXIT_CODE} {FOREIGN_STORE_EXIT_CODE}\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"))
+    Ok(format!("[Unit]\nDescription=Gents node runtime\n\n[Service]\nType=simple\nExecStart={executable} \"server\" \"--home\" {home}\nEnvironment=\"GENTS_SYSTEM_LOG=1\"\n{search_path}StandardOutput=journal\nStandardError={stderr}\nRestart=always\nRestartPreventExitStatus={INCOMPATIBLE_STORE_EXIT_CODE} {INSECURE_KEY_EXIT_CODE} {FOREIGN_STORE_EXIT_CODE}\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"))
 }
 
 /// `append:` takes the rest of the line as the path after specifier expansion.

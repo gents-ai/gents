@@ -9,6 +9,10 @@ use gents_server::native_service::{
     CommandOutput, CommandRunner, NativeServiceConfig, NativeServiceManager, NativeServicePlatform,
 };
 
+#[cfg(target_os = "macos")]
+#[path = "native_service/supervision.rs"]
+mod supervision;
+
 #[derive(Clone, Default)]
 struct ScriptedRunner {
     outputs: Arc<Mutex<VecDeque<CommandOutput>>>,
@@ -81,6 +85,45 @@ fn manager(
     runner: ScriptedRunner,
 ) -> NativeServiceManager<ScriptedRunner> {
     NativeServiceManager::with_runner(config, platform, runner)
+}
+
+#[test]
+fn mac_restarts_clean_exits_with_bounded_throttle() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let config = config(temp.path(), "gents");
+    manager(
+        config.clone(),
+        NativeServicePlatform::Macos,
+        ScriptedRunner::with_outputs([output(true, "501", ""), ok()]),
+    )
+    .install()?;
+    let plist = plist::Value::from_file(config.definition_path(NativeServicePlatform::Macos))?;
+    let definition = plist.as_dictionary().expect("service dictionary");
+    assert_eq!(definition["KeepAlive"].as_boolean(), Some(true));
+    assert_eq!(
+        definition["ThrottleInterval"].as_unsigned_integer(),
+        Some(10)
+    );
+    Ok(())
+}
+
+#[test]
+fn linux_restarts_clean_exits_with_existing_fatal_exit_fences() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let config = config(temp.path(), "gents");
+    manager(
+        config.clone(),
+        NativeServicePlatform::Linux,
+        ScriptedRunner::with_outputs([ok(), ok()]),
+    )
+    .install()?;
+    let definition = fs::read_to_string(config.definition_path(NativeServicePlatform::Linux))?;
+    assert!(definition.lines().any(|line| line == "Restart=always"));
+    assert!(definition.lines().any(|line| line == "RestartSec=2"));
+    assert!(definition
+        .lines()
+        .any(|line| line == "RestartPreventExitStatus=65 66 67"));
+    Ok(())
 }
 
 #[test]
