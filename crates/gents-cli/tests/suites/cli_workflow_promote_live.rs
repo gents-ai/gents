@@ -103,12 +103,11 @@ async fn promote_a_dynamic_run(artifacts: &mut FailureArtifacts) -> Result<()> {
 
     let port = allocate_port()?;
     let graphql = graphql_url(port);
-    let (serve, readiness) = crate::support::process::spawn_server_with_ready_json_in(
+    let (serve, readiness) = crate::support::process::spawn_server_with_ready_json(
         &home_dir,
         port,
         &["--home", home],
         &[("RUST_LOG", "warn")],
-        artifacts.path(),
     )?;
     artifacts.attach_server(serve);
     anyhow::ensure!(

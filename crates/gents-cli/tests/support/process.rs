@@ -161,21 +161,7 @@ pub fn spawn_server_with_ready_json(
     envs: &[(&str, &str)],
 ) -> Result<(ServeProcess, Value)> {
     let (serve, _port, value) =
-        spawn_server_with_ready_json_inner(home_dir, port, extra_args, envs, false, None)?;
-    Ok((serve, value))
-}
-
-/// The fixture owns cleanup of these logs, including when startup fails before
-/// a `ServeProcess` can be returned.
-pub fn spawn_server_with_ready_json_in(
-    home_dir: &Path,
-    port: u16,
-    extra_args: &[&str],
-    envs: &[(&str, &str)],
-    log_dir: &Path,
-) -> Result<(ServeProcess, Value)> {
-    let (serve, _port, value) =
-        spawn_server_with_ready_json_inner(home_dir, port, extra_args, envs, false, Some(log_dir))?;
+        spawn_server_with_ready_json_inner(home_dir, port, extra_args, envs, false)?;
     Ok((serve, value))
 }
 
@@ -188,7 +174,7 @@ pub fn spawn_server_with_ready_json_recovering(
     extra_args: &[&str],
     envs: &[(&str, &str)],
 ) -> Result<(ServeProcess, u16, Value)> {
-    spawn_server_with_ready_json_inner(home_dir, port, extra_args, envs, true, None)
+    spawn_server_with_ready_json_inner(home_dir, port, extra_args, envs, true)
 }
 
 #[expect(
@@ -201,7 +187,6 @@ fn spawn_server_with_ready_json_inner(
     extra_args: &[&str],
     envs: &[(&str, &str)],
     recover_stolen_port: bool,
-    log_dir: Option<&Path>,
 ) -> Result<(ServeProcess, u16, Value)> {
     let mut port = port;
     let mut attempts_left = if recover_stolen_port {
@@ -211,8 +196,8 @@ fn spawn_server_with_ready_json_inner(
     };
     let deadline = Instant::now() + Duration::from_secs(30);
     'attempt: loop {
-        let stdout_log = server_log(log_dir, "stdout")?;
-        let stderr_log = server_log(log_dir, "stderr")?;
+        let stdout_log = tempfile::NamedTempFile::new().context("creating gents stdout log")?;
+        let stderr_log = tempfile::NamedTempFile::new().context("creating gents stderr log")?;
         let stdout = stdout_log.reopen().context("opening gents stdout log")?;
         let stderr = stderr_log.reopen().context("opening gents stderr log")?;
         let mut command = Command::new(cli_bin());
@@ -275,22 +260,6 @@ fn spawn_server_with_ready_json_inner(
             thread::sleep(Duration::from_millis(100));
         }
     }
-}
-
-pub(crate) fn server_log(
-    directory: Option<&Path>,
-    stream: &str,
-) -> Result<tempfile::NamedTempFile> {
-    let mut log = match directory {
-        Some(directory) => tempfile::Builder::new()
-            .prefix(&format!("server.{stream}."))
-            .suffix(".log")
-            .tempfile_in(directory),
-        None => tempfile::NamedTempFile::new(),
-    }
-    .with_context(|| format!("creating gents {stream} log"))?;
-    log.disable_cleanup(directory.is_some());
-    Ok(log)
 }
 
 fn server_readiness_json(buffer: &str) -> Option<Value> {

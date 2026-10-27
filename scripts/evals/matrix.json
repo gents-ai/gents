@@ -147,20 +147,6 @@
       "title": "Engineer sessions"
     },
     {
-      "id": "packs",
-      "definition_id": "engineer-packs",
-      "path": "packs",
-      "subject": "ladder/engineer_subject",
-      "title": "Registry packs",
-      "coverage": [
-        "registry discovery without installation",
-        "inference slot binding",
-        "saved installation state",
-        "blocked upgrade preserves installed version",
-        "removal preserves unrelated configuration"
-      ]
-    },
-    {
       "id": "native-packs",
       "definition_id": "engineer-native-packs",
       "path": "native_packs",
