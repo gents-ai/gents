@@ -789,6 +789,7 @@ mod tests {
             started_by_job: false,
             cwd_allowed: Vec::new(),
             within: Vec::new(),
+            script_digest: None,
             adoption_facts: facts(),
             caller_scope: ProcessControlScope {
                 request_id: "request".to_owned(),

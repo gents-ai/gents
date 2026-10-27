@@ -2273,6 +2273,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         ("tool_effects", "PluginEffectCases"),
         ("tool_effect_terminals", "PluginEffectTerminalCases"),
         ("tool_effect_accounting", "PluginEffectAccountingCases"),
+        ("host_import", "PluginHostImportCases"),
         ("scratch", "PluginScratchCases"),
     ] {
         assert!(snapshot.plugin_resource_cases[family]

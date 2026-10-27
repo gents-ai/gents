@@ -1190,3 +1190,187 @@ async fn generated_plugin_call_access_cases_drive_bind_admission() {
         }
     }
 }
+
+// ---- the `gents::run_script` host import -----------------------------------
+
+/// A guest that hands its whole stdin to `gents::run_script`, then copies the
+/// host's answer with `gents::read_result`: to stdout on success, to stderr
+/// with exit code 1 when the host answered a negative code.
+pub(crate) const IMPORTING_WAT: &str = r#"(module
+  (import "wasi_snapshot_preview1" "fd_read" (func $fd_read (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "fd_write" (func $fd_write (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+  (import "gents" "run_script" (func $run_script (param i32 i32) (result i32)))
+  (import "gents" "read_result" (func $read_result (param i32 i32) (result i32)))
+  (memory (export "memory") 4)
+  (func (export "_start")
+    (local $n i32) (local $m i32)
+    (i32.store (i32.const 1024) (i32.const 65536))
+    (i32.store (i32.const 1028) (i32.const 65536))
+    (drop (call $fd_read (i32.const 0) (i32.const 1024) (i32.const 1) (i32.const 1040)))
+    (local.set $n (call $run_script (i32.const 65536) (i32.load (i32.const 1040))))
+    (local.set $m (call $read_result (i32.const 131072) (i32.const 65536)))
+    (i32.store (i32.const 1032) (i32.const 131072))
+    (i32.store (i32.const 1036) (local.get $m))
+    (if (i32.lt_s (local.get $n) (i32.const 0))
+      (then
+        (drop (call $fd_write (i32.const 2) (i32.const 1032) (i32.const 1) (i32.const 1048)))
+        (call $proc_exit (i32.const 1)))
+      (else
+        (drop (call $fd_write (i32.const 1) (i32.const 1032) (i32.const 1) (i32.const 1048)))))))
+"#;
+
+fn importing_plugin(declares: bool) -> PackPlugin {
+    PackPlugin {
+        name: "plugin".into(),
+        description: "runs the call's script through the host".into(),
+        artifact: PLUGIN_ARTIFACT.into(),
+        language: "rust".into(),
+        input_schema: serde_json::json!({"type": "object", "properties": {"script": {"type": "string"}}}),
+        job: gents_protocol::job::PluginJobDeclaration(true),
+        host_imports: if declares {
+            vec![crate::pack::HostImport::RunScript]
+        } else {
+            Vec::new()
+        },
+        ..PackPlugin::default()
+    }
+}
+
+fn importing_runner(declares: bool) -> Result<PluginRunner> {
+    PluginRunner::compile(
+        &build_plugin_afb(IMPORTING_WAT),
+        &importing_plugin(declares),
+    )
+}
+
+#[test]
+fn a_declaring_plugin_gets_the_scripts_output_through_the_import() {
+    let runner = importing_runner(true).expect("compiles");
+    let arguments =
+        serde_json::json!({"pin": null, "script": "module.exports = (i) => ({result: {n: 1}})"});
+    let outcome = runner
+        .call(&arguments, &PluginBudget::default())
+        .expect("call runs");
+    assert_eq!(
+        outcome.verdict,
+        PluginVerdict::Success,
+        "{}",
+        outcome.diagnostics
+    );
+    assert_eq!(outcome.output, serde_json::json!({"result": {"n": 1}}));
+}
+
+#[test]
+fn a_call_without_a_script_gets_no_script_from_the_import() {
+    let runner = importing_runner(true).expect("compiles");
+    let outcome = runner
+        .call(&serde_json::json!({"pin": null}), &PluginBudget::default())
+        .expect("call runs");
+    assert_eq!(outcome.verdict, PluginVerdict::Failed);
+    assert!(
+        outcome.diagnostics.contains("no script"),
+        "{}",
+        outcome.diagnostics
+    );
+}
+
+#[test]
+fn an_engine_failure_keeps_its_verdict_and_message() {
+    let runner = importing_runner(true).expect("compiles");
+    let broken = runner
+        .call(
+            &serde_json::json!({"pin": null, "script": "module.exports = (i) => {"}),
+            &PluginBudget::default(),
+        )
+        .expect("call runs");
+    assert_eq!(broken.verdict, PluginVerdict::Failed);
+    assert!(
+        broken
+            .diagnostics
+            .starts_with("the script does not compile:"),
+        "{}",
+        broken.diagnostics
+    );
+    assert!(
+        !broken.diagnostics.contains("plugin exited with code"),
+        "{}",
+        broken.diagnostics
+    );
+    let looping = runner
+        .call(
+            &serde_json::json!({"pin": null, "script": "module.exports = (i) => { for (;;) {} }"}),
+            &PluginBudget {
+                wall_clock: std::time::Duration::from_millis(300),
+                ..PluginBudget::default()
+            },
+        )
+        .expect("call runs");
+    assert!(
+        matches!(
+            looping.verdict,
+            PluginVerdict::Timeout | PluginVerdict::OutOfFuel
+        ),
+        "{:?} {}",
+        looping.verdict,
+        looping.diagnostics
+    );
+}
+
+#[test]
+fn an_undeclared_plugin_that_imports_run_script_does_not_start() {
+    let runner = importing_runner(false).expect("compiles: the import is checked at run time");
+    let error = runner
+        .call(
+            &serde_json::json!({"pin": null, "script": "module.exports = (i) => i"}),
+            &PluginBudget::default(),
+        )
+        .expect_err("an undeclared import is refused");
+    let text = format!("{error:#}");
+    assert!(
+        text.contains("gents::run_script") || text.contains("run_script"),
+        "{text}"
+    );
+}
+
+/// Calls `run_script` once with its stdin, then again with an invalid pointer,
+/// and writes whatever `read_result` returns after the second call.
+const TWICE_WAT: &str = r#"(module
+  (import "wasi_snapshot_preview1" "fd_read" (func $fd_read (param i32 i32 i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "fd_write" (func $fd_write (param i32 i32 i32 i32) (result i32)))
+  (import "gents" "run_script" (func $run_script (param i32 i32) (result i32)))
+  (import "gents" "read_result" (func $read_result (param i32 i32) (result i32)))
+  (memory (export "memory") 4)
+  (func (export "_start")
+    (local $m i32)
+    (i32.store (i32.const 1024) (i32.const 65536))
+    (i32.store (i32.const 1028) (i32.const 65536))
+    (drop (call $fd_read (i32.const 0) (i32.const 1024) (i32.const 1) (i32.const 1040)))
+    (drop (call $run_script (i32.const 65536) (i32.load (i32.const 1040))))
+    (drop (call $run_script (i32.const -1) (i32.const 1)))
+    (local.set $m (call $read_result (i32.const 131072) (i32.const 65536)))
+    (i32.store (i32.const 1032) (i32.const 131072))
+    (i32.store (i32.const 1036) (local.get $m))
+    (drop (call $fd_write (i32.const 1) (i32.const 1032) (i32.const 1) (i32.const 1048)))))
+"#;
+
+#[test]
+fn a_failed_second_run_script_call_does_not_hand_back_the_first_answer() {
+    let runner = PluginRunner::compile(&build_plugin_afb(TWICE_WAT), &importing_plugin(true))
+        .expect("compiles");
+    let outcome = runner
+        .call(
+            &serde_json::json!({"pin": null, "script": "module.exports = (i) => ({result: {n: 1}})"}),
+            &PluginBudget::default(),
+        )
+        .expect("call runs");
+    // The guest wrote the bytes stored after the failed call: a message, not the
+    // first call's JSON answer.
+    assert_ne!(outcome.output, serde_json::json!({"result": {"n": 1}}));
+    assert_eq!(
+        outcome.verdict,
+        PluginVerdict::BadOutput,
+        "{}",
+        outcome.diagnostics
+    );
+}

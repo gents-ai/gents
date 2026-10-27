@@ -14,7 +14,6 @@ use sha2::{Digest, Sha256};
 use crate::config_client::ConfigAccess;
 use crate::pack::authoring::scaffold::{scaffold, ScaffoldInput};
 use crate::pack::authoring::template::Template;
-use crate::plugin::source_runner::SourceRunner;
 use crate::plugin::{PluginBudget, PluginVerdict};
 use crate::plugin_job::view::{load_job_view, JobKey};
 
@@ -335,7 +334,7 @@ pub fn generate_pack(dir: &Path, name: &str, run: &DynamicRun) -> Result<Generat
     // `pack test` checks this fixture against the compiled artifact, which
     // keeps the wrapper's pin; a script run would stamp the wrapper's digest.
     let outcome =
-        SourceRunner::new(main.clone(), &plugin).call_unpinned(&input, &PluginBudget::default())?;
+        crate::plugin::script_engine::eval(&main, &plugin, &input, &PluginBudget::default())?;
     anyhow::ensure!(
         outcome.verdict == PluginVerdict::Success,
         "the script fails on step 0: {}",
@@ -527,9 +526,13 @@ mod tests {
     }
 
     fn run_js(source: String, input: Value) -> Value {
-        let outcome = SourceRunner::new(source, "gents/test")
-            .call_unpinned(&input, &PluginBudget::default())
-            .unwrap();
+        let outcome = crate::plugin::script_engine::eval(
+            &source,
+            "gents/test",
+            &input,
+            &PluginBudget::default(),
+        )
+        .unwrap();
         assert_eq!(
             outcome.verdict,
             PluginVerdict::Success,
@@ -574,6 +577,22 @@ mod tests {
         let source = " \nmodule.exports = (i) => i;\n \t";
         assert_eq!(script_digest(source), sha(source));
         assert_ne!(script_digest(source), sha(source.trim()));
+    }
+
+    #[test]
+    fn the_recorded_script_is_promoted_byte_for_byte() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("rome");
+        let mut run = run(vec!["gents/dynamic_workflows".into()]);
+        run.script = format!("{}\n", run.script);
+        run.view.pin.script_id = sha(&run.script);
+        let pack = generate_pack(&dir, "rome", &run).unwrap();
+        let main = std::fs::read_to_string(dir.join("plugins/rome/source/main.js")).unwrap();
+        assert!(main.starts_with(&run.script), "the newline is kept");
+        assert_eq!(
+            pack.fixture["expect"]["effects"]["pin"]["script_id"],
+            sha(&run.script)
+        );
     }
 
     fn sha(text: &str) -> String {

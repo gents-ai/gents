@@ -6,6 +6,22 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- A job plugin may declare `host_imports: ["run_script"]`. The host then
+  links `gents::run_script` and `gents::read_result` into its artifact and,
+  when the plugin asks, evaluates the call's own `script` in the embedded
+  JavaScript engine and hands the answer back. No script text crosses the
+  boundary, the import is linked only for a plugin that declares it, and a
+  call without a script answers `no_script`. The `workflow` tool of
+  `gents/dynamic_workflows` is now an ordinary Rust plugin over this import:
+  it pins the script's digest, applies the default budget and words the
+  failures itself. `script_runtime` is gone from plugin manifests (no release
+  shipped it) and the host no longer runs a plugin's script for it.
+- A dynamic call's step-0 pin must name its script: `script_id` is the
+  sha256 of the exact `script` on the call and `source_digest` is `sha256:`
+  plus that, or the step is refused `plugin_job_pin_mismatch`. The rule
+  covers every job plugin whose call carries a `script`. `gents job promote`
+  hashes the recorded script byte for byte (it used to trim it), so the
+  pack's pin, the host's guard and promotion agree.
 - `gents job promote <address|tool_call_id> --name <snake_case>` installs a
   finished dynamic workflow run as a tool wired to its agent, so later calls
   run the script as an `installed` job. The generated pack lives at

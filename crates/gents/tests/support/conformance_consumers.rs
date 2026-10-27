@@ -1806,6 +1806,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_plugin_job_resource_cases_drive_scratch",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::tool_policy::generated_plugin_host_import_cases_drive_the_grant",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/tool_policy.rs",
+            module_path: "conformance::tool_policy",
+            function: "generated_plugin_host_import_cases_drive_the_grant",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::tool_policy::generated_plugin_calls_route_cases_drive_supported",
             package: "gents",
             source_path: "crates/gents/tests/conformance/tool_policy.rs",
