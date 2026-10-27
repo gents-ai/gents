@@ -1051,18 +1051,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         journey,
         Journey::EditorGoalRecovery | Journey::EditorGoalSteering
     ) {
-        let mut request = json!({
+        let request = json!({
             "nodeDid":node_did, "agentId":agent_id,
             "cwd": journey.is_steering().then_some(root),
             "action":{"kind":"create", "objective":"Return the fixture response.", "tokenBudget":"1000"}
         });
-        if matches!(journey, Journey::Goal) {
-            request["capturedContext"] = json!([{
-                "kind":"file","source":"editor","capturedAt":chrono::Utc::now().to_rfc3339(),
-                "uri":"file:///fixture/retained.rs","workspaceUri":"file:///fixture","terminalName":null,
-                "version":7,"unsaved":true,"range":null,"content":"remote Goal capture\n"
-            }]);
-        }
         client
             .call(id, "desktop_goal_control", json!({"request":request}))
             .await
@@ -1105,18 +1098,6 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let original_doc_id = row.doc_id.clone().context("submitted physical request")?;
     ensure!(row.admission_signer_did.as_deref() == Some(client_did.as_str()));
     ensure!(client_did != node_did);
-    if matches!(journey, Journey::Goal) {
-        let context = &row
-            .input
-            .as_ref()
-            .context("signed captured input")?
-            .captured_context;
-        ensure!(
-            context.len() == 1
-                && context[0].unsaved
-                && context[0].content == "remote Goal capture\n"
-        );
-    }
     ensure!(
         row.input
             .and_then(|input| input.queue)
