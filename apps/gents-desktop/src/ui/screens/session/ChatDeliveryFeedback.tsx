@@ -1,5 +1,6 @@
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import { useEffect, useRef, useState } from "react";
+import { useStore } from "zustand";
 import { Button } from "@gents/ui/components/button";
 import { useApp } from "@/app/AppContext";
 import { workspace } from "@/app/workspace";
@@ -32,7 +33,10 @@ export function ChatDeliveryFeedback({
   mailboxItem?: MailboxItemView;
 }) {
   const { stores } = useApp();
-  const snapshot = stores.client.use.snapshot();
+  const clientDid = useStore(
+    stores.client,
+    (state) => state.snapshot?.client?.clientDid ?? null,
+  );
   const selectedNode = stores.selection.use.nodeDid();
   const selectedSession = stores.selection.use.sessionId();
   const nodeDid = mailboxItem?.targetNodeDid ?? selectedNode;
@@ -55,7 +59,7 @@ export function ChatDeliveryFeedback({
       )}
       {chatDraftsFor(
         entries,
-        snapshot?.client?.clientDid ?? null,
+        clientDid,
         nodeDid,
         sessionId,
         mailboxItem?.itemId ?? null,

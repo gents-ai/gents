@@ -7,9 +7,11 @@ describe("the rail flyout", () => {
   afterEach(() => vi.useRealTimers());
 
   it("leaves no timer behind when it unmounts", () => {
+    // jsdom queues storage events while initializing the app.
+    const app = testApp();
     vi.useFakeTimers();
     const { unmount } = renderIn(
-      testApp(),
+      app,
       <RailFlyout route={{ name: "sessions" }} settings={null}>
         <button type="button">rail</button>
       </RailFlyout>,
