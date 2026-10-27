@@ -25,6 +25,7 @@ import { Kbd } from "@gents/ui/components/kbd";
 import { cn } from "@gents/ui/lib/utils";
 import { href, navigate } from "@/lib/router";
 import { useState, type ComponentProps } from "react";
+import { useStore } from "zustand";
 import { agentName } from "./behavior";
 import type { ShellActions } from "@/../hooks/shellActions";
 import { NodeAgentStack } from "./NodeBehaviorStack";
@@ -90,7 +91,10 @@ export function Item({
     actions: { answerMailboxQuestion, dismissMailboxItem, openMailboxItem },
     stores,
   } = useApp();
-  const clientDid = stores.client.use.snapshot()?.client?.clientDid ?? null;
+  const clientDid = useStore(
+    stores.client,
+    (state) => state.snapshot?.client?.clientDid ?? null,
+  );
   const drafts = chatDraftsFor(
     stores.chat.use.chatDrafts(),
     clientDid,
