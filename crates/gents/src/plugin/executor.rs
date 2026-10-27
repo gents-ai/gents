@@ -831,14 +831,14 @@ fn script_round(source: String, plugin: &str) -> rounds::Round {
     Arc::new(move |input, budget| runner.call(&input, &budget))
 }
 
-/// The `script` a call carries when `declaration` runs scripts; a blank or
-/// absent script runs the artifact (its non-job verbs).
+/// The `script` a call carries when `declaration` runs scripts; an empty or
+/// absent script runs the artifact (its non-job verbs). Whitespace is source
+/// (Lean `CallArgs.runsDynamicScript`), so the run and its digest see it.
 fn script_of(declaration: &crate::pack::PackPlugin, input: &serde_json::Value) -> Option<String> {
     declaration.script_runtime?;
     input
         .get("script")
         .and_then(serde_json::Value::as_str)
-        .map(str::trim)
         .filter(|script| !script.is_empty())
         .map(str::to_owned)
 }
