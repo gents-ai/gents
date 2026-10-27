@@ -542,15 +542,22 @@ export function createDesktopUiHarness(
                     created: false,
                     replacementsApplied: 1,
                     diff: [
-                      { kind: "context" as const, text: "impl Parser {" },
+                      {
+                        kind: "context" as const,
+                        text: "impl Parser {",
+                        lineNumber: 3,
+                      },
                       {
                         kind: "removed" as const,
-                        text: "fn parse() -> Ast { todo!() }",
+                        text: "    fn parse() -> Ast { todo!() }",
+                        lineNumber: 4,
                       },
                       {
                         kind: "added" as const,
-                        text: "fn parse() -> Ast { Ast::default() }",
+                        text: "    fn parse() -> Ast { Ast::default() }",
+                        lineNumber: 4,
                       },
+                      { kind: "context" as const, text: "}", lineNumber: 5 },
                     ],
                     fallbackOutput: null,
                   },
