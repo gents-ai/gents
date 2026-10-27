@@ -42,10 +42,11 @@ pre {
   background-color: var(--diff-removed);
 }`;
 
-/* The highlighter's JavaScript engine compiles grammars to regular
-   expressions; the webview's CSP admits no WebAssembly, which the other
-   engines need. */
-const HIGHLIGHTER = "shiki-js";
+/* Highlights, the highlighter built for Diffs, is compiled to WebAssembly
+   and colours a long file in milliseconds where the regular-expression
+   engines take seconds; the webview's CSP admits WebAssembly for it. A
+   language it does not know shows as plain text. */
+const HIGHLIGHTER = "highlights";
 
 /* Colouring runs in workers, so a long file no longer holds the view; a
    file past this many lines, beyond what a 1 MB copy usually holds, still
