@@ -464,7 +464,14 @@ mod tests {
 
         let destination = reserve_promoted_dir(&home_link, "rome").unwrap();
 
-        assert_eq!(destination, actual_home.path().join("packs/promoted/rome"));
+        assert_eq!(
+            destination,
+            actual_home
+                .path()
+                .canonicalize()
+                .unwrap()
+                .join("packs/promoted/rome")
+        );
         assert!(destination.is_dir());
     }
 }
