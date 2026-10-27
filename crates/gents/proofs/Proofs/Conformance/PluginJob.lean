@@ -989,21 +989,37 @@ structure OriginCase where
   digest : String
   mounts : List AssetMount
   trusted : List String
+  /-- The call the pin answers; `stepZero`'s names a script by `argv`. -/
+  call : CallArgs
 
 def originCases : List OriginCase :=
   [ ⟨"trusted_operator_pack_file_installed", scriptDigest,
-      [packMount .operator [scriptDigest]], [fixturePack]⟩
+      [packMount .operator [scriptDigest]], [fixturePack], stepZero.call⟩
   , ⟨"untrusted_pack_dynamic", scriptDigest, [packMount .operator [scriptDigest]],
-      ["content_pack"]⟩
+      ["content_pack"], stepZero.call⟩
   , ⟨"self_config_pack_dynamic", scriptDigest, [packMount .selfConfig [scriptDigest]],
-      [fixturePack]⟩
+      [fixturePack], stepZero.call⟩
   , ⟨"project_mount_dynamic", scriptDigest,
-      [{ projectMount "/work/.gents/workflows" with files := [scriptDigest] }], [fixturePack]⟩
+      [{ projectMount "/work/.gents/workflows" with files := [scriptDigest] }], [fixturePack],
+      stepZero.call⟩
   , ⟨"digest_not_in_any_mount_dynamic", scriptDigest, [packMount .operator ["sha256-other"]],
-      [fixturePack]⟩ ]
+      [fixturePack], stepZero.call⟩
+  , ⟨"scriptless_call_installed_without_any_mount", scriptDigest, [], [],
+      { argv := [], args := some "{\"base\":\"main\"}", path := none, script := none
+      , agentBudget := some 22 }⟩
+  , ⟨"scriptless_call_with_empty_strings_installed", scriptDigest,
+      [packMount .operator ["sha256-other"]], ["content_pack"],
+      { argv := [], args := none, path := some "", script := some "", agentBudget := none }⟩
+  , ⟨"whitespace_script_without_argv_is_source", scriptDigest,
+      [packMount .operator ["sha256-other"]], ["content_pack"],
+      { argv := [], args := none, path := none, script := some " \n", agentBudget := none }⟩
+  , ⟨"inline_script_without_argv_is_the_digests_origin", scriptDigest,
+      [packMount .operator ["sha256-other"]], [fixturePack],
+      { argv := [], args := none, path := none, script := some "module.exports = (i) => i"
+      , agentBudget := none }⟩ ]
 
 private def originVerdict (c : OriginCase) : Origin × List Bool :=
-  (originOf c.digest c.mounts c.trusted, c.mounts.map (trustedHint · c.trusted))
+  (callOrigin c.call c.digest c.mounts c.trusted, c.mounts.map (trustedHint · c.trusted))
 
 /-- The pack and its dependencies. -/
 private def blockClosure : List String := [fixturePack, "content_pack"]
@@ -1074,6 +1090,7 @@ theorem authority_regressions :
       , .written .selfConfig, .written .operator ] ∧
     originCases.map originVerdict =
       [ (.installed, [true]), (.dynamic, [false]), (.dynamic, [false]), (.dynamic, [false])
+      , (.dynamic, [true]), (.installed, []), (.installed, [false]), (.dynamic, [false])
       , (.dynamic, [true]) ] ∧
     packBlockCases.map (fun c => packJobBlockAdmissible c.via blockClosure c.block) =
       [true, false, false, false, false, false] ∧
@@ -1129,6 +1146,7 @@ private def renderOrigin (c : OriginCase) : Json :=
   let (origin, hints) := originVerdict c
   Json.mkObj [("name", toJson c.name), ("kind", toJson "origin"), ("digest", toJson c.digest),
     ("mounts", toJson (c.mounts.map mountJson)), ("trusted_packs", toJson c.trusted),
+    ("call", callArgsJson c.call),
     ("expected", Json.mkObj [("origin", originJson origin), ("trusted_hints", toJson hints)])]
 
 private def renderPackBlock (c : PackBlockCase) : Json :=

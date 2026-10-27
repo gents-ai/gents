@@ -4,6 +4,7 @@ use crate::background_tools::ProcessControlScope;
 use crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
 use crate::lifecycle::materialize::{next_request_hop, request_hop_within_bound, RequestHopCause};
 use crate::plugin_job::keys::job_spawn_key;
+use crate::plugin_job::origin::scriptless;
 use crate::tool_surface::EndpointScope;
 use gents_protocol::job::{
     DynamicMode, JobCeiling, JobChildState, JobControlRequest, JobEffects, JobGuestPin,
@@ -311,6 +312,11 @@ fn admit(ctx: &StepContext, job: &StepRow, out: &JobStepOutput) -> Result<StepRo
     }
     if pin.origin == JobOrigin::Installed
         && !ctx.installed_trusted_sources.contains(&pin.source_digest)
+        && !scriptless(
+            &job.call.argv,
+            job.call.script.as_deref(),
+            job.call.path.as_deref(),
+        )
     {
         return Err(Refusal::PolicyDenied);
     }

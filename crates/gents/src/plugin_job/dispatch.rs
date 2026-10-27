@@ -29,7 +29,9 @@ use super::driver::{
 };
 use super::effects::{stage_effects_in_txn, write_scratch, JobContext};
 use super::input::{build_step_input, CallArgs, StepKind};
-use super::origin::{classify_origin, engine_guard, engine_guard_next, script_index, trusted_hint};
+use super::origin::{
+    call_origin, engine_guard, engine_guard_next, script_index, scriptless, trusted_hint,
+};
 use super::records::{
     read_step_state, write_pin_in_txn, write_progress_in_txn, write_step_state_in_txn,
     HostProgressFacts,
@@ -626,7 +628,12 @@ pub async fn adopt_step0(
                         .unwrap_or(u32::MAX);
                     }
                     let facts = HostFacts {
-                        origin: if ctx.installed_trusted_sources.contains(&guest.source_digest) {
+                        origin: if scriptless(
+                            &input.argv,
+                            input.script.as_deref(),
+                            input.path.as_deref(),
+                        ) || ctx.installed_trusted_sources.contains(&guest.source_digest)
+                        {
                             JobOrigin::Installed
                         } else {
                             JobOrigin::Dynamic
@@ -983,8 +990,10 @@ fn step0_context(
         .filter(|(_, pack, _, class)| trusted_hint(pack, class, &via, &index.trusted_packs))
         .map(|(sha, ..)| sha.clone())
         .collect();
+    let scriptless = scriptless(&input.argv, input.script.as_deref(), input.path.as_deref());
     let origin = out_pin(output).map_or(JobOrigin::Dynamic, |guest| {
-        classify_origin(
+        call_origin(
+            scriptless,
             &guest.source_digest,
             &index.files,
             &via,
