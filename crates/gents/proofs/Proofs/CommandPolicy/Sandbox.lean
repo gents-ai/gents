@@ -2,6 +2,37 @@ import Proofs.CommandPolicy.Types
 
 namespace CommandPolicy
 
+/-- A bounded command inherits the sandbox's offline default, not the host's
+network authority. Explicit network configuration still meets the existing tool
+ceiling before launch. Unrestricted and argv-validated read-only commands retain
+their own enforcement owners. -/
+def effectiveNetworkMode (mode : ExecutionMode) (network : NetworkMode) : NetworkMode :=
+  match mode, network with
+  | .workspaceWrite, .inherit | .artifactWrite, .inherit => .disabled
+  | _, network => network
+
+/-- The native adapter supplies the credential namespace from host-owned home
+and identity configuration. Seatbelt must exclude both its names and resolved
+targets, independently of optional workspace consent. Filesystem namespace
+replacement by an outside host process after inspection is an external premise;
+the child may not move protected ancestors or create hard-link aliases. -/
+def protectsCredentials (mode : ExecutionMode) : Bool :=
+  mode == .workspaceWrite || mode == .artifactWrite
+
+theorem bounded_inherits_no_network :
+    effectiveNetworkMode .workspaceWrite .inherit = .disabled ∧
+    effectiveNetworkMode .artifactWrite .inherit = .disabled := by decide
+
+theorem disabled_network_is_never_enabled (mode : ExecutionMode) :
+    effectiveNetworkMode mode .disabled = .disabled := by cases mode <;> rfl
+
+theorem explicit_network_preserved (mode : ExecutionMode) :
+    effectiveNetworkMode mode .enabled = .enabled := by cases mode <;> rfl
+
+theorem bounded_credentials_are_protected :
+    protectsCredentials .workspaceWrite = true ∧
+    protectsCredentials .artifactWrite = true := by decide
+
 /-- A selected project may narrow a sandboxed command's writable root but
 cannot widen its configured tool ceiling. Canonical host containment supplies
 the path relation. Full access retains that ceiling; unrestricted commands and

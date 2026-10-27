@@ -290,6 +290,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) deviations: Vec<LeanDeviation>,
     pub(crate) command_policy_cases: Vec<LeanCommandPolicyCase>,
     pub(crate) command_sandbox_cases: Vec<LeanCommandSandboxCase>,
+    pub(crate) command_isolation_cases: Vec<serde_json::Value>,
     pub(crate) artifact_mode_meet_cases: Vec<serde_json::Value>,
     pub(crate) artifact_admission_cases: Vec<serde_json::Value>,
     pub(crate) artifact_spawn_cases: Vec<serde_json::Value>,

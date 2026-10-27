@@ -1225,6 +1225,16 @@ def caseCoverage : List CoverageEntry :=
       "toolset::tests::generated_command_env_cases_match_rust_filtering")
       "command-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
+      "command_isolation_cases"
+      "CommandIsolation"
+      "toolset::shared::command::network_enforcement_disclosure_tests::generated_command_isolation_matches_native_policy")
+      "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "command_isolation_cases"
+      "CommandIsolationSeatbelt"
+      "toolset::shared::command::command_credentials::tests::generated_bounded_sandboxes_deny_credentials_and_default_network")
+      "command-policy" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "command_policy_cases"
       "CommandPolicyOperatorUi"
       "gents_desktop_bridge::snapshot::tests::session_timeline::structured_command_policy_denial_projects_to_rendered_tool")

@@ -302,6 +302,7 @@ mod tests {
             None,
             tokio_util::sync::CancellationToken::new(),
             crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+                runtime_home: None,
                 workspace_cwd: Some(source.clone()),
                 workspace_root: Some(source),
                 workspace_authority: Some(crate::toolset::WorkspaceAuthority::ReadOnly),

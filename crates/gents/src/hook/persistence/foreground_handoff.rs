@@ -76,6 +76,7 @@ impl DefraSessionHook {
                 .background_executions
                 .process_recorder(lifecycle.tool_call_id(), &doc);
             let workspace = ToolWorkspaceScope {
+                runtime_home: context.runtime_home,
                 workspace_cwd: context.workspace_cwd,
                 workspace_root: context.workspace_root,
                 workspace_authority: context.workspace_authority,

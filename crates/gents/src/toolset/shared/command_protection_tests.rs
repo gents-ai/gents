@@ -228,3 +228,54 @@ async fn configured_cli_tools_keep_the_guard_and_declared_environment() {
         );
     }
 }
+
+#[tokio::test]
+async fn bounded_commands_protect_runtime_keys_without_workspace_consent() {
+    use crate::tool_call_lifecycle::runtime::{
+        scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let home = root.join("custom-runtime");
+    std::fs::create_dir_all(crate::home::keys_dir(&home)).unwrap();
+    let key = crate::home::default_key_path(&home, "fixture");
+    std::fs::write(&key, "fixture identity").unwrap();
+    let scope = ToolWorkspaceScope {
+        runtime_home: Some(home),
+        ..Default::default()
+    };
+    scope_request_tool_execution_with_workspace_overlay(
+        None,
+        Default::default(),
+        scope,
+        None,
+        None,
+        None,
+        Default::default(),
+        false,
+        async {
+            let context = ToolContext::new(root, false).unwrap();
+            let policy = CommandExecutionPolicy::write_capable()
+                .with_mode(CommandExecutionMode::WorkspaceWrite);
+            let output = run_command(
+                &context,
+                "bash",
+                "/bin/cat",
+                &[key.to_str().unwrap().into()],
+                None,
+                Duration::from_secs(5),
+                &policy,
+                true,
+                4096,
+            )
+            .await
+            .unwrap_err();
+            let output = output.to_string();
+            let output: serde_json::Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(output["ok"], false, "{output}");
+            assert_eq!(output["network_mode"], "disabled", "{output}");
+            assert_eq!(output["stdout"], "");
+        },
+    )
+    .await;
+}
