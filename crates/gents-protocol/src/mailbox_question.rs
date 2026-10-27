@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const MAILBOX_QUESTION_VERSION: u32 = 2;
+pub const MAILBOX_QUESTION_VERSION: u32 = 3;
 pub const STATUS_QUESTION_CONTRACT_FIELD: &str = "mailbox_question_contract_version";
 pub const MAILBOX_QUESTION_MIN_OPTIONS: usize = 2;
 pub const MAILBOX_QUESTION_MAX_OPTIONS: usize = 4;
@@ -18,6 +18,9 @@ pub struct MailboxQuestionOption {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,6 +37,9 @@ pub struct MailboxQuestion {
     #[serde(default, skip_serializing_if = "absent_or_false")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub optional: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub recommended_order: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +62,8 @@ pub struct MailboxQuestionAnswer {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MailboxQuestionReply {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question_version: Option<u32>,
     pub source_doc_id: String,
     pub question_hash: String,
     #[serde(serialize_with = "serialize_stored_answer")]
@@ -88,12 +96,14 @@ impl MailboxQuestionReply {
         request_id: Option<&str>,
         answer: MailboxQuestionAnswer,
     ) -> anyhow::Result<Self> {
+        let question = MailboxQuestion::from_payload(payload)?;
         let question_hash = question_source_hash(title, summary, payload, request_id)?;
         anyhow::ensure!(
             answer.question_hash.as_deref() == Some(question_hash.as_str()),
             "the question changed; reload its current prompt before replying"
         );
         Ok(Self {
+            question_version: (question.version >= 3).then_some(question.version),
             source_doc_id: source_doc_id.into(),
             question_hash,
             answer,
@@ -116,6 +126,12 @@ impl MailboxQuestionReply {
             "the question changed; review its current prompt before replying"
         );
         let question = MailboxQuestion::from_payload(payload)?;
+        anyhow::ensure!(
+            self.question_version
+                .map_or(question.version <= 2, |version| version >= 3
+                    && version == question.version),
+            "the question version changed; reload its current prompt before replying"
+        );
         anyhow::ensure!(
             question.reply_content(title, &self.answer)? == content,
             "the signed reply does not match its question answer"
@@ -143,6 +159,8 @@ pub enum MailboxQuestionError {
     EmptyPrompt,
     OptionCount,
     EmptyOption,
+    PromptNotAllowed,
+    RecommendedOrder,
     DuplicateOption(String),
     UnknownOption(String),
     MultipleSelected,
@@ -157,12 +175,14 @@ pub enum MailboxQuestionError {
 impl std::fmt::Display for MailboxQuestionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Version => write!(f, "question version must be 1 or {MAILBOX_QUESTION_VERSION}; optional questions require version 2"),
+            Self::Version => write!(f, "question version must be 1-{MAILBOX_QUESTION_VERSION}; optional questions require version 2 or later"),
             Self::EmptyPrompt => f.write_str("question prompt must not be empty"),
             Self::OptionCount => write!(
                 f,
-                "question needs {MAILBOX_QUESTION_MIN_OPTIONS}-{MAILBOX_QUESTION_MAX_OPTIONS} options, or version 2 with no options and free text enabled"
+                "question needs {MAILBOX_QUESTION_MIN_OPTIONS}-{MAILBOX_QUESTION_MAX_OPTIONS} options, or version 2 or later with no options and free text enabled"
             ),
+            Self::PromptNotAllowed => f.write_str("editable prompts require question version 3, non-empty prompt text, allow_free_text and a single choice"),
+            Self::RecommendedOrder => f.write_str("recommended_order requires question version 3 and multi_select; list every option id exactly once"),
             Self::EmptyOption => f.write_str("question option ids and labels must be non-empty"),
             Self::DuplicateOption(id) => write!(f, "question option id {id:?} is duplicated"),
             Self::UnknownOption(id) => write!(f, "answer names unknown option {id:?}"),
@@ -172,7 +192,7 @@ impl std::fmt::Display for MailboxQuestionError {
             Self::RepeatedSelection(id) => write!(f, "answer repeats option {id:?}"),
             Self::FreeTextNotAllowed => f.write_str("question does not accept a free-text answer"),
             Self::Empty => f.write_str("answer selects nothing"),
-            Self::SkipNotAllowed => f.write_str("answer this question; only an explicitly optional version 2 question can be skipped"),
+            Self::SkipNotAllowed => f.write_str("answer this question; only an explicitly optional version 2 or later question can be skipped"),
             Self::SkipHasAnswer => f.write_str("send either Skip or an answer, not both"),
             Self::Decode(error) => write!(f, "payload is not a question: {error}"),
         }
@@ -197,6 +217,15 @@ pub fn question_requires_reply_receipt(payload: &str) -> bool {
 }
 
 impl MailboxQuestion {
+    pub fn awaiting_answer(&self, is_open: bool, same_parent: bool, completed: bool) -> bool {
+        self.validate().is_ok()
+            && self.version >= 2
+            && self.optional != Some(true)
+            && is_open
+            && same_parent
+            && completed
+    }
+
     pub fn validate(&self) -> Result<(), MailboxQuestionError> {
         if !(1..=MAILBOX_QUESTION_VERSION).contains(&self.version)
             || (self.version == 1 && self.optional == Some(true))
@@ -208,7 +237,7 @@ impl MailboxQuestion {
         }
         if !((MAILBOX_QUESTION_MIN_OPTIONS..=MAILBOX_QUESTION_MAX_OPTIONS)
             .contains(&self.options.len())
-            || (self.version == 2 && self.options.is_empty() && self.allow_free_text))
+            || (self.version >= 2 && self.options.is_empty() && self.allow_free_text))
         {
             return Err(MailboxQuestionError::OptionCount);
         }
@@ -219,6 +248,28 @@ impl MailboxQuestion {
             }
             if !seen.insert(option.id.trim()) {
                 return Err(MailboxQuestionError::DuplicateOption(option.id.clone()));
+            }
+            if option.prompt.as_deref().is_some_and(|prompt| {
+                self.version != 3
+                    || !self.allow_free_text
+                    || self.multi_select
+                    || prompt.trim().is_empty()
+            }) {
+                return Err(MailboxQuestionError::PromptNotAllowed);
+            }
+        }
+        if let Some(order) = &self.recommended_order {
+            if self.version != 3
+                || !self.multi_select
+                || self.options.is_empty()
+                || order.len() != self.options.len()
+                || order
+                    .iter()
+                    .map(|id| id.trim())
+                    .collect::<std::collections::BTreeSet<_>>()
+                    != seen
+            {
+                return Err(MailboxQuestionError::RecommendedOrder);
             }
         }
         Ok(())
@@ -239,7 +290,7 @@ impl MailboxQuestion {
         self.validate()?;
         let free_text = trimmed(answer.free_text.as_deref());
         if answer.skip == Some(true) {
-            if self.version != 2 || self.optional != Some(true) {
+            if self.version < 2 || self.optional != Some(true) {
                 return Err(MailboxQuestionError::SkipNotAllowed);
             }
             if !answer.option_ids.is_empty() || free_text.is_some() {

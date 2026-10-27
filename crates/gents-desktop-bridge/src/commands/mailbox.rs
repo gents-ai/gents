@@ -96,7 +96,7 @@ fn question_reply_for_item(
     let question = gents_protocol::mailbox_question::MailboxQuestion::from_payload(
         item.payload.as_deref().unwrap_or_default(),
     )?;
-    if question.version == 2 {
+    if question.version >= 2 {
         anyhow::ensure!(
             answer.question_hash.is_some() && answer.question_hash == item.question_hash,
             "the question changed; reload its current prompt before replying"
@@ -125,11 +125,13 @@ mod tests {
                     id: id.into(),
                     label: id.to_uppercase(),
                     description: None,
+                    prompt: None,
                 })
                 .to_vec(),
             multi_select: false,
             allow_free_text: false,
             optional: None,
+            recommended_order: None,
         };
         let row: gents_protocol::row::MailboxItemRow = serde_json::from_value(serde_json::json!({
             "_docID": "item-1", "item_key": "k", "requester_did": "did:person",

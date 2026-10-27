@@ -40,6 +40,8 @@ mod editor_history;
 mod editor_inventory;
 #[path = "support/editor_inventory_permissions.rs"]
 mod editor_inventory_permissions;
+#[path = "support/editor_questions.rs"]
+mod editor_questions;
 #[path = "support/editor_related_work.rs"]
 mod editor_related_work;
 #[path = "support/editor_retry.rs"]
@@ -108,6 +110,8 @@ enum Journey {
     EditorRelatedWork,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorRelatedWorkFailure,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorQuestions,
     Goal,
 }
 
@@ -134,6 +138,7 @@ impl Journey {
             Self::EditorWorkspace => Some("workspace"),
             Self::EditorRelatedWork => Some("related-work"),
             Self::EditorRelatedWorkFailure => Some("related-work-failure"),
+            Self::EditorQuestions => Some("questions"),
             _ => None,
         }
     }
@@ -533,6 +538,30 @@ async fn editor_replaces_goals_in_the_same_chat_without_losing_work_or_drafts() 
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_answers_a_native_question_and_uses_the_edited_worker_prompt() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorQuestions)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "editor.log",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })?;
+    copy_editor_evidence(temp.path(), "editor-questions-canonical.json")
+}
+
+#[cfg(feature = "editor-e2e")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_observes_concurrent_related_work_without_losing_the_parent_draft() -> Result<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorRelatedWork)
@@ -656,6 +685,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         },
         None,
         Arc::new(move |request| {
+            if matches!(journey, Journey::EditorQuestions) {
+                if let Some(reply) = editor_questions::reply(request) {
+                    return reply;
+                }
+            }
             if matches!(journey, Journey::EditorDelivery) {
                 if let Some(reply) = editor_delivery::reply(request) {
                     return reply;
@@ -799,6 +833,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             "--inference-url",
         ])
         .arg(provider.endpoint());
+    if matches!(journey, Journey::EditorQuestions) {
+        init.arg("--engineer");
+    }
     let output = initialization::Initialization::spawn(&mut init, root)?
         .wait(Duration::from_secs(30))
         .await?;
@@ -1798,6 +1835,43 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .await?;
         std::fs::write(
             root.join("editor-related-work-canonical.json"),
+            serde_json::to_vec_pretty(&evidence)?,
+        )?;
+    }
+    if matches!(journey, Journey::EditorQuestions) {
+        editor_related_work::configure(&access, node_did, agent_id).await?;
+        client
+            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .await;
+        let editor_result = run_editor_journey(
+            root,
+            &paths,
+            &host_binary,
+            session,
+            provider.endpoint(),
+            "questions",
+        )
+        .await;
+        let captured = provider.captured_chat_requests();
+        std::fs::write(
+            root.join("editor-questions-provider.json"),
+            serde_json::to_vec_pretty(&captured)?,
+        )?;
+        #[cfg(feature = "editor-e2e")]
+        copy_editor_evidence(root, "editor-questions-provider.json")?;
+        ensure!(
+            captured
+                .iter()
+                .any(|body| body["tools"]
+                    .as_array()
+                    .is_some_and(|tools| tools.iter().any(|tool| tool["function"]["name"]
+                        == gents::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME))),
+            "the default Engineer must advertise its question tool"
+        );
+        editor_result?;
+        let evidence = editor_questions::verify(&access, node_did, session, &client_did).await?;
+        std::fs::write(
+            root.join("editor-questions-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
         )?;
     }
