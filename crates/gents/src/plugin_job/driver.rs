@@ -2,7 +2,6 @@
 //! canonical tool output.
 
 use rapidhash::{HashMapExt, RapidHashMap};
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Weak};
 
@@ -28,7 +27,7 @@ use super::effects::{
 };
 use super::input::{build_step_input, chain_of, derive_children_in_txn, CallArgs, StepKind};
 use super::keys::job_session_id;
-use super::origin::{engine_guard, script_index, trusted_hint};
+use super::origin::engine_guard;
 use super::records::{
     read_pin, read_progress, read_step_state, write_progress_in_txn, write_step_state_in_txn,
     HostProgressFacts, RecordError,
@@ -38,7 +37,6 @@ use crate::background_tools::ProcessControlScope;
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::SessionMessageCause;
-use crate::pack::InstalledVia;
 use crate::plugin::data::{DataCaller, StampContext};
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::job_calls::{job_state, JobCaller};
@@ -169,7 +167,8 @@ fn terminal(settlement: Settlement, tool: &str, address: &str) -> Option<Termina
 
 /// What a host refusal means and the call that follows it.
 pub(super) fn refusal_text(refusal: Refusal, tool: &str, address: &str) -> (&'static str, String) {
-    let inspect = format!("Next: `{tool} status {address}`, then `{tool} resume {address}`");
+    let inspect =
+        format!("Next: `gents job show {address}`; the `{tool}` help says how a run is resumed");
     match refusal {
         Refusal::Stalled => (
             "the job stopped making progress: every child is terminal and the step spawned nothing and sent no message",
@@ -178,15 +177,15 @@ pub(super) fn refusal_text(refusal: Refusal, tool: &str, address: &str) -> (&'st
         Refusal::PolicyDenied => ("the job asked for something its policy refuses", inspect),
         Refusal::DynamicCodeDisabled => (
             "`job.policy.dynamic` is `off`; dynamic script execution is disabled",
-            "Next: use an operator-installed script, or ask the operator to enable dynamic execution in `job.policy.dynamic`".to_owned(),
+            format!("Next: call `{tool}` without a `script` to run the installed plugin, or ask the operator to enable dynamic execution in `job.policy.dynamic`"),
         ),
         Refusal::NotAvailable => (
             "the job's plugin or its job grant is no longer available",
-            format!("Next: ask the operator to restore `{tool}` and its `job` block, then `{tool} resume {address}`"),
+            format!("Next: ask the operator to restore `{tool}` and its `job` block, then call `{tool}` again"),
         ),
         Refusal::EngineChanged => (
-            "the job's engine changed since the job was pinned",
-            format!("Next: `{tool} resume {address} --engine current`"),
+            "the job's plugin changed since the job was pinned",
+            format!("Next: call `{tool}` again to start a new run; `gents job show {address}` keeps the old one"),
         ),
         Refusal::DepthExceeded => (
             "the job would run too deep in a chain of jobs",
@@ -672,7 +671,7 @@ async fn step_context(
 }
 
 /// [`step_context`] over the host `facts` a step is admitted with; they name
-/// the plugin and the working folder the live settings and mounts are read for.
+/// the plugin and the working folder the live settings are read for.
 pub(super) async fn step_context_for(
     txn: &ConfigApplyTxn<'_>,
     runtime: &JobRuntime,
@@ -700,23 +699,6 @@ pub(super) async fn step_context_for(
         .and_then(|(namespace, name)| read_record(&runtime.home, namespace, name).ok());
     let policy = settings.as_ref().map(|settings| &settings.policy);
     let cwd = Path::new(&facts.cwd);
-    let installed_trusted_sources = match &installed {
-        Some(plugin) => {
-            let index = script_index(&runtime.home, plugin, policy, Some(cwd))?;
-            let via: BTreeMap<&str, InstalledVia> = index
-                .installed_via
-                .iter()
-                .map(|(pack, via)| (pack.as_str(), *via))
-                .collect();
-            index
-                .files
-                .iter()
-                .filter(|(_, pack, _, class)| trusted_hint(pack, class, &via, &index.trusted_packs))
-                .map(|(sha, ..)| sha.clone())
-                .collect()
-        }
-        None => Vec::new(),
-    };
     let key = |target: &crate::document_config::AgentTargetDocument| {
         (target.target_node_did.clone(), target.agent_id.clone())
     };
@@ -775,7 +757,6 @@ pub(super) async fn step_context_for(
         engine_provenance_operator: installed
             .as_ref()
             .is_some_and(|plugin| engine_guard(&runtime.home, plugin).is_ok()),
-        installed_trusted_sources,
         max_hop: max_request_hop_in_txn(txn, &caller.node_did).await?,
         target_hops,
         target_ids: targets
@@ -786,7 +767,6 @@ pub(super) async fn step_context_for(
         started_by_job: false,
         cwd_allowed,
         within,
-        named_origin: None,
         adoption_facts: facts.clone(),
         caller_scope: ProcessControlScope {
             request_id: caller.request_id.clone(),
@@ -1366,7 +1346,6 @@ async fn read_row(txn: &ConfigApplyTxn<'_>, row_doc_id: &str) -> Result<StepRow>
                 .args
                 .map(|args| serde_json::to_string(&args))
                 .transpose()?,
-            path: call.path,
             script: call.script,
             agent_budget: call.agent_budget,
         },
@@ -2778,7 +2757,6 @@ pub(crate) mod tests {
             call: StepCall {
                 argv: vec!["run".to_owned()],
                 args: None,
-                path: None,
                 script: None,
                 agent_budget: None,
             },
@@ -2961,10 +2939,7 @@ pub(crate) mod tests {
         let output = step.output(&step.row).await;
         assert_eq!(output["code"], "plugin_job_step_failed");
         let next = output["next"].as_str().unwrap();
-        assert!(
-            next.contains("workflow status") && next.contains("workflow resume"),
-            "{next}"
-        );
+        assert!(next.contains("gents job show"), "{next}");
         let message = output["message"].as_str().unwrap();
         assert!(
             message.starts_with("three consecutive job steps failed; last: ")

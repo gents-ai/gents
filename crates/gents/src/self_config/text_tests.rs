@@ -1077,7 +1077,6 @@ async fn job_block_help_topic_states_bounds_defaults_and_policy() {
         "dynamic: off|check|run; default check",
         "dynamic_targets",
         "trusted_packs",
-        "project_roots",
         "operator-only",
     ] {
         assert!(shapes.contains(detail), "missing {detail:?}: {shapes}");

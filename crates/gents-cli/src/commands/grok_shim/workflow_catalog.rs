@@ -14,9 +14,7 @@ use serde_json::{json, Value};
 
 /// One row of the pager's Workflows tab: an installed job plugin's name, its
 /// manifest description, and the first paragraph of its TOOL.md (or the
-/// description again) as `when_to_use`. Every row is `bundled`: a workflow is
-/// a plugin a pack ships. The key casing is unverified until the pager probe
-/// confirms it.
+/// description again) as `when_to_use`.
 #[derive(Serialize)]
 struct WorkflowInfo {
     name: String,

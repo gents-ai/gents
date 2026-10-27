@@ -47,7 +47,8 @@ pub enum JobPauseReason {
     BudgetExceeded,
 }
 
-/// Host fact: whether the script is a file in a trusted pack mount.
+/// Host fact: whether the call carries a model-authored `script` (dynamic) or
+/// runs the plugin artifact (installed).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -248,31 +249,7 @@ pub struct JobRootCall {
     pub args: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub agent_budget: Option<u32>,
-}
-
-/// The verified bytes the engine must run (installed origin, steps after the first).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub struct JobVerifiedScript {
-    pub source: String,
-    pub digest: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub struct AssetMount {
-    pub pack: String,
-    pub class: String,
-    pub digest: String,
-    pub path: String,
-    /// Host hint: operator provenance and listed in `trusted_packs`.
-    pub trusted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -373,11 +350,8 @@ pub struct JobStepInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(type = "Record<string, unknown> | null", optional = nullable))]
     pub args: Option<serde_json::Map<String, serde_json::Value>>,
-    /// Binds on step 0 only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub path: Option<String>,
-    /// The model's script text, never the verified bytes.
+    /// The model's script text; the host runs it as the step when the plugin
+    /// declares `script_runtime`, and its presence makes the run `dynamic`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub script: Option<String>,
@@ -391,11 +365,6 @@ pub struct JobStepInput {
     pub pin: Option<JobPin>,
     /// Null only on step 0.
     pub origin: Option<JobOrigin>,
-    /// Host-verified bytes; separate from `script`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub verified_script: Option<JobVerifiedScript>,
-    pub mounts: Vec<AssetMount>,
     pub ceiling: JobCeilingView,
     pub children: BTreeMap<String, JobChildView>,
     pub control: Option<JobControlEcho>,
@@ -901,29 +870,6 @@ pub struct ChildOutputSlice {
     pub truncated: bool,
 }
 
-/// Where a catalog entry was found.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub enum CatalogSource {
-    Pack,
-    Project,
-    Kept,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub struct CatalogEntry {
-    pub name: String,
-    pub description: String,
-    pub when_to_use: String,
-    pub source: CatalogSource,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub path: Option<String>,
-}
-
 /// The request a job row belongs to.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -1148,8 +1094,6 @@ pub struct JobPolicy {
     pub dynamic_targets: Vec<String>,
     #[serde(default)]
     pub trusted_packs: Vec<String>,
-    #[serde(default)]
-    pub project_roots: Vec<String>,
 }
 
 impl JobPolicy {
@@ -1166,7 +1110,6 @@ impl Default for JobPolicy {
             dynamic: Self::DEFAULT_DYNAMIC,
             dynamic_targets: Vec::new(),
             trusted_packs: Vec::new(),
-            project_roots: Vec::new(),
         }
     }
 }
@@ -1200,29 +1143,6 @@ pub struct PluginDataDeclaration {
     #[serde(default)]
     pub stamped: BTreeMap<String, StampedField>,
 }
-
-/// Manifest `asset_mounts[]`: one asset class the plugin reads.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub struct AssetMountDeclaration {
-    pub class: String,
-}
-
-/// Manifest `catalog`: the argv of the plugin's catalog call. Catalog calls
-/// use the raw-argument shape, so there is no catalog input type.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub struct PluginCatalogDeclaration {
-    pub argv: Vec<String>,
-}
-
-/// Reserved input key under which non-job calls receive the asset mount list.
-pub const ASSET_MOUNTS_INPUT_KEY: &str = "asset_mounts";
-
-/// `AssetMount.class` of a project-tier mount.
-pub const PROJECT_MOUNT_CLASS: &str = "project";
 
 #[cfg(test)]
 mod tests {

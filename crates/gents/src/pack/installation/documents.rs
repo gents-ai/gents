@@ -96,7 +96,7 @@ pub type UniqueKeySets = BTreeMap<String, Vec<Vec<String>>>;
 /// Field names per declared collection.
 pub type CollectionFields = BTreeMap<String, Vec<String>>;
 
-/// Checks `plugin`'s `data` and `asset_mounts` against the pack that ships it
+/// Checks `plugin`'s `data` against the pack that ships it
 /// and returns each declared collection's unique key field sets and field
 /// names. Every path that installs a pack plugin goes through this check.
 pub fn plugin_data_unique_keys<'a>(
@@ -105,17 +105,6 @@ pub fn plugin_data_unique_keys<'a>(
     asset: &dyn Fn(&str) -> Result<&'a [u8]>,
 ) -> Result<(UniqueKeySets, CollectionFields)> {
     let name = &plugin.name;
-    for mount in &plugin.asset_mounts {
-        let prefix = format!("{}/", mount.class);
-        anyhow::ensure!(
-            manifest.metadata.assets.iter().any(|path| {
-                path.starts_with(&prefix) && super::super::is_distributable_asset_path(path)
-            }),
-            "plugin {name:?} asset_mounts class {:?} has no asset under {prefix}; ship one or \
-             drop the mount",
-            mount.class
-        );
-    }
     let Some(data) = &plugin.data else {
         return Ok((BTreeMap::new(), BTreeMap::new()));
     };

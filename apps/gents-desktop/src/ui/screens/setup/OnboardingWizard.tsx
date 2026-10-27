@@ -26,7 +26,6 @@ import { useBootstrap, useStartup } from "@/hooks/useClient";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { shortPath } from "@/lib/paths";
 import { Field, Frame, Nav, Option, Title } from "./parts";
-import { WorkflowsOffer } from "./WorkflowsOffer";
 import { InferenceSetup } from "./InferenceSetup";
 import { nodeSetUp } from "@/lib/firstRun";
 import type { NodeView } from "../../../hooks/fleetStore";
@@ -542,7 +541,6 @@ export function OnboardingWizard({
             </Button>
           }
         />
-        {done && provisioned && <WorkflowsOffer deployment={provisioned} />}
       </Frame>
     );
   }

@@ -6,9 +6,6 @@ use afterburner::wasi::embedder_vm::NanMode;
 use afterburner_core::manifold::{EnvAccess, FsAccess, ListenAccess, NetAccess};
 use anyhow::{Context, Result};
 
-use gents_protocol::job::{AssetMount, ASSET_MOUNTS_INPUT_KEY, PROJECT_MOUNT_CLASS};
-use gents_protocol::plugin::PluginFilesystemScope;
-
 use crate::pack::{BindAccess, PackPlugin};
 
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
@@ -190,13 +187,6 @@ impl PluginRunner {
             }
         }
 
-        anyhow::ensure!(
-            plugin.asset_mounts.is_empty() || afterburner::afb_run::bounds_for(&afb).manifold_fs_ro,
-            "plugin {:?} declares asset_mounts, but its dispatch path cannot enforce a read-only \
-             filesystem grant, so mounted assets would not actually be contained",
-            plugin.name
-        );
-
         Ok(Self {
             afb_bytes: afb_bytes.to_vec(),
             plugin: plugin.clone(),
@@ -220,100 +210,6 @@ impl PluginRunner {
     ) -> Result<PluginOutcome> {
         let (arguments, manifold) = self.prepare_bound(arguments, bound)?;
         self.call_with_manifold(&arguments, budget, manifold)
-    }
-
-    /// [`Self::call`] or [`Self::call_bound`] (when `bound` is given) with
-    /// `mounts` preopened read-only beside whatever the call already grants.
-    pub(super) fn call_mounted(
-        &self,
-        arguments: &serde_json::Value,
-        budget: &PluginBudget,
-        bound: Option<&BoundDir>,
-        mounts: &[AssetMount],
-    ) -> Result<PluginOutcome> {
-        let (arguments, manifold, _) = self.prepare_mounted(arguments, bound, mounts)?;
-        self.call_with_manifold(&arguments, budget, manifold)
-    }
-
-    /// The input and manifold of one call under `mounts`, and the receipt
-    /// scope that names them (`None` when there are no mounts). A read bind
-    /// and the mounts share one `ReadOnly` list; a read-write grant with any
-    /// mount is refused ([`mounts::resolve_access`]).
-    pub(super) fn prepare_mounted(
-        &self,
-        arguments: &serde_json::Value,
-        bound: Option<&BoundDir>,
-        mounts: &[AssetMount],
-    ) -> Result<(serde_json::Value, Manifold, Option<PluginFilesystemScope>)> {
-        let (mut arguments, mut manifold) = match bound {
-            Some(bound) => self.prepare_bound(arguments, bound)?,
-            None => (arguments.clone(), self.manifold.clone()),
-        };
-        if !self.plugin.asset_mounts.is_empty() {
-            // Host-overwritten like `bind_dir`'s field: a guest value never survives.
-            if arguments.is_null() {
-                arguments = serde_json::Value::Object(serde_json::Map::new());
-            }
-            let object = arguments.as_object_mut().with_context(|| {
-                format!(
-                    "plugin {:?} arguments must be a JSON object to receive {ASSET_MOUNTS_INPUT_KEY:?}",
-                    self.plugin.name
-                )
-            })?;
-            object.insert(
-                ASSET_MOUNTS_INPUT_KEY.to_owned(),
-                serde_json::to_value(mounts)?,
-            );
-        }
-        if mounts.is_empty() {
-            return Ok((arguments, manifold, None));
-        }
-        let (mut roots, rw_bind) = match std::mem::replace(&mut manifold.fs, FsAccess::None) {
-            FsAccess::ReadOnly(roots) => (roots, false),
-            FsAccess::ReadWrite(roots) => {
-                let writes = !roots.is_empty();
-                (roots, writes)
-            }
-            FsAccess::None => (Vec::new(), false),
-        };
-        let installed_roots = roots.len() as u64;
-        let resolution = mounts::resolve_access(
-            rw_bind,
-            &mounts
-                .iter()
-                .map(|mount| (mount.clone(), std::path::Path::new(&mount.path).is_dir()))
-                .collect::<Vec<_>>(),
-        );
-        anyhow::ensure!(
-            resolution.admitted,
-            "plugin {:?} cannot mount assets into a read-write call: this call writes; run it \
-             without mounted workflows",
-            self.plugin.name
-        );
-        let mut mounted = 0;
-        let mut project_tier = false;
-        for (mount, access) in mounts.iter().zip(&resolution.access) {
-            if access.is_none() {
-                continue;
-            }
-            mounted += 1;
-            project_tier |= mount.class == PROJECT_MOUNT_CLASS;
-            let root = PathBuf::from(&mount.path);
-            if !roots.contains(&root) {
-                roots.push(root);
-            }
-        }
-        manifold.fs = FsAccess::ReadOnly(roots);
-        let bound_input = bound
-            .and(self.plugin.bind_dir.as_ref())
-            .map(|binding| binding.input_field.clone());
-        let scope = PluginFilesystemScope::Mounted {
-            installed_roots: if bound.is_some() { 0 } else { installed_roots },
-            mounts: mounted,
-            project_tier,
-            bound_input,
-        };
-        Ok((arguments, manifold, Some(scope)))
     }
 
     pub(super) fn prepare_bound(
@@ -718,7 +614,6 @@ pub mod http_calls;
 pub mod install;
 pub mod job_calls;
 pub mod model_calls;
-pub mod mounts;
 mod rounds;
 mod service;
 pub(crate) mod source_runner;

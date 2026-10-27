@@ -908,10 +908,6 @@ mod tests {
         assert_eq!(manifest.metadata.kind, crate::pack::PackKind::Documents);
         let plugin = &manifest.metadata.plugins[0];
         assert!(plugin.job.0, "the workflow plugin runs jobs");
-        assert!(
-            plugin.asset_mounts.is_empty(),
-            "no mount: a script-less call is installed"
-        );
         for path in [
             "plugins/demo_flow/Cargo.toml",
             "plugins/demo_flow/source/main.rs",

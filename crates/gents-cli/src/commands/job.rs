@@ -7,7 +7,6 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use gents::background_tools::ProcessControlScope;
 use gents::config_client::ConfigAccess;
-use gents::plugin_job::admit::Refusal;
 use gents::plugin_job::control::control;
 use gents::plugin_job::dispatch::split_address;
 use gents::plugin_job::view::{list_jobs, load_job_view, JobFilter, JobKey, StateFilter};
@@ -178,16 +177,7 @@ fn failure_text(error: &JobReadError, session_id: &str) -> String {
 fn terminal_line(view: &JobView) -> Value {
     let progress = view.progress.as_ref();
     let pause_reason = progress.and_then(|progress| progress.pause_reason);
-    let outcome_code = view.outcome.as_ref().map(|outcome| outcome.code.as_str());
-    let next = next_calls(
-        view.state,
-        pause_reason,
-        outcome_code,
-        &view.address,
-        &view.handle,
-    )
-    .into_iter()
-    .next();
+    let next = next_calls(view.state, &view.address).into_iter().next();
     let mut line = json!({
         "state": state_name(view.state),
         "address": view.address,
@@ -372,7 +362,7 @@ pub(crate) fn control_lines(
                 state_name(state)
             )];
             lines.push("next:".to_owned());
-            for call in next_calls(state, None, None, &view.address, &clean(&view.handle)) {
+            for call in next_calls(state, &view.address) {
                 lines.push(format!("  {call}"));
             }
             Ok(lines)
@@ -549,47 +539,20 @@ fn ambiguous(selector: &str, candidates: &[&JobView]) -> anyhow::Error {
     )
 }
 
-/// The job's next calls, from the fixed `workflow` spelling. A host refusal code
-/// is compared through `Refusal::code()`; any other code is the engine's.
-pub fn next_calls(
-    state: JobState,
-    pause_reason: Option<JobPauseReason>,
-    outcome_code: Option<&str>,
-    address: &str,
-    handle: &str,
-) -> Vec<String> {
+/// The `gents job` calls that follow a job in `state`. How a paused or failed
+/// run is resumed is the plugin's own contract (its TOOL.md), not the host's.
+pub fn next_calls(state: JobState, address: &str) -> Vec<String> {
     match state {
         JobState::Running => vec![
             format!("gents job watch {address}"),
             format!("gents job stop {address}"),
         ],
-        JobState::Completed => vec![format!("workflow result {address}")],
-        JobState::Paused => {
-            let budget = match pause_reason {
-                Some(JobPauseReason::BudgetExceeded) => " --budget N",
-                Some(
-                    JobPauseReason::User
-                    | JobPauseReason::BackOff
-                    | JobPauseReason::NoProgress
-                    | JobPauseReason::Verification
-                    | JobPauseReason::Infra,
-                )
-                | None => "",
-            };
-            vec![format!("workflow resume {address}{budget}")]
-        }
-        JobState::AwaitingUser => vec![format!("workflow resume {address} --answer <text>")],
-        JobState::Failed | JobState::Cancelled | JobState::TimedOut => {
-            if outcome_code.is_some() && outcome_code == Refusal::EngineChanged.code() {
-                vec![format!("workflow resume {handle} --engine current")]
-            } else if outcome_code.is_some() && outcome_code == Refusal::StepFailed.code() {
-                vec![
-                    format!("workflow status {address}"),
-                    format!("workflow resume {address}"),
-                ]
-            } else {
-                vec![format!("workflow status {address}")]
-            }
+        JobState::Paused | JobState::AwaitingUser => vec![
+            format!("gents job show {address}"),
+            format!("gents job stop {address}"),
+        ],
+        JobState::Completed | JobState::Failed | JobState::Cancelled | JobState::TimedOut => {
+            vec![format!("gents job show {address}")]
         }
     }
 }
@@ -603,8 +566,7 @@ pub(crate) fn clean(text: &str) -> String {
 /// and metadata. A section whose source is an absent `progress` is omitted.
 fn show_lines(view: &JobView) -> Vec<String> {
     let progress = view.progress.as_ref();
-    let handle = clean(&view.handle);
-    let title = progress.map_or_else(|| handle.clone(), |progress| clean(&progress.title));
+    let title = progress.map_or_else(|| clean(&view.handle), |progress| clean(&progress.title));
     let mut lines = vec![format!("{}  {title}", state_name(view.state))];
     if let Some(outcome) = &view.outcome {
         lines.push(format!(
@@ -650,14 +612,7 @@ fn show_lines(view: &JobView) -> Vec<String> {
         lines.push(format!("question: {}", clean(question)));
     }
     lines.push("next:".to_owned());
-    let outcome_code = view.outcome.as_ref().map(|outcome| outcome.code.as_str());
-    for call in next_calls(
-        view.state,
-        pause_reason,
-        outcome_code,
-        &view.address,
-        &handle,
-    ) {
+    for call in next_calls(view.state, &view.address) {
         lines.push(format!("  {call}"));
     }
     lines.push("metadata:".to_owned());
@@ -985,51 +940,35 @@ mod tests {
 
     #[test]
     fn show_completed_names_workflow_result() {
-        let mut done = view("s1", "call-1", "alpha", JobState::Completed, 1);
-        done.progress = Some(progress());
-        let text = shown(&done);
-        assert!(text.contains("workflow result s1:call-1"), "{text}");
         assert_eq!(
-            next_calls(JobState::Completed, None, None, "s1:call-1", "alpha"),
-            ["workflow result s1:call-1"]
+            next_calls(JobState::Completed, "s1:call-1"),
+            ["gents job show s1:call-1"]
         );
     }
 
     #[test]
-    fn show_step_failed_names_status_then_resume() {
-        let code = Refusal::StepFailed.code();
+    fn show_step_failed_names_show() {
         assert_eq!(
-            next_calls(JobState::Failed, None, code, "s1:call-1", "alpha"),
-            ["workflow status s1:call-1", "workflow resume s1:call-1"]
+            next_calls(JobState::Failed, "s1:call-1"),
+            ["gents job show s1:call-1"]
         );
         let mut failed = view("s1", "call-1", "alpha", JobState::Failed, 1);
         failed.outcome = outcome(Refusal::StepFailed);
         let text = shown(&failed);
         assert!(text.contains("plugin_job_step_failed"), "{text}");
-        assert!(text.find("workflow status").unwrap() < text.find("workflow resume").unwrap());
     }
 
     #[test]
-    fn show_paused_budget_exceeded_names_resume_with_budget() {
+    fn show_paused_names_show_and_stop() {
         let mut paused = view("s1", "call-1", "alpha", JobState::Paused, 1);
         let mut p = progress();
         p.pause_reason = Some(JobPauseReason::BudgetExceeded);
         paused.progress = Some(p);
         let text = shown(&paused);
         assert!(text.contains("budget_exceeded"), "{text}");
-        assert!(
-            text.contains("workflow resume s1:call-1 --budget N"),
-            "{text}"
-        );
         assert_eq!(
-            next_calls(
-                JobState::Paused,
-                Some(JobPauseReason::User),
-                None,
-                "s1:call-1",
-                "alpha"
-            ),
-            ["workflow resume s1:call-1"]
+            next_calls(JobState::Paused, "s1:call-1"),
+            ["gents job show s1:call-1", "gents job stop s1:call-1"]
         );
     }
 
@@ -1041,24 +980,7 @@ mod tests {
         waiting.progress = Some(p);
         let text = shown(&waiting);
         assert!(text.contains("Which branch?"), "{text}");
-        assert!(
-            text.contains("workflow resume s1:call-1 --answer <text>"),
-            "{text}"
-        );
-    }
-
-    #[test]
-    fn show_engine_changed_names_engine_current() {
-        assert_eq!(
-            next_calls(
-                JobState::Failed,
-                None,
-                Refusal::EngineChanged.code(),
-                "s1:call-1",
-                "alpha"
-            ),
-            ["workflow resume alpha --engine current"]
-        );
+        assert!(text.contains("gents job show s1:call-1"), "{text}");
     }
 
     #[test]
@@ -1067,10 +989,9 @@ mod tests {
         let text = shown(&cancelled);
         assert!(text.contains("cancelled"), "{text}");
         assert!(!text.contains("outcome"), "{text}");
-        assert!(text.contains("workflow status s1:call-1"), "{text}");
         assert_eq!(
-            next_calls(JobState::Cancelled, None, None, "s1:call-1", "alpha"),
-            ["workflow status s1:call-1"]
+            next_calls(JobState::Cancelled, "s1:call-1"),
+            ["gents job show s1:call-1"]
         );
     }
 
@@ -1130,7 +1051,7 @@ mod tests {
             at("plan"),
             at("slot-a"),
             at("Which branch?"),
-            at("workflow resume"),
+            at("gents job show"),
             at("script"),
         ];
         assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
@@ -1139,11 +1060,11 @@ mod tests {
     #[test]
     fn next_calls_takes_pure_inputs_through_the_jobs_facade() {
         assert_eq!(
-            crate::jobs::next_calls(JobState::Completed, None, None, "s:t", "h"),
-            ["workflow result s:t"]
+            crate::jobs::next_calls(JobState::Completed, "s:t"),
+            ["gents job show s:t"]
         );
         assert_eq!(
-            next_calls(JobState::Running, None, None, "s:t", "h"),
+            next_calls(JobState::Running, "s:t"),
             ["gents job watch s:t", "gents job stop s:t"]
         );
     }
@@ -1236,20 +1157,20 @@ mod tests {
             line["budget"],
             serde_json::json!({"total": 5, "spent": 2, "remaining": 3})
         );
-        assert_eq!(line["next"], "workflow resume s1:call-1 --budget N");
+        assert_eq!(line["next"], "gents job show s1:call-1");
 
         let cancelled = terminal_line(&view("s1", "call-1", "alpha", JobState::Cancelled, 1));
         assert!(cancelled["outcome"].is_null());
         assert!(cancelled["spawned"].is_null());
         assert!(cancelled["budget"].is_null());
         assert!(cancelled.get("pause_reason").is_none());
-        assert_eq!(cancelled["next"], "workflow status s1:call-1");
+        assert_eq!(cancelled["next"], "gents job show s1:call-1");
 
         let mut done = view("s1", "call-1", "alpha", JobState::Completed, 1);
         done.outcome = outcome(Refusal::StepFailed);
         let line = terminal_line(&done);
         assert_eq!(line["outcome"]["code"], "plugin_job_step_failed");
-        assert_eq!(line["next"], "workflow result s1:call-1");
+        assert_eq!(line["next"], "gents job show s1:call-1");
     }
 
     #[tokio::test]
@@ -1320,15 +1241,8 @@ mod tests {
         let dirty = "a\x1b[2Jb\x07c\rd";
         let mut row = view("s1", "call-1", dirty, JobState::Failed, 1);
         row.pin.script_id = dirty.to_owned();
-        row.outcome = Some(JobOutcome {
-            code: Refusal::EngineChanged.code().unwrap_or_default().to_owned(),
-            message: String::new(),
-        });
         let untitled = show_lines(&row).join("\n");
-        assert!(
-            untitled.contains("workflow resume a[2Jbc d --engine current"),
-            "{untitled}"
-        );
+        assert!(untitled.contains("a[2Jbc d"), "{untitled}");
         row.state = JobState::AwaitingUser;
         let mut progress = progress();
         progress.title = dirty.to_owned();
@@ -1417,7 +1331,7 @@ mod tests {
         .unwrap();
         assert_eq!(lines[0], "cancelled  stop applied  2 children interrupted");
         assert!(
-            lines.contains(&"  workflow status s1:call-1".to_owned()),
+            lines.contains(&"  gents job show s1:call-1".to_owned()),
             "{lines:?}"
         );
     }

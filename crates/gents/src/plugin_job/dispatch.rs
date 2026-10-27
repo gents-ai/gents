@@ -2,7 +2,6 @@
 //! loop; an answer that is not a job ends the call there, and a refusal
 //! completes it failed with the host code and the call that follows.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -29,9 +28,7 @@ use super::driver::{
 };
 use super::effects::{stage_effects_in_txn, write_scratch, JobContext};
 use super::input::{build_step_input, CallArgs, StepKind};
-use super::origin::{
-    call_origin, engine_guard, engine_guard_next, script_index, scriptless, trusted_hint,
-};
+use super::origin::{call_origin, engine_guard, engine_guard_next};
 use super::records::{
     read_step_state, write_pin_in_txn, write_progress_in_txn, write_step_state_in_txn,
     HostProgressFacts,
@@ -46,7 +43,6 @@ use crate::hook::persistence::{
 };
 use crate::hook::DefraSessionHook;
 use crate::lifecycle::SessionMessageCause;
-use crate::pack::InstalledVia;
 use crate::plugin::data::DataCaller;
 use crate::plugin::data::StampContext;
 use crate::plugin::job_calls::JobCaller;
@@ -195,9 +191,7 @@ pub async fn run_step0(
     let row = read_step_row(&access, &row_doc_id).await?;
     let max_hop =
         crate::request_admission::max_request_hop(runtime.node.as_ref(), &caller.node_did).await?;
-    let mut ctx = step0_context(
-        runtime, binding, &installed, &input, &output, lifecycle, max_hop,
-    )?;
+    let mut ctx = step0_context(runtime, binding, &installed, &input, lifecycle, max_hop)?;
     ctx.control_targets = control_targets(&access, coordinate, &output).await?;
     if let Err(refusal) = admit_step(&ctx, &row, &output) {
         let (class, message, next) = step0_refusal(
@@ -490,7 +484,6 @@ fn args_digest(input: &JobStepInput) -> String {
     let call = json!({
         "argv": input.argv,
         "args": input.args,
-        "path": input.path,
         "script": input.script,
         "agent_budget": input.agent_budget,
     });
@@ -628,16 +621,7 @@ pub async fn adopt_step0(
                         .unwrap_or(u32::MAX);
                     }
                     let facts = HostFacts {
-                        origin: if scriptless(
-                            &input.argv,
-                            input.script.as_deref(),
-                            input.path.as_deref(),
-                        ) || ctx.installed_trusted_sources.contains(&guest.source_digest)
-                        {
-                            JobOrigin::Installed
-                        } else {
-                            JobOrigin::Dynamic
-                        },
+                        origin: call_origin(input.script.as_deref()),
                         ceiling_at_pin: ctx.live.clone(),
                         ..provisional
                     };
@@ -971,35 +955,11 @@ fn step0_context(
     binding: &JobBinding,
     installed: &InstalledPlugin,
     input: &JobStepInput,
-    output: &JobStepOutput,
     lifecycle: &ToolCallLifecycle,
     max_hop: Option<u32>,
 ) -> Result<StepContext> {
     let caller = &input.caller;
     let policy = binding.settings.as_ref().map(|settings| &settings.policy);
-    let cwd = (!caller.cwd.is_empty()).then(|| Path::new(&caller.cwd));
-    let index = script_index(&runtime.home, installed, policy, cwd)?;
-    let via: BTreeMap<&str, InstalledVia> = index
-        .installed_via
-        .iter()
-        .map(|(pack, via)| (pack.as_str(), *via))
-        .collect();
-    let installed_trusted_sources = index
-        .files
-        .iter()
-        .filter(|(_, pack, _, class)| trusted_hint(pack, class, &via, &index.trusted_packs))
-        .map(|(sha, ..)| sha.clone())
-        .collect();
-    let scriptless = scriptless(&input.argv, input.script.as_deref(), input.path.as_deref());
-    let origin = out_pin(output).map_or(JobOrigin::Dynamic, |guest| {
-        call_origin(
-            scriptless,
-            &guest.source_digest,
-            &index.files,
-            &via,
-            &index.trusted_packs,
-        )
-    });
     let live = effective_ceiling(binding.settings.as_ref());
     let facts = HostFacts {
         engine_digest: installed.digest.clone(),
@@ -1007,7 +967,7 @@ fn step0_context(
         cwd: caller.cwd.clone(),
         args_digest: String::new(),
         chain_root: input.job.row_doc_id.clone(),
-        origin,
+        origin: call_origin(input.script.as_deref()),
         adopted_at: 0,
         resume_of: None,
         replayed_from: None,
@@ -1021,7 +981,6 @@ fn step0_context(
         policy: policy.cloned().unwrap_or_default(),
         engine_digest: installed.digest.clone(),
         engine_provenance_operator: engine_guard(&runtime.home, installed).is_ok(),
-        installed_trusted_sources,
         max_hop,
         target_hops: Vec::new(),
         target_ids: Vec::new(),
@@ -1029,7 +988,6 @@ fn step0_context(
         started_by_job: caller.started_by_job,
         cwd_allowed: Vec::new(),
         within: Vec::new(),
-        named_origin: None,
         adoption_facts: facts.clone(),
         caller_scope: ProcessControlScope {
             request_id: caller.request_id.clone(),
@@ -1089,7 +1047,6 @@ mod tests {
             },
             engine_digest: "engine".to_owned(),
             engine_provenance_operator: true,
-            installed_trusted_sources: Vec::new(),
             max_hop: Some(8),
             target_hops: vec![(("node".to_owned(), "a".to_owned()), 0)],
             target_ids: vec![("a".to_owned(), ("node".to_owned(), "a".to_owned()))],
@@ -1097,7 +1054,6 @@ mod tests {
             started_by_job: false,
             cwd_allowed: Vec::new(),
             within: Vec::new(),
-            named_origin: None,
             adoption_facts: facts(),
             caller_scope: ProcessControlScope {
                 request_id: "request".to_owned(),
@@ -1122,7 +1078,6 @@ mod tests {
             call: StepCall {
                 argv: vec!["run".to_owned()],
                 args: None,
-                path: None,
                 script: None,
                 agent_budget: None,
             },

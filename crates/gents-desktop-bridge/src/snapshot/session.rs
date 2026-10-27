@@ -8,7 +8,7 @@ use gents::session::canonical_rows::TranscriptMessageRow;
 use gents_desktop_core::client::{
     CanonicalTranscriptDependencies, ClientCore, ClientStore, SessionTranscriptQueryPage,
 };
-use gents_protocol::job::{JobOutcome, JobProgress, JobState};
+use gents_protocol::job::{JobOutcome, JobState};
 use gents_protocol::message::Message;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::{AgentRequestRow, AgentToolCallRow};
@@ -648,8 +648,6 @@ async fn fill_job_outcomes(core: &ClientCore, snapshot: &mut DesktopSessionSnaps
             session_id,
             tool.tool_call_id.as_deref(),
             tool.job_state,
-            tool.job_progress.as_ref(),
-            tool.job_handle.as_deref(),
             &outcomes,
         ) {
             tool.job_outcome = outcome;
@@ -663,8 +661,6 @@ async fn fill_job_outcomes(core: &ClientCore, snapshot: &mut DesktopSessionSnaps
                     session_id,
                     tool.tool_call_id.as_deref(),
                     tool.job_state,
-                    tool.job_progress.as_ref(),
-                    tool.job_handle.as_deref(),
                     &outcomes,
                 ) {
                     tool.job_outcome = outcome;
@@ -703,19 +699,11 @@ fn job_row_fill(
     session_id: &str,
     tool_call_id: Option<&str>,
     state: Option<JobState>,
-    progress: Option<&JobProgress>,
-    handle: Option<&str>,
     outcomes: &RapidHashMap<String, JobOutcome>,
 ) -> Option<(Option<JobOutcome>, Vec<String>)> {
     let (state, tool_call_id) = (state?, tool_call_id?);
     let outcome = outcomes.get(tool_call_id).cloned();
-    let next_calls = gents_server::jobs::next_calls(
-        state,
-        progress.and_then(|progress| progress.pause_reason),
-        outcome.as_ref().map(|outcome| outcome.code.as_str()),
-        &format!("{session_id}:{tool_call_id}"),
-        handle.unwrap_or(tool_call_id),
-    );
+    let next_calls = gents_server::jobs::next_calls(state, &format!("{session_id}:{tool_call_id}"));
     Some((outcome, next_calls))
 }
 

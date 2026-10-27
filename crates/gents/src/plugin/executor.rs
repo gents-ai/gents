@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents_protocol::job::AssetMount;
 use gents_protocol::plugin::{
     PluginEnvironmentGrant, PluginExecutionAuthority, PluginExecutionLimits,
     PluginExecutionReceipt, PluginExecutionVerdict, PluginFilesystemGrant, PluginFilesystemScope,
@@ -128,18 +127,16 @@ pub(super) fn initial_receipt(
 fn authority(
     manifold: &Manifold,
     bound_field: Option<&str>,
-    mounted: Option<PluginFilesystemScope>,
     model: bool,
     http: Option<&http_calls::Session>,
     tools: bool,
 ) -> PluginExecutionAuthority {
     use afterburner_core::manifold::{EnvAccess, FsAccess, NetAccess};
-    let scope = |roots: &[PathBuf]| match (&mounted, bound_field) {
-        (Some(mounted), _) => mounted.clone(),
-        (None, Some(field)) => PluginFilesystemScope::BoundInput {
+    let scope = |roots: &[PathBuf]| match bound_field {
+        Some(field) => PluginFilesystemScope::BoundInput {
             field: field.to_owned(),
         },
-        (None, None) => PluginFilesystemScope::Installed {
+        None => PluginFilesystemScope::Installed {
             roots: roots.len() as u64,
         },
     };
@@ -630,16 +627,10 @@ impl PluginExecutor {
             } else {
                 calls.prepare_input(input.clone())?
             };
-            let mounts = match &self.home {
-                Some(home) if !record.declaration.asset_mounts.is_empty() => {
-                    super::mounts::resolve(home, record, None, None)?
-                }
-                _ => Vec::new(),
+            let (effective_input, manifold) = match bound.as_ref() {
+                Some(bound) => admitted.runner.prepare_bound(&first_input, bound)?,
+                None => (first_input.clone(), admitted.runner.manifold.clone()),
             };
-            let (effective_input, manifold, mounted) =
-                admitted
-                    .runner
-                    .prepare_mounted(&first_input, bound.as_ref(), &mounts)?;
             receipt.input_digest = json_digest(&effective_input);
             receipt.limits = Some(PluginExecutionLimits {
                 fuel: admitted.budget.fuel,
@@ -654,7 +645,6 @@ impl PluginExecutor {
             receipt.authority = Some(authority(
                 &manifold,
                 bound_field,
-                mounted,
                 calls.model.is_some(),
                 calls.http.as_ref(),
                 calls.tools.is_some(),
@@ -662,7 +652,7 @@ impl PluginExecutor {
             receipt.verdict = PluginExecutionVerdict::ExecutionError;
             let round = match script_of(&record.declaration, &input) {
                 Some(source) => script_round(source, &record.name),
-                None => artifact_round(admitted.runner.clone(), bound, mounts),
+                None => artifact_round(admitted.runner.clone(), bound),
             };
             let outcome = drive_with_calls(&coordinate, round, calls, input, admitted.budget)
             .await
@@ -807,7 +797,7 @@ async fn drive(
     };
     drive_with_calls(
         coordinate,
-        artifact_round(runner, bound, Vec::new()),
+        artifact_round(runner, bound),
         calls,
         input,
         budget,
@@ -815,13 +805,12 @@ async fn drive(
     .await
 }
 
-/// The round of an artifact: the compiled `.afb` over its bound directory and mounts.
-fn artifact_round(
-    runner: Arc<PluginRunner>,
-    bound: Option<BoundDir>,
-    mounts: Vec<AssetMount>,
-) -> rounds::Round {
-    Arc::new(move |input, budget| runner.call_mounted(&input, &budget, bound.as_ref(), &mounts))
+/// The round of an artifact: the compiled `.afb` over its bound directory.
+fn artifact_round(runner: Arc<PluginRunner>, bound: Option<BoundDir>) -> rounds::Round {
+    Arc::new(move |input, budget| match bound.as_ref() {
+        Some(bound) => runner.call_bound(&input, &budget, bound),
+        None => runner.call(&input, &budget),
+    })
 }
 
 /// The round of a `script_runtime` plugin whose call carries `script`: the
@@ -833,7 +822,7 @@ fn script_round(source: String, plugin: &str) -> rounds::Round {
 
 /// The `script` a call carries when `declaration` runs scripts; an empty or
 /// absent script runs the artifact (its non-job verbs). Whitespace is source
-/// (Lean `CallArgs.runsDynamicScript`), so the run and its digest see it.
+/// (Lean `CallArgs.carriesScript`), so the run and its digest see it.
 fn script_of(declaration: &crate::pack::PackPlugin, input: &serde_json::Value) -> Option<String> {
     declaration.script_runtime?;
     input

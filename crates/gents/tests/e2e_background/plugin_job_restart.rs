@@ -37,8 +37,6 @@ fn entry(when: Value, output: gents::plugin_job::job::JobStepOutput) -> PlanEntr
     PlanEntry {
         when,
         output,
-        note: false,
-        scratch: false,
         control: None,
     }
 }

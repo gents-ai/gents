@@ -363,51 +363,6 @@ inductive InstallProvenance where
   | selfConfig
   deriving DecidableEq, Repr
 
-/-- A mount is a pack's asset class or the project tier. -/
-inductive MountClass where
-  | pack (klass : String)
-  | project
-  deriving DecidableEq, Repr
-
-/-- One read-only preopen handed to a plugin call. `installed` means the pack's
-assets are materialized in the digest-addressed install cache. `files` holds
-the sha256 of each file in the mount, read natively from the install-cache
-index; it is model-only and never on the wire, where a mount is
-`{pack, class, digest, path, trusted}`. -/
-structure AssetMount where
-  klass : MountClass
-  pack : String
-  installDigest : String
-  path : String
-  installed : Bool
-  trusted : Bool
-  via : InstallProvenance
-  files : List String
-  deriving DecidableEq, Repr
-
-/-- A preopened project directory is an ordinary mount, spelled on the wire
-`{ pack: "", class: "project", digest: "", path, trusted: false }`, never
-`pack: "project"` or a separate field. It exists only by the operator's
-`project_roots` policy. -/
-def projectMount (path : String) : AssetMount :=
-  { klass := .project, pack := "", installDigest := "", path := path,
-    installed := false, trusted := false, via := .operator, files := [] }
-
-/-- Mounts are only ever read: an installed pack's class or the project tier. -/
-def mountAccess (m : AssetMount) : Option PluginAccess :=
-  if m.installed || decide (m.klass = .project) then some .read else none
-
-/-- The host preopens `<cwd>/.gents/workflows` and `<cwd>/.grok/workflows` only
-when `cwd` lies within a configured project root; no roots means no project tier. -/
-def projectPreopen (cwd : String) (projectRoots : List String)
-    (within : String → String → Bool) : Bool :=
-  projectRoots.any (within · cwd)
-
-/-- A call that combines a read-write bind with mounts is refused; project
-mounts are in the list. -/
-def mountCallAdmitted (rwBind : Bool) (mounts : List AssetMount) : Bool :=
-  !(rwBind && !mounts.isEmpty)
-
 def scratchMaxBytes : Nat := 1048576
 def scratchMaxFiles : Nat := 32
 
@@ -427,52 +382,6 @@ def scratchAdmitted (cwd : String) (cwdAllowed : String → Bool)
   let path := scratchRunDir cwd toolCallId ++ name
   if scratchName name && scratchName toolCallId && cwdAllowed path && decide (size ≤ scratchMaxBytes) &&
       decide (count ≤ scratchMaxFiles) then some path else none
-
-/-- A mount never grants write access, so a writing call through a mount is refused. -/
-theorem mount_read_only (m : AssetMount) (hasWriteFields : Bool) :
-    (∀ a, mountAccess m = some a → a = .read) ∧
-      pluginCallAdmitted .readWrite (mountAccess m) hasWriteFields true = false := by
-  unfold mountAccess
-  split
-  · exact ⟨fun _ h => (Option.some.inj h).symm,
-      plugin_writing_call_needs_read_write hasWriteFields⟩
-  · exact ⟨fun _ h => (nomatch h), rfl⟩
-
-/-- Every installed pack, of any kind, that ships any asset class is
-materialized at install into the digest-addressed cache, whatever plugins are
-installed, so the install order of content pack and engine does not matter.
-The native install path owns materialization; here a pack mount's access
-depends only on the pack's own install, never on another pack's. -/
-theorem mount_requires_install (m : AssetMount) (klass : String)
-    (h : m.klass = .pack klass) :
-    mountAccess m = if m.installed then some .read else none := by
-  simp [mountAccess, h]
-
-/-- A mount resolves only against the install record admitted at its digest. -/
-theorem mount_pinned_to_install_digest (m : AssetMount)
-    (record : PluginInvocation.Record) (bound : Option PluginInvocation.Record)
-    (h : PluginInvocation.admitted (some record) m.installDigest bound = true) :
-    record.digest = m.installDigest :=
-  PluginInvocation.admission_requires_pin record m.installDigest bound h
-
-theorem project_tier_off_by_default (cwd : String) (within : String → String → Bool) :
-    projectPreopen cwd [] within = false := rfl
-
-theorem project_tier_read_only (m : AssetMount) (h : m.klass = .project) :
-    mountAccess m = some .read := by
-  simp [mountAccess, h]
-
-/-- A project file is never trusted, so its origin is never an installed pack. -/
-theorem project_mount_never_trusted (path : String) :
-    (projectMount path).trusted = false ∧ (projectMount path).klass = .project ∧
-      (projectMount path).pack = "" ∧ (projectMount path).installDigest = "" :=
-  ⟨rfl, rfl, rfl, rfl⟩
-
-theorem rw_bind_with_mounts_refused (mounts : List AssetMount) (h : mounts ≠ []) :
-    mountCallAdmitted true mounts = false := by
-  cases mounts with
-  | nil => exact absurd rfl h
-  | cons _ _ => rfl
 
 theorem scratch_within_run_dir (cwd : String) (cwdAllowed : String → Bool)
     (toolCallId name : String) (size count : Nat) (path : String)

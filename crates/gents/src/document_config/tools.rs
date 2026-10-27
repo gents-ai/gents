@@ -1009,7 +1009,7 @@ fn union_into(list: &mut Vec<String>, items: &[String]) {
 }
 
 /// Merges `new` into `existing` without widening anything `existing` grants
-/// (targets and trusted packs are the additions); `project_roots` is never set.
+/// (targets and trusted packs are the additions).
 fn merge_job_blocks(
     existing: &gents_protocol::job::PluginJobSettings,
     new: &gents_protocol::job::PluginJobSettings,
@@ -1114,11 +1114,7 @@ pub fn wire_plugin(
             let merged = job.is_some();
             let mut block = match &job {
                 Some(existing) => merge_job_blocks(existing, &incoming),
-                None => {
-                    let mut fresh = incoming;
-                    fresh.policy.project_roots.clear();
-                    fresh
-                }
+                None => incoming,
             };
             for (pack, pack_targets, via) in targets_from {
                 (block.policy, block.agent_targets, agents.target_ids) =
@@ -1214,7 +1210,7 @@ pub fn wire_plugin(
 /// plugin entry still needs it (skills are not recorded per plugin, so any
 /// remaining plugin keeps them). With `targets_from`, keeps the plugin and
 /// removes only those packs' targets and trust entries; a block left without
-/// targets is dropped. `agents.enabled`, `policy.dynamic`, `project_roots` and
+/// targets is dropped. `agents.enabled`, `policy.dynamic` and
 /// `built_ins.p2p_collections` are never written: a P2P grant may back a live
 /// pairing or another plugin, so narrowing it stays an explicit Tools edit.
 pub fn unwire_plugin(
@@ -1439,10 +1435,6 @@ mod tests {
             (json!({"agent_targets":[]}), "job.agent_targets"),
             (json!({"agent_targets":["a"],"max_live":0}), "job.max_live"),
             (
-                json!({"agent_targets":["a"],"policy":{"project_roots":["rel"]}}),
-                "job.policy.project_roots",
-            ),
-            (
                 json!({"agent_targets":["a"],"policy":{"trusted_packs":["not a pack"]}}),
                 "job.policy.trusted_packs",
             ),
@@ -1586,7 +1578,6 @@ mod tests {
             );
             assert_eq!(block.policy.dynamic, DynamicMode::Check);
             assert!(block.policy.dynamic_targets.is_empty());
-            assert!(block.policy.project_roots.is_empty());
             assert_eq!(block.max_live, PluginJobSettings::DEFAULT_MAX_LIVE);
             assert_eq!(block.max_spawns, PluginJobSettings::DEFAULT_MAX_SPAWNS);
             assert_eq!(
@@ -1660,40 +1651,6 @@ mod tests {
             assert_eq!(block.max_wall_secs, 100);
             assert_eq!(block.policy.dynamic, DynamicMode::Off);
             assert_eq!(block.policy.dynamic_targets, strs(&["c"]));
-        }
-
-        #[test]
-        fn project_roots_untouched() {
-            let (mut tools, context) = start(None);
-            existing(
-                &mut tools,
-                job(json!({"agent_targets": ["a"], "policy": {"project_roots": ["/w"]}})),
-            );
-            let reviewed = job(json!({
-                "agent_targets": ["b"], "policy": {"project_roots": ["/elsewhere"]}
-            }));
-            let (tools, _, _) = wire_plugin(
-                &tools,
-                &context,
-                &installed(true, None),
-                Some(&reviewed),
-                &[],
-                &[],
-            )
-            .unwrap();
-            assert_eq!(block(&tools).unwrap().policy.project_roots, strs(&["/w"]));
-
-            let (fresh, context) = start(None);
-            let (fresh, _, _) = wire_plugin(
-                &fresh,
-                &context,
-                &installed(true, None),
-                Some(&reviewed),
-                &[],
-                &[],
-            )
-            .unwrap();
-            assert!(block(&fresh).unwrap().policy.project_roots.is_empty());
         }
 
         #[test]
@@ -1987,7 +1944,7 @@ mod tests {
         }
 
         #[test]
-        fn remove_never_changes_enabled_dynamic_or_project_roots() {
+        fn remove_never_changes_enabled_or_dynamic() {
             for (removed, dynamic_targets) in [("b", vec!["a"]), ("a", vec![])] {
                 let (mut tools, context) = start(Some(true));
                 tools.agents.as_mut().unwrap().target_ids = strs(&["a", "b"]);
@@ -1995,9 +1952,7 @@ mod tests {
                     &mut tools,
                     job(json!({
                         "agent_targets": ["a", "b"],
-                        "policy": {
-                            "dynamic": "run", "dynamic_targets": ["a"], "project_roots": ["/w"]
-                        }
+                        "policy": {"dynamic": "run", "dynamic_targets": ["a"]}
                     })),
                 );
                 let pack = (
@@ -2009,7 +1964,6 @@ mod tests {
                     unwire_plugin(&tools, &context, &installed(true, None), &[], &[pack]).unwrap();
                 let block = block(&tools).unwrap();
                 assert_eq!(block.policy.dynamic, DynamicMode::Run);
-                assert_eq!(block.policy.project_roots, strs(&["/w"]));
                 assert_eq!(block.policy.dynamic_targets, strs(&dynamic_targets));
                 assert_eq!(tools.agents.unwrap().enabled, Some(true));
             }

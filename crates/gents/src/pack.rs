@@ -1,7 +1,5 @@
 use anyhow::{Context, Result};
-use gents_protocol::job::{
-    AssetMountDeclaration, PluginCatalogDeclaration, PluginDataDeclaration, PluginJobDeclaration,
-};
+use gents_protocol::job::{PluginDataDeclaration, PluginJobDeclaration};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -145,14 +143,6 @@ pub struct PackPlugin {
     /// calls and writes may use; absent means it has no data access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<PluginDataDeclaration>,
-    /// The asset classes the plugin reads through read-only mounts; absent
-    /// means none.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub asset_mounts: Vec<AssetMountDeclaration>,
-    /// The argv of the plugin's catalog call; absent means it lists no
-    /// catalog.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub catalog: Option<PluginCatalogDeclaration>,
     /// When set, a call that carries `script` runs that source as the step
     /// through the host's embedded engine instead of the artifact (a job
     /// plugin only); absent means the artifact runs every call.
@@ -186,8 +176,6 @@ impl Default for PackPlugin {
             service: None,
             job: undeclared_job(),
             data: None,
-            asset_mounts: Vec::new(),
-            catalog: None,
             script_runtime: None,
         }
     }
@@ -738,7 +726,7 @@ impl PackPlugin {
         self.validate_job_manifest_fields()
     }
 
-    /// The static rules for the `data`, `asset_mounts` and `catalog` fields;
+    /// The static rules for the `data` field;
     /// checks against the archive itself belong to install.
     fn validate_job_manifest_fields(&self) -> Result<()> {
         let name = &self.name;
@@ -774,25 +762,6 @@ impl PackPlugin {
                      rename the field"
                 );
             }
-        }
-        let mut classes = BTreeSet::new();
-        for mount in &self.asset_mounts {
-            anyhow::ensure!(
-                asset_path::is_snake_case_name(&mount.class),
-                "plugin {name:?} asset_mounts class {:?} must be snake_case",
-                mount.class
-            );
-            anyhow::ensure!(
-                classes.insert(&mount.class),
-                "plugin {name:?} asset_mounts lists class {:?} twice; list each once",
-                mount.class
-            );
-        }
-        if let Some(catalog) = &self.catalog {
-            anyhow::ensure!(
-                !catalog.argv.is_empty() && catalog.argv.iter().all(|arg| !arg.is_empty()),
-                "plugin {name:?} catalog.argv must be non-empty and hold non-empty strings"
-            );
         }
         Ok(())
     }
@@ -1210,16 +1179,6 @@ mod tests {
             data.stamped.get("chain_root_doc_id"),
             Some(&StampedField::ChainRootDocId)
         );
-        assert_eq!(
-            plugin.asset_mounts,
-            [AssetMountDeclaration {
-                class: "fixture_assets".to_owned()
-            }]
-        );
-        assert_eq!(
-            plugin.catalog.map(|catalog| catalog.argv),
-            Some(vec!["catalog".to_owned()])
-        );
     }
 
     #[test]
@@ -1234,8 +1193,6 @@ mod tests {
         let plugin: PackPlugin = serde_json::from_value(plain.clone()).unwrap();
         assert_eq!(plugin.job, PluginJobDeclaration(false));
         assert!(plugin.data.is_none());
-        assert!(plugin.asset_mounts.is_empty());
-        assert!(plugin.catalog.is_none());
         assert_eq!(serde_json::to_value(&plugin).unwrap(), plain);
     }
 
@@ -1327,46 +1284,6 @@ mod tests {
             let message = refusal(&plugin);
             assert!(message.contains("format_check"), "{message}");
             assert!(message.contains(field), "{message}");
-        }
-    }
-
-    #[test]
-    fn asset_mount_classes_must_be_unique_snake_case() {
-        let mounts = |classes: &[&str]| PackPlugin {
-            asset_mounts: classes
-                .iter()
-                .map(|class| AssetMountDeclaration {
-                    class: (*class).to_owned(),
-                })
-                .collect(),
-            ..valid_plugin()
-        };
-        mounts(&["fixture_assets", "docs2"]).validate().unwrap();
-        for classes in [
-            &["Fixture"][..],
-            &[""][..],
-            &["a-b"][..],
-            &["a_b", "a_b"][..],
-        ] {
-            let message = refusal(&mounts(classes));
-            assert!(message.contains("format_check"), "{message}");
-            assert!(message.contains("asset_mounts"), "{message}");
-        }
-    }
-
-    #[test]
-    fn empty_catalog_argv_is_refused() {
-        let catalog = |argv: &[&str]| PackPlugin {
-            catalog: Some(PluginCatalogDeclaration {
-                argv: argv.iter().map(|arg| (*arg).to_owned()).collect(),
-            }),
-            ..valid_plugin()
-        };
-        catalog(&["catalog"]).validate().unwrap();
-        for argv in [&[][..], &["catalog", ""][..]] {
-            let message = refusal(&catalog(argv));
-            assert!(message.contains("format_check"), "{message}");
-            assert!(message.contains("catalog.argv"), "{message}");
         }
     }
 
