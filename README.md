@@ -57,10 +57,10 @@ and gets back the picture as an image part, `alt` (a description with each
 series' highest and lowest point), `series` (the numbers behind the marks) and
 `warnings`. `plugins/charts/TOOL.md` is what the model reads.
 
-## Use it as a graph node
+## Use it as a callback node
 
 Installing the pack also installs the plugin as two nodes, plain callbacks, so
-no model and no graph pack is needed: create a `ChartRequest` document and a
+no model is needed: create a `ChartRequest` document and a
 `ChartResult` appears.
 
 ```sh
@@ -101,9 +101,9 @@ non-null `save`, even an empty one, as a write.
 | `warnings` | what was reduced, left out or drawn as gaps |
 | `error` | the one-sentence reason when nothing could be drawn; the record still exists, so a run never stalls on a bad chart |
 
-A path in a graph request must be inside the server's working folder or an
+A path in a callback request must be inside the server's working folder or an
 allowed folder (`gents plugin dirs add <folder>`; `--access read_write` for a
-request that sets `save`): a graph node asks nobody and is refused with that
+request that sets `save`): a callback node asks nobody and is refused with that
 command otherwise. Unset fields are ignored; an empty `x_label`, `y_label` or
 `y2_label` still removes that label. The record carries the full-size PNG,
 not the 1568-pixel image a tool call shows.
@@ -131,7 +131,7 @@ ls reports   # revenue.svg  revenue.png  sales.csv
 ## Installation
 
 `gents pack install gents/charts` installs the Chart maker agent, its Tools
-document, the two graph nodes and the plugin, and binds the `chart_maker` inference slot to a
+document, the two callback nodes and the plugin, and binds the `chart_maker` inference slot to a
 profile (any capable one; a profile that accepts images also checks the
 picture). Nothing else needs configuring: there is no network, key or model
 download.
@@ -171,7 +171,7 @@ the chart types. In short:
   gents turns `parts` into an image the model and the desktop show.
   `response` has `chart`, `width`, `height`, `alt`, `series`, `warnings`, `png`
   (size), `svg` only for `output: "svg"`, and `files` when `save` is set.
-- A graph node returns one flat `ChartResult` (see above).
+- A callback node returns one flat `ChartResult` (see above).
 - `output` picks `both`, `svg` or `png`; `scale` sets the PNG density; the
   picture is at most 16 million pixels.
 
@@ -199,7 +199,7 @@ reply whose text stays under 45 KiB (the agent loop keeps only 50 KiB, so a
 longer SVG is left out with a warning) and whose image is at most 1568 pixels
 on its long side (Claude resizes larger ones to that and refuses any side over
 8000), the whole reply under 4 MiB (the PNG is drawn smaller past that), and a
-graph record under 2 MB (the SVG text is left out first, then the PNG is drawn
+callback record under 2 MB (the SVG text is left out first, then the PNG is drawn
 smaller). A table is read in one streaming pass and only the columns the chart
 names are kept, so memory follows the chart, not the file.
 
@@ -211,7 +211,7 @@ axis is logarithmic but column "v" has 1 values at or below zero (first is 0 in
 row 2); remove them or use a linear axis`, `the file looks binary, not CSV or
 JSON data`, `the chart is too small for its labels and legend; make it larger,
 shorten the labels or move the legend`. As a tool or CLI call the plugin exits
-non-zero with that sentence; as a graph node the sentence is the `error` of a
+non-zero with that sentence; as a callback node the sentence is the `error` of a
 `ChartResult`. Partial results are never silent: what a chart left out, reduced
 or could not draw is in `warnings`.
 
@@ -306,7 +306,7 @@ tar xzf lib.tgz && shasum -a 256 liberation-fonts-ttf-2.1.5/LiberationSans-{Regu
   deterministic; CSV and JSON round trips), and a mutation fuzzer that corrupts
   every fixture and every request with a fixed seed.
 - `plugins/charts/tests/*.json` are plugin cases with exact expected output (every chart type, every input
-  format, inline and bound modes, graph records, and the failures that come
+  format, inline and bound modes, callback records, and the failures that come
   back as records), run through the real WebAssembly host by `gents pack test`
   and natively by `cargo test`. The case format cannot expect a failed call, so
   failures of the tool itself are pinned by `cargo test`.

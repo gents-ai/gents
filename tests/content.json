@@ -51,7 +51,7 @@
     },
     {
       "name": "the README documents all three call paths with a command or call each",
-      "expr": "doc_text(\"README.md\") as $r | ($r | contains(\"## Use it as a model tool\")) and ($r | contains(\"## Use it as a graph node\")) and ($r | contains(\"gents plugin run charts \")) and ($r | contains(\"create_ChartRequest\"))"
+      "expr": "doc_text(\"README.md\") as $r | ($r | contains(\"## Use it as a model tool\")) and ($r | contains(\"## Use it as a callback node\")) and ($r | contains(\"gents plugin run charts \")) and ($r | contains(\"create_ChartRequest\"))"
     },
     {
       "name": "the font licence travels with the pack: names, source and both checksums",
