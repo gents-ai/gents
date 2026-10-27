@@ -4,6 +4,23 @@ All desktop crates and npm packages release together at `workspace.package.versi
 (lockstep train). The bundled frontend and Rust bridge use generated types and
 source consistency checks, not a separate runtime compatibility version.
 
+## Unreleased
+
+- `gents job promote <address|tool_call_id> --name <snake_case>` installs a
+  finished dynamic workflow run as a tool wired to its agent, so later calls
+  run the script as an `installed` job. The generated pack lives at
+  `<home>/packs/promoted/<name>`. It needs javy 8.1.1 to build the plugin
+  artifact.
+- The desktop run view has a Promote action on finished dynamic runs, and a
+  Workflows section under the node's Automation group lists the installed
+  workflow plugins and the dynamic scripts that ran, with run counts and the
+  tool names they became. A script that is already promoted offers no
+  second promotion. Only a completed run is promotable: a run that is still
+  live or ended failed, cancelled or timed out is refused with
+  `promote_not_completed` and a script with no completed run is not listed.
+- `JobChildRow.target` is reported by `gents job show --output json` and
+  carried in the desktop bindings.
+
 ## 0.21.0 - 2026-10-23
 
 - The desktop reads a session's transcript by message number, and one scroll

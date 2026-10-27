@@ -127,11 +127,12 @@ pub async fn promote(
     .await
 }
 
-/// Every dynamic script that ran, newest first: its runs and the tools it
-/// was promoted to.
+/// Every dynamic script with a completed run, newest first: its completed
+/// runs and the tools it was promoted to. Runs that failed, were cancelled or
+/// timed out are not promotable (`promote::gate`) and are left out.
 pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
     use gents::plugin_job::view::{list_jobs, JobFilter, StateFilter};
-    use gents_protocol::job::{JobOrigin, JobView};
+    use gents_protocol::job::JobView;
     let (access, home) = crate::resolve_config_access(Some(&home), None).await?;
     let views = list_jobs(
         &access,
@@ -148,7 +149,7 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
     let mut scripts: std::collections::BTreeMap<&str, Vec<&JobView>> = Default::default();
     for view in views
         .iter()
-        .filter(|view| view.pin.origin == JobOrigin::Dynamic)
+        .filter(|view| gents::plugin_job::promote::gate(view).is_ok())
     {
         scripts.entry(&view.pin.script_id).or_default().push(view);
     }
@@ -178,7 +179,20 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
         }));
     }
     workflows.sort_by_key(|workflow| std::cmp::Reverse(workflow["last_run_at"].as_u64()));
-    Ok(serde_json::json!({ "workflows": workflows }))
+    // Installed workflows are the home's job plugins, as Grok's `/workflows` lists them.
+    let installed: Vec<Value> = gents::plugin::store::list_records(&home)?
+        .into_iter()
+        .filter(|record| record.declaration.job.0)
+        .map(|record| {
+            serde_json::json!({
+                "plugin": format!("{}/{}", record.namespace, record.name),
+                "version": record.version,
+                "description": record.declaration.description,
+                "pack": record.owner_pack_coordinate,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({ "workflows": workflows, "installed": installed }))
 }
 
 /// One dynamic run, selected by its address (SESSION_ID:TOOL_CALL_ID) or tool
@@ -189,7 +203,6 @@ pub async fn dynamic_workflow(home: PathBuf, selector: String) -> Result<Value> 
     let view = crate::commands::job::resolve_job(&access, &actor, &selector, None).await?;
     let run = gents::plugin_job::promote::load_dynamic_run(
         &access,
-        &home,
         gents::plugin_job::view::JobKey::RowDocId(view.row_doc_id),
     )
     .await?;

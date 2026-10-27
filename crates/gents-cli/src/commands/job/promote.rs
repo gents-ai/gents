@@ -5,18 +5,18 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
+use gents::document_config::Tools;
 use gents::pack::authoring::check_dir;
 use gents::pack::authoring::test::run_plugin_cases;
 use gents::plugin_job::promote::{
-    generate_pack, load_dynamic_run, validate_name, write_promotion, PromoteRefusal,
+    generate_pack, load_dynamic_run, promoted_dir, validate_name, write_promotion, PromoteRefusal,
     PromotionRecord,
 };
 use gents::plugin_job::view::JobKey;
-use gents_protocol::job::{JobOrigin, JobView};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{resolve_job, ACTIVE_STATES};
+use super::resolve_job;
 use crate::cli::{PackDriftArgs, PackInstallArgs, ScopeArgs};
 use crate::commands::pack::wire::{wire_in, WireRequest};
 use crate::output_format::OutputFormat;
@@ -87,21 +87,13 @@ pub fn refusal_code(error: &anyhow::Error) -> Option<&'static str> {
 
 /// The run's handle as the tool name, when it is a pack name.
 pub fn default_name(handle: &str) -> Option<String> {
-    let mut chars = handle.chars();
-    let valid = chars.next().is_some_and(|first| first.is_ascii_lowercase())
-        && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_');
-    valid.then(|| handle.to_owned())
+    gents::pack::is_valid_pack_name(handle).then(|| handle.to_owned())
 }
 
-/// Refuses a run that is still live or did not run a dynamic script.
-fn gate(view: &JobView) -> Result<(), PromoteRefusal> {
-    if ACTIVE_STATES.contains(&view.state) {
-        return Err(PromoteRefusal::NotTerminal);
-    }
-    if view.pin.origin != JobOrigin::Dynamic {
-        return Err(PromoteRefusal::NotDynamic);
-    }
-    Ok(())
+/// Refuses an agent with no Tools document: wiring into it would fail after
+/// the install.
+fn require_agent_tools(agent: &str, tools: Option<Tools>) -> Result<Tools, PromoteRefusal> {
+    tools.ok_or_else(|| PromoteRefusal::NoAgentTools(agent.to_owned()))
 }
 
 fn javy_version() -> Result<String, JavyMissing> {
@@ -137,8 +129,7 @@ pub async fn promote(
 
     report(PromoteStep::Load);
     let view = resolve_job(access, actor, selector, None).await?;
-    gate(&view)?;
-    let run = load_dynamic_run(access, home, JobKey::RowDocId(view.row_doc_id)).await?;
+    let run = load_dynamic_run(access, JobKey::RowDocId(view.row_doc_id)).await?;
     let name = match name {
         Some(name) => name.to_owned(),
         None => default_name(&run.view.handle)
@@ -147,13 +138,22 @@ pub async fn promote(
     };
     validate_name(home, &name)?;
     let agent = agent.map_or_else(|| run.caller_agent_id.clone(), str::to_owned);
+    let tools = {
+        let (owner, agent_id) = (run.view.scope.node_did.clone(), agent.clone());
+        access
+            .transact_readonly("job.promote.agent_tools", move |txn| {
+                let (owner, agent_id) = (owner.clone(), agent_id.clone());
+                Box::pin(async move {
+                    gents::document_config::load_agent_tools_in_txn(txn, &owner, &agent_id).await
+                })
+            })
+            .await
+            .context("loading the agent's Tools")?
+    };
+    require_agent_tools(&agent, tools)?;
 
     report(PromoteStep::Generate);
-    let dir = std::path::absolute(
-        home.join(gents::home::PACKS_DIR_NAME)
-            .join("promoted")
-            .join(&name),
-    )?;
+    let dir = std::path::absolute(promoted_dir(home).join(&name))?;
     // `validate_name` passed, so a directory here is a failed attempt's leftover.
     if dir.exists() {
         std::fs::remove_dir_all(&dir)
@@ -212,22 +212,6 @@ pub async fn promote(
     .await
     .context("promote install failed")?;
 
-    report(PromoteStep::Wire);
-    let wire = wire_in(
-        access,
-        actor,
-        home,
-        &WireRequest {
-            plugin: pack.plugin.clone(),
-            agent,
-            targets_from: run.owners.clone(),
-            remove: false,
-            preview: false,
-        },
-    )
-    .await
-    .context("promote wire failed")?;
-
     let record = PromotionRecord {
         name: name.clone(),
         plugin: pack.plugin.clone(),
@@ -236,7 +220,33 @@ pub async fn promote(
         session_id: run.view.session_id.clone(),
         promoted_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     };
-    write_promotion(home, &record).context("promote record failed")?;
+    let recovery = format!(
+        "; the tool {plugin} is installed: finish with gents pack wire {plugin} --agent {agent}{owners}, \
+         or remove it with gents pack remove {plugin}",
+        plugin = pack.plugin,
+        owners = run
+            .owners
+            .iter()
+            .map(|owner| format!(" --targets-from {owner}"))
+            .collect::<String>(),
+    );
+    write_promotion(home, &record).with_context(|| format!("promote record failed{recovery}"))?;
+
+    report(PromoteStep::Wire);
+    let wire = wire_in(
+        access,
+        actor,
+        home,
+        &WireRequest {
+            plugin: pack.plugin.clone(),
+            agent: agent.clone(),
+            targets_from: run.owners.clone(),
+            remove: false,
+            preview: false,
+        },
+    )
+    .await
+    .with_context(|| format!("promote wire failed{recovery}"))?;
     Ok(PromoteReport {
         tool: name,
         plugin: pack.plugin,
@@ -252,7 +262,8 @@ pub async fn promote(
 mod tests {
     use super::*;
     use gents::config_client::GraphqlEndpoint;
-    use gents_protocol::job::{JobPinSummary, JobScope, JobState};
+    use gents::plugin_job::promote::gate;
+    use gents_protocol::job::{JobOrigin, JobPinSummary, JobScope, JobState, JobView};
 
     fn view(state: JobState, origin: JobOrigin) -> JobView {
         JobView {
@@ -348,10 +359,31 @@ mod tests {
     }
 
     #[test]
-    fn a_running_run_is_refused() {
-        for state in [JobState::Running, JobState::Paused, JobState::AwaitingUser] {
+    fn an_agent_without_tools_is_refused() {
+        let refusal = require_agent_tools("typo", None).unwrap_err();
+        assert_eq!(refusal, PromoteRefusal::NoAgentTools("typo".into()));
+        assert_eq!(refusal.code(), "promote_no_agent_tools");
+        assert!(refusal.to_string().contains("\"typo\""));
+        assert_eq!(
+            require_agent_tools("caller", Some(Tools::default())),
+            Ok(Tools::default())
+        );
+    }
+
+    #[test]
+    fn a_run_that_did_not_complete_is_refused() {
+        for state in [
+            JobState::Running,
+            JobState::Paused,
+            JobState::AwaitingUser,
+            JobState::Failed,
+            JobState::Cancelled,
+            JobState::TimedOut,
+        ] {
             let refusal = gate(&view(state, JobOrigin::Dynamic)).unwrap_err();
-            assert_eq!(refusal.code(), "promote_not_terminal");
+            assert_eq!(refusal, PromoteRefusal::NotCompleted(state));
+            assert_eq!(refusal.code(), "promote_not_completed");
+            assert!(refusal.to_string().contains("completed"), "{refusal}");
         }
     }
 }

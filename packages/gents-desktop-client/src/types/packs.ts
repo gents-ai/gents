@@ -9,6 +9,7 @@ export type { PackInstallRequest } from "../generated/PackInstallRequest.js";
 export type { PackWireRequest } from "../generated/PackWireRequest.js";
 export type { DynamicWorkflowsView as DynamicWorkflows } from "../generated/DynamicWorkflowsView.js";
 export type { DynamicWorkflowSummary } from "../generated/DynamicWorkflowSummary.js";
+export type { InstalledWorkflowSummary } from "../generated/InstalledWorkflowSummary.js";
 export type { DynamicWorkflowView as DynamicWorkflow } from "../generated/DynamicWorkflowView.js";
 export type { WorkflowPromoteRequest } from "../generated/WorkflowPromoteRequest.js";
 export type { WorkflowPromoteView as WorkflowPromoted } from "../generated/WorkflowPromoteView.js";

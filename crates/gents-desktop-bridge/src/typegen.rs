@@ -365,6 +365,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         crate::tauri_commands::packs::WorkflowPromoteRequest,
         DynamicWorkflowsView,
         DynamicWorkflowSummary,
+        InstalledWorkflowSummary,
         DynamicWorkflowView,
         WorkflowPromoteView,
         WorkflowPromotionRecord,
@@ -486,6 +487,7 @@ fn ts_rs_exports_tagged_enum_and_camel_case_structs() {
 
     for file in [
         "DynamicWorkflowsView.ts",
+        "InstalledWorkflowSummary.ts",
         "DynamicWorkflowView.ts",
         "WorkflowPromoteRequest.ts",
         "WorkflowPromoteView.ts",

@@ -1,8 +1,7 @@
 import type { ComponentType } from "react";
-import { SlidersHorizontal, Workflow, Wrench } from "lucide-react";
+import { SlidersHorizontal, Wrench } from "lucide-react";
 import { DeveloperPanel } from "./DeveloperPanel";
 import { GeneralPanel } from "./GeneralPanel";
-import { WorkflowsPanel } from "./WorkflowsPanel";
 
 export type SettingsSection = {
   id: string;
@@ -28,13 +27,6 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     label: "Developer",
     icon: Wrench,
     Panel: DeveloperPanel,
-  },
-  {
-    group: "App",
-    id: "workflows",
-    label: "Workflows",
-    icon: Workflow,
-    Panel: WorkflowsPanel,
   },
 ];
 

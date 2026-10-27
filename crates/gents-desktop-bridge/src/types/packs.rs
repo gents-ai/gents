@@ -202,6 +202,16 @@ pub struct WorkflowPromotionRecord {
 #[derive(Debug, Serialize, Deserialize, TS)]
 pub struct DynamicWorkflowsView {
     pub workflows: Vec<DynamicWorkflowSummary>,
+    pub installed: Vec<InstalledWorkflowSummary>,
+}
+
+/// One installed job plugin: a workflow that is already a pack.
+#[derive(Debug, Serialize, Deserialize, TS)]
+pub struct InstalledWorkflowSummary {
+    pub plugin: String,
+    pub version: String,
+    pub description: String,
+    pub pack: Option<String>,
 }
 
 /// One dynamic script that ran, with its runs and the tools it became.

@@ -27,7 +27,6 @@ pub struct DynamicRun {
     pub view: JobView,
     pub script: String,
     pub args: Option<Value>,
-    pub agent_budget: u32,
     /// The run's spawn targets plus the caller job block's `policy.dynamic_targets`.
     pub targets: Vec<String>,
     /// The caller job block's `policy.trusted_packs`: the packs that own the targets.
@@ -39,7 +38,9 @@ pub struct DynamicRun {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PromoteRefusal {
-    NotTerminal,
+    /// The run is not `Completed`: still live, or ended failed, cancelled
+    /// or timed out.
+    NotCompleted(JobState),
     NotDynamic,
     SourceDigestMismatch {
         pinned: String,
@@ -48,6 +49,8 @@ pub enum PromoteRefusal {
     NoTargetOwner,
     BadName(String),
     NameTaken(String),
+    /// The target agent has no Tools document to wire the tool into.
+    NoAgentTools(String),
     /// The run or its caller could not be read.
     Unreadable(String),
 }
@@ -55,12 +58,13 @@ pub enum PromoteRefusal {
 impl PromoteRefusal {
     pub fn code(&self) -> &'static str {
         match self {
-            Self::NotTerminal => "promote_not_terminal",
+            Self::NotCompleted(_) => "promote_not_completed",
             Self::NotDynamic => "promote_not_dynamic",
             Self::SourceDigestMismatch { .. } => "promote_source_digest_mismatch",
             Self::NoTargetOwner => "promote_no_target_owner",
             Self::BadName(_) => "promote_bad_name",
             Self::NameTaken(_) => "promote_name_taken",
+            Self::NoAgentTools(_) => "promote_no_agent_tools",
             Self::Unreadable(_) => "promote_unreadable",
         }
     }
@@ -69,7 +73,10 @@ impl PromoteRefusal {
 impl std::fmt::Display for PromoteRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotTerminal => f.write_str("the run has not finished; promote it once it is terminal"),
+            Self::NotCompleted(state) => write!(
+                f,
+                "the run is {state:?}, not completed; only a completed run can be promoted"
+            ),
             Self::NotDynamic => f.write_str("the run is not a dynamic script run, so there is no script to promote"),
             Self::SourceDigestMismatch { pinned, actual } => write!(
                 f,
@@ -83,6 +90,10 @@ impl std::fmt::Display for PromoteRefusal {
                 "{name:?} is not a pack name; use lowercase letters, digits and underscores, starting with a letter"
             ),
             Self::NameTaken(name) => write!(f, "gents/{name} is already a pack or plugin; choose another name"),
+            Self::NoAgentTools(agent) => write!(
+                f,
+                "agent {agent:?} has no Tools document to wire the tool into; pass an existing agent with --agent"
+            ),
             Self::Unreadable(message) => write!(f, "the run could not be read: {message}"),
         }
     }
@@ -90,31 +101,34 @@ impl std::fmt::Display for PromoteRefusal {
 
 impl std::error::Error for PromoteRefusal {}
 
+/// The run's `script_id`: sha256 of the script as the executor runs it,
+/// which is trimmed (`plugin::executor::script_of`).
+pub fn script_digest(script: &str) -> String {
+    format!("{:x}", Sha256::digest(script.trim().as_bytes()))
+}
+
 /// Reads the run at `key` as the node's operator and refuses one that is not a
-/// terminal dynamic run whose recorded script is the one it pinned.
+/// completed dynamic run whose recorded script is the one it pinned.
 pub async fn load_dynamic_run(
     access: &ConfigAccess,
-    _home: &Path,
     key: JobKey,
 ) -> Result<DynamicRun, PromoteRefusal> {
     let unreadable = |error: anyhow::Error| PromoteRefusal::Unreadable(format!("{error:#}"));
     let view = load_job_view(access, None, key)
         .await
         .map_err(|error| PromoteRefusal::Unreadable(error.to_string()))?;
-    if matches!(
-        view.state,
-        JobState::Running | JobState::Paused | JobState::AwaitingUser
-    ) {
-        return Err(PromoteRefusal::NotTerminal);
-    }
-    if view.pin.origin != JobOrigin::Dynamic {
-        return Err(PromoteRefusal::NotDynamic);
-    }
+    gate(&view)?;
     let row = crate::plugin_job::driver::read_step_row(access, &view.row_doc_id)
         .await
         .map_err(unreadable)?;
-    let script = row.call.script.ok_or(PromoteRefusal::NotDynamic)?;
-    let actual = format!("{:x}", Sha256::digest(script.as_bytes()));
+    let script = row
+        .call
+        .script
+        .as_deref()
+        .map(str::trim)
+        .ok_or(PromoteRefusal::NotDynamic)?
+        .to_owned();
+    let actual = script_digest(&script);
     if actual != view.pin.script_id {
         return Err(PromoteRefusal::SourceDigestMismatch {
             pinned: view.pin.script_id.clone(),
@@ -162,31 +176,56 @@ pub async fn load_dynamic_run(
         .and_then(|plugin| plugin.job)
         .map(|job| job.policy)
         .unwrap_or_default();
-    let targets: BTreeSet<String> = view
+    let children: Vec<String> = view
         .children
         .iter()
         .map(|child| child.target.clone())
-        .chain(policy.dynamic_targets)
         .collect();
+    let targets = effective_targets(&children, &policy.dynamic_targets, &ceiling.targets);
     Ok(DynamicRun {
-        agent_budget: view.pin.agent_budget,
         view,
         script,
         args,
-        targets: targets.into_iter().collect(),
+        targets,
         owners: policy.trusted_packs,
         ceiling,
         caller_agent_id: session.agent_id,
     })
 }
 
+/// Refuses a run that did not complete or did not run a dynamic script.
+pub fn gate(view: &JobView) -> Result<(), PromoteRefusal> {
+    if view.state != JobState::Completed {
+        return Err(PromoteRefusal::NotCompleted(view.state));
+    }
+    if view.pin.origin != JobOrigin::Dynamic {
+        return Err(PromoteRefusal::NotDynamic);
+    }
+    Ok(())
+}
+
+/// The run's spawn targets plus `dynamic_targets`, or the pin ceiling's
+/// targets when both are empty (a run that spawned nothing under a block with
+/// no `dynamic_targets`). The pin ceiling always carries the caller's wired
+/// targets, so the result is never empty for a run that pinned.
+pub fn effective_targets(
+    children: &[String],
+    dynamic_targets: &[String],
+    ceiling: &[String],
+) -> Vec<String> {
+    let union: BTreeSet<&String> = children.iter().chain(dynamic_targets).collect();
+    let chosen = if union.is_empty() {
+        ceiling.iter().collect()
+    } else {
+        union
+    };
+    chosen.into_iter().cloned().collect()
+}
+
 /// `name` is `^[a-z][a-z0-9_]*$` and not yet `gents/<name>` as an installed
 /// pack or plugin. A leftover `packs/promoted/<name>` directory does not take it.
 pub fn validate_name(home: &Path, name: &str) -> Result<(), PromoteRefusal> {
-    let mut chars = name.chars();
-    let well_formed = chars.next().is_some_and(|first| first.is_ascii_lowercase())
-        && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_');
-    if !well_formed {
+    if !crate::pack::is_valid_pack_name(name) {
         return Err(PromoteRefusal::BadName(name.to_owned()));
     }
     let coordinate = format!("{NAMESPACE}/{name}");
@@ -242,7 +281,7 @@ pub fn generate_pack(dir: &Path, name: &str, run: &DynamicRun) -> Result<Generat
         &JobGuestPin {
             source_digest: format!("sha256:{script_id}"),
             script_id,
-            agent_budget: run.agent_budget,
+            agent_budget: run.view.pin.agent_budget,
             handle: name.to_owned(),
         },
     );
@@ -250,7 +289,7 @@ pub fn generate_pack(dir: &Path, name: &str, run: &DynamicRun) -> Result<Generat
     let input = json!({
         "pin": null,
         "args": run.args.clone().unwrap_or_else(|| json!({})),
-        "agent_budget": run.agent_budget,
+        "agent_budget": run.view.pin.agent_budget,
         "children": {},
         "ceiling": {
             "targets": run.targets,
@@ -301,7 +340,7 @@ pub fn generate_pack(dir: &Path, name: &str, run: &DynamicRun) -> Result<Generat
          ## Output\n\n\
          A receipt `{{address, handle, status}}`; later the workflow's result.\n",
         address = run.view.address,
-        budget = run.agent_budget,
+        budget = run.view.pin.agent_budget,
     );
 
     let fixture_path = format!("{plugin_dir}/tests/00_step0.json");
@@ -392,8 +431,7 @@ pub struct PromotionRecord {
     pub promoted_at: String,
 }
 
-/// `<home>/packs/promoted`.
-fn promoted_dir(home: &Path) -> PathBuf {
+pub fn promoted_dir(home: &Path) -> PathBuf {
     home.join(crate::home::PACKS_DIR_NAME).join("promoted")
 }
 
@@ -432,13 +470,7 @@ pub fn list_promotions(home: &Path) -> Result<Vec<PromotionRecord>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::source_runner::SourceRunner;
-    use crate::plugin::{PluginBudget, PluginVerdict};
-    use gents_protocol::job::{
-        JobCeiling, JobGuestPin, JobOrigin, JobPinSummary, JobScope, JobState, JobView,
-    };
-    use serde_json::{json, Value};
-    use sha2::{Digest, Sha256};
+    use gents_protocol::job::{JobPinSummary, JobScope};
 
     const SPAWNING: &str = r#"module.exports = (i) => i.pin ? {effects:{}} : {effects:{spawn:[{slot:"a",attempt:0,target:"t",prompt:"p",title:"a"}]}};"#;
 
@@ -478,17 +510,19 @@ mod tests {
     }
 
     #[test]
-    fn wrap_script_leaves_a_step0_result_alone() {
-        let wrapped = wrap_script("module.exports = () => ({result: 1})", &guest_pin());
-        assert_eq!(run_js(wrapped, json!({"pin": null})), json!({"result": 1}));
-    }
-
-    #[test]
     fn wrap_script_captures_module_exports_before_the_harness_names() {
         let script = format!("const __fn = 1;\n{SPAWNING}");
         let output = run_js(wrap_script(&script, &guest_pin()), json!({"pin": null}));
         assert_eq!(output["effects"]["spawn"][0]["target"], "t");
         assert_eq!(output["effects"]["pin"]["handle"], "rome");
+    }
+
+    #[test]
+    fn a_trailing_newline_does_not_change_the_script_digest() {
+        assert_eq!(
+            script_digest("module.exports = (i) => i;\n"),
+            sha("module.exports = (i) => i;")
+        );
     }
 
     fn sha(text: &str) -> String {
@@ -530,7 +564,6 @@ mod tests {
             },
             script,
             args: Some(json!({"sides": ["a", "b"]})),
-            agent_budget: 8,
             targets: vec!["wf-read-only".into()],
             owners,
             ceiling: JobCeiling {
@@ -622,6 +655,42 @@ mod tests {
             error.downcast_ref::<PromoteRefusal>(),
             Some(PromoteRefusal::NoTargetOwner)
         ));
+    }
+
+    #[test]
+    fn effective_targets_falls_back_to_the_ceiling_only_when_the_union_is_empty() {
+        let s = |items: &[&str]| {
+            items
+                .iter()
+                .map(|&item| item.to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            effective_targets(&s(&["b", "a"]), &s(&["a"]), &s(&["c"])),
+            s(&["a", "b"])
+        );
+        assert_eq!(effective_targets(&[], &[], &s(&["c"])), s(&["c"]));
+    }
+
+    #[test]
+    fn generate_pack_uses_the_pin_ceiling_targets_when_the_run_spawned_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("rome");
+        let mut run = run(vec!["gents/dynamic_workflows".into()]);
+        run.script = "module.exports = () => ({result: 1})".into();
+        run.view.pin.script_id = sha(&run.script);
+        run.targets = effective_targets(&[], &[], &run.ceiling.targets);
+        let pack = generate_pack(&dir, "rome", &run).unwrap();
+        assert_eq!(pack.fixture["expect"], json!({"result": 1}));
+        let config = read_json(&dir.join("pack_config.json"));
+        let job = &config["tools"][0]["integrations"]["plugins"][0]["job"];
+        assert_eq!(job["agent_targets"], json!(["wf-read-only"]));
+        // `check_dir` stops at an unbuilt pack; this is the validation it runs once built.
+        let settings = crate::plugin_job::settings::parse(job.clone()).unwrap();
+        assert_eq!(
+            crate::plugin_job::settings::validate(&settings),
+            Vec::<String>::new()
+        );
     }
 
     #[test]

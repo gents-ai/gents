@@ -166,13 +166,21 @@ describe("JobProgressCell", () => {
     expect(jobControl).not.toHaveBeenCalled();
   });
 
-  it("offers Promote only on an ended dynamic run", () => {
+  it("offers Promote only on a completed dynamic run", () => {
     const { unmount } = renderIn(
       testApp({ selection: { sessionId: "session-1" } }),
       <JobProgressCell tool={row({ jobOrigin: "dynamic" })} />,
     );
     expect(screen.queryByRole("button", { name: "Promote" })).toBeNull();
     unmount();
+    for (const jobState of ["failed", "cancelled", "timed_out"] as const) {
+      const notCompleted = renderIn(
+        testApp({ selection: { sessionId: "session-1" } }),
+        <JobProgressCell tool={row({ jobState, jobOrigin: "dynamic" })} />,
+      );
+      expect(screen.queryByRole("button", { name: "Promote" })).toBeNull();
+      notCompleted.unmount();
+    }
     const ended = renderIn(
       testApp({ selection: { sessionId: "session-1" } }),
       <JobProgressCell tool={row({ jobState: "completed", jobOrigin: "installed" })} />,
@@ -182,6 +190,17 @@ describe("JobProgressCell", () => {
     const getDynamicWorkflow = vi.fn().mockReturnValue(new Promise(() => {}));
     mount(row({ jobState: "completed", jobOrigin: "dynamic" }), { getDynamicWorkflow });
     fireEvent.click(screen.getByRole("button", { name: "Promote" }));
+    expect(getDynamicWorkflow).toHaveBeenCalledWith("session-1:call-1");
+  });
+
+  it("drops Promote once the run's script has been promoted", async () => {
+    const getDynamicWorkflow = vi
+      .fn()
+      .mockResolvedValue({ promoted_as: ["gents/rome"] });
+    mount(row({ jobState: "completed", jobOrigin: "dynamic" }), { getDynamicWorkflow });
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Promote" })).toBeNull(),
+    );
     expect(getDynamicWorkflow).toHaveBeenCalledWith("session-1:call-1");
   });
 });

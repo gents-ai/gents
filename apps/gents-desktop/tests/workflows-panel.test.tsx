@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { DynamicWorkflowSummary } from "@source-inc/gents-desktop-client";
 
-import { WorkflowsPanel } from "../src/ui/screens/settings/WorkflowsPanel";
+import { WorkflowsPanel } from "../src/ui/screens/agent/WorkflowsPanel";
 import { renderIn, testApp } from "./app-fixture";
 
 const summary = (over: Partial<DynamicWorkflowSummary>): DynamicWorkflowSummary => ({
@@ -30,6 +30,14 @@ describe("WorkflowsPanel", () => {
           promoted_as: ["gents/triage", "gents/triage_v2"],
         }),
       ],
+      installed: [
+        {
+          plugin: "gents/review_changes",
+          version: "2.0.0",
+          description: "Review a diff through four lenses.",
+          pack: "gents/code_review",
+        },
+      ],
     });
     renderIn(testApp({ api: { listDynamicWorkflows } }), <WorkflowsPanel />);
     const rows = await screen.findAllByTestId("workflow-row");
@@ -38,7 +46,13 @@ describe("WorkflowsPanel", () => {
     expect(rows[0]!.textContent).toContain("3 runs");
     expect(rows[0]!.textContent).toContain("agent-1");
     expect(rows[1]!.textContent).toContain("1 run");
+    expect(within(rows[0]!).getByRole("button", { name: /Promote/ })).toBeTruthy();
+    expect(within(rows[1]!).queryByRole("button", { name: /Promote/ })).toBeNull();
+    const installed = screen.getAllByTestId("installed-workflow-row");
+    expect(installed).toHaveLength(1);
+    expect(installed[0]!.textContent).toContain("gents/review_changes");
+    expect(installed[0]!.textContent).toContain("gents/code_review");
+    expect(within(installed[0]!).queryByRole("button")).toBeNull();
     expect(rows[1]!.textContent).toContain("promoted as gents/triage, gents/triage_v2");
-    expect(within(rows[1]!).getByRole("button", { name: "Promote…" })).toBeTruthy();
   });
 });

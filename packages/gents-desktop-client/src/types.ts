@@ -176,6 +176,7 @@ export type {
   PackWireRequest,
   DynamicWorkflows,
   DynamicWorkflowSummary,
+  InstalledWorkflowSummary,
   DynamicWorkflow,
   WorkflowPromoteRequest,
   WorkflowPromoted,

@@ -3,7 +3,7 @@
    the progress record's, which stays "running" on an ended row. The next
    calls are the bridge's, printed as given. */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import type { JobControlKind } from "@source-inc/gents-desktop-client/generated/JobControlKind";
 import { Button } from "@gents/ui/components/button";
@@ -19,6 +19,7 @@ export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
   const { actions, drafts, stores, view } = useApp();
   const sessionId = stores.selection.use.sessionId();
   const [promoting, setPromoting] = useState(false);
+  const [promotedAs, setPromotedAs] = useState<string[]>([]);
   const state = tool.jobState;
   const progress = tool.jobProgress;
   const terminal =
@@ -26,6 +27,25 @@ export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
     state === "failed" ||
     state === "cancelled" ||
     state === "timed_out";
+  // Only a completed run is promotable; the host refuses the rest
+  // (`promote_not_completed`).
+  const promotable =
+    state === "completed" &&
+    tool.jobOrigin === "dynamic" &&
+    !!sessionId &&
+    !!tool.toolCallId;
+  const selector = `${sessionId}:${tool.toolCallId}`;
+  useEffect(() => {
+    if (!promotable) return;
+    let current = true;
+    actions.getDynamicWorkflow(selector).then(
+      (run) => current && setPromotedAs(run.promoted_as),
+      () => {},
+    );
+    return () => {
+      current = false;
+    };
+  }, [actions, promotable, selector]);
   const control = (action: JobControlKind) => {
     if (!tool.toolCallDocId || !tool.nodeDid) return;
     actions
@@ -133,17 +153,20 @@ export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
               ? `${tool.jobOutcome.code}: ${tool.jobOutcome.message}`
               : words(state)}
           </p>
-          {tool.jobOrigin === "dynamic" && sessionId && tool.toolCallId && (
+          {promotable && promotedAs.length === 0 && (
             <Button size="sm" variant="outline" onClick={() => setPromoting(true)}>
               Promote
             </Button>
           )}
         </div>
       )}
-      {promoting && sessionId && tool.toolCallId && (
+      {promoting && (
         <PromoteWorkflowDialog
-          selector={`${sessionId}:${tool.toolCallId}`}
-          onClose={() => setPromoting(false)}
+          selector={selector}
+          onClose={(promoted) => {
+            setPromoting(false);
+            if (promoted) setPromotedAs([promoted.tool]);
+          }}
         />
       )}
       {!!tool.jobNextCalls?.length && (

@@ -88,6 +88,17 @@ describe("PromoteWorkflowDialog", () => {
     });
   });
 
+  it("offers only Done on a run whose script is already promoted", async () => {
+    const run = { ...workflow("rome_debate"), promoted_as: ["gents/rome_debate"] };
+    mount({ getDynamicWorkflow: vi.fn().mockResolvedValue(run) });
+    expect((await screen.findByTestId("promote-already")).textContent).toContain(
+      "gents/rome_debate",
+    );
+    expect(screen.queryByRole("textbox", { name: "Tool name" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Promote" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Done" })).toBeTruthy();
+  });
+
   it("shows a refusal's message in place of the button and no install link", async () => {
     // the bridge folds a facade error into one message, its code first
     const message = "promote_javy_missing: javy is not on PATH";

@@ -417,7 +417,6 @@ mod tests {
             },
             script: script.into(),
             args: Some(serde_json::json!({"sides": ["a", "b"]})),
-            agent_budget: 8,
             targets: vec!["wf-read-only".into()],
             owners: vec!["gents/dynamic_workflows".into()],
             ceiling: JobCeiling {
