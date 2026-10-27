@@ -29,14 +29,13 @@ pub fn awaiting_goal_question_ids(
     ) else {
         return Vec::new();
     };
-    let assigned = members
-        .entry
-        .input
-        .as_ref()
-        .and_then(|input| input.goal_assignment.as_ref());
     if members.entry.doc_id.is_none()
         || members.entry.doc_id != goal.assignment_root_request_doc_id
-        || !assigned.is_some_and(|reference| reference.goal_id == goal.snapshot.goal_id)
+        || !super::request_assignment::entry_matches_assignment(
+            &goal.snapshot.goal_id,
+            goal.assignment_root_request_doc_id.as_deref(),
+            members.entry,
+        )
     {
         return Vec::new();
     }

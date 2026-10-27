@@ -36,7 +36,7 @@ async fn question_wait_requires_the_authenticated_current_goal_assignment() {
     row["_docID"] = json!("physical-root");
     row["admission_kind"] = json!(request.admission.kind.as_str());
     row["admission_signer_did"] = json!(request.admission.signer_did);
-    row["admission_signature"] = json!(bs58::encode(request.admission.signature).into_string());
+    row["admission_signature"] = json!(bs58::encode(&request.admission.signature).into_string());
     row["lifecycle_state"] = json!("completed");
     let root: AgentRequestRow = serde_json::from_value(row).unwrap();
     let goal: gents::goal::GoalDocument = serde_json::from_value(json!({
@@ -76,6 +76,8 @@ async fn question_wait_requires_the_authenticated_current_goal_assignment() {
     })).unwrap();
     for fault in [
         "none",
+        "created-in-turn",
+        "wrong-physical-reference",
         "foreign-row",
         "old-assignment",
         "other-goal",
@@ -90,6 +92,25 @@ async fn question_wait_requires_the_authenticated_current_goal_assignment() {
         let mut latest = latest.clone();
         let mut requests = vec![root.clone()];
         match fault {
+            "created-in-turn" | "wrong-physical-reference" => {
+                let mut signed = request.clone();
+                signed.input.goal_assignment = if fault == "created-in-turn" {
+                    None
+                } else {
+                    Some(GoalAssignmentInput {
+                        goal_id: "goal".into(),
+                        root_request_doc_id: Some("other-root".into()),
+                    })
+                };
+                signed.admission.signature =
+                    identity.sign(&signed.signing_payload()).await.unwrap();
+                let mut row = serde_json::to_value(&requests[0]).unwrap();
+                row["_docID"] = json!(requests[0].doc_id);
+                row["input"] = serde_json::to_value(&signed.input).unwrap();
+                row["admission_signature"] =
+                    json!(bs58::encode(signed.admission.signature).into_string());
+                requests[0] = serde_json::from_value(row).unwrap();
+            }
             "foreign-row" => {
                 let mut foreign = root.clone();
                 foreign.node_did = Some("other-node".into());
@@ -128,7 +149,7 @@ async fn question_wait_requires_the_authenticated_current_goal_assignment() {
         );
         assert_eq!(
             actual,
-            if matches!(fault, "none" | "foreign-row") {
+            if matches!(fault, "none" | "foreign-row" | "created-in-turn") {
                 vec!["question".to_string()]
             } else {
                 Vec::new()
