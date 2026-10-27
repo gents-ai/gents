@@ -8,6 +8,7 @@ pub const PROMPT: &str = "Ask me which worker approach to use.";
 pub const EDITED_PROMPT: &str = "Inspect only the parser and report QUESTION_WORKER_EDGE_CASES.";
 pub const ANSWER_USED: &str = "Using your edited worker prompt.";
 pub const WORKER_REPLY: &str = "QUESTION_WORKER_EDGE_CASES inspected.";
+pub const GOAL_REPLY: &str = "The answered question goal continued automatically.";
 
 pub fn reply(request: &Value) -> Option<ChatAction> {
     let messages = request["messages"].as_array()?;
@@ -29,6 +30,16 @@ pub fn reply(request: &Value) -> Option<ChatAction> {
             .iter()
             .any(|message| message["role"] == "tool" && message["tool_call_id"] == id)
     };
+    if content.contains(&format!(
+        "<goal-objective-json>{}",
+        serde_json::to_string(PROMPT).ok()?
+    )) {
+        return Some(ChatAction::Sse(if returned("question-goal-complete") {
+            fake_llm::completion_text_sse(GOAL_REPLY)
+        } else {
+            fake_llm::tool_call_sse_with_id("question-goal-complete", "update_goal", &json!({"status":"complete", "reason":"The chosen worker received the edited instructions."}).to_string())
+        }));
+    }
     if content.contains(EDITED_PROMPT) {
         if !content.contains("Decision on Worker approach:") {
             return Some(ChatAction::Sse(fake_llm::completion_text_sse(WORKER_REPLY)));
@@ -151,7 +162,54 @@ pub async fn verify(
             && worker.lifecycle_state == Some(RequestLifecycleState::Completed),
         "delegation must use the existing authenticated tool owner after the answer"
     );
+    let goal_rows = access.execute(&format!("{{ Goal(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ {} }} AgentSessionGoalControl(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ intent_json }} }}", escape(node), escape(session), gents::goal::GOAL_FIELDS, escape(node), escape(session))).await?;
+    let goals = goal_rows["data"]["Goal"]
+        .as_array()
+        .context("question Goal rows")?;
+    let [goal] = goals.as_slice() else {
+        anyhow::bail!("expected one question Goal");
+    };
+    ensure!(
+        goal["status"] == "complete"
+            && goal["assignment_root_request_doc_id"].as_str() == parent.doc_id.as_deref(),
+        "answer must complete the original Goal assignment"
+    );
+    let continuations: Vec<_> = rows
+        .iter()
+        .filter(|row| {
+            row.session_id.as_deref() == Some(session)
+                && row
+                    .input
+                    .as_ref()
+                    .is_some_and(|input| input.goal_continuation.is_some())
+        })
+        .collect();
+    let [continuation] = continuations.as_slice() else {
+        anyhow::bail!("expected exactly one automatic continuation after answering");
+    };
+    gents::verify_request_receipt_signature(continuation)?;
+    ensure!(
+        continuation.caused_by_parent_request_doc_id == answer.doc_id
+            && continuation.lifecycle_state == Some(RequestLifecycleState::Completed),
+        "the Goal must continue from the signed answer without pause/resume or duplicate work"
+    );
+    let controls = goal_rows["data"]["AgentSessionGoalControl"]
+        .as_array()
+        .context("question Goal controls")?;
+    ensure!(
+        controls.len() == 1,
+        "only the initial Goal creation is expected"
+    );
+    let intent: Value = serde_json::from_str(
+        controls[0]["intent_json"]
+            .as_str()
+            .context("Goal control intent")?,
+    )?;
+    ensure!(
+        intent["operation"]["kind"] == "create",
+        "the Goal must resume without an explicit pause or resume"
+    );
     Ok(
-        json!({"question":question.doc_id,"answer":answer.doc_id,"worker":worker.doc_id,"signedSourceVerified":true,"editedPromptUsedByWorker":true}),
+        json!({"question":question.doc_id,"answer":answer.doc_id,"worker":worker.doc_id,"goal":goal["goal_id"],"signedSourceVerified":true,"editedPromptUsedByWorker":true,"automaticGoalContinuationVerified":true}),
     )
 }
