@@ -660,15 +660,11 @@ impl PluginExecutor {
                 calls.tools.is_some(),
             ));
             receipt.verdict = PluginExecutionVerdict::ExecutionError;
-            let outcome = drive_with_calls(
-                &coordinate,
-                admitted.runner.clone(),
-                calls,
-                input,
-                admitted.budget,
-                bound,
-                mounts,
-            )
+            let round = match script_of(&record.declaration, &input) {
+                Some(source) => script_round(source, &record.name),
+                None => artifact_round(admitted.runner.clone(), bound, mounts),
+            };
+            let outcome = drive_with_calls(&coordinate, round, calls, input, admitted.budget)
             .await
             .inspect_err(|error| {
                 if error.downcast_ref::<super::GuestTrap>().is_some() {
@@ -809,21 +805,51 @@ async fn drive(
         data: None,
         jobs: None,
     };
-    drive_with_calls(coordinate, runner, calls, input, budget, bound, Vec::new()).await
+    drive_with_calls(
+        coordinate,
+        artifact_round(runner, bound, Vec::new()),
+        calls,
+        input,
+        budget,
+    )
+    .await
+}
+
+/// The round of an artifact: the compiled `.afb` over its bound directory and mounts.
+fn artifact_round(
+    runner: Arc<PluginRunner>,
+    bound: Option<BoundDir>,
+    mounts: Vec<AssetMount>,
+) -> rounds::Round {
+    Arc::new(move |input, budget| runner.call_mounted(&input, &budget, bound.as_ref(), &mounts))
+}
+
+/// The round of a `script_runtime` plugin whose call carries `script`: the
+/// source runs as the step through the host's embedded engine.
+fn script_round(source: String, plugin: &str) -> rounds::Round {
+    let runner = super::source_runner::SourceRunner::new(source, plugin);
+    Arc::new(move |input, budget| runner.call(&input, &budget))
+}
+
+/// The `script` a call carries when `declaration` runs scripts; a blank or
+/// absent script runs the artifact (its non-job verbs).
+fn script_of(declaration: &crate::pack::PackPlugin, input: &serde_json::Value) -> Option<String> {
+    declaration.script_runtime?;
+    input
+        .get("script")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|script| !script.is_empty())
+        .map(str::to_owned)
 }
 
 async fn drive_with_calls(
     coordinate: &str,
-    runner: Arc<PluginRunner>,
+    round: rounds::Round,
     calls: HostCalls,
     input: serde_json::Value,
     budget: PluginBudget,
-    bound: Option<BoundDir>,
-    mounts: Vec<AssetMount>,
 ) -> Result<PluginOutcome> {
-    let round: rounds::Round = Arc::new(move |input, budget| {
-        runner.call_mounted(&input, &budget, bound.as_ref(), &mounts)
-    });
     if calls.is_empty() {
         tokio::task::spawn_blocking(move || round(input, budget))
             .await

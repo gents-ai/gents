@@ -373,14 +373,16 @@ def admitNonJob (ctx : StepContext) (job : Job) : StepOutput → Except Refusal 
 `import`, which checks the file it binds. -/
 def scriptVerbs : List String := ["run", "check", "import"]
 
-/-- A call runs dynamic script code when a script verb carries its source with
-the call: a nonempty inline `script` or `path`. Empty optional strings carry
-no source bytes; whitespace remains source and is never trimmed. A pinless call presents no source
-digest, so the host treats a carried source as dynamic. A named run of an
-installed script and the workflow control, status, result and help verbs
-carry neither. -/
+/-- A call runs dynamic script code when it carries its source with the call:
+a non-empty inline `script`, which the host runs whatever the `argv`, or a
+non-empty `path` under a script verb. Empty optional strings carry no source
+bytes; whitespace remains source and is never trimmed. A pinless call presents
+no source digest, so the host treats a carried source as dynamic. A named run
+of an installed script and the workflow control, status, result and help
+verbs carry neither. -/
 def CallArgs.runsDynamicScript (c : CallArgs) : Bool :=
-  c.argv.head?.any scriptVerbs.contains && (c.script.any (fun source => !source.isEmpty) || c.path.any (fun source => !source.isEmpty))
+  c.script.any (!·.isEmpty) ||
+    (c.argv.head?.any scriptVerbs.contains && c.path.any (!·.isEmpty))
 
 theorem empty_source_fields_preserve_dynamic_classification (c : CallArgs) :
     ({ c with script := some "", path := some "" }).runsDynamicScript =

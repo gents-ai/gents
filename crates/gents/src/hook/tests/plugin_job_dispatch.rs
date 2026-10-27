@@ -34,6 +34,8 @@ struct Options {
     /// Later steps of an adopted job end without effect and leave it running,
     /// instead of failing on a refused scratch file.
     idle: bool,
+    /// The plugin runs a call's `script` as its step (`script_runtime: js`).
+    script: bool,
 }
 
 /// The job block of `team/plugin` in the caller's Tools: it may start `worker`.
@@ -61,6 +63,7 @@ impl Default for Options {
             hop: 0,
             cwd: false,
             idle: false,
+            script: false,
         }
     }
 }
@@ -134,6 +137,7 @@ fn install_plugin(
     data: bool,
     via: InstalledVia,
     idle: bool,
+    script: bool,
 ) {
     let later = if idle {
         json!({"effects": {}})
@@ -149,6 +153,9 @@ fn install_plugin(
         class: "workflows".into(),
     }];
     record.owner_pack_coordinate = Some("team/plugin".into());
+    if script {
+        record.declaration.script_runtime = Some(crate::pack::ScriptRuntime::Js);
+    }
     if data {
         record.declaration.data = Some(PluginDataDeclaration {
             collections: vec!["Plain".into()],
@@ -224,6 +231,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
         options.data,
         options.via,
         options.idle,
+        options.script,
     );
     let cwd = options.cwd.then(|| tempfile::tempdir().unwrap());
 
@@ -432,7 +440,14 @@ impl Step0 {
 
     /// Replaces the installed plugin, as an operator reinstall does.
     fn reinstall(&self, output: &Value) {
-        install_plugin(self.home.path(), output, self.data, self.via, self.idle);
+        install_plugin(
+            self.home.path(),
+            output,
+            self.data,
+            self.via,
+            self.idle,
+            false,
+        );
     }
 
     /// The requests whose retry key names a spawn of the job rooted at `root`.
@@ -920,6 +935,65 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
     step.finish().await;
 }
 
+/// A `script_runtime: js` plugin runs the call's `script` as its step: a step-0
+/// spawn adopts with the host's pin (the script's digest), the run is `dynamic`,
+/// and the job policy applies to it like any dynamic origin.
+#[tokio::test]
+async fn a_js_script_step_adopts_with_the_hosts_pin_as_a_dynamic_run() {
+    let step = step0(
+        adopting(),
+        Options {
+            script: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let script = "module.exports = (i) => i.pin ? {effects: {}} : {effects: {spawn: [{slot: \"s\", attempt: 0, target: \"t-worker\", prompt: \"go\", title: \"t\"}]}};";
+    let call = json!({"script": script, "agent_budget": 2, "args": {"handle": "js-run"}});
+    let answer = step.call_as("call-1", &call.to_string()).await;
+    assert_eq!(answer["status"], "running", "{answer}");
+    let row = step.row_of("call-1").await;
+    let pin = step.pin_of(&row).await;
+    let digest = format!(
+        "{:x}",
+        <sha2::Sha256 as sha2::Digest>::digest(script.as_bytes())
+    );
+    assert_eq!(pin.script_id, digest);
+    assert_eq!(pin.source_digest, format!("sha256:{digest}"));
+    assert_eq!(pin.origin, gents_protocol::job::JobOrigin::Dynamic);
+    assert_eq!(pin.agent_budget, 2);
+    assert_eq!(pin.handle, "js-run");
+    let child = step
+        .child_request(row["_docID"].as_str().unwrap(), "s")
+        .await;
+    assert!(
+        child["request_id"].is_string(),
+        "the spawn became a child request: {child}"
+    );
+    step.finish().await;
+}
+
+/// Under `policy.dynamic: check` the script's first spawn is refused like any dynamic run.
+#[tokio::test]
+async fn a_js_script_spawn_is_refused_under_the_check_policy() {
+    let step = step0(
+        adopting(),
+        Options {
+            script: true,
+            settings: Some(worker_settings(JobPolicy {
+                dynamic: DynamicMode::Check,
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    let call = json!({"script": "module.exports = (i) => ({effects: {spawn: [{slot: \"s\", attempt: 0, target: \"t-worker\", prompt: \"go\", title: \"t\"}]}});", "agent_budget": 2});
+    let answer = step.call_as("call-1", &call.to_string()).await;
+    assert_eq!(answer["code"], "plugin_job_policy_denied", "{answer}");
+    step.finish().await;
+}
+
 /// A step 0 that adopts a job and asks to resume `row`.
 fn resuming(row: &str) -> Value {
     json!({"effects": {
@@ -1055,10 +1129,27 @@ async fn adopted_origin_follows_classify() {
         },
     )
     .await;
+    install_trusted_script(&step, SCRIPT);
+    step.call_as("call-1", ARGS).await;
+    assert_eq!(
+        step.pin_of(&step.row_of("call-1").await).await.origin,
+        gents_protocol::job::JobOrigin::Installed
+    );
+    step.reinstall(&adopting());
+    step.call_as("call-2", ARGS).await;
+    assert_eq!(
+        step.pin_of(&step.row_of("call-2").await).await.origin,
+        gents_protocol::job::JobOrigin::Dynamic
+    );
+    step.finish().await;
+}
+
+/// Installs `script` as a workflow file of the operator pack `acme/op`.
+fn install_trusted_script(step: &Step0, script: &[u8]) {
     let assets = "packs/.materialized/acme/op/22";
     let dir = step.home.path().join(assets).join("workflows");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("flow.rhai"), SCRIPT).unwrap();
+    std::fs::write(dir.join("flow.rhai"), script).unwrap();
     write_home_install(
         step.home.path(),
         &HomePackInstall {
@@ -1075,17 +1166,66 @@ async fn adopted_origin_follows_classify() {
         },
     )
     .unwrap();
-    step.call_as("call-1", ARGS).await;
-    assert_eq!(
-        step.pin_of(&step.row_of("call-1").await).await.origin,
-        gents_protocol::job::JobOrigin::Installed
+}
+
+/// A JS script cannot name a trusted file's digest as its own: the host pins
+/// the digest of the source that ran, so the run stays dynamic.
+#[tokio::test]
+async fn a_js_script_cannot_forge_a_trusted_source_digest() {
+    const TRUSTED: &[u8] = b"fn step(input) { input }";
+    let trusted = format!(
+        "sha256:{:x}",
+        <sha2::Sha256 as sha2::Digest>::digest(TRUSTED)
     );
-    step.reinstall(&adopting());
-    step.call_as("call-2", ARGS).await;
-    assert_eq!(
-        step.pin_of(&step.row_of("call-2").await).await.origin,
-        gents_protocol::job::JobOrigin::Dynamic
+    let step = step0(
+        adopting(),
+        Options {
+            script: true,
+            settings: Some(worker_settings(JobPolicy {
+                trusted_packs: vec!["acme/op".into()],
+                ..running_policy()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    install_trusted_script(&step, TRUSTED);
+    let script = format!(
+        "module.exports = (i) => i.pin ? {{effects: {{}}}} : {{effects: {{pin: {{script_id: \"s\", source_digest: \"{trusted}\", agent_budget: 2, handle: \"h\"}}, spawn: [{{slot: \"s\", attempt: 0, target: \"t-worker\", prompt: \"go\", title: \"t\"}}]}}}};"
     );
+    let call = json!({"script": script, "agent_budget": 2});
+    let answer = step.call_as("call-1", &call.to_string()).await;
+    assert_eq!(answer["status"], "running", "{answer}");
+    let pin = step.pin_of(&step.row_of("call-1").await).await;
+    let digest = format!(
+        "{:x}",
+        <sha2::Sha256 as sha2::Digest>::digest(script.as_bytes())
+    );
+    assert_eq!(pin.source_digest, format!("sha256:{digest}"));
+    assert_eq!(pin.script_id, digest);
+    assert_eq!(pin.origin, gents_protocol::job::JobOrigin::Dynamic);
+    step.finish().await;
+}
+
+/// Under `policy.dynamic: off` a call that carries a `script` runs dynamic
+/// code whatever its `argv`, so a pinless script answer is refused.
+#[tokio::test]
+async fn a_js_script_without_argv_is_refused_under_off() {
+    let step = step0(
+        adopting(),
+        Options {
+            script: true,
+            settings: Some(worker_settings(JobPolicy {
+                dynamic: DynamicMode::Off,
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    let call = json!({"script": "module.exports = () => ({result: {answer: 42}})"});
+    let answer = step.call_as("call-1", &call.to_string()).await;
+    assert_eq!(answer["code"], "plugin_job_policy_denied", "{answer}");
     step.finish().await;
 }
 

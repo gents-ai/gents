@@ -858,16 +858,15 @@ fn admit_non_job(
 /// Lean `scriptVerbs`: the workflow verbs that run script code.
 const SCRIPT_VERBS: [&str; 3] = ["run", "check", "import"];
 
+/// Lean `runsDynamicCode`: a non-empty `script` runs whatever the `argv`.
 fn runs_dynamic_code(ctx: &StepContext, call: &StepCall) -> bool {
-    call.argv
-        .first()
-        .is_some_and(|verb| SCRIPT_VERBS.contains(&verb.as_str()))
-        && (call
-            .script
-            .as_ref()
-            .is_some_and(|source| !source.is_empty())
-            || call.path.as_ref().is_some_and(|source| !source.is_empty())
-            || ctx.named_origin == Some(JobOrigin::Dynamic))
+    call.script.as_deref().is_some_and(|s| !s.is_empty())
+        || call
+            .argv
+            .first()
+            .is_some_and(|verb| SCRIPT_VERBS.contains(&verb.as_str()))
+            && (call.path.as_deref().is_some_and(|p| !p.is_empty())
+                || ctx.named_origin == Some(JobOrigin::Dynamic))
 }
 
 fn dynamic_mode_refusal(

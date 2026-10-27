@@ -170,7 +170,11 @@ private def sourceBoundaryCases : List AdmissionCase :=
   , ⟨"import_empty_sources_under_off", off, call "import" (some "") (some ""), .result noExtras [] none none⟩
   , ⟨"dynamic_name_still_denied_with_empty_sources", { off with namedOrigin := some .dynamic }, call "run" (some "") (some ""), .result noExtras [] none none⟩
   , ⟨"installed_name_with_empty_sources", { off with namedOrigin := some .installed }, call "run" (some "") (some ""), .result noExtras [] none none⟩
-  , ⟨"pinned_dynamic_under_off", off, { pinned [] 0 0 with pin := some (hostPin guestPin { facts with origin := .dynamic }) }, .result noExtras [] none none⟩ ]
+  , ⟨"pinned_dynamic_under_off", off, { pinned [] 0 0 with pin := some (hostPin guestPin { facts with origin := .dynamic }) }, .result noExtras [] none none⟩
+  , ⟨"inline_script_without_argv_refused_under_off", off,
+      { stepZero with call := { stepZero.call with
+          argv := [], script := some "module.exports = () => ({result: {}})" } },
+      .result noExtras [] none none⟩ ]
 
 private def observation : SpawnKey → Recovery.KillObservation := fun _ => .causedLiveLocal
 
