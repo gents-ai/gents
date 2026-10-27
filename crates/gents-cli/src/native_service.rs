@@ -499,7 +499,9 @@ where
                     || (self.platform == NativeServicePlatform::Linux
                         && status.is_active_or_transitioning())
                 {
-                    bail!("native service is running or transitioning; stop it before updating its executable or environment");
+                    bail!(
+                        "native service is running or transitioning; stop it before updating its executable or environment"
+                    );
                 }
                 if self.platform == NativeServicePlatform::Macos {
                     let target = format!("gui/{}/{}", self.current_uid()?, SERVICE_LABEL);
@@ -1088,7 +1090,9 @@ fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
         })
         .transpose()?
         .unwrap_or_default();
-    let environment = format!("\n  <key>EnvironmentVariables</key>\n  <dict><key>GENTS_SYSTEM_LOG</key><string>1</string>{search_path}</dict>");
+    let environment = format!(
+        "\n  <key>EnvironmentVariables</key>\n  <dict><key>GENTS_SYSTEM_LOG</key><string>1</string>{search_path}</dict>"
+    );
     let stderr = config
         .stderr_path
         .as_deref()
@@ -1141,20 +1145,28 @@ fn render_systemd(config: &NativeServiceConfig) -> Result<String> {
             .to_str()
             .context("home path is not valid UTF-8")?,
     )?;
-    let search_path = config
-        .search_path
-        .as_ref()
-        .map(|value| systemd_environment("PATH", &value.to_string_lossy()))
-        .transpose()?
-        .map(|value| format!("Environment={value}\n"))
-        .unwrap_or_default();
+    // systemd applies EnvironmentFile and UnsetEnvironment after Environment.
+    // Set the installer-owned values in the executed process environment so
+    // preserved operator directives cannot replace or remove them.
+    let mut command = vec![systemd_arg("/usr/bin/env")?, "--".to_owned()];
+    command.push(systemd_arg("GENTS_SYSTEM_LOG=1")?);
+    if let Some(path) = &config.search_path {
+        command.push(systemd_arg(&format!("PATH={}", path.to_string_lossy()))?);
+    }
+    command.push(executable);
+    command.push(systemd_arg("server")?);
+    command.push(systemd_arg("--home")?);
+    command.push(home);
     let stderr = config
         .stderr_path
         .as_deref()
         .map(systemd_append_target)
         .transpose()?
         .unwrap_or_else(|| "journal".to_string());
-    Ok(format!("[Unit]\nDescription=Gents node runtime\n\n[Service]\nType=simple\nExecStart={executable} \"server\" \"--home\" {home}\nEnvironment=\"GENTS_SYSTEM_LOG=1\"\n{search_path}StandardOutput=journal\nStandardError={stderr}\nRestart=always\nRestartPreventExitStatus={INCOMPATIBLE_STORE_EXIT_CODE} {INSECURE_KEY_EXIT_CODE} {FOREIGN_STORE_EXIT_CODE}\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"))
+    Ok(format!(
+        "[Unit]\nDescription=Gents node runtime\n\n[Service]\nType=simple\nExecStart={}\nStandardOutput=journal\nStandardError={stderr}\nRestart=always\nRestartPreventExitStatus={INCOMPATIBLE_STORE_EXIT_CODE} {INSECURE_KEY_EXIT_CODE} {FOREIGN_STORE_EXIT_CODE}\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n",
+        command.join(" ")
+    ))
 }
 
 /// `append:` takes the rest of the line as the path after specifier expansion.
@@ -1284,10 +1296,18 @@ fn systemd_executable(unit: &str) -> Result<String> {
         .lines()
         .find_map(|line| line.strip_prefix("ExecStart="))
         .context("systemd definition has no ExecStart")?;
-    let (executable, _) = exec
+    let (prefix, _) = exec
         .split_once(" \"server\" \"--home\" ")
         .context("systemd definition is not a Gents foreground server invocation")?;
-    parse_systemd_quoted(executable)
+    match prefix.split_once(" -- ") {
+        Some(("\"/usr/bin/env\"", _)) => {
+            let start = prefix
+                .rfind(" \"")
+                .context("systemd environment wrapper has no executable argument")?;
+            parse_systemd_quoted(&prefix[start + 1..])
+        }
+        _ => parse_systemd_quoted(prefix),
+    }
 }
 
 fn parse_systemd_quoted(value: &str) -> Result<String> {

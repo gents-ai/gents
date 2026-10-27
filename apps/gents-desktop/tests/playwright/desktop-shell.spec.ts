@@ -98,7 +98,9 @@ test.describe("kit shell", () => {
     await gotoHarness(page);
     await page.getByRole("link", { name: /configuration/i }).focus();
     await page.keyboard.press("Tab");
-    await expect(page.getByRole("link", { name: /Configure/ })).toBeVisible();
+    await expect(
+      page.locator('[aria-hidden="false"] [data-testid="working-node"]'),
+    ).toBeVisible();
   });
   test("rail pointer focus does not cover a link before mouseup", async ({ page }) => {
     test.skip(test.info().project.name === "chromium-narrow", "No desktop rail");

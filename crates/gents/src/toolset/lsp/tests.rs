@@ -1118,6 +1118,115 @@ async fn runtime_home_changes_exclude_cached_servers_without_workspace_consent()
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
+async fn pooled_server_restarts_when_same_runtime_home_credential_path_changes() {
+    use crate::tool_call_lifecycle::runtime::{
+        scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname='t'\nversion='0.1.0'\n",
+    )
+    .unwrap();
+    let home = root.join("runtime");
+    std::fs::create_dir_all(&home).unwrap();
+    let home = home.canonicalize().unwrap();
+    let first_key = root.join("identity-a.key");
+    let second_key = root.join("identity-b.key");
+    std::fs::write(&first_key, "first identity credential").unwrap();
+    std::fs::write(&second_key, "second identity credential").unwrap();
+    let write_config = |key_path: &std::path::Path| {
+        crate::home::write_init_config(
+            &home,
+            &crate::home::StoredInitConfig::<String, String> {
+                home: home.to_string_lossy().into_owned(),
+                node_name: "fixture".into(),
+                node_did: "did:key:fixture".into(),
+                key_path: Some(key_path.to_string_lossy().into_owned()),
+                identity_backend: None,
+                keychain_label: None,
+                secure_enclave_label: None,
+                tool_package: None,
+                tool_ceiling: "readwrite".into(),
+                tool_root: None,
+                store_encryption: None,
+            },
+        )
+        .unwrap();
+    };
+    write_config(&first_key);
+
+    let starts = root.join("starts.txt");
+    let script = FIXTURE_PY.replace(
+        "while True:\n    msg = read()",
+        &format!(
+            "open({:?}, 'a').write('start\\n')\nwhile True:\n    msg = read()",
+            starts
+        ),
+    );
+    let server = fixture_server(script);
+    let config = sample_config(
+        root.clone(),
+        FileToolMode::ReadWrite,
+        "s-credential-guard",
+        vec![server.clone()],
+    );
+    let key = PoolKey {
+        runtime_home: Some(home.clone()),
+        session_id: config.session_id.clone(),
+        agent_id: config.agent_id.clone(),
+        workspace_root: root,
+        server_name: server.name.clone(),
+        config_digest: config.digest.clone(),
+        operator_guard_home: None,
+    };
+    let pool = LspPool::new();
+    scope_request_tool_execution_with_workspace_overlay(
+        None,
+        Default::default(),
+        ToolWorkspaceScope {
+            runtime_home: Some(home.clone()),
+            workspace_authority: Some(crate::toolset::WorkspaceAuthority::ReadWrite),
+            ..Default::default()
+        },
+        None,
+        None,
+        None,
+        Default::default(),
+        false,
+        async {
+            let first = pool
+                .get_or_start(key.clone(), &server, &config)
+                .await
+                .unwrap();
+            let unchanged = pool
+                .get_or_start(key.clone(), &server, &config)
+                .await
+                .unwrap();
+            assert!(std::ptr::eq(first.client(), unchanged.client()));
+            assert_eq!(std::fs::read_to_string(&starts).unwrap().lines().count(), 1);
+            drop(unchanged);
+            drop(first);
+
+            write_config(&second_key);
+            assert!(pool.get_ready(&key).await.is_none());
+            let refreshed = pool
+                .get_or_start(key.clone(), &server, &config)
+                .await
+                .unwrap();
+            assert_eq!(std::fs::read_to_string(&starts).unwrap().lines().count(), 2);
+            assert!(pool.has_ready(&key).await);
+            drop(refreshed);
+            pool.shutdown().await;
+        },
+    )
+    .await;
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
 async fn operator_guard_selection_excludes_cached_unprotected_servers() {
     use crate::plugin::approval::workspace;
 

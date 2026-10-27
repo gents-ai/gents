@@ -483,6 +483,26 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     ));
     for (category, domain, present) in [
         (
+            "claude_output_config_cases",
+            "ClaudeStructuredOutput",
+            !snapshot.claude_output_config_cases.is_empty(),
+        ),
+        (
+            "checkpoint_fallback_cases",
+            "CompactionCheckpointRepresentation",
+            !snapshot.checkpoint_fallback_cases.is_empty(),
+        ),
+        (
+            "command_isolation_cases",
+            "CommandIsolation",
+            !snapshot.command_isolation_cases.is_empty(),
+        ),
+        (
+            "command_isolation_cases",
+            "CommandIsolationSeatbelt",
+            !snapshot.command_isolation_cases.is_empty(),
+        ),
+        (
             "reasoning_delta_cases",
             "ReasoningDeltaCases",
             !snapshot.reasoning_delta_cases.is_empty(),

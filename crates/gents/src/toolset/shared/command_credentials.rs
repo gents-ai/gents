@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::CStr;
 use std::os::unix::{ffi::OsStrExt, fs::MetadataExt};
 use std::path::{Path, PathBuf};
@@ -6,9 +6,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{ensure, Context as _, Result};
 
 /// These host credential namespaces are excluded even when a workspace contains
-/// the user's home. Resolved links are also excluded; existing hard-link aliases
-/// refuse launch rather than leaving a second readable name. Host-side namespace
-/// replacement after inspection is outside the child sandbox's authority.
+/// the user's home. Resolved links are also excluded; hard-link aliases outside
+/// those namespaces refuse launch rather than leaving a readable name.
+/// Host-side namespace replacement after inspection is outside the child sandbox's authority.
 const USER_CREDENTIALS: &[&str] = &[
     ".ssh",
     ".aws",
@@ -57,7 +57,7 @@ fn capture_native(
         .collect::<Vec<_>>();
     // Inactive homes may have a different configuration schema. Their standard
     // credential paths do not require decoding configuration or walking data.
-    for home in homes.iter().map(|home| home.join(".gents")).chain(
+    for home in homes.iter().map(|account| account.join(".gents")).chain(
         std::env::var_os("GENTS_HOME")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from),
@@ -106,15 +106,17 @@ impl CredentialProtection {
             paths: BTreeSet::new(),
         };
         let mut inspected = BTreeSet::new();
+        let mut hard_links = BTreeMap::new();
         for path in paths {
             let path = std::path::absolute(path).context("resolving credential exclusion")?;
             protection.paths.insert(path.clone());
             let resolved = resolve_missing(&path)?;
             protection.paths.insert(resolved.clone());
             protection
-                .inspect(&resolved, &mut inspected)
+                .inspect(&resolved, &mut inspected, &mut hard_links)
                 .with_context(|| format!("inspecting credential exclusion {}", path.display()))?;
         }
+        validate_hard_link_coverage(&hard_links)?;
         Ok(protection)
     }
 
@@ -125,6 +127,10 @@ impl CredentialProtection {
             "Credential exclusions changed while the command awaited approval. Retry the command."
         );
         Ok(())
+    }
+
+    pub(super) fn snapshot(&self) -> Vec<PathBuf> {
+        self.paths.iter().cloned().collect()
     }
 
     pub(super) fn protect_launch(&self, args: &mut Vec<String>) -> Result<()> {
@@ -141,7 +147,12 @@ impl CredentialProtection {
         Ok(())
     }
 
-    fn inspect(&mut self, path: &Path, inspected: &mut BTreeSet<PathBuf>) -> Result<()> {
+    fn inspect(
+        &mut self,
+        path: &Path,
+        inspected: &mut BTreeSet<PathBuf>,
+        hard_links: &mut BTreeMap<(u64, u64), (u64, BTreeSet<PathBuf>)>,
+    ) -> Result<()> {
         if !inspected.insert(path.to_owned()) {
             return Ok(());
         }
@@ -153,13 +164,20 @@ impl CredentialProtection {
         if metadata.is_symlink() {
             let target = path.canonicalize().context("resolving credential link")?;
             self.paths.insert(target.clone());
-            self.inspect(&target, inspected)?;
+            self.inspect(&target, inspected, hard_links)?;
         } else if metadata.is_dir() {
             for entry in std::fs::read_dir(path).context("inspecting credential directory")? {
-                self.inspect(&entry?.path(), inspected)?;
+                self.inspect(&entry?.path(), inspected, hard_links)?;
             }
         } else if metadata.is_file() {
-            ensure!(metadata.nlink() == 1, "A credential file has a hard-link alias. Remove the alias outside this session before running a bounded command.");
+            let aliases = hard_links
+                .entry((metadata.dev(), metadata.ino()))
+                .or_insert_with(|| (metadata.nlink(), BTreeSet::new()));
+            ensure!(
+                aliases.0 == metadata.nlink(),
+                "A credential file changed during hard-link inspection. Retry the command."
+            );
+            aliases.1.insert(path.to_owned());
         }
         Ok(())
     }
@@ -191,6 +209,23 @@ impl CredentialProtection {
         }
         Ok(())
     }
+}
+
+/// Native link counts cover directory entries on the file's device. Inspection
+/// counts each distinct non-symlink protected path once, including resolved
+/// symlink targets; repeated or overlapping roots do not add aliases. A count
+/// larger than that inventory proves at least one hard-link name lies outside
+/// the protected namespace.
+fn validate_hard_link_coverage(
+    hard_links: &BTreeMap<(u64, u64), (u64, BTreeSet<PathBuf>)>,
+) -> Result<()> {
+    for (link_count, protected_aliases) in hard_links.values() {
+        ensure!(
+            *link_count <= protected_aliases.len() as u64,
+            "A credential file has a hard-link alias outside the protected namespaces. Remove the alias outside this session before running a bounded command."
+        );
+    }
+    Ok(())
 }
 
 fn resolve_missing(path: &Path) -> Result<PathBuf> {

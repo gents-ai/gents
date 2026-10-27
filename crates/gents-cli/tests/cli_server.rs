@@ -589,9 +589,22 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
                     .any(|row| row["compaction_key"] == format!("nac-{phase}"))),
             "{phase}: principal could not read its row: {owner_rows}"
         );
+        let operator_authorization = support::graphql::served_endpoint(&graphql)
+            .authorization()?
+            .context("served principal authorization")?;
         for surface in ["self", "sessions"] {
+            let anonymous = reqwest::Client::new()
+                .get(format!("http://127.0.0.1:{port}/{surface}"))
+                .send()
+                .await?;
+            assert_eq!(
+                anonymous.status(),
+                reqwest::StatusCode::UNAUTHORIZED,
+                "{phase}: anonymous /{surface} must require the served principal"
+            );
             let response = reqwest::Client::new()
                 .get(format!("http://127.0.0.1:{port}/{surface}"))
+                .header(reqwest::header::AUTHORIZATION, &operator_authorization)
                 .send()
                 .await?;
             assert!(

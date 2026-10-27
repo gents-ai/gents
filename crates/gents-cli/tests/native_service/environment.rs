@@ -157,7 +157,7 @@ fn environment_values_round_trip_without_shell_or_specifier_expansion() -> Resul
 #[test]
 fn systemd_environment_directives_keep_native_syntax_order_and_scope() -> Result<()> {
     let temp = tempfile::tempdir()?;
-    let config = config(temp.path(), "gents");
+    let config = config(temp.path(), "gents \"quoted\" \\$%");
     let platform = NativeServicePlatform::Linux;
     manager(config.clone(), platform, initial(platform)).install()?;
     let path = config.definition_path(platform);
@@ -167,7 +167,7 @@ fn systemd_environment_directives_keep_native_syntax_order_and_scope() -> Result
         "  'PACK_SECOND=space value'\n",
         "EnvironmentFile=-%h/.config/pack.env\n",
         "PassEnvironment=PACK_INHERITED\n",
-        "UnsetEnvironment=PACK_REMOVED\n",
+        "UnsetEnvironment=PATH GENTS_SYSTEM_LOG PACK_REMOVED\n",
         "Environment=\n",
         "Environment=\"PACK_LAST=after reset\"\n",
         "Environment=PACK_SLASH=\\\\\n",
@@ -185,8 +185,37 @@ fn systemd_environment_directives_keep_native_syntax_order_and_scope() -> Result
         updated
             .matches("Environment=\"GENTS_SYSTEM_LOG=1\"")
             .count(),
-        1
+        0
     );
+    let exec = updated
+        .lines()
+        .find_map(|line| line.strip_prefix("ExecStart="))
+        .expect("systemd ExecStart");
+    assert!(exec.starts_with(
+        "\"/usr/bin/env\" -- \"GENTS_SYSTEM_LOG=1\" \"PATH=/reviewed/bin:/usr/bin\" "
+    ));
+    assert!(exec.contains("\"server\" \"--home\" "));
+    assert!(
+        !manager(config.clone(), platform, ScriptedRunner::default())
+            .installed_executable_differs()?
+    );
+    let output = std::process::Command::new("/usr/bin/env")
+        .env_clear()
+        .args([
+            "--",
+            "GENTS_SYSTEM_LOG=1",
+            "PATH=/reviewed/bin:/usr/bin",
+            "/usr/bin/env",
+        ])
+        .env("GENTS_SYSTEM_LOG", "0")
+        .env("PATH", "/deliberately-wrong")
+        .output()?;
+    assert!(output.status.success());
+    let environment = String::from_utf8(output.stdout)?;
+    assert!(environment.lines().any(|line| line == "GENTS_SYSTEM_LOG=1"));
+    assert!(environment
+        .lines()
+        .any(|line| line == "PATH=/reviewed/bin:/usr/bin"));
     manager(config, platform, ScriptedRunner::default()).install()?;
     assert_eq!(fs::read_to_string(&path)?, updated);
     Ok(())

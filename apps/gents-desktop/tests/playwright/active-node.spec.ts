@@ -2,7 +2,7 @@ import { composer, expect, gotoHarness, openChat, test } from "./desktopTest";
 
 test("keeps the selected node visible and reviews a draft before changing destinations", async ({
   page,
-}) => {
+}, testInfo) => {
   await gotoHarness(page, "active-nodes");
   await openChat(page);
   await expect(page.getByLabel("Active node", { exact: true })).toContainText("Local");
@@ -37,5 +37,8 @@ test("keeps the selected node visible and reviews a draft before changing destin
     page.getByRole("status").filter({ hasText: "Remote configuration is read-only" }),
   ).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Display name" })).toBeDisabled();
-  await page.screenshot({ path: "/private/tmp/gents-3091-remote-settings.png" });
+  await testInfo.attach("remote-settings.png", {
+    body: await page.screenshot(),
+    contentType: "image/png",
+  });
 });

@@ -56,6 +56,34 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "gents_loop::claude_messages_body::output_tests::checkpoint_wire_claude_output_matches_executed_model",
+            package: "gents-loop",
+            source_path: "crates/gents-loop/src/claude_messages_output_tests.rs",
+            module_path: "gents_loop::claude_messages_body::output_tests",
+            function: "checkpoint_wire_claude_output_matches_executed_model",
+        },
+        ConformanceConsumer::RustTest {
+            id: "gents_loop::compaction::summary::tests::checkpoint_wire_fallback_matches_executed_model",
+            package: "gents-loop",
+            source_path: "crates/gents-loop/src/compaction_summary_tests.rs",
+            module_path: "gents_loop::compaction::summary::tests",
+            function: "checkpoint_wire_fallback_matches_executed_model",
+        },
+        ConformanceConsumer::RustTest {
+            id: "toolset::shared::command::network_enforcement_disclosure_tests::generated_command_isolation_matches_native_policy",
+            package: "gents",
+            source_path: "crates/gents/src/toolset/shared/command.rs",
+            module_path: "toolset::shared::command::network_enforcement_disclosure_tests",
+            function: "generated_command_isolation_matches_native_policy",
+        },
+        ConformanceConsumer::RustTest {
+            id: "toolset::shared::command::command_credentials::tests::generated_bounded_sandboxes_deny_credentials_and_default_network",
+            package: "gents",
+            source_path: "crates/gents/src/toolset/shared/command_credentials_tests.rs",
+            module_path: "toolset::shared::command::command_credentials::tests",
+            function: "generated_bounded_sandboxes_deny_credentials_and_default_network",
+        },
+        ConformanceConsumer::RustTest {
             id: "provider_input::tool_call_identity_tests::modeled_tool_identity_projection_is_idempotent_and_preserves_other_fields",
             package: "gents-loop",
             source_path: "crates/gents-loop/src/provider_input/tool_call_identity_tests.rs",

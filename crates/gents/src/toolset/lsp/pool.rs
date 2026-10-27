@@ -80,6 +80,7 @@ struct PoolEntry {
     last_used: Instant,
     idle_timeout: Duration,
     client: Option<Arc<LspClient>>,
+    credential_snapshot: Option<Vec<std::path::PathBuf>>,
     ready: Arc<Notify>,
     start_error: Option<String>,
 }
@@ -255,6 +256,18 @@ impl LspPool {
         let map = self.inner.lock().await;
         let slot = map.get(key)?.clone();
         drop(map);
+        let captured_credentials = slot.lock().await.credential_snapshot.clone();
+        let current_credentials = if captured_credentials.is_some() {
+            match crate::toolset::current_managed_command_credential_snapshot(true).await {
+                Ok(snapshot) => snapshot,
+                Err(_) => {
+                    self.retire(key).await;
+                    return None;
+                }
+            }
+        } else {
+            None
+        };
         let mut entry = slot.lock().await;
         if entry.state != EntryState::Ready {
             return None;
@@ -266,6 +279,11 @@ impl LspPool {
             return None;
         }
         key.validate_operator_guard().ok()?;
+        if entry.credential_snapshot != current_credentials {
+            drop(entry);
+            self.retire(key).await;
+            return None;
+        }
         entry.leases.fetch_add(1, Ordering::SeqCst);
         entry.last_used = Instant::now();
         Some(LspLease {
@@ -286,6 +304,11 @@ impl LspPool {
             return Err(super::ARTIFACT_SCOPE_DENIAL.into());
         }
         key.validate_operator_guard()?;
+        let constraints = super::overlay_lsp_constraints(&config.constraints);
+        let protects_credentials = constraints.to_spawn_policy().mode.protects_credentials();
+        let current_credentials =
+            crate::toolset::current_managed_command_credential_snapshot(protects_credentials)
+                .await?;
         self.spawn_sweeper_once();
         {
             let mut failed = self.failed.lock().await;
@@ -305,10 +328,11 @@ impl LspPool {
                 let dead = {
                     let entry = existing.lock().await;
                     entry.state == EntryState::Ready
-                        && entry
+                        && (entry
                             .client
                             .as_ref()
                             .is_some_and(|client| !client.is_alive())
+                            || entry.credential_snapshot != current_credentials)
                 };
                 if dead {
                     map.remove(&key);
@@ -330,6 +354,7 @@ impl LspPool {
                     last_used: Instant::now(),
                     idle_timeout: config.idle_timeout,
                     client: None,
+                    credential_snapshot: None,
                     ready: Arc::new(Notify::new()),
                     start_error: None,
                 }));
@@ -347,6 +372,14 @@ impl LspPool {
                 if entry.state == EntryState::Ready {
                     if let Some(client) = entry.client.clone() {
                         key.validate_operator_guard()?;
+                        if entry.credential_snapshot != current_credentials {
+                            drop(entry);
+                            self.retire(&key).await;
+                            return Err(
+                                "language-server credential exclusions changed; retry the action"
+                                    .into(),
+                            );
+                        }
                         entry.leases.fetch_add(1, Ordering::SeqCst);
                         entry.last_used = Instant::now();
                         return Ok(LspLease {
@@ -383,24 +416,46 @@ impl LspPool {
             disarm: Arc::new(AtomicBool::new(false)),
         };
         let started = self.start_client(&key, server, config).await;
+        let credentials_current = match &started {
+            Ok((_, credential_snapshot)) => {
+                crate::toolset::current_managed_command_credential_snapshot(
+                    credential_snapshot.is_some(),
+                )
+                .await
+                .is_ok_and(|current| current == *credential_snapshot)
+            }
+            Err(_) => false,
+        };
         let mut entry = slot.lock().await;
         let started = match started {
-            Ok(client) => match key.validate_operator_guard() {
-                Ok(()) => Ok(client),
-                Err(error) => {
-                    drop(entry);
-                    client.shutdown_exit().await;
-                    entry = slot.lock().await;
-                    Err(ClientStartError::Admission(error))
+            Ok((client, credential_snapshot)) => {
+                match (key.validate_operator_guard(), credentials_current) {
+                    (Ok(()), true) => Ok((client, credential_snapshot)),
+                    (guard_result, false) => {
+                        let error = guard_result.err().unwrap_or_else(|| {
+                            "language-server credential exclusions changed; retry the action".into()
+                        });
+                        drop(entry);
+                        client.shutdown_exit().await;
+                        entry = slot.lock().await;
+                        Err(ClientStartError::Admission(error))
+                    }
+                    (Err(error), true) => {
+                        drop(entry);
+                        client.shutdown_exit().await;
+                        entry = slot.lock().await;
+                        Err(ClientStartError::Admission(error))
+                    }
                 }
-            },
+            }
             Err(error) => Err(error),
         };
         match started {
-            Ok(client) => {
+            Ok((client, credential_snapshot)) => {
                 let client = Arc::new(client);
                 let leases = {
                     entry.client = Some(client.clone());
+                    entry.credential_snapshot = credential_snapshot;
                     entry.state = EntryState::Ready;
                     entry.last_used = Instant::now();
                     entry.idle_timeout = config.idle_timeout;
@@ -445,7 +500,7 @@ impl LspPool {
         key: &PoolKey,
         server: &CatalogServer,
         config: &LspToolConfig,
-    ) -> Result<LspClient, ClientStartError> {
+    ) -> Result<(LspClient, Option<Vec<std::path::PathBuf>>), ClientStartError> {
         let workspace = key.workspace_root.clone();
         let constraints = super::overlay_lsp_constraints(&config.constraints);
         let command =
@@ -478,7 +533,7 @@ impl LspPool {
         client
             .wait_until_ready(server.workspace_ready_timings.as_ref())
             .await;
-        Ok(client)
+        Ok((client, command.credential_snapshot))
     }
 
     async fn take_eviction_victims(
@@ -576,11 +631,33 @@ impl LspPool {
             return false;
         }
         let map = self.inner.lock().await;
-        if let Some(slot) = map.get(key) {
+        let Some(slot) = map.get(key).cloned() else {
+            return false;
+        };
+        drop(map);
+        let captured_credentials = slot.lock().await.credential_snapshot.clone();
+        let current_credentials = if captured_credentials.is_some() {
+            match crate::toolset::current_managed_command_credential_snapshot(true).await {
+                Ok(snapshot) => snapshot,
+                Err(_) => {
+                    self.retire(key).await;
+                    return false;
+                }
+            }
+        } else {
+            None
+        };
+        {
             let entry = slot.lock().await;
-            return entry.state == EntryState::Ready && entry.client.is_some();
+            let candidate = entry.state == EntryState::Ready && entry.client.is_some();
+            let ready = candidate && entry.credential_snapshot == current_credentials;
+            let stale = candidate && !ready;
+            drop(entry);
+            if stale {
+                self.retire(key).await;
+            }
+            ready
         }
-        false
     }
 
     pub async fn live_count(&self) -> usize {

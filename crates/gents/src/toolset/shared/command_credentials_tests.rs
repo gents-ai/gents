@@ -124,6 +124,42 @@ print('verified credential, workspace and network boundaries')
     }
 }
 
+#[tokio::test]
+async fn protected_hard_link_names_inside_one_namespace_are_allowed_and_unreadable() {
+    let folder = tempfile::tempdir().unwrap();
+    let root = folder.path().canonicalize().unwrap();
+    let namespace = root.join(".gnupg");
+    std::fs::create_dir(&namespace).unwrap();
+    let first = namespace.join("private-keys-v1.d");
+    let second = namespace.join("private-keys-v1.lock");
+    std::fs::write(&first, "fixture credential").unwrap();
+    std::fs::hard_link(&first, &second).unwrap();
+
+    let protection = CredentialProtection::capture([namespace]).unwrap();
+    let mut profile = macos_workspace_write_policy(CommandNetworkMode::Disabled);
+    let mut parameters = vec![format!("-DWRITABLE_ROOT={}", root.display())];
+    protection.apply(&mut profile, &mut parameters).unwrap();
+    let script = r#"import pathlib, sys
+for name in sys.argv[1:]:
+    try:
+        pathlib.Path(name).read_bytes()
+    except PermissionError:
+        continue
+    raise AssertionError('protected hard-link alias was readable: ' + name)
+print('protected hard-link aliases denied')
+"#;
+    let targets = [first, second]
+        .map(|path| path.to_string_lossy().into_owned())
+        .to_vec();
+    let output = run(profile, parameters, &root, script, &targets).await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("protected hard-link aliases denied"));
+}
+
 #[test]
 fn credential_aliases_and_unreadable_namespaces_cannot_fall_back() {
     let folder = tempfile::tempdir().unwrap();
@@ -131,10 +167,16 @@ fn credential_aliases_and_unreadable_namespaces_cannot_fall_back() {
     let key = root.join("secret");
     std::fs::write(&key, "fixture credential").unwrap();
     std::fs::hard_link(&key, root.join("alias")).unwrap();
-    let error = CredentialProtection::capture([key]).unwrap_err();
+    let error = CredentialProtection::capture([key.clone()]).unwrap_err();
     assert!(
         format!("{error:#}").contains("hard-link alias"),
         "{error:#}"
+    );
+    let duplicate_roots_error = CredentialProtection::capture([key.clone(), key.clone()])
+        .expect_err("repeated protected roots must not account for an external alias");
+    assert!(
+        format!("{duplicate_roots_error:#}").contains("hard-link alias outside"),
+        "{duplicate_roots_error:#}"
     );
     let dangling = root.join("dangling");
     std::os::unix::fs::symlink(root.join("absent"), &dangling).unwrap();

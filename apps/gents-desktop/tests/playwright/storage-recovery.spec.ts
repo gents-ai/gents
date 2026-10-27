@@ -5,7 +5,7 @@ import { acceptedChat } from "../chat-delivery-fixture";
 for (const colorScheme of ["light", "dark"] as const) {
   test(`reviews disk-full recovery without replaying saved input in ${colorScheme}`, async ({
     page,
-  }) => {
+  }, testInfo) => {
     await page.setViewportSize({
       width: colorScheme === "dark" ? 390 : 1280,
       height: 900,
@@ -48,8 +48,9 @@ for (const colorScheme of ["light", "dark"] as const) {
     const dialog = page.getByRole("alertdialog");
     await expect(dialog).toContainText("/tmp/gents-bombadil/workspace");
     await expect(dialog).toContainText("read-only command set");
-    await dialog.screenshot({
-      path: `/private/tmp/gents-2996-review-${colorScheme}.png`,
+    await testInfo.attach(`review-${colorScheme}.png`, {
+      body: await dialog.screenshot(),
+      contentType: "image/png",
     });
     await dialog.getByRole("button", { name: "Restart runtime", exact: true }).click();
     await expect(dialog).toBeHidden();
@@ -64,8 +65,9 @@ for (const colorScheme of ["light", "dark"] as const) {
     const box = (await panel.boundingBox())!;
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize()!.width);
-    await panel.screenshot({
-      path: `/private/tmp/gents-2996-recovered-${colorScheme}.png`,
+    await testInfo.attach(`recovered-${colorScheme}.png`, {
+      body: await panel.screenshot(),
+      contentType: "image/png",
     });
   });
 }

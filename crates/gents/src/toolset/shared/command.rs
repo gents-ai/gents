@@ -385,6 +385,7 @@ pub(crate) struct PreparedManagedCommand {
     pub(crate) environment: RapidHashMap<String, String>,
     pub(crate) sandbox: &'static str,
     pub(crate) operator_guard_home: Option<PathBuf>,
+    pub(crate) credential_snapshot: Option<Vec<PathBuf>>,
 }
 
 impl std::fmt::Debug for PreparedManagedCommand {
@@ -432,7 +433,33 @@ pub(crate) async fn prepare_managed_command(
             .protection
             .as_ref()
             .map(|guard| guard.home().to_owned()),
+        #[cfg(target_os = "macos")]
+        credential_snapshot: launch
+            .credentials
+            .as_ref()
+            .map(command_credentials::CredentialProtection::snapshot),
+        #[cfg(not(target_os = "macos"))]
+        credential_snapshot: None,
     })
+}
+
+pub(crate) async fn current_managed_command_credential_snapshot(
+    protects_credentials: bool,
+) -> std::result::Result<Option<Vec<PathBuf>>, String> {
+    if !protects_credentials {
+        return Ok(None);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        command_credentials::capture()
+            .await
+            .map(|protection| Some(protection.snapshot()))
+            .map_err(|error| format!("{error:#}"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(None)
+    }
 }
 
 #[expect(

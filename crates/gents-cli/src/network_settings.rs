@@ -450,7 +450,7 @@ mod tests {
             install_on(NativeServicePlatform::Linux, TAILNET);
         let exec_start = |config: &NativeServiceConfig| {
             format!(
-                "ExecStart=\"{}\" \"server\" \"--home\" \"{}\"\n",
+                "ExecStart=\"/usr/bin/env\" -- \"GENTS_SYSTEM_LOG=1\" \"{}\" \"server\" \"--home\" \"{}\"\n",
                 config.executable.display(),
                 config.home.display()
             )
