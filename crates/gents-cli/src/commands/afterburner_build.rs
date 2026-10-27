@@ -330,6 +330,83 @@ mod tests {
         assert_compiles_to_wasm32_wasip1(&root, "cpp");
     }
 
+    /// The build wraps a JS or TS source in Afterburner's stdin/stdout harness,
+    /// which calls `module.exports(input)`; a scaffolded echo plugin must run
+    /// under it, not only compile.
+    fn assert_scaffolded_echo_runs(language: &str, entry: &str) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("pkg");
+        write_package(
+            &root,
+            language,
+            entry,
+            gents::pack::authoring::scaffold::echo_source(entry).as_bytes(),
+        );
+        let bytes = assert_compiles_to_wasm32_wasip1(&root, language);
+        let plugin: gents::pack::PackPlugin = serde_json::from_value(serde_json::json!({
+            "name": "sample",
+            "description": "a test plugin",
+            "artifact": format!("plugins/{language}.afb"),
+            "language": language,
+            "input_schema": {"type": "object"},
+        }))
+        .unwrap();
+        let input = serde_json::json!({"hello": "world"});
+        let result = gents::plugin::PluginRunner::compile(&bytes, &plugin)
+            .unwrap()
+            .call(&input, &gents::plugin::PluginBudget::default())
+            .unwrap();
+        assert_eq!(
+            (result.verdict, result.output),
+            (gents::plugin::PluginVerdict::Success, input),
+            "{language}: {}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn js_echo_scaffold_runs_under_the_harness() {
+        assert_scaffolded_echo_runs("js", "source/main.js");
+    }
+
+    #[test]
+    fn ts_echo_scaffold_runs_under_the_harness() {
+        assert_scaffolded_echo_runs("ts", "source/main.ts");
+    }
+
+    /// `gents pack new --template workflow --language js` scaffolds a pack whose
+    /// step function builds through the harness and answers its own fixture.
+    #[tokio::test]
+    async fn js_workflow_scaffold_builds_and_passes_its_fixture() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack = dir.path().join("demo_flow");
+        let input = gents::pack::authoring::scaffold::ScaffoldInput {
+            namespace: "acme".into(),
+            template: Some(gents::pack::authoring::template::Template::Workflow),
+            kind: None,
+            language: Some("js".into()),
+            ux: false,
+        };
+        gents::pack::authoring::scaffold::scaffold(&pack, "demo_flow", &input).unwrap();
+        {
+            let _guard = compile_lock()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            crate::commands::pack::build::build_pack(&pack, None)
+                .unwrap_or_else(|error| panic!("building the js workflow must succeed: {error:#}"));
+        }
+        let cases = gents::pack::authoring::test::run_plugin_cases(&pack)
+            .await
+            .unwrap();
+        assert_eq!(cases.len(), 1);
+        assert_eq!(
+            (cases[0].passed, cases[0].failures.as_slice()),
+            (1, &[][..]),
+            "{:?}",
+            cases[0].failures
+        );
+    }
+
     #[test]
     fn js_compiles_to_a_genuine_wasm32_wasip1_afb() {
         let dir = tempfile::tempdir().unwrap();

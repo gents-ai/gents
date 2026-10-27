@@ -440,7 +440,7 @@ pub(crate) struct PackScaffoldArgs {
     pub(crate) template: Option<PackTemplate>,
     #[arg(
         long,
-        help = "Plugin language for the plugin-tool template; defaults to rust"
+        help = "Plugin language; the plugin-tool template takes any language gents builds, the workflow template rust, js or ts; defaults to rust"
     )]
     pub(crate) language: Option<String>,
     #[arg(
