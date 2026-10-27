@@ -142,5 +142,37 @@ pub(super) fn validate_reply_claim(
         },
         "mailbox item is closed or was consumed by another request"
     );
+    if item.parsed_status() == Some(MailboxStatus::Acted) {
+        return Ok(());
+    }
+    let modern_question = item.kind == super::MailboxKind::Ask.as_str()
+        && item
+            .payload
+            .as_deref()
+            .is_some_and(gents_protocol::mailbox_question::question_requires_reply_receipt);
+    ensure!(
+        !modern_question || request.input.question_reply.is_some(),
+        "this question requires a source-bound answer; update the client before replying"
+    );
+    if let Some(evidence) = &request.input.question_reply {
+        ensure!(
+            item.kind == super::MailboxKind::Ask.as_str(),
+            "reply evidence does not belong to a question"
+        );
+        ensure!(
+            request.input.captured_context.is_empty() && request.input.attachments.is_empty(),
+            "a question answer cannot include unrelated captures or attachments"
+        );
+        evidence.validate_for(
+            &item.doc_id,
+            &item.title,
+            item.summary.as_deref(),
+            item.payload
+                .as_deref()
+                .context("question payload is unavailable")?,
+            item.request_id.as_deref(),
+            &request.content,
+        )?;
+    }
     Ok(())
 }

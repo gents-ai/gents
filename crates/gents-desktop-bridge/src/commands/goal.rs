@@ -13,27 +13,48 @@ pub async fn session_goal(
     session_id: &str,
 ) -> Result<Option<SessionGoalView>> {
     let observation = core.session_goal_observation(node_did, session_id).await?;
-    Ok(observation.map(|observation| SessionGoalView {
-        node_did: observation.node_did,
-        session_id: observation.session_id,
-        session_doc_id: observation.session_doc_id,
-        observed_at: observation.observed_at,
-        goal: observation.goal.map(|goal| {
-            let snapshot = goal.snapshot;
-            GoalControlView {
-                goal_id: snapshot.goal_id,
-                revision: goal.revision,
-                objective: snapshot.objective,
-                status: snapshot.status,
-                token_budget: snapshot.token_budget.map(|budget| budget.to_string()),
-                tokens_used: snapshot.tokens_used.to_string(),
-                active_time_seconds: snapshot.active_time_seconds.to_string(),
-                continuation_sequence: snapshot.continuation_sequence.to_string(),
-                last_blocked_reason: snapshot.last_blocked_reason,
-                last_failure: snapshot.last_failure,
-                completion_evidence: snapshot.completion_evidence,
-            }
-        }),
+    Ok(observation.map(|observation| {
+        let snapshot = core.store().snapshot();
+        let mut sessions = snapshot.sessions.iter().filter(|session| {
+            session.node_did == node_did
+                && session.session_id == session_id
+                && session.requester_did == observation.requester_did
+        });
+        let source = sessions.next().filter(|_| sessions.next().is_none());
+        let waiting_question_ids = source.and_then(|session| {
+            let latest = session.observation.as_ref()?.latest_request.as_ref()?;
+            let ids = gents::goal::awaiting_goal_question_ids(
+                &observation,
+                latest,
+                &snapshot.requests,
+                &snapshot.mailbox_items,
+                chrono::Utc::now(),
+            );
+            (!ids.is_empty()).then_some(ids)
+        });
+        SessionGoalView {
+            waiting_question_ids,
+            node_did: observation.node_did,
+            session_id: observation.session_id,
+            session_doc_id: observation.session_doc_id,
+            observed_at: observation.observed_at,
+            goal: observation.goal.map(|goal| {
+                let snapshot = goal.snapshot;
+                GoalControlView {
+                    goal_id: snapshot.goal_id,
+                    revision: goal.revision,
+                    objective: snapshot.objective,
+                    status: snapshot.status,
+                    token_budget: snapshot.token_budget.map(|budget| budget.to_string()),
+                    tokens_used: snapshot.tokens_used.to_string(),
+                    active_time_seconds: snapshot.active_time_seconds.to_string(),
+                    continuation_sequence: snapshot.continuation_sequence.to_string(),
+                    last_blocked_reason: snapshot.last_blocked_reason,
+                    last_failure: snapshot.last_failure,
+                    completion_evidence: snapshot.completion_evidence,
+                }
+            }),
+        }
     }))
 }
 

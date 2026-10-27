@@ -63,6 +63,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "modeled_tool_identity_projection_is_idempotent_and_preserves_other_fields",
         },
         ConformanceConsumer::RustTest {
+            id: "mailbox_question::question_policy_follows_the_executable_model",
+            package: "gents-protocol",
+            source_path: "crates/gents-protocol/tests/mailbox_question.rs",
+            module_path: "mailbox_question",
+            function: "question_policy_follows_the_executable_model",
+        },
+        ConformanceConsumer::RustTest {
             id: "plugin_job::control::tests::kill_reads_children_that_committed_after_the_recovery_snapshot",
             package: "gents",
             source_path: "crates/gents/src/plugin_job/control.rs",

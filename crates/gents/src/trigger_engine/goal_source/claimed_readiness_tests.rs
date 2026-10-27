@@ -67,6 +67,10 @@ async fn child_count(db: &TestDb, goal: &GoalDocument, parent: &str) -> usize {
 }
 
 async fn install_claim(db: &TestDb, before: &Value) -> GoalDocument {
+    install_claim_with_terminal(db, before, "failed").await
+}
+
+async fn install_claim_with_terminal(db: &TestDb, before: &Value, terminal: &str) -> GoalDocument {
     crate::test_support::install_test_agent(&db.node, db.node_identity.did(), BEHAVIOR).await;
     crate::session::ensure_session_with_agent_id_and_requester_did(
         &db.node,
@@ -110,8 +114,8 @@ async fn install_claim(db: &TestDb, before: &Value) -> GoalDocument {
     crate::ConfigAccess::write_local(
         &db.node,
         "goal.claimed_readiness_test_terminal",
-        &format!(r#"mutation {{ update_AgentRequest(filter: {{request_id: {{_eq: "{}"}}, lifecycle_state: {{_eq: "pending"}}}}, input: {{lifecycle_state: "failed", terminalized_at: "2020-01-02T00:00:00Z"}}) {{_docID}} }}"#,
-            escape_graphql_string(parent)),
+        &format!(r#"mutation {{ update_AgentRequest(filter: {{request_id: {{_eq: "{}"}}, lifecycle_state: {{_eq: "pending"}}}}, input: {{lifecycle_state: "{}", terminalized_at: "2020-01-02T00:00:00Z"}}) {{_docID}} }}"#,
+            escape_graphql_string(parent), escape_graphql_string(terminal)),
     ).await.unwrap();
     let goal = set_goal(
         &db.node,
@@ -123,15 +127,19 @@ async fn install_claim(db: &TestDb, before: &Value) -> GoalDocument {
     )
     .await
     .unwrap();
-    assert!(claim_retry_continuation(
-        &db.node,
-        &goal,
-        parent,
-        before["infrastructure_retries"].as_i64().unwrap(),
-        before["last_failure"].as_str().unwrap(),
-    )
-    .await
-    .unwrap());
+    if let Some(failure) = before["last_failure"].as_str() {
+        assert!(claim_retry_continuation(
+            &db.node,
+            &goal,
+            parent,
+            before["infrastructure_retries"].as_i64().unwrap(),
+            failure,
+        )
+        .await
+        .unwrap());
+    } else {
+        assert!(claim_continuation(&db.node, &goal, parent).await.unwrap());
+    }
     let claimed = load_goal(db).await;
     assert!(update_goal_fields_if_status(&db.node, &claimed, GoalStatus::Active, &format!(
         r#"status: "{}", wrapup_requested: {}, wrapup_completed: {}, consecutive_blocked_audits: {}"#,
@@ -213,6 +221,74 @@ async fn publish_readiness(
             add: {{node_did: "{did}", reconcile_phase: "{phase}", last_reconcile_result: "applied"}},
             update: {{reconcile_phase: "{phase}", last_reconcile_result: "applied"}}) {{_docID}} }}"#,
     )).await.unwrap();
+}
+
+#[tokio::test]
+async fn required_question_holds_the_claim_until_its_native_item_is_acted() {
+    let case = crate::lean_vocab_test::lean_contract_snapshot()
+        .goal_claimed_readiness_cases
+        .iter()
+        .find(|case| case["name"] == "claimed_ready_materializes_retry")
+        .unwrap();
+    let mut before = case["before"].clone();
+    before["infrastructure_retries"] = json!(0);
+    before["last_failure"] = Value::Null;
+    let db = test_db("required-question-continuation").await;
+    let goal = install_claim_with_terminal(&db, &before, "completed").await;
+    let parent = goal.last_continued_from_request_id.as_deref().unwrap();
+    publish_readiness(&db, "ready", true, true).await;
+    let payload = json!({"version":2,"prompt":"Choose the next step","options":[
+        {"id":"small","label":"Small change"},{"id":"broad","label":"Broader change"}
+    ]})
+    .to_string();
+    let did = escape_graphql_string(db.node_identity.did());
+    let session = escape_graphql_string(SESSION);
+    let behavior = escape_graphql_string(BEHAVIOR);
+    let response = crate::ConfigAccess::write_local(
+        &db.node,
+        "test.goal.required_question",
+        &format!(
+            r#"mutation {{ create_MailboxItem(input: {{
+            item_key: "required-question", requester_did: "{did}", node_did: "{did}",
+            status: "open", kind: "ask", action: "start_request", title: "Next step",
+            payload: "{}", source_kind: "agent", source_id: "required-question-source",
+            session_id: "{session}", request_id: "{}", target_node_did: "{did}",
+            target_agent_id: "{behavior}", created_at: "2020-01-02T00:00:00Z"
+        }}) {{ _docID }} }}"#,
+            escape_graphql_string(&payload),
+            escape_graphql_string(parent),
+        ),
+    )
+    .await
+    .unwrap();
+    let item_id = crate::graphql::created_doc_id(&response, "MailboxItem").unwrap();
+    let controller = source(&db);
+    for _ in 0..2 {
+        assert!(controller
+            .build_intent(load_goal(&db).await)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(child_count(&db, &goal, parent).await, 0);
+        assert_eq!(recovery_projection(&load_goal(&db).await), before);
+    }
+    crate::ConfigAccess::write_local(&db.node, "test.goal.acted_question", &format!(
+        r#"mutation {{ update_MailboxItem(filter: {{_docID: {{_eq: "{}"}}}},
+            input: {{status: "acted", resolved_doc_id: "accepted-answer", resolved_at: "2030-01-01T00:00:00Z"}}) {{_docID}} }}"#,
+        escape_graphql_string(&item_id),
+    )).await.unwrap();
+    assert!(controller
+        .build_intent(load_goal(&db).await)
+        .await
+        .unwrap()
+        .is_some());
+    assert_eq!(child_count(&db, &goal, parent).await, 1);
+    assert!(controller
+        .build_intent(load_goal(&db).await)
+        .await
+        .unwrap()
+        .is_none());
+    assert_eq!(child_count(&db, &goal, parent).await, 1);
 }
 
 #[tokio::test]

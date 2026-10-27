@@ -422,10 +422,13 @@ async fn question_files_an_ask_whatever_the_surface_policy_and_refuses_invalid_p
                 id: (*id).into(),
                 label: id.to_uppercase(),
                 description: None,
+                prompt: None,
             })
             .collect(),
         multi_select: false,
         allow_free_text: true,
+        optional: None,
+        recommended_order: None,
     };
     let call = |args: MailboxContentArgs| {
         scope_tool_request_identity(

@@ -9,7 +9,6 @@ use crate::support::accepted_turn::{
     boot_prepared_accepted_turn, prepare_accepted_turn, AcceptedTurnSpec,
 };
 use crate::support::fixtures::configure_agent_tools;
-use crate::support::interrupt::create_runtime_request_caused_by_source;
 use crate::support::live_inference::wait_for_request_terminal;
 use crate::support::streaming_backend::{StreamChunk, StreamPlan, StreamResponse};
 use crate::support::test_db;
@@ -182,7 +181,7 @@ pub(super) async fn configure_engineer_mailbox(db: &crate::support::TestDb, did:
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_filed_question_is_answered_through_the_reply_request() {
+async fn an_optional_question_skip_reaches_the_asking_session() {
     use gents_protocol::mailbox_question::{
         MailboxQuestion, MailboxQuestionAnswer, MailboxQuestionOption, MAILBOX_QUESTION_VERSION,
     };
@@ -197,20 +196,19 @@ async fn a_filed_question_is_answered_through_the_reply_request() {
                 id: id.into(),
                 label: id.to_uppercase(),
                 description: None,
+                prompt: None,
             })
             .to_vec(),
         multi_select: false,
         allow_free_text: true,
+        optional: Some(true),
+        recommended_order: None,
     };
-    let reply = question
-        .reply_content(
-            "Release",
-            &MailboxQuestionAnswer {
-                option_ids: vec!["yes".into()],
-                free_text: Some("after the tag".into()),
-            },
-        )
-        .unwrap();
+    let mut answer = MailboxQuestionAnswer {
+        skip: Some(true),
+        ..Default::default()
+    };
+    let reply = question.reply_content("Release", &answer).unwrap();
     let prepared = prepare_accepted_turn(
         &db,
         AcceptedTurnSpec {
@@ -271,16 +269,55 @@ async fn a_filed_question_is_answered_through_the_reply_request() {
         question
     );
 
-    let reply_doc = create_runtime_request_caused_by_source(
-        db.node.as_ref(),
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        "mailbox-question-reply",
+        &did,
         &did,
         AGENT,
-        "mailbox-question-reply",
         session_id,
-        &item.doc_id,
         &reply,
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
+    );
+    create.caused_by_source_doc_id = Some(item.doc_id.clone());
+    answer.question_hash = Some(
+        gents_protocol::mailbox_question::question_source_hash(
+            &item.title,
+            item.summary.as_deref(),
+            item.payload.as_deref().unwrap(),
+            item.request_id.as_deref(),
+        )
+        .unwrap(),
+    );
+    create.input.question_reply = Some(
+        gents_protocol::mailbox_question::MailboxQuestionReply::new(
+            &item.doc_id,
+            &item.title,
+            item.summary.as_deref(),
+            item.payload.as_deref().unwrap(),
+            item.request_id.as_deref(),
+            answer,
+        )
+        .unwrap(),
+    );
+    gents::sign_agent_request_create_as_registered_target(&mut create)
+        .await
+        .unwrap();
+    let response = gents::ConfigAccess::write_local(
+        &db.node,
+        "test.optional_question.reply",
+        &create.graphql_mutation().unwrap(),
     )
-    .await;
+    .await
+    .unwrap();
+    let reply_doc = gents::graphql::mutation_documents(&response, "create_AgentRequest")
+        .unwrap()
+        .unwrap()[0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert_eq!(
         wait_for_request_terminal(
             db.node.as_ref(),
@@ -302,7 +339,7 @@ async fn a_filed_question_is_answered_through_the_reply_request() {
     let bodies = runtime.backend.observed_completion_bodies();
     let delivered = bodies.last().expect("reply provider turn").to_string();
     assert!(
-        delivered.contains("Decision on Release: YES (yes)") && delivered.contains("after the tag"),
+        delivered.contains("Skipped optional decision on Release."),
         "the answer must reach the model in the asking session: {delivered}"
     );
     runtime.shutdown().await;
@@ -328,7 +365,7 @@ pub(super) async fn request_state(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn() {
     use gents_protocol::mailbox_question::{
-        MailboxQuestion, MailboxQuestionAnswer, MailboxQuestionOption, MAILBOX_QUESTION_VERSION,
+        MailboxQuestion, MailboxQuestionAnswer, MailboxQuestionOption,
     };
     let db = test_db("mailbox-question-busy").await;
     let did = db.node_identity.did().to_string();
@@ -336,17 +373,20 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
     let asking = "mailbox-question-busy-request";
     let prompt = "mailbox-question-busy-prompt";
     let question = MailboxQuestion {
-        version: MAILBOX_QUESTION_VERSION,
+        version: 1,
         prompt: "Keep going?".into(),
         options: ["yes", "no"]
             .map(|id| MailboxQuestionOption {
                 id: id.into(),
                 label: id.to_uppercase(),
                 description: None,
+                prompt: None,
             })
             .to_vec(),
         multi_select: false,
         allow_free_text: false,
+        optional: None,
+        recommended_order: None,
     };
     let reply = question
         .reply_content(
@@ -354,6 +394,8 @@ async fn a_question_answered_while_its_session_is_busy_is_queued_behind_the_turn
             &MailboxQuestionAnswer {
                 option_ids: vec!["yes".into()],
                 free_text: None,
+                skip: None,
+                question_hash: None,
             },
         )
         .unwrap();
