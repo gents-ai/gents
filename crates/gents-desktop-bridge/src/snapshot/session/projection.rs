@@ -3,6 +3,10 @@ use gents_desktop_core::client::canonical_output::{
     project_canonical_live, CanonicalMessageProjection,
 };
 
+#[cfg(test)]
+#[path = "request_handoff_tests.rs"]
+mod request_handoff_tests;
+
 fn request_turn(request: &AgentRequestRow) -> Option<crate::types::RequestTurnView> {
     Some(crate::types::RequestTurnView {
         request_doc_id: request.doc_id.clone()?,
