@@ -22,6 +22,8 @@ struct SeedPlan {
     context_override: Option<i64>,
     output_override: Option<i64>,
     records_probe: bool,
+    unselected_model_reason: Option<String>,
+    enabled_unselected_model_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -64,7 +66,10 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
     for case in snapshot.initial_inference_cases {
         let args = parse_case(&case);
         let temp = tempfile::tempdir()?;
-        let identity = KeyIdentity::load_or_create(temp.path().join("identity.key"), None)?;
+        let identity = Arc::new(KeyIdentity::load_or_create(
+            temp.path().join("identity.key"),
+            None,
+        )?);
         let owner = identity.did();
         let node = Arc::new(
             gents::defra_node::EmbeddedNode::builder()
@@ -131,6 +136,51 @@ async fn generated_initial_inference_keeps_unselected_models_and_limits_unpinned
             "{case:?}"
         );
         if expected.model.is_none() {
+            let runtime = gents::Gents::from_default_agent_documents(
+                node.clone(),
+                identity.clone(),
+                gents::DocumentRuntimeOptions::default(),
+            )
+            .await?;
+            assert!(runtime.agents().is_empty());
+            let unavailable = runtime
+                .unavailable_agents()
+                .get(&summary.default_agent_id)
+                .expect("the unselected agent remains visible for setup");
+            assert_eq!(
+                serde_json::to_value(unavailable.public_reason)?.as_str(),
+                expected.unselected_model_reason.as_deref(),
+                "{case:?}",
+            );
+            drop(runtime);
+            let mut enabled_backend = backend.clone();
+            enabled_backend.enabled = true;
+            publish_home_config(
+                &access,
+                owner,
+                "Incomplete selection",
+                &summary.default_agent_id,
+                true,
+                vec![replacement(Collection::InferenceBackend, &enabled_backend)?],
+            )
+            .await?;
+            let runtime = gents::Gents::from_default_agent_documents(
+                node.clone(),
+                identity.clone(),
+                gents::DocumentRuntimeOptions::default(),
+            )
+            .await?;
+            assert!(runtime.agents().is_empty());
+            let unavailable = runtime
+                .unavailable_agents()
+                .get(&summary.default_agent_id)
+                .expect("an enabled backend still requires model selection");
+            assert_eq!(
+                serde_json::to_value(unavailable.public_reason)?.as_str(),
+                expected.enabled_unselected_model_reason.as_deref(),
+                "{case:?}",
+            );
+            drop(runtime);
             let steps = init_next_steps(&summary, false, false, false);
             assert!(
                 !steps

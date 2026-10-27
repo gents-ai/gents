@@ -50,6 +50,15 @@ struct UnknownKindBackend {
     kind: String,
 }
 
+/// First-run setup must remain reachable without a model. Only an explicitly
+/// disabled backend permits that unfinished selection; it supplies no runnable
+/// agent and becomes invalid if enabled before model selection.
+#[derive(Debug, thiserror::Error)]
+#[error("disabled backend {backend_id} awaits model selection")]
+struct UnselectedDisabledBackend {
+    backend_id: String,
+}
+
 struct AgentResolutionError {
     code: AgentReadinessUnavailableReason,
     detail: anyhow::Error,
@@ -123,7 +132,11 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
             let inference =
                 resolve_inference(view, &agent_config.inference_profile_id).map_err(|error| {
                     AgentResolutionError::new(
-                        AgentReadinessUnavailableReason::InferenceProfileInvalid,
+                        if error.is::<UnselectedDisabledBackend>() {
+                            AgentReadinessUnavailableReason::BackendDisabled
+                        } else {
+                            AgentReadinessUnavailableReason::InferenceProfileInvalid
+                        },
                         error,
                     )
                 })?;
@@ -496,6 +509,12 @@ fn resolve_inference(
     let selected = select_inference_documents(view, id)?;
     let profile = selected.profile.clone();
     let backend = selected.backend.clone();
+    if profile.model_name.trim().is_empty() && !backend.enabled {
+        return Err(UnselectedDisabledBackend {
+            backend_id: backend.backend_id,
+        }
+        .into());
+    }
     anyhow::ensure!(
         !profile.model_name.trim().is_empty(),
         "profile {} has no model selection",

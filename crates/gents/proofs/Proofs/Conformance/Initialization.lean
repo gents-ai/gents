@@ -34,6 +34,9 @@ def casesJson : String := (toJson (inputs.map fun input =>
       ("effective_concurrent", toJson plan.effectiveConcurrent),
       ("context_override", toJson plan.contextOverride),
       ("output_override", toJson plan.outputOverride),
-      ("records_probe", toJson plan.recordsProbe)]) |>.getD Json.null)])).compress
+      ("records_probe", toJson plan.recordsProbe),
+      ("unselected_model_reason", toJson (unselectedModelReason plan.enabled plan.model)),
+      ("enabled_unselected_model_reason", toJson (unselectedModelReason true plan.model))])
+      |>.getD Json.null)])).compress
 
 end Conformance.Initialization
