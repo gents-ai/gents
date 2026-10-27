@@ -27,6 +27,7 @@ import Proofs.Conformance.PluginResources
 import Proofs.Conformance.PluginJob
 import Proofs.Conformance.MailboxNotification
 import Proofs.Conformance.MailboxReply
+import Proofs.Conformance.MailboxQuestion
 import Proofs.Conformance.MailboxHandoff
 import Proofs.Conformance.MailboxSweep
 import Proofs.Conformance.ArtifactAuthority
@@ -542,6 +543,8 @@ def snapshotJson : String :=
       ++ Conformance.MailboxNotificationContracts.casesJson ++ ","
     ++ "\"mailbox_reply_cases\":"
       ++ Conformance.MailboxReplyContracts.casesJson ++ ","
+    ++ "\"mailbox_question_cases\":"
+      ++ Conformance.MailboxQuestionContracts.casesJson ++ ","
     ++ "\"mailbox_handoff_cases\":"
       ++ Conformance.MailboxHandoffContracts.casesJson ++ ","
     ++ "\"mailbox_sweep_cases\":"

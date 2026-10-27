@@ -44,6 +44,7 @@ private def variants : List (String × ReplyEnvelope × ReplyEvidence) :=
   , ("wrong-agent", baselineEnvelope, { baselineReply with agentId := "other" })
   , ("wrong-session", baselineEnvelope, { baselineReply with sessionId := "other" })
   , ("wrong-source", baselineEnvelope, { baselineReply with sourceDocId := "other" })
+  , ("stale-question", { baselineEnvelope with questionCurrent := false }, baselineReply)
   ]
 
 private def boolJson (value : Bool) : String := if value then "true" else "false"
@@ -60,6 +61,7 @@ private def caseJson (item : Item) (name : String) (envelope : ReplyEnvelope)
   ",\"target_node_did\":" ++ jsonString envelope.targetNodeDid ++
   ",\"bound_session_id\":" ++ (envelope.sessionId.map jsonString).getD "null" ++
   ",\"deadline_valid\":" ++ boolJson envelope.deadlineValid ++
+  ",\"question_current\":" ++ boolJson envelope.questionCurrent ++
   ",\"request_doc_id\":" ++ jsonString reply.requestDocId ++
   ",\"source_doc_id\":" ++ jsonString reply.sourceDocId ++
   ",\"requester_did\":" ++ jsonString reply.requesterDid ++

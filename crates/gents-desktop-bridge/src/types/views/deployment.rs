@@ -283,6 +283,9 @@ pub struct MailboxItemView {
     pub title: String,
     pub summary: Option<String>,
     pub payload: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional = nullable)]
+    pub question_hash: Option<String>,
     pub source_kind: String,
     pub source_id: String,
     pub session_id: Option<String>,
@@ -310,6 +313,25 @@ impl From<&MailboxItemRow> for MailboxItemView {
             title: row.title.clone(),
             summary: row.summary.clone(),
             payload: row.payload.clone(),
+            question_hash: row
+                .payload
+                .as_deref()
+                .filter(|payload| {
+                    row.kind == "ask"
+                        && row.action == "start_request"
+                        && gents_protocol::mailbox_question::question_requires_reply_receipt(
+                            payload,
+                        )
+                })
+                .and_then(|payload| {
+                    gents_protocol::mailbox_question::question_source_hash(
+                        &row.title,
+                        row.summary.as_deref(),
+                        payload,
+                        row.request_id.as_deref(),
+                    )
+                    .ok()
+                }),
             source_kind: row.source_kind.clone(),
             source_id: row.source_id.clone(),
             session_id: row.session_id.clone(),

@@ -29,7 +29,7 @@ it("decodes the existing native question without selecting an answer", () => {
 it.each([
   null,
   [],
-  { ...payload, version: 2 },
+  { ...payload, version: 3 },
   { ...payload, prompt: " " },
   { ...payload, options: [] },
   { ...payload, options: Array(5).fill(payload.options[0]) },
@@ -56,4 +56,33 @@ it("does not treat informational mailbox items as questions", () => {
     parseMailboxQuestion({ ...item(payload), action: "write_document" }),
   ).toBeNull();
   expect(parseMailboxQuestion({ ...item(payload), payload: "{" })).toBeNull();
+});
+
+it("decodes optional and required version-two questions without inventing an answer", () => {
+  for (const optional of [true, false, null]) {
+    expect(
+      parseMailboxQuestion(item({ ...payload, version: 2, optional }))
+        ?.optional,
+    ).toBe(optional);
+  }
+  expect(
+    parseMailboxQuestion(
+      item({ ...payload, version: 2, options: [], optional: true }),
+    ),
+  ).toEqual({
+    version: 2,
+    prompt: payload.prompt,
+    options: [],
+    optional: true,
+    multi_select: false,
+    allow_free_text: true,
+  });
+  expect(
+    parseMailboxQuestion(
+      item({ ...payload, version: 2, options: [], allow_free_text: false }),
+    ),
+  ).toBeNull();
+  expect(
+    parseMailboxQuestion(item({ ...payload, version: 2, optional: "yes" })),
+  ).toBeNull();
 });

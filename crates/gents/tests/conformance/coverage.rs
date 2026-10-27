@@ -831,6 +831,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.mailbox_reply_cases,
         ),
         (
+            "mailbox_question_cases",
+            "MailboxQuestionCases",
+            &snapshot.mailbox_question_cases,
+        ),
+        (
             "schema_argument_repair_cases",
             "SchemaArgumentRepairCases",
             &snapshot.schema_argument_repair_cases,

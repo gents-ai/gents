@@ -426,6 +426,7 @@ async fn question_files_an_ask_whatever_the_surface_policy_and_refuses_invalid_p
             .collect(),
         multi_select: false,
         allow_free_text: true,
+        optional: None,
     };
     let call = |args: MailboxContentArgs| {
         scope_tool_request_identity(

@@ -438,6 +438,7 @@ mod tests {
                         title: "Review".into(),
                         summary: Some("Needs attention".into()),
                         payload: None,
+                        question_hash: None,
                         source_kind: "runtime".into(),
                         source_id: "request-1".into(),
                         session_id: Some("sess_1".into()),

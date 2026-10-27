@@ -107,7 +107,7 @@ pub async fn send_chat_message(
 
     let captured_context = request.captured_context.unwrap_or_default();
     let attachments = request.attachments.unwrap_or_default();
-    let content = match &request.answer {
+    let (content, question_reply) = match &request.answer {
         Some(answer) => {
             if !request.content.trim().is_empty()
                 || !captured_context.is_empty()
@@ -120,10 +120,11 @@ pub async fn send_chat_message(
                 request.caused_by_source_doc_id.as_deref(),
                 request.session_id.as_deref(),
                 &node_did,
+                request.agent_id.as_deref(),
                 answer,
             )?
         }
-        None => request.content.trim().to_string(),
+        None => (request.content.trim().to_string(), None),
     };
     if content.is_empty() && captured_context.is_empty() && attachments.is_empty() {
         bail!("content is required");
@@ -150,6 +151,7 @@ pub async fn send_chat_message(
             &node_did,
             &session_id,
             gents_protocol::request_input::RequestInput {
+                question_reply,
                 cwd: chat_folder(request.cwd.as_deref())?,
                 captured_context,
                 attachments,
