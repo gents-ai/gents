@@ -374,6 +374,11 @@ pub(super) fn touched_observation(
     now: &str,
 ) -> gents_protocol::session::SessionObservation {
     gents_protocol::session::SessionObservation {
+        reply_preview: row
+            .session
+            .observation
+            .as_ref()
+            .and_then(|v| v.reply_preview.clone()),
         last_activity_at: touch_activity_value(row, now),
         preview: row
             .session

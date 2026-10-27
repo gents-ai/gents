@@ -20,6 +20,7 @@ fn observation(
 ) -> SessionObservation {
     let latest = &value["latest"];
     SessionObservation {
+        reply_preview: None,
         last_activity_at: (epoch + Duration::seconds(value["activity"].as_i64().unwrap()))
             .to_rfc3339_opts(SecondsFormat::Nanos, true),
         preview: value["preview"].as_str().map(str::to_owned),

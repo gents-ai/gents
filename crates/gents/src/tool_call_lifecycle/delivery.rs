@@ -1931,6 +1931,7 @@ async fn terminalize_transaction(
         session_id,
         request_doc_id,
         request_id,
+        None,
         &completed_at,
     )
     .await?;

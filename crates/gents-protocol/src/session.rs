@@ -55,6 +55,8 @@ pub struct SessionObservation {
     pub last_activity_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_preview: Option<String>,
     /// An unobserved referenced request must not fall back to an older local request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest_request: Option<SessionRequestObservation>,

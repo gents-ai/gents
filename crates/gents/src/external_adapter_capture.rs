@@ -1346,6 +1346,7 @@ fn imported_session(
             tags: Vec::new(),
             provenance: None,
             observation: Some(SessionObservation {
+                reply_preview: None,
                 last_activity_at: created_at.to_owned(),
                 preview: preview.map(crate::session::derive_session_preview),
                 latest_request: None,

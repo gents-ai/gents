@@ -679,6 +679,7 @@ async fn terminalize_execution_in_txn(
         !auxiliary || *selection == TerminalOutput::NoMessage,
         "auxiliary execution cannot select a transcript message"
     );
+    let mut reply_preview = None;
     match selection {
         TerminalOutput::Message { message_doc_id } => {
             let matching = headers
@@ -691,7 +692,8 @@ async fn terminalize_execution_in_txn(
                 "terminal selection lacks exact owned assistant header"
             );
             if !matches!(authority, TerminalAuthority::Revocation { .. }) {
-                reader.load_message(message_doc_id).await?;
+                let (_, message) = reader.load_message(message_doc_id).await?;
+                reply_preview = session::visible_reply_preview(&message);
             }
         }
         TerminalOutput::NoMessage => {
@@ -773,6 +775,7 @@ async fn terminalize_execution_in_txn(
             session_id,
             request_doc_id,
             &row.request_id,
+            Some(reply_preview.as_deref()),
             &timestamp,
         )
         .await?;

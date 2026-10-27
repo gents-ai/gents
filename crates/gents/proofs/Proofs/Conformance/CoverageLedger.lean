@@ -2590,6 +2590,9 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage "request_input_cases" "RequestInputCases"
       "conformance::request_input::runtime_continuation_inputs_match_the_lean_owner")
       "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "session_reply_preview_cases" "SessionReplyPreviewCases"
+      "session::preview::tests::terminal_reply_projection_follows_the_model")
+      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp "session_document_cases" "SessionDocumentCases"
       "lean_vocab_test::support::session_documents::tests::generated_pending_timeline_cases_preserve_request_identities_and_order"
       "Generated pending timeline cases bind physical identity, admission order, same or following request anchors, hidden or missing anchor fallback, tool-first replication, orphan groups and overlay ownership to the shared protocol ordering owner. Durable request lookup and authored-message suppression remain bridge-owner obligations.")

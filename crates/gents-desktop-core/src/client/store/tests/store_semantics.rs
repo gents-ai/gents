@@ -152,6 +152,7 @@ fn session_pointer_requires_the_observed_physical_request() {
                 tags: Vec::new(),
                 provenance: None,
                 observation: Some(SessionObservation {
+                    reply_preview: None,
                     last_activity_at: "2026-07-02T00:00:00Z".into(),
                     preview: None,
                     latest_request: Some(SessionRequestObservation {

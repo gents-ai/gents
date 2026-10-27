@@ -17,6 +17,7 @@ fn canonical_session(requester: Option<&str>) -> AgentSession {
 fn indexed_session(requester: Option<&str>) -> AgentSession {
     let mut session = canonical_session(requester);
     session.observation = Some(SessionObservation {
+        reply_preview: None,
         last_activity_at: "2026-09-02T00:00:00Z".into(),
         preview: Some("latest prompt".into()),
         latest_request: Some(SessionRequestObservation {

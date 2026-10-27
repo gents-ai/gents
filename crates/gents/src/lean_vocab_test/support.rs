@@ -184,6 +184,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) callback_transition_case_count: usize,
     pub(crate) callback_transition_cases: Vec<serde_json::Value>,
     pub(crate) session_document_cases: LeanSessionDocumentCases,
+    pub(crate) session_reply_preview_cases: Vec<serde_json::Value>,
     pub(crate) request_input_cases: Vec<serde_json::Value>,
     pub(crate) background_wake_row_cases: Vec<serde_json::Value>,
     pub(crate) configuration_scope_cases: serde_json::Value,

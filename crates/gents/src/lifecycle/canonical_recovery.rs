@@ -77,7 +77,7 @@ async fn validate_selection(
     headers: &[TranscriptMessageRow],
     row: &AgentRequestRow,
     selection: &TerminalOutput,
-) -> Result<()> {
+) -> Result<Option<String>> {
     if row
         .purpose
         .context("recovery request purpose missing")?
@@ -87,7 +87,7 @@ async fn validate_selection(
             matches!(selection, TerminalOutput::NoMessage) && headers.is_empty(),
             "auxiliary recovery requires NoMessage and no transcript headers"
         );
-        return Ok(());
+        return Ok(None);
     }
     let eligible = |header: &&TranscriptMessageRow| {
         header.message.role == MessageRole::Assistant
@@ -119,10 +119,11 @@ async fn validate_selection(
             let [header] = matching.as_slice() else {
                 return Err(RecoverySelectionRejected.into());
             };
-            reader.load_message(&header.doc_id).await?;
+            let (_, message) = reader.load_message(&header.doc_id).await?;
+            return Ok(session::visible_reply_preview(&message));
         }
     }
-    Ok(())
+    Ok(None)
 }
 
 async fn ensure_auxiliary_has_no_tools(
@@ -287,7 +288,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                 let agent = row.node_did.as_deref().context("missing request agent")?;
                 let mut reader = session::TxnCanonicalReader::new(txn, agent, row.requester_did.as_deref());
                 reader.observe_headers(&headers);
-                validate_selection(&mut reader, &headers, &row, terminal_output)
+                let _ = validate_selection(&mut reader, &headers, &row, terminal_output)
                     .await?;
                 if let Some(choice) = &selection_choice {
                     let expected = selection_from_choice(&headers, choice)?;
@@ -482,7 +483,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     Some(choice) => selection_from_choice(&headers, choice)?,
                 }
             };
-            validate_selection(&mut reader, &headers, &row, &selection).await?;
+            let reply_preview = validate_selection(&mut reader, &headers, &row, &selection).await?;
             let target = if row.interrupt_requested_at.as_deref().is_some_and(|v| !v.trim().is_empty()) {
                 RequestLifecycleState::Interrupted
             } else { RequestLifecycleState::Failed };
@@ -508,7 +509,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                 txn, agent, &row.request_id, &target, "execution lease expired", &timestamp,
             ).await?;
             if !is_auxiliary {
-                session::refresh_session_request_observation_in_txn(txn, agent, row.requester_did.as_deref(), session_id, &request_doc_id, &row.request_id, &timestamp).await?;
+                session::refresh_session_request_observation_in_txn(txn, agent, row.requester_did.as_deref(), session_id, &request_doc_id, &row.request_id, Some(reply_preview.as_deref()), &timestamp).await?;
             }
             Ok(RecoveryResult::Won { published: published.len() })
         })},

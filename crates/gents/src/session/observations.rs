@@ -458,6 +458,7 @@ async fn advance_observation_in_txn(
     }
     let activity = touch_activity_value(&session, now);
     let observation = gents_protocol::session::SessionObservation {
+        reply_preview: None,
         last_activity_at: activity.clone(),
         preview: Some(normalize_preview(preview_content)),
         latest_request: Some(incoming.observed.clone()),
@@ -476,6 +477,8 @@ async fn advance_observation_in_txn(
     Ok(true)
 }
 
+/// A terminal boundary supplies `Some`, including `Some(None)` for no readable
+/// final text. Ordinary activity supplies `None` and preserves the last reply.
 pub(crate) async fn refresh_session_request_observation_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
@@ -483,6 +486,7 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
     session_id: &str,
     request_doc_id: &str,
     request_id: &str,
+    reply_preview: Option<Option<&str>>,
     now: &str,
 ) -> Result<bool> {
     let Some(session) =
@@ -554,6 +558,10 @@ pub(crate) async fn refresh_session_request_observation_in_txn(
     }
     let activity = touch_activity_value(&session, now);
     let next = gents_protocol::session::SessionObservation {
+        reply_preview: reply_preview.map_or_else(
+            || observation.reply_preview.clone(),
+            |reply| super::preview::observe_reply_preview(observation, &current, reply),
+        ),
         last_activity_at: activity,
         preview: observation.preview.clone(),
         latest_request: Some(current),
@@ -944,7 +952,7 @@ mod observation_refresh_tests {
                 }}"#)).await?;
                 assert!(refresh_session_request_observation_in_txn(
                     txn, "did:test:refresh", None, "refresh-session",
-                    &fact.observed.request_doc_id, "refresh-request", now,
+                    &fact.observed.request_doc_id, "refresh-request", Some(Some("Finished")), now,
                 ).await?);
                 patch_session_in_txn(txn, &owner.doc_id, serde_json::json!({
                     "closed_at": "2030-01-01T00:00:02Z", "tags": ["review"]
@@ -959,6 +967,7 @@ mod observation_refresh_tests {
                 assert!(reopened.closed_at.is_none());
                 assert_eq!(reopened.created_at, now);
                 assert_eq!(reopened.tags, vec!["review"]);
+                assert_eq!(reopened.observation.as_ref().unwrap().reply_preview.as_deref(), Some("Finished"));
                 assert_eq!(reopened.observation.unwrap().latest_request.unwrap().lifecycle_state,
                     RequestLifecycleState::Completed);
                 // A malformed/stale observation must not import state from a
@@ -1003,11 +1012,12 @@ mod observation_refresh_tests {
                 })).await?;
                 assert!(!refresh_session_request_observation_in_txn(
                     txn, "did:test:refresh", None, "refresh-session",
-                    foreign_doc_id, "refresh-request", now,
+                    foreign_doc_id, "refresh-request", Some(Some("Wrong scope")), now,
                 ).await?);
                 let session = load_agent_session_row_in_txn(
                     txn, "did:test:refresh", "refresh-session", None,
                 ).await?.unwrap().session;
+                assert_eq!(session.observation.as_ref().unwrap().reply_preview.as_deref(), Some("Finished"));
                 assert_eq!(session.observation.unwrap().latest_request.unwrap().lifecycle_state,
                     RequestLifecycleState::Completed);
                 Ok(())

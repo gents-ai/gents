@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "session::preview::tests::terminal_reply_projection_follows_the_model",
+            package: "gents",
+            source_path: "crates/gents/src/session/preview.rs",
+            module_path: "session::preview::tests",
+            function: "terminal_reply_projection_follows_the_model",
+        },
+        ConformanceConsumer::RustTest {
             id: "plugin_job::control::tests::kill_reads_children_that_committed_after_the_recovery_snapshot",
             package: "gents",
             source_path: "crates/gents/src/plugin_job/control.rs",

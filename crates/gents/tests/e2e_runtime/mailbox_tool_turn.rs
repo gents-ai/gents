@@ -144,6 +144,35 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
     assert_eq!(receipt["item"]["_docID"], items[0].doc_id);
     assert_eq!(receipt["item"]["title"], items[0].title);
     assert_eq!(receipt["item"]["request_id"], request_id);
+    gents::ConfigAccess::transact_local_readonly(
+        &db.node,
+        None,
+        "test.session.observed_reply",
+        |txn| {
+            let did = did.clone();
+            Box::pin(async move {
+                let session = gents::session::load_agent_session_row_in_txn(
+                    txn,
+                    &did,
+                    "mailbox-tool-turn-session",
+                    Some(&did),
+                )
+                .await?
+                .unwrap()
+                .session;
+                let observation = session.observation.unwrap();
+                assert_eq!(observation.preview.as_deref(), Some(prompt));
+                assert_eq!(
+                    observation.reply_preview.as_deref(),
+                    Some("parent complete")
+                );
+                assert_eq!(observation.latest_request.unwrap().request_id, request_id);
+                Ok(())
+            })
+        },
+    )
+    .await
+    .unwrap();
     runtime.shutdown().await;
 }
 

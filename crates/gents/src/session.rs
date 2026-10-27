@@ -16,6 +16,8 @@ mod history;
 mod model_test_support;
 mod observations;
 mod output;
+mod preview;
+pub(crate) use preview::{request_preview_in_txn, visible_reply_preview};
 #[cfg(test)]
 mod output_replay_tests;
 mod query;

@@ -25,6 +25,7 @@ fn session(requester_did: Option<&str>) -> AgentSession {
         tags: Vec::new(),
         provenance: None,
         observation: Some(SessionObservation {
+            reply_preview: None,
             last_activity_at: "2026-04-21T12:02:00Z".into(),
             preview: Some("turn two".into()),
             latest_request: Some(SessionRequestObservation {
@@ -177,6 +178,7 @@ fn contract_session(
         tags: Vec::new(),
         provenance: None,
         observation: newest.map(|newest| SessionObservation {
+            reply_preview: None,
             last_activity_at: "2026-04-21T12:01:00Z".into(),
             preview: Some("contract prompt".into()),
             latest_request: Some(SessionRequestObservation {
@@ -1204,6 +1206,7 @@ fn refused_latest_request_observation_keeps_the_failed_turn_reason_retry_and_pro
         "request admission denied: request activates a skill outside its context allowlist";
     let mut refused_session = session(None);
     refused_session.observation = Some(SessionObservation {
+        reply_preview: None,
         last_activity_at: "2026-04-21T12:02:00Z".into(),
         preview: Some("run the disallowed skill".into()),
         latest_request: Some(SessionRequestObservation {

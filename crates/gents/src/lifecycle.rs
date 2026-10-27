@@ -35,6 +35,7 @@ pub mod manual;
 pub(crate) mod materialize;
 mod session_message_presentation;
 pub use session_message_presentation::session_message_display_body;
+pub(crate) use session_message_presentation::session_message_display_body_with_content;
 mod query;
 pub(crate) mod queue;
 mod recovery;

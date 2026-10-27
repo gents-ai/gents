@@ -29,6 +29,7 @@ import Proofs.Conformance.MailboxNotification
 import Proofs.Conformance.MailboxReply
 import Proofs.Conformance.MailboxHandoff
 import Proofs.Conformance.MailboxSweep
+import Proofs.Conformance.SessionReplyPreview
 import Proofs.Conformance.ArtifactAuthority
 import Proofs.Conformance.WorkspacePathCapability
 import Proofs.Conformance.FileImageHydration
@@ -324,6 +325,7 @@ def snapshotJson : String :=
     ++ "\"budget_rehydration_cases\":" ++ budgetRehydrationCasesJson ++ ","
     ++ "\"configuration_scope_cases\":" ++ Conformance.ConfigurationScope.casesJson ++ ","
     ++ "\"session_document_cases\":" ++ sessionDocumentsJson ++ ","
+    ++ "\"session_reply_preview_cases\":" ++ Conformance.SessionReplyPreview.casesJson ++ ","
     ++ "\"background_wake_row_cases\":" ++ backgroundWakeRowsCasesJson ++ ","
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
     ++ "\"agent_request_admission_cases\":"
