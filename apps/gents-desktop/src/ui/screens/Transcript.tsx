@@ -57,7 +57,7 @@ import {
 } from "./TranscriptInputs";
 import { type ParentWork } from "./parentWork";
 import { useEditInBranch } from "./session/editInBranch";
-import { DayMarker, dayOpenings } from "./TranscriptMarker";
+import { CompactionMarker, DayMarker, dayOpenings } from "./TranscriptMarker";
 import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
 import { readableReasoning, reasoningWithheld } from "./tool-summary";
 import { groupTranscript, type TranscriptEntry } from "./transcript-groups";
@@ -159,33 +159,6 @@ function ModelInputReduction({
   );
 }
 
-function SessionCompaction({
-  item,
-}: {
-  item: Extract<RenderedTimelineItem, { kind: "sessionCompaction" }>;
-}) {
-  return (
-    <div
-      className="mx-auto my-2 w-full max-w-3xl rounded-md border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
-      data-testid="session-compaction-event"
-      data-compaction-key={item.itemKey}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <span className="font-medium text-foreground">Session history compacted</span>
-        {item.timestamp && <time dateTime={item.timestamp}>{item.timestamp}</time>}
-      </div>
-      <p className="mt-1">
-        {item.messagesCompacted == null
-          ? "Message count unavailable"
-          : `${item.messagesCompacted.toLocaleString()} messages compacted`}
-        {item.originalTokens == null || item.compactedTokens == null
-          ? " · Token estimates unavailable"
-          : ` · ${item.originalTokens.toLocaleString()} → ${item.compactedTokens.toLocaleString()} tokens`}
-      </p>
-    </div>
-  );
-}
-
 const TranscriptItem = memo(function TranscriptItem({
   item,
   final = false,
@@ -261,7 +234,7 @@ const TranscriptItem = memo(function TranscriptItem({
     case "requestContextReductionSummary":
       return <ModelInputReduction item={item} />;
     case "sessionCompaction":
-      return <SessionCompaction item={item} />;
+      return <CompactionMarker item={item} />;
   }
 });
 

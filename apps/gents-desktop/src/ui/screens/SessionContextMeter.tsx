@@ -16,22 +16,12 @@ import { cn } from "@gents/ui/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/popover";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { InfoTip } from "./InfoTip";
+import { compactTokens } from "@/lib/tokens";
 
 type LastRequest = NonNullable<DesktopSessionSnapshot["context"]["lastRequest"]>;
 
 function formatPercent(value: number) {
   return `${value.toFixed(1).replace(/\.0$/, "")}%`;
-}
-
-function trimFixed(value: number, digits: number) {
-  return value.toFixed(digits).replace(/\.0$/, "");
-}
-
-function compactTokens(tokens: number) {
-  if (tokens < 1000) return tokens.toLocaleString();
-  const thousands = tokens / 1000;
-  if (thousands < 999.5) return `${trimFixed(thousands, thousands < 99.95 ? 1 : 0)}k`;
-  return `${trimFixed(tokens / 1_000_000, 1)}M`;
 }
 
 type InputPart = { label: string; tokens: number; color: string };

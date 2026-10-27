@@ -92,7 +92,7 @@ function harnessRequestOutcome(
   };
 }
 
-/* a conversation that runs from yesterday into today */
+/* a conversation that runs from yesterday into today, compacted between */
 function dayItems(): RenderedTimelineItem[] {
   const at = (daysAgo: number, hour: number) => {
     const date = new Date();
@@ -119,7 +119,29 @@ function dayItems(): RenderedTimelineItem[] {
       reasoning: null,
       timestamp: at(1, 16),
     }),
-    user(4, "Good morning. Let's fix it and add a test.", at(0, 9)),
+    {
+      kind: "sessionCompaction" as const,
+      itemKey: "day-compaction",
+      sequence: 4,
+      messagesCompacted: 128,
+      originalTokens: 182_400,
+      compactedTokens: 11_900,
+      timestamp: at(1, 17),
+      summary: [
+        "## Goal",
+        "Fix the flaky parser test and add a regression test.",
+        "",
+        "## Progress",
+        "- Found the race: `parse_header` reads the buffer before the length is set.",
+        "- Moved the length check ahead of the read; the test passes 50 times in a row.",
+        "",
+        "## Next",
+        "Add a regression test for an empty header.",
+      ].join("\n"),
+      filesRead: ["src/parser.rs", "tests/parser.rs"],
+      filesModified: ["src/parser.rs"],
+    },
+    user(5, "Good morning. Let's fix it and add a test.", at(0, 9)),
   ];
 }
 
