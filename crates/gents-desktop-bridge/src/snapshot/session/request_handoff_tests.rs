@@ -2,7 +2,11 @@ use super::*;
 use crate::snapshot::tests::push_canonical_text_message;
 use crate::types::RenderedTimelineItem;
 use gents_desktop_core::client::{ClientStoreRows, RequestPromptFact, RequestPromptOwnership};
-use gents_protocol::output::MessageRole;
+use gents_protocol::message::{DocumentSourceKind, Message, UserContent};
+use gents_protocol::output::{
+    MediaBlock, MediaData, MediaKind, MediaType, MessageBlock, MessageRole, PayloadRef, SegmentRun,
+    SourceClose, StreamDeclaration, StreamPayload,
+};
 use gents_protocol::request_input::{QueueDelivery, RequestInput};
 
 fn requests() -> Vec<AgentRequestRow> {
@@ -119,6 +123,94 @@ fn inputs(snapshot: &DesktopSessionSnapshot) -> Vec<(&str, &str)> {
         .collect()
 }
 
+fn assert_metadata(snapshot: &DesktopSessionSnapshot, requests: &[AgentRequestRow]) {
+    for request in requests.iter().skip(1).take(3) {
+        let source = request.input.as_ref().unwrap();
+        source.validate_attachments().unwrap();
+        let metadata = snapshot
+            .timeline_items
+            .iter()
+            .find_map(|item| match item {
+                RenderedTimelineItem::PendingUserTurn {
+                    request_id,
+                    captured_context,
+                    attachments,
+                    ..
+                } if request_id == &request.request_id => Some((captured_context, attachments)),
+                RenderedTimelineItem::UserMessage {
+                    input_request_id: Some(id),
+                    captured_context,
+                    attachments,
+                    ..
+                } if id == &request.request_id => Some((captured_context, attachments)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(metadata.0.as_ref(), Some(&source.captured_context));
+        assert_eq!(
+            metadata.1.as_ref(),
+            Some(
+                &source
+                    .attachments
+                    .iter()
+                    .map(|a| a.view())
+                    .collect::<Vec<_>>()
+            )
+        );
+    }
+}
+
+fn materialize_metadata(rows: &mut ClientStoreRows, request: &AgentRequestRow) {
+    let input = request.input.clone().unwrap_or_default();
+    let Message::User { content } = input
+        .authored_message(request.content.as_deref().unwrap())
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    let header = &mut rows.transcript_messages.last_mut().unwrap().message;
+    let segment_row = rows.output_segments.last_mut().unwrap();
+    let segment = &mut segment_row.segment;
+    for part in content {
+        let UserContent::Document(document) = part else {
+            continue;
+        };
+        let SourceClose::Closed { stream_bytes, .. } = segment.close.as_mut().unwrap() else {
+            unreachable!()
+        };
+        let stream = u32::try_from(stream_bytes.len()).unwrap();
+        let reference = PayloadRef {
+            close_doc_id: segment_row.doc_id.clone(),
+            stream,
+        };
+        let (data, bytes) = match document.data {
+            DocumentSourceKind::String(bytes) => (MediaData::String { data: reference }, bytes),
+            DocumentSourceKind::Base64(bytes) => (MediaData::Base64 { data: reference }, bytes),
+            _ => panic!("fixture documents carry frozen payloads"),
+        };
+        segment.runs.push(SegmentRun {
+            stream,
+            bytes: u32::try_from(bytes.len()).unwrap(),
+            declaration: Some(StreamDeclaration {
+                block_index: u32::try_from(header.blocks.len()).unwrap(),
+                part_index: 0,
+                payload: StreamPayload::Media {
+                    media_kind: MediaKind::Document,
+                },
+            }),
+        });
+        stream_bytes.push(u64::try_from(bytes.len()).unwrap());
+        segment.payload.push_str(&bytes);
+        header.blocks.push(MessageBlock::Media(MediaBlock {
+            kind: MediaKind::Document,
+            data,
+            media_type: document.media_type.map(MediaType::Document),
+            detail: None,
+            additional_params: document.additional_params,
+        }));
+    }
+}
+
 #[test]
 fn fresh_multi_steer_handoff_retains_each_capture_and_attachment_in_requester_scope() {
     let mut requests = requests();
@@ -174,32 +266,7 @@ fn fresh_multi_steer_handoff_retains_each_capture_and_attachment_in_requester_sc
                 ("steer-3", "exact steer 3"),
             ]
         );
-        for request in &requests[1..4] {
-            let source = request.input.as_ref().unwrap();
-            source.validate_attachments().unwrap();
-            let item = snapshot.timeline_items.iter().find(|item| matches!(item,
-                RenderedTimelineItem::PendingUserTurn { request_id, .. } if request_id == &request.request_id
-            )).unwrap();
-            let RenderedTimelineItem::PendingUserTurn {
-                captured_context,
-                attachments,
-                ..
-            } = item
-            else {
-                unreachable!()
-            };
-            assert_eq!(captured_context.as_ref(), Some(&source.captured_context));
-            assert_eq!(
-                attachments.as_ref(),
-                Some(
-                    &source
-                        .attachments
-                        .iter()
-                        .map(|a| a.view())
-                        .collect::<Vec<_>>()
-                )
-            );
-        }
+        assert_metadata(&snapshot, &requests);
         assert!(snapshot
             .queued_turns
             .iter()
@@ -242,6 +309,7 @@ fn multiple_folded_inputs_materialize_once_and_stay_on_their_original_page() {
             MessageRole::User,
             request.content.as_deref().unwrap(),
         );
+        materialize_metadata(&mut rows, request);
         let fact = facts
             .by_request_doc_id
             .get_mut(request.doc_id.as_deref().unwrap())
@@ -259,6 +327,7 @@ fn multiple_folded_inputs_materialize_once_and_stay_on_their_original_page() {
                 ("steer-3", "exact steer 3"),
             ]
         );
+        assert_metadata(&snapshot, &requests);
     }
     let context = ClientStore::from_rows(rows.clone());
     let mut historical = rows.clone();
