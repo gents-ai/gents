@@ -79,17 +79,28 @@ export function createChatDelivery(api: DesktopApiAdapter, stores: ShellStores) 
       selectedSessionId: string | null,
       queued: boolean,
       applied: Applied,
+      mailbox?: ChatDraft["mailbox"],
     ) {
       const actor = clientDid();
       if (request.clientDid && request.clientDid !== actor)
         throw new Error("The selected client changed before dispatch.");
       if (
-        chatDraftsFor(load(), actor, request.nodeDid, selectedSessionId).some(
-          (draft) => !draft.result || draft.result.outcome === "deliveryUnknown",
+        chatDraftsFor(
+          load(),
+          actor,
+          request.nodeDid,
+          selectedSessionId,
+          mailbox?.itemId,
+        ).some((draft) =>
+          mailbox
+            ? draft.result?.outcome !== "notDelivered"
+            : !draft.result || draft.result.outcome === "deliveryUnknown",
         )
       )
         throw new Error(
-          "Check the saved message before sending another message in this chat.",
+          mailbox
+            ? "Check the saved answer before answering this question again."
+            : "Check the saved message before sending another message in this chat.",
         );
       const draft = retainChatDraft(
         {
@@ -100,6 +111,7 @@ export function createChatDelivery(api: DesktopApiAdapter, stores: ShellStores) 
         },
         selectedSessionId,
         queued,
+        mailbox,
       );
       track(draft.requestId, true);
       try {

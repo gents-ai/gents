@@ -29,6 +29,8 @@ import { agentName } from "./behavior";
 import type { ShellActions } from "@/../hooks/shellActions";
 import { NodeAgentStack } from "./NodeBehaviorStack";
 import { deadlineOf, dueSoon } from "./mailbox-triage";
+import { ChatDeliveryFeedback } from "./session/ChatDeliveryFeedback";
+import { chatDraftsFor } from "../../hooks/chatDrafts";
 import { parseQuestion, QuestionAnswer } from "./MailboxQuestion";
 import { Markdown } from "./Markdown";
 import { span, when } from "./time";
@@ -84,8 +86,22 @@ export function Item({
   const session = useFleet((state) =>
     m.sessionId ? state.bySessionId[m.sessionId] : undefined,
   );
-  const { answerMailboxQuestion, dismissMailboxItem, openMailboxItem } =
-    useApp().actions;
+  const {
+    actions: { answerMailboxQuestion, dismissMailboxItem, openMailboxItem },
+    stores,
+  } = useApp();
+  const clientDid = stores.client.use.snapshot()?.client?.clientDid ?? null;
+  const drafts = chatDraftsFor(
+    stores.chat.use.chatDrafts(),
+    clientDid,
+    m.targetNodeDid,
+    m.sessionId,
+    m.itemId,
+  );
+  const answerPending = drafts.some(
+    (draft) => !draft.result || draft.result.outcome === "deliveryUnknown",
+  );
+  const answerConfirmed = drafts.some((draft) => draft.result && !draft.result.outcome);
   const kind = KIND[m.kind] ?? {
     icon: CircleHelp,
     label: m.kind,
@@ -247,9 +263,12 @@ export function Item({
                 key={m.questionHash ?? m.payload ?? m.itemId}
                 question={question}
                 questionHash={m.questionHash}
-                onAnswer={(answer) => answerMailboxQuestion(m, answer)}
+                onAnswer={(answer, view) => answerMailboxQuestion(m, answer, view)}
+                pending={answerPending}
+                confirmed={answerConfirmed}
               />
             )}
+            {question && <ChatDeliveryFeedback mailboxItem={m} />}
             {m.action === "write_document" && m.expectedCollection && (
               <p className="mt-2 text-xs text-muted-foreground">
                 Answer with a{" "}

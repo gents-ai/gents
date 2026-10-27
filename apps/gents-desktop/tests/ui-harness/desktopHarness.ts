@@ -113,6 +113,7 @@ export type DesktopUiHarnessScenario =
   | "backend-health-error"
   | "backend-unavailable"
   | "mailbox-overflow"
+  | "mailbox-question"
   | "long-content"
   | "active-turn"
   | "coding"
@@ -298,6 +299,46 @@ export function createDesktopUiHarness(
         ...backend,
         enabled: false,
       })),
+    };
+  }
+  if (scenario === "mailbox-question") {
+    deployment = {
+      ...deployment,
+      mailboxItems: [
+        {
+          itemId: "mailbox-question",
+          itemKey: "mailbox-question",
+          requesterDid: "did:key:desktop-harness",
+          nodeDid: NODE_DID,
+          status: "open",
+          kind: "ask",
+          action: "start_request",
+          title: "Choose a workspace",
+          summary: null,
+          payload: JSON.stringify({
+            version: 1,
+            prompt: "Where should this run?",
+            options: [
+              { id: "local", label: "This computer" },
+              { id: "remote", label: "Remote host" },
+            ],
+            multi_select: true,
+            allow_free_text: true,
+          }),
+          sourceKind: "session",
+          sourceId: "session-intro",
+          sessionId: "session-intro",
+          requestId: null,
+          graphRunId: null,
+          causeDocId: null,
+          targetNodeDid: NODE_DID,
+          targetAgentId: DEFAULT_AGENT_ID,
+          expectedCollection: null,
+          parentItemId: null,
+          deadlineAt: null,
+          createdAt: STARTED_AT,
+        },
+      ],
     };
   }
   if (scenario === "mailbox-overflow") {
@@ -1449,7 +1490,9 @@ export function createDesktopUiHarness(
       };
     },
     async sendChatMessage(request) {
-      const content = request.content.trim();
+      const content = request.answer
+        ? "Question answer received"
+        : request.content.trim();
       if (!content && !request.attachments?.length) {
         throw new Error("message content is required");
       }
@@ -3630,6 +3673,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "backend-health-error":
     case "backend-unavailable":
     case "mailbox-overflow":
+    case "mailbox-question":
     case "long-content":
     case "active-turn":
     case "coding":

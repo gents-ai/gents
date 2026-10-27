@@ -1,3 +1,4 @@
+import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@gents/ui/components/button";
 import { useApp } from "@/app/AppContext";
@@ -11,6 +12,7 @@ import {
 } from "../../../hooks/chatDrafts";
 
 function description(draft: ChatDraft) {
+  if (draft.mailbox) return draft.mailbox.summary;
   try {
     const request = chatDraftRequest(draft);
     return [
@@ -24,11 +26,17 @@ function description(draft: ChatDraft) {
   }
 }
 
-export function ChatDeliveryFeedback() {
+export function ChatDeliveryFeedback({
+  mailboxItem,
+}: {
+  mailboxItem?: MailboxItemView;
+}) {
   const { stores } = useApp();
   const snapshot = stores.client.use.snapshot();
-  const nodeDid = stores.selection.use.nodeDid();
-  const sessionId = stores.selection.use.sessionId();
+  const selectedNode = stores.selection.use.nodeDid();
+  const selectedSession = stores.selection.use.sessionId();
+  const nodeDid = mailboxItem?.targetNodeDid ?? selectedNode;
+  const sessionId = mailboxItem ? mailboxItem.sessionId : selectedSession;
   const entries = stores.chat.use.chatDrafts();
   const readError = stores.chat.use.chatDraftError();
   const sending = stores.chat.use.sending();
@@ -50,6 +58,7 @@ export function ChatDeliveryFeedback() {
         snapshot?.client?.clientDid ?? null,
         nodeDid,
         sessionId,
+        mailboxItem?.itemId ?? null,
       ).map((draft) => (
         <SavedMessage
           key={draft.requestId}
@@ -81,6 +90,7 @@ function SavedMessage({
   }, []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const noun = draft.mailbox ? "answer" : "message";
   const notDelivered = draft.result?.outcome === "notDelivered";
   const confirmed = draft.result && !draft.result.outcome;
   async function recover(resume: boolean) {
@@ -89,15 +99,22 @@ function SavedMessage({
     setBusy(true);
     setError("");
     try {
-      const result = await actions.recoverChatMessage(
-        draft.requestId,
-        resume,
-        () => mounted.current,
-      );
+      const result = draft.mailbox
+        ? await actions.recoverMailboxAnswer(
+            draft.mailbox.itemId,
+            draft.requestId,
+            resume,
+            () => mounted.current,
+          )
+        : await actions.recoverChatMessage(
+            draft.requestId,
+            resume,
+            () => mounted.current,
+          );
       if (!mounted.current) return;
       if (!result || result.outcome === "deliveryUnknown")
         setError(
-          "Delivery is still unconfirmed. Check again or resume the saved message.",
+          `Delivery is still unconfirmed. Check again or resume the saved ${noun}.`,
         );
       else if (
         !result.outcome &&
@@ -131,20 +148,26 @@ function SavedMessage({
   return (
     <section
       role="status"
-      aria-label="Saved message"
+      aria-label={draft.mailbox ? "Saved answer" : "Saved message"}
       className="mt-2 rounded-xl border border-border p-3 text-xs"
     >
       <div className="flex flex-wrap items-center gap-2">
         <span className="mr-auto text-muted-foreground">
           {notDelivered
-            ? "Message was not delivered"
+            ? draft.mailbox
+              ? "Answer was not delivered"
+              : "Message was not delivered"
             : confirmed
-              ? "Message sent"
+              ? draft.mailbox
+                ? "Answer sent"
+                : "Message sent"
               : busy
-                ? "Checking saved message…"
+                ? `Checking saved ${noun}…`
                 : submitting
-                  ? "Sending saved message…"
-                  : "Message awaiting confirmation"}
+                  ? `Sending saved ${noun}…`
+                  : draft.mailbox
+                    ? "Answer awaiting confirmation"
+                    : "Message awaiting confirmation"}
         </span>
         <Button
           variant="ghost"
@@ -152,7 +175,7 @@ function SavedMessage({
           disabled={busy || disabled}
           onClick={() => void recover(false)}
         >
-          {busy ? "Checking…" : "Check message delivery"}
+          {busy ? "Checking…" : `Check ${noun} delivery`}
         </Button>
         {notDelivered ? (
           <Button
@@ -161,7 +184,7 @@ function SavedMessage({
             disabled={busy || disabled}
             onClick={() => void dismiss()}
           >
-            Dismiss saved message
+            Dismiss saved {noun}
           </Button>
         ) : (
           !confirmed && (
@@ -171,13 +194,13 @@ function SavedMessage({
               disabled={busy || disabled}
               onClick={() => void recover(true)}
             >
-              Resume saved message
+              Resume saved {noun}
             </Button>
           )
         )}
       </div>
       <details className="mt-1 text-muted-foreground">
-        <summary>Saved message</summary>
+        <summary>Saved {noun}</summary>
         <p className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words">
           {description(draft)}
         </p>

@@ -14,6 +14,7 @@ export type ChatDraft = {
   sessionId: string;
   selectedSessionId: string | null;
   queued: boolean;
+  mailbox?: { itemId: string; summary: string };
   requestJson: string;
   result?: ChatSendResult;
 };
@@ -51,6 +52,15 @@ function decode(value: unknown): ChatDraft {
     queued: value.queued === true,
     requestJson: value.requestJson,
   };
+  if (value.mailbox !== undefined) {
+    if (
+      !object(value.mailbox) ||
+      !identifier(value.mailbox.itemId) ||
+      typeof value.mailbox.summary !== "string"
+    )
+      throw new Error("The saved answer's question could not be read.");
+    draft.mailbox = { itemId: value.mailbox.itemId, summary: value.mailbox.summary };
+  }
   if (value.result !== undefined) {
     if (!object(value.result))
       throw new Error("The saved message receipt could not be read.");
@@ -88,11 +98,13 @@ export function retainChatDraft(
   request: ChatSendRequest,
   selectedSessionId: string | null,
   queued = false,
+  mailbox?: ChatDraft["mailbox"],
 ): ChatDraft {
   return decode({
     ...request,
     selectedSessionId,
     queued,
+    mailbox,
     requestJson: JSON.stringify(request),
   });
 }
@@ -106,7 +118,9 @@ export function chatDraftRequest(draft: ChatDraft): ChatSendRequest {
     request.requestId !== draft.requestId ||
     request.sessionId !== draft.sessionId ||
     typeof request.content !== "string" ||
-    request.resolveRequestId != null
+    request.resolveRequestId != null ||
+    (draft.mailbox !== undefined &&
+      request.causedBySourceDocId !== draft.mailbox.itemId)
   )
     throw new Error(
       "The saved message input is unreadable or has changed identity. Check its delivery.",
@@ -142,11 +156,14 @@ export function chatDraftsFor(
   clientDid: string | null,
   nodeDid: string | null,
   sessionId: string | null,
+  mailboxItemId?: string | null,
 ) {
   return drafts.filter(
     (draft) =>
       draft.clientDid === clientDid &&
       draft.nodeDid === nodeDid &&
+      (mailboxItemId === null ||
+        (mailboxItemId ? draft.mailbox?.itemId === mailboxItemId : !draft.mailbox)) &&
       (draft.selectedSessionId === sessionId || draft.sessionId === sessionId),
   );
 }

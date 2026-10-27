@@ -7,36 +7,57 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toastFailure } from "@/lib/failure";
 
 export function QuestionAnswer({
   question,
   questionHash,
   onAnswer,
+  pending = false,
+  confirmed = false,
 }: {
   question: MailboxQuestion;
   questionHash?: string | null;
-  onAnswer: (answer: MailboxQuestionAnswer) => Promise<void>;
+  onAnswer: (
+    answer: MailboxQuestionAnswer,
+    acceptsView: () => boolean,
+  ) => Promise<boolean>;
+  pending?: boolean;
+  confirmed?: boolean;
 }) {
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const [unconfirmed, setUnconfirmed] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [other, setOther] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<"answer" | "skip" | null>(null);
   const unavailable = question.version === 2 && !questionHash;
   const send = async (answer: MailboxQuestionAnswer) => {
-    if (unavailable || sending) return;
+    if (unavailable || sending || pending || confirmed) return;
     setSending(true);
     try {
-      await onAnswer({
-        ...answer,
-        ...(question.version === 2 ? { question_hash: questionHash } : {}),
-      });
-      setSent(answer.skip ? "skip" : "answer");
+      const applied = await onAnswer(
+        {
+          ...answer,
+          ...(question.version === 2 ? { question_hash: questionHash } : {}),
+        },
+        () => mounted.current,
+      );
+      if (mounted.current) {
+        setSent(applied ? (answer.skip ? "skip" : "answer") : null);
+        setUnconfirmed(!applied);
+      }
     } catch (error) {
-      toastFailure("send the answer", error);
+      if (mounted.current) toastFailure("send the answer", error);
     } finally {
-      setSending(false);
+      if (mounted.current) setSending(false);
     }
   };
   const note = other.trim() || null;
@@ -58,7 +79,7 @@ export function QuestionAnswer({
     );
   };
   const canSend = selected.length > 0 || note !== null;
-  if (sent) {
+  if (sent || confirmed) {
     return (
       <div className="mt-3 max-w-prose" data-testid="mailbox-question">
         <p className="text-sm text-foreground">{question.prompt}</p>
@@ -85,7 +106,7 @@ export function QuestionAnswer({
               variant={on ? "brand" : "raised"}
               aria-pressed={deferred ? on : undefined}
               title={option.description ?? undefined}
-              disabled={sending || unavailable}
+              disabled={sending || unavailable || pending}
               onClick={() => choose(option.id)}
             >
               {deferred && on && <Check />}
@@ -109,6 +130,12 @@ export function QuestionAnswer({
       {unavailable && (
         <p role="status">Reconnect to load this question before answering.</p>
       )}
+      {unconfirmed && pending && (
+        <p role="alert" className="mt-2 text-xs text-muted-foreground">
+          Your answer is not confirmed. Use Check answer delivery or Resume saved answer
+          below.
+        </p>
+      )}
       {(question.version === 2 ||
         question.allow_free_text ||
         question.multi_select) && (
@@ -124,7 +151,7 @@ export function QuestionAnswer({
               aria-label={question.options.length ? "Other" : "Your answer"}
               placeholder={question.options.length ? "Other…" : "Your answer…"}
               value={other}
-              disabled={sending || unavailable}
+              disabled={sending || unavailable || pending}
               onChange={(event) => setOther(event.target.value)}
               className="h-8 max-w-xs text-sm"
             />
@@ -133,7 +160,7 @@ export function QuestionAnswer({
             type="submit"
             size="sm"
             variant="brand"
-            disabled={!canSend || sending || unavailable}
+            disabled={!canSend || sending || unavailable || pending}
           >
             Send
           </Button>
@@ -142,7 +169,7 @@ export function QuestionAnswer({
               type="button"
               size="sm"
               variant="raised"
-              disabled={sending || unavailable}
+              disabled={sending || unavailable || pending}
               onClick={() => void send({ option_ids: [], free_text: null, skip: true })}
             >
               Skip
