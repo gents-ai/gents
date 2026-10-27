@@ -160,7 +160,7 @@ const questionItem = (question: Record<string, unknown>) =>
 
 describe("mailbox question", () => {
   it("skips an optional question with its observed source and without a selected answer", async () => {
-    const answer = vi.fn().mockResolvedValue(undefined);
+    const answer = vi.fn(acceptedChatReply);
     const ask = {
       ...questionItem({ version: 2, optional: true }),
       questionHash: "original-question",
@@ -185,7 +185,7 @@ describe("mailbox question", () => {
   });
 
   it("keeps required free-text questions pending until an explicit answer", async () => {
-    const answer = vi.fn().mockResolvedValue(undefined);
+    const answer = vi.fn(acceptedChatReply);
     const ask = {
       ...questionItem({ version: 2, options: [], allow_free_text: true }),
       questionHash: "required-question",
