@@ -162,11 +162,9 @@ mod tests {
             let (access, _) = crate::resolve_config_access(Some(home.path()), None)
                 .await
                 .unwrap();
-            access
-                .execute("{ PackInstallation { coordinate } }")
-                .await
-                .unwrap()["data"]["PackInstallation"]
-                .clone()
+            let records = access.execute("{ PackInstallation { coordinate } }").await;
+            access.local_node().unwrap().shutdown().await;
+            records.unwrap()["data"]["PackInstallation"].clone()
         };
 
         install(args(&format!("{namespace}/echo"), base_url, home.path()))
