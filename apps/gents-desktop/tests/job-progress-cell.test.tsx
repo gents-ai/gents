@@ -165,4 +165,23 @@ describe("JobProgressCell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop" }));
     expect(jobControl).not.toHaveBeenCalled();
   });
+
+  it("offers Promote only on an ended dynamic run", () => {
+    const { unmount } = renderIn(
+      testApp({ selection: { sessionId: "session-1" } }),
+      <JobProgressCell tool={row({ jobOrigin: "dynamic" })} />,
+    );
+    expect(screen.queryByRole("button", { name: "Promote" })).toBeNull();
+    unmount();
+    const ended = renderIn(
+      testApp({ selection: { sessionId: "session-1" } }),
+      <JobProgressCell tool={row({ jobState: "completed", jobOrigin: "installed" })} />,
+    );
+    expect(screen.queryByRole("button", { name: "Promote" })).toBeNull();
+    ended.unmount();
+    const getDynamicWorkflow = vi.fn().mockReturnValue(new Promise(() => {}));
+    mount(row({ jobState: "completed", jobOrigin: "dynamic" }), { getDynamicWorkflow });
+    fireEvent.click(screen.getByRole("button", { name: "Promote" }));
+    expect(getDynamicWorkflow).toHaveBeenCalledWith("session-1:call-1");
+  });
 });

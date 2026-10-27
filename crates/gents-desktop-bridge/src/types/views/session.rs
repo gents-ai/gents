@@ -153,6 +153,9 @@ pub struct ToolCallView {
     pub job_state: Option<gents_protocol::job::JobState>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
+    pub job_origin: Option<gents_protocol::job::JobOrigin>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
     pub job_outcome: Option<gents_protocol::job::JobOutcome>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     #[ts(as = "Option<Vec<String>>", optional)]
@@ -326,6 +329,9 @@ pub struct RenderedToolCallView {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub job_state: Option<gents_protocol::job::JobState>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub job_origin: Option<gents_protocol::job::JobOrigin>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub job_outcome: Option<gents_protocol::job::JobOutcome>,

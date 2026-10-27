@@ -362,6 +362,12 @@ fn export_all(dir: &Path) -> Result<(), String> {
         crate::tauri_commands::ux_plugins::UxDataSurfacesRequest,
         crate::tauri_commands::packs::PluginBindRequest,
         crate::tauri_commands::packs::PackWireRequest,
+        crate::tauri_commands::packs::WorkflowPromoteRequest,
+        DynamicWorkflowsView,
+        DynamicWorkflowSummary,
+        DynamicWorkflowView,
+        WorkflowPromoteView,
+        WorkflowPromotionRecord,
         gents_server::packs::EditedDocuments,
         RequestTimelineView,
         ToolSurfaceExplanationView,
@@ -477,6 +483,15 @@ fn ts_rs_exports_tagged_enum_and_camel_case_structs() {
         goal.contains("\"kind\": \"pause\"") && goal.contains("tokenBudget: string"),
         "goal controls must retain their tagged request shape and exact budget strings: {goal}"
     );
+
+    for file in [
+        "DynamicWorkflowsView.ts",
+        "DynamicWorkflowView.ts",
+        "WorkflowPromoteRequest.ts",
+        "WorkflowPromoteView.ts",
+    ] {
+        assert!(tmp.path().join(file).exists(), "{file} must be exported");
+    }
 
     let timeline = std::fs::read_to_string(tmp.path().join("RenderedTimelineItem.ts"))
         .expect("RenderedTimelineItem.ts");

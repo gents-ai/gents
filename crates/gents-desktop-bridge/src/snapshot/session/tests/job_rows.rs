@@ -2,7 +2,9 @@ use super::*;
 use crate::tests::support::{boot_core, create_session, create_tool_call, seed_job_row, OPERATOR};
 use crate::types::RenderedToolCallView;
 use gents::config_client::ConfigAccess;
-use gents_protocol::job::{JobBudget, JobOutcome, JobPauseReason, JobProgress, JobState};
+use gents_protocol::job::{
+    JobBudget, JobOrigin, JobOutcome, JobPauseReason, JobProgress, JobState,
+};
 
 fn progress(state: JobState, pause_reason: Option<JobPauseReason>) -> JobProgress {
     JobProgress {
@@ -188,6 +190,7 @@ async fn paused_job_row_has_state_paused_and_no_outcome() {
     );
     let wire = rendered(&snapshot, "call-paused");
     assert_eq!(wire.job_state, Some(JobState::Paused));
+    assert_eq!(wire.job_origin, Some(JobOrigin::Installed));
     assert_eq!(wire.job_outcome, None);
     assert_eq!(wire.job_next_calls, next);
     let flat_row = flat(&snapshot, "call-paused");
@@ -228,6 +231,7 @@ async fn non_job_row_has_no_job_fields() {
         "jobProgress",
         "jobHandle",
         "jobState",
+        "jobOrigin",
         "jobOutcome",
         "jobNextCalls",
     ] {

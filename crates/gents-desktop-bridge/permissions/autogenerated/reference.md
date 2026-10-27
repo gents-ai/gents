@@ -3430,6 +3430,84 @@ Denies the desktop_ux_plugins_list command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-workflow-dynamic`
+
+</td>
+<td>
+
+Enables the desktop_workflow_dynamic command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-workflow-dynamic`
+
+</td>
+<td>
+
+Denies the desktop_workflow_dynamic command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-workflow-promote`
+
+</td>
+<td>
+
+Enables the desktop_workflow_promote command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-workflow-promote`
+
+</td>
+<td>
+
+Denies the desktop_workflow_promote command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-workflows-dynamic`
+
+</td>
+<td>
+
+Enables the desktop_workflows_dynamic command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-workflows-dynamic`
+
+</td>
+<td>
+
+Denies the desktop_workflows_dynamic command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-workspace-list`
 
 </td>

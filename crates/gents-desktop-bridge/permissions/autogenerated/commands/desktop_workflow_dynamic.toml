@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-workflow-dynamic"
+description = "Enables the desktop_workflow_dynamic command without any pre-configured scope."
+commands.allow = ["desktop_workflow_dynamic"]
+
+[[permission]]
+identifier = "deny-desktop-workflow-dynamic"
+description = "Denies the desktop_workflow_dynamic command without any pre-configured scope."
+commands.deny = ["desktop_workflow_dynamic"]

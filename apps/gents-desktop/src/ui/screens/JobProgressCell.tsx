@@ -3,6 +3,7 @@
    the progress record's, which stays "running" on an ended row. The next
    calls are the bridge's, printed as given. */
 
+import { useState } from "react";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import type { JobControlKind } from "@source-inc/gents-desktop-client/generated/JobControlKind";
 import { Button } from "@gents/ui/components/button";
@@ -10,11 +11,14 @@ import { cn } from "@gents/ui/lib/utils";
 import { writeDraft } from "../../hooks/draftStore";
 import { toastFailure } from "../lib/failure";
 import { useApp } from "../app/AppContext";
+import { PromoteWorkflowDialog } from "./PromoteWorkflowDialog";
 
 const words = (value: string) => value.replace(/_/g, " ");
 
 export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
-  const { actions, drafts, view } = useApp();
+  const { actions, drafts, stores, view } = useApp();
+  const sessionId = stores.selection.use.sessionId();
+  const [promoting, setPromoting] = useState(false);
   const state = tool.jobState;
   const progress = tool.jobProgress;
   const terminal =
@@ -123,11 +127,24 @@ export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
         </>
       )}
       {state && terminal && (
-        <p data-testid="job-outcome" className="text-sm">
-          {tool.jobOutcome
-            ? `${tool.jobOutcome.code}: ${tool.jobOutcome.message}`
-            : words(state)}
-        </p>
+        <div className="flex items-center gap-2">
+          <p data-testid="job-outcome" className="min-w-0 flex-1 text-sm">
+            {tool.jobOutcome
+              ? `${tool.jobOutcome.code}: ${tool.jobOutcome.message}`
+              : words(state)}
+          </p>
+          {tool.jobOrigin === "dynamic" && sessionId && tool.toolCallId && (
+            <Button size="sm" variant="outline" onClick={() => setPromoting(true)}>
+              Promote
+            </Button>
+          )}
+        </div>
+      )}
+      {promoting && sessionId && tool.toolCallId && (
+        <PromoteWorkflowDialog
+          selector={`${sessionId}:${tool.toolCallId}`}
+          onClose={() => setPromoting(false)}
+        />
       )}
       {!!tool.jobNextCalls?.length && (
         <ul data-testid="job-next-calls" className="grid gap-0.5 font-mono text-[11px]">
