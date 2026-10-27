@@ -33,6 +33,8 @@ import {
   unresolvedSubmissionFor,
 } from "./unresolvedSubmissions";
 import type { ShellProjection, ShellStores } from "./shellProjection";
+import { createGoalDelivery } from "./goalDelivery";
+import { goalDraftCommand, type GoalDraft } from "./goalDrafts";
 
 type ChatActionParams = {
   api: DesktopApiAdapter;
@@ -107,8 +109,57 @@ export function createChatActions({
 }: ChatActionParams) {
   const store = stores.selection;
   let submissionInFlight = false;
+  const goalDelivery = createGoalDelivery(api, stores);
 
   const selectedNode = () => nodeOf(stores.fleet.getState(), store.getState().nodeDid);
+
+  function applyGoalResult(
+    result: GoalControlResult,
+    draft: GoalDraft,
+    intent: number,
+  ) {
+    if (
+      !selection.acceptsIntent(store, intent) ||
+      store.getState().nodeDid !== draft.nodeDid ||
+      (store.getState().sessionId !== draft.selectedSessionId &&
+        store.getState().sessionId !== draft.sessionId) ||
+      stores.client.getState().snapshot?.client?.clientDid !== draft.clientDid
+    )
+      return false;
+    let request = null;
+    try {
+      request = goalDraftCommand(draft);
+    } catch {}
+    if (draft.selectedSessionId === null) {
+      writeChatFolders(stores.chat, (folders) =>
+        withFolder(folders, result.sessionId, request?.cwd ?? null),
+      );
+      selection.adoptSession(store, result.sessionId);
+    }
+    if (result.requestId) {
+      if (request?.action.kind === "create")
+        chat.showPendingTurn(
+          stores.chat,
+          {
+            sessionId: result.sessionId,
+            requestId: result.requestId,
+            content: request.action.objective,
+            selectedSkillIds: [],
+            lifecycleState: "pending",
+            foldedIntoRequestId: null,
+            origin: null,
+            createdAt: new Date().toISOString(),
+          },
+          draft.queued,
+        );
+      chat.awaitObservation(stores.chat, {
+        nodeDid: draft.nodeDid,
+        sessionId: result.sessionId,
+        requestId: result.requestId,
+      });
+    }
+    return true;
+  }
 
   async function sendMessage(
     content: string,
@@ -254,6 +305,7 @@ export function createChatActions({
   async function setGoal(
     objective: string,
     agentId?: string | null,
+    acceptsView: () => boolean = () => true,
   ): Promise<GoalControlResult | null> {
     if (submissionInFlight) return null;
     const node = selectedNode() ?? firstNode(stores.fleet.getState());
@@ -276,6 +328,8 @@ export function createChatActions({
     submissionInFlight = true;
     const intentGeneration = selection.captureIntent(store);
     const { sessionId: selectedSessionId } = store.getState();
+    const goalClientDid = stores.client.getState().snapshot?.client?.clientDid;
+    const goalCwd = folderOf(stores.chat.getState().folders, selectedSessionId);
     const ownedWorkflow: ChatWorkflowState = {
       kind: "submittingRequest",
       nodeDid: node.nodeDid,
@@ -283,48 +337,40 @@ export function createChatActions({
     };
     chat.beginSubmission(stores.chat, ownedWorkflow);
     try {
+      if (!goalClientDid)
+        throw new Error("Connect this client before changing a Goal.");
       const current = selectedSessionId
         ? await api.fetchSessionGoal(node.nodeDid, selectedSessionId)
         : null;
-      const result = await api.controlGoal({
-        nodeDid: node.nodeDid,
-        sessionId: selectedSessionId,
-        sessionDocId: current?.sessionDocId ?? null,
-        expected: current?.goal?.revision ?? null,
-        agentId: admission.agentId,
-        action: { kind: "create", objective, tokenBudget: null },
-        cwd: folderOf(stores.chat.getState().folders, selectedSessionId),
-      });
-      if (selectedSessionId === null)
-        writeChatFolders(stores.chat, (folders) =>
-          adoptNewChatFolder(folders, result.sessionId),
+      if (
+        selectedSessionId &&
+        (!current ||
+          current.nodeDid !== node.nodeDid ||
+          current.sessionId !== selectedSessionId)
+      )
+        throw new Error(
+          "The Goal state is unavailable for this chat. Refresh it before changing the Goal.",
         );
-      if (!selection.acceptsIntent(store, intentGeneration)) return result;
-      selection.adoptSession(store, result.sessionId);
-      if (result.requestId) {
-        chat.showPendingTurn(
-          stores.chat,
-          {
-            sessionId: result.sessionId,
-            requestId: result.requestId,
-            content: objective,
-            selectedSkillIds: [],
-            lifecycleState: "pending",
-            foldedIntoRequestId: null,
-            origin: null,
-            createdAt: new Date().toISOString(),
-          },
-          status.kind === "queue",
-        );
-        chat.awaitObservation(stores.chat, {
+      const result = await goalDelivery.submit(
+        {
+          clientDid: goalClientDid,
           nodeDid: node.nodeDid,
-          sessionId: result.sessionId,
-          requestId: result.requestId,
-        });
-      }
+          sessionId: selectedSessionId,
+          sessionDocId: current?.sessionDocId ?? null,
+          expected: current?.goal?.revision ?? null,
+          agentId: admission.agentId,
+          action: { kind: "create", objective, tokenBudget: null },
+          cwd: goalCwd,
+        },
+        selectedSessionId,
+        (result, draft) =>
+          acceptsView() && applyGoalResult(result, draft, intentGeneration),
+        status.kind === "queue",
+      );
       return result;
     } catch (err) {
-      if (!selection.acceptsIntent(store, intentGeneration)) return null;
+      if (!acceptsView() || !selection.acceptsIntent(store, intentGeneration))
+        return null;
       chat.resetWorkflow(stores.chat);
       reportFailure(actionFailure("set the goal", err));
       return null;
@@ -341,20 +387,38 @@ export function createChatActions({
     const nodeDid =
       heldFor(readSession(stores.session), sessionId, null)?.nodeDid ??
       store.getState().nodeDid;
+    const intent = selection.captureIntent(store);
+    const goalClientDid = stores.client.getState().snapshot?.client?.clientDid;
+    const originalAction = { ...action };
     try {
       if (!nodeDid) throw new Error("no node holds this session");
+      if (!goalClientDid)
+        throw new Error("Connect this client before changing a Goal.");
       const current = await api.fetchSessionGoal(nodeDid, sessionId);
+      if (current && (current.nodeDid !== nodeDid || current.sessionId !== sessionId))
+        throw new Error("The Goal observation belongs to another chat.");
       if (!current?.goal) throw new Error("this session has no goal");
-      await api.controlGoal({
-        nodeDid,
+      await goalDelivery.submit(
+        {
+          clientDid: goalClientDid,
+          nodeDid,
+          sessionId,
+          sessionDocId: current.sessionDocId,
+          expected: current.goal.revision,
+          agentId: null,
+          action: originalAction,
+          cwd: null,
+        },
         sessionId,
-        sessionDocId: current.sessionDocId,
-        expected: current.goal.revision,
-        agentId: null,
-        action,
-        cwd: null,
-      });
-      await refreshSession(sessionId);
+        (result, draft) => applyGoalResult(result, draft, intent),
+      );
+      if (
+        selection.acceptsIntent(store, intent) &&
+        store.getState().sessionId === sessionId
+      )
+        void Promise.resolve()
+          .then(() => refreshSession(sessionId))
+          .catch(() => {});
     } catch (err) {
       reportFailure(actionFailure(GOAL_CONTROL_DOING[action.kind], err));
       throw shownFailure(err);
@@ -484,6 +548,30 @@ export function createChatActions({
     renameSession,
     setGoal,
     controlGoal,
+    async recoverGoalChange(
+      commandId: string,
+      resume = false,
+      acceptsView: () => boolean = () => true,
+    ) {
+      const intent = selection.captureIntent(store);
+      const result = await goalDelivery.recover(
+        commandId,
+        resume,
+        (result, draft) => acceptsView() && applyGoalResult(result, draft, intent),
+      );
+      if (
+        result &&
+        acceptsView() &&
+        selection.acceptsIntent(store, intent) &&
+        store.getState().sessionId === result.sessionId &&
+        store.getState().nodeDid === result.submissionReceipt?.nodeDid
+      )
+        void Promise.resolve()
+          .then(() => refreshSession(result.sessionId))
+          .catch(() => {});
+      return result;
+    },
+    dismissGoalChange: goalDelivery.dismiss,
     interruptRequest,
     backgroundTool: (request: Parameters<DesktopApiAdapter["backgroundTool"]>[0]) =>
       api.backgroundTool(request),
