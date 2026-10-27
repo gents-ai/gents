@@ -1226,6 +1226,9 @@ fn context_events_page_with_their_durable_message_anchor() {
             original_tokens: Some(300),
             compacted_tokens: Some(90),
             timestamp: Some("2026-10-20T11:00:00Z".into()),
+            summary: None,
+            files_read: None,
+            files_modified: None,
         },
         assistant_item("message-2", 2),
     ];
@@ -1388,4 +1391,43 @@ fn a_rows_read_draws_the_rows_the_session_snapshot_draws() {
             RenderedTimelineItem::AssistantMessage { .. },
         ] if prompt == "req-1"
     ));
+}
+
+#[test]
+fn a_compaction_row_carries_its_summary_and_files() {
+    let entry: gents_protocol::row::CompactionEntryRow =
+        serde_json::from_value(serde_json::json!({
+            "compaction_key": "checkpoint-1",
+            "summary": "## Goal\nFix the parser.",
+            "files_read": "[\"src/lib.rs\"]",
+            "files_modified": "not a list",
+            "messages_compacted": 4,
+            "compacted_through_sequence": 1,
+            "original_tokens": 300,
+            "compacted_tokens": 90,
+            "created_at": "2026-10-20T11:00:00Z"
+        }))
+        .expect("compaction entry");
+    let mut items = vec![assistant_item("message-1", 1)];
+    let page = [1_i64].into_iter().collect::<rapidhash::RapidHashSet<_>>();
+    crate::snapshot::session::attach_session_compaction_timeline_events(
+        &mut items,
+        &[entry],
+        &page,
+    );
+    let Some(RenderedTimelineItem::SessionCompaction {
+        summary,
+        files_read,
+        files_modified,
+        ..
+    }) = items
+        .iter()
+        .find(|item| matches!(item, RenderedTimelineItem::SessionCompaction { .. }))
+    else {
+        panic!("no compaction row");
+    };
+    assert_eq!(summary.as_deref(), Some("## Goal\nFix the parser."));
+    assert_eq!(files_read.as_deref(), Some(&["src/lib.rs".to_string()][..]));
+    /* a file list the bridge can't read is left out, not shown as text */
+    assert_eq!(files_modified, &None);
 }

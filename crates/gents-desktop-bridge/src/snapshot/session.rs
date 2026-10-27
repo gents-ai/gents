@@ -679,7 +679,7 @@ async fn fill_job_outcomes(core: &ClientCore, snapshot: &mut DesktopSessionSnaps
     }
 }
 
-fn attach_session_compaction_timeline_events(
+pub(super) fn attach_session_compaction_timeline_events(
     items: &mut Vec<RenderedTimelineItem>,
     entries: &[gents_protocol::row::CompactionEntryRow],
     page_sequences: &RapidHashSet<i64>,
@@ -698,9 +698,21 @@ fn attach_session_compaction_timeline_events(
             original_tokens: entry.original_tokens,
             compacted_tokens: entry.compacted_tokens,
             timestamp: entry.created_at.clone(),
+            summary: entry
+                .summary
+                .clone()
+                .filter(|summary| !summary.trim().is_empty()),
+            files_read: compaction_files(entry.files_read.as_deref()),
+            files_modified: compaction_files(entry.files_modified.as_deref()),
         };
         insert_timeline_item_by_sequence(items, item, sequence);
     }
+}
+
+/// The compaction entry keeps its file lists as JSON arrays in a string field.
+fn compaction_files(json: Option<&str>) -> Option<Vec<String>> {
+    json.and_then(|json| serde_json::from_str::<Vec<String>>(json).ok())
+        .filter(|files| !files.is_empty())
 }
 
 fn job_row_fill(
