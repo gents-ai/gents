@@ -13,6 +13,9 @@ pub const MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS: usize = 32_768;
 pub const DEFAULT_COMPACTION_SUMMARY_FILE_LIST_MAX: usize = 100;
 pub const MAX_COMPACTION_SUMMARY_FILE_LIST_MAX: usize = 1_000;
 
+#[cfg(test)]
+#[path = "compaction_checkpoint_tests.rs"]
+mod checkpoint_tests;
 #[path = "compaction_history.rs"]
 pub mod history;
 #[path = "compaction_summary.rs"]

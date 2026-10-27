@@ -63,6 +63,9 @@ pub(crate) struct LeanContractVocabulary<'a> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanContractSnapshot {
+    pub(crate) claude_output_config_cases: Vec<serde_json::Value>,
+    pub(crate) checkpoint_fallback_cases: Vec<serde_json::Value>,
+    pub(crate) checkpoint_list_fields: Vec<String>,
     pub(crate) generated_by: String,
     pub(crate) schema_publication_cases: Vec<serde_json::Value>,
     pub(crate) root_admission_cases: Vec<LeanRootAdmissionCase>,

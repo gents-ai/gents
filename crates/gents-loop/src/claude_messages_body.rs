@@ -507,6 +507,12 @@ pub fn build_messages_body(model: &str, request: &CompletionRequest) -> anyhow::
     if let Some(params) = &request.additional_params {
         apply_reasoning_parameters(model, params, &mut body);
     }
+    if let Some(schema) = &request.output_schema {
+        body["output_config"]["format"] = json!({
+            "type": "json_schema",
+            "schema": schema,
+        });
+    }
     Ok(body)
 }
 
@@ -523,7 +529,7 @@ pub fn apply_reasoning_parameters(_model: &str, params: &Value, body: &mut Value
     if supported.iter().any(|value| value.as_str() == Some(effort))
         && matches!(effort, "low" | "medium" | "high" | "xhigh" | "max")
     {
-        body["output_config"] = json!({ "effort": effort });
+        body["output_config"]["effort"] = json!(effort);
         body["thinking"] = json!({ "type": "adaptive" });
     }
 }
@@ -887,6 +893,10 @@ pub fn encode_assistant_content(
     }
     Ok(blocks)
 }
+
+#[cfg(test)]
+#[path = "claude_messages_output_tests.rs"]
+mod output_tests;
 
 #[cfg(test)]
 mod tests {
