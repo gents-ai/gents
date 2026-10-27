@@ -703,7 +703,6 @@ pub mod approval;
 pub mod authority;
 mod bound;
 pub use bound::BoundDir;
-pub use catalog::catalog;
 
 pub fn attempts_allowed(max_attempts: Option<u32>) -> u32 {
     max_attempts.unwrap_or(1).max(1)
@@ -713,7 +712,6 @@ pub fn retry_backoff(attempts: u32) -> std::time::Duration {
     std::time::Duration::from_secs(1u64 << attempts.saturating_sub(1).min(6))
         .min(std::time::Duration::from_secs(60))
 }
-pub mod catalog;
 pub mod data;
 pub mod executor;
 pub mod http_calls;

@@ -1396,7 +1396,7 @@ mod mounted {
 
     /// A plugin declaring the `workflows` mount class, in a home whose one
     /// materialized pack ships `workflows/a.json`.
-    pub(super) fn mounted_plugin(
+    fn mounted_plugin(
         wat: &str,
         access: Option<BindAccess>,
     ) -> (tempfile::TempDir, InstalledPlugin) {
@@ -1429,7 +1429,7 @@ mod mounted {
         (home, record)
     }
 
-    pub(super) fn executor(home: &tempfile::TempDir) -> PluginExecutor {
+    fn executor(home: &tempfile::TempDir) -> PluginExecutor {
         PluginExecutor::new(Some(home.path().to_owned()))
     }
 
@@ -1475,7 +1475,7 @@ mod mounted {
     }
 
     /// [`ECHO_WAT`] with a 4 KiB read buffer: a mount list outgrows its 256 bytes.
-    pub(super) const ECHO_BIG_WAT: &str = r#"
+    const ECHO_BIG_WAT: &str = r#"
       (module
         (import "wasi_snapshot_preview1" "fd_read"
           (func $fd_read (param i32 i32 i32 i32) (result i32)))
@@ -2490,162 +2490,5 @@ mod job_calls {
             call.outcome.diagnostics
         );
         finish(admission).await;
-    }
-}
-
-mod catalog {
-    use gents_protocol::job::{
-        CatalogEntry, CatalogSource, PluginCatalogDeclaration, PluginDataDeclaration,
-    };
-    use serde_json::{json, Value};
-
-    use super::mounted::{executor, mounted_plugin, ECHO_BIG_WAT};
-    use super::*;
-    use crate::config_client::ConfigAccess;
-    use crate::plugin::catalog;
-    use crate::plugin::data::DataCaller;
-    use crate::plugin::tests::{constant_output_wat, filled_output_wat};
-
-    const NODE: &str = "did:key:z6Mknode";
-
-    async fn test_node() -> Arc<crate::defra_node::EmbeddedNode> {
-        let node = Arc::new(
-            crate::defra_node::EmbeddedNode::builder()
-                .build()
-                .await
-                .unwrap(),
-        );
-        node.add_schema("type FixtureNote { body: String }")
-            .await
-            .unwrap();
-        node
-    }
-
-    fn declare_catalog(home: &tempfile::TempDir, record: &mut InstalledPlugin) {
-        record.declaration.catalog = Some(PluginCatalogDeclaration {
-            argv: vec!["catalog".into()],
-        });
-        store::write_record(home.path(), record).unwrap();
-    }
-
-    fn plugin_ref(record: &InstalledPlugin) -> PluginToolRef {
-        serde_json::from_value(json!({
-            "plugin": format!("{}/{}", record.namespace, record.name),
-            "digest": record.digest,
-        }))
-        .unwrap()
-    }
-
-    async fn list(
-        home: &tempfile::TempDir,
-        record: &InstalledPlugin,
-        node: &Arc<crate::defra_node::EmbeddedNode>,
-    ) -> anyhow::Result<Vec<CatalogEntry>> {
-        catalog(
-            &executor(home),
-            &plugin_ref(record),
-            &DataCaller::new(node.clone(), NODE).unwrap(),
-        )
-        .await
-    }
-
-    #[tokio::test]
-    async fn catalog_entries_decode() {
-        let wat = constant_output_wat(
-            br#"[{"name":"triage","description":"Sort issues","when_to_use":"new issues","source":"pack","path":"workflows/triage.rhai"}]"#,
-        );
-        let (home, mut record) = installed_plugin(&wat, None);
-        declare_catalog(&home, &mut record);
-        let entries = list(&home, &record, &test_node().await).await.unwrap();
-        assert_eq!(
-            entries,
-            [CatalogEntry {
-                name: "triage".into(),
-                description: "Sort issues".into(),
-                when_to_use: "new issues".into(),
-                source: CatalogSource::Pack,
-                path: Some("workflows/triage.rhai".into()),
-            }]
-        );
-    }
-
-    #[tokio::test]
-    async fn catalog_input_carries_argv_and_asset_mounts_never_job_step_input() {
-        let (home, mut record) = mounted_plugin(ECHO_BIG_WAT, None);
-        declare_catalog(&home, &mut record);
-        let error = list(&home, &record, &test_node().await).await.unwrap_err();
-        let message = format!("{error:#}");
-        assert!(message.contains(r#""argv":["catalog"]"#), "{message}");
-        assert!(message.contains(r#""asset_mounts""#), "{message}");
-        for key in ["protocol", "job", "caller", "ceiling"] {
-            assert!(
-                !message.contains(&format!("\"{key}\":")),
-                "{key}: {message}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn catalog_offers_read_only_data_calls_and_no_job_calls_or_tool_calls() {
-        let node = test_node().await;
-        let data = Some(PluginDataDeclaration {
-            collections: vec!["FixtureNote".into()],
-            ops: vec!["insert".into()],
-            stamped: Default::default(),
-        });
-        let (home, mut record) = installed_plugin(ECHO_BIG_WAT, None);
-        record.declaration.data = data.clone();
-        declare_catalog(&home, &mut record);
-        let message = format!("{:#}", list(&home, &record, &node).await.unwrap_err());
-        assert!(message.contains(r#""data_calls":true"#), "{message}");
-        assert!(!message.contains("job_calls"), "{message}");
-        assert!(!message.contains("tool_calls"), "{message}");
-
-        let wat = constant_output_wat(
-            br#"{"writes":[{"op":"insert","collection":"FixtureNote","fields":{}}]}"#,
-        );
-        let (home, mut record) = installed_plugin(&wat, None);
-        record.declaration.data = data;
-        declare_catalog(&home, &mut record);
-        list(&home, &record, &node).await.unwrap_err();
-        let rows = ConfigAccess::local(node.clone())
-            .execute("{ FixtureNote { body } }")
-            .await
-            .unwrap();
-        assert_eq!(rows["data"]["FixtureNote"], Value::Array(vec![]));
-    }
-
-    #[tokio::test]
-    async fn catalog_output_over_256_kib_is_an_error_naming_the_plugin() {
-        let wat = filled_output_wat(
-            br#"[{"name":"x","description":""#,
-            262_144,
-            br#"","when_to_use":"w","source":"pack"}]"#,
-        );
-        let (home, mut record) = installed_plugin(&wat, None);
-        declare_catalog(&home, &mut record);
-        let message = format!(
-            "{:#}",
-            list(&home, &record, &test_node().await).await.unwrap_err()
-        );
-        assert!(
-            message.contains(&format!("{}/{}", record.namespace, record.name)),
-            "{message}"
-        );
-        assert!(message.contains("at most 262144"), "{message}");
-    }
-
-    #[tokio::test]
-    async fn catalog_without_a_declaration_returns_the_next_call() {
-        let (home, record) = installed_plugin(ECHO_BIG_WAT, None);
-        let message = format!(
-            "{:#}",
-            list(&home, &record, &test_node().await).await.unwrap_err()
-        );
-        assert!(
-            message.contains(&format!("{}/{}", record.namespace, record.name)),
-            "{message}"
-        );
-        assert!(message.contains("declare `catalog`"), "{message}");
     }
 }
