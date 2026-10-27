@@ -12,6 +12,11 @@ pub use chat_submission::{acknowledge_chat_submission, recover_chat_submission};
 #[path = "commands/goal.rs"]
 mod goal;
 pub use goal::{control_goal, session_goal};
+#[path = "commands/goal_submission.rs"]
+mod goal_submission;
+pub use goal_submission::{
+    acknowledge_goal_submission, recover_goal_submission, resume_goal_submission,
+};
 #[path = "commands/config.rs"]
 mod config;
 #[path = "commands/mailbox.rs"]

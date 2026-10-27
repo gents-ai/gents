@@ -243,6 +243,36 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
                 case.name,
                 receipt.outcome
             );
+            if case.signature_valid {
+                let query = "{ AgentSessionGoalControl { _docID intent_json receipt_json } AgentRequest { _docID request_id admission_signature } Goal { _docID status objective } }";
+                let before = access.execute(query).await.unwrap();
+                assert_eq!(
+                    crate::goal::recover_session_goal_control(&access, identity.as_ref(), &command)
+                        .await
+                        .unwrap(),
+                    Some(receipt.clone()),
+                    "{}: recover the exact signed creation result",
+                    case.name
+                );
+                assert_eq!(
+                    crate::goal::submit_prepared_session_goal_control(
+                        &access,
+                        identity.as_ref(),
+                        &command,
+                    )
+                    .await
+                    .unwrap(),
+                    receipt,
+                    "{}: resumption retains the original first request",
+                    case.name
+                );
+                assert_eq!(
+                    access.execute(query).await.unwrap(),
+                    before,
+                    "{}",
+                    case.name
+                );
+            }
         } else {
             let txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
             let prepared = prepare_goal_control(&txn, &command).await.unwrap().unwrap();

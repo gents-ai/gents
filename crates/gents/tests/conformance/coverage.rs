@@ -477,6 +477,11 @@ fn lean_feature_matrix_covers_every_declared_required_surface() {
 fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     let snapshot = lean_contract_snapshot();
     let mut emitted = BTreeSet::new();
+    assert!(!snapshot.goal_client_delivery_cases.is_empty());
+    emitted.insert((
+        "goal_client_delivery_cases".into(),
+        "GoalClientDeliveryCases".into(),
+    ));
     for (category, domain, present) in [
         (
             "reasoning_delta_cases",

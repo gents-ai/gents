@@ -246,6 +246,11 @@ export type { GoalControlView } from "./generated/GoalControlView.js";
 export type { GoalControlAction } from "./generated/GoalControlAction.js";
 export type { GoalControlRequest } from "./generated/GoalControlRequest.js";
 export type { GoalControlResult } from "./generated/GoalControlResult.js";
+export type { GoalSubmissionQuery } from "./generated/GoalSubmissionQuery.js";
+export type { GoalSubmissionReference } from "./generated/GoalSubmissionReference.js";
+export type { GoalSubmissionReceipt } from "./generated/GoalSubmissionReceipt.js";
+export type { GoalSubmissionOutcome } from "./generated/GoalSubmissionOutcome.js";
+export type { GoalSubmissionRecovery } from "./generated/GoalSubmissionRecovery.js";
 
 export type { RequestAttachment } from "./generated/RequestAttachment.js";
 export type { AttachmentView } from "./generated/AttachmentView.js";

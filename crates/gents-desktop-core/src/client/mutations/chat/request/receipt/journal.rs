@@ -8,31 +8,47 @@ use super::correlated::{Outcome, Record};
 use super::UnresolvedSubmission;
 
 pub(crate) mod caller;
+pub(crate) mod goal;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "kind", content = "record", deny_unknown_fields)]
 enum Envelope {
     #[serde(rename = "callerReceipt-v1")]
     Caller(Record),
+    #[serde(rename = "goalCallerReceipt-v1")]
+    Goal(super::goal_delivery::Record),
 }
 
 enum Entry {
     Uncorrelated(Box<UnresolvedSubmission>),
     Caller(Box<Record>),
+    Goal(Box<super::goal_delivery::Record>),
 }
 
 fn decode(payload: &str, request_id: &str) -> Result<Entry> {
     let value: serde_json::Value =
         serde_json::from_str(payload).context("decoding retained submission")?;
     if value.get("kind").is_some() {
-        let Envelope::Caller(record) =
+        let envelope: Envelope =
             serde_json::from_value(value).context("decoding caller submission receipt")?;
-        anyhow::ensure!(
-            record.intent.request_id == request_id
-                && record.result() != super::correlated::Decision::Refused,
-            "retained caller receipt binding is invalid"
-        );
-        Ok(Entry::Caller(Box::new(record)))
+        match envelope {
+            Envelope::Caller(record) => {
+                anyhow::ensure!(
+                    record.intent.request_id == request_id
+                        && record.result() != super::correlated::Decision::Refused,
+                    "retained caller receipt binding is invalid"
+                );
+                Ok(Entry::Caller(Box::new(record)))
+            }
+            Envelope::Goal(record) => {
+                anyhow::ensure!(
+                    record.intent.command_id == request_id
+                        && record.decision() != super::goal_delivery::Decision::Refused,
+                    "retained Goal caller binding is invalid"
+                );
+                Ok(Entry::Goal(Box::new(record)))
+            }
+        }
     } else {
         let pending: UnresolvedSubmission =
             serde_json::from_value(value).context("decoding retained signed submission")?;
@@ -109,6 +125,7 @@ pub(crate) async fn load(
         Entry::Uncorrelated(pending) => Some(*pending),
         Entry::Caller(record) if record.outcome == Outcome::Unresolved => record.pending,
         Entry::Caller(_) => None,
+        Entry::Goal(_) => None,
     }))
 }
 
