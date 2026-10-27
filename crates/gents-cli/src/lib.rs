@@ -79,6 +79,7 @@ const DEFAULT_P2P_MAX_PENDING_DAGS: usize = p2p::sync::DEFAULT_MAX_PENDING_DAGS;
 const DEFAULT_LOG_FILTER: &str = concat!(
     "warn,",
     "gents_server::commands::serve=info,",
+    "gents::shutdown=info,",
     "gents::agent::runtime=info,",
     "gents::agent::daemon=info,",
     "gents::agent::reconcile=info,",
