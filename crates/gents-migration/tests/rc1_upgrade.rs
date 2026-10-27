@@ -11,8 +11,12 @@ async fn applied_pairing_generation_upgrade_preserves_routes_without_granting_au
         .replace("    enrollment_request_digest: String\n", "")
         .replace("    enrollment_authorization_sequence: Int\n", "")
         .replace("    enrollment_authorization_expires_at: DateTime\n", "");
-    node.add_schema(&previous).await.unwrap();
+    node.add_collection(&previous).await.unwrap();
     let before = node.get_collection("PeerPairingApplied").unwrap().unwrap();
+    assert_eq!(
+        before.version_id,
+        "bafyreifunn7vevp6b6rzg232gjfypp2lqviafe5now5ldlwo3na5nfinq4"
+    );
     let created = node
         .execute(
             r#"mutation {
@@ -31,6 +35,10 @@ async fn applied_pairing_generation_upgrade_preserves_routes_without_granting_au
     let report = ensure_migrations(node.as_ref()).await.unwrap();
     assert_eq!(report.steps_applied, 1);
     let after = node.get_collection("PeerPairingApplied").unwrap().unwrap();
+    assert_eq!(
+        after.version_id,
+        "bafyreifiujskeayi7adradcst2jit3srboodcd6ejy2m6gppwy2mv6k7ri"
+    );
     for field in before.fields {
         assert_eq!(
             after
