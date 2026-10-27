@@ -57,6 +57,7 @@ import { SessionScreen } from "./ui/screens/SessionScreen";
 import { SessionsScreen } from "./ui/screens/SessionsScreen";
 import { SetupScreen } from "./ui/screens/setup/SetupScreen";
 import { Shortcuts } from "./ui/screens/Shortcuts";
+import { SearchPalette } from "./ui/screens/SearchPalette";
 import "./ui/screens/surfaces";
 
 import "./App.css";
@@ -206,6 +207,7 @@ function AppBody() {
       <Toaster closeButton />
       {hasLocalNode && <PluginAccessPrompt />}
       <Shortcuts />
+      <SearchPalette />
     </TooltipProvider>
   );
 }

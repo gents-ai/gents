@@ -214,7 +214,8 @@ export function OpenSession() {
                   <div
                     aria-hidden={!condensed}
                     className={cn(
-                      "grid shrink-0 transition-[grid-template-columns,margin,opacity,transform] duration-150 ease-out",
+                      /* the page's own header holds the meter on a phone */
+                      "grid shrink-0 transition-[grid-template-columns,margin,opacity,transform] duration-150 ease-out max-md:hidden",
                       condensed
                         ? "ml-0 translate-y-0 grid-cols-[1fr] opacity-100"
                         : "pointer-events-none -ml-2 translate-y-1 grid-cols-[0fr] opacity-0",
