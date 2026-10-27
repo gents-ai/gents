@@ -25,7 +25,7 @@
       "expr": ".assets[\"plugins/data_tables/TOOL.md\"] | startswith(\"# data_tables\")"
     },
     {
-      "name": "the graph callback outputs three collections correlated by run_id",
+      "name": "the callback outputs three collections correlated by run_id",
       "expr": ".config.callbacks[0].handler.outputs | map(.collection) == [\"DataResult\", \"DataRow\", \"DataTable\"] and all(.correlation_field == \"run_id\")"
     },
     {
@@ -33,7 +33,7 @@
       "expr": ".config.callback_bindings[0].input_fields | contains([\"run_id\", \"path\", \"sql\", \"mode\", \"cursor\", \"tables\", \"max_rows\"])"
     },
     {
-      "name": "the graph node never writes: its binding passes no output",
+      "name": "the callback node never writes: its binding passes no output",
       "expr": ".config.callback_bindings[0].input_fields | index(\"output\") == null"
     },
     {

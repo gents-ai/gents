@@ -55,13 +55,12 @@ to that agent's Tools. The model calls
 and reads `rows`, `markdown` and `warnings`; a result with `next.cursor` is continued by calling again with that
 `cursor` and every other field unchanged. `plugins/data_tables/TOOL.md` is what the model reads.
 
-## Use it as a graph node
+## Use it as a callback node
 
-Installing the pack also installs one plugin node, `data-run`, wired as a plain callback, so no model and no
-graph pack is needed: create a `DataJob` document and the records below appear.
+Installing the pack also installs one plugin node, `data-run`, wired as a plain callback, so no model is needed: create a `DataJob` document and the records below appear.
 
 ```sh
-gents plugin dirs add /data/reports --home <home>   # a graph call reads only allowed folders
+gents plugin dirs add /data/reports --home <home>   # a callback call reads only allowed folders
 gents server --home <home> --http-port 8080 &
 gql() { curl -fsS http://127.0.0.1:8080/api/v0/graphql -H 'content-type: application/json' -d "$(jq -cn --arg q "$1" '{query: $q}')"; }
 gql 'mutation { create_DataJob(input: {run_id: "r1", path: "/data/reports", sql: "SELECT region, sum(units) AS units FROM sales GROUP BY region"}) { _docID } }'
@@ -69,7 +68,7 @@ gql '{ DataRow(filter: {run_id: {_eq: "r1"}}) { row values } }'
 ```
 
 `path` is the absolute path of a folder or one file inside an allowed folder (`gents plugin dirs add <folder>`):
-a graph call has no working folder and nobody to ask, so a relative path, or one outside the allowed folders,
+a callback call has no working folder and nobody to ask, so a relative path, or one outside the allowed folders,
 fails the job with a sentence. A request is recognized as a node's by the `run_id`
 every such document carries. The node never writes: a `DataJob` has no `output`, so every node call reads.
 
@@ -122,7 +121,7 @@ To write a result, add `output`: `gents plugin run gents/data_tables --bind-dir 
   files exactly. Use ocr to read a scanned or office document, then query the tables it exposes (export them to
   CSV, or pass the rows inline).
 - **charts**: the `columns` and `rows` of a result are the input shape of the charts pack, unchanged; feed them
-  on directly, or through `DataResult.columns` and `DataRow.values` in a graph.
+  on directly, or through `DataResult.columns` and `DataRow.values` in a callback chain.
 - **itself**: `tables` accepts the `columns` and `rows` of an earlier result, so a query can read a previous
   query's output without a file.
 
@@ -216,5 +215,5 @@ build.
 
 `scripts/test-pack.sh packs/gents/data_tables` builds the pack, runs `gents pack test` (every case in
 `plugins/data_tables/tests/`, byte-exact, through the real WebAssembly host), the plugin's own `cargo test`, the
-install case and the graph cases. The fixtures under `plugins/data_tables/tests/fixtures` are written by
+install case and the callback cases. The fixtures under `plugins/data_tables/tests/fixtures` are written by
 `cargo run --example gen_fixtures` and are identical when it runs again.
