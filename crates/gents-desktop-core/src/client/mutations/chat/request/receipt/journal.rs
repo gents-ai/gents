@@ -14,9 +14,9 @@ pub(crate) mod goal;
 #[serde(tag = "kind", content = "record", deny_unknown_fields)]
 enum Envelope {
     #[serde(rename = "callerReceipt-v1")]
-    Caller(Record),
+    Caller(Box<Record>),
     #[serde(rename = "goalCallerReceipt-v1")]
-    Goal(super::goal_delivery::Record),
+    Goal(Box<super::goal_delivery::Record>),
 }
 
 enum Entry {
@@ -38,7 +38,7 @@ fn decode(payload: &str, request_id: &str) -> Result<Entry> {
                         && record.result() != super::correlated::Decision::Refused,
                     "retained caller receipt binding is invalid"
                 );
-                Ok(Entry::Caller(Box::new(record)))
+                Ok(Entry::Caller(record))
             }
             Envelope::Goal(record) => {
                 anyhow::ensure!(
@@ -46,7 +46,7 @@ fn decode(payload: &str, request_id: &str) -> Result<Entry> {
                         && record.decision() != super::goal_delivery::Decision::Refused,
                     "retained Goal caller binding is invalid"
                 );
-                Ok(Entry::Goal(Box::new(record)))
+                Ok(Entry::Goal(record))
             }
         }
     } else {

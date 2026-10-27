@@ -28,6 +28,8 @@ mod configured_actions;
 mod editor_command_output;
 #[path = "support/editor_delivery.rs"]
 mod editor_delivery;
+#[path = "support/editor_goal_delivery.rs"]
+mod editor_goal_delivery;
 #[path = "support/editor_goal_recovery.rs"]
 mod editor_goal_recovery;
 #[path = "support/editor_goal_removal.rs"]
@@ -99,6 +101,8 @@ enum Journey {
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorDelivery,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorGoalDelivery,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorReview,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorReviewPermissions,
@@ -133,6 +137,7 @@ impl Journey {
             Self::EditorGoalReplacement => Some("goal-replacement"),
             Self::EditorRetry => Some("retry"),
             Self::EditorDelivery => Some("delivery"),
+            Self::EditorGoalDelivery => Some("goal-delivery"),
             Self::EditorReview => Some("review"),
             Self::EditorReviewPermissions => Some("review-permissions"),
             Self::EditorInventory => Some("review-inventory"),
@@ -148,6 +153,34 @@ impl Journey {
 
 const STEERING_INPUT: &str = "Steering input from the installed editor.";
 const STEERING_REPLY: &str = "Steering input received.";
+
+#[cfg(feature = "editor-e2e")]
+#[cfg_attr(
+    windows,
+    ignore = "installed reply-loss relay requires a POSIX executable fixture"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_recovers_goal_commands_after_lost_replies_and_reload() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorGoalDelivery)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "editor.log",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })?;
+    copy_editor_evidence(temp.path(), "editor-goal-delivery-canonical.json")
+}
 
 #[cfg(feature = "editor-e2e")]
 #[cfg_attr(
@@ -666,6 +699,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let provider_goal_removal = Arc::clone(&goal_removal);
     let goal_replacement = Arc::new(editor_goal_replacement::Provider::default());
     let provider_goal_replacement = Arc::clone(&goal_replacement);
+    let goal_delivery_provider = Arc::new(editor_goal_delivery::Provider::default());
+    let provider_goal_delivery = Arc::clone(&goal_delivery_provider);
     let editor_history_gate = Arc::new(tokio::sync::Semaphore::new(0));
     let history_provider_gate = editor_history_gate.clone();
     let history_provider_hold = root.join("hold-history-provider");
@@ -689,6 +724,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         Arc::new(move |request| {
             if matches!(journey, Journey::EditorQuestions) {
                 if let Some(reply) = editor_questions::reply(request) {
+                    return reply;
+                }
+            }
+            if matches!(journey, Journey::EditorGoalDelivery) {
+                if let Some(reply) = provider_goal_delivery.reply(request, &emitted) {
                     return reply;
                 }
             }
@@ -986,9 +1026,15 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .context("runtime default agent")?;
     if matches!(
         journey,
-        Journey::Conversation | Journey::RuntimeReplacement | Journey::EditorDelivery
+        Journey::Conversation
+            | Journey::RuntimeReplacement
+            | Journey::EditorDelivery
+            | Journey::EditorGoalDelivery
     ) {
-        if matches!(journey, Journey::EditorDelivery) {
+        if matches!(
+            journey,
+            Journey::EditorDelivery | Journey::EditorGoalDelivery
+        ) {
             client
                 .call(id, "client_connect_local", json!({"nodeHome":node_home}))
                 .await;
@@ -2287,6 +2333,44 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             root.join("editor-goal-recovery-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
         )?;
+    }
+    if matches!(journey, Journey::EditorGoalDelivery) {
+        editor_goal_delivery::prepare(root)?;
+        let finish = root.join("finish-delivery-goal");
+        let held = Arc::clone(&goal_delivery_provider);
+        let release = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            loop {
+                if finish.is_file() {
+                    held.release();
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }));
+        run_editor_journey(
+            root,
+            &paths,
+            &host_binary,
+            session,
+            provider.endpoint(),
+            "goal-delivery",
+        )
+        .await?;
+        let evidence = editor_goal_delivery::verify(
+            &access,
+            &mut client,
+            &mut id,
+            node_did,
+            &client_did,
+            &identity,
+            root,
+        )
+        .await?;
+        std::fs::write(
+            root.join("editor-goal-delivery-canonical.json"),
+            serde_json::to_vec_pretty(&evidence)?,
+        )?;
+        drop(release);
     }
     if matches!(journey, Journey::EditorDelivery) {
         run_editor_journey(

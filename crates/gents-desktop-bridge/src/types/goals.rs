@@ -108,7 +108,7 @@ pub struct GoalSubmissionReceipt {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum GoalSubmissionOutcome {
-    Applied { result: GoalControlResult },
+    Applied { result: Box<GoalControlResult> },
     Rejected { reason: String },
 }
 

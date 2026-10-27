@@ -56,7 +56,7 @@ pub(crate) enum Decision {
     Refused,
     Unconfirmed,
     Pending(Reference),
-    Confirmed(Reference, SessionGoalControlReceipt),
+    Confirmed(Reference, Box<SessionGoalControlReceipt>),
 }
 
 impl Record {
@@ -133,7 +133,7 @@ impl Record {
         if !self.valid() {
             Decision::Refused
         } else if let Some(receipt) = &self.receipt {
-            Decision::Confirmed(self.reference.clone(), receipt.clone())
+            Decision::Confirmed(self.reference.clone(), Box::new(receipt.clone()))
         } else {
             Decision::Pending(self.reference.clone())
         }

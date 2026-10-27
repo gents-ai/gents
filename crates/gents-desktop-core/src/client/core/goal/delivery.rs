@@ -124,7 +124,7 @@ impl ClientCore {
                     .await?,
                 "retained Goal outcome has no verified runtime signature"
             );
-            return Ok(receipt);
+            return Ok(*receipt);
         }
         anyhow::ensure!(
             publication.as_ref() == Some(reference),
