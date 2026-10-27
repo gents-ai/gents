@@ -157,13 +157,25 @@ def wrongStreamInput (headers : List MessageEnvelope) : ClosureInput :=
               { run with declaration := run.declaration.map fun declaration =>
                   { declaration with kind := .text } } } } }
 
+def effectWithoutPublication : Snapshot × ClosureInput × Tool :=
+  let effect := { tool with id := 91 }
+  let headers := [call 10 3, delivered 11 5]
+  ({ snapshot headers with tools := [⟨tool, .unknown⟩, ⟨effect, .unknown⟩] },
+   { input headers with segments := terminalRecords tool ++ terminalRecords effect }, effect)
+
+theorem an_accepted_effect_cannot_borrow_its_parent_publication :
+    let (selected, closure, effect) := effectWithoutPublication
+    window selected closure effect = none := by native_decide
+
 def windowCases : List (String × Snapshot × ClosureInput × Tool) :=
   let valid := [call 10 3, delivered 11 5]
   let wrong := delivered 11 5
   let wrong := { wrong with header := { wrong.header with request := some 701 } }
   let completeFork := forkInput true
   let cutFork := forkInput false
-  [ ("wrong_terminal_stream_kind", snapshot valid, wrongStreamInput valid, tool)
+  [ ("accepted_effect_without_own_publication", effectWithoutPublication.1,
+      effectWithoutPublication.2.1, effectWithoutPublication.2.2)
+  , ("wrong_terminal_stream_kind", snapshot valid, wrongStreamInput valid, tool)
   , ("authored_background_receipt", snapshot valid,
       { input valid with segments := (terminalRecords tool).map fun segment =>
         { segment with coordinate := ⟨tool.request, .authored 11⟩ } }, tool)
