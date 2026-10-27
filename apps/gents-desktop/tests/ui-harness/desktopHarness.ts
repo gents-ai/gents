@@ -106,6 +106,7 @@ function harnessAssistantItem(
 
 export type DesktopUiHarnessScenario =
   | "default"
+  | "storage-recovery"
   | "empty-fleet"
   | "loading"
   | "bridge-unavailable"
@@ -390,6 +391,17 @@ export function createDesktopUiHarness(
     runtimeBooting: false,
     error: null,
   };
+  if (scenario === "storage-recovery") {
+    managedServer = {
+      ...managedServer,
+      state: "running",
+      nodeName: deployment.label,
+      nodeDid: NODE_DID,
+      effectiveToolCeiling: "readonly",
+      effectiveToolRoot: "/tmp/gents-bombadil/workspace",
+      pairingReady: true,
+    };
+  }
   let p2pStatus: "healthy" | "degraded" | "wedged" =
     scenario === "sync-offline" ? "wedged" : "healthy";
   let syncHealth: SyncHealthView = initialSyncHealth(scenario);
@@ -1067,7 +1079,7 @@ export function createDesktopUiHarness(
     async listUxDataSurfaces() {
       return { surfaces: [] };
     },
-    ...(scenario === "empty-fleet"
+    ...(scenario === "empty-fleet" || scenario === "storage-recovery"
       ? ({
           async managedServerStatus() {
             if (managedServer.state === "running" && !managedServer.pairingReady) {
@@ -3672,6 +3684,7 @@ function clone<T>(value: T): T {
 
 function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
   switch (value) {
+    case "storage-recovery":
     case "empty-fleet":
     case "loading":
     case "bridge-unavailable":
