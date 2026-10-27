@@ -37,7 +37,8 @@
           "agent_budget": {
             "maximum": 1024,
             "minimum": 1,
-            "type": "integer"
+            "type": "integer",
+            "description": "How many child agents the run may start; pass the number of children the script spawns"
           },
           "args": {
             "description": "Read by the step function as input.args; args.handle names the run",
@@ -70,5 +71,5 @@
     "workflow",
     "dynamic"
   ],
-  "version": "0.1.0"
+  "version": "0.1.7"
 }

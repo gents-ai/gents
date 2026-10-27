@@ -10,9 +10,8 @@ call's fuel, memory and time bounds. There is no engine pack and nothing to
 compile: a workflow is text in the call.
 
 The pack ships one read-only worker persona, `wf-read-only`, and a caller
-Tools template whose job block lets the tool spawn only that persona under
-`policy.dynamic: run`. A workflow that outgrows this becomes a pack of its own:
-the same step function, compiled by `gents pack build` (see `code_review`).
+Tools template whose job block ships `policy.dynamic: check`. Promoting a
+workflow to a pack of its own is `gents job promote` (see `plugins/workflow/TOOL.md`).
 
 ## Operator steps
 
@@ -36,24 +35,6 @@ gents config tools --agent <A> set integrations.plugins[gents/workflow].job.poli
 ## Authoring
 
 See `plugins/workflow/TOOL.md`, which the model reads as the tool description.
-A one-phase workflow:
-
-```js
-module.exports = (input) => {
-  if (!input.pin) {
-    return { effects: { spawn: [{ slot: "ask", attempt: 0, target: "wf-read-only",
-      prompt: "Count the Rust files under src and answer with the number only.", title: "ask" }] } };
-  }
-  const ask = input.children["ask"];
-  if (!ask || ask.state === "live") return { effects: {} };
-  if (ask.state !== "completed") return { result: { count: null, limitation: "the worker did not answer" } };
-  const text = input.job_results?.text?.result?.slots?.ask?.text;
-  if (text === undefined) {
-    return { job_calls: { requests: [{ id: "text", child_output: { slots: ["ask"], offset: 0, limit: input.ceiling.result_bytes } }] } };
-  }
-  return { result: { count: parseInt(text, 10) } };
-};
-```
 
 The host pins the run with the script's digest, the call's `agent_budget` and
 `args.handle`, so `gents job list|show|watch` and the Grok run view work as for

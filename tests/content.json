@@ -18,8 +18,8 @@
       "expr": "tool(\"wf-read-only-tools\") | .host.bash.mode == \"ReadOnly\" and .host.bash.network_mode == \"disabled\" and .host.files.mode == \"ReadOnly\" and .built_ins.enable_session_history_tool == false"
     },
     {
-      "name": "TOOL.md states the step-function contract",
-      "expr": ".assets[\"plugins/workflow/TOOL.md\"] | contains(\"module.exports\") and contains(\"(input) => output\") and contains(\"job_calls\") and contains(\"effects\")"
+      "name": "the TOOL.md example asks text only of completed children (the host refuses child_output for a failed slot)",
+      "expr": ".assets[\"plugins/workflow/TOOL.md\"] | contains(\"const ok = slots.filter(completed);\") and contains(\"read(ok)\") and (contains(\"read(slots)\") | not)"
     }
   ]
 }
