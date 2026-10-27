@@ -15,6 +15,7 @@ use std::{path::Path, sync::Arc, time::Duration};
 pub const OBJECTIVE: &str = "Prepare two recorded edits for saved Undo.";
 pub const REFUSALS: &str = "Prepare the protected Undo targets.";
 pub const PARTIAL: &str = "Prepare the partial save Undo targets.";
+const PARTICIPANT_SUFFIX: &str = "Editor save participant λ\n";
 pub const DRAFT: &str = "Keep this unsent Undo draft";
 pub const RUNNING: &str = "Recorded edits are ready. Waiting for the paused Goal.";
 pub const FINISHED: &str =
@@ -52,7 +53,9 @@ pub fn prepare(root: &Path) -> Result<()> {
     }
     std::fs::write(
         root.join("editor-undo-fixture.json"),
-        serde_json::to_vec_pretty(&json!({"cases":cases,"draft":DRAFT,"running":RUNNING}))?,
+        serde_json::to_vec_pretty(
+            &json!({"cases":cases,"draft":DRAFT,"running":RUNNING,"participantSuffix":PARTICIPANT_SUFFIX}),
+        )?,
     )?;
     Ok(())
 }
@@ -142,6 +145,8 @@ pub async fn verify(
         "reloadPreserved",
         "crashRestartPreserved",
         "dirtyPreserved",
+        "multiFileWorkspaceEditPreserved",
+        "saveParticipantPreserved",
         "diskPreserved",
         "createdPreserved",
         "lockPreserved",
@@ -365,9 +370,9 @@ pub async fn verify(
         .context("partial conflict text")?;
     for file in partial_files {
         let expected = if file["path"] == conflict_path {
-            conflict_text
+            conflict_text.to_owned()
         } else {
-            text(file, "before")?
+            format!("{}{PARTICIPANT_SUFFIX}", text(file, "before")?)
         };
         ensure!(
             std::fs::read(root.join(text(file, "path")?))? == expected.as_bytes(),
