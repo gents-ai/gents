@@ -1,6 +1,8 @@
 use super::*;
 use gents_protocol::goal_control::{SessionGoalControl, SessionGoalControlReceipt};
 
+pub(super) const CAPTURED_CONTENT: &str = "saved before the lost Goal reply\n";
+
 pub(super) async fn exercise(
     mut client: Attachment,
     id: &mut u32,
@@ -18,7 +20,7 @@ pub(super) async fn exercise(
         "action":{"kind":"create","objective":"Return the fixture response.","tokenBudget":"1000"},
         "capturedContext":[{"kind":"file","source":"editor","capturedAt":chrono::Utc::now().to_rfc3339(),
             "uri":"file:///fixture/retained.rs","workspaceUri":"file:///fixture","terminalName":null,
-            "version":7,"unsaved":true,"range":null,"content":"saved before the lost Goal reply\n"}],
+            "version":7,"unsaved":true,"range":null,"content":CAPTURED_CONTENT}],
     });
     discard_successful_reply(
         &mut client,
@@ -73,7 +75,7 @@ pub(super) async fn exercise(
         .as_ref()
         .context("retained first request")?;
     ensure!(first.input.captured_context[0].unsaved);
-    ensure!(first.input.captured_context[0].content == "saved before the lost Goal reply\n");
+    ensure!(first.input.captured_context[0].content == CAPTURED_CONTENT);
     let requests = admitted["data"]["AgentRequest"]
         .as_array()
         .context("admitted requests")?;

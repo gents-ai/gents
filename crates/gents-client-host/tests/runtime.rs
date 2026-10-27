@@ -1190,7 +1190,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         ensure!(
             context.len() == 1
                 && context[0].unsaved
-                && context[0].content == "remote Goal capture\n"
+                && context[0].content == goal_delivery::CAPTURED_CONTENT
         );
     }
     ensure!(
