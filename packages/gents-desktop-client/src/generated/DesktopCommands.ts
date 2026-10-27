@@ -132,6 +132,7 @@ import type { TaskDeleteRequest } from "./TaskDeleteRequest.js";
 import type { TaskRunRequest } from "./TaskRunRequest.js";
 import type { TaskRunResult } from "./TaskRunResult.js";
 import type { TaskSaveRequest } from "./TaskSaveRequest.js";
+import type { ToolFileChanges } from "./ToolFileChanges.js";
 import type { ToolServiceDeleteRequest } from "./ToolServiceDeleteRequest.js";
 import type { ToolServiceSaveRequest } from "./ToolServiceSaveRequest.js";
 import type { ToolServiceTestRequest } from "./ToolServiceTestRequest.js";
@@ -270,6 +271,7 @@ export type DesktopCommands = {
   desktop_task_delete: { args: { request: TaskDeleteRequest }; result: DesktopClientSnapshot };
   desktop_task_run: { args: { request: TaskRunRequest }; result: TaskRunResult };
   desktop_task_save: { args: { request: TaskSaveRequest }; result: DesktopClientSnapshot };
+  desktop_tool_file_changes: { args: { nodeDid: string; sessionId: string; requestId: string; toolCallDocId: string }; result: ToolFileChanges | null };
   desktop_tool_service_delete: { args: { request: ToolServiceDeleteRequest }; result: DesktopClientSnapshot };
   desktop_tool_service_save: { args: { request: ToolServiceSaveRequest }; result: DesktopClientSnapshot };
   desktop_tool_service_test: { args: { request: ToolServiceTestRequest }; result: ToolServiceTestResult };

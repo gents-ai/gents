@@ -109,6 +109,31 @@ pub async fn desktop_session_rows(
         .map(Some)
 }
 
+/// The exact file versions one native file tool call recorded before and
+/// after its edit, for showing what that edit changed.
+#[tauri::command]
+pub async fn desktop_tool_file_changes(
+    node_did: String,
+    session_id: String,
+    request_id: String,
+    tool_call_doc_id: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<Option<gents_protocol::file_changes::ToolFileChanges>, BridgeError> {
+    let Some(core) = current_core(&state) else {
+        return Ok(None);
+    };
+    crate::commands::tool_file_changes(
+        &core,
+        node_did,
+        session_id,
+        request_id,
+        tool_call_doc_id,
+        None,
+    )
+    .await
+    .map_err(|error| BridgeError::untyped(error.to_string()))
+}
+
 #[tauri::command]
 pub async fn desktop_session_hydration_retry(
     session_id: String,
