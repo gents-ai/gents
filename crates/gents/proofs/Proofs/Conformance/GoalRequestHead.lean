@@ -91,6 +91,25 @@ def rowJson (row : Row) : String :=
   ",\"deterministic_identity\":" ++ boolJson row.deterministicIdentity ++
   ",\"input_disposition\":" ++ dispositionJson row.inputDisposition ++ "}"
 
+private def membershipFields (testCase : Case) : String :=
+  let current := (testCase.rows.head?.map (·.doc)).getD 0
+  let entry := GoalAutomation.RequestAncestry.signedEntry
+    scope.owner scope.session testCase.rows none current
+  let members : List Row := match entry with
+    | none => []
+    | some opening => testCase.rows.filter fun row =>
+      GoalAutomation.RequestAncestry.signedEntry scope.owner scope.session
+        testCase.rows none row.doc == some opening
+  let parents := members.filterMap fun row =>
+    if some row.doc == entry then none
+    else row.parentDoc.map fun parent => "[" ++ toString row.doc ++ "," ++ toString parent ++ "]"
+  ",\"membership_current\":" ++ toString current ++
+  ",\"membership_entry\":" ++ optionalNatJson entry ++
+  ",\"membership_members\":" ++ jsonArray (members.map fun row => toString row.doc) ++
+  ",\"membership_parents\":" ++ jsonArray parents ++
+  ",\"membership_receipt_checks\":" ++ optionalNatJson (testCase.assignmentRoot.map fun _ =>
+    GoalAutomation.AuthenticationCost.membershipChainChecks (testCase.rows.length - 1))
+
 def caseJson (testCase : Case) : String :=
   "{\"name\":" ++ jsonString testCase.name ++
   ",\"scope\":{\"owner\":" ++ toString scope.owner ++
@@ -99,7 +118,8 @@ def caseJson (testCase : Case) : String :=
   ",\"expected_receipt_checks\":" ++ optionalNatJson (testCase.assignmentRoot.map fun _ =>
     GoalAutomation.AuthenticationCost.newestChainChecks (testCase.rows.length - 1)) ++
   ",\"rows\":" ++ jsonArray (testCase.rows.map rowJson) ++
-  ",\"expected\":" ++ (match testCase.expected with | none => "null" | some row => rowJson row) ++ "}"
+  ",\"expected\":" ++ (match testCase.expected with | none => "null" | some row => rowJson row) ++
+  membershipFields testCase ++ "}"
 
 def casesJson : String := jsonArray (cases.map caseJson)
 
