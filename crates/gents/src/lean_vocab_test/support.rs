@@ -351,6 +351,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) compaction_cursor_cases: Vec<LeanCompactionCursorCase>,
     pub(crate) prompt_assembly_sanitize_cases: Vec<LeanPromptAssemblySanitizeCase>,
     pub(crate) prompt_assembly_assistant_order_cases: Vec<LeanPromptAssemblyAssistantOrderCase>,
+    pub(crate) provider_tool_identity_cases: Vec<serde_json::Value>,
     pub(crate) prompt_assembly_mode_sanitize_cases: Vec<LeanPromptAssemblyModeSanitizeCase>,
     pub(crate) routing_affinity_cases: Vec<serde_json::Value>,
     pub(crate) retry_frontier_cases: Vec<serde_json::Value>,

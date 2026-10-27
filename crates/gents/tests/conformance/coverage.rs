@@ -1709,6 +1709,10 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     }
     for (domain, present) in [
         (
+            "ProviderToolIdentityCases",
+            !snapshot.provider_tool_identity_cases.is_empty(),
+        ),
+        (
             "PromptAssemblyAssistantOrderCases",
             !snapshot.prompt_assembly_assistant_order_cases.is_empty(),
         ),

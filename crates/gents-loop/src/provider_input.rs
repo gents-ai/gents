@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use rig::completion::CompletionRequest;
+use rig::one_or_many::OneOrMany;
 #[cfg(feature = "native")]
 use serde_json::Map;
 use serde_json::Value;
@@ -363,9 +364,8 @@ impl ProviderInputCounter {
                 return Ok(0);
             }
         }
-        let chat_history =
-            rig::one_or_many::OneOrMany::many(crate::rig_compat::to_rig_messages(messages))
-                .map_err(|_| anyhow::anyhow!("provider input message projection was empty"))?;
+        let chat_history = OneOrMany::many(crate::rig_compat::to_rig_messages(messages))
+            .map_err(|_| anyhow::anyhow!("provider input message projection was empty"))?;
         let request = CompletionRequest {
             model: None,
             preamble: None,

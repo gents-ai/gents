@@ -104,10 +104,7 @@ fn modeled_cross_provider_tool_identity_projects_for_responses() {
         let request = CompletionRequest {
             model: None,
             preamble: Some("System instructions".into()),
-            chat_history: rig::one_or_many::OneOrMany::many(crate::rig_compat::to_rig_messages(
-                &original,
-            ))
-            .unwrap(),
+            chat_history: OneOrMany::many(crate::rig_compat::to_rig_messages(&original)).unwrap(),
             documents: Vec::new(),
             tools: Vec::new(),
             temperature: None,

@@ -2423,6 +2423,9 @@ def caseCoverage : List CoverageEntry :=
       "conformance::prompt_assembly::generated_claude_checkpoint_cases_bind_selected_assistant_projection"
       "Models source-tagged selected assistant occurrences, the exact reduction split that keeps a pending tool round out of a summary, and the strict Claude codec. Replay selection is PromptAssemblyReasoningSuffixCases; this model does not prove tag issuance (#1693).")
       "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "prompt_assembly_cases" "ProviderToolIdentityCases"
+      "provider_input::tool_call_identity_tests::modeled_tool_identity_projection_is_idempotent_and_preserves_other_fields")
+      "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_cases"
       "PromptAssemblyAssistantOrderCases"
