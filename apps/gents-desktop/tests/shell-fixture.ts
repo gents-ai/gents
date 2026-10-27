@@ -23,7 +23,7 @@ export function fleetFor(deployments: unknown[] = []) {
   const fleet = createFleetStore();
   applyFleetSnapshot(fleet, {
     bootstrap: {},
-    client: { deployments },
+    client: { clientDid: "test-client", deployments },
   } as unknown as DesktopClientSnapshot);
   return fleet;
 }
@@ -40,7 +40,7 @@ export function shellStores({
     client.setState({
       snapshot: {
         bootstrap: {},
-        client: { deployments },
+        client: { clientDid: "test-client", deployments },
       } as unknown as DesktopClientSnapshot,
     });
   return {

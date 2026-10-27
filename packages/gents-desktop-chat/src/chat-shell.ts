@@ -11,7 +11,11 @@ import {
   projectRouteOperationalStatus,
 } from "@source-inc/gents-desktop-client";
 
-export type OptimisticPendingTurn = PendingTurnView & { sessionId: string };
+export type OptimisticPendingTurn = PendingTurnView & {
+  sessionId: string;
+  /** Last observed row when this input was submitted; null denotes an empty timeline. */
+  afterItemKey?: string | null;
+};
 
 export type RequestProgressPresentation = {
   label: string;

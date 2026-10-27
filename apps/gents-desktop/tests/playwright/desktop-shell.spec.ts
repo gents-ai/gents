@@ -187,9 +187,9 @@ test.describe("kit shell", () => {
 
     await filters.getByRole("combobox", { name: "Agent" }).click();
     await expect(page.getByRole("dialog", { name: "Filter by agent" })).toBeVisible();
-    const ops = page.getByRole("option", { name: /Ops\s*0$/ });
+    const ops = page.getByRole("option", { name: /Ops$/ });
     await expect(ops).toBeVisible();
-    await expect(ops).toHaveAttribute("aria-disabled", "true");
+    await expect(ops).not.toHaveAttribute("aria-disabled");
     const withSession = page.getByRole("option", { name: /Default\s*1$/ });
     await withSession.click();
     await page.keyboard.press("Escape");
@@ -197,9 +197,9 @@ test.describe("kit shell", () => {
     await expect(session).toBeVisible();
 
     await filters.getByRole("button", { name: "State" }).click();
-    await expect(
-      page.getByRole("menuitemcheckbox", { name: /Failed\s*0$/ }),
-    ).toHaveAttribute("aria-disabled", "true");
+    const failed = page.getByRole("menuitemcheckbox", { name: /Failed$/ });
+    await expect(failed).toHaveAttribute("aria-checked", "true");
+    await expect(failed).not.toHaveAttribute("aria-disabled");
     await page.keyboard.press("Escape");
     await narrowed.getByRole("button", { name: "Clear filters" }).click();
     await expect(narrowed).toHaveCount(0);

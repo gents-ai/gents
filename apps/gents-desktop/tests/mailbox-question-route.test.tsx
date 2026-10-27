@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { acceptedChatReply } from "./chat-delivery-fixture";
+import { goalDeliveryStorage } from "./goal-delivery-storage";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   DesktopApiAdapter,
@@ -17,7 +19,7 @@ const item = {
 } as MailboxItemView;
 
 function mailbox(api: DesktopApiAdapter) {
-  const stores = shellStores();
+  const stores = shellStores({ deployments: [] });
   const actions = createMailboxActions({
     api,
     stores,
@@ -29,7 +31,7 @@ function mailbox(api: DesktopApiAdapter) {
 
 describe("answering a mailbox question", () => {
   it("sends the answer as the item's reply and retires a compose route on it", async () => {
-    const sendChatMessage = vi.fn().mockResolvedValue({});
+    const sendChatMessage = vi.fn(acceptedChatReply);
     const api = {
       startMailboxRequest: vi.fn().mockResolvedValue(item),
       sendChatMessage,
@@ -39,14 +41,19 @@ describe("answering a mailbox question", () => {
     expect(store.getState().mailboxRoute?.itemId).toBe("item-1");
     const answer = { option_ids: ["yes"], free_text: null };
     await actions.answerMailboxQuestion(item, answer);
-    expect(sendChatMessage).toHaveBeenCalledWith({
-      nodeDid: "did:node",
-      agentId: "engineer",
-      sessionId: "session-1",
-      content: "",
-      causedBySourceDocId: "item-1",
-      answer,
-    });
+    expect(sendChatMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeDid: "did:node",
+        agentId: "engineer",
+        sessionId: "session-1",
+        content: "",
+        causedBySourceDocId: "item-1",
+        answer,
+      }),
+    );
     expect(store.getState().mailboxRoute).toBeNull();
   });
 });
+
+beforeEach(() => vi.stubGlobal("localStorage", goalDeliveryStorage()));
+afterEach(() => vi.unstubAllGlobals());

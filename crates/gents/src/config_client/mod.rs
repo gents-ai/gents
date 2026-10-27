@@ -86,7 +86,6 @@ pub use schema_install::{
 pub use tools::write_tools_document;
 #[cfg(test)]
 pub(crate) use txn::ReentrantEmbeddedWrite;
-pub(crate) use txn::TransactionOutcome;
 pub(crate) use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;
 pub use txn::{ConfigApplyTxn, IdempotentTransactionRetry, LocalConfigAccess};
 

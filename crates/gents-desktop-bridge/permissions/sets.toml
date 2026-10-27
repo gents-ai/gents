@@ -62,6 +62,9 @@ permissions = [
   "allow-desktop-pending-queue-edit",
   "allow-desktop-pending-message-steer",
   "allow-desktop-goal-control",
+  "allow-desktop-goal-submission-recover",
+  "allow-desktop-goal-submission-resume",
+  "allow-desktop-goal-submission-acknowledge",
   "allow-desktop-session-fork-before-message",
   "allow-desktop-session-rename",
   "allow-desktop-session-archive",
@@ -109,7 +112,7 @@ permissions = ["allow-desktop-open-external-url"]
 [[set]]
 identifier = "packs-read"
 description = "Installed packs, registry search and package pages, the signed-in account, and which plugins can call a model or be wired"
-permissions = ["allow-desktop-pack-installed", "allow-desktop-pack-search", "allow-desktop-pack-info", "allow-desktop-pack-whoami", "allow-desktop-pack-plugin-slots", "allow-desktop-pack-wire-sources"]
+permissions = ["allow-desktop-pack-installed", "allow-desktop-pack-search", "allow-desktop-pack-info", "allow-desktop-pack-whoami", "allow-desktop-pack-plugin-slots", "allow-desktop-pack-wire-sources", "allow-desktop-workflows-dynamic", "allow-desktop-workflow-dynamic"]
 
 [[set]]
 identifier = "ux-plugins-read"
@@ -128,7 +131,7 @@ permissions = ["allow-desktop-plugin-call", "allow-desktop-ux-data-call"]
 [[set]]
 identifier = "packs-admin"
 description = "Install, update and remove packs, wire a plugin to an agent, bind a plugin to an inference profile, and sign in to the registry"
-permissions = ["allow-desktop-pack-install", "allow-desktop-pack-update", "allow-desktop-pack-remove", "allow-desktop-pack-login", "allow-desktop-pack-logout", "allow-desktop-pack-plugin-bind", "allow-desktop-pack-wire"]
+permissions = ["allow-desktop-pack-install", "allow-desktop-pack-update", "allow-desktop-pack-remove", "allow-desktop-pack-login", "allow-desktop-pack-logout", "allow-desktop-pack-plugin-bind", "allow-desktop-pack-wire", "allow-desktop-workflow-promote"]
 
 [[set]]
 identifier = "allowed-dirs-read"

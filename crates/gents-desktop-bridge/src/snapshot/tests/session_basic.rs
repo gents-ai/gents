@@ -19,6 +19,7 @@ fn session(id: &str, node: &str, latest: Option<(&str, RequestLifecycleState)>) 
         tags: Vec::new(),
         provenance: None,
         observation: latest.map(|(request_id, lifecycle_state)| SessionObservation {
+            reply_preview: None,
             last_activity_at: "2026-04-21T12:01:00Z".to_string(),
             preview: Some("follow up question".to_string()),
             latest_request: Some(SessionRequestObservation {

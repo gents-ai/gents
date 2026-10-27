@@ -200,6 +200,47 @@ pub(super) struct TerminalJobProgress {
     pub host: crate::plugin_job::records::HostProgressFacts,
 }
 
+/// Writes a terminal stamp that never fails the settle: a stamp over the
+/// progress cap drops its event, and one that still does not fit is skipped.
+async fn write_terminal_progress(
+    txn: &ConfigApplyTxn<'_>,
+    doc_id: &str,
+    progress: TerminalJobProgress,
+) -> Result<()> {
+    use crate::plugin_job::records::{write_progress_in_txn, RecordError};
+    let too_large = |result: &Result<_>| {
+        result.as_ref().is_err_and(|error| {
+            matches!(
+                error.downcast_ref::<RecordError>(),
+                Some(RecordError::TooLarge { .. })
+            )
+        })
+    };
+    let TerminalJobProgress {
+        expected_revision,
+        guest,
+        host,
+    } = progress;
+    let written =
+        write_progress_in_txn(txn, doc_id, expected_revision, guest.clone(), host.clone()).await;
+    if !too_large(&written) {
+        return written.map(drop);
+    }
+    let cut = gents_protocol::job::JobProgress {
+        last_event: String::new(),
+        ..guest
+    };
+    let written = write_progress_in_txn(txn, doc_id, expected_revision, cut, host).await;
+    if too_large(&written) {
+        tracing::warn!(
+            doc_id,
+            "the terminal job progress stamp is over the cap; skipped"
+        );
+        return Ok(());
+    }
+    written.map(drop)
+}
+
 #[derive(Clone)]
 pub(crate) struct ToolOutputBinding {
     pub(crate) node: std::sync::Arc<defra_node::EmbeddedNode>,
@@ -935,14 +976,7 @@ impl ToolCallLifecycle {
             return Err(crate::config_client::classified_conflict_for_test());
         }
         if let (true, Some(progress)) = (published, job_progress) {
-            crate::plugin_job::records::write_progress_in_txn(
-                txn,
-                doc_id,
-                progress.expected_revision,
-                progress.guest,
-                progress.host,
-            )
-            .await?;
+            write_terminal_progress(txn, doc_id, progress).await?;
         }
         Ok(published)
     }
@@ -1929,8 +1963,11 @@ async fn terminalize_transaction(
         node_did,
         requester_did,
         session_id,
-        request_doc_id,
-        request_id,
+        crate::session::SessionRequestRefresh {
+            request_doc_id,
+            request_id,
+            reply_preview: None,
+        },
         &completed_at,
     )
     .await?;

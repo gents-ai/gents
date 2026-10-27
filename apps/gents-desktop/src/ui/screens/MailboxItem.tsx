@@ -25,10 +25,13 @@ import { Kbd } from "@gents/ui/components/kbd";
 import { cn } from "@gents/ui/lib/utils";
 import { href, navigate } from "@/lib/router";
 import { useState, type ComponentProps } from "react";
+import { useStore } from "zustand";
 import { agentName } from "./behavior";
 import type { ShellActions } from "@/../hooks/shellActions";
 import { NodeAgentStack } from "./NodeBehaviorStack";
 import { deadlineOf, dueSoon } from "./mailbox-triage";
+import { ChatDeliveryFeedback } from "./session/ChatDeliveryFeedback";
+import { chatDraftsFor } from "../../hooks/chatDrafts";
 import { parseQuestion, QuestionAnswer } from "./MailboxQuestion";
 import { Markdown } from "./Markdown";
 import { span, when } from "./time";
@@ -84,8 +87,25 @@ export function Item({
   const session = useFleet((state) =>
     m.sessionId ? state.bySessionId[m.sessionId] : undefined,
   );
-  const { answerMailboxQuestion, dismissMailboxItem, openMailboxItem } =
-    useApp().actions;
+  const {
+    actions: { answerMailboxQuestion, dismissMailboxItem, openMailboxItem },
+    stores,
+  } = useApp();
+  const clientDid = useStore(
+    stores.client,
+    (state) => state.snapshot?.client?.clientDid ?? null,
+  );
+  const drafts = chatDraftsFor(
+    stores.chat.use.chatDrafts(),
+    clientDid,
+    m.targetNodeDid,
+    m.sessionId,
+    m.itemId,
+  );
+  const answerPending = drafts.some(
+    (draft) => !draft.result || draft.result.outcome === "deliveryUnknown",
+  );
+  const answerConfirmed = drafts.some((draft) => draft.result && !draft.result.outcome);
   const kind = KIND[m.kind] ?? {
     icon: CircleHelp,
     label: m.kind,
@@ -244,10 +264,15 @@ export function Item({
             )}
             {question && (
               <QuestionAnswer
+                key={m.questionHash ?? m.payload ?? m.itemId}
                 question={question}
-                onAnswer={(answer) => answerMailboxQuestion(m, answer)}
+                questionHash={m.questionHash}
+                onAnswer={(answer, view) => answerMailboxQuestion(m, answer, view)}
+                pending={answerPending}
+                confirmed={answerConfirmed}
               />
             )}
+            {question && <ChatDeliveryFeedback mailboxItem={m} />}
             {m.action === "write_document" && m.expectedCollection && (
               <p className="mt-2 text-xs text-muted-foreground">
                 Answer with a{" "}
@@ -273,19 +298,21 @@ export function Item({
           </div>
         </div>
       </article>
-      <Button
-        size="sm"
-        variant="raised"
-        className="-mt-3.5 mr-4 ml-auto flex h-7 w-fit rounded-full px-3 text-xs"
-        onClick={() =>
-          dismissMailboxItem(m.itemId).then(
-            () => onSelect(false),
-            (e: unknown) => toastFailure("dismiss the item", e),
-          )
-        }
-      >
-        <X className="size-3" /> Dismiss
-      </Button>
+      {(!question || question.version < 2) && (
+        <Button
+          size="sm"
+          variant="raised"
+          className="-mt-3.5 mr-4 ml-auto flex h-7 w-fit rounded-full px-3 text-xs"
+          onClick={() =>
+            dismissMailboxItem(m.itemId).then(
+              () => onSelect(false),
+              (e: unknown) => toastFailure("dismiss the item", e),
+            )
+          }
+        >
+          <X className="size-3" /> Dismiss
+        </Button>
+      )}
     </li>
   );
 }

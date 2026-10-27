@@ -7,6 +7,12 @@ export type { PackInferenceProfileOption as PackSlotProfile } from "../generated
 export type { EditedDocuments as PackEditedChoice } from "../generated/EditedDocuments.js";
 export type { PackInstallRequest } from "../generated/PackInstallRequest.js";
 export type { PackWireRequest } from "../generated/PackWireRequest.js";
+export type { DynamicWorkflowsView as DynamicWorkflows } from "../generated/DynamicWorkflowsView.js";
+export type { DynamicWorkflowSummary } from "../generated/DynamicWorkflowSummary.js";
+export type { InstalledWorkflowSummary } from "../generated/InstalledWorkflowSummary.js";
+export type { DynamicWorkflowView as DynamicWorkflow } from "../generated/DynamicWorkflowView.js";
+export type { WorkflowPromoteRequest } from "../generated/WorkflowPromoteRequest.js";
+export type { WorkflowPromoteView as WorkflowPromoted } from "../generated/WorkflowPromoteView.js";
 
 /* The bridge's wire commands return the JSON `gents pack wire` reports, which
    the bridge does not type (`serde_json::Value`); these are its shapes. */

@@ -19,9 +19,9 @@ fn shared_template(template: PackTemplate) -> gents::pack::authoring::Template {
     match template {
         PackTemplate::Minimal => Template::Minimal,
         PackTemplate::Automation => Template::Automation,
-        PackTemplate::Graph => Template::Graph,
         PackTemplate::PluginTool => Template::PluginTool,
         PackTemplate::Assets => Template::Assets,
+        PackTemplate::Workflow => Template::Workflow,
     }
 }
 
@@ -29,7 +29,6 @@ fn shared_kind(kind: Option<PackKindArg>) -> Option<gents::pack::authoring::Kind
     use gents::pack::authoring::Kind;
     kind.map(|kind| match kind {
         PackKindArg::Documents => Kind::Documents,
-        PackKindArg::Graph => Kind::Graph,
         PackKindArg::Assets => Kind::Assets,
         PackKindArg::Plugins => Kind::Plugins,
     })
@@ -75,9 +74,9 @@ pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Resul
     let template = match report.template {
         "minimal" => PackTemplate::Minimal,
         "automation" => PackTemplate::Automation,
-        "graph" => PackTemplate::Graph,
         "plugin-tool" => PackTemplate::PluginTool,
         "assets" => PackTemplate::Assets,
+        "workflow" => PackTemplate::Workflow,
         other => anyhow::bail!("shared scaffold returned unknown template {other:?}"),
     };
     Ok(ScaffoldReport {
@@ -121,7 +120,6 @@ mod tests {
             PackTemplate::Assets,
             PackTemplate::Minimal,
             PackTemplate::Automation,
-            PackTemplate::Graph,
         ] {
             let root = tempfile::tempdir().unwrap();
             let dir = root.path().join("review_toolkit");
@@ -136,31 +134,7 @@ mod tests {
             );
             let built = super::super::build::build_pack(&dir, None).unwrap();
             assert_eq!(Some(built.digest), check.digest, "{template:?}");
-            if template == PackTemplate::Graph {
-                assert_eq!(check.graphs, vec!["review-toolkit".to_owned()]);
-            }
         }
-    }
-
-    #[tokio::test]
-    async fn a_shipped_plan_that_differs_from_compilation_is_refused() {
-        let root = tempfile::tempdir().unwrap();
-        let dir = root.path().join("review_toolkit");
-        scaffold(&dir, "review_toolkit", &options(PackTemplate::Graph)).unwrap();
-        let plan_path = dir.join("graphs/review_toolkit.plan.json");
-        let mut plan: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&plan_path).unwrap()).unwrap();
-        plan["digest"] = "sha256:0".into();
-        std::fs::write(&plan_path, serde_json::to_vec_pretty(&plan).unwrap()).unwrap();
-        let report = super::super::check::check_dir(&dir).await;
-        assert!(
-            report
-                .problems
-                .iter()
-                .any(|problem| problem.contains("rebuild the pack")),
-            "{:#?}",
-            report.problems
-        );
     }
 
     #[tokio::test]

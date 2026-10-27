@@ -285,6 +285,52 @@ fn test_loop_config() -> LoopConfig {
     }
 }
 
+#[cfg(feature = "native")]
+#[tokio::test]
+async fn cross_provider_tool_identity_allows_the_owned_loop_to_continue() {
+    use crate::provider_input::tool_call_identity_tests::{cases, counter, messages};
+    for case in cases().into_iter().filter(|case| case.responses) {
+        let mut history = messages(&case);
+        let prompt = history.pop().unwrap();
+        let model = ScriptedModel::new(vec![vec![
+            RawStreamingChoice::Message("continued".into()),
+            RawStreamingChoice::FinalResponse(()),
+        ]]);
+        let requests = model.requests.clone();
+        let mut config = test_loop_config();
+        config.provider_input_counter = Arc::new(counter(BackendProviderKind::ChatGptCodex));
+        let answer = run_loop_to_text(model, prompt, history, Arc::new(Vec::new()), config)
+            .await
+            .unwrap();
+        assert_eq!(answer, "continued", "{}", case.name);
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 1, "{}", case.name);
+        let dispatched: Vec<rig::message::Message> = serde_json::from_str(&requests[0]).unwrap();
+        let ids = dispatched
+            .iter()
+            .flat_map(|message| match message {
+                rig::message::Message::Assistant { content, .. } => content
+                    .iter()
+                    .filter_map(|item| match item {
+                        rig::message::AssistantContent::ToolCall(call) => {
+                            Some(call.call_id.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            case.expected
+                .iter()
+                .map(|id| id.call_id.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
 #[tokio::test]
 async fn the_loop_dispatches_a_tool_and_threads_messages_with_no_defradb_and_no_network() {
     let model = ScriptedModel::new(vec![

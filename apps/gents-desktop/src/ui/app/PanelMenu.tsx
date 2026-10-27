@@ -1,3 +1,4 @@
+import type { ComponentProps, ReactNode } from "react";
 import { Check, EllipsisVertical } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -8,12 +9,22 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
+import { cn } from "@gents/ui/lib/utils";
 import { Hint } from "@/screens/Hint";
 import { useSurfaces } from "./surfaces";
 import { inScope } from "./dock-scope";
 import { useDock } from "./workspace";
 
-export function PanelMenu({ routeName }: { routeName: string }) {
+export function PanelMenu({
+  routeName,
+  finalFocus,
+  children,
+}: {
+  routeName: string;
+  finalFocus?: ComponentProps<typeof DropdownMenuContent>["finalFocus"];
+  /** the items of what the pane shows, before its panels */
+  children?: ReactNode;
+}) {
   const { dock, closeTab, openSurface, closeDock, reopenDock } = useDock();
   const surfaces = useSurfaces().filter(
     (s) => s.placements.includes("dock") && inScope(s, routeName),
@@ -39,8 +50,14 @@ export function PanelMenu({ routeName }: { routeName: string }) {
       </Hint>
       <DropdownMenuContent
         align="end"
-        className="w-48 text-xs [&_[role=menuitem]]:text-xs"
+        finalFocus={finalFocus}
+        className={cn(
+          children ? "w-56" : "w-48",
+          "text-xs [&_[role=menuitem]]:text-xs",
+        )}
       >
+        {children}
+        {children && surfaces.length > 0 && <DropdownMenuSeparator />}
         <DropdownMenuGroup>
           {surfaces.map((s) => {
             const open = dock.open && dock.tabs.includes(s.id);

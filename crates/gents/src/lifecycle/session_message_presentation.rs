@@ -23,6 +23,14 @@ pub fn session_message_display_body<'a>(
     request: &'a AgentRequestRow,
     parent: &AgentRequestRow,
 ) -> Option<&'a str> {
+    session_message_display_body_with_content(request, parent, request.content.as_deref()?)
+}
+
+pub(crate) fn session_message_display_body_with_content<'a>(
+    request: &AgentRequestRow,
+    parent: &AgentRequestRow,
+    content: &'a str,
+) -> Option<&'a str> {
     let super::RequestOrigin::SessionMessage {
         parent_request_doc_id: Some(document),
     } = super::request_origin(request)
@@ -45,10 +53,7 @@ pub fn session_message_display_body<'a>(
         &parent.request_id,
         present(request.created_at.as_deref())?,
     );
-    request
-        .content
-        .as_deref()?
-        .strip_prefix(&format!("{header}\n\n"))
+    content.strip_prefix(&format!("{header}\n\n"))
 }
 
 #[cfg(test)]

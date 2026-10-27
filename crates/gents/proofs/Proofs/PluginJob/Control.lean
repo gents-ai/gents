@@ -278,8 +278,7 @@ def resumePin (root _prior : Pin) (g : GuestPin) (facts : HostFacts) : Pin :=
 
 /-- `root_call`: the chain root's own call arguments. -/
 def rootCallOf (root : Job) : RootCall :=
-  { argv := root.call.argv, args := root.call.args, path := root.call.path
-  , agentBudget := root.call.agentBudget }
+  { argv := root.call.argv, args := root.call.args, agentBudget := root.call.agentBudget }
 
 /-- `job_calls.result` is offered to tool-call invocations, job steps and
     non-job calls alike. A callback has no caller session and so no

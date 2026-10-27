@@ -13,6 +13,9 @@ import type { PendingQueueEditRequest } from "../generated/PendingQueueEditReque
 import type { PendingQueueEditResult } from "../generated/PendingQueueEditResult.js";
 import type { GoalControlRequest } from "../generated/GoalControlRequest.js";
 import type { GoalControlResult } from "../generated/GoalControlResult.js";
+import type { GoalSubmissionQuery } from "../generated/GoalSubmissionQuery.js";
+import type { GoalSubmissionReceipt } from "../generated/GoalSubmissionReceipt.js";
+import type { GoalSubmissionRecovery } from "../generated/GoalSubmissionRecovery.js";
 import type { SessionGoalView } from "../generated/SessionGoalView.js";
 import type { OauthProvider } from "../transport.js";
 import type { DesktopJobControlRequest } from "../generated/DesktopJobControlRequest.js";
@@ -107,6 +110,10 @@ import type {
   PackPluginSlot,
   PackSlotProfile,
   PackWireRequest,
+  DynamicWorkflows,
+  DynamicWorkflow,
+  WorkflowPromoteRequest,
+  WorkflowPromoted,
   PackWireResult,
   PackWireSources,
 } from "../types/packs.js";
@@ -143,6 +150,14 @@ export type DesktopApiAdapter = {
     sessionId: string,
   ) => Promise<SessionGoalView | null>;
   controlGoal: (request: GoalControlRequest) => Promise<GoalControlResult>;
+  recoverGoalSubmission: (
+    query: GoalSubmissionQuery,
+  ) => Promise<GoalSubmissionRecovery>;
+  resumeGoalSubmission: (
+    request: GoalControlRequest,
+    receipt: GoalSubmissionReceipt,
+  ) => Promise<GoalControlResult>;
+  acknowledgeGoalSubmission: (receipt: GoalSubmissionReceipt) => Promise<void>;
   fetchDesktopSnapshot: () => Promise<DesktopClientSnapshot>;
   initLocalStandardRuntime: (request: {
     label: string;
@@ -438,6 +453,9 @@ export type DesktopApiAdapter = {
   bindPackPlugin: (plugin: string, profile: string | null) => Promise<void>;
   wirePack: (request: PackWireRequest) => Promise<PackWireResult>;
   listPackWireSources: () => Promise<PackWireSources>;
+  listDynamicWorkflows: () => Promise<DynamicWorkflows>;
+  getDynamicWorkflow: (selector: string) => Promise<DynamicWorkflow>;
+  promoteWorkflow: (request: WorkflowPromoteRequest) => Promise<WorkflowPromoted>;
   signInToPackRegistry: (token: string) => Promise<void>;
   signOutOfPackRegistry: () => Promise<void>;
   listAllowedFolders: () => Promise<AllowedFolders>;
@@ -477,6 +495,9 @@ export type PackCommand =
   | "bindPackPlugin"
   | "wirePack"
   | "listPackWireSources"
+  | "listDynamicWorkflows"
+  | "getDynamicWorkflow"
+  | "promoteWorkflow"
   | "signInToPackRegistry"
   | "signOutOfPackRegistry";
 

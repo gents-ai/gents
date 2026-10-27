@@ -262,3 +262,94 @@ test.each([
     if (content === "Earlier folded input") expect(html).toContain(content);
   },
 );
+
+test("keeps temporary input before a response observed before its authored header", () => {
+  const html = renderToStaticMarkup(
+    <ChatTranscriptPanel
+      selectedSessionId="session"
+      session={{
+        ...session,
+        latestRequestId: pending.requestId,
+        timelineItems: [
+          {
+            kind: "assistantMessage",
+            itemKey: "early-response",
+            requestId: pending.requestId,
+            sequence: 9,
+            content: "Response that arrived first",
+            reasoning: null,
+            timestamp: null,
+            reconstruction: { state: "ready" },
+          },
+        ],
+      }}
+      optimisticPendingTurn={pending}
+      activity={null}
+    />,
+  );
+  expect(html.indexOf(pending.content)).toBeLessThan(
+    html.indexOf("Response that arrived first"),
+  );
+});
+
+test("holds the captured insertion boundary when steered work shares an execution request", () => {
+  const response = (
+    itemKey: string,
+    content: string,
+  ): RenderedTimelineItem => ({
+    kind: "assistantMessage",
+    itemKey,
+    requestId: "parent",
+    sequence: 1,
+    content,
+    reasoning: null,
+    timestamp: null,
+    reconstruction: { state: "ready" },
+  });
+  const html = renderToStaticMarkup(
+    <ChatTranscriptPanel
+      selectedSessionId="session"
+      session={{
+        ...session,
+        latestRequestId: "parent",
+        timelineItems: [
+          response("before", "Before this Steer"),
+          response("after", "After this Steer"),
+        ],
+      }}
+      optimisticPendingTurn={{ ...pending, afterItemKey: "before" }}
+      activity={null}
+    />,
+  );
+  expect(html.indexOf("Before this Steer")).toBeLessThan(
+    html.indexOf(pending.content),
+  );
+  expect(html.indexOf(pending.content)).toBeLessThan(
+    html.indexOf("After this Steer"),
+  );
+});
+
+test("puts an input submitted to an empty timeline before the arriving live response", () => {
+  const html = renderToStaticMarkup(
+    <ChatTranscriptPanel
+      selectedSessionId="session"
+      session={{
+        ...session,
+        latestRequestId: pending.requestId,
+        timelineItems: [
+          {
+            kind: "liveAssistant",
+            itemKey: "stream",
+            content: "New live response",
+            reasoning: null,
+          },
+        ],
+      }}
+      optimisticPendingTurn={{ ...pending, afterItemKey: null }}
+      activity={null}
+    />,
+  );
+  expect(html.indexOf(pending.content)).toBeLessThan(
+    html.indexOf("New live"),
+  );
+});

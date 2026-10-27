@@ -27,7 +27,6 @@ enum BackgroundTaskResult {
     Reconcile(Result<()>),
     Control(Result<()>),
     BackgroundCompletion(Result<()>),
-    GraphRunReconcile(Result<()>),
     PairingReconcile(Result<()>),
     EnrollmentReconcile(Result<()>),
     RegistryHeartbeat(Result<()>),
@@ -45,7 +44,6 @@ impl BackgroundTaskResult {
             Self::Reconcile(result) => result.context("generation supervisor task"),
             Self::Control(result) => result.context("control watcher task"),
             Self::BackgroundCompletion(result) => result.context("background completion task"),
-            Self::GraphRunReconcile(result) => result.context("graph run reconcile task"),
             Self::PairingReconcile(result) => result.context("pairing reconcile task"),
             Self::EnrollmentReconcile(result) => result.context("enrollment reconcile task"),
             Self::RegistryHeartbeat(result) => result.context("registry heartbeat task"),
@@ -477,6 +475,7 @@ async fn run_agent_owned(
         .map_err(|_| anyhow::anyhow!("enrollment authority is unavailable"))? =
         Some(enrollment_handle.clone());
     let lsp_pool = tool_runtime.lsp_pool.clone();
+    let control_tool_runtime = tool_runtime.clone();
     let job_driver = crate::plugin_job::driver::JobDriver::with_service_admission(
         crate::plugin_job::driver::JobRuntime {
             node: agent.node.clone(),
@@ -793,20 +792,6 @@ async fn run_agent_owned(
         )
     });
 
-    let graph_run_node = agent.node.clone();
-    let graph_run_owner_did = agent.node_did().to_string();
-    let graph_run_cancel = cancel.child_token();
-    background_tasks.spawn(async move {
-        BackgroundTaskResult::GraphRunReconcile(
-            crate::graph_pipeline::run_graph_run_reconciler(
-                graph_run_node,
-                graph_run_owner_did,
-                graph_run_cancel,
-            )
-            .await,
-        )
-    });
-
     let enrollment_node = agent.node.clone();
     let enrollment_identity = agent.runtime_node_arc().identity.clone();
     let enrollment_cancel = cancel.child_token();
@@ -981,6 +966,7 @@ async fn run_agent_owned(
                         subscription: control_subscription,
                         node_did: control_node_did,
                         resolve_context: control_context,
+                        tool_runtime: control_tool_runtime,
                         proposals_tx: control_tx,
                         runtime_status: control_runtime_status,
                         health_events_rx: backend_health_events_rx,
@@ -1201,6 +1187,43 @@ fn is_degraded_startup_unavailable_reason(
     )
 }
 
+/// Demotes each agent whose tool surface fails to build to
+/// `tool_surface_unavailable`. Startup and the control watcher both run it
+/// on every resolved snapshot, so a reconcile cannot bring such an agent back
+/// runnable while its tools still fail to build.
+pub(super) async fn demote_unbuildable_agents(
+    tool_runtime: &ToolRuntimeContext,
+    snapshot: &mut ResolvedRuntimeSnapshot,
+) -> Result<()> {
+    let mut agent_ids = snapshot.agents.keys().cloned().collect::<Vec<_>>();
+    agent_ids.sort();
+
+    for agent_id in agent_ids {
+        let tool_surface = snapshot
+            .tool_surfaces
+            .get(&agent_id)
+            .ok_or_else(|| anyhow!("missing tool surface for agent_config {agent_id}"))?;
+        if let Err(error) = tool_surface.build_tools(tool_runtime).await {
+            let reason = UnavailableAgent::new(
+                gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
+                format!("building tool surface: {error:#}"),
+            );
+            tracing::error!(
+                agent_id = %agent_id,
+                public_reason = ?reason.public_reason,
+                diagnostic = %reason.diagnostic,
+                "agent_config tool surface unavailable; running without it"
+            );
+            crate::native_logging::mirror_service_diagnostic(&format!(
+                "gents runtime: agent_config {agent_id} unavailable: {}",
+                reason.diagnostic
+            ));
+            snapshot.demote_agent(&agent_id, reason);
+        }
+    }
+    Ok(())
+}
+
 pub(super) async fn validate_startup_snapshot(
     agent: &Gents,
     tool_runtime: &ToolRuntimeContext,
@@ -1213,32 +1236,7 @@ pub(super) async fn validate_startup_snapshot(
         )
     })?;
 
-    let mut agent_ids = snapshot.agents.keys().cloned().collect::<Vec<_>>();
-    agent_ids.sort();
-
-    for agent_id in agent_ids {
-        let tool_surface = snapshot
-            .tool_surfaces
-            .get(&agent_id)
-            .ok_or_else(|| anyhow!("missing tool surface for agent_config {agent_id}"))?;
-        if let Err(error) = tool_surface.build_tools(tool_runtime).await {
-            let reason = UnavailableAgent::new(
-                gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
-                format!("building startup tool surface: {error:#}"),
-            );
-            tracing::error!(
-                agent_id = %agent_id,
-                public_reason = ?reason.public_reason,
-                diagnostic = %reason.diagnostic,
-                "agent_config tool surface unavailable at startup; starting without it"
-            );
-            crate::native_logging::mirror_service_diagnostic(&format!(
-                "gents runtime: agent_config {agent_id} unavailable at startup: {}",
-                reason.diagnostic
-            ));
-            snapshot.demote_agent(&agent_id, reason);
-        }
-    }
+    demote_unbuildable_agents(tool_runtime, snapshot).await?;
 
     if snapshot.agents.is_empty() {
         let mut unavailable = snapshot

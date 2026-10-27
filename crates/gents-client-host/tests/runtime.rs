@@ -28,6 +28,8 @@ mod configured_actions;
 mod editor_command_output;
 #[path = "support/editor_delivery.rs"]
 mod editor_delivery;
+#[path = "support/editor_goal_delivery.rs"]
+mod editor_goal_delivery;
 #[path = "support/editor_goal_recovery.rs"]
 mod editor_goal_recovery;
 #[path = "support/editor_goal_removal.rs"]
@@ -40,6 +42,8 @@ mod editor_history;
 mod editor_inventory;
 #[path = "support/editor_inventory_permissions.rs"]
 mod editor_inventory_permissions;
+#[path = "support/editor_questions.rs"]
+mod editor_questions;
 #[path = "support/editor_related_work.rs"]
 mod editor_related_work;
 #[path = "support/editor_retry.rs"]
@@ -55,6 +59,8 @@ mod editor_workspace;
 #[allow(dead_code)]
 #[path = "../../gents-cli/tests/support/mocks/fake_llm.rs"]
 mod fake_llm;
+#[path = "support/goal_delivery.rs"]
+mod goal_delivery;
 #[path = "support/initialization.rs"]
 mod initialization;
 #[allow(dead_code)]
@@ -95,6 +101,8 @@ enum Journey {
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorDelivery,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorGoalDelivery,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorReview,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorReviewPermissions,
@@ -108,6 +116,8 @@ enum Journey {
     EditorRelatedWork,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorRelatedWorkFailure,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorQuestions,
     Goal,
 }
 
@@ -127,6 +137,7 @@ impl Journey {
             Self::EditorGoalReplacement => Some("goal-replacement"),
             Self::EditorRetry => Some("retry"),
             Self::EditorDelivery => Some("delivery"),
+            Self::EditorGoalDelivery => Some("goal-delivery"),
             Self::EditorReview => Some("review"),
             Self::EditorReviewPermissions => Some("review-permissions"),
             Self::EditorInventory => Some("review-inventory"),
@@ -134,6 +145,7 @@ impl Journey {
             Self::EditorWorkspace => Some("workspace"),
             Self::EditorRelatedWork => Some("related-work"),
             Self::EditorRelatedWorkFailure => Some("related-work-failure"),
+            Self::EditorQuestions => Some("questions"),
             _ => None,
         }
     }
@@ -141,6 +153,34 @@ impl Journey {
 
 const STEERING_INPUT: &str = "Steering input from the installed editor.";
 const STEERING_REPLY: &str = "Steering input received.";
+
+#[cfg(feature = "editor-e2e")]
+#[cfg_attr(
+    windows,
+    ignore = "installed reply-loss relay requires a POSIX executable fixture"
+)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_recovers_goal_commands_after_lost_replies_and_reload() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorGoalDelivery)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "editor.log",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })?;
+    copy_editor_evidence(temp.path(), "editor-goal-delivery-canonical.json")
+}
 
 #[cfg(feature = "editor-e2e")]
 #[cfg_attr(
@@ -533,6 +573,30 @@ async fn editor_replaces_goals_in_the_same_chat_without_losing_work_or_drafts() 
 
 #[cfg(feature = "editor-e2e")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_answers_a_native_question_and_uses_the_edited_worker_prompt() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    exercise(temp.path(), Journey::EditorQuestions)
+        .await
+        .with_context(|| {
+            [
+                "runtime.log",
+                "runtime.err",
+                "client-host.log",
+                "editor.log",
+            ]
+            .map(|name| {
+                format!(
+                    "{name}:\n{}",
+                    std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+                )
+            })
+            .join("\n")
+        })?;
+    copy_editor_evidence(temp.path(), "editor-questions-canonical.json")
+}
+
+#[cfg(feature = "editor-e2e")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn editor_observes_concurrent_related_work_without_losing_the_parent_draft() -> Result<()> {
     let temp = tempfile::tempdir()?;
     exercise(temp.path(), Journey::EditorRelatedWork)
@@ -635,6 +699,8 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let provider_goal_removal = Arc::clone(&goal_removal);
     let goal_replacement = Arc::new(editor_goal_replacement::Provider::default());
     let provider_goal_replacement = Arc::clone(&goal_replacement);
+    let goal_delivery_provider = Arc::new(editor_goal_delivery::Provider::default());
+    let provider_goal_delivery = Arc::clone(&goal_delivery_provider);
     let editor_history_gate = Arc::new(tokio::sync::Semaphore::new(0));
     let history_provider_gate = editor_history_gate.clone();
     let history_provider_hold = root.join("hold-history-provider");
@@ -656,6 +722,16 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         },
         None,
         Arc::new(move |request| {
+            if matches!(journey, Journey::EditorQuestions) {
+                if let Some(reply) = editor_questions::reply(request) {
+                    return reply;
+                }
+            }
+            if matches!(journey, Journey::EditorGoalDelivery) {
+                if let Some(reply) = provider_goal_delivery.reply(request, &emitted) {
+                    return reply;
+                }
+            }
             if matches!(journey, Journey::EditorDelivery) {
                 if let Some(reply) = editor_delivery::reply(request) {
                     return reply;
@@ -799,6 +875,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             "--inference-url",
         ])
         .arg(provider.endpoint());
+    if matches!(journey, Journey::EditorQuestions) {
+        init.arg("--engineer");
+    }
     let output = initialization::Initialization::spawn(&mut init, root)?
         .wait(Duration::from_secs(30))
         .await?;
@@ -939,7 +1018,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         );
     }
     let mut id = 2;
-    let deployment = wait_chat_deployment(&mut client, &mut id, node_did).await?;
+    let deployment = wait_chat_deployment(&mut client, &mut id, node_did, &access).await?;
     let agent_id = deployment["agents"]
         .as_array()
         .and_then(|agents| agents.iter().find(|agent| agent["isDefault"] == true))
@@ -947,14 +1026,20 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         .context("runtime default agent")?;
     if matches!(
         journey,
-        Journey::Conversation | Journey::RuntimeReplacement | Journey::EditorDelivery
+        Journey::Conversation
+            | Journey::RuntimeReplacement
+            | Journey::EditorDelivery
+            | Journey::EditorGoalDelivery
     ) {
-        if matches!(journey, Journey::EditorDelivery) {
+        if matches!(
+            journey,
+            Journey::EditorDelivery | Journey::EditorGoalDelivery
+        ) {
             client
                 .call(id, "client_connect_local", json!({"nodeHome":node_home}))
                 .await;
             id += 1;
-            wait_chat_deployment(&mut client, &mut id, node_did).await?;
+            wait_chat_deployment(&mut client, &mut id, node_did, &access).await?;
         }
         configure_inference(
             &mut client,
@@ -1024,15 +1109,39 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         } else {
             "Return the fixture response.".to_owned()
         };
-    let receipt = if matches!(
+    let receipt = if matches!(journey, Journey::Goal) {
+        let mut recovery = EditRecoveryHost {
+            process: &mut host,
+            binary: &host_binary,
+            root,
+            paths: &paths,
+            access: &access,
+            editor_store: false,
+        };
+        let (reconnected, result) = goal_delivery::exercise(
+            client,
+            &mut id,
+            node_did,
+            &client_did,
+            agent_id,
+            &identity,
+            &mut recovery,
+        )
+        .await?;
+        client = reconnected;
+        result
+    } else if matches!(
         journey,
-        Journey::Goal | Journey::EditorGoalRecovery | Journey::EditorGoalSteering
+        Journey::EditorGoalRecovery | Journey::EditorGoalSteering
     ) {
-        client.call(id, "desktop_goal_control", json!({"request": {
+        let request = json!({
             "nodeDid":node_did, "agentId":agent_id,
             "cwd": journey.is_steering().then_some(root),
             "action":{"kind":"create", "objective":"Return the fixture response.", "tokenBudget":"1000"}
-        }})).await
+        });
+        client
+            .call(id, "desktop_goal_control", json!({"request":request}))
+            .await
     } else {
         client
             .call(
@@ -1072,6 +1181,18 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let original_doc_id = row.doc_id.clone().context("submitted physical request")?;
     ensure!(row.admission_signer_did.as_deref() == Some(client_did.as_str()));
     ensure!(client_did != node_did);
+    if matches!(journey, Journey::Goal) {
+        let context = &row
+            .input
+            .as_ref()
+            .context("signed captured input")?
+            .captured_context;
+        ensure!(
+            context.len() == 1
+                && context[0].unsaved
+                && context[0].content == goal_delivery::CAPTURED_CONTENT
+        );
+    }
     ensure!(
         row.input
             .and_then(|input| input.queue)
@@ -1159,7 +1280,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         client
             .call(id, "client_connect_local", json!({"nodeHome":node_home}))
             .await;
-        run_editor_journey(
+        let editor = run_editor_journey(
             root,
             &paths,
             &host_binary,
@@ -1167,7 +1288,26 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             provider.endpoint(),
             journey.editor_scenario().context("steering scenario")?,
         )
-        .await?;
+        .await;
+        if editor.is_err() {
+            let snapshot = read_session(&mut client, &mut id, node_did, session).await?;
+            let requests = access.execute(&format!(
+                r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}) {{ {} superseded_by_request_doc_id }} }}"#,
+                gents::graphql::escape_graphql_string(node_did),
+                gents::graphql::escape_graphql_string(session),
+                gents::SIGNED_REQUEST_FIELDS,
+            )).await?;
+            let name = "editor-steering-failure.json";
+            std::fs::write(
+                root.join(name),
+                serde_json::to_vec_pretty(&json!({
+                    "snapshot": snapshot, "requests": requests,
+                }))?,
+            )?;
+            #[cfg(feature = "editor-e2e")]
+            copy_editor_evidence(root, name)?;
+        }
+        editor?;
         id += 1;
     }
     if matches!(journey, Journey::EditorGoalRecovery) {
@@ -1783,6 +1923,43 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             serde_json::to_vec_pretty(&evidence)?,
         )?;
     }
+    if matches!(journey, Journey::EditorQuestions) {
+        editor_related_work::configure(&access, node_did, agent_id).await?;
+        client
+            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .await;
+        let editor_result = run_editor_journey(
+            root,
+            &paths,
+            &host_binary,
+            session,
+            provider.endpoint(),
+            "questions",
+        )
+        .await;
+        let captured = provider.captured_chat_requests();
+        std::fs::write(
+            root.join("editor-questions-provider.json"),
+            serde_json::to_vec_pretty(&captured)?,
+        )?;
+        #[cfg(feature = "editor-e2e")]
+        copy_editor_evidence(root, "editor-questions-provider.json")?;
+        ensure!(
+            captured
+                .iter()
+                .any(|body| body["tools"]
+                    .as_array()
+                    .is_some_and(|tools| tools.iter().any(|tool| tool["function"]["name"]
+                        == gents::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME))),
+            "the default Engineer must advertise its question tool"
+        );
+        editor_result?;
+        let evidence = editor_questions::verify(&access, node_did, session, &client_did).await?;
+        std::fs::write(
+            root.join("editor-questions-canonical.json"),
+            serde_json::to_vec_pretty(&evidence)?,
+        )?;
+    }
     if matches!(journey, Journey::EditorWorkspace) {
         configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
         client
@@ -2169,6 +2346,44 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             serde_json::to_vec_pretty(&evidence)?,
         )?;
     }
+    if matches!(journey, Journey::EditorGoalDelivery) {
+        editor_goal_delivery::prepare(root)?;
+        let finish = root.join("finish-delivery-goal");
+        let held = Arc::clone(&goal_delivery_provider);
+        let release = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            loop {
+                if finish.is_file() {
+                    held.release();
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }));
+        run_editor_journey(
+            root,
+            &paths,
+            &host_binary,
+            session,
+            provider.endpoint(),
+            "goal-delivery",
+        )
+        .await?;
+        let evidence = editor_goal_delivery::verify(
+            &access,
+            &mut client,
+            &mut id,
+            node_did,
+            &client_did,
+            &identity,
+            root,
+        )
+        .await?;
+        std::fs::write(
+            root.join("editor-goal-delivery-canonical.json"),
+            serde_json::to_vec_pretty(&evidence)?,
+        )?;
+        drop(release);
+    }
     if matches!(journey, Journey::EditorDelivery) {
         run_editor_journey(
             root,
@@ -2288,9 +2503,10 @@ async fn wait_chat_deployment(
     client: &mut Attachment,
     id: &mut u32,
     node_did: &str,
+    access: &gents::ConfigAccess,
 ) -> Result<Value> {
     let mut last_snapshot = Value::Null;
-    tokio::time::timeout(Duration::from_secs(30), async {
+    let observed = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let snapshot = client.snapshot(*id).await;
             *id += 1;
@@ -2311,10 +2527,22 @@ async fn wait_chat_deployment(
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     })
-    .await
-    .with_context(|| {
-        format!("client did not observe its authorized runtime route: {last_snapshot}")
-    })
+    .await;
+    match observed {
+        Ok(deployment) => Ok(deployment),
+        Err(error) => {
+            let query = format!(
+                "{{ NodeReadiness(filter: {{node_did: {{_eq: \"{}\"}}}}, limit: 2) {{_docID node_did snapshot_json updated_at}} }}",
+                gents::graphql::escape_graphql_string(node_did),
+            );
+            let source = tokio::time::timeout(Duration::from_secs(2), access.execute(&query)).await;
+            Err(error).with_context(|| {
+                format!(
+                    "client did not observe its authorized runtime route; runtime readiness: {source:?}; client snapshot: {last_snapshot}"
+                )
+            })
+        }
+    }
 }
 
 struct EditRecoveryHost<'a> {
@@ -2445,7 +2673,9 @@ async fn exercise_message_edit(
     client.close().await;
     recovery.restart().await?;
     client = Attachment::start(paths).await;
-    wait_chat_deployment(&mut client, id, node_did).await?;
+    wait_chat_deployment(&mut client, id, node_did, access)
+        .await
+        .context("restoring the runtime route after the fork helper restart")?;
     let fork = client
         .call(*id, "desktop_session_fork_before_message", args)
         .await;
@@ -2506,7 +2736,9 @@ async fn exercise_message_edit(
     client.close().await;
     recovery.restart().await?;
     client = Attachment::start(paths).await;
-    wait_chat_deployment(&mut client, id, node_did).await?;
+    wait_chat_deployment(&mut client, id, node_did, access)
+        .await
+        .context("restoring the runtime route after the send helper restart")?;
     let recovered = client
         .call(
             *id,
@@ -2547,7 +2779,9 @@ async fn exercise_message_edit(
     client.close().await;
     recovery.restart().await?;
     client = Attachment::start(paths).await;
-    wait_chat_deployment(&mut client, id, node_did).await?;
+    wait_chat_deployment(&mut client, id, node_did, access)
+        .await
+        .context("restoring the runtime route after the acknowledgement helper restart")?;
     let acknowledged = client
         .call(
             *id,

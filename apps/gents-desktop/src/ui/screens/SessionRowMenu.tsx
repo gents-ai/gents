@@ -1,8 +1,7 @@
-import type { ComponentType, ReactElement, ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import {
   ChevronsDownUp,
   ChevronsUpDown,
-  Copy,
   CornerLeftUp,
   EllipsisVertical,
   ExternalLink,
@@ -12,21 +11,24 @@ import { Button } from "@gents/ui/components/button";
 import {
   ContextMenu,
   ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@gents/ui/components/context-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { href, navigate } from "@/lib/router";
 import type { SessionRow } from "@/lib/session-rows";
 import { sessionKeyOf } from "../../hooks/fleetStore";
+import {
+  CONTEXT_MENU,
+  DROPDOWN_MENU,
+  SessionItems,
+  useRenameFromMenu,
+  type MenuParts,
+} from "./SessionMenu";
 
 /* a session revealed by "Go to the session that started it": the level it
    lands on, or the one already shown, scrolls it into view once */
@@ -45,19 +47,23 @@ type MenuProps = {
   starter: SessionSummary | null;
   /** opens or closes its started sessions here; absent where rows can't open */
   onToggle: (() => void) | null;
+  /** starts its rename in the row */
+  onRename: (() => void) | null;
 };
 
 /** a row's menu, from a right-click, a long press or the menu key */
 export function SessionRowMenu({
   trigger,
   children,
+  onRename: start,
   ...props
 }: MenuProps & { trigger: ReactElement; children: ReactNode }) {
+  const { onRename, finalFocus } = useRenameFromMenu(start);
   return (
     <ContextMenu>
       <ContextMenuTrigger render={trigger}>{children}</ContextMenuTrigger>
-      <ContextMenuContent className="min-w-56">
-        <Items {...props} Item={ContextMenuItem} Separator={ContextMenuSeparator} />
+      <ContextMenuContent className="min-w-56" finalFocus={finalFocus}>
+        <Items {...props} onRename={onRename} {...CONTEXT_MENU} />
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -66,8 +72,10 @@ export function SessionRowMenu({
 /** the same menu, from the row's actions button */
 export function SessionRowActions({
   className,
+  onRename: start,
   ...props
 }: MenuProps & { className?: string }) {
+  const { onRename, finalFocus } = useRenameFromMenu(start);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -82,30 +90,19 @@ export function SessionRowActions({
       >
         <EllipsisVertical />
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-auto min-w-56">
-        <Items {...props} Item={DropdownMenuItem} Separator={DropdownMenuSeparator} />
+      <DropdownMenuContent
+        align="end"
+        className="w-auto min-w-56"
+        finalFocus={finalFocus}
+      >
+        <Items {...props} onRename={onRename} {...DROPDOWN_MENU} />
       </DropdownMenuContent>
     </DropdownMenu>
   );
 }
 
-type ItemProps = {
-  onClick?: () => void;
-  nativeButton?: boolean;
-  render?: ReactElement;
-  children: ReactNode;
-};
-
-function Items({
-  row,
-  starter,
-  onToggle,
-  Item,
-  Separator,
-}: MenuProps & {
-  Item: ComponentType<ItemProps>;
-  Separator: ComponentType;
-}) {
+function Items({ row, starter, onToggle, onRename, ...parts }: MenuProps & MenuParts) {
+  const { Item, Separator } = parts;
   const { session, started, open } = row;
   return (
     <>
@@ -156,10 +153,7 @@ function Items({
         </Item>
       )}
       <Separator />
-      <Item onClick={() => void navigator.clipboard?.writeText(session.sessionId)}>
-        <Copy />
-        Copy session ID
-      </Item>
+      <SessionItems session={session} onRename={onRename} {...parts} />
     </>
   );
 }

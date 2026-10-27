@@ -48,19 +48,8 @@ pub enum PluginFilesystemGrant {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PluginFilesystemScope {
-    Installed {
-        roots: u64,
-    },
-    BoundInput {
-        field: String,
-    },
-    /// Read-only mounts: counts of installed roots and mounts, never host paths.
-    Mounted {
-        installed_roots: u64,
-        mounts: u64,
-        project_tier: bool,
-        bound_input: Option<String>,
-    },
+    Installed { roots: u64 },
+    BoundInput { field: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

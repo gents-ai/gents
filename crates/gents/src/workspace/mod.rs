@@ -71,8 +71,3 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use overlay::overlay_tests::{artifact_test_fixture, ArtifactTestFixture};
-
-pub(crate) use overlay::{
-    decode_isolated_workspace_record_response, isolated_workspace_record_query,
-};
-pub(crate) use runtime::apply_workspace_lineage_stamp;

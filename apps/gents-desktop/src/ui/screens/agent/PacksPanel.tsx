@@ -15,11 +15,7 @@ import { defaultAgentOf } from "@/lib/agents";
 import type { NodeView } from "../../../hooks/fleetStore";
 import { ChoiceRow } from "./editors";
 import { Group, Row } from "./rows";
-import {
-  WORKFLOW_ENGINE,
-  WirePackDialog,
-  type WirePackDialogProps,
-} from "./WirePackDialog";
+import { WirePackDialog, type WirePackDialogProps } from "./WirePackDialog";
 import { errorText } from "../../../lib/errorText";
 
 /** An install or update that would replace documents someone edited stops and
@@ -207,26 +203,7 @@ export function PacksPanel({ deployment }: { deployment: NodeView }) {
         </Button>
       ));
     }
-    if (!sources.target_packs.some((p) => p.pack === pack)) return null;
-    const engineMissing = !sources.plugins.some(
-      (p) => p.plugin === WORKFLOW_ENGINE.plugin,
-    );
-    return (
-      <Button
-        size="sm"
-        variant="outline"
-        disabled={busy !== null}
-        onClick={() =>
-          setWiring({
-            plugin: WORKFLOW_ENGINE.plugin,
-            targetsFrom: [pack],
-            installFirst: engineMissing ? WORKFLOW_ENGINE.pack : undefined,
-          })
-        }
-      >
-        Enable for agent
-      </Button>
-    );
+    return null;
   }
 
   return (

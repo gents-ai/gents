@@ -14,6 +14,7 @@ import type {
 import { LIST_WINDOW_THRESHOLD } from "@source-inc/gents-desktop-ui";
 import { isTerminalTurnState } from "@source-inc/gents-desktop-client";
 import { MessageList } from "../Transcript.js";
+import { timelineKey } from "../transcript/TimelineItem.js";
 import {
   coalesceToolGroups,
   type CompactTimelineItem,
@@ -38,62 +39,6 @@ export type ChatTranscriptPanelProps = {
 export const TRANSCRIPT_PAGE_SIZE = 40;
 const TRANSCRIPT_RETAINED_ITEMS = TRANSCRIPT_PAGE_SIZE * 2;
 const RESPONSE_ERROR_SUMMARY = "The assistant couldn't complete this turn.";
-
-function timelineChangeSignal(items: CompactTimelineItem[]) {
-  return JSON.stringify(
-    items.map((item) => {
-      switch (item.kind) {
-        case "assistantMessage":
-        case "liveAssistant":
-          return [
-            item.kind,
-            item.itemKey,
-            item.content?.length ?? 0,
-            item.reasoning?.length ?? 0,
-            item.kind === "assistantMessage" ? item.requestTurn : null,
-          ];
-        case "userMessage":
-        case "automatedInput":
-          return [item.kind, item.itemKey, item.content?.length ?? 0];
-        case "pendingUserTurn":
-          return [
-            item.kind,
-            item.itemKey,
-            item.content.length,
-            item.lifecycleState ?? "",
-          ];
-        case "requestContextReductionSummary":
-          return [
-            item.kind,
-            item.itemKey,
-            item.reductionCount,
-            item.compactedCount,
-            item.repairedCount,
-            item.latestTimestamp ?? "",
-          ];
-        case "sessionCompaction":
-          return [item.kind, item.itemKey, item.messagesCompacted ?? -1];
-        case "toolGroup":
-          return [
-            item.kind,
-            item.itemKey,
-            item.compactAnchors?.map((anchor) => [
-              anchor.itemKey,
-              anchor.requestTurn,
-            ]),
-            item.tools.map((tool) => [
-              tool.itemKey,
-              tool.statusKind,
-              tool.requestTurn,
-              tool.presentation,
-              tool.partialOutputTail?.length ?? 0,
-              tool.cancelCause?.cause ?? "",
-            ]),
-          ];
-      }
-    }),
-  );
-}
 
 function scrollPanelToTip(panel: HTMLElement) {
   panel.scrollTo({ top: panel.scrollHeight, behavior: "instant" });
@@ -153,8 +98,29 @@ export function ChatTranscriptPanel({
     if (hasOwner) {
       return durable;
     }
+    const after = optimisticPendingTurn.afterItemKey;
+    const anchor =
+      after == null ? -1 : durable.findIndex((item) => item.itemKey === after);
+    const response = durable.findIndex((item) =>
+      item.kind === "toolGroup"
+        ? item.tools.some(
+            (tool) => tool.requestId === optimisticPendingTurn.requestId,
+          )
+        : item.kind === "assistantMessage"
+          ? item.requestId === optimisticPendingTurn.requestId
+          : item.kind === "liveAssistant" &&
+            session?.latestRequestId === optimisticPendingTurn.requestId,
+    );
+    const position =
+      after === null
+        ? 0
+        : anchor >= 0
+          ? anchor + 1
+          : response >= 0
+            ? response
+            : durable.length;
     return [
-      ...durable,
+      ...durable.slice(0, position),
       {
         kind: "pendingUserTurn",
         itemKey: `optimistic-${optimisticPendingTurn.requestId}`,
@@ -168,8 +134,14 @@ export function ChatTranscriptPanel({
         origin: null,
         createdAt: optimisticPendingTurn.createdAt,
       },
+      ...durable.slice(position),
     ];
-  }, [optimisticPendingTurn, selectedSessionId, session?.timelineItems]);
+  }, [
+    optimisticPendingTurn,
+    selectedSessionId,
+    session?.timelineItems,
+    session?.latestRequestId,
+  ]);
 
   const timelineItems = useMemo<CompactTimelineItem[]>(
     () =>
@@ -178,6 +150,23 @@ export function ChatTranscriptPanel({
         : sourceTimelineItems,
     [compactTools, sourceTimelineItems],
   );
+
+  const latestUserIndex = useMemo(() => {
+    for (let index = timelineItems.length - 1; index >= 0; index--) {
+      if (
+        ["userMessage", "pendingUserTurn"].includes(timelineItems[index]!.kind)
+      )
+        return index;
+    }
+    return -1;
+  }, [timelineItems]);
+  const pinUser =
+    autoFollowTranscript &&
+    !isTerminalTurnState(session?.turnState) &&
+    latestUserIndex >= 0;
+  const stickyUserItemKey = pinUser
+    ? timelineKey(timelineItems[latestUserIndex]!)
+    : null;
 
   const baseVisibleCount =
     transcriptWindow.sessionId === selectedSessionId
@@ -188,7 +177,10 @@ export function ChatTranscriptPanel({
       ? baseVisibleCount +
         Math.max(0, timelineItems.length - transcriptWindow.timelineLength)
       : baseVisibleCount;
-  const firstVisibleIndex = Math.max(0, timelineItems.length - visibleCount);
+  const firstVisibleIndex = Math.min(
+    Math.max(0, timelineItems.length - visibleCount),
+    pinUser ? latestUserIndex : timelineItems.length,
+  );
   const visibleTimelineItems = useMemo(
     () => timelineItems.slice(firstVisibleIndex),
     [firstVisibleIndex, timelineItems],
@@ -199,15 +191,8 @@ export function ChatTranscriptPanel({
   const hasOlderItems =
     hasLocalOlderItems ||
     Boolean(session?.timelinePage?.hasOlder && onLoadOlder);
-  const transcriptChange = useMemo(
-    () => timelineChangeSignal(timelineItems),
-    [timelineItems],
-  );
-
-  const tipChange = useMemo(
-    () => timelineChangeSignal(sourceTimelineItems.slice(-1)),
-    [sourceTimelineItems],
-  );
+  const transcriptChange = timelineItems;
+  const tipChange = sourceTimelineItems.at(-1);
   const observedTip = useRef(tipChange);
   useLayoutEffect(() => {
     if (autoFollowTranscript) setNewContentBelow(false);
@@ -286,6 +271,8 @@ export function ChatTranscriptPanel({
       );
     });
     observer.observe(transcriptPanel);
+    const content = transcriptPanel.querySelector(".message-list");
+    if (content) observer.observe(content);
     return () => observer.disconnect();
   }, [transcriptPanel, autoFollowTranscript]);
 
@@ -523,6 +510,7 @@ export function ChatTranscriptPanel({
             compactTools={compactTools}
             timelineItems={visibleTimelineItems}
             timelineIdentity={selectedSessionId}
+            stickyUserItemKey={stickyUserItemKey}
             scrollElement={transcriptPanel}
             requestCancelCause={requestOutcome?.cancelCause}
           />

@@ -36,11 +36,10 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
                 .one("kind")?
                 .map(|kind| match kind {
                     "documents" => Ok(Kind::Documents),
-                    "graph" => Ok(Kind::Graph),
                     "assets" => Ok(Kind::Assets),
                     "plugins" => Ok(Kind::Plugins),
                     other => Err(anyhow::anyhow!(
-                        "unknown pack kind {other:?}; accepted: documents, graph, assets, plugins"
+                        "unknown pack kind {other:?}; accepted: documents, assets, plugins"
                     )),
                 })
                 .transpose()?;
@@ -49,11 +48,11 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
                 .map(|slug| match slug {
                     "minimal" => Ok(Template::Minimal),
                     "automation" => Ok(Template::Automation),
-                    "graph" => Ok(Template::Graph),
                     "plugin-tool" => Ok(Template::PluginTool),
                     "assets" => Ok(Template::Assets),
+                    "workflow" => Ok(Template::Workflow),
                     other => Err(anyhow::anyhow!(
-                        "unknown pack template {other:?}; accepted: minimal, automation, graph, plugin-tool, assets"
+                        "unknown pack template {other:?}; accepted: minimal, automation, plugin-tool, assets, workflow"
                     )),
                 })
                 .transpose()?;
@@ -203,7 +202,6 @@ impl ConfigCommandTool {
             "pack": report.pack,
             "dir": context.display_path(&report.dir),
             "digest": report.digest,
-            "graphs": report.graphs,
             "problems": report.problems,
             "unverified": report.unverified,
             "validated": validated,
@@ -236,6 +234,34 @@ impl ConfigCommandTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scaffold_accepts_the_workflow_template_and_a_language() {
+        let argv: Vec<String> = ["rome_debate", "--template", "workflow", "--language", "js"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let AuthoringCall::Scaffold { name, input } =
+            parse_authoring_args("scaffold", &argv).unwrap()
+        else {
+            panic!("scaffold parses to a scaffold call");
+        };
+        assert_eq!(name, "rome_debate");
+        assert_eq!(input.template, Some(Template::Workflow));
+        assert_eq!(input.language.as_deref(), Some("js"));
+        let bad: Vec<String> = ["x", "--template", "nope"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let error = match parse_authoring_args("scaffold", &bad) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("an unknown template is refused"),
+        };
+        assert!(
+            error.contains("workflow"),
+            "the refusal lists every template: {error}"
+        );
+    }
 
     #[test]
     fn the_caller_path_never_expands_authority() {
@@ -287,7 +313,6 @@ mod tests {
             dir: PathBuf::from("review_toolkit"),
             pack: Some("review_toolkit".into()),
             digest: Some("sha256:x".into()),
-            graphs: Vec::new(),
             problems,
             unverified,
         };

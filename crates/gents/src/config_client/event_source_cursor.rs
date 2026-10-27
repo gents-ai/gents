@@ -1,4 +1,5 @@
 use super::ConfigApplyTxn;
+use crate::agent::document_view::is_retired_reserved_id;
 use crate::graphql::escape_graphql_string;
 use anyhow::{Context, Result};
 use gents_protocol::event_delivery::EventConsumer;
@@ -171,6 +172,9 @@ pub(crate) async fn seed_referencing_consumers(
             let trigger_id = row["trigger_id"]
                 .as_str()
                 .context("source consumer lacks trigger ID")?;
+            if is_retired_reserved_id(trigger_id) {
+                continue;
+            }
             let consumer = EventConsumer::Trigger {
                 trigger_id: trigger_id.to_owned(),
             };
@@ -184,6 +188,9 @@ pub(crate) async fn seed_referencing_consumers(
         let binding_id = row["binding_id"]
             .as_str()
             .context("source consumer lacks binding ID")?;
+        if is_retired_reserved_id(binding_id) {
+            continue;
+        }
         let consumer = EventConsumer::CallbackBinding {
             binding_id: binding_id.to_owned(),
         };

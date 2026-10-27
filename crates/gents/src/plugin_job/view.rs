@@ -400,6 +400,7 @@ fn children_of(pin: &JobPin, pairs: Vec<(StepChild, JobChildView)>) -> Vec<JobCh
             title: view.title,
             usage: view.usage,
             duration_ms: view.duration_ms,
+            target: child.target.1,
         })
         .collect()
 }
@@ -538,6 +539,7 @@ mod tests {
                 total: 0,
             },
             duration_ms: 0,
+            target: "agent-a".to_owned(),
         };
 
         let loaded = view(&job, &row).await.unwrap();

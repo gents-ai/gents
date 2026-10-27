@@ -47,7 +47,8 @@ pub enum JobPauseReason {
     BudgetExceeded,
 }
 
-/// Host fact: whether the script is a file in a trusted pack mount.
+/// Host fact: whether the call carries a model-authored `script` (dynamic) or
+/// runs the plugin artifact (installed).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -96,6 +97,9 @@ pub enum JobResumeEngine {
 
 /// Size cap of a serialized `JobProgress`.
 pub const JOB_PROGRESS_MAX_BYTES: usize = 16 * 1024;
+/// The cap on a guest's own step state (`JobStepInput.state`, `JobEffects.state`), which the
+/// host stores verbatim and never reads.
+pub const JOB_GUEST_STATE_MAX_BYTES: usize = 64 * 1024;
 /// Size cap of one `JobProgress` title or event string.
 pub const JOB_PROGRESS_TEXT_MAX_BYTES: usize = 256;
 
@@ -245,31 +249,7 @@ pub struct JobRootCall {
     pub args: Option<serde_json::Map<String, serde_json::Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub agent_budget: Option<u32>,
-}
-
-/// The verified bytes the engine must run (installed origin, steps after the first).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub struct JobVerifiedScript {
-    pub source: String,
-    pub digest: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub struct AssetMount {
-    pub pack: String,
-    pub class: String,
-    pub digest: String,
-    pub path: String,
-    /// Host hint: operator provenance and listed in `trusted_packs`.
-    pub trusted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -370,11 +350,8 @@ pub struct JobStepInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(type = "Record<string, unknown> | null", optional = nullable))]
     pub args: Option<serde_json::Map<String, serde_json::Value>>,
-    /// Binds on step 0 only.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub path: Option<String>,
-    /// The model's script text, never the verified bytes.
+    /// The model's script text; the host runs it as the step when the plugin
+    /// declares `script_runtime`, and its presence makes the run `dynamic`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub script: Option<String>,
@@ -388,16 +365,16 @@ pub struct JobStepInput {
     pub pin: Option<JobPin>,
     /// Null only on step 0.
     pub origin: Option<JobOrigin>,
-    /// Host-verified bytes; separate from `script`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub verified_script: Option<JobVerifiedScript>,
-    pub mounts: Vec<AssetMount>,
     pub ceiling: JobCeilingView,
     pub children: BTreeMap<String, JobChildView>,
     pub control: Option<JobControlEcho>,
     pub scratch: BTreeMap<String, String>,
     pub jobs: Vec<JobRowView>,
+    /// The guest's own state from its last step that carried one, stored verbatim and never
+    /// read by the host; absent before the first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(type = "unknown | null", optional = nullable))]
+    pub state: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -587,6 +564,10 @@ pub struct JobEffects {
     )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<JobScratch>>", optional = nullable))]
     pub scratch: Vec<JobScratch>,
+    /// The guest's own state for its next step, stored verbatim; absent keeps the stored one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(type = "unknown | null", optional = nullable))]
+    pub state: Option<serde_json::Value>,
 }
 
 /// The output of one job step: exactly one of `result`, `fail`, `suspend` or
@@ -618,6 +599,7 @@ pub enum JobStepOutput {
         progress: Option<JobProgress>,
         pin: Option<JobGuestPin>,
         resume: Option<JobResume>,
+        state: Option<serde_json::Value>,
     },
     Effects {
         effects: JobEffects,
@@ -669,6 +651,7 @@ fn step_output_variant(kind: &str, o: &mut StepObject) -> Result<JobStepOutput, 
             progress: rider(o, "progress")?,
             pin: rider(o, "pin")?,
             resume: rider(o, "resume")?,
+            state: rider(o, "state")?,
         },
         _ => JobStepOutput::Effects {
             effects: required(o, "effects")?,
@@ -701,7 +684,7 @@ impl<'de> Deserialize<'de> for JobStepOutput {
         let riders: &[&str] = match kind {
             "result" => &["writes", "scratch", "progress", "control", "pin", "resume"],
             "fail" => &["writes", "progress"],
-            "suspend" => &["writes", "scratch", "progress", "pin", "resume"],
+            "suspend" => &["writes", "scratch", "progress", "pin", "resume", "state"],
             _ => &[],
         };
         if let Some(unknown) = object
@@ -778,6 +761,7 @@ impl Serialize for JobStepOutput {
                 progress,
                 pin,
                 resume,
+                state,
             } => {
                 m.serialize_entry("suspend", suspend)?;
                 list(&mut m, "writes", writes)?;
@@ -785,6 +769,7 @@ impl Serialize for JobStepOutput {
                 opt(&mut m, "progress", progress)?;
                 opt(&mut m, "pin", pin)?;
                 opt(&mut m, "resume", resume)?;
+                opt(&mut m, "state", state)?;
             }
             Self::Effects { effects } => m.serialize_entry("effects", effects)?,
         }
@@ -885,29 +870,6 @@ pub struct ChildOutputSlice {
     pub truncated: bool,
 }
 
-/// Where a catalog entry was found.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub enum CatalogSource {
-    Pack,
-    Project,
-    Kept,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub struct CatalogEntry {
-    pub name: String,
-    pub description: String,
-    pub when_to_use: String,
-    pub source: CatalogSource,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub path: Option<String>,
-}
-
 /// The request a job row belongs to.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -960,6 +922,7 @@ pub struct JobChildRow {
     pub title: String,
     pub usage: JobUsage,
     pub duration_ms: u64,
+    pub target: String,
 }
 
 /// A client's view of one job row.
@@ -1086,9 +1049,22 @@ pub struct PluginJobSettings {
     /// Seconds the job may run.
     #[serde(default = "PluginJobSettings::default_max_wall_secs")]
     pub max_wall_secs: u64,
-    /// Operator-only rules for dynamic scripts, trusted packs and project roots.
-    #[serde(default)]
+    /// Operator-only rules for dynamic scripts and trusted packs.
+    #[serde(default, deserialize_with = "policy_without_project_roots")]
     pub policy: JobPolicy,
+}
+
+/// Reads a policy, dropping the `project_roots` a 0.21 Tools document may
+/// still carry. Accepted for this release only.
+fn policy_without_project_roots<'de, D>(deserializer: D) -> Result<JobPolicy, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut policy = serde_json::Value::deserialize(deserializer)?;
+    if let Some(fields) = policy.as_object_mut() {
+        fields.remove("project_roots");
+    }
+    serde_json::from_value(policy).map_err(serde::de::Error::custom)
 }
 
 impl PluginJobSettings {
@@ -1131,8 +1107,6 @@ pub struct JobPolicy {
     pub dynamic_targets: Vec<String>,
     #[serde(default)]
     pub trusted_packs: Vec<String>,
-    #[serde(default)]
-    pub project_roots: Vec<String>,
 }
 
 impl JobPolicy {
@@ -1149,7 +1123,6 @@ impl Default for JobPolicy {
             dynamic: Self::DEFAULT_DYNAMIC,
             dynamic_targets: Vec::new(),
             trusted_packs: Vec::new(),
-            project_roots: Vec::new(),
         }
     }
 }
@@ -1183,29 +1156,6 @@ pub struct PluginDataDeclaration {
     #[serde(default)]
     pub stamped: BTreeMap<String, StampedField>,
 }
-
-/// Manifest `asset_mounts[]`: one asset class the plugin reads.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub struct AssetMountDeclaration {
-    pub class: String,
-}
-
-/// Manifest `catalog`: the argv of the plugin's catalog call. Catalog calls
-/// use the raw-argument shape, so there is no catalog input type.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-pub struct PluginCatalogDeclaration {
-    pub argv: Vec<String>,
-}
-
-/// Reserved input key under which non-job calls receive the asset mount list.
-pub const ASSET_MOUNTS_INPUT_KEY: &str = "asset_mounts";
-
-/// `AssetMount.class` of a project-tier mount.
-pub const PROJECT_MOUNT_CLASS: &str = "project";
 
 #[cfg(test)]
 mod tests {
@@ -1268,6 +1218,25 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&output).expect("encode"),
             json!({ "effects": {} })
+        );
+    }
+
+    #[test]
+    fn guest_state_rides_on_effects_and_suspend_only() {
+        let effects = effects_of(decode(json!({"effects": {"state": {"phase": "scan"}}})).unwrap());
+        assert_eq!(effects.state, Some(json!({"phase": "scan"})));
+        let suspend =
+            decode(json!({"suspend": {"kind": "pause", "message": "m"}, "state": [1, 2]})).unwrap();
+        assert!(
+            matches!(&suspend, JobStepOutput::Suspend { state, .. } if *state == Some(json!([1, 2])))
+        );
+        assert_eq!(
+            serde_json::to_value(&suspend).unwrap()["state"],
+            json!([1, 2])
+        );
+        assert!(
+            decode(json!({"result": {}, "state": 1})).is_err(),
+            "a terminal result carries no state for a next step"
         );
     }
 

@@ -1,6 +1,15 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { acceptedChat, acceptedChatReply } from "./chat-delivery-fixture";
+import { goalDeliveryStorage } from "./goal-delivery-storage";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SessionScreen } from "../src/ui/screens/SessionScreen";
 import {
@@ -29,13 +38,15 @@ vi.mock("@/lib/router", async (importOriginal) => ({
   navigate,
 }));
 
-vi.stubGlobal(
-  "IntersectionObserver",
-  class {
-    observe() {}
-    disconnect() {}
-  },
-);
+beforeEach(() => {
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+});
 
 vi.mock("../src/ui/screens/BehaviorPicker", () => ({
   AgentPicker: () => null,
@@ -65,9 +76,7 @@ function heldSession(over: Partial<DesktopSessionSnapshot> = {}) {
 function screenApp({
   session = null,
   nodeOverrides = {},
-  sendChatMessage = vi
-    .fn()
-    .mockResolvedValue({ sessionId: "session", requestId: "accepted" }),
+  sendChatMessage = vi.fn(acceptedChatReply),
   api = {},
 }: {
   session?: DesktopSessionSnapshot | null;
@@ -141,7 +150,10 @@ describe("SessionScreen canonical composer admission", () => {
     });
     const { app } = screenApp({
       session: heldSession(),
-      sendChatMessage: vi.fn(() => pending),
+      sendChatMessage: vi.fn(async (request) => {
+        await pending;
+        return acceptedChat(request);
+      }),
     });
     renderScreen(app);
     fireEvent.change(screen.getByLabelText("Message"), {
@@ -260,7 +272,7 @@ describe("SessionScreen canonical composer admission", () => {
       expect.objectContaining({
         content: "hello",
         agentId: "default",
-        sessionId: null,
+        sessionId: expect.any(String),
       }),
     );
   });
@@ -268,12 +280,12 @@ describe("SessionScreen canonical composer admission", () => {
   it("clears accepted text only in its origin after navigating away", async () => {
     navigate.mockClear();
     let resolve!: (value: { sessionId: string; requestId: string }) => void;
-    const sendChatMessage = vi.fn(
-      () =>
-        new Promise<{ sessionId: string; requestId: string }>((next) => {
-          resolve = next;
-        }),
-    );
+    const sendChatMessage = vi.fn(async (request) => {
+      await new Promise<{ sessionId: string; requestId: string }>((next) => {
+        resolve = next;
+      });
+      return acceptedChat(request);
+    });
     const { app } = screenApp({ sendChatMessage });
     renderScreen(app);
     fireEvent.change(screen.getByLabelText("Message"), {
@@ -732,4 +744,42 @@ describe("renaming a session", () => {
       ),
     );
   });
+});
+
+beforeEach(() => vi.stubGlobal("localStorage", goalDeliveryStorage()));
+afterEach(() => vi.unstubAllGlobals());
+
+it("does not clear the replacement history draft when an earlier client's reply arrives", async () => {
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const sendChatMessage = vi.fn(async (request) => {
+    await pending;
+    return acceptedChat(request);
+  });
+  const { app } = screenApp({ session: heldSession(), sendChatMessage });
+  renderScreen(app);
+  fireEvent.change(screen.getByLabelText("Message"), {
+    target: { value: "same text in another history" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  expect(sendChatMessage).toHaveBeenCalledTimes(1);
+  act(() =>
+    app.stores.client.setState((state) => ({
+      snapshot: {
+        ...state.snapshot!,
+        client: { ...state.snapshot!.client!, clientDid: "replacement-client" },
+      },
+    })),
+  );
+  await act(async () => {
+    finish();
+    await pending;
+  });
+  await waitFor(() =>
+    expect(app.stores.chat.getState().chatRequestsInFlight.size).toBe(0),
+  );
+  expect(screen.getByLabelText("Message")).toHaveValue("same text in another history");
+  expect(app.stores.chat.getState().chatDrafts[0].clientDid).toBe("test-client");
 });

@@ -36,7 +36,7 @@ const HELP_INDEX: &[(&str, &str)] = &[
         "automation",
         "connect sources, tasks and triggers; wiring recipes",
     ),
-    ("pack", "pack and graph installation"),
+    ("pack", "pack installation"),
     (
         "plugin",
         "installed plugin inspection and explicit Tools selection",
@@ -48,7 +48,7 @@ const HELP_INDEX: &[(&str, &str)] = &[
 ];
 
 const HELP_GRAMMAR: &str = "Documents: list, get, create, update, delete. target_id names the document; set writes fields, clear removes optional fields. list takes options.limit/cursor. create requires a new ID; update requires an existing ID. agent create takes options instead of set and allocates its ID and Context/Tools.
-Preview: [RESOURCE,preview,VERB]. Delete needs options.digest from preview. batch takes options.operations: ordered config calls; each commits separately, stopping on error. Packs use installation workflows. Collections and migrations use the separate schema tool; graph authoring is unavailable.";
+Preview: [RESOURCE,preview,VERB]. Delete needs options.digest from preview. batch takes options.operations: ordered config calls; each commits separately, stopping on error. Packs use installation workflows. Collections and migrations use the separate schema tool.";
 
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
@@ -2535,9 +2535,9 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
                 "host": {"root":"string|null; absent uses runtime cwd", "files":{"mode":"Off|ReadOnly|ReadWrite (default Off)","max_read_chars":"integer 1..1000000|null; default 32000; read_file bytes, default and maximum","max_list_entries":"integer 1..5000|null; default 200","max_matches":"integer 1..5000|null; default 200; glob and grep"}, "bash":{"mode":"Off|ReadOnly|Unrestricted; default Off; ReadOnly still runs shell commands","execution_mode":"read_only|workspace_write|artifact_write|unrestricted|null","network_mode":"inherit|disabled|enabled|null","allowed_argv_prefixes":"array<array<string>>|null","forbidden_argv_prefixes":"array<array<string>>|null","read_only_commands":"array<string>|null","background_enabled":"boolean; default false","timeout_secs":"positive integer|null; default host --command-timeout-secs (120); clamped to the host maximum","max_timeout_secs":"positive integer|null; default timeout_secs if set, else host maximum; clamped to host --command-timeout-max-secs","background_timeout_secs":"positive integer|null; default 36000; clamped to 36000","wait_timeout_secs":"positive integer|null; default 30","max_wait_timeout_secs":"positive integer|null; default 600; clamped to 600","max_output_chars":"integer 1..1000000|null; default 16000; stdout and stderr each"}, "cli":[{"name":"string; host-registered CLI tool name (cli default [])","timeout_secs":"positive integer|null; default host registration (10); clamped to host --command-timeout-max-secs","max_output_chars":"integer 1..1000000|null; default host registration (16000); stdout and stderr each"}]},
                 "remote": {"services":"array<{mcp_service_id:string,tool_names:array<string>,style:flat|discovery(default),required:boolean(default false),background_tool_names:array<string>,connect_timeout_secs?:integer,discovery_timeout_secs?:integer,timeout_secs?:integer,stale_timeout_secs?:integer,background_timeout_secs?:integer (default 36000; clamped to 36000),wait_timeout_secs?:integer (default 30),max_wait_timeout_secs?:integer (default 600; clamped to 600)}>; default []"},
                 "agents": {"target_ids":"array<existing same-node AgentTarget ID>; default []; the agents agent_new may address (create them with agent-target)","enabled":"boolean|null; enables the agents tools: agent_message, agent_interrupt, agent_stop, agent_resume, agent_list, agent_session_list and agent_session_read, plus agent_new when target_ids selects a target"},
-                "built_ins": {"enable_graph_tools":"boolean|null","enable_goal_tools":"boolean|null","enable_goal_creation":"boolean|null","enable_memory":"boolean|null","enable_session_history_tool":"boolean|null","enable_schema_tool":"boolean|null","enable_p2p_tool":"boolean|null","enable_p2p_mutations":"boolean|null","p2p_collections":"array<string>|null","enable_context_budget":"boolean|null"},
+                "built_ins": {"enable_goal_tools":"boolean|null","enable_goal_creation":"boolean|null","enable_memory":"boolean|null","enable_session_history_tool":"boolean|null","enable_schema_tool":"boolean|null","enable_p2p_tool":"boolean|null","enable_p2p_mutations":"boolean|null","p2p_collections":"array<string>|null","enable_context_budget":"boolean|null"},
                 "datastore": {"enable_defra_query":"boolean|null","defra_query_collections":"array<string>|null","write_collections":"array<exact application collection>|null (empty denies all)","datastore_tool_surface_ids":"array<existing same-node DatastoreToolSurface ID>|null"},
-                "integrations": {"lsp":{"config":"JSON encoded as a string|null","timeout_secs":"positive integer|null; default 20","max_timeout_secs":"positive integer|null; default 300; clamped to 300"},"eth_tool_ids":"array<existing same-node EthTool ID>|null","plugins":"array<{plugin: installed namespace/name, digest: sha256:<hex>|null, job: {agent_targets: non-empty array<existing AgentTarget ID>, max_live: 1..64; default 8, max_spawns: 1..1024; default 128, max_messages_per_slot: 0..16; default 4, result_bytes: 1024..1048576; default 65536, max_wall_secs: 60..86400; default 7200, policy: {dynamic: off|check|run; default check, dynamic_targets: array<ID> within agent_targets unless dynamic is off, trusted_packs: array<pack coordinate>, project_roots: array<absolute path>}}|null}>|null; the plugin must declare job: true; job is operator-only, so a Tools write cannot add one or widen it"},
+                "integrations": {"lsp":{"config":"JSON encoded as a string|null","timeout_secs":"positive integer|null; default 20","max_timeout_secs":"positive integer|null; default 300; clamped to 300"},"eth_tool_ids":"array<existing same-node EthTool ID>|null","plugins":"array<{plugin: installed namespace/name, digest: sha256:<hex>|null, job: {agent_targets: non-empty array<existing AgentTarget ID>, max_live: 1..64; default 8, max_spawns: 1..1024; default 128, max_messages_per_slot: 0..16; default 4, result_bytes: 1024..1048576; default 65536, max_wall_secs: 60..86400; default 7200, policy: {dynamic: off|check|run; default check, dynamic_targets: array<ID> within agent_targets unless dynamic is off, trusted_packs: array<pack coordinate>}}|null}>|null; the plugin must declare job: true; job is operator-only, so a Tools write cannot add one or widen it"},
                 "self_config": {"enable_self_config":"boolean|null; absent is disabled","self_config_categories":"array<node|agent|tools|profile|backend|mcp_service|automation>|null; absent selects agent, tools, profile; node grants the agent catalog; agent permits only current-agent configuration","self_config_no_lockout":"boolean|null","self_config_preview":"boolean|null; grants the preview verb","enable_pack_install":"boolean|null; raise it only if you hold it; keep a stored true when rewriting self_config"},
                 "tags": "array<string>; default []",
             }),
@@ -2911,7 +2911,6 @@ pub(super) fn agent_params(
         profile_id: update("profile", "profile_id")?,
         make_default: parsed.switches.contains("default"),
         enable_lsp: None,
-        enable_graph_tools: None,
         network_mode: None,
     })
 }

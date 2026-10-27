@@ -16,7 +16,11 @@ export function useListWindow<T>(
   scroller: HTMLElement | null,
   keyOf: (row: T) => string,
   sizeOf: (row: T) => number,
-  options: { enabled?: boolean; anchorTo?: "end" } = {},
+  options: {
+    enabled?: boolean;
+    anchorTo?: "end";
+    stickyKey?: string | null;
+  } = {},
 ) {
   const ref = useRef<HTMLUListElement>(null);
   const active = options.enabled !== false;
@@ -44,7 +48,11 @@ export function useListWindow<T>(
     useFlushSync: false,
     rangeExtractor: (range) => {
       const indexes = new Set(defaultRangeExtractor(range));
-      for (const key of [focused, pending?.key ?? null]) {
+      for (const key of [
+        focused,
+        pending?.key ?? null,
+        options.stickyKey ?? null,
+      ]) {
         const index = key === null ? undefined : keys.get(key);
         if (index !== undefined) indexes.add(index);
       }
@@ -71,6 +79,16 @@ export function useListWindow<T>(
     observer.observe(list.parentElement!);
     return () => observer.disconnect();
   }, [active, scroller]);
+  const stickyIndex = options.stickyKey
+    ? keys.get(options.stickyKey)
+    : undefined;
+  const stickySize = virtual
+    .getVirtualItems()
+    .find((item) => item.index === stickyIndex)?.size;
+  const canStick =
+    stickySize !== undefined &&
+    !!scroller &&
+    stickySize <= scroller.clientHeight / 3;
   const items = enabled
     ? virtual.getVirtualItems()
     : rows.map((_, index) => ({ index, start: 0 }));
@@ -149,9 +167,19 @@ export function useListWindow<T>(
               top: 0,
               left: 0,
               width: "100%",
-              transform: `translateY(${start - margin}px)`,
+              transform: `translateY(${
+                canStick && index === stickyIndex
+                  ? Math.max(
+                      start - margin,
+                      (virtual.scrollOffset ?? 0) - margin,
+                    )
+                  : start - margin
+              }px)`,
+              ...(canStick && index === stickyIndex ? { zIndex: 1 } : {}),
             }
-          : undefined,
+          : canStick && index === stickyIndex
+            ? { position: "sticky", top: 0, zIndex: 1 }
+            : undefined,
       } as ComponentProps<"li">;
     },
   };

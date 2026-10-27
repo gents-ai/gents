@@ -5,16 +5,22 @@ import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
 import { PortalContainerProvider } from "@gents/ui/lib/portal-container";
 import { href, type Route } from "@/lib/router";
+import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import type { NavMode } from "@/preferences";
 import { NodeAvatar } from "@/screens/AgentAvatar";
-import { SessionStatus } from "@/screens/SessionStatus";
+import { ListedSessionStatus } from "@/screens/SessionStatus";
 import { SyncHealth } from "./SyncHealth";
+import { RecentFilter } from "./RecentFilter";
+import { listViews, useListViews } from "./listViews";
+import { emptyFilter, hasFilter } from "@/lib/session-filter";
 import { navRowState, useNavItems, type NavContext, type NavItem } from "./navRegistry";
 import { ContribBoundary } from "@/contrib/react/boundary";
 import {
   useMailboxCount,
   useNodeCount,
   useOnline,
+  usePinnedSessionList,
+  useRecentCandidates,
   useRecentSessions,
   useSelectedNode,
   useSyncHealth,
@@ -69,7 +75,10 @@ export function NavPanel({
 }) {
   const online = useOnline();
   const mailboxCount = useMailboxCount();
+  const pinned = usePinnedSessionList();
   const recent = useRecentSessions(RECENT);
+  const recentCandidates = useRecentCandidates();
+  const recentFiltered = useListViews((views) => hasFilter(views.recentFilter));
   const working = useWorkingNode();
   const nodeCount = useNodeCount();
   const syncHealth = useSyncHealth();
@@ -176,46 +185,54 @@ export function NavPanel({
       </Item>
       <Item
         to={href({ name: "sessions" })}
-        active={route.name === "sessions" || route.name === "sessionsUnder"}
+        active={
+          route.name === "sessions" ||
+          route.name === "sessionsUnder" ||
+          route.name === "sessionsArchived"
+        }
         icon={<ScrollText className="size-4" />}
       >
         Sessions
       </Item>
       {primary.map(contributed)}
-      {recent.length > 0 && (
+      {pinned.length > 0 && (
         <>
           <p className="mt-2 mb-0 px-5 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
-            Recent sessions
+            Pinned
           </p>
+          <ul className="px-3">
+            {pinned.map((c) => (
+              <SessionLink key={c.sessionId} session={c} current={currentSession} />
+            ))}
+          </ul>
+        </>
+      )}
+      {(recent.length > 0 || recentFiltered) && (
+        <>
+          <div className="mt-2 flex items-center gap-1 pr-3 pl-5">
+            <p className="m-0 min-w-0 flex-1 font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+              Recent sessions
+            </p>
+            <RecentFilter sessions={recentCandidates} />
+          </div>
           <ScrollArea className="min-h-0">
             <ul className="px-3">
               {recent.map((c) => (
-                <li key={c.sessionId}>
-                  <a
-                    href={href({ name: "session", sessionId: c.sessionId })}
-                    aria-current={currentSession === c.sessionId ? "page" : undefined}
-                    className={cn(
-                      "flex h-8 items-center gap-2.5 rounded-lg px-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-                      currentSession === c.sessionId && "text-foreground",
-                    )}
-                  >
-                    <SessionStatus turnState={c.turnState} />
-                    <span className="min-w-0 flex-1 truncate">
-                      {c.title ?? "Untitled session"}
-                    </span>
-                    {c.unreadableReason && (
-                      <Lock
-                        className="size-3 shrink-0"
-                        role="img"
-                        aria-label={c.unreadableReason}
-                      >
-                        <title>{c.unreadableReason}</title>
-                      </Lock>
-                    )}
-                  </a>
-                </li>
+                <SessionLink key={c.sessionId} session={c} current={currentSession} />
               ))}
             </ul>
+            {recent.length === 0 && (
+              <p className="m-0 px-5 py-1 text-xs text-muted-foreground">
+                No sessions match.{" "}
+                <button
+                  type="button"
+                  className="cursor-pointer underline hover:text-foreground"
+                  onClick={() => listViews.setRecentFilter(emptyFilter)}
+                >
+                  Clear filters
+                </button>
+              </p>
+            )}
           </ScrollArea>
           <a
             href={href({ name: "sessions" })}
@@ -319,5 +336,34 @@ export function RailFlyout({
         </div>
       </PortalContainerProvider>
     </div>
+  );
+}
+
+function SessionLink({
+  session: c,
+  current,
+}: {
+  session: SessionSummary;
+  current: string | null;
+}) {
+  return (
+    <li>
+      <a
+        href={href({ name: "session", sessionId: c.sessionId, nodeDid: c.nodeDid })}
+        aria-current={current === c.sessionId ? "page" : undefined}
+        className={cn(
+          "flex h-8 items-center gap-2.5 rounded-lg px-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+          current === c.sessionId && "text-foreground",
+        )}
+      >
+        <ListedSessionStatus session={c} />
+        <span className="min-w-0 flex-1 truncate">{c.title ?? "Untitled session"}</span>
+        {c.unreadableReason && (
+          <Lock className="size-3 shrink-0" role="img" aria-label={c.unreadableReason}>
+            <title>{c.unreadableReason}</title>
+          </Lock>
+        )}
+      </a>
+    </li>
   );
 }

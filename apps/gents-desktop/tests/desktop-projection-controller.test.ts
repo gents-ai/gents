@@ -20,28 +20,30 @@ function controller(
 }
 
 describe("createProjectionController", () => {
-  it("aggregates snapshot completion once for a coalesced update burst", async () => {
+  it("settles a coalesced update burst once its shared snapshot refresh has finished", async () => {
     const session = deferred();
+    const fleet = deferred();
     const refreshSession = vi.fn(async () => {
       await session.promise;
       return null;
     });
-    const projection = controller({ refreshSession });
-    const first = projection.request("full");
+    const refreshSnapshot = vi.fn(async () => fleet.promise);
+    const projection = controller({ refreshSession, refreshSnapshot });
+    let settled = false;
+    const first = projection.request("full").then(() => {
+      settled = true;
+    });
     await vi.waitFor(() => expect(refreshSession).toHaveBeenCalledTimes(1));
     for (let index = 0; index < 256; index++) {
       void projection.request("full");
     }
 
-    const aggregate = vi.spyOn(Promise, "all");
-    try {
-      session.resolve();
-      await first;
-      expect(aggregate).toHaveBeenCalledTimes(1);
-      expect(refreshSession).toHaveBeenCalledTimes(2);
-    } finally {
-      aggregate.mockRestore();
-    }
+    session.resolve();
+    await vi.waitFor(() => expect(refreshSession).toHaveBeenCalledTimes(2));
+    expect(settled).toBe(false);
+    fleet.resolve();
+    await first;
+    expect(refreshSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it("coalesces a synchronous delta wave and serializes one trailing wave", async () => {

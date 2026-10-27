@@ -360,6 +360,7 @@ fn active_background_request_keeps_interrupt_and_queue_visible_after_public_comp
     };
     let mut header = session();
     header.observation = Some(SessionObservation {
+        reply_preview: None,
         last_activity_at: "2026-04-21T12:00:01Z".into(),
         preview: Some("person text".into()),
         latest_request: Some(SessionRequestObservation {
@@ -421,6 +422,7 @@ fn queued_and_folded_observations_retain_the_active_owners_trigger() {
         }
         let mut header = session();
         header.observation = Some(SessionObservation {
+            reply_preview: None,
             last_activity_at: "2026-04-21T12:00:01Z".into(),
             preview: None,
             latest_request: Some(SessionRequestObservation {

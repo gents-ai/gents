@@ -1382,6 +1382,12 @@ fn assemble_rig_chat_history(
             })?;
         projected.push(rig_compat::to_rig_message(&message));
     }
+    for message in &mut projected {
+        crate::provider_input::normalize_tool_call_ids(
+            config.provider_input_counter.profile(),
+            message,
+        );
+    }
     Ok(projected)
 }
 

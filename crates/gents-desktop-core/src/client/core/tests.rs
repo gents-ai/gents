@@ -1511,6 +1511,7 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
         provenance: None,
         tags: Vec::new(),
         observation: Some(gents_protocol::session::SessionObservation {
+            reply_preview: None,
             last_activity_at: chrono::Utc::now().to_rfc3339(),
             preview: None,
             latest_request: Some(gents_protocol::session::SessionRequestObservation {

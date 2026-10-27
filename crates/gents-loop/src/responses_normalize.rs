@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 pub fn normalize_responses_assistant_items(value: &mut Value) {
+    normalize_function_call_item_ids(value);
     let Some(input) = value.get_mut("input") else {
         return;
     };
@@ -11,6 +12,28 @@ pub fn normalize_responses_assistant_items(value: &mut Value) {
     for (index, item) in items.iter_mut().enumerate() {
         normalize_assistant_item(item, index);
     }
+}
+
+pub fn normalize_function_call_item_ids(value: &mut Value) -> bool {
+    let Some(items) = value.get_mut("input").and_then(Value::as_array_mut) else {
+        return false;
+    };
+    let mut changed = false;
+    for item in items {
+        let Some(object) = item.as_object_mut() else {
+            continue;
+        };
+        if object.get("type").and_then(Value::as_str) == Some("function_call")
+            && object
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !id.starts_with("fc_"))
+        {
+            object.remove("id");
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn normalize_assistant_item(item: &mut Value, index: usize) {

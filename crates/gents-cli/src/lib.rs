@@ -79,6 +79,7 @@ const DEFAULT_P2P_MAX_PENDING_DAGS: usize = p2p::sync::DEFAULT_MAX_PENDING_DAGS;
 const DEFAULT_LOG_FILTER: &str = concat!(
     "warn,",
     "gents_server::commands::serve=info,",
+    "gents::shutdown=info,",
     "gents::agent::runtime=info,",
     "gents::agent::daemon=info,",
     "gents::agent::reconcile=info,",
@@ -474,7 +475,6 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Command::Mcp { command } => commands::mcp::dispatch(command).await,
         Command::Fleet { command } => commands::fleet::dispatch(command).await,
         Command::Task { command } => commands::task::dispatch(command).await,
-        Command::Graph { command } => commands::graph::dispatch(command).await,
         Command::Pack { command } => commands::pack::dispatch(command).await,
         Command::Plugin { command } => commands::plugin::dispatch(command).await,
         Command::Ux { command } => commands::ux::dispatch(command).await,
@@ -882,12 +882,14 @@ mod tests {
             "{error:#}"
         );
 
+        access.local_node().unwrap().shutdown().await;
         drop(access);
         assert_eq!(node.strong_count(), 0, "the access held the only node");
         let (reopened, _) = resolve_config_access(Some(&home), None)
             .await
-            .expect("a dropped access releases the store");
+            .expect("a shut down and dropped access releases the store");
         assert_eq!(reopened.mode(), "local");
+        reopened.local_node().unwrap().shutdown().await;
     }
 
     #[tokio::test]

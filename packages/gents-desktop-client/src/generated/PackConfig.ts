@@ -11,8 +11,6 @@ import type { DatastoreToolSurfaceDocument } from "./DatastoreToolSurfaceDocumen
 import type { EthToolDocument } from "./EthToolDocument.js";
 import type { EvalDefinition } from "./EvalDefinition.js";
 import type { EventSource } from "./EventSource.js";
-import type { GraphDefinition } from "./GraphDefinition.js";
-import type { GraphIntent } from "./GraphIntent.js";
 import type { InferenceBackend } from "./InferenceBackend.js";
 import type { InferenceExecution } from "./InferenceExecution.js";
 import type { InferenceProfile } from "./InferenceProfile.js";
@@ -23,24 +21,15 @@ import type { ProjectionAcpBinding } from "./ProjectionAcpBinding.js";
 import type { RepositoryPlacement } from "./RepositoryPlacement.js";
 import type { Schedule } from "./Schedule.js";
 import type { SkillDocument } from "./SkillDocument.js";
-import type { StageCapability } from "./StageCapability.js";
 import type { Task } from "./Task.js";
 import type { ToolServiceRegistry } from "./ToolServiceRegistry.js";
 import type { Tools } from "./Tools.js";
 import type { Trigger } from "./Trigger.js";
 
 /**
- * Canonical authored document bundle for both ordinary and graph packs; the
+ * Canonical authored document bundle for packs; the
  * loader fills missing root node_did from PackInstallOptions and explicit
  * owners must match. Validate ownership, references, unknown authoring keys,
  * and resource bounds before persistence.
  */
-export type PackConfig = { node: Node, agents?: Array<Agent> | null, contexts?: Array<AgentContext> | null, compactions?: Array<CompactionConfig> | null, tools?: Array<Tools> | null, agent_targets?: Array<AgentTargetDocument> | null, skills?: Array<SkillDocument> | null, datastore_tool_surfaces?: Array<DatastoreToolSurfaceDocument> | null, chain_key_bindings?: Array<ChainKeyBindingDocument> | null, eth_tools?: Array<EthToolDocument> | null, inference_backends?: Array<InferenceBackend> | null, inference_profiles?: Array<InferenceProfile> | null, inference_sampling?: Array<InferenceSampling> | null, inference_execution?: Array<InferenceExecution> | null, inference_retry_policies?: Array<InferenceRetryPolicy> | null, tool_service_registries?: Array<ToolServiceRegistry> | null, projection_acp_bindings?: Array<ProjectionAcpBinding> | null, tasks?: Array<Task> | null, triggers?: Array<Trigger> | null, schedules?: Array<Schedule> | null, event_sources?: Array<EventSource> | null, callbacks?: Array<Callback> | null, callback_bindings?: Array<CallbackBinding> | null, callback_modules?: Array<CallbackModule> | null, repository_placements?: Array<RepositoryPlacement> | null, graphs?: Array<GraphDefinition> | null, eval_definitions?: Array<EvalDefinition> | null,
-/**
- * Canonical authored topology, compiled after ordinary config resolution.
- */
-graph_intents?: Array<GraphIntent> | null,
-/**
- * Canonical interfaces referencing installed tasks; no graph asset/model rewrite.
- */
-graph_capabilities?: Array<StageCapability> | null, };
+export type PackConfig = { node: Node, agents?: Array<Agent> | null, contexts?: Array<AgentContext> | null, compactions?: Array<CompactionConfig> | null, tools?: Array<Tools> | null, agent_targets?: Array<AgentTargetDocument> | null, skills?: Array<SkillDocument> | null, datastore_tool_surfaces?: Array<DatastoreToolSurfaceDocument> | null, chain_key_bindings?: Array<ChainKeyBindingDocument> | null, eth_tools?: Array<EthToolDocument> | null, inference_backends?: Array<InferenceBackend> | null, inference_profiles?: Array<InferenceProfile> | null, inference_sampling?: Array<InferenceSampling> | null, inference_execution?: Array<InferenceExecution> | null, inference_retry_policies?: Array<InferenceRetryPolicy> | null, tool_service_registries?: Array<ToolServiceRegistry> | null, projection_acp_bindings?: Array<ProjectionAcpBinding> | null, tasks?: Array<Task> | null, triggers?: Array<Trigger> | null, schedules?: Array<Schedule> | null, event_sources?: Array<EventSource> | null, callbacks?: Array<Callback> | null, callback_bindings?: Array<CallbackBinding> | null, callback_modules?: Array<CallbackModule> | null, repository_placements?: Array<RepositoryPlacement> | null, eval_definitions?: Array<EvalDefinition> | null, };

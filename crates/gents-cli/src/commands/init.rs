@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::config::{DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS};
 use gents::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
     DesiredStateApplyPlan,
@@ -25,8 +24,6 @@ use serde_json::{json, Value};
 
 use crate::cli::*;
 use crate::config_writes::ConfigAccess;
-use crate::output_format::OutputFormat;
-use crate::request_helpers::capture_report;
 use crate::shared::*;
 use crate::{
     clear_runtime_state, dangerously_overwrite_home, default_data_dir, default_key_path,
@@ -156,38 +153,7 @@ fn overwrite_data_dir(home_dir: &Path, home: &Path, data_dir: &Path) -> Result<P
 }
 
 pub(crate) async fn init(args: InitArgs) -> Result<()> {
-    let home = resolve_home_dir(args.home.as_deref());
-    let workflows = args.workflows;
-    // The install runs after `init_home` returns: init's exclusive store lock
-    // and node are released by then, and a second claim in this process is refused.
-    let mut output = init_home(args).await?;
-    if workflows {
-        let agent = output["default_agent_id"]
-            .as_str()
-            .context("init output has no default_agent_id")?
-            .to_owned();
-        output["workflows"] = capture_report(crate::commands::pack::install(PackInstallArgs {
-            package: "gents/rhai_workflows".to_owned(),
-            bindings: None,
-            inference_slots: Vec::new(),
-            preview: false,
-            scope: ScopeArgs {
-                home: Some(home),
-                graphql: None,
-                node_did: None,
-            },
-            output: OutputFormat::Json,
-            force_rebind_concrete_did: false,
-            registry: None,
-            drift: PackDriftArgs::default(),
-            grant_authority: true,
-            wire: vec![agent],
-            expect_digest: None,
-            explicit: true,
-        }))
-        .await?;
-    }
-    print_json(&output)
+    print_json(&init_home(args).await?)
 }
 
 /// Normal completion drains the embedded node before releasing its store claim;
@@ -930,11 +896,9 @@ async fn initialize_runtime_home(
         auth: backend_auth,
         connect_timeout_secs: None,
         discovery_timeout_secs: None,
-        max_concurrent: Some(args.max_concurrent),
+        max_concurrent: args.max_concurrent,
         max_queue_depth: Some(args.max_queue_depth),
-        // First-run must not activate the placeholder model because an
-        // unrelated service answers on the default localhost port.
-        enabled: initial_backend_enabled(args),
+        enabled: model_name.is_some(),
         tags: Vec::new(),
     };
 
@@ -953,10 +917,6 @@ async fn initialize_runtime_home(
         args.defra_query_collections.clone(),
     );
     tools.self_config = Some(engineer_self_config());
-    tools
-        .built_ins
-        .get_or_insert_with(Default::default)
-        .enable_graph_tools = Some(true);
     let engineer_mailbox = args
         .engineer
         .then(|| engineer_tools(&mut tools, node_did, !args.disable_defra_query));
@@ -982,8 +942,12 @@ async fn initialize_runtime_home(
     let inference_profile_id = default_inference_profile_id_for_agent(&default_agent_id);
     let inference_execution_id = default_inference_execution_id_for_profile(&inference_profile_id);
     let inference_execution = standard_inference_execution(node_did, &inference_execution_id);
-    let mut inference_profile =
-        standard_inference_profile(node_did, &inference_profile_id, &backend_id, model_name);
+    let mut inference_profile = standard_inference_profile(
+        node_did,
+        &inference_profile_id,
+        &backend_id,
+        model_name.unwrap_or_default(),
+    );
     inference_profile.execution_id = Some(inference_execution_id);
     let agent = Agent {
         agent_id: default_agent_id.clone(),
@@ -1041,14 +1005,6 @@ async fn initialize_runtime_home(
         documents,
     )
     .await?;
-    gents::backend_registry::set_backend_probe_status_with_last_probe(
-        node,
-        node_did,
-        &backend_id,
-        gents::HEALTHY_PROBE_STATUS,
-        chrono::Utc::now(),
-    )
-    .await?;
 
     Ok(InitSummary {
         backend_id,
@@ -1057,8 +1013,8 @@ async fn initialize_runtime_home(
         endpoint: backend.endpoint,
         api_key: backend.api_key.map(|_| "<redacted>".to_string()),
         api_key_env_var: backend.api_key_env_var,
-        model_name: model_name.to_string(),
-        max_concurrent: args.max_concurrent,
+        model_name: model_name.unwrap_or_default().to_string(),
+        max_concurrent: backend_doc.effective_max_concurrent(),
         max_queue_depth: args.max_queue_depth,
         default_agent_id,
         tools_id: tools_id.clone(),
@@ -1196,7 +1152,6 @@ fn tools_for_package(
         remote: None,
         agents: None,
         built_ins: Some(BuiltInTools {
-            enable_graph_tools: None,
             enable_goal_tools: privileged.then_some(true),
             enable_goal_creation: Some(false),
             enable_memory: Some(enable_memory),
@@ -1206,6 +1161,7 @@ fn tools_for_package(
             enable_p2p_mutations: None,
             p2p_collections: Vec::new(),
             enable_context_budget: Some(true),
+            ..Default::default()
         }),
         datastore: Some(DatastoreTools {
             write_collections: None,
@@ -1395,8 +1351,8 @@ fn standard_inference_profile(
         model_name: model_name.to_string(),
         reasoning_effort: None,
         service_tier: None,
-        context_window: Some(DEFAULT_CONTEXT_WINDOW as i64),
-        max_output_tokens: Some(DEFAULT_MAX_OUTPUT_TOKENS as i64),
+        context_window: None,
+        max_output_tokens: None,
         sampling_id: None,
         execution_id: None,
         tags: Vec::new(),
@@ -1447,7 +1403,11 @@ fn init_next_steps(
     {
         steps.push("gents claude-login".to_string());
     }
-    if is_probably_ollama_endpoint(&summary.endpoint) {
+    if summary.model_name.is_empty() {
+        steps.push(
+            "Select a provider and model in Gents settings before starting work.".to_string(),
+        );
+    } else if is_probably_ollama_endpoint(&summary.endpoint) {
         steps.push(format!("ollama pull {}", summary.model_name));
     } else if is_probably_llama_server_endpoint(&summary.endpoint) {
         steps.push(format!("llama-server -hf {}", summary.model_name));
@@ -1455,12 +1415,8 @@ fn init_next_steps(
     steps.push("gents server".to_string());
     steps.push("gents codex".to_string());
     steps.push(format!(
-        "gents pack install gents/rhai_workflows --wire {} --grant-authority",
-        summary.default_agent_id
-    ));
-    steps.push(format!(
-        "gents config backend set --graphql http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql --backend-id {} --name {} --endpoint <URL> --max-concurrent {}",
-        summary.backend_id, summary.backend_name, summary.max_concurrent
+        "gents config backend set --graphql http://127.0.0.1:{DEFAULT_HTTP_PORT}/api/v0/graphql --backend-id {} --name {} --endpoint <URL>",
+        summary.backend_id, summary.backend_name
     ));
     steps
 }
@@ -1485,21 +1441,17 @@ fn resolve_init_backend_config(args: &InitArgs) -> Result<ResolvedBackendConfig>
     )
 }
 
-fn initial_backend_enabled(args: &InitArgs) -> bool {
-    !args.engineer || args.model_name.is_some() || args.backend_preset.is_some()
-}
-
-fn resolve_init_model_name(args: &InitArgs) -> Result<&str> {
+fn resolve_init_model_name(args: &InitArgs) -> Result<Option<&str>> {
     if let Some(explicit) = args.model_name.as_deref() {
         let model_name = explicit.trim();
         if model_name.is_empty() {
             anyhow::bail!("--model-name must not be empty");
         }
-        return Ok(model_name);
+        return Ok(Some(model_name));
     }
 
     if let Some(default) = args.preset_default_model_name() {
-        return Ok(default);
+        return Ok(Some(default));
     }
 
     if let Some(preset) = args.backend_preset {
@@ -1509,7 +1461,7 @@ fn resolve_init_model_name(args: &InitArgs) -> Result<&str> {
         );
     }
 
-    Ok(crate::DEFAULT_INIT_MODEL_NAME)
+    Ok((!args.engineer).then_some(crate::DEFAULT_INIT_MODEL_NAME))
 }
 
 fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
@@ -1522,6 +1474,10 @@ fn resolve_default_tool_root(explicit: Option<&Path>) -> Result<PathBuf> {
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .ok_or_else(|| anyhow::anyhow!("unable to determine a default tool root for local tools"))
 }
+
+#[cfg(test)]
+#[path = "init/inference_seed_tests.rs"]
+mod inference_seed_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1779,6 +1735,15 @@ mod tests {
         let summary = initialize_runtime_home(&access, &args, &owner, tool_package)
             .await
             .expect("a fresh home initializes");
+        gents::backend_registry::set_backend_probe_status_with_last_probe(
+            &node,
+            &owner,
+            &summary.backend_id,
+            gents::HEALTHY_PROBE_STATUS,
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
 
         let categories = engineer_self_config()
             .self_config_categories
@@ -1851,6 +1816,15 @@ mod tests {
         let summary = initialize_runtime_home(&access, &args, &owner, tool_package)
             .await
             .expect("a fresh home initializes");
+        gents::backend_registry::set_backend_probe_status_with_last_probe(
+            &node,
+            &owner,
+            &summary.backend_id,
+            gents::HEALTHY_PROBE_STATUS,
+            chrono::Utc::now(),
+        )
+        .await
+        .unwrap();
 
         let agent = gents::Gents::from_default_agent_documents(
             node.clone(),
@@ -1957,72 +1931,6 @@ mod tests {
         );
     }
 
-    fn init_summary(provider_kind: gents::BackendProviderKind, endpoint: &str) -> InitSummary {
-        InitSummary {
-            backend_id: "did:key:z-init:backend".to_string(),
-            backend_name: "test-agent backend".to_string(),
-            provider_kind,
-            endpoint: endpoint.to_string(),
-            api_key: None,
-            api_key_env_var: None,
-            model_name: "test-model".to_string(),
-            max_concurrent: 2,
-            max_queue_depth: 16,
-            default_agent_id: "default".to_string(),
-            tools_id: "default-tools".to_string(),
-            wide_open_preset_id: "wide-open".to_string(),
-            inference_profile_id: "default-profile".to_string(),
-            tool_package: ToolPackageArg::Readonly,
-            tool_ceiling: ToolCeilingArg::Readonly,
-            tool_root: None,
-            enable_memory: false,
-            enable_defra_query: false,
-            defra_query_collections: Vec::new(),
-            created_node: true,
-            created_default_agent: true,
-        }
-    }
-
-    #[test]
-    fn init_workflows_flag_parses() {
-        let parse = |argv: &[&str]| <Cli as clap::Parser>::try_parse_from(argv);
-        let Command::Init(args) = parse(&["gents", "init", "--workflows"]).unwrap().command else {
-            panic!("init must parse as init");
-        };
-        assert!(args.workflows);
-        let Command::Init(args) = parse(&["gents", "init"]).unwrap().command else {
-            panic!("init must parse as init");
-        };
-        assert!(!args.workflows);
-        assert!(parse(&["gents", "init", "--workflows", "--identity-only"]).is_err());
-    }
-
-    #[test]
-    fn init_hint_names_install_and_wire_with_agent_id() {
-        let steps = init_next_steps(
-            &init_summary(
-                gents::BackendProviderKind::OpenAiCompatible,
-                "http://127.0.0.1:8080/v1",
-            ),
-            false,
-            false,
-            false,
-        );
-        assert!(steps.iter().any(|step| step
-            == "gents pack install gents/rhai_workflows --wire default --grant-authority"));
-    }
-
-    #[tokio::test]
-    async fn init_without_workflows_installs_nothing() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join("home");
-        let mut args = init_args();
-        args.home = Some(home.clone());
-        assert!(!args.workflows);
-        init(args).await.expect("an offline init succeeds");
-        assert!(gents::pack::list_home_installs(&home).unwrap().is_empty());
-    }
-
     async fn initialize_disposable_home(home: &Path, empty_model: bool) -> Result<Value> {
         let mut args = init_args();
         args.home = Some(home.to_path_buf());
@@ -2085,7 +1993,7 @@ mod tests {
             api_key: None,
             api_key_env_var: None,
             model_name: Some("test-model".to_string()),
-            max_concurrent: 2,
+            max_concurrent: Some(2),
             max_queue_depth: 16,
             write_tools: false,
             yolo: false,
@@ -2096,7 +2004,6 @@ mod tests {
             disable_defra_query: false,
             enable_defra_query: false,
             defra_query_collections: Vec::new(),
-            workflows: false,
         }
     }
 }

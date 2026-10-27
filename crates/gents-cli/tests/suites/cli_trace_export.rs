@@ -2320,7 +2320,7 @@ async fn projection_graphql_mock(
     Json(body): Json<ProjectionGraphqlRequest>,
 ) -> (StatusCode, Json<Value>) {
     let query = body.query.as_str();
-    let response = if query.contains("AgentRequest(") {
+    let mut response = if query.contains("AgentRequest(") {
         json!({ "data": { "AgentRequest": projection_mock_agent_requests(query) } })
     } else if query.contains("ProviderContextReduction(") {
         json!({ "data": { "ProviderContextReduction": [] } })
@@ -2354,6 +2354,13 @@ async fn projection_graphql_mock(
             }]
         })
     };
+    if query.contains("_cursor") {
+        if let Some(data) = response.get_mut("data") {
+            let mut page = data.take();
+            page["_pageInfo"] = json!({ "hasNext": false, "endCursor": null });
+            *data = json!({ "_cursor": page });
+        }
+    }
     (StatusCode::OK, Json(response))
 }
 

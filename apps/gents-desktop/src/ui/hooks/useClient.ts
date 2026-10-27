@@ -10,8 +10,12 @@ import {
   firstNode,
   nodeKeyOf,
   nodeOrFirst,
+  sessionKeyOf,
   type NodeView,
 } from "../../hooks/fleetStore";
+import { usePinnedSessions } from "@/preferences";
+import { useListViews } from "../app/listViews";
+import { passes } from "../lib/session-filter";
 
 import { folderOf, recentFolders } from "../../hooks/chatFolders";
 import { useIncompatibleHome } from "../../hooks/useIncompatibleHome";
@@ -123,8 +127,44 @@ export function useMailboxCount() {
   return useInScope((ctx) => mailboxInScope(defaultScope("mailbox"), ctx).length);
 }
 
+/** The newest sessions in scope that aren't pinned or archived; pinned ones
+    have their own group. */
 export function useRecentSessions(limit: number) {
-  return useInScope((ctx) => recentInScope(defaultScope("recents"), ctx, limit));
+  const pinned = usePinnedSessions();
+  const filter = useListViews((views) => views.recentFilter);
+  return useInScope((ctx) =>
+    recentInScope(defaultScope("recents"), ctx, Infinity)
+      .filter(
+        (s) =>
+          s.archivedAt === null &&
+          !pinned.includes(sessionKeyOf(s)) &&
+          passes(s, filter),
+      )
+      .slice(0, limit),
+  );
+}
+
+/** Every session the recent list could show before its own filter, for the
+    filter's choices. */
+export function useRecentCandidates() {
+  return useInScope((ctx) =>
+    recentInScope(defaultScope("recents"), ctx, Infinity).filter(
+      (s) => s.archivedAt === null,
+    ),
+  );
+}
+
+/** Pinned sessions in scope, in the order they were pinned. */
+export function usePinnedSessionList() {
+  const pinned = usePinnedSessions();
+  return useInScope((ctx) => {
+    const byKey = new Map(
+      recentInScope(defaultScope("recents"), ctx, Infinity)
+        .filter((s) => s.archivedAt === null)
+        .map((s) => [sessionKeyOf(s), s]),
+    );
+    return pinned.flatMap((key) => byKey.get(key) ?? []);
+  });
 }
 
 export function useSelectedAgentId() {

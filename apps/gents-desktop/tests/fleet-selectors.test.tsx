@@ -36,7 +36,6 @@ const item = (itemId: string): MailboxItemView => ({
   sourceId: "s-1",
   sessionId: "s-1",
   requestId: null,
-  graphRunId: null,
   causeDocId: null,
   targetNodeDid: AGENT,
   targetAgentId: "default",
@@ -77,21 +76,35 @@ describe("screens read the fleet by what they show", () => {
     expect(commits()).toBeGreaterThan(before);
   });
 
-  it("a session no item names changing does not re-render the mailbox", () => {
-    const app = testApp({
-      deployments: [here({ mailboxItems: [item("m-1")] })],
-      selection: { nodeDid: AGENT },
-    });
-    const commits = commitsOf(app, <MailboxScreen />);
-    const before = commits();
-    act(() =>
-      publish(app, [
-        here({
-          mailboxItems: [item("m-1")],
-          sessions: [summary("s-1", "one"), summary("s-2", "elsewhere")],
-        }),
-      ]),
-    );
-    expect(commits()).toBe(before);
-  });
+  it.each(["plain", "structured"])(
+    "a session no %s item names changing does not re-render the mailbox",
+    (kind) => {
+      const mailboxItem = item("m-1");
+      if (kind === "structured") {
+        mailboxItem.action = "start_request";
+        mailboxItem.payload = JSON.stringify({
+          version: 1,
+          prompt: "Where should this run?",
+          options: [{ id: "local", label: "This computer" }],
+          multi_select: false,
+          allow_free_text: true,
+        });
+      }
+      const app = testApp({
+        deployments: [here({ mailboxItems: [mailboxItem] })],
+        selection: { nodeDid: AGENT },
+      });
+      const commits = commitsOf(app, <MailboxScreen />);
+      const before = commits();
+      act(() =>
+        publish(app, [
+          here({
+            mailboxItems: [mailboxItem],
+            sessions: [summary("s-1", "one"), summary("s-2", "elsewhere")],
+          }),
+        ]),
+      );
+      expect(commits()).toBe(before);
+    },
+  );
 });

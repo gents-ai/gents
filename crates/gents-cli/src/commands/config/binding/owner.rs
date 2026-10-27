@@ -8,7 +8,6 @@ fn document_roots() -> impl Iterator<Item = &'static str> {
     Collection::ALL
         .into_iter()
         .filter_map(|collection| collection.dir_name())
-        .chain(["graph_intents", "graph_capabilities"])
 }
 
 pub(super) fn manifest_node_dids(config: &PackConfig) -> Result<BTreeSet<String>> {
@@ -48,7 +47,7 @@ pub(super) fn enforce_manifest_rebind_safety(
 
 /// Rebind authored document owners, preserving explicit foreign destinations and
 /// all nested host data. This is an operator-requested config rewrite, not a
-/// recursive replacement of DIDs or a change to graph caller permissions.
+/// recursive replacement of DIDs or a change to permissions.
 pub(super) fn rebind_manifest_node_did(config: &mut PackConfig, target: &str) -> Result<()> {
     anyhow::ensure!(!target.trim().is_empty(), "target owner must not be blank");
     let source_owners = manifest_node_dids(config)?;
@@ -88,11 +87,7 @@ mod tests {
                  "target_node_did": "did:test:remote", "agent_id": "b", "name": "remote"}
             ],
             "inference_profiles": [{"profile_id": "p", "node_did": "did:test:source",
-                "backend_id": "backend", "model_name": "model"}],
-            "graph_capabilities": [{"capability_id": "cap", "revision": "v1",
-                "node_did": "did:test:source",
-                "target": {"kind": "task", "task_id": "task"},
-                "allowed_callers": ["did:test:source", "did:test:remote"]}]
+                "backend_id": "backend", "model_name": "model"}]
         }))
         .unwrap();
         assert!(enforce_manifest_rebind_safety(&config, "did:test:target", false).is_err());
@@ -110,10 +105,6 @@ mod tests {
             Some("  did:test:source\n")
         );
         assert_eq!(config.contexts[0].skill_ids, ["b", "a"]);
-        assert_eq!(
-            config.graph_capabilities[0].allowed_callers,
-            ["did:test:source", "did:test:remote"]
-        );
         let once = serde_json::to_value(&config).unwrap();
         rebind_manifest_node_did(&mut config, "did:test:target").unwrap();
         assert_eq!(serde_json::to_value(&config).unwrap(), once);

@@ -40,6 +40,29 @@ const opened =
     open.some((s) => key(s) === k);
 
 describe("the sessions list's rows", () => {
+  it("puts pinned sessions first among the sessions beside them, in list order", () => {
+    const second = session("second");
+    const sideline = session("sideline");
+    const { rows } = sessionRows({
+      sessions: [lead, worker, sideline, stray, second],
+      parentOf: (s) => (s === sideline ? lead : parentOf(s)),
+      under: null,
+      matches: null,
+      isOpen: opened(lead),
+      pinned: new Set([key(second), key(stray), key(sideline)]),
+    });
+    expect(shape(rows)).toEqual([
+      "stray",
+      "second",
+      "lead [2 open]",
+      "  sideline",
+      "  worker",
+    ]);
+    expect(
+      rows.filter((row) => row.pinned).map((row) => row.session.sessionId),
+    ).toEqual(["stray", "second", "sideline"]);
+  });
+
   it("keeps every session's started sessions closed until opened, whether or not any still run", () => {
     const { rows, shown, total } = sessionRows({
       sessions: all,

@@ -4,4 +4,4 @@ import type { DynamicMode } from "./DynamicMode.js";
 /**
  * Operator-only job policy; self-config may not edit it.
  */
-export type JobPolicy = { dynamic: DynamicMode, dynamic_targets: Array<string>, trusted_packs: Array<string>, project_roots: Array<string>, };
+export type JobPolicy = { dynamic: DynamicMode, dynamic_targets: Array<string>, trusted_packs: Array<string>, };

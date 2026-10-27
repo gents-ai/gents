@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { ArrowLeft, ArrowRight, Menu } from "lucide-react";
+import { ArrowLeft, ArrowRight, Menu, Search } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import {
   Sheet,
@@ -11,6 +11,7 @@ import { cn } from "@gents/ui/lib/utils";
 import type { History, Route } from "@/lib/router";
 import { useSyncHealth } from "@/hooks/useClient";
 import { Hint } from "@/screens/Hint";
+import { openSearch, SearchButton } from "@/screens/SearchPalette";
 import { headerIsWindowBar, isWindowsTauriShell } from "../../lib/shellPlatform";
 import { DockTabs } from "./Dock";
 import { MarkLink } from "./Mark";
@@ -22,6 +23,8 @@ import { WindowControls } from "./WindowControls";
 function HistoryNav({ history }: { history: History }) {
   return (
     <div className="flex shrink-0 items-center gap-0.5" data-testid="history-nav">
+      {/* on a phone, search lives in the menu sheet */}
+      <SearchButton className="max-md:hidden" />
       <Hint label="Back">
         <Button
           variant="ghost"
@@ -38,6 +41,7 @@ function HistoryNav({ history }: { history: History }) {
           variant="ghost"
           size="icon-sm"
           aria-label="Forward"
+          className="max-md:hidden"
           disabled={!history.canForward}
           onClick={history.forward}
         >
@@ -72,6 +76,17 @@ function NavSheet({ route, settings }: { route: Route; settings: ReactNode }) {
         }}
       >
         <SheetTitle className="sr-only">Navigation</SheetTitle>
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(false);
+            openSearch();
+          }}
+          className="mx-3 flex h-8 items-center gap-2 rounded-lg px-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <Search className="size-4" />
+          <span className="flex-1 text-left">Search</span>
+        </button>
         <NavPanel route={route} settings={settings} syncRow />
       </SheetContent>
     </Sheet>

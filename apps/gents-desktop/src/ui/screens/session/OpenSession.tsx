@@ -20,7 +20,7 @@ import { isWorkingNode } from "@/lib/nodes";
 import { useScroller } from "@/lib/scroll";
 import { useSentTurnPlacement } from "@/preferences";
 import { listedSession, nodeOf } from "../../../hooks/fleetStore";
-import { useFleet, workersOfId } from "../../hooks/useFleet";
+import { useFleet } from "../../hooks/useFleet";
 import {
   useSelectedSession,
   useSelectedSessionFields,
@@ -31,7 +31,9 @@ import { NodeAgentStack } from "../NodeBehaviorStack";
 import { useParentWork } from "../parentWork";
 import { SessionContext } from "../SessionContextMeter";
 import { StartedSessionsButton } from "../StartedSessionsButton";
+import { BackgroundButton } from "../BackgroundButton";
 import { ParentLine, StartedByAutomation, Title } from "../SessionHeader";
+import { DROPDOWN_MENU, SessionItems, useRenameFromMenu } from "../SessionMenu";
 import { SessionLoading } from "../SessionLoading";
 import { useComposerRoom, useHeaderScrolledOut } from "../sessionLayout";
 import { sentTurnKey } from "../stream-reveal";
@@ -66,7 +68,6 @@ export function OpenSession() {
     [loadSessionContextDetails, session?.nodeDid, session?.sessionId],
   );
   const homeDid = useHomeDid();
-  const sessionWorkers = useFleet((s) => workersOfId(s, session?.sessionId));
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
   const column = useRef<HTMLDivElement | null>(null);
   const [scroller, ownScroller] = useScroller();
@@ -103,6 +104,8 @@ export function OpenSession() {
     listedSession(s, deployment?.nodeDid, session?.sessionId),
   );
   const sessionNode = useFleet((s) => nodeOf(s, session?.nodeDid));
+  const [renaming, setRenaming] = useState(false);
+  const rename = useRenameFromMenu(session ? () => setRenaming(true) : null);
 
   const stoppableRequestId = interruptTarget({
     trackedRequestId: activeRequestId,
@@ -173,7 +176,6 @@ export function OpenSession() {
                     agentId={session?.agentId}
                     size="sm"
                     keyboard
-                    workers={sessionWorkers}
                   />
                   <div className="min-w-0 flex-1 [&_form]:min-w-0 [&_h1]:truncate [&_h1]:text-sm [&_input]:h-7 [&_input]:text-sm">
                     {session ? (
@@ -184,6 +186,8 @@ export function OpenSession() {
                           await renameSession(session.sessionId, title);
                           toast("Renamed");
                         }}
+                        editing={renaming && condensed}
+                        onEditingChange={setRenaming}
                       />
                     ) : (
                       <h1 className="font-heading text-sm font-medium text-heading">
@@ -198,11 +202,18 @@ export function OpenSession() {
                     className="max-md:hidden"
                   />
                 )}
+                {session && (
+                  <BackgroundButton
+                    sessionId={session.sessionId}
+                    className="max-md:hidden"
+                  />
+                )}
                 {session?.context && (
                   <div
                     aria-hidden={!condensed}
                     className={cn(
-                      "grid shrink-0 transition-[grid-template-columns,margin,opacity,transform] duration-150 ease-out",
+                      /* the page's own header holds the meter on a phone */
+                      "grid shrink-0 transition-[grid-template-columns,margin,opacity,transform] duration-150 ease-out max-md:hidden",
                       condensed
                         ? "ml-0 translate-y-0 grid-cols-[1fr] opacity-100"
                         : "pointer-events-none -ml-2 translate-y-1 grid-cols-[0fr] opacity-0",
@@ -218,7 +229,15 @@ export function OpenSession() {
                   </div>
                 )}
                 <Slot area={SESSION_HEADER_ACTIONS_AREA} />
-                <PanelMenu routeName="session" />
+                <PanelMenu routeName="session" finalFocus={rename.finalFocus}>
+                  {summary && (
+                    <SessionItems
+                      session={summary}
+                      onRename={rename.onRename}
+                      {...DROPDOWN_MENU}
+                    />
+                  )}
+                </PanelMenu>
               </PaneBar>
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -230,6 +249,8 @@ export function OpenSession() {
                         await renameSession(session.sessionId, title);
                         toast("Renamed");
                       }}
+                      editing={renaming && !condensed}
+                      onEditingChange={setRenaming}
                     />
                   ) : (
                     <h1 className="font-heading text-lg font-medium text-heading">
@@ -255,7 +276,6 @@ export function OpenSession() {
                     <NodeAgentStack
                       nodeDid={session?.nodeDid}
                       agentId={session?.agentId}
-                      workers={sessionWorkers}
                     />
                     <span className="text-sm text-muted-foreground">
                       {agentName(session?.agentId ?? null, deployment)}

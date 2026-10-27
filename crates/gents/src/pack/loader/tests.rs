@@ -1,19 +1,19 @@
 use super::*;
 use serde_json::json;
 
-fn manifest(graph: bool) -> PackManifest {
+fn manifest() -> PackManifest {
     serde_json::from_value(json!({
         "manifest_version":1,"name":"example","version":"1","description":"Example",
-        "kind":if graph { "graph" } else { "documents" },"authors":["Example"],
+        "kind":"documents","authors":["Example"],
         "assets":["README.md","config/bundle.json","config/prompt.md"],
         "config":"config/bundle.json",
-        "compiler_version": if graph { Some(crate::graph_pipeline::COMPILER_VERSION) } else { None },
-    })).unwrap()
+    }))
+    .unwrap()
 }
 
-fn load(value: Value, graph: bool) -> Result<PackConfig> {
+fn load(value: Value) -> Result<PackConfig> {
     load_pack_config(
-        &manifest(graph),
+        &manifest(),
         &PackInstallOptions {
             node_did: "did:key:owner".into(),
         },
@@ -27,34 +27,7 @@ fn load(value: Value, graph: bool) -> Result<PackConfig> {
 }
 
 #[test]
-fn explicit_pack_caller_uses_selected_owner_and_cannot_be_spoofed_by_environment() {
-    let value = json!({"node":{},"graph_capabilities":[{
-        "capability_id":"review","revision":"1","target":{"kind":"task","task_id":"review"},
-        "allowed_callers":["${GENTS_PACK_NODE_DID}"]
-    },{
-        "capability_id":"closed","revision":"1","target":{"kind":"task","task_id":"review"}
-    }]});
-    let config = load_pack_config(
-        &manifest(true),
-        &PackInstallOptions {
-            node_did: "did:key:selected".into(),
-        },
-        &|_| Ok(serde_json::to_vec(&value)?),
-        &|_| Some("did:key:spoofed".into()),
-    )
-    .unwrap();
-    assert_eq!(
-        config.graph_capabilities[0].allowed_callers,
-        ["did:key:selected"]
-    );
-    assert!(
-        config.graph_capabilities[1].allowed_callers.is_empty(),
-        "owner binding must not invent grants"
-    );
-}
-
-#[test]
-fn document_and_graph_loading_share_scope_defaults_and_literal_sidecars() {
+fn document_loading_applies_scope_defaults_and_literal_sidecars() {
     let value = json!({
         "node":{"created_by":"did:key:creator"},
         "contexts":[{"context_id":"work","system_prompt":"./prompt.md"}],
@@ -62,12 +35,7 @@ fn document_and_graph_loading_share_scope_defaults_and_literal_sidecars() {
         "agent_targets":[{"target_id":"remote","name":"remote","target_node_did":"did:key:foreign","agent_id":"worker"}],
         "tools":null
     });
-    let document = load(value.clone(), false).unwrap();
-    let graph = load(value, true).unwrap();
-    assert_eq!(
-        serde_json::to_value(&document).unwrap(),
-        serde_json::to_value(graph).unwrap()
-    );
+    let document = load(value).unwrap();
     assert_eq!(document.node.node_did, "did:key:owner");
     assert_eq!(document.node.created_by.as_deref(), Some("did:key:creator"));
     assert_eq!(document.agent_targets[0].node_did, "did:key:owner");
@@ -87,35 +55,29 @@ fn document_and_graph_loading_share_scope_defaults_and_literal_sidecars() {
 
 #[test]
 fn interpolation_cannot_change_json_structure_and_preserves_task_braces() {
-    let config = load(
-        json!({"node":{},"tasks":[{
-            "task_id":"review","agent_id":"reviewer",
-            "prompt_template":"${TEXT} {{ task.input }} $${LITERAL} ${MISSING:-fallback}"
-        }]}),
-        false,
-    )
+    let config = load(json!({"node":{},"tasks":[{
+        "task_id":"review","agent_id":"reviewer",
+        "prompt_template":"${TEXT} {{ task.input }} $${LITERAL} ${MISSING:-fallback}"
+    }]}))
     .unwrap();
     assert_eq!(
         config.tasks[0].prompt_template,
         "quoted \"value\"\nsecond line {{ task.input }} ${LITERAL} fallback"
     );
-    assert!(load(json!({"node":{"display_name":"${UNSET}"}}), false).is_err());
+    assert!(load(json!({"node":{"display_name":"${UNSET}"}})).is_err());
 }
 
 #[test]
 fn explicit_owner_mismatch_and_unknown_authoring_keys_fail() {
     for owner in [json!("did:key:foreign"), json!(null), json!("")] {
-        assert!(load(json!({"node":{"node_did":owner}}), false).is_err());
-        assert!(load(
-            json!({"node":{},"contexts":[{"node_did":owner,"context_id":"work"}]}),
-            false
-        )
-        .is_err());
+        assert!(load(json!({"node":{"node_did":owner}})).is_err());
+        assert!(
+            load(json!({"node":{},"contexts":[{"node_did":owner,"context_id":"work"}]})).is_err()
+        );
     }
-    assert!(load(json!({"node":{},"old_tool_selections":[]}), false).is_err());
+    assert!(load(json!({"node":{},"old_tool_selections":[]})).is_err());
     assert!(load(
-        json!({"node":{},"contexts":[{"context_id":"work","request_context_template":"removed"}]}),
-        false
+        json!({"node":{},"contexts":[{"context_id":"work","request_context_template":"removed"}]})
     )
     .is_err());
 }
@@ -128,17 +90,15 @@ fn sidecar_cannot_escape_or_read_undeclared_assets() {
         "./nested/../../private.md",
         "./prompt\\other.md",
     ] {
-        let error = load(
-            json!({"node":{},"contexts":[{"context_id":"work","system_prompt":path}]}),
-            false,
-        )
-        .unwrap_err();
+        let error =
+            load(json!({"node":{},"contexts":[{"context_id":"work","system_prompt":path}]}))
+                .unwrap_err();
         assert!(
             !format!("{error:#}").contains("unexpected asset"),
             "resolver must not receive forbidden path: {error:#}"
         );
     }
-    let mut undeclared = manifest(false);
+    let mut undeclared = manifest();
     undeclared.config = Some("private.json".into());
     let result = load_pack_config(
         &undeclared,
@@ -331,13 +291,10 @@ fn eval_definition_case_sidecars_refuse_undeclared_escaping_bare_and_malformed_p
 
 #[test]
 fn skill_instructions_load_from_a_literal_sidecar() {
-    let config = load(
-        json!({
-            "node":{},
-            "skills":[{"skill_id":"review","name":"review","instructions":"./prompt.md"}]
-        }),
-        false,
-    )
+    let config = load(json!({
+        "node":{},
+        "skills":[{"skill_id":"review","name":"review","instructions":"./prompt.md"}]
+    }))
     .unwrap();
     assert_eq!(
         config.skills[0].instructions.as_deref(),
@@ -345,161 +302,13 @@ fn skill_instructions_load_from_a_literal_sidecar() {
     );
 }
 
-fn plugin_pack_config(target: Value) -> Result<PackConfig> {
-    let manifest: PackManifest = serde_json::from_value(json!({
-        "manifest_version":1,"name":"example","namespace":"team","version":"1",
-        "description":"Example","kind":"graph","authors":["Example"],
-        "assets":["README.md","config/bundle.json","plugins/lint.afb"],
-        "config":"config/bundle.json",
-        "compiler_version": crate::graph_pipeline::COMPILER_VERSION,
-        "plugins":[{"name":"lint","description":"Lints a diff","artifact":"plugins/lint.afb",
-                    "language":"rust","input_schema":{"type":"object"}}],
-    }))
-    .unwrap();
-    let config = json!({"node":{},"graph_capabilities":[{
-        "capability_id":"lint","revision":"1","target":target,
-    }]});
-    load_pack_config(
-        &manifest,
-        &PackInstallOptions {
-            node_did: "did:key:owner".into(),
-        },
-        &|path| match path {
-            "config/bundle.json" => Ok(serde_json::to_vec(&config)?),
-            "plugins/lint.afb" => Ok(b"artifact bytes".to_vec()),
-            _ => anyhow::bail!("unexpected asset {path}"),
-        },
-        &|_| None,
-    )
-}
-
-fn shipped_digest() -> String {
-    format!(
-        "sha256:{:x}",
-        <sha2::Sha256 as sha2::Digest>::digest(b"artifact bytes")
-    )
-}
-
-#[test]
-fn a_plugin_node_runs_the_packs_own_artifact() {
-    let config = plugin_pack_config(json!({"kind":"plugin","plugin":"lint"})).unwrap();
-    assert_eq!(
-        config.graph_capabilities[0].target,
-        crate::graph_pipeline::StageTarget::Plugin {
-            plugin: "team/lint".into(),
-            digest: Some(shipped_digest()),
-            max_attempts: None,
-        }
-    );
-    plugin_pack_config(json!({"kind":"plugin","plugin":"lint","digest":shipped_digest()})).unwrap();
-}
-
-#[test]
-fn a_plugin_node_the_pack_cannot_run_is_refused() {
-    let undeclared = plugin_pack_config(json!({"kind":"plugin","plugin":"missing"})).unwrap_err();
-    assert!(format!("{undeclared:#}").contains("does not declare"));
-    let wrong_pin = plugin_pack_config(
-        json!({"kind":"plugin","plugin":"lint","digest":format!("sha256:{}", "0".repeat(64))}),
-    )
-    .unwrap_err();
-    assert!(format!("{wrong_pin:#}").contains("the pack ships"));
-    let external = plugin_pack_config(json!({"kind":"plugin","plugin":"other/tool"})).unwrap();
-    assert_eq!(
-        external.graph_capabilities[0].target,
-        crate::graph_pipeline::StageTarget::Plugin {
-            plugin: "other/tool".into(),
-            digest: None,
-            max_attempts: None,
-        }
-    );
-}
-
-fn prepare_pack_config(entry_extra: Value) -> Result<PackConfig> {
-    let manifest: PackManifest = serde_json::from_value(json!({
-        "manifest_version":1,"name":"example","namespace":"team","version":"1",
-        "description":"Example","kind":"graph","authors":["Example"],
-        "assets":["README.md","config/bundle.json","plugins/prepare.afb"],
-        "config":"config/bundle.json",
-        "compiler_version": crate::graph_pipeline::COMPILER_VERSION,
-        "plugins":[{"name":"prepare","description":"Prepares evidence","artifact":"plugins/prepare.afb",
-                    "language":"rust","input_schema":{"type":"object"}}],
-    }))
-    .unwrap();
-    let mut entry = json!({
-        "name":"job","collection":"Job","schema":"Job/v1",
-        "to":{"node_id":"worker","port":"job"},
-    });
-    for (key, value) in entry_extra.as_object().unwrap() {
-        entry[key] = value.clone();
-    }
-    let config = json!({"node":{},"graph_intents":[{
-        "graph_id":"g",
-        "nodes":[{"node_id":"worker","capability_id":"worker","capability_revision":"1"}],
-        "edges":[],
-        "entries":[entry],
-        "results":[],
-        "limits":{"max_nodes":1,"max_edges":1,"max_depth":1,"max_fan_out":1,
-                  "max_total_invocations":1,"max_runtime_secs":60},
-        "tags":[],
-    }]});
-    load_pack_config(
-        &manifest,
-        &PackInstallOptions {
-            node_did: "did:key:owner".into(),
-        },
-        &|path| match path {
-            "config/bundle.json" => Ok(serde_json::to_vec(&config)?),
-            "plugins/prepare.afb" => Ok(b"artifact bytes".to_vec()),
-            _ => anyhow::bail!("unexpected asset {path}"),
-        },
-        &|_| None,
-    )
-}
-
-#[test]
-fn an_entry_prepare_plugin_is_pinned_to_the_packs_artifact() {
-    let prepare = json!({
-        "host": [{"kind":"git_diff","repository_field":"repository","base_field":"base",
-                  "head_field":"head","unified_context_lines":3,"rename_similarity_percent":50}],
-        "plugin": "prepare",
-        "writes": ["FixtureEvidence"],
-    });
-    let config = prepare_pack_config(json!({"prepare": prepare})).unwrap();
-    let prepare = config.graph_intents[0].entries[0].prepare.as_ref().unwrap();
-    assert_eq!(prepare.plugin, "team/prepare");
-    assert_eq!(prepare.digest.as_deref(), Some(shipped_digest().as_str()));
-}
-
-#[test]
-fn an_entry_prepare_plugin_the_pack_cannot_run_is_refused() {
-    let prepare = json!({"host": [], "plugin": "missing", "writes": ["FixtureEvidence"]});
-    let error = prepare_pack_config(json!({"prepare": prepare})).unwrap_err();
-    assert!(
-        format!("{error:#}").contains("does not declare"),
-        "{error:#}"
-    );
-}
-
-#[test]
-fn an_entry_input_schema_must_compile_and_declare_an_object() {
-    let error = prepare_pack_config(json!({"input_schema": {"type": "string"}})).unwrap_err();
-    assert!(
-        format!("{error:#}").contains("\"type\": \"object\""),
-        "{error:#}"
-    );
-
-    let too_big = json!({"type": "object", "filler": "a".repeat(70 * 1024)});
-    let error = prepare_pack_config(json!({"input_schema": too_big})).unwrap_err();
-    assert!(format!("{error:#}").contains("byte ceiling"), "{error:#}");
-}
-
 #[test]
 fn a_pack_that_selects_the_default_agent_is_refused() {
-    let error = load(json!({"node":{"default_agent_id":"worker"}}), false).unwrap_err();
+    let error = load(json!({"node":{"default_agent_id":"worker"}})).unwrap_err();
     let message = format!("{error:#}");
     assert!(
         message.contains("must not choose the default agent") && message.contains("worker"),
         "{message}"
     );
-    assert!(load(json!({"node":{}}), false).is_ok());
+    assert!(load(json!({"node":{}})).is_ok());
 }

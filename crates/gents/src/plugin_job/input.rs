@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use gents_protocol::job::{
     JobCaller, JobCeilingView, JobChildState, JobChildView, JobPin, JobProgress, JobRef,
-    JobRootCall, JobRowView, JobStepInput, JobUsage, JobVerifiedScript, PluginJobSettings,
+    JobRootCall, JobRowView, JobStepInput, JobUsage, PluginJobSettings,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
@@ -20,15 +20,12 @@ use crate::background_tools::caused_request_terminals_in_txn;
 use crate::config_client::{ConfigAccess, ConfigApplyTxn, ConfigRead};
 use crate::graphql::{escape_graphql_string, graphql_string_list_literal};
 use crate::plugin::job_calls::job_state;
-use crate::plugin::mounts::resolve as resolve_mounts;
-use crate::plugin::store::{parse_coordinate, read_record};
 use crate::plugin_job::admit::{meet, StepChild};
 use crate::plugin_job::ancestry::started_by_job;
 use crate::plugin_job::control::resume_echo;
 use crate::plugin_job::driver::JobRuntime;
 use crate::plugin_job::effects::scratch_name;
 use crate::plugin_job::keys::decode_job_retry_key;
-use crate::plugin_job::origin::{classify, script_index, Origin};
 use crate::plugin_job::records::{read_pin, read_progress, read_step_state};
 use crate::plugin_job::settings::effective_ceiling;
 use crate::plugin_job::JobBinding;
@@ -480,8 +477,6 @@ pub(super) struct CallArgs {
     #[serde(default)]
     pub(super) args: Option<serde_json::Map<String, Value>>,
     #[serde(default)]
-    pub(super) path: Option<String>,
-    #[serde(default)]
     pub(super) script: Option<String>,
     #[serde(default)]
     pub(super) agent_budget: Option<u32>,
@@ -633,18 +628,14 @@ pub async fn build_step_input(
     let caller = load_agent_request_by_doc_id(&runtime.node, &row.request_doc_id)
         .await?
         .with_context(|| format!("the caller request of job row {row_doc_id} does not exist"))?;
-    let (pin, coordinate, settings) = match step {
-        StepKind::Step0 { binding } => (
-            None,
-            binding.plugin.plugin.clone(),
-            binding.settings.clone(),
-        ),
+    let (pin, settings) = match step {
+        StepKind::Step0 { binding } => (None, binding.settings.clone()),
         StepKind::Later => {
             let pin = read_pin(access, row_doc_id)
                 .await?
                 .with_context(|| format!("job row {row_doc_id} has no job_pin"))?;
             let settings = live_job_settings(runtime, &caller, &pin.plugin_ref).await?;
-            (Some(pin.clone()), pin.plugin_ref, settings)
+            (Some(pin), settings)
         }
     };
     let cwd = match &pin {
@@ -656,26 +647,6 @@ pub async fn build_step_input(
     };
     let cwd_path = (!cwd.is_empty()).then(|| PathBuf::from(&cwd));
     let policy = settings.as_ref().map(|settings| &settings.policy);
-    let (namespace, name) = parse_coordinate(&coordinate)?;
-    let plugin = read_record(&runtime.home, namespace, name)?;
-    let mounts = resolve_mounts(&runtime.home, &plugin, policy, cwd_path.as_deref())?;
-    let verified_script = match &pin {
-        Some(pin) => match classify(
-            &script_index(&runtime.home, &plugin, policy, cwd_path.as_deref())?,
-            pin,
-        ) {
-            Origin::Installed {
-                verified_script,
-                digest,
-            } => Some(JobVerifiedScript {
-                source: String::from_utf8(verified_script)
-                    .context("the verified script is not UTF-8")?,
-                digest,
-            }),
-            Origin::Dynamic => None,
-        },
-        None => None,
-    };
     let progress = read_progress(access, row_doc_id).await?;
     let revision = progress.as_ref().map_or(0, |progress| progress.revision);
     let live = effective_ceiling(settings.as_ref());
@@ -706,16 +677,15 @@ pub async fn build_step_input(
             children.insert(child.slot, view);
         }
     }
-    let resume = read_step_state(access, row_doc_id)
-        .await?
-        .and_then(|state| state.resume);
+    let step_state = read_step_state(access, row_doc_id).await?;
+    let state = step_state.as_ref().and_then(|state| state.guest.clone());
+    let resume = step_state.and_then(|state| state.resume);
     let root_call = match (&pin, &resume) {
         (Some(pin), Some(_)) => {
             let (_, root) = read_call(access, &pin.chain_root_doc_id).await?;
             Some(JobRootCall {
                 argv: root.argv,
                 args: root.args,
-                path: root.path,
                 agent_budget: root.agent_budget,
             })
         }
@@ -750,19 +720,17 @@ pub async fn build_step_input(
         },
         argv: call.argv,
         args: call.args,
-        path: call.path,
         script: call.script,
         agent_budget: call.agent_budget,
         root_call,
         origin: pin.as_ref().map(|pin| pin.origin),
         pin,
-        verified_script,
-        mounts,
         ceiling,
         children,
         control,
         scratch: scratch_files(cwd_path.as_deref(), &row.tool_call_id),
         jobs: session_jobs(access, &row.session_id, &row.tool_name).await?,
+        state,
     };
     Ok((input, revision))
 }
@@ -1452,20 +1420,18 @@ pub(crate) mod tests {
     }
 
     use std::collections::BTreeMap;
-    use std::path::Path;
 
     use gents_protocol::job::{
-        AssetMount, DynamicMode, JobBudget, JobCeilingView, JobControlEcho, JobControlEchoKind,
-        JobOrigin, JobPin, JobPolicy, JobProgress, JobResume, JobResumeEngine, JobRootCall,
-        JobRowView, JobState, JobStepInput, JobStepOutput, JobUsage, JobVerifiedScript,
-        PluginDataDeclaration, PluginJobSettings, StampedField,
+        DynamicMode, JobBudget, JobCeilingView, JobControlEcho, JobControlEchoKind, JobOrigin,
+        JobPin, JobPolicy, JobProgress, JobResume, JobResumeEngine, JobRootCall, JobRowView,
+        JobState, JobStepInput, JobStepOutput, JobUsage, PluginDataDeclaration, PluginJobSettings,
+        StampedField,
     };
     use gents_protocol::plugin::{PluginExecutionReceipt, PluginExecutionVerdict};
 
     use super::{build_step_input, StepKind};
     use crate::document_config::Tools;
     use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
-    use crate::pack::{write_home_install, HomePackInstall, InstalledVia, PackKind};
     use crate::plugin::executor::PluginExecutor;
     use crate::plugin::store::InstalledPlugin;
     use crate::plugin_job::driver::JobRuntime;
@@ -1489,13 +1455,6 @@ pub(crate) mod tests {
             })
             .did()
     }
-    const SCRIPT: &[u8] = b"fn step(input) { input }";
-
-    fn sha(bytes: &[u8]) -> String {
-        use sha2::Digest;
-        format!("sha256:{:x}", sha2::Sha256::digest(bytes))
-    }
-
     fn plugin() -> InstalledPlugin {
         InstalledPlugin {
             namespace: "acme".into(),
@@ -1505,9 +1464,6 @@ pub(crate) mod tests {
             language: "rust".into(),
             declaration: crate::pack::PackPlugin {
                 name: "engine".into(),
-                asset_mounts: vec![gents_protocol::job::AssetMountDeclaration {
-                    class: "workflows".into(),
-                }],
                 ..Default::default()
             },
             granted: None,
@@ -1529,13 +1485,6 @@ pub(crate) mod tests {
             result_bytes: 2048,
             max_wall_secs: 600,
             policy,
-        }
-    }
-
-    fn trusting(packs: &[&str]) -> JobPolicy {
-        JobPolicy {
-            trusted_packs: packs.iter().map(|pack| (*pack).to_owned()).collect(),
-            ..Default::default()
         }
     }
 
@@ -1568,31 +1517,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// Records `coordinate` as an operator-installed documents pack whose
-    /// `workflows/` class holds `script`.
-    fn install(home: &Path, coordinate: &str, hex: &str, script: &[u8]) {
-        let assets = format!("packs/.materialized/{coordinate}/{hex}");
-        let dir = home.join(&assets).join("workflows");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("flow.rhai"), script).unwrap();
-        write_home_install(
-            home,
-            &HomePackInstall {
-                coordinate: coordinate.into(),
-                version: "1.0.0".into(),
-                digest: format!("sha256:{hex}"),
-                kind: PackKind::Documents,
-                assets,
-                dependency_assets: vec![],
-                plugins: vec![],
-                ux: Vec::new(),
-                installed_at: "2026-01-01T00:00:00Z".into(),
-                installed_via: Some(InstalledVia::Operator),
-            },
-        )
-        .unwrap();
-    }
-
     /// An embedded node holding the caller's Agent, context and Tools (with
     /// `settings` as the live job block of `acme/engine`), a claimed caller
     /// request, and an installed `acme/engine` under a temp home.
@@ -1600,7 +1524,7 @@ pub(crate) mod tests {
         pub(crate) node: Arc<EmbeddedNode>,
         pub(crate) access: ConfigAccess,
         pub(crate) runtime: JobRuntime,
-        home: tempfile::TempDir,
+        _home: tempfile::TempDir,
         cwd: tempfile::TempDir,
         request: RequestLifecycle,
         turn: usize,
@@ -1686,7 +1610,7 @@ pub(crate) mod tests {
             node,
             access,
             runtime,
-            home,
+            _home: home,
             cwd,
             request,
             turn: 0,
@@ -1789,9 +1713,19 @@ pub(crate) mod tests {
 
         pub(crate) async fn write_step_state(&self, row: &str, resume: Option<&JobResume>) {
             ConfigAccess::transact_local_write(&self.node, None, "test.input.step_state", |txn| {
-                Box::pin(
-                    async move { write_step_state_in_txn(txn, row, &evidence(), resume).await },
-                )
+                Box::pin(async move {
+                    write_step_state_in_txn(txn, row, &evidence(), resume, None).await
+                })
+            })
+            .await
+            .unwrap();
+        }
+
+        pub(crate) async fn write_guest_state(&self, row: &str, guest: &serde_json::Value) {
+            ConfigAccess::transact_local_write(&self.node, None, "test.input.guest_state", |txn| {
+                Box::pin(async move {
+                    write_step_state_in_txn(txn, row, &evidence(), None, Some(guest)).await
+                })
             })
             .await
             .unwrap();
@@ -1806,7 +1740,6 @@ pub(crate) mod tests {
         json!({
             "argv": ["run", "--fast"],
             "args": {"n": 1, "nested": {"a": [1, 2]}},
-            "path": "/work/flow",
             "script": "fn main() {}",
             "agent_budget": 7,
         })
@@ -1821,7 +1754,6 @@ pub(crate) mod tests {
         let check = |input: &JobStepInput| {
             assert_eq!(input.argv, ["run", "--fast"]);
             assert_eq!(serde_json::to_value(&input.args).unwrap(), call["args"]);
-            assert_eq!(input.path.as_deref(), Some("/work/flow"));
             assert_eq!(input.script.as_deref(), Some("fn main() {}"));
             assert_eq!(input.agent_budget, Some(7));
         };
@@ -1846,7 +1778,6 @@ pub(crate) mod tests {
         let (input, _) = job.later(&bare).await.unwrap();
         assert_eq!(input.argv, ["list"]);
         assert_eq!(input.args, None);
-        assert_eq!(input.path, None);
         assert_eq!(input.script, None);
         assert_eq!(input.agent_budget, None);
         job.node.shutdown().await;
@@ -1879,7 +1810,6 @@ pub(crate) mod tests {
             Some(JobRootCall {
                 argv: vec!["run".into(), "--fast".into()],
                 args: call["args"].as_object().cloned(),
-                path: Some("/work/flow".into()),
                 agent_budget: Some(7),
             })
         );
@@ -2077,8 +2007,6 @@ pub(crate) mod tests {
             "origin": "installed",
             "caller": {"cwd": "/evil", "node_did": "did:evil"},
             "ceiling": {"max_live": 99},
-            "mounts": [{"pack": "evil"}],
-            "verified_script": {"source": "evil", "digest": "evil"},
             "root_call": {"argv": ["evil"]},
             "control": {"kind": "answer"},
             "scratch": {"x": "/evil"},
@@ -2094,8 +2022,6 @@ pub(crate) mod tests {
         assert_eq!(input.caller.cwd, pin.cwd);
         assert_eq!(input.caller.node_did, node_did());
         assert_eq!(input.ceiling.max_live, 2);
-        assert!(input.mounts.is_empty());
-        assert_eq!(input.verified_script, None);
         assert_eq!(input.root_call, None);
         assert_eq!(input.control, None);
         assert!(input.scratch.is_empty());
@@ -2157,6 +2083,7 @@ pub(crate) mod tests {
             revision: 3,
         };
         let input = JobStepInput {
+            state: None,
             protocol: 1,
             job: gents_protocol::job::JobRef {
                 row_doc_id: "row".into(),
@@ -2178,28 +2105,15 @@ pub(crate) mod tests {
             },
             argv: vec!["run".into()],
             args: json!({"n": 1}).as_object().cloned(),
-            path: Some("/p".into()),
             script: Some("fn main() {}".into()),
             agent_budget: Some(3),
             root_call: Some(JobRootCall {
                 argv: vec!["run".into()],
                 args: json!({"n": 1}).as_object().cloned(),
-                path: Some("/p".into()),
                 agent_budget: Some(3),
             }),
             pin: Some(pin),
             origin: Some(JobOrigin::Installed),
-            verified_script: Some(JobVerifiedScript {
-                source: "fn main() {}".into(),
-                digest: "sha256:x".into(),
-            }),
-            mounts: vec![AssetMount {
-                pack: "acme/op".into(),
-                class: "workflows".into(),
-                digest: "sha256:y".into(),
-                path: "/m".into(),
-                trusted: true,
-            }],
             ceiling: JobCeilingView {
                 targets: vec!["a".into()],
                 max_live: 1,
@@ -2270,61 +2184,9 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn later_step_mounts_and_verified_script_come_from_the_pinned_plugin_record() {
-        let live = live_settings(trusting(&["acme/op"]));
-        let mut job = new_job(Some(&live), None).await;
-        install(job.home.path(), "acme/op", "22", SCRIPT);
-        let row = job
-            .row("workflow", "call-1", json!({"argv": ["run"]}))
-            .await;
-        let mut pin = job.pin(&row, None);
-        pin.source_digest = sha(SCRIPT);
-        job.write_pin(&row, &pin).await;
-        let (input, _) = job.later(&row).await.unwrap();
-        let expected = crate::plugin::mounts::resolve(
-            job.home.path(),
-            &plugin(),
-            Some(&live.policy),
-            Some(Path::new(&pin.cwd)),
-        )
-        .unwrap();
-        assert_eq!(expected.len(), 1);
-        assert!(expected[0].trusted);
-        assert_eq!(input.mounts, expected);
-        assert_eq!(
-            input.verified_script,
-            Some(JobVerifiedScript {
-                source: String::from_utf8(SCRIPT.to_vec()).unwrap(),
-                digest: pin.source_digest.clone(),
-            })
-        );
-
-        let stranger = job
-            .row("workflow", "call-2", json!({"argv": ["run"]}))
-            .await;
-        let mut other = job.pin(&stranger, None);
-        other.source_digest = sha(b"a script no mount holds");
-        job.write_pin(&stranger, &other).await;
-        let (input, _) = job.later(&stranger).await.unwrap();
-        assert_eq!(input.verified_script, None);
-        assert_eq!(input.mounts, expected);
-
-        let missing = job
-            .row("workflow", "call-3", json!({"argv": ["run"]}))
-            .await;
-        let mut absent = job.pin(&missing, None);
-        absent.plugin_ref = "acme/missing".into();
-        job.write_pin(&missing, &absent).await;
-        let error = job.later(&missing).await.unwrap_err();
-        assert!(format!("{error:#}").contains("acme/missing"), "{error:#}");
-        job.node.shutdown().await;
-    }
-
-    #[tokio::test]
     async fn step0_takes_the_plugin_from_the_binding_and_cwd_from_the_tool_root() {
-        let bound = live_settings(trusting(&["acme/op"]));
+        let bound = live_settings(JobPolicy::default());
         let mut job = new_job(None, None).await;
-        install(job.home.path(), "acme/op", "22", SCRIPT);
         let row = job
             .row("workflow", "call-1", json!({"argv": ["run"]}))
             .await;
@@ -2367,19 +2229,8 @@ pub(crate) mod tests {
             input.scratch,
             [("notes.md".to_owned(), notes.display().to_string())].into()
         );
-        let record = crate::plugin::store::read_record(job.home.path(), "acme", "engine").unwrap();
-        let expected = crate::plugin::mounts::resolve(
-            job.home.path(),
-            &record,
-            Some(&bound.policy),
-            Some(job.cwd.path()),
-        )
-        .unwrap();
-        assert_eq!(expected.len(), 1);
-        assert_eq!(input.mounts, expected);
         assert_eq!(input.pin, None);
         assert_eq!(input.origin, None);
-        assert_eq!(input.verified_script, None);
         assert_eq!(input.job.chain, std::slice::from_ref(&row));
         assert_eq!(input.job.chain_root_doc_id, row);
         job.node.shutdown().await;

@@ -575,7 +575,7 @@ impl ConfigReferences {
             Collection::ToolServiceRegistry => decode::<ToolServiceRegistry>(value)?.validate()?,
             Collection::RepositoryPlacement => decode::<RepositoryPlacement>(value)?.validate()?,
             Collection::EvalDefinition => decode::<EvalDefinition>(value)?.validate()?,
-            Collection::Skill | Collection::CallbackModule | Collection::GraphDefinition => {}
+            Collection::Skill | Collection::CallbackModule => {}
         }
         Ok(())
     }

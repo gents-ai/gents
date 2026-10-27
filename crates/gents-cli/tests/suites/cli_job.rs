@@ -542,7 +542,7 @@ async fn served_node_lists_shows_and_watches_ended_jobs() -> Result<()> {
         "{stdout}"
     );
     assert!(
-        stdout.contains("workflow result job-s1:call-done"),
+        stdout.contains("gents job show job-s1:call-done"),
         "{stdout}"
     );
 
@@ -784,6 +784,7 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
                 let (_, _, agent_id) = node_state.expect("node state is set before submits");
                 let e0 = JobStepOutput::Effects {
                     effects: JobEffects {
+                        state: None,
                         pin: Some(JobGuestPin {
                             script_id: "fixture".into(),
                             source_digest: digest.clone(),
@@ -817,6 +818,7 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
                 };
                 let holding = JobStepOutput::Effects {
                     effects: JobEffects {
+                        state: None,
                         pin: None,
                         resume: None,
                         spawn: Vec::new(),

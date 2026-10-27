@@ -29,6 +29,8 @@ use super::super::store::{ClientStore, ClientStoreRows};
 use super::bootstrap::normalize_required;
 use super::p2p_ops;
 use super::ClientCore;
+#[cfg(test)]
+mod hydration_progress_tests;
 mod pending_submissions;
 
 #[cfg(test)]
@@ -2615,13 +2617,6 @@ impl ClientCore {
         Option<String>,
         gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState,
     )> {
-        let merged = load_local_hydration_documents(
-            self.node.as_ref(),
-            self.node_identity.did(),
-            session_id,
-            node_did,
-        )
-        .await?;
         let (request, detail) = load_hydration_server_state(
             self.node.as_ref(),
             self.local_peer_id(),
@@ -2629,6 +2624,20 @@ impl ClientCore {
             session_id,
             node_did,
             &self.node_identity,
+        )
+        .await?;
+        use gents::agent::p2p_reconcile::session_hydration::ClientHydrationRequestState;
+        let verified_manifest = match &request {
+            ClientHydrationRequestState::Served(documents)
+            | ClientHydrationRequestState::Rejected(Some(documents)) => Some(documents),
+            _ => None,
+        };
+        let merged = load_local_hydration_documents(
+            self.node.as_ref(),
+            self.node_identity.did(),
+            session_id,
+            node_did,
+            verified_manifest,
         )
         .await?;
         Ok((
@@ -2803,8 +2812,9 @@ async fn load_local_hydration_documents(
     requester_did: &str,
     session_id: &str,
     node_did: &str,
+    verified_manifest: Option<&BTreeSet<SessionHydrationDocumentKey>>,
 ) -> Result<BTreeSet<SessionHydrationDocumentKey>> {
-    let query = local_hydration_query(requester_did, session_id, node_did);
+    let query = local_hydration_query(requester_did, session_id, node_did, verified_manifest);
     let response = gents::graphql::graphql_with_transaction_retry(
         node,
         &query,
@@ -2814,41 +2824,61 @@ async fn load_local_hydration_documents(
     local_hydration_documents_from_response(&response)
 }
 
-fn local_hydration_query(requester_did: &str, session_id: &str, node_did: &str) -> String {
+const HYDRATION_COLLECTIONS: [(&str, SessionHydrationCollection); 5] = [
+    ("AgentRequest", SessionHydrationCollection::AgentRequest),
+    ("AgentMessage", SessionHydrationCollection::AgentMessage),
+    (
+        "AgentOutputSegment",
+        SessionHydrationCollection::AgentOutputSegment,
+    ),
+    ("AgentToolCall", SessionHydrationCollection::AgentToolCall),
+    (
+        "CompactionEntry",
+        SessionHydrationCollection::CompactionEntry,
+    ),
+];
+
+/// Fork origin dependencies retain their source session. Only the verified
+/// receipt's physical keys extend the session read; ownership filters still apply.
+fn local_hydration_query(
+    requester_did: &str,
+    session_id: &str,
+    node_did: &str,
+    verified_manifest: Option<&BTreeSet<SessionHydrationDocumentKey>>,
+) -> String {
     let requester_did = gents::graphql::escape_graphql_string(requester_did);
     let session_id = gents::graphql::escape_graphql_string(session_id);
     let node_did = gents::graphql::escape_graphql_string(node_did);
-    let scope = format!(
-        "requester_did: {{ _eq: \"{requester_did}\" }}, node_did: {{ _eq: \"{node_did}\" }}, session_id: {{ _eq: \"{session_id}\" }}"
-    );
-    format!(
-        r#"{{
-            AgentRequest(filter: {{ {scope} }}) {{ _docID }}
-            AgentMessage(filter: {{ {scope} }}) {{ _docID }}
-            AgentOutputSegment(filter: {{ {scope} }}) {{ _docID }}
-            AgentToolCall(filter: {{ {scope} }}) {{ _docID }}
-            CompactionEntry(filter: {{ {scope} }}) {{ _docID }}
-        }}"#
-    )
+    let fields = HYDRATION_COLLECTIONS
+        .into_iter()
+        .map(|(name, collection)| {
+            let ids = verified_manifest
+                .into_iter()
+                .flatten()
+                .filter(|key| key.collection == collection)
+                .map(|key| format!("\"{}\"", gents::graphql::escape_graphql_string(&key.doc_id)))
+                .collect::<Vec<_>>()
+                .join(",");
+            let session_filter = format!("session_id: {{ _eq: \"{session_id}\" }}");
+            let selected = if ids.is_empty() {
+                session_filter
+            } else {
+                format!("_or: [{{{session_filter}}}, {{_docID: {{_in: [{ids}]}}}}]")
+            };
+            format!(
+                "{name}(filter: {{requester_did: {{_eq: \"{requester_did}\"}}, node_did: {{_eq: \"{node_did}\"}}, {selected}}}) {{_docID}}"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("{{{fields}}}")
 }
 
 fn local_hydration_documents_from_response(
     response: &defra_node::QueryResponse,
 ) -> Result<BTreeSet<SessionHydrationDocumentKey>> {
     let mut ids = BTreeSet::new();
-    for (collection_name, collection) in [
-        ("AgentRequest", SessionHydrationCollection::AgentRequest),
-        ("AgentMessage", SessionHydrationCollection::AgentMessage),
-        (
-            "AgentOutputSegment",
-            SessionHydrationCollection::AgentOutputSegment,
-        ),
-        ("AgentToolCall", SessionHydrationCollection::AgentToolCall),
-        (
-            "CompactionEntry",
-            SessionHydrationCollection::CompactionEntry,
-        ),
-    ] {
+    for (collection_name, collection) in HYDRATION_COLLECTIONS {
         for row in gents::graphql::rows::<HydrationDocIdRow>(response, collection_name)? {
             if let Some(doc_id) = row.doc_id.filter(|value| !value.is_empty()) {
                 ids.insert(SessionHydrationDocumentKey { collection, doc_id });
@@ -3085,10 +3115,11 @@ mod delete_source_tests {
             "did:key:requester\"escaped",
             "session\"escaped",
             "did:key:node\"escaped",
+            None,
         );
-        assert!(query.contains(r#"requester_did: { _eq: "did:key:requester\"escaped" }"#));
+        assert!(query.contains(r#"requester_did: {_eq: "did:key:requester\"escaped"}"#));
         assert!(query.contains(r#"session_id: { _eq: "session\"escaped" }"#));
-        assert!(query.contains(r#"node_did: { _eq: "did:key:node\"escaped" }"#));
+        assert!(query.contains(r#"node_did: {_eq: "did:key:node\"escaped"}"#));
     }
 
     fn task(task_id: &str) -> Task {

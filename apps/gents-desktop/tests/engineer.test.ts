@@ -51,7 +51,6 @@ describe("engineer setup patches", () => {
     expect(tools).toMatchObject({
       id: "tools-a",
       changes: {
-        built_ins: { enable_graph_tools: true, enable_context_budget: true },
         self_config: {
           enable_self_config: true,
           self_config_categories: [

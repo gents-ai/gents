@@ -326,6 +326,32 @@ impl DefraSessionHook {
         self.persisted_direct_tool_result(lifecycle).await
     }
 
+    /// Failed native control cannot be presented as a successful interception:
+    /// that would let the provider repeat unavailable authorization indefinitely
+    /// inside the same request, bypassing the durable Goal retry owner.
+    pub(in crate::hook) async fn fail_control_tool_call(
+        &self,
+        lifecycle: &mut crate::tool_call_lifecycle::ToolCallLifecycle,
+        tool_name: &str,
+        raw_result: String,
+        failure: crate::tool_call_lifecycle::FailureClass,
+    ) -> anyhow::Result<ToolCallHookAction> {
+        let (bounded, presentation) =
+            bounded_tool_result_with_presentation(tool_name, &raw_result, &self.truncation_limits);
+        let won = lifecycle
+            .fail_raw_with_presentation(
+                &raw_result,
+                &bounded,
+                failure,
+                presentation.unwrap_or(gents_protocol::output::PayloadPresentation::Full),
+            )
+            .await?;
+        if won {
+            return Ok(ToolCallHookAction::terminate(bounded));
+        }
+        self.persisted_direct_tool_result(lifecycle).await
+    }
+
     async fn persisted_direct_tool_result(
         &self,
         lifecycle: &crate::tool_call_lifecycle::ToolCallLifecycle,

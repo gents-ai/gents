@@ -232,6 +232,7 @@ async fn terminalizing_an_older_request_preserves_the_latest_projection() {
         &db.node,
         &session_id,
         &gents_protocol::session::SessionObservation {
+            reply_preview: None,
             last_activity_at: created_at.clone(),
             preview: Some("newer request".into()),
             latest_request: Some(gents_protocol::session::SessionRequestObservation {

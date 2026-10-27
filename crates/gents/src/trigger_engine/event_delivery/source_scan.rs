@@ -14,20 +14,6 @@ pub(crate) async fn load_doc_ids(node: &EmbeddedNode, collection: &str) -> Resul
         .collect()
 }
 
-pub(crate) async fn load_doc_field(
-    node: &EmbeddedNode,
-    collection: &str,
-    field: &str,
-) -> Result<Vec<(String, String)>> {
-    let mut fields = Vec::new();
-    for row in load_source_rows(node, collection, Some(field), None).await? {
-        if let Some(value) = row.get(field).and_then(Value::as_str) {
-            fields.push((document_id(&row)?.to_owned(), value.to_owned()));
-        }
-    }
-    Ok(fields)
-}
-
 fn document_id(row: &Value) -> Result<&str> {
     row.get("_docID")
         .and_then(Value::as_str)
@@ -123,41 +109,5 @@ pub(crate) mod tests {
             inserted.extend(ids);
         }
         inserted
-    }
-
-    #[tokio::test]
-    async fn source_scans_reach_documents_beyond_the_former_cap() {
-        let directory = tempfile::tempdir().unwrap();
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .data_path(directory.path().join("db"))
-                .build()
-                .await
-                .unwrap(),
-        );
-        let inserted = create_source_documents(&node).await;
-        assert_eq!(inserted.len(), 10_001);
-        let ids = load_doc_ids(&node, "RescanSource").await.unwrap();
-        assert_eq!(ids.len(), inserted.len());
-        assert_eq!(ids.into_iter().collect::<BTreeSet<_>>(), inserted);
-        let fields = load_doc_field(&node, "RescanSource", "correlation")
-            .await
-            .unwrap();
-        assert_eq!(fields.len(), inserted.len());
-        assert_eq!(
-            fields
-                .iter()
-                .map(|(id, _)| id.clone())
-                .collect::<BTreeSet<_>>(),
-            inserted
-        );
-        assert_eq!(
-            fields
-                .into_iter()
-                .map(|(_, field)| field)
-                .collect::<BTreeSet<_>>(),
-            (0..10_001).map(|index| format!("group-{index}")).collect()
-        );
-        node.shutdown().await;
     }
 }

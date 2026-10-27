@@ -37,7 +37,7 @@ pub(crate) fn goal_continuation_identity(
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "called from goal, watcher, graph_pipeline and agent tests with this shape"
+    reason = "called from goal, watcher and agent tests with this shape"
 )]
 pub(crate) fn prepare_goal_continuation(
     parent: &AgentRequest,

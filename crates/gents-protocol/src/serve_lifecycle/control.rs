@@ -145,6 +145,10 @@ pub fn current_capabilities() -> BTreeMap<String, u64> {
     [
         ("runtime_control", u64::from(RUNTIME_CONTROL_VERSION)),
         (
+            "mailbox_question",
+            u64::from(crate::mailbox_question::MAILBOX_QUESTION_VERSION),
+        ),
+        (
             "request_input",
             u64::from(crate::request_input::REQUEST_INPUT_CONTRACT_VERSION),
         ),

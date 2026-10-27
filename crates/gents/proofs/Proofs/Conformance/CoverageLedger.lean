@@ -162,15 +162,6 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.runtimeInternal]
     , deferred := []
     }
-  , { feature := "graph-pipeline"
-    , required := [Surface.runtimeInternal]
-    , deferred :=
-        [ (Surface.agentFacing, "evaluation-only custom tool; production configuration wiring follows graduation")
-        , (Surface.operatorCli, "post-experiment graduation surface")
-        , (Surface.operatorUi, "post-experiment graduation surface")
-        , (Surface.api, "post-experiment graduation surface")
-        ]
-    }
   , { feature := "session-recovery"
     , required := [Surface.runtimeInternal]
     , deferred := []
@@ -528,7 +519,10 @@ def stateMachineCoverage : List CoverageEntry :=
   ]
 
 def caseCoverage : List CoverageEntry :=
-  [ tagged (consumerCoverage
+  [ tagged (consumerCoverage "goal_client_delivery_cases" "GoalClientDeliveryCases"
+      "client::mutations::chat::request::receipt::goal_delivery::tests::generated_goal_delivery_histories_bind_native_signed_preparations")
+      "durable-goals" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "root_admission_cases"
       "RootAdmissionCases"
       "conformance::root_admission::generated_root_admission_cases_drive_production_root_policy")
@@ -608,16 +602,6 @@ def caseCoverage : List CoverageEntry :=
       "trigger_delivery"
       "Triggers.Durable.Outcomes"
       "trigger_engine::tests::durable_contract::generated_terminal_outcome_action_traces_use_native_owners")
-      "durable-goals" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "graph_session_continuation_cases"
-      "GraphPipeline.WorkspaceLineage.SessionContinuation"
-      "graph_pipeline::session_continuation_contract_tests::session_selection_matches_executable_graph_owner")
-      "triggers" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "graph_assignment_head_cases"
-      "GraphPipeline.LogicalInvocation.AssignmentHead"
-      "graph_pipeline::session_continuation_contract_tests::applied_assignment_heads_match_executable_graph_owner")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "trigger_cases"
@@ -995,6 +979,11 @@ def caseCoverage : List CoverageEntry :=
       "mailbox::reply_tests::generated_reply_cases_drive_claim_validation"
       "Decision cases cover reply matching and terminal-state eligibility. Signed-row loading, atomic request/item claim, and concurrent dismissal require transaction-owner integration tests.")
       "mailbox" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "mailbox_question_cases"
+      "MailboxQuestionCases"
+      "mailbox_question::question_policy_follows_the_executable_model")
+      "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "mailbox_handoff_cases"
       "MailboxHandoffCases"
@@ -1331,17 +1320,6 @@ def caseCoverage : List CoverageEntry :=
       "RecoverySweepCases"
       "conformance::generated_recovery_sweep_cases_drive_startup_recovery_contract")
       "recovery" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "graph_failure_attribution_traces"
-      "GraphFailureAttributionTraces"
-      "graph_pipeline::run::attribution_contract_tests::generated_graph_failure_attribution_traces_drive_real_transactions"
-      "Covers durable CAS outcomes and emitted positive failure decisions through the real interrupt owner. Isolated no-failure/cancellation suppression remains unobserved; a false failure-interrupt decision does not forbid cancellation-driven interrupts.")
-      "graph-pipeline" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "graph_workspace_lineage_cases"
-      "GraphWorkspaceLineageCases"
-      "graph_pipeline::run::workspace_lineage_contract_tests::generated_graph_workspace_cases_drive_installed_plan_and_signed_receipts")
-      "graph-pipeline" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "artifact_mode_meet_cases"
       "ArtifactModeMeetCases"
@@ -1669,18 +1647,8 @@ def caseCoverage : List CoverageEntry :=
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_resource_cases"
-      "PluginAssetMountCases"
-      "conformance::tool_policy::generated_plugin_job_resource_cases_drive_mounts_and_scratch")
-      "plugin-jobs" [Surface.agentFacing]
-  , tagged (consumerCoverage
-      "plugin_resource_cases"
-      "PluginProjectTierCases"
-      "conformance::tool_policy::generated_plugin_job_resource_cases_drive_mounts_and_scratch")
-      "plugin-jobs" [Surface.agentFacing]
-  , tagged (consumerCoverage
-      "plugin_resource_cases"
       "PluginScratchCases"
-      "conformance::tool_policy::generated_plugin_job_resource_cases_drive_mounts_and_scratch")
+      "conformance::tool_policy::generated_plugin_job_resource_cases_drive_scratch")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_calls_route_cases"
@@ -1702,18 +1670,6 @@ def caseCoverage : List CoverageEntry :=
       "WorkspacePathAliasCases"
       "workspace::tests::path_alias_contract::generated_workspace_path_alias_cases_drive_real_git_delta")
       "isolated-workspaces" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "graph_logical_invocation_cases"
-      "GraphLogicalInvocationCases"
-      "graph_pipeline::logical_invocation_contract_tests::generated_graph_logical_invocations_drive_persisted_run_projection"
-      "Fifteen representable cases replay through signed production owners. The defensive pinned-root-with-parent row is outside admission: root event/schedule authority excludes Goal/local-control parent authority, and ancestry excludes its entry. Reconcile that abstract input domain before claiming runtime projection coverage; do not broaden authority to manufacture the row.")
-      "graph-pipeline" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "graph_invocation_publication_cases"
-      "GraphInvocationPublicationCases"
-      "graph_pipeline::run::publication_contract_tests::generated_graph_invocation_publication_traces_drive_real_transactions"
-      "Covers durable publication, failure/cancellation fences and child counts. Failure-driven interrupts still need observations through the graph execution owner; recomputing may_interrupt_for_failure from stored flags does not exercise that decision.")
-      "graph-pipeline" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_claimed_publication_cases"
       "GoalClaimedPublicationCases"
@@ -1889,26 +1845,6 @@ def caseCoverage : List CoverageEntry :=
       "GoalResetResumeCases"
       "goal::reset_resume::contract_tests::generated_goal_reset_resume_cases_drive_real_transactions")
       "durable-goals" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "graph_pipeline_validation_cases"
-      "GraphPipelineValidationCases"
-      "conformance::graph_pipeline::generated_validation_cases_fence_whole_graph_compilation_gate")
-      "graph-pipeline" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "graph_pipeline_revision_gate_cases"
-      "GraphPipelineRevisionGateCases"
-      "conformance::graph_pipeline::generated_revision_gate_cases_fence_publication_and_start_readiness")
-      "graph-pipeline" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "graph_pipeline_run_terminal_cases"
-      "GraphPipelineRunTerminalCases"
-      "conformance::graph_pipeline::generated_run_terminal_cases_fence_completion_cas")
-      "graph-pipeline" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "graph_pipeline_edge_delivery_cases"
-      "GraphPipelineEdgeDeliveryCases"
-      "conformance::graph_pipeline::generated_edge_delivery_cases_fence_graph_edge_admission")
-      "graph-pipeline" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "restart_disposition_cases"
       "RestartDispositionCases"
@@ -2423,6 +2359,9 @@ def caseCoverage : List CoverageEntry :=
       "conformance::prompt_assembly::generated_claude_checkpoint_cases_bind_selected_assistant_projection"
       "Models source-tagged selected assistant occurrences, the exact reduction split that keeps a pending tool round out of a summary, and the strict Claude codec. Replay selection is PromptAssemblyReasoningSuffixCases; this model does not prove tag issuance (#1693).")
       "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "prompt_assembly_cases" "ProviderToolIdentityCases"
+      "provider_input::tool_call_identity_tests::modeled_tool_identity_projection_is_idempotent_and_preserves_other_fields")
+      "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "prompt_assembly_cases"
       "PromptAssemblyAssistantOrderCases"
@@ -2590,6 +2529,9 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage "request_input_cases" "RequestInputCases"
       "conformance::request_input::runtime_continuation_inputs_match_the_lean_owner")
       "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "session_reply_preview_cases" "SessionReplyPreviewCases"
+      "session::preview::tests::terminal_reply_projection_follows_the_model")
+      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp "session_document_cases" "SessionDocumentCases"
       "lean_vocab_test::support::session_documents::tests::generated_pending_timeline_cases_preserve_request_identities_and_order"
       "Generated pending timeline cases bind physical identity, admission order, same or following request anchors, hidden or missing anchor fallback, tool-first replication, orphan groups and overlay ownership to the shared protocol ordering owner. Durable request lookup and authored-message suppression remain bridge-owner obligations.")
@@ -2616,6 +2558,9 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage "discovery_scope_cases" "DiscoveryScopeCases"
       "Exercise backend-owner and credential-scoped catalog selection in the production discovery owner, including shared/OAuth and foreign-owner rejection.")
       "apply-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage "initial_inference_cases" "InitialInferenceCases"
+      "commands::init::inference_seed_tests::generated_initial_inference_keeps_unselected_models_and_limits_unpinned")
+      "apply-reconcile" [Surface.operatorCli]
   , tagged (followUpCoverage "event_group_clock_cases" "EventGroupClockCases"
       "Drive the existing durable group clock owner after typed trigger/callback identity migration; preserve first-seen and quiescence across restart.")
       "triggers" [Surface.runtimeInternal]
@@ -2626,6 +2571,9 @@ def caseCoverage : List CoverageEntry :=
       "Drive the callback executor's claim/run/succeed/fail/denial operations and observe exact input/origin/journal/emission; journal-prefix-only checks cannot establish lifecycle coverage. The interrupt case's journal and retry refusal are executed through callback_recovery_cases.")
       "triggers" [Surface.runtimeInternal]
 
+  , tagged (consumerCoverage "prompt_assembly_cases" "DiscoveryGuidanceCases"
+      "prompt::tests::mcp_discovery_guidance_matches_presented_operations_model")
+      "prompt-assembly" [Surface.agentFacing]
   ]
 
 def followUpHookCoverage : List CoverageEntry :=

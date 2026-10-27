@@ -413,13 +413,31 @@ async fn generated_goal_tool_context_uses_the_signed_callers_assignment() {
             let action = hook
                 .on_tool_call(tool, None, "goal-context-call", args)
                 .await;
-            let ToolCallHookAction::Skip { reason } = action else {
-                panic!("{name}/{tool}: control escaped its accepted hook: {action:?}");
+            let terminated = matches!(&action, ToolCallHookAction::Terminate { .. });
+            let reason = match action {
+                ToolCallHookAction::Skip { reason } | ToolCallHookAction::Terminate { reason } => {
+                    reason
+                }
+                action => panic!("{name}/{tool}: control escaped its accepted hook: {action:?}"),
             };
             let result: Value = serde_json::from_str(&reason).unwrap();
+            if case["observation"]["kind"] == "unknown" {
+                assert!(
+                    terminated,
+                    "unavailable attribution must stop the current provider loop"
+                );
+                let scope = crate::graphql::escape_graphql_string(&caller);
+                let observed = access.execute(&format!(r#"{{AgentToolCall(filter: {{request_doc_id: {{_eq: "{scope}"}}}}) {{lifecycle_state tool_failure_class}}}}"#)).await.unwrap();
+                let rows = observed["data"]["AgentToolCall"].as_array().unwrap();
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0]["lifecycle_state"], "failed");
+                assert_eq!(rows[0]["tool_failure_class"], "serviceUnavailable");
+            }
             if tool == crate::goal::GET_GOAL_TOOL_NAME {
                 match case["observation"]["kind"].as_str().unwrap() {
-                    "unknown" => assert!(result["error"].is_string(), "{name}/{tool}: {result}"),
+                    "unknown" => {
+                        assert!(result["error"].is_string(), "{name}/{tool}: {result}");
+                    }
                     "unassigned" => {
                         assert!(result["goal"].is_null(), "{name}/{tool}: {result}");
                         assert!(!result["error"].is_string(), "{name}/{tool}: {result}");

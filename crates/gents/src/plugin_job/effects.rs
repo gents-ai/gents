@@ -776,11 +776,9 @@ mod tests {
                 dynamic: DynamicMode::Run,
                 dynamic_targets: vec!["general".to_owned()],
                 trusted_packs: Vec::new(),
-                project_roots: Vec::new(),
             },
             engine_digest: "engine".to_owned(),
             engine_provenance_operator: true,
-            installed_trusted_sources: Vec::new(),
             max_hop: Some(8),
             target_hops: vec![((node_did.to_owned(), "general".to_owned()), 0)],
             target_ids: vec![(
@@ -791,7 +789,6 @@ mod tests {
             started_by_job: false,
             cwd_allowed: Vec::new(),
             within: Vec::new(),
-            named_origin: None,
             adoption_facts: facts(),
             caller_scope: ProcessControlScope {
                 request_id: "request".to_owned(),
@@ -816,7 +813,6 @@ mod tests {
             call: StepCall {
                 argv: vec!["run".to_owned()],
                 args: None,
-                path: None,
                 script: None,
                 agent_budget: None,
             },
@@ -844,6 +840,7 @@ mod tests {
 
     fn job_effects(spawn: Vec<JobSpawn>, message: Vec<JobMessage>) -> JobEffects {
         JobEffects {
+            state: None,
             pin: None,
             resume: None,
             spawn,

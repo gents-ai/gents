@@ -54,6 +54,7 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(browser_store_lock());
     let builder = builder
+        .plugin(tauri_plugin_fs::init())
         .plugin(init(platform_bridge_config()))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init());

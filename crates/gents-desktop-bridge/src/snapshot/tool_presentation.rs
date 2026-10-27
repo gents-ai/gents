@@ -564,6 +564,7 @@ mod tests {
             job_progress: None,
             job_handle: None,
             job_state: None,
+            job_origin: None,
             job_outcome: None,
             job_next_calls: Vec::new(),
         }

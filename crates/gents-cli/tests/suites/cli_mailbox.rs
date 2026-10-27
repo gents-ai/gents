@@ -38,7 +38,7 @@ async fn mailbox_list_scopes_to_caller_and_dismisses_owned_item() -> Result<()> 
             node_did: "{did}", status: "open", kind: "ask", action: "ack",
             title: "CLI attention", summary: "check from the terminal", payload: null,
             source_kind: "runtime", source_id: "request-doc", session_id: null,
-            request_id: null, graph_run_id: null, cause_doc_id: null,
+            request_id: null, cause_doc_id: null,
             target_node_did: "{did}", target_agent_id: "default",
             expected_collection: null, parent_item_id: null, deadline_at: null,
             created_at: "2026-08-25T12:00:00Z", updated_at: "2026-08-25T12:00:00Z",

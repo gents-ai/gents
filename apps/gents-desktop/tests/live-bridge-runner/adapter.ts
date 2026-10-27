@@ -60,6 +60,9 @@ export function createBridgeHttpAdapter(
     fetchSessionGoal: unsupported("fetchSessionGoal"),
     steerPendingMessage: unsupported("steerPendingMessage"),
     controlGoal: unsupported("controlGoal"),
+    recoverGoalSubmission: unsupported("recoverGoalSubmission"),
+    resumeGoalSubmission: unsupported("resumeGoalSubmission"),
+    acknowledgeGoalSubmission: unsupported("acknowledgeGoalSubmission"),
     recoverChatSubmission: unsupported("recoverChatSubmission"),
     acknowledgeChatSubmission: unsupported("acknowledgeChatSubmission"),
     explainToolSurface: unsupported("explainToolSurface"),
@@ -95,6 +98,9 @@ export function createBridgeHttpAdapter(
     bindPackPlugin: unsupported("bindPackPlugin"),
     wirePack: unsupported("wirePack"),
     listPackWireSources: unsupported("listPackWireSources"),
+    listDynamicWorkflows: unsupported("listDynamicWorkflows"),
+    getDynamicWorkflow: unsupported("getDynamicWorkflow"),
+    promoteWorkflow: unsupported("promoteWorkflow"),
     signInToPackRegistry: unsupported("signInToPackRegistry"),
     signOutOfPackRegistry: unsupported("signOutOfPackRegistry"),
     listAllowedFolders: unsupported("listAllowedFolders"),
@@ -145,6 +151,7 @@ export function createBridgeHttpAdapter(
       client.postJson<SessionLiveDeltaView>("/desktop/session/live-delta", request),
     sendChatMessage: async (request) => {
       const normalized: TauriDriverChatRequest = {
+        ...request,
         nodeDid: request.nodeDid,
         agentId: request.agentId ?? null,
         sessionId: request.sessionId ?? null,

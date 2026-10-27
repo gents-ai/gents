@@ -136,7 +136,6 @@ pub struct ResolvedToolSelection {
     pub file_limits: crate::toolset::FileToolLimits,
     pub enable_meta_tools: bool,
     pub enable_goal_tools: bool,
-    pub enable_graph_tools: bool,
     pub enable_goal_creation: bool,
     pub allowed_mcp_service_ids: Vec<String>,
     pub remote_tools: Option<crate::document_config::RemoteTools>,
@@ -181,7 +180,6 @@ impl Default for ResolvedToolSelection {
             file_limits: crate::toolset::FileToolLimits::default(),
             enable_meta_tools: true,
             enable_goal_tools: true,
-            enable_graph_tools: false,
             enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             remote_tools: None,
@@ -315,9 +313,6 @@ impl ResolvedToolSelection {
             file_limits: file_limits_from_document(files),
             enable_meta_tools,
             enable_goal_tools,
-            enable_graph_tools: built_ins
-                .and_then(|built| built.enable_graph_tools)
-                .unwrap_or(false),
             enable_goal_creation,
             allowed_mcp_service_ids,
             remote_tools: tools.remote.clone(),

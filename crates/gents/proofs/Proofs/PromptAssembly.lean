@@ -12,3 +12,4 @@ import Proofs.PromptAssembly.ClaudeMap
 import Proofs.PromptAssembly.ReplayFrontier
 import Proofs.PromptAssembly.ServiceTier
 import Proofs.PromptAssembly.CapturedContext
+import Proofs.PromptAssembly.ToolCallIdentity

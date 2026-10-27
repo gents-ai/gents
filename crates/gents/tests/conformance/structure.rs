@@ -62,10 +62,6 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("Fleet", Module("conformance/fleet.rs")),
         ("GoalAutomation", Module("conformance/goals.rs")),
         ("Goals", Module("conformance/goals.rs")),
-        (
-            "GraphPipeline",
-            Module("conformance/graph_pipeline.rs"),
-        ),
         ("Identity", Module("conformance/identity.rs")),
         ("InferenceCall", Module("conformance/inference_call.rs")),
         ("ManagedExec", Gap("Real process-group/job kill and bounded-drain tests live in src/managed_exec.rs; generated OS/process-tree cases still need those consumers, not fixture-only flags.")),

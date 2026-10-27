@@ -1,6 +1,7 @@
-import { ListTree, SquareStack } from "lucide-react";
+import { ListTree, SquareStack, Terminal } from "lucide-react";
 import { registerSurface } from "@/app/surfaces";
 import { workersOfId } from "@/hooks/useFleet";
+import { BackgroundSurface } from "./BackgroundCalls";
 import { TraceSurface } from "./TracePanel";
 import { WorkersSurface } from "./WorkersSurface";
 
@@ -21,4 +22,13 @@ registerSurface({
   routes: ["session"],
   render: WorkersSurface,
   badge: (fleet, sessionId) => workersOfId(fleet, sessionId).length || null,
+});
+
+registerSurface({
+  id: "background",
+  title: "Background",
+  icon: Terminal,
+  placements: ["dock", "sheet"],
+  routes: ["session"],
+  render: BackgroundSurface,
 });

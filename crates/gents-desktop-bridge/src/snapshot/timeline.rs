@@ -55,6 +55,7 @@ fn render_tool_call(tool: ToolCallView) -> RenderedToolCallView {
         job_progress: tool.job_progress.clone(),
         job_handle: tool.job_handle.clone(),
         job_state: tool.job_state,
+        job_origin: tool.job_origin,
         job_outcome: tool.job_outcome.clone(),
         job_next_calls: tool.job_next_calls.clone(),
     }
@@ -399,6 +400,7 @@ mod tests {
             job_progress: None,
             job_handle: None,
             job_state: None,
+            job_origin: None,
             job_outcome: None,
             job_next_calls: Vec::new(),
         };

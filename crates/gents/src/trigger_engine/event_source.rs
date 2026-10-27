@@ -684,20 +684,6 @@ impl EventSource {
             ids = super::event_delivery::source_scan::load_doc_ids(&self.node, collection) => ids?,
         };
         let mut doc_ids: RapidHashSet<String> = ids.into_iter().collect();
-        // Documents of a graph run already underway on a trigger's own
-        // revision are live work, never history, even when they predate this
-        // engine noticing the trigger.
-        let live = match snapshot.node.as_ref() {
-            Some(node) => {
-                crate::graph_pipeline::live_run_correlations(
-                    self.node.as_ref(),
-                    &node.node_did,
-                    trigger_ids.iter().map(String::as_str),
-                )
-                .await?
-            }
-            None => RapidHashMap::new(),
-        };
         let mut deferred_by_doc: RapidHashMap<String, RapidHashSet<String>> = RapidHashMap::new();
         for ((filter, field), correlated_trigger_ids) in correlation_probes {
             let filter = filter
@@ -719,10 +705,7 @@ impl EventSource {
                     .filter(|value| !value.is_empty());
                 let pending: Vec<&String> = match correlation {
                     None => correlated_trigger_ids.iter().collect(),
-                    Some(correlation) => correlated_trigger_ids
-                        .iter()
-                        .filter(|id| crate::graph_pipeline::is_live_for(&live, id, correlation))
-                        .collect(),
+                    Some(_) => Vec::new(),
                 };
                 if !pending.is_empty() {
                     if let Some(doc_id) = row.get("_docID").and_then(serde_json::Value::as_str) {

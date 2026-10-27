@@ -1,7 +1,7 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 
-/// Canonical authored document bundle for both ordinary and graph packs; the
+/// Canonical authored document bundle for packs; the
 /// loader fills missing root node_did from PackInstallOptions and explicit
 /// owners must match. Validate ownership, references, unknown authoring keys,
 /// and resource bounds before persistence.
@@ -183,29 +183,6 @@ pub struct PackConfig {
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
-    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<GraphDefinition>>", optional = nullable))]
-    pub graphs: Vec<GraphDefinition>,
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
-        skip_serializing_if = "Vec::is_empty"
-    )]
     #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<EvalDefinition>>", optional = nullable))]
     pub eval_definitions: Vec<EvalDefinition>,
-    /// Canonical authored topology, compiled after ordinary config resolution.
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<crate::graph_pipeline::GraphIntent>>", optional = nullable))]
-    pub graph_intents: Vec<crate::graph_pipeline::GraphIntent>,
-    /// Canonical interfaces referencing installed tasks; no graph asset/model rewrite.
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<crate::graph_pipeline::StageCapability>>", optional = nullable))]
-    pub graph_capabilities: Vec<crate::graph_pipeline::StageCapability>,
 }

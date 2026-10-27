@@ -116,7 +116,6 @@ describe("a agent on another node", () => {
       sourceId: "remote-session",
       sessionId: "remote-session",
       requestId: null,
-      graphRunId: null,
       causeDocId: null,
       targetNodeDid: "did:key:there",
       targetAgentId: "reviewer",

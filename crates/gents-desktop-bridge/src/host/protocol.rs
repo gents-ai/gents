@@ -280,6 +280,19 @@ pub enum ClientCommand {
     GoalControl {
         request: Box<crate::types::GoalControlRequest>,
     },
+    #[serde(rename = "desktop_goal_submission_recover")]
+    RecoverGoalSubmission {
+        query: crate::types::GoalSubmissionQuery,
+    },
+    #[serde(rename = "desktop_goal_submission_resume")]
+    ResumeGoalSubmission {
+        request: Box<crate::types::GoalControlRequest>,
+        receipt: crate::types::GoalSubmissionReceipt,
+    },
+    #[serde(rename = "desktop_goal_submission_acknowledge")]
+    AcknowledgeGoalSubmission {
+        receipt: crate::types::GoalSubmissionReceipt,
+    },
     #[serde(rename = "desktop_chat_send")]
     Send { request: ChatSendRequest },
     #[serde(rename = "desktop_chat_submission_recover")]
@@ -366,6 +379,9 @@ impl ClientCommand {
         "desktop_session_goal",
         "desktop_session_provenance",
         "desktop_goal_control",
+        "desktop_goal_submission_recover",
+        "desktop_goal_submission_resume",
+        "desktop_goal_submission_acknowledge",
         "desktop_chat_send",
         "desktop_chat_submission_recover",
         "desktop_chat_submission_acknowledge",

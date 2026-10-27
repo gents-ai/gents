@@ -696,3 +696,6 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
         .unwrap();
     }
 }
+
+#[path = "request_membership_tests.rs"]
+mod membership;

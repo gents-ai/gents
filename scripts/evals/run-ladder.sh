@@ -4,8 +4,7 @@
 #   scripts/evals/run-ladder.sh [SUITE|all|list] [TRIALS] [CONCURRENCY]
 #       [--backend TARGET | --target TARGET] [--trials N] [--concurrency N]
 #
-# `all` runs L1-L5 and the configuration-only capstone. L6 is an explicit
-# capability probe, excluded from acceptance while graph authoring is missing.
+# `all` runs L1-L5 and the configuration-only capstone.
 # Defaults: 3 trials per case; global trial cap floor(4 / PER_TRIAL); train + validation.
 # The cap covers active trials across all runs, not every provider/background call.
 # Held-out cases run only with GENTS_EVAL_SPLITS=held_out.

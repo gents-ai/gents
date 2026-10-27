@@ -1,6 +1,8 @@
+import { acceptedChatReply } from "./chat-delivery-fixture";
+import { goalDeliveryStorage } from "./goal-delivery-storage";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
 import type { DesktopApp } from "../src/hooks/desktopApp";
@@ -27,7 +29,6 @@ const item = (over: Partial<MailboxItemView> = {}): MailboxItemView => ({
   sourceId: "session-1",
   sessionId: "session-1",
   requestId: null,
-  graphRunId: null,
   causeDocId: null,
   targetNodeDid: "did:key:worker",
   targetAgentId: "engineer",
@@ -40,8 +41,15 @@ const item = (over: Partial<MailboxItemView> = {}): MailboxItemView => ({
 
 const mailboxWith = (
   items: MailboxItemView[],
-  send: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue({}),
-) => testApp({ api: { sendChatMessage: send }, deployments: [deploymentWith(items)] });
+  send: ReturnType<typeof vi.fn> = vi.fn(acceptedChatReply),
+) =>
+  testApp({
+    api: {
+      sendChatMessage: send,
+      acknowledgeChatSubmission: vi.fn().mockResolvedValue(undefined),
+    },
+    deployments: [deploymentWith(items)],
+  });
 const deploymentWith = (items: MailboxItemView[]) =>
   node({
     nodeDid: "did:key:node",
@@ -53,6 +61,7 @@ const deploymentWith = (items: MailboxItemView[]) =>
 const renderMailbox = (app: DesktopApp) =>
   render(<MailboxScreen />, { wrapper: withApp(app) });
 
+beforeEach(() => vi.stubGlobal("localStorage", goalDeliveryStorage()));
 afterEach(() => vi.unstubAllGlobals());
 
 describe("mailbox item", () => {
@@ -149,8 +158,80 @@ const questionItem = (question: Record<string, unknown>) =>
   });
 
 describe("mailbox question", () => {
+  it.each([2, 3])(
+    "skips a version %i optional question with its observed source",
+    async (version) => {
+      const answer = vi.fn(acceptedChatReply);
+      const ask = {
+        ...questionItem({ version, optional: true }),
+        questionHash: "original-question",
+      };
+      renderMailbox(mailboxWith([ask], answer));
+      expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Local model" }));
+      expect(answer).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+      expect(answer).toHaveBeenCalledWith(
+        expect.objectContaining({
+          causedBySourceDocId: ask.itemId,
+          answer: {
+            option_ids: [],
+            free_text: null,
+            skip: true,
+            question_hash: "original-question",
+          },
+        }),
+      );
+      expect(await screen.findByText("Question skipped.")).toBeVisible();
+    },
+  );
+
+  it.each([2, 3])(
+    "keeps version %i required free-text questions pending until an explicit answer",
+    async (version) => {
+      const answer = vi.fn(acceptedChatReply);
+      const ask = {
+        ...questionItem({ version, options: [], allow_free_text: true }),
+        questionHash: "required-question",
+      };
+      renderMailbox(mailboxWith([ask], answer));
+      expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+      fireEvent.change(screen.getByRole("textbox", { name: "Your answer" }), {
+        target: { value: "Ship Friday" },
+      });
+      expect(answer).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      expect(answer).toHaveBeenCalledWith(
+        expect.objectContaining({
+          answer: {
+            option_ids: [],
+            free_text: "Ship Friday",
+            question_hash: "required-question",
+          },
+        }),
+      );
+      expect(await screen.findByText("Answer sent to the agent.")).toBeVisible();
+    },
+  );
+
+  it.each([2, 3])(
+    "refuses to invent a source observation for a version %i question",
+    (version) => {
+      const answer = vi.fn();
+      renderMailbox(mailboxWith([questionItem({ version, optional: true })], answer));
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Reconnect to load this question",
+      );
+      expect(screen.getByRole("button", { name: "Skip" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Local model" })).toBeDisabled();
+      expect(answer).not.toHaveBeenCalled();
+    },
+  );
+
   it("sends a single choice on click and hides the raw payload", async () => {
-    const answer = vi.fn().mockResolvedValue(undefined);
+    const answer = vi.fn(acceptedChatReply);
     const ask = questionItem({});
     renderMailbox(mailboxWith([ask], answer));
     expect(screen.getByText("Which backend should the crew use?")).toBeVisible();
@@ -172,7 +253,7 @@ describe("mailbox question", () => {
   });
 
   it("toggles several choices and sends them with an Other note", () => {
-    const answer = vi.fn().mockResolvedValue(undefined);
+    const answer = vi.fn(acceptedChatReply);
     const ask = questionItem({ multi_select: true, allow_free_text: true });
     renderMailbox(mailboxWith([ask], answer));
     const send = screen.getByRole("button", { name: "Send" });
@@ -198,7 +279,7 @@ describe("mailbox question", () => {
   });
 
   it("sends a free-text-only answer", () => {
-    const answer = vi.fn().mockResolvedValue(undefined);
+    const answer = vi.fn(acceptedChatReply);
     const ask = questionItem({ allow_free_text: true });
     renderMailbox(mailboxWith([ask], answer));
     fireEvent.change(screen.getByLabelText("Other"), { target: { value: "Ollama" } });
