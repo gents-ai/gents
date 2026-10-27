@@ -87,7 +87,7 @@ mod tests {
                     lifecycle_state: Some(if wait["completed"] == true {
                         RequestLifecycleState::Completed
                     } else {
-                        RequestLifecycleState::Cancelled
+                        RequestLifecycleState::Interrupted
                     }),
                     ..Default::default()
                 };

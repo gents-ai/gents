@@ -62,6 +62,8 @@ pub(crate) use request_head::{
     verify_goal_continuation_edge,
 };
 pub use reset_resume::resume_at_reset;
+mod question_wait;
+pub use question_wait::awaiting_goal_question_ids;
 pub(crate) use tool_context::load_goal_tool_context;
 use tool_context::same_goal_assignment;
 

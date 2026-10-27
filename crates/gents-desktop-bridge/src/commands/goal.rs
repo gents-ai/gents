@@ -22,27 +22,12 @@ pub async fn session_goal(
         });
         let source = sessions.next().filter(|_| sessions.next().is_none());
         let waiting_question_ids = source.and_then(|session| {
-            if !observation
-                .goal
-                .as_ref()
-                .is_some_and(|goal| goal.snapshot.status.as_str() == "active")
-            {
-                return None;
-            }
             let latest = session.observation.as_ref()?.latest_request.as_ref()?;
-            let parent = gents_protocol::row::AgentRequestRow {
-                doc_id: Some(latest.request_doc_id.clone()),
-                request_id: latest.request_id.clone(),
-                node_did: Some(session.node_did.clone()),
-                session_id: Some(session.session_id.clone()),
-                requester_did: session.requester_did.clone(),
-                agent_id: Some(session.agent_id.clone()),
-                lifecycle_state: Some(latest.lifecycle_state),
-                ..Default::default()
-            };
-            let ids = gents::mailbox::awaiting_question_ids(
+            let ids = gents::goal::awaiting_goal_question_ids(
+                &observation,
+                latest,
+                &snapshot.requests,
                 &snapshot.mailbox_items,
-                &parent,
                 chrono::Utc::now(),
             );
             (!ids.is_empty()).then_some(ids)
