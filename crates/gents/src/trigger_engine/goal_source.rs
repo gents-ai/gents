@@ -17,9 +17,9 @@ use crate::goal::{
     load_goal_by_id, load_goals_for_session, next_goal_infrastructure_retries, observe_goal_agent,
     refresh_goal_usage, stop_claimed_continuation_for_unavailable_agent,
     update_goal_fields_if_status, GoalAction, GoalClaimedDecision, GoalContinuationAction,
-    GoalContinuationFacts, GoalContinuationPhase, GoalDecision, GoalDocument, GoalGatedDecision,
-    GoalRequestTerminal, GoalStatus, ObservedGoalAgent, GOAL_READINESS_WAIT_PREFIX,
-    GOAL_TRIGGER_KIND, MAX_INFRASTRUCTURE_RETRIES,
+    GoalContinuationFacts, GoalContinuationPhase, GoalDecision, GoalDocument, GoalFailureCause,
+    GoalGatedDecision, GoalRequestTerminal, GoalStatus, ObservedGoalAgent,
+    GOAL_READINESS_WAIT_PREFIX, GOAL_TRIGGER_KIND, MAX_INFRASTRUCTURE_RETRIES,
 };
 use crate::goal::{publish_claimed_continuation, resume_at_reset};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
@@ -311,11 +311,13 @@ impl GoalSource {
                 }
             }
             let retries = goal.infrastructure_retry_count.unwrap_or_default().max(0);
-            let retry_prefix = (retries > 0
-                && goal.last_failure.as_deref() == Some(terminal_name.as_str()))
-            .then(|| {
+            let failure_name = goal
+                .last_failure
+                .as_deref()
+                .filter(|reason| *reason == terminal_name || *reason == "goal_control_unavailable");
+            let retry_prefix = failure_name.filter(|_| retries > 0).map(|failure_name| {
                 format!(
-                    "The previous request ended in infrastructure state {terminal_name}. Retry the goal from durable session state; this is recovery attempt {retries} of {MAX_INFRASTRUCTURE_RETRIES}."
+                    "The previous request ended in infrastructure state {failure_name}. Retry the goal from durable session state; this is recovery attempt {retries} of {MAX_INFRASTRUCTURE_RETRIES}."
                 )
             });
             let wrapup = status == GoalStatus::BudgetLimited
@@ -393,9 +395,21 @@ impl GoalSource {
             }
         }
 
-        let has_activity = terminal != GoalRequestTerminal::Completed
-            || self.request_has_activity(&latest).await?;
-        let cause = goal_failure_cause(&latest);
+        let (has_activity, control_unavailable) = if terminal == GoalRequestTerminal::Completed {
+            self.request_activity(&latest).await?
+        } else {
+            (true, false)
+        };
+        let cause = if control_unavailable {
+            GoalFailureCause::GoalControlUnavailable
+        } else {
+            goal_failure_cause(&latest)
+        };
+        let failure_name = if control_unavailable {
+            "goal_control_unavailable"
+        } else {
+            &terminal_name
+        };
         let facts =
             |goal: &GoalDocument, status: GoalStatus, budget_reached: bool| GoalContinuationFacts {
                 status,
@@ -458,6 +472,9 @@ impl GoalSource {
                 let reason = match terminal {
                     GoalRequestTerminal::Interrupted => "interrupted",
                     GoalRequestTerminal::Superseded => "superseded",
+                    GoalRequestTerminal::Completed if control_unavailable => {
+                        "Goal control attribution remained unavailable after the bounded recovery attempts"
+                    }
                     GoalRequestTerminal::Completed => {
                         "completed request produced no model or tool activity"
                     }
@@ -473,9 +490,9 @@ impl GoalSource {
             GoalDecision::Retry => {
                 let retries = next_retries;
                 goal.infrastructure_retry_count = Some(retries);
-                goal.last_failure = Some(terminal_name.clone());
+                goal.last_failure = Some(failure_name.to_owned());
                 Some(format!(
-                    "The previous request ended in infrastructure state {terminal_name}. Retry the goal from durable session state; this is recovery attempt {retries} of {MAX_INFRASTRUCTURE_RETRIES}."
+                    "The previous request ended in infrastructure state {failure_name}. Retry the goal from durable session state; this is recovery attempt {retries} of {MAX_INFRASTRUCTURE_RETRIES}."
                 ))
             }
             GoalDecision::AbandonWrapup => {
@@ -563,7 +580,7 @@ impl GoalSource {
                 &goal,
                 &latest.request_id,
                 goal.infrastructure_retry_count.unwrap_or_default(),
-                &terminal_name,
+                failure_name,
             )
             .await?
         } else {
@@ -748,13 +765,31 @@ impl GoalSource {
             .is_some_and(|rows| !rows.is_empty()))
     }
 
-    async fn request_has_activity(&self, request: &AgentRequestRow) -> Result<bool> {
+    async fn request_activity(&self, request: &AgentRequestRow) -> Result<(bool, bool)> {
         let physical_id = request
             .doc_id
             .as_deref()
             .filter(|id| !id.is_empty())
             .context("goal activity requires the physical request document")?;
         let request_doc_id = escape_graphql_string(physical_id);
+        let owner = escape_graphql_string(
+            request
+                .node_did
+                .as_deref()
+                .context("Goal activity owner missing")?,
+        );
+        let requester = escape_graphql_string(
+            request
+                .requester_did
+                .as_deref()
+                .context("Goal activity requester missing")?,
+        );
+        let session = escape_graphql_string(
+            request
+                .session_id
+                .as_deref()
+                .context("Goal activity session missing")?,
+        );
         let segment_fields = crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS;
         let query = format!(
             r#"{{
@@ -763,6 +798,11 @@ impl GoalSource {
                     limit: 1
                 ) {{ call_id }}
                 AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}, limit: 1) {{ _docID }}
+                unavailable_controls: AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }},
+                    node_did: {{ _eq: "{owner}" }}, requester_did: {{ _eq: "{requester}" }}, session_id: {{ _eq: "{session}" }},
+                    tool_name: {{ _in: ["create_goal", "get_goal", "update_goal"] }},
+                    lifecycle_state: {{ _eq: "failed" }}, tool_failure_class: {{ _eq: "serviceUnavailable" }}
+                }}, limit: 1) {{ _docID }}
                 AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {segment_fields} }}
             }}"#
         );
@@ -794,7 +834,10 @@ impl GoalSource {
                         if scope.kind == gents_protocol::rendered_request::CaptureScopeKind::Inference)
                 && !row.segment.payload.trim().is_empty()
         });
-        Ok(has_rows("InferenceCall")? || has_rows("AgentToolCall")? || provider_output)
+        Ok((
+            has_rows("InferenceCall")? || has_rows("AgentToolCall")? || provider_output,
+            has_rows("unavailable_controls")?,
+        ))
     }
 
     async fn request_usage_limit_failure(

@@ -4656,3 +4656,6 @@ async fn closed_goal_notifications_keep_durable_continuation_and_cancellation_li
             .is_none()
     );
 }
+
+#[path = "goal_controller/control_failure.rs"]
+mod control_failure;
