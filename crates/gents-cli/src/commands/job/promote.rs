@@ -9,7 +9,7 @@ use gents::document_config::Tools;
 use gents::pack::authoring::check_dir;
 use gents::pack::authoring::test::run_plugin_cases;
 use gents::plugin_job::promote::{
-    generate_pack, load_dynamic_run, promoted_dir, validate_name, write_promotion, PromoteRefusal,
+    generate_pack, load_dynamic_run, validate_name, write_promotion, PromoteRefusal,
     PromotionRecord,
 };
 use gents::plugin_job::view::JobKey;
@@ -95,6 +95,38 @@ fn require_agent_tools(agent: &str, tools: Option<Tools>) -> Result<Tools, Promo
     tools.ok_or_else(|| PromoteRefusal::NoAgentTools(agent.to_owned()))
 }
 
+/// Creates the promoted destination without following home-internal symlinks
+/// or taking ownership of an existing directory.
+fn reserve_promoted_dir(home: &Path, name: &str) -> Result<PathBuf> {
+    let home = home.canonicalize().context("resolving the Gents home")?;
+    let mut cursor = home;
+    for component in ["packs", "promoted"] {
+        cursor.push(component);
+        match std::fs::symlink_metadata(&cursor) {
+            Ok(metadata) => anyhow::ensure!(
+                metadata.is_dir() && !metadata.file_type().is_symlink(),
+                "promoted pack path {} must be a real directory",
+                cursor.display()
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&cursor)
+                    .with_context(|| format!("creating {}", cursor.display()))?;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("checking {}", cursor.display()));
+            }
+        }
+    }
+    let dir = cursor.join(name);
+    std::fs::create_dir(&dir).with_context(|| {
+        format!(
+            "reserving {}; it already exists, so inspect or remove it explicitly before retrying",
+            dir.display()
+        )
+    })?;
+    Ok(dir)
+}
+
 fn javy_version() -> Result<String, JavyMissing> {
     let javy = std::env::var("JAVY").unwrap_or_else(|_| "javy".into());
     match Command::new(&javy).arg("--version").output() {
@@ -155,12 +187,8 @@ pub async fn promote(
     }
 
     report(PromoteStep::Generate);
-    let dir = std::path::absolute(promoted_dir(home).join(&name))?;
-    // `validate_name` passed, so a directory here is a failed attempt's leftover.
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir)
-            .with_context(|| format!("removing the leftover {}", dir.display()))?;
-    }
+    // Never treat a pre-existing destination as ours to clean up.
+    let dir = reserve_promoted_dir(home, &name)?;
     // The step-0 fixture runs the script under wasmtime, which blocks.
     let pack = {
         let (dir, name, run) = (dir.clone(), name.clone(), run.clone());
@@ -387,5 +415,56 @@ mod tests {
             assert_eq!(refusal.code(), "promote_not_completed");
             assert!(refusal.to_string().contains("completed"), "{refusal}");
         }
+    }
+
+    #[test]
+    fn reserve_refuses_existing_destination_without_removing_contents() {
+        let home = tempfile::tempdir().unwrap();
+        let destination = home.path().join("packs/promoted/rome");
+        std::fs::create_dir_all(&destination).unwrap();
+        let sentinel = destination.join("keep.txt");
+        std::fs::write(&sentinel, "operator data").unwrap();
+
+        let error = reserve_promoted_dir(home.path(), "rome").unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("remove it explicitly before retrying"));
+        assert_eq!(std::fs::read_to_string(sentinel).unwrap(), "operator data");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reserve_rejects_symlinked_promoted_parent_without_touching_outside() {
+        use std::os::unix::fs::symlink;
+
+        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let sentinel = outside.path().join("rome/keep.txt");
+        std::fs::create_dir_all(sentinel.parent().unwrap()).unwrap();
+        std::fs::write(&sentinel, "operator data").unwrap();
+        std::fs::create_dir_all(home.path().join("packs")).unwrap();
+        symlink(outside.path(), home.path().join("packs/promoted")).unwrap();
+
+        let error = reserve_promoted_dir(home.path(), "rome").unwrap_err();
+
+        assert!(error.to_string().contains("must be a real directory"));
+        assert_eq!(std::fs::read_to_string(sentinel).unwrap(), "operator data");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reserve_allows_home_to_be_reached_through_a_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let actual_home = tempfile::tempdir().unwrap();
+        let link_parent = tempfile::tempdir().unwrap();
+        let home_link = link_parent.path().join("home");
+        symlink(actual_home.path(), &home_link).unwrap();
+
+        let destination = reserve_promoted_dir(&home_link, "rome").unwrap();
+
+        assert_eq!(destination, actual_home.path().join("packs/promoted/rome"));
+        assert!(destination.is_dir());
     }
 }

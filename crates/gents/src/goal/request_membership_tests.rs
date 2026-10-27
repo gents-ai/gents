@@ -61,7 +61,23 @@ async fn generated_membership_observations_keep_model_roots_and_linear_receipt_w
                     )
                 })
                 .collect::<std::collections::BTreeMap<_, _>>();
-            assert_eq!(observed.parents, expected_parents, "{}", case.name);
+            let observed_parents = rows
+                .iter()
+                .filter(|row| {
+                    row.doc_id != observed.entry.doc_id
+                        && row
+                            .doc_id
+                            .as_ref()
+                            .is_some_and(|doc| observed.member_doc_ids.contains(doc))
+                })
+                .map(|row| {
+                    (
+                        row.doc_id.clone().unwrap(),
+                        row.caused_by_parent_request_doc_id.clone().unwrap(),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>();
+            assert_eq!(observed_parents, expected_parents, "{}", case.name);
         } else {
             assert!(
                 observed.is_err(),
