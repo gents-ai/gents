@@ -153,6 +153,19 @@ pub struct PackPlugin {
     /// catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catalog: Option<PluginCatalogDeclaration>,
+    /// When set, a call that carries `script` runs that source as the step
+    /// through the host's embedded engine instead of the artifact (a job
+    /// plugin only); absent means the artifact runs every call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script_runtime: Option<ScriptRuntime>,
+}
+
+/// The engine the host runs a call's `script` with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScriptRuntime {
+    /// JavaScript through Afterburner's embedded QuickJS-on-Wasmtime engine.
+    Js,
 }
 
 /// For literals that set only the fields they need.
@@ -175,6 +188,7 @@ impl Default for PackPlugin {
             data: None,
             asset_mounts: Vec::new(),
             catalog: None,
+            script_runtime: None,
         }
     }
 }
@@ -535,6 +549,10 @@ pub const SUPPORTED_PLUGIN_LANGUAGES: &[&str] = &[
 
 impl PackPlugin {
     pub fn validate(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.script_runtime.is_none() || self.job.0,
+            "script_runtime needs job: true; a script is a job step function"
+        );
         if let Some(service) = &self.service {
             anyhow::ensure!(
                 crate::plugin::authority::declared_manifold(self)?.child_process,

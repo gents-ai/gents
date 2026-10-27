@@ -260,6 +260,41 @@ pub async fn desktop_pack_wire_sources(
     }
 }
 
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowPromoteRequest {
+    /// A dynamic run's address (SESSION_ID:TOOL_CALL_ID) or tool call id.
+    pub selector: String,
+    pub name: Option<String>,
+    pub agent: Option<String>,
+}
+
+#[tauri::command]
+pub async fn desktop_workflows_dynamic(
+    state: State<'_, DesktopAppState>,
+) -> Result<DynamicWorkflowsView, BridgeError> {
+    let home = home(&state)?;
+    run(move || packs::dynamic_workflows(home)).await
+}
+
+#[tauri::command]
+pub async fn desktop_workflow_dynamic(
+    selector: String,
+    state: State<'_, DesktopAppState>,
+) -> Result<DynamicWorkflowView, BridgeError> {
+    let home = home(&state)?;
+    run(move || packs::dynamic_workflow(home, selector)).await
+}
+
+#[tauri::command]
+pub async fn desktop_workflow_promote(
+    request: WorkflowPromoteRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<WorkflowPromoteView, BridgeError> {
+    let home = home(&state)?;
+    run(move || packs::promote(home, request.selector, request.name, request.agent)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

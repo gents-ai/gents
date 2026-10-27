@@ -35,6 +35,7 @@ impl Template {
             Template::Graph => "graph",
             Template::PluginTool => "plugin-tool",
             Template::Assets => "assets",
+            Template::Workflow => "workflow",
         }
     }
 }
@@ -94,6 +95,17 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
             if entry == "source/main.rs" {
                 output_paths.push(format!("plugins/{}/Cargo.toml", names.name));
             }
+        }
+        Template::Workflow => {
+            output_paths.extend([
+                "agents/worker/system_prompt.md".to_owned(),
+                "pack_config.json".to_owned(),
+            ]);
+            output_paths.extend(
+                workflow_plugin_files(&names, workflow_language(input.language.as_deref())?)
+                    .into_iter()
+                    .map(|(path, _)| path),
+            );
         }
     }
     for path in output_paths {
@@ -177,6 +189,50 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
             }]);
             files.push((instructions, markdown));
         }
+        Template::Workflow => {
+            let language = workflow_language(input.language.as_deref())?;
+            manifest["kind"] = json!(template.manifest_kind());
+            manifest["config"] = json!("pack_config.json");
+            manifest["inference_slots"] = json!([{
+                "name": "worker",
+                "description": "The worker the workflow spawns. Any capable profile.",
+                "agents": [format!("{}-worker", names.kebab)],
+            }]);
+            manifest["plugins"] = json!([{
+                "name": names.name,
+                "description": format!("Run the {} workflow as a background job.", names.title),
+                "artifact": format!("plugins/{}.afb", names.name),
+                "source": format!("plugins/{}", names.name),
+                "language": language,
+                "job": true,
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "args": {
+                            "type": "object",
+                            "properties": {"task": {"type": "string"}, "handle": {"type": "string"}},
+                        },
+                        "agent_budget": {"type": "integer", "minimum": 1, "maximum": 1024},
+                    },
+                },
+                "instructions": format!("plugins/{}/TOOL.md", names.name),
+                "limits": {"memory_mib": 256, "wall_clock_secs": 60, "max_output_mib": 4},
+            }]);
+            files.push((
+                "agents/worker/system_prompt.md".into(),
+                format!(
+                    "You are the {} worker. One prompt describes one task; do that task with the \
+                     read-only tools you have and answer with exactly what the prompt asks for, in \
+                     the shape it asks for. Never write, edit or run anything that changes state.\n",
+                    names.title
+                ),
+            ));
+            files.push((
+                "pack_config.json".into(),
+                serde_json::to_string_pretty(&workflow_config(&names))? + "\n",
+            ));
+            files.extend(workflow_plugin_files(&names, language));
+        }
     }
 
     if input.ux {
@@ -204,7 +260,7 @@ pub fn scaffold(dir: &Path, name: &str, input: &ScaffoldInput) -> Result<Scaffol
             .with_context(|| format!("writing {}", target.display()))?;
     }
     let mut assets: Vec<String> = files.iter().map(|(path, _)| path.clone()).collect();
-    if template == Template::PluginTool {
+    if matches!(template, Template::PluginTool | Template::Workflow) {
         assets.push(format!("plugins/{}.afb", names.name));
     }
     assets.sort();
@@ -356,7 +412,7 @@ pub fn write_plugin_source(source: &Path, name: &str, language: Option<&str>) ->
     Ok(language)
 }
 
-fn echo_source(entry: &str) -> String {
+pub fn echo_source(entry: &str) -> String {
     match entry {
         "source/main.rs" => "use std::io::{Read, Write};\n\n\
             fn main() -> std::io::Result<()> {\n    let mut input = Vec::new();\n    \
@@ -369,9 +425,11 @@ fn echo_source(entry: &str) -> String {
             if (fwrite(buffer, 1, n, stdout) != n) return 1;\n    }\n    return ferror(stdin) ? 1 : 0;\n}\n",
         "source/main.cpp" => "#include <iostream>\n\nint main() {\n    std::cout << std::cin.rdbuf();\n    \
             return std::cout.good() ? 0 : 1;\n}\n",
-        "source/main.js" | "source/main.ts" => "const chunk = new Uint8Array(4096);\nconst parts = [];\nfor (;;) {\n  \
-            const n = Javy.IO.readSync(0, chunk);\n  if (n === 0) break;\n  parts.push(chunk.slice(0, n));\n}\n\
-            for (const part of parts) Javy.IO.writeSync(1, part);\n",
+        // `gents pack build` wraps a JS or TS source in Afterburner's stdin/stdout
+        // harness, which reads the input and calls `module.exports(input)`; the
+        // source itself touches no stdin or stdout.
+        "source/main.js" => "module.exports = (input) => input;\n",
+        "source/main.ts" => "module.exports = (input: unknown) => input;\n",
         "source/main.py" => "import sys\n\nsys.stdout.write(sys.stdin.read())\n",
         "source/main.rb" => "$stdout.write($stdin.read)\n",
         _ => "",
@@ -481,9 +539,177 @@ fn config(names: &Names, template: Template) -> Value {
                 },
             }]);
         }
-        Template::Minimal | Template::PluginTool | Template::Assets => {}
+        Template::Minimal | Template::PluginTool | Template::Assets | Template::Workflow => {}
     }
     config
+}
+
+/// The workflow pack's configuration: the worker persona (read-only tools, no
+/// session history), its AgentTarget, and the caller Tools template whose job
+/// block `pack wire --targets-from` copies into the calling agent's Tools.
+fn workflow_config(names: &Names) -> Value {
+    let kebab = &names.kebab;
+    let worker = format!("{kebab}-worker");
+    json!({
+        "node": {},
+        "agents": [{
+            "agent_id": worker,
+            "display_name": format!("{} worker", names.title),
+            "description": "Does one read-only task a workflow step gives it and answers in the shape asked.",
+            "context_id": format!("{worker}-context"),
+            "inference_profile_id": "gents:inference-slot:worker",
+        }],
+        "contexts": [{
+            "context_id": format!("{worker}-context"),
+            "system_prompt": "./agents/worker/system_prompt.md",
+            "tools_id": format!("{worker}-tools"),
+        }],
+        "tools": [
+            {
+                "tools_id": format!("{worker}-tools"),
+                "display_name": format!("{} worker tools: read-only files and bash", names.title),
+                "host": {"bash": {"mode": "ReadOnly", "network_mode": "disabled"}, "files": {"mode": "ReadOnly"}},
+                "built_ins": {"enable_session_history_tool": false},
+            },
+            {
+                "tools_id": format!("{kebab}-caller"),
+                "display_name": format!("{} caller: the workflow tool over its worker", names.title),
+                "integrations": {"plugins": [{
+                    "plugin": format!("{}/{}", names.namespace, names.name),
+                    "job": {
+                        "agent_targets": [worker],
+                        "max_live": 8,
+                        "max_spawns": 16,
+                        "max_messages_per_slot": 4,
+                        "result_bytes": 65536,
+                        "max_wall_secs": 3600,
+                    },
+                }]},
+            },
+        ],
+        "agent_targets": [{
+            "agent_id": worker,
+            "name": worker,
+            "target_id": worker,
+            "target_node_did": "${GENTS_PACK_NODE_DID}",
+            "description": format!("The worker the {} workflow spawns.", names.title),
+        }],
+    })
+}
+
+/// The languages the workflow template has a step skeleton for: Rust over the
+/// vendored wire mirror, or a JavaScript or TypeScript `module.exports` function.
+fn workflow_language(language: Option<&str>) -> Result<&'static str> {
+    match language
+        .unwrap_or("rust")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "rust" => Ok("rust"),
+        "js" | "javascript" => Ok("js"),
+        "ts" | "typescript" => Ok("ts"),
+        other => anyhow::bail!("the workflow template is written in rust, js or ts, not {other:?}"),
+    }
+}
+
+/// `sha256("<name> 0.1.0")`: what the skeleton's pin names as the workflow's source.
+fn workflow_digest(names: &Names) -> String {
+    use sha2::Digest;
+    format!(
+        "{:x}",
+        sha2::Sha256::digest(format!("{} 0.1.0", names.name))
+    )
+}
+
+/// The workflow plugin's source in `language`: the step skeleton (a Rust crate over the
+/// vendored wire mirror of the job contract, or one `module.exports` file for js and ts),
+/// its TOOL.md and the step-0 fixture every skeleton passes.
+fn workflow_plugin_files(names: &Names, language: &str) -> Vec<(String, String)> {
+    let fill = |text: &str| {
+        text.replace("__NAME__", &names.name)
+            .replace("__TITLE__", &names.title)
+            .replace("__TARGET__", &format!("{}-worker", names.kebab))
+            .replace("__DIGEST__", &workflow_digest(names))
+    };
+    let dir = format!("plugins/{}", names.name);
+    let mut files = vec![
+        (
+            format!("{dir}/TOOL.md"),
+            fill(include_str!("templates/workflow/TOOL.md")),
+        ),
+        (
+            format!("{dir}/tests/00_step0_spawns_worker.json"),
+            serde_json::to_string_pretty(&workflow_fixture(names)).expect("fixture serializes")
+                + "\n",
+        ),
+    ];
+    if language != "rust" {
+        files.push((
+            format!("{dir}/source/main.{language}"),
+            fill(include_str!("templates/workflow/main.js")),
+        ));
+        return files;
+    }
+    let cargo = format!(
+        "[workspace]\n\n[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+         [lib]\nname = \"{name}\"\npath = \"source/lib.rs\"\n\n\
+         [[bin]]\nname = \"{name}\"\npath = \"source/main.rs\"\n\n\
+         [dependencies]\nserde = {{ version = \"1\", features = [\"derive\"] }}\nserde_json = \"1\"\n\n\
+         [profile.release]\nopt-level = 3\nlto = true\ncodegen-units = 1\npanic = \"abort\"\nstrip = true\n",
+        name = names.name
+    );
+    files.extend([
+        (format!("{dir}/Cargo.toml"), cargo),
+        (
+            format!("{dir}/source/main.rs"),
+            fill(include_str!("templates/workflow/main.rs")),
+        ),
+        (
+            format!("{dir}/source/lib.rs"),
+            fill(include_str!("templates/workflow/lib.rs")),
+        ),
+        (
+            format!("{dir}/source/wire.rs"),
+            include_str!("templates/workflow/wire.rs").to_owned(),
+        ),
+    ]);
+    files
+}
+
+/// Step 0 of the skeleton, byte for byte what `lib.rs` answers: the pin over the
+/// crate's identity string, one worker spawn and the first progress.
+fn workflow_fixture(names: &Names) -> Value {
+    let digest = workflow_digest(names);
+    let task = "Reply with the single word pong and nothing else.";
+    json!({
+        "input": {
+            "protocol": 1,
+            "job": {"row_doc_id": "row-1", "chain_root_doc_id": "row-1", "chain": ["row-1"], "handle": ""},
+            "caller": {"session_id": "session-1", "request_id": "request-1", "request_doc_id": "doc-1",
+                       "tool_call_id": "call_1", "node_did": "did:key:z6Mknode", "agent_id": "caller",
+                       "request_hop": 0, "cwd": "/work"},
+            "argv": [],
+            "args": {"task": task},
+            "agent_budget": 2,
+            "pin": null,
+            "ceiling": {"targets": [format!("{}-worker", names.kebab)], "max_live": 8, "remaining_spawns": 16,
+                        "max_messages_per_slot": 4, "result_bytes": 65536},
+            "children": {},
+            "scratch": {},
+            "jobs": [],
+            "job_calls": true,
+        },
+        "expect": {"effects": {
+            "pin": {"script_id": digest, "source_digest": format!("sha256:{digest}"), "agent_budget": 2, "handle": names.name},
+            "spawn": [{"slot": "worker", "attempt": 0, "target": format!("{}-worker", names.kebab), "prompt": task,
+                       "title": "worker", "cwd": "/work"}],
+            "progress": {"title": names.title, "state": "running", "phases": [{"title": "Worker", "state": "active"}],
+                         "active": [], "spawned": 1, "budget": {"total": 2, "spent": 1, "remaining": 1},
+                         "last_event": "worker started", "last_event_at": null,
+                         "observed_terminal_children": 0, "revision": 0},
+        }},
+    })
 }
 
 fn task_prompt(names: &Names, template: Template) -> String {
@@ -515,6 +741,12 @@ fn readme(names: &Names, template: Template) -> String {
         Template::PluginTool => (
             "ships one plugin tool",
             "The plugin's JSON input and output.",
+        ),
+        Template::Workflow => (
+            "ships one workflow: a job plugin that spawns the pack's worker and reads its reply",
+            "See `plugins/<name>/TOOL.md` for the input and output. \
+             Prove it offline with `gents pack build` and `gents pack test`; ship it with `gents pack install --grant-authority` and \
+             `gents pack wire <namespace>/<name> --agent <agent> --targets-from <namespace>/<name>`.",
         ),
     };
     format!(
@@ -660,6 +892,97 @@ mod tests {
                 && format!("{error:#}").contains("non-sdk import"),
             "{error:#}"
         );
+    }
+
+    /// The workflow template is a documents pack whose one plugin runs jobs: its
+    /// manifest and configuration pass `pack check` unbuilt, and its fixture pins
+    /// the crate's identity digest.
+    #[tokio::test]
+    async fn the_workflow_template_is_a_checked_documents_pack_with_a_job_plugin() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("demo_flow");
+        scaffold(&dir, "demo_flow", &input(Template::Workflow)).unwrap();
+        let manifest: crate::pack::PackManifest =
+            serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap()).unwrap();
+        crate::pack::validate_manifest("demo_flow", &manifest).unwrap();
+        assert_eq!(manifest.metadata.kind, crate::pack::PackKind::Documents);
+        let plugin = &manifest.metadata.plugins[0];
+        assert!(plugin.job.0, "the workflow plugin runs jobs");
+        assert!(
+            plugin.asset_mounts.is_empty(),
+            "no mount: a script-less call is installed"
+        );
+        for path in [
+            "plugins/demo_flow/Cargo.toml",
+            "plugins/demo_flow/source/main.rs",
+            "plugins/demo_flow/source/lib.rs",
+            "plugins/demo_flow/source/wire.rs",
+            "plugins/demo_flow/TOOL.md",
+            "plugins/demo_flow/tests/00_step0_spawns_worker.json",
+            "agents/worker/system_prompt.md",
+            "pack_config.json",
+        ] {
+            assert!(dir.join(path).is_file(), "{path}");
+        }
+        let lib = std::fs::read_to_string(dir.join("plugins/demo_flow/source/lib.rs")).unwrap();
+        assert!(
+            lib.contains("const TARGET: &str = \"demo-flow-worker\";"),
+            "{lib}"
+        );
+        assert!(!lib.contains("__"), "every placeholder is filled");
+        let check = super::super::check::check_dir(&dir).await;
+        assert_eq!(
+            check.problems,
+            ["build the plugins (demo_flow) with gents pack build before checking its configuration"],
+            "the only problem is the unbuilt artifact"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_workflow_template_in_javascript_ships_a_module_exports_step() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("demo_flow");
+        let mut input = input(Template::Workflow);
+        input.language = Some("js".into());
+        scaffold(&dir, "demo_flow", &input).unwrap();
+        let manifest: crate::pack::PackManifest =
+            serde_json::from_slice(&std::fs::read(dir.join("manifest.json")).unwrap()).unwrap();
+        crate::pack::validate_manifest("demo_flow", &manifest).unwrap();
+        assert_eq!(manifest.metadata.plugins[0].language, "js");
+        for path in [
+            "plugins/demo_flow/source/main.js",
+            "plugins/demo_flow/TOOL.md",
+            "plugins/demo_flow/tests/00_step0_spawns_worker.json",
+            "pack_config.json",
+        ] {
+            assert!(dir.join(path).is_file(), "{path}");
+        }
+        assert!(
+            !dir.join("plugins/demo_flow/Cargo.toml").exists(),
+            "no crate for a JS plugin"
+        );
+        let main = std::fs::read_to_string(dir.join("plugins/demo_flow/source/main.js")).unwrap();
+        assert!(main.contains("module.exports = "), "{main}");
+        assert!(
+            main.contains("const TARGET = \"demo-flow-worker\";"),
+            "{main}"
+        );
+        assert!(!main.contains("__"), "every placeholder is filled");
+        let check = super::super::check::check_dir(&dir).await;
+        assert_eq!(
+            check.problems,
+            ["build the plugins (demo_flow) with gents pack build before checking its configuration"],
+        );
+    }
+
+    #[test]
+    fn the_workflow_template_refuses_a_language_without_a_step_skeleton() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("demo_flow");
+        let mut input = input(Template::Workflow);
+        input.language = Some("python".into());
+        let error = scaffold(&dir, "demo_flow", &input).unwrap_err().to_string();
+        assert!(error.contains("rust, js or ts"), "{error}");
     }
 
     #[test]

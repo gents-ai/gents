@@ -364,6 +364,7 @@ async fn load_tool_call_read_source(
             raw_result,
         });
     }
+    let background = call.await_mode.as_deref() == Some("background");
     let native_call_id = call.tool_call_id;
     let expected_request_doc_id = call.request_doc_id.ok_or_else(|| {
         anyhow!(
@@ -466,7 +467,35 @@ async fn load_tool_call_read_source(
         block_call_id.as_deref(),
         tool_call_doc_id,
     )?;
-    let raw_result = if let (ReadSource::Txn(txn), [ToolResultPart::Text { text }]) =
+    let raw_result = if background && matches!(source, ReadSource::Txn(_)) {
+        // A background call's ToolResult reply is its acceptance receipt, an
+        // authored payload; its output lives on the call's tool_call segment.
+        let response = source
+            .execute(
+                &crate::session::canonical_rows::request_output_segments_query(
+                    &expected_request_doc_id,
+                ),
+            )
+            .await?;
+        let values = response
+            .pointer("/data/AgentOutputSegment")
+            .and_then(Value::as_array)
+            .context("canonical tool output query omitted segments")?;
+        let rows = crate::session::canonical_rows::decode_scoped_request_output_segments(
+            values,
+            node_did,
+            Some(session_id),
+            requester_did,
+        )?;
+        match crate::background_tools::canonical_tool_output_from_rows(
+            rows,
+            tool_call_doc_id,
+            &expected_request_doc_id,
+        )? {
+            crate::background_tools::CanonicalToolOutputObservation::Closed(text) => Some(text),
+            crate::background_tools::CanonicalToolOutputObservation::Open(_) => None,
+        }
+    } else if let (ReadSource::Txn(txn), [ToolResultPart::Text { text }]) =
         (source, parts.as_slice())
     {
         let stream = crate::session::load_canonical_payload_in_txn(

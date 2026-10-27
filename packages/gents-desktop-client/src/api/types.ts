@@ -110,6 +110,10 @@ import type {
   PackPluginSlot,
   PackSlotProfile,
   PackWireRequest,
+  DynamicWorkflows,
+  DynamicWorkflow,
+  WorkflowPromoteRequest,
+  WorkflowPromoted,
   PackWireResult,
   PackWireSources,
 } from "../types/packs.js";
@@ -449,6 +453,9 @@ export type DesktopApiAdapter = {
   bindPackPlugin: (plugin: string, profile: string | null) => Promise<void>;
   wirePack: (request: PackWireRequest) => Promise<PackWireResult>;
   listPackWireSources: () => Promise<PackWireSources>;
+  listDynamicWorkflows: () => Promise<DynamicWorkflows>;
+  getDynamicWorkflow: (selector: string) => Promise<DynamicWorkflow>;
+  promoteWorkflow: (request: WorkflowPromoteRequest) => Promise<WorkflowPromoted>;
   signInToPackRegistry: (token: string) => Promise<void>;
   signOutOfPackRegistry: () => Promise<void>;
   listAllowedFolders: () => Promise<AllowedFolders>;
@@ -488,6 +495,9 @@ export type PackCommand =
   | "bindPackPlugin"
   | "wirePack"
   | "listPackWireSources"
+  | "listDynamicWorkflows"
+  | "getDynamicWorkflow"
+  | "promoteWorkflow"
   | "signInToPackRegistry"
   | "signOutOfPackRegistry";
 

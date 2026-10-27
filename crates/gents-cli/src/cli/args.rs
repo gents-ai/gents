@@ -410,6 +410,8 @@ pub(crate) enum PackTemplate {
     PluginTool,
     /// A pack of files with no configuration.
     Assets,
+    /// A documents pack shipping one workflow: a Rust job plugin, the worker it spawns and the caller Tools template.
+    Workflow,
 }
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -438,7 +440,7 @@ pub(crate) struct PackScaffoldArgs {
     pub(crate) template: Option<PackTemplate>,
     #[arg(
         long,
-        help = "Plugin language for the plugin-tool template; defaults to rust"
+        help = "Plugin language; the plugin-tool template takes any language gents builds, the workflow template rust, js or ts; defaults to rust"
     )]
     pub(crate) language: Option<String>,
     #[arg(
@@ -4074,6 +4076,10 @@ pub(crate) enum JobCommand {
     Stop(JobControlArgs),
     #[command(about = "Pause one plugin job and interrupt its children; local only")]
     Pause(JobControlArgs),
+    #[command(
+        about = "Turn a finished dynamic workflow run into an installed tool, wired into an agent"
+    )]
+    Promote(JobPromoteArgs),
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -4136,6 +4142,26 @@ pub(crate) struct JobControlArgs {
         help = "Resolve a handle within this session"
     )]
     pub(crate) session: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct JobPromoteArgs {
+    #[command(flatten)]
+    pub(crate) scope: ScopeArgs,
+    #[arg(help = "A dynamic job address (SESSION_ID:TOOL_CALL_ID) or a tool call id")]
+    pub(crate) selector: String,
+    #[arg(
+        long,
+        help = "The tool's snake_case name, installed as gents/<name>; defaults to the run's handle when it is one"
+    )]
+    pub(crate) name: Option<String>,
+    #[arg(
+        long,
+        help = "Agent to wire the tool into; defaults to the agent that ran the workflow"
+    )]
+    pub(crate) agent: Option<String>,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    pub(crate) output: OutputFormat,
 }
 
 #[derive(clap::Args)]

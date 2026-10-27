@@ -3,6 +3,7 @@
    the progress record's, which stays "running" on an ended row. The next
    calls are the bridge's, printed as given. */
 
+import { useEffect, useState } from "react";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import type { JobControlKind } from "@source-inc/gents-desktop-client/generated/JobControlKind";
 import { Button } from "@gents/ui/components/button";
@@ -10,11 +11,15 @@ import { cn } from "@gents/ui/lib/utils";
 import { writeDraft } from "../../hooks/draftStore";
 import { toastFailure } from "../lib/failure";
 import { useApp } from "../app/AppContext";
+import { PromoteWorkflowDialog } from "./PromoteWorkflowDialog";
 
 const words = (value: string) => value.replace(/_/g, " ");
 
 export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
-  const { actions, drafts, view } = useApp();
+  const { actions, drafts, stores, view } = useApp();
+  const sessionId = stores.selection.use.sessionId();
+  const [promoting, setPromoting] = useState(false);
+  const [promotedAs, setPromotedAs] = useState<string[]>([]);
   const state = tool.jobState;
   const progress = tool.jobProgress;
   const terminal =
@@ -22,6 +27,25 @@ export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
     state === "failed" ||
     state === "cancelled" ||
     state === "timed_out";
+  // Only a completed run is promotable; the host refuses the rest
+  // (`promote_not_completed`).
+  const promotable =
+    state === "completed" &&
+    tool.jobOrigin === "dynamic" &&
+    !!sessionId &&
+    !!tool.toolCallId;
+  const selector = `${sessionId}:${tool.toolCallId}`;
+  useEffect(() => {
+    if (!promotable) return;
+    let current = true;
+    actions.getDynamicWorkflow(selector).then(
+      (run) => current && setPromotedAs(run.promoted_as),
+      () => {},
+    );
+    return () => {
+      current = false;
+    };
+  }, [actions, promotable, selector]);
   const control = (action: JobControlKind) => {
     if (!tool.toolCallDocId || !tool.nodeDid) return;
     actions
@@ -123,11 +147,27 @@ export function JobProgressCell({ tool }: { tool: RenderedToolCallView }) {
         </>
       )}
       {state && terminal && (
-        <p data-testid="job-outcome" className="text-sm">
-          {tool.jobOutcome
-            ? `${tool.jobOutcome.code}: ${tool.jobOutcome.message}`
-            : words(state)}
-        </p>
+        <div className="flex items-center gap-2">
+          <p data-testid="job-outcome" className="min-w-0 flex-1 text-sm">
+            {tool.jobOutcome
+              ? `${tool.jobOutcome.code}: ${tool.jobOutcome.message}`
+              : words(state)}
+          </p>
+          {promotable && promotedAs.length === 0 && (
+            <Button size="sm" variant="outline" onClick={() => setPromoting(true)}>
+              Promote
+            </Button>
+          )}
+        </div>
+      )}
+      {promoting && (
+        <PromoteWorkflowDialog
+          selector={selector}
+          onClose={(promoted) => {
+            setPromoting(false);
+            if (promoted) setPromotedAs([promoted.tool]);
+          }}
+        />
       )}
       {!!tool.jobNextCalls?.length && (
         <ul data-testid="job-next-calls" className="grid gap-0.5 font-mono text-[11px]">

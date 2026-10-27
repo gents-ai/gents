@@ -1,4 +1,5 @@
-//! `x.ai/workflows/list`: the workflow catalogs of the bound agent's plugins.
+//! `x.ai/workflows/list`: the installed job plugins of the bound agent's Tools.
+//! The plugin is the workflow, so its installed record is its catalog entry.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -6,43 +7,51 @@ use std::sync::Arc;
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 use gents::document_config::{load_agent_tools_in_txn, PluginToolRef};
-use gents::plugin::data::DataCaller;
 use gents::plugin::executor::PluginExecutor;
-use gents_protocol::job::{CatalogEntry, CatalogSource};
+use gents::plugin::store::InstalledPlugin;
 use serde::Serialize;
 use serde_json::{json, Value};
 
-/// One row of the pager's Workflows tab. The key casing and the `source`
-/// spellings are unverified until the pager probe confirms them.
+/// One row of the pager's Workflows tab: an installed job plugin's name, its
+/// manifest description, and the first paragraph of its TOOL.md (or the
+/// description again) as `when_to_use`. Every row is `bundled`: a workflow is
+/// a plugin a pack ships. The key casing is unverified until the pager probe
+/// confirms it.
 #[derive(Serialize)]
 struct WorkflowInfo {
     name: String,
     description: String,
     when_to_use: String,
     source: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    path: Option<String>,
 }
 
-fn workflow_info(entry: CatalogEntry) -> WorkflowInfo {
+fn workflow_info(record: &InstalledPlugin) -> WorkflowInfo {
+    let description = record.declaration.description.clone();
+    let when_to_use = record
+        .instructions
+        .as_deref()
+        .and_then(first_paragraph)
+        .unwrap_or_else(|| description.clone());
     WorkflowInfo {
-        name: entry.name,
-        description: entry.description,
-        when_to_use: entry.when_to_use,
-        source: match entry.source {
-            CatalogSource::Pack => "bundled",
-            CatalogSource::Project => "project",
-            CatalogSource::Kept => "user",
-        },
-        path: entry.path,
+        name: record.name.clone(),
+        description,
+        when_to_use,
+        source: "bundled",
     }
 }
 
-/// The `{"workflows": [...]}` result: the catalog of every plugin in the
-/// agent's Tools whose manifest declares one. The shim runs beside the node,
-/// so the catalog's local-only requirement holds. A plugin that is not
-/// installed, is pinned to another artifact or declares no catalog is
-/// skipped; a catalog call that fails fails the list.
+/// The first paragraph of `text` that is not a heading, its lines joined by
+/// one space.
+fn first_paragraph(text: &str) -> Option<String> {
+    text.split("\n\n")
+        .map(str::trim)
+        .find(|paragraph| !paragraph.is_empty() && !paragraph.starts_with('#'))
+        .map(|paragraph| paragraph.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// The `{"workflows": [...]}` result: one row per plugin in the agent's Tools
+/// whose installed record declares `job: true`. A plugin that is not
+/// installed, is pinned to another artifact or runs no jobs is skipped.
 pub(super) async fn list(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
@@ -59,17 +68,16 @@ pub(super) async fn list(
         .and_then(|integrations| integrations.plugins)
         .unwrap_or_default();
     let executor = PluginExecutor::new(Some(plugin_home.to_owned()));
-    let caller = DataCaller::new(node.clone(), node_did)?;
-    let mut workflows = Vec::new();
-    for plugin_ref in plugins {
-        let declares_catalog = executor
-            .resolve(&plugin_ref.plugin, plugin_ref.digest.as_deref())
-            .is_ok_and(|record| record.declaration.catalog.is_some());
-        if declares_catalog {
-            let entries = gents::plugin::catalog(&executor, &plugin_ref, &caller).await?;
-            workflows.extend(entries.into_iter().map(workflow_info));
-        }
-    }
+    let workflows: Vec<WorkflowInfo> = plugins
+        .iter()
+        .filter_map(|plugin_ref| {
+            executor
+                .resolve(&plugin_ref.plugin, plugin_ref.digest.as_deref())
+                .ok()
+        })
+        .filter(|record| record.declaration.job.0)
+        .map(|record| workflow_info(&record))
+        .collect();
     Ok(json!({ "workflows": workflows }))
 }
 
@@ -80,58 +88,23 @@ mod tests {
 
     use defra_node::EmbeddedNode;
     use gents::document_config::{AgentContext, IntegrationTools, PluginToolRef, Tools};
-    use gents_protocol::job::{CatalogEntry, CatalogSource};
     use serde_json::{json, Value};
 
     use super::*;
 
-    #[test]
-    fn catalog_entry_maps_to_workflow_info() {
-        for source in [
-            CatalogSource::Pack,
-            CatalogSource::Project,
-            CatalogSource::Kept,
-        ] {
-            let spelling = match source {
-                CatalogSource::Pack => "bundled",
-                CatalogSource::Project => "project",
-                CatalogSource::Kept => "user",
-            };
-            let info = workflow_info(CatalogEntry {
-                name: "triage".into(),
-                description: "Sort issues".into(),
-                when_to_use: "new issues".into(),
-                source,
-                path: Some("workflows/triage.rhai".into()),
-            });
-            assert_eq!(
-                serde_json::to_value(info).unwrap(),
-                json!({
-                    "name": "triage",
-                    "description": "Sort issues",
-                    "when_to_use": "new issues",
-                    "source": spelling,
-                    "path": "workflows/triage.rhai",
-                })
-            );
-        }
-    }
-
-    fn install(home: &Path, name: &str, catalog: bool) {
-        let mut declaration = json!({
-            "name": name, "description": "fixture", "language": "rust",
-            "artifact": "plugins/fixture.afb", "input_schema": {"type": "object"}
-        });
-        if catalog {
-            declaration["catalog"] = json!({"argv": ["catalog"]});
-        }
-        let record = serde_json::from_value(json!({
+    fn install(home: &Path, name: &str, job: bool, instructions: Option<&str>) {
+        let mut record = json!({
             "namespace": "team", "name": name, "version": "0.1.0",
             "digest": format!("sha256:{}", "0".repeat(64)),
-            "language": "rust", "declaration": declaration,
-        }))
-        .unwrap();
-        gents::plugin::store::write_record(home, &record).unwrap();
+            "language": "rust", "declaration": {
+                "name": name, "description": format!("{name} description"), "language": "rust",
+                "artifact": "plugins/fixture.afb", "input_schema": {"type": "object"}, "job": job,
+            },
+        });
+        if let Some(instructions) = instructions {
+            record["instructions"] = instructions.into();
+        }
+        gents::plugin::store::write_record(home, &serde_json::from_value(record).unwrap()).unwrap();
     }
 
     /// A node with one agent; `plugins` gives that agent a Tools document
@@ -226,12 +199,27 @@ mod tests {
         (dir, node, node_did, agent_id)
     }
 
+    #[test]
+    fn first_paragraph_skips_headings_and_joins_lines() {
+        assert_eq!(
+            first_paragraph("# review\n\nReview a diff\nthrough four lenses.\n\nMore."),
+            Some("Review a diff through four lenses.".into())
+        );
+        assert_eq!(first_paragraph("# only a heading\n\n"), None);
+        assert_eq!(first_paragraph(""), None);
+    }
+
     #[tokio::test]
-    async fn no_catalog_plugin_returns_empty_list() {
+    async fn no_job_plugin_returns_empty_list() {
         let empty = json!({"workflows": Vec::<Value>::new()});
 
         let home = tempfile::tempdir().unwrap();
-        install(home.path(), "plain", false);
+        install(
+            home.path(),
+            "plain",
+            false,
+            Some("# plain\n\nNot a workflow."),
+        );
         let (_dir, node, did, agent) =
             node_with_agent(Some(&["team/plain", "team/not-installed"])).await;
         assert_eq!(list(&node, &did, &agent, home.path()).await.unwrap(), empty);
@@ -241,14 +229,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn catalog_failure_returns_shaped_internal_error() {
+    async fn job_plugins_list_from_their_installed_records() {
         let home = tempfile::tempdir().unwrap();
-        install(home.path(), "broken", true);
-        let (_dir, node, did, agent) = node_with_agent(Some(&["team/broken"])).await;
-        let error = list(&node, &did, &agent, home.path()).await.unwrap_err();
-        assert!(
-            format!("{error:#}").contains("reading the installed plugin bytes"),
-            "{error:#}"
+        install(
+            home.path(),
+            "review",
+            true,
+            Some("# review\n\nReview a diff\nthrough four lenses.\n\n## Input\n\n- args"),
+        );
+        install(home.path(), "terse", true, None);
+        let (_dir, node, did, agent) =
+            node_with_agent(Some(&["team/review", "team/terse", "team/not-installed"])).await;
+        assert_eq!(
+            list(&node, &did, &agent, home.path()).await.unwrap(),
+            json!({"workflows": [
+                {
+                    "name": "review",
+                    "description": "review description",
+                    "when_to_use": "Review a diff through four lenses.",
+                    "source": "bundled",
+                },
+                {
+                    "name": "terse",
+                    "description": "terse description",
+                    "when_to_use": "terse description",
+                    "source": "bundled",
+                },
+            ]})
         );
     }
 }

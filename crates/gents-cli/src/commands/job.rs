@@ -19,13 +19,15 @@ use gents_protocol::job::{
 use serde_json::{json, Value};
 
 use crate::cli::args::{
-    JobCommand, JobControlArgs, JobListArgs, JobShowArgs, JobStateArg, JobWatchArgs,
+    JobCommand, JobControlArgs, JobListArgs, JobPromoteArgs, JobShowArgs, JobStateArg, JobWatchArgs,
 };
 use crate::cli::output_format::OutputFormat;
 use crate::commands::chat::streaming::sanitize_summary_text;
 use crate::home_state::resolve_node_did;
 use crate::request_helpers::print_ndjson;
 use crate::{print_json, resolve_config_access};
+
+pub(crate) mod promote;
 
 pub(crate) const ACTIVE_STATES: [JobState; 3] =
     [JobState::Running, JobState::Paused, JobState::AwaitingUser];
@@ -46,6 +48,7 @@ pub(crate) async fn dispatch(command: JobCommand) -> Result<()> {
         JobCommand::Watch(args) => job_watch(args).await,
         JobCommand::Stop(args) => job_control(args, JobControlKind::Stop).await,
         JobCommand::Pause(args) => job_control(args, JobControlKind::Pause).await,
+        JobCommand::Promote(args) => job_promote(args).await,
     }
 }
 
@@ -270,6 +273,48 @@ async fn job_show(args: JobShowArgs) -> Result<()> {
             for line in show_lines(&view) {
                 println!("{line}");
             }
+            Ok(())
+        }
+    }
+}
+
+pub(crate) async fn job_promote(args: JobPromoteArgs) -> Result<()> {
+    let format = args
+        .output
+        .ensure_supported("job promote", &[OutputFormat::Text, OutputFormat::Json])?;
+    let actor = resolve_node_did(args.scope.home.as_deref(), args.scope.node_did.as_deref())
+        .context("resolving job owner node_did")?;
+    let (access, home) =
+        resolve_config_access(args.scope.home.as_deref(), args.scope.graphql.as_deref()).await?;
+    let text = format == OutputFormat::Text;
+    let result = promote::promote(
+        &access,
+        &home,
+        &actor,
+        &args.selector,
+        args.name.as_deref(),
+        args.agent.as_deref(),
+        &mut |step| {
+            if text {
+                println!("{}", step.name());
+            }
+        },
+    )
+    .await;
+    if let Some(node) = access.local_node() {
+        node.shutdown().await;
+    }
+    let report = result.map_err(|error| match promote::refusal_code(&error) {
+        Some(code) => error.context(code),
+        None => error,
+    })?;
+    match format {
+        OutputFormat::Json => print_json(&report),
+        _ => {
+            println!(
+                "promoted: {}; call it with args and agent_budget",
+                report.plugin
+            );
             Ok(())
         }
     }
@@ -1045,6 +1090,7 @@ mod tests {
                 total: 4242,
             },
             duration_ms: 3_000,
+            target: "agent-a".to_owned(),
         }];
         let text = shown(&parent);
         assert!(text.contains("interrupted"), "{text}");
@@ -1071,6 +1117,7 @@ mod tests {
                 total: 2,
             },
             duration_ms: 1,
+            target: "agent-a".to_owned(),
         }];
         let text = shown(&waiting);
         let at = |needle: &str| {

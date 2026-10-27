@@ -8,6 +8,7 @@ use tokio::sync::{mpsc, watch};
 
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::runtime_status::{ReconcilePhase, RuntimeStatusHandle};
+use crate::tool_surface::ToolRuntimeContext;
 
 use super::super::document_view;
 use super::super::DocumentResolveContext;
@@ -58,6 +59,7 @@ pub(super) struct ControlWatcherInputs {
     pub(super) subscription: ControlSubscription,
     pub(super) node_did: String,
     pub(super) resolve_context: DocumentResolveContext,
+    pub(super) tool_runtime: ToolRuntimeContext,
     pub(super) proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
     pub(super) runtime_status: RuntimeStatusHandle,
     pub(super) health_events_rx: mpsc::Receiver<()>,
@@ -77,6 +79,7 @@ pub(super) async fn run_control_watcher_with_timing(
         subscription,
         node_did,
         resolve_context,
+        tool_runtime,
         proposals_tx,
         runtime_status,
         mut health_events_rx,
@@ -164,11 +167,16 @@ pub(super) async fn run_control_watcher_with_timing(
                 }
                 let mut proposed_update = false;
                 let mut resolve_failed = false;
-                match document_view::resolve_document_runtime_snapshot_from_view(
-                    &node,
-                    &resolve_context,
-                    &document_view,
-                )
+                match async {
+                    let mut snapshot = document_view::resolve_document_runtime_snapshot_from_view(
+                        &node,
+                        &resolve_context,
+                        &document_view,
+                    )
+                    .await?;
+                    super::startup::demote_unbuildable_agents(&tool_runtime, &mut snapshot).await?;
+                    anyhow::Ok(snapshot)
+                }
                 .await
                 {
                     Ok(snapshot) => {

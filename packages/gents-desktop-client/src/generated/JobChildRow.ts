@@ -2,4 +2,4 @@
 import type { JobChildState } from "./JobChildState.js";
 import type { JobUsage } from "./JobUsage.js";
 
-export type JobChildRow = { slot: string, attempt: number, session_id: string, request_id: string, state: JobChildState, title: string, usage: JobUsage, duration_ms: number, };
+export type JobChildRow = { slot: string, attempt: number, session_id: string, request_id: string, state: JobChildState, title: string, usage: JobUsage, duration_ms: number, target: string, };

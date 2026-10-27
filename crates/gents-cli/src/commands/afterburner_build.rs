@@ -330,6 +330,170 @@ mod tests {
         assert_compiles_to_wasm32_wasip1(&root, "cpp");
     }
 
+    /// The build wraps a JS or TS source in Afterburner's stdin/stdout harness,
+    /// which calls `module.exports(input)`; a scaffolded echo plugin must run
+    /// under it, not only compile.
+    fn assert_scaffolded_echo_runs(language: &str, entry: &str) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("pkg");
+        write_package(
+            &root,
+            language,
+            entry,
+            gents::pack::authoring::scaffold::echo_source(entry).as_bytes(),
+        );
+        let bytes = assert_compiles_to_wasm32_wasip1(&root, language);
+        let plugin: gents::pack::PackPlugin = serde_json::from_value(serde_json::json!({
+            "name": "sample",
+            "description": "a test plugin",
+            "artifact": format!("plugins/{language}.afb"),
+            "language": language,
+            "input_schema": {"type": "object"},
+        }))
+        .unwrap();
+        let input = serde_json::json!({"hello": "world"});
+        let result = gents::plugin::PluginRunner::compile(&bytes, &plugin)
+            .unwrap()
+            .call(&input, &gents::plugin::PluginBudget::default())
+            .unwrap();
+        assert_eq!(
+            (result.verdict, result.output),
+            (gents::plugin::PluginVerdict::Success, input),
+            "{language}: {}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn js_echo_scaffold_runs_under_the_harness() {
+        assert_scaffolded_echo_runs("js", "source/main.js");
+    }
+
+    #[test]
+    fn ts_echo_scaffold_runs_under_the_harness() {
+        assert_scaffolded_echo_runs("ts", "source/main.ts");
+    }
+
+    /// A pack generated from a dynamic run builds, passes its recorded step-0
+    /// fixture and checks clean, offline: the stages `gents job promote` runs
+    /// before it installs.
+    #[tokio::test]
+    async fn a_generated_promotion_pack_builds_tests_and_checks() {
+        use gents_protocol::job::{
+            JobCeiling, JobOrigin, JobPinSummary, JobScope, JobState, JobView,
+        };
+        use sha2::{Digest, Sha256};
+        let script = r#"module.exports = (i) => i.pin ? {effects:{}} : {effects:{spawn:[{slot:"a",attempt:0,target:"wf-read-only",prompt:"p",title:"a"}]}};"#;
+        let run = gents::plugin_job::promote::DynamicRun {
+            view: JobView {
+                address: "session-1:call_1".into(),
+                row_doc_id: "row-1".into(),
+                session_id: "session-1".into(),
+                tool_call_id: "call_1".into(),
+                scope: JobScope {
+                    session_id: "session-1".into(),
+                    request_id: "request-1".into(),
+                    node_did: "did:key:z6Mknode".into(),
+                    requester_did: None,
+                },
+                handle: "rome".into(),
+                state: JobState::Completed,
+                outcome: None,
+                pin: JobPinSummary {
+                    script_id: format!("{:x}", Sha256::digest(script.as_bytes())),
+                    origin: JobOrigin::Dynamic,
+                    engine_digest: "engine".into(),
+                    plugin_ref: "gents/dynamic_workflows".into(),
+                    agent_budget: 8,
+                    cwd: "/work".into(),
+                    chain_root_doc_id: "row-1".into(),
+                    resume_of: None,
+                },
+                progress: None,
+                children: vec![],
+                created_at: 0,
+                adopted_at: 0,
+                completed_at: Some(1),
+            },
+            script: script.into(),
+            args: Some(serde_json::json!({"sides": ["a", "b"]})),
+            targets: vec!["wf-read-only".into()],
+            owners: vec!["gents/dynamic_workflows".into()],
+            ceiling: JobCeiling {
+                targets: vec!["wf-read-only".into()],
+                max_live: 4,
+                max_spawns: 12,
+                max_messages_per_slot: 3,
+                result_bytes: 65536,
+                max_wall_secs: 1800,
+            },
+            caller_agent_id: "caller".into(),
+        };
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join("packs/promoted/rome");
+        // The step-0 fixture runs the script under wasmtime, which blocks.
+        let generated = dir.clone();
+        tokio::task::spawn_blocking(move || {
+            gents::plugin_job::promote::generate_pack(&generated, "rome", &run)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        {
+            let _guard = compile_lock()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            crate::commands::pack::build::build_pack(&dir, None).unwrap_or_else(|error| {
+                panic!("building the promotion pack must succeed: {error:#}")
+            });
+        }
+        let cases = gents::pack::authoring::test::run_plugin_cases(&dir)
+            .await
+            .unwrap();
+        assert_eq!(cases.len(), 1);
+        assert_eq!(
+            (cases[0].passed, cases[0].failures.as_slice()),
+            (1, &[][..]),
+            "{:?}",
+            cases[0].failures
+        );
+        let checked = gents::pack::authoring::check_dir(&dir).await;
+        assert_eq!(checked.problems, Vec::<String>::new());
+    }
+
+    /// `gents pack new --template workflow --language js` scaffolds a pack whose
+    /// step function builds through the harness and answers its own fixture.
+    #[tokio::test]
+    async fn js_workflow_scaffold_builds_and_passes_its_fixture() {
+        let dir = tempfile::tempdir().unwrap();
+        let pack = dir.path().join("demo_flow");
+        let input = gents::pack::authoring::scaffold::ScaffoldInput {
+            namespace: "acme".into(),
+            template: Some(gents::pack::authoring::template::Template::Workflow),
+            kind: None,
+            language: Some("js".into()),
+            ux: false,
+        };
+        gents::pack::authoring::scaffold::scaffold(&pack, "demo_flow", &input).unwrap();
+        {
+            let _guard = compile_lock()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            crate::commands::pack::build::build_pack(&pack, None)
+                .unwrap_or_else(|error| panic!("building the js workflow must succeed: {error:#}"));
+        }
+        let cases = gents::pack::authoring::test::run_plugin_cases(&pack)
+            .await
+            .unwrap();
+        assert_eq!(cases.len(), 1);
+        assert_eq!(
+            (cases[0].passed, cases[0].failures.as_slice()),
+            (1, &[][..]),
+            "{:?}",
+            cases[0].failures
+        );
+    }
+
     #[test]
     fn js_compiles_to_a_genuine_wasm32_wasip1_afb() {
         let dir = tempfile::tempdir().unwrap();

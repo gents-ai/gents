@@ -4,6 +4,7 @@ use crate::background_tools::ProcessControlScope;
 use crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
 use crate::lifecycle::materialize::{next_request_hop, request_hop_within_bound, RequestHopCause};
 use crate::plugin_job::keys::job_spawn_key;
+use crate::plugin_job::origin::scriptless;
 use crate::tool_surface::EndpointScope;
 use gents_protocol::job::{
     DynamicMode, JobCeiling, JobChildState, JobControlRequest, JobEffects, JobGuestPin,
@@ -311,6 +312,11 @@ fn admit(ctx: &StepContext, job: &StepRow, out: &JobStepOutput) -> Result<StepRo
     }
     if pin.origin == JobOrigin::Installed
         && !ctx.installed_trusted_sources.contains(&pin.source_digest)
+        && !scriptless(
+            &job.call.argv,
+            job.call.script.as_deref(),
+            job.call.path.as_deref(),
+        )
     {
         return Err(Refusal::PolicyDenied);
     }
@@ -858,16 +864,15 @@ fn admit_non_job(
 /// Lean `scriptVerbs`: the workflow verbs that run script code.
 const SCRIPT_VERBS: [&str; 3] = ["run", "check", "import"];
 
+/// Lean `runsDynamicCode`: a non-empty `script` runs whatever the `argv`.
 fn runs_dynamic_code(ctx: &StepContext, call: &StepCall) -> bool {
-    call.argv
-        .first()
-        .is_some_and(|verb| SCRIPT_VERBS.contains(&verb.as_str()))
-        && (call
-            .script
-            .as_ref()
-            .is_some_and(|source| !source.is_empty())
-            || call.path.as_ref().is_some_and(|source| !source.is_empty())
-            || ctx.named_origin == Some(JobOrigin::Dynamic))
+    call.script.as_deref().is_some_and(|s| !s.is_empty())
+        || call
+            .argv
+            .first()
+            .is_some_and(|verb| SCRIPT_VERBS.contains(&verb.as_str()))
+            && (call.path.as_deref().is_some_and(|p| !p.is_empty())
+                || ctx.named_origin == Some(JobOrigin::Dynamic))
 }
 
 fn dynamic_mode_refusal(
@@ -1077,6 +1082,7 @@ mod tests {
     fn effects(spawn: Vec<JobSpawn>, messages: &[&str]) -> JobStepOutput {
         JobStepOutput::Effects {
             effects: JobEffects {
+                state: None,
                 pin: None,
                 resume: None,
                 spawn,
@@ -1126,6 +1132,7 @@ mod tests {
 
     fn suspend() -> JobStepOutput {
         JobStepOutput::Suspend {
+            state: None,
             suspend: JobSuspend {
                 kind: JobSuspendKind::Pause,
                 reason: None,

@@ -1022,6 +1022,15 @@ export function createDesktopUiHarness(
     async listPackWireSources() {
       return { plugins: [], target_packs: [] };
     },
+    async listDynamicWorkflows() {
+      return { workflows: [], installed: [] };
+    },
+    async getDynamicWorkflow() {
+      throw new Error("No dynamic workflow run in the harness.");
+    },
+    async promoteWorkflow() {
+      throw new Error("No dynamic workflow run in the harness.");
+    },
     async signInToPackRegistry() {},
     async signOutOfPackRegistry() {},
     async listAllowedFolders() {

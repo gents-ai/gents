@@ -1954,6 +1954,7 @@ pub(super) fn project_transcript_rows(
                 job_progress,
                 job_handle,
                 job_state,
+                job_origin: row.job_pin.as_ref().map(|pin| pin.origin),
                 job_outcome: None,
                 job_next_calls: Vec::new(),
             }

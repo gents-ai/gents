@@ -844,6 +844,7 @@ mod tests {
 
     fn job_effects(spawn: Vec<JobSpawn>, message: Vec<JobMessage>) -> JobEffects {
         JobEffects {
+            state: None,
             pin: None,
             resume: None,
             spawn,

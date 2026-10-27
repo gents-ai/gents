@@ -6,7 +6,9 @@ import Proofs.PluginJob.Admission
 
 Origin is a host fact. A script is `installed` only when its source digest is a
 file of a pack-tier mount whose pack the operator installed and the job policy
-trusts; every other script is `dynamic`. The engine pack itself must be
+trusts; every other script is `dynamic`. A script-less call (no `argv`,
+`script` or `path`) runs the plugin artifact itself and is `installed`
+(`callOrigin`). The engine pack itself must be
 operator-installed, or every step is refused. The dynamic policy gates
 dynamic-origin scripts, pack-shipped job blocks stay within what the operator
 installed, a job-descended caller cannot start a job, and a script reaches
@@ -62,6 +64,24 @@ def originOf (digest : String) (mounts : List ToolPolicy.AssetMount) (trusted : 
 /-- `JobStepInput.mounts[].trusted`: lets the engine predict origin; the host still decides. -/
 def trustedHint (m : ToolPolicy.AssetMount) (trusted : List String) : Bool :=
   m.klass != .project && m.via == .operator && trusted.contains m.pack
+
+/-- The origin of one call. A script-less call (`CallArgs.scriptless`) is
+`installed`: its code is the operator-installed artifact the engine guard and
+`engineChanged` check, so no file digest is needed. Every other call is
+`originOf` its pinned source digest. -/
+def callOrigin (c : CallArgs) (digest : String) (mounts : List ToolPolicy.AssetMount)
+    (trusted : List String) : Origin :=
+  if c.scriptless then .installed else originOf digest mounts trusted
+
+theorem scriptless_call_is_installed (c : CallArgs) (digest : String)
+    (mounts : List ToolPolicy.AssetMount) (trusted : List String) (h : c.scriptless = true) :
+    callOrigin c digest mounts trusted = .installed := by
+  simp [callOrigin, h]
+
+theorem scripted_call_origin_is_the_digests (c : CallArgs) (digest : String)
+    (mounts : List ToolPolicy.AssetMount) (trusted : List String) (h : c.scriptless = false) :
+    callOrigin c digest mounts trusted = originOf digest mounts trusted := by
+  simp [callOrigin, h]
 
 /-- `JobStepInput.verified_script`. -/
 structure VerifiedScript where
@@ -283,11 +303,11 @@ theorem installed_ignores_mode (ctx : StepContext) (job : Job) (out : StepOutput
   simp only [dynamicModeRefusal, ho]
   rfl
 
-/-- A running job whose pin has installed origin re-checks its source on every
-step: once the source is no longer a file of an operator-installed mount of a
-pack in `policy.trustedPacks` (`originOf` is `dynamic`), the step is refused
-with `policyDenied`, the row ends `failed` and kill runs over its own
-children. -/
+/-- A running job whose pin has installed origin and whose call names a script
+re-checks its source on every step: once the source is no longer a file of an
+operator-installed mount of a pack in `policy.trustedPacks` (`originOf` is
+`dynamic`), the step is refused with `policyDenied`, the row ends `failed` and
+kill runs over its own children. -/
 theorem installed_job_refused_when_untrusted (ctx : StepContext) (job : Job) (out : StepOutput)
     (p : Pin) (mounts : List ToolPolicy.AssetMount) (obs : SpawnKey → Recovery.KillObservation)
     (hctx : ∀ d, ctx.installedTrusted d = (originOf d mounts ctx.policy.trustedPacks == .installed))
@@ -295,6 +315,7 @@ theorem installed_job_refused_when_untrusted (ctx : StepContext) (job : Job) (ou
     (ha : (ctx.available && ctx.engineProvenanceOperator) = true)
     (he : engineChanged ctx job out = false)
     (hpin : job.pin = some p) (ho : p.origin = .installed)
+    (hc : job.call.scriptless = false)
     (hadm : resumeAdmitted ctx out = true)
     (hu : originOf p.sourceDigest mounts ctx.policy.trustedPacks = .dynamic) :
     admitStep ctx job out = .error .policyDenied ∧
@@ -305,7 +326,7 @@ theorem installed_job_refused_when_untrusted (ctx : StepContext) (job : Job) (ou
   have hs : stepPin ctx job out = some p := by simp [stepPin, hpin]
   simp only [Bool.and_eq_true] at ha
   have hd : admitStep ctx job out = .error .policyDenied := by
-    simp [admitStep, hr, ha.1, ha.2, he, hs, hpin, ho, ht, hadm, dynamicModeRefusal]
+    simp [admitStep, hr, ha.1, ha.2, he, hs, hpin, ho, ht, hc, hadm, dynamicModeRefusal]
   exact ⟨hd, (panel_refusal_fails_closed ctx p job out obs).2 hd⟩
 
 /-- `Policy.valid` ignores `dynamicTargets` when the mode is `off`, bounds them

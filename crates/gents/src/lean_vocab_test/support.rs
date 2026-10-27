@@ -952,6 +952,7 @@ pub(crate) enum LeanPluginJobAuthorityCase {
         digest: String,
         mounts: Vec<LeanPluginJobMount>,
         trusted_packs: Vec<String>,
+        call: LeanPluginJobCall,
         expected: Box<LeanPluginJobOriginExpected>,
     },
     PackJobBlock {

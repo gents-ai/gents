@@ -40,7 +40,11 @@ impl HostCalls {
                 anyhow::bail!("a plugin the host serves requests for takes a JSON object as input")
             }
         };
-        base.remove("state");
+        // A job step's `state` is the host's stored guest state, which every
+        // round answer carries unless the guest's own `state` replaces it.
+        if !self.jobs.as_ref().is_some_and(job_calls::Session::is_step) {
+            base.remove("state");
+        }
         if self.model.is_some() {
             base.remove("model_results");
             base.insert("model_calls".to_owned(), Value::Bool(true));
@@ -283,4 +287,91 @@ where
 
 fn elapsed_ms(started: Instant, now: Instant) -> u64 {
     u64::try_from(now.saturating_duration_since(started).as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::background_tools::ProcessControlScope;
+    use crate::plugin::data::StampContext;
+    use serde_json::json;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    /// A job step's `state` is the host's stored guest state: the first call
+    /// sees it, a round answer whose request named no state sees it again, and
+    /// a request's own `job_calls.state` wins.
+    #[tokio::test]
+    async fn a_job_step_keeps_its_stored_state_across_rounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let node = Arc::new(
+            crate::defra_node::EmbeddedNode::builder()
+                .data_path(dir.path())
+                .build()
+                .await
+                .unwrap(),
+        );
+        let caller = job_calls::JobCaller::new(
+            node.clone(),
+            ProcessControlScope {
+                request_id: "r".into(),
+                session_id: "s".into(),
+                node_did: "did:n".into(),
+                requester_did: None,
+            },
+            StampContext::JobStep {
+                node_did: "did:n".into(),
+                session_id: "s".into(),
+                request_doc_id: "r".into(),
+                tool_call_doc_id: "t".into(),
+                job_row_doc_id: "t".into(),
+                chain_root_doc_id: "t".into(),
+            },
+        );
+        let calls = HostCalls {
+            jobs: job_calls::Session::for_call(true, "team/plugin", Some(caller)),
+            ..HostCalls::default()
+        };
+        let ask = json!([{"id": "a", "child_output": {"slots": ["s"], "offset": 0, "limit": 1}}]);
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let round: Round = {
+            let seen = seen.clone();
+            Arc::new(move |input: Value, _| {
+                let mut seen = seen.lock().unwrap();
+                seen.push(input["state"].clone());
+                let output = match seen.len() {
+                    1 => json!({"job_calls": {"requests": ask}}),
+                    2 => json!({"job_calls": {"requests": ask, "state": {"n": 2}}}),
+                    _ => json!({"result": "done"}),
+                };
+                Ok(PluginOutcome {
+                    verdict: PluginVerdict::Success,
+                    output,
+                    diagnostics: String::new(),
+                    fuel_used: 0,
+                    wall_ms: 0,
+                })
+            })
+        };
+        let budget = PluginBudget {
+            fuel: None,
+            memory_bytes: 1 << 20,
+            wall_clock: Duration::from_secs(5),
+            max_output_bytes: 1 << 20,
+        };
+        let outcome = drive(calls, json!({"state": {"n": 1}}), budget, round)
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome.verdict,
+            PluginVerdict::Success,
+            "{}",
+            outcome.diagnostics
+        );
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [json!({"n": 1}), json!({"n": 1}), json!({"n": 2})]
+        );
+        node.shutdown().await;
+    }
 }

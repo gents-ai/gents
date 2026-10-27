@@ -708,7 +708,9 @@ mod job_control {
                 "test.process_control_scope.step_state",
                 |txn| {
                     let evidence = &evidence;
-                    Box::pin(async move { write_step_state_in_txn(txn, row, evidence, None).await })
+                    Box::pin(async move {
+                        write_step_state_in_txn(txn, row, evidence, None, None).await
+                    })
                 },
             )
             .await
