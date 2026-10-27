@@ -291,6 +291,89 @@ async fn automatic_review_reuses_remembered_invocations_until_revocation() {
     .await;
 }
 
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn one_time_workspace_approval_creates_a_profile_only_inside_its_write_root() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let home = root.join("runtime");
+    let project = root.join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let key = workspace::WorkspaceKey::canonical("node", "requester", "agent", &project).unwrap();
+    workspace::save_mode(&home, &key, 0, policy::Mode::Ask, None).unwrap();
+    mark_listening(&home).unwrap();
+    let context = workspace::for_request(
+        Some(&home),
+        "node",
+        Some("requester"),
+        "agent",
+        Some(&project),
+    )
+    .unwrap();
+    workspace::scope(
+        context,
+        scope_interactive(true, async {
+            let tools = crate::toolset::ToolContext::new(project.clone(), false).unwrap();
+            let policy = crate::toolset::CommandExecutionPolicy::write_capable()
+                .with_mode(crate::toolset::CommandExecutionMode::WorkspaceWrite);
+            let args = vec![
+                "-c".into(),
+                concat!(
+                    "test \"$TMPDIR\" = \"$TMP\" && test \"$TMP\" = \"$TEMP\" && ",
+                    "/usr/bin/mktemp -d \"$TMPDIR/browser-profile-XXXXXX\"",
+                )
+                .into(),
+            ];
+            let run = || {
+                crate::toolset::run_command_for_test(
+                    &tools,
+                    "bash",
+                    "/bin/sh",
+                    &args,
+                    None,
+                    Duration::from_secs(10),
+                    &policy,
+                    false,
+                    4096,
+                )
+            };
+            let mut first = Box::pin(run());
+            assert!(futures::poll!(first.as_mut()).is_pending());
+            let questions = pending(&home).unwrap();
+            assert_eq!(questions.len(), 1);
+            let original = questions[0].id.clone();
+            decide(&home, &original, Answer::Once).unwrap();
+            let result = first.await.unwrap();
+            let temporary = project.join(".gents-tmp");
+            let profiles: Vec<_> = std::fs::read_dir(&temporary)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect();
+            assert_eq!(
+                profiles.len(),
+                1,
+                "approved command did not create one profile: {result}"
+            );
+            assert!(profiles[0].is_dir());
+            assert!(
+                result.contains(&profiles[0].to_string_lossy().to_string()),
+                "{result}"
+            );
+            assert!(pending_requests(&home).unwrap().is_empty());
+            let mut again = Box::pin(run());
+            assert!(futures::poll!(again.as_mut()).is_pending());
+            let questions = pending(&home).unwrap();
+            assert_eq!(questions.len(), 1);
+            assert_ne!(questions[0].id, original);
+            decide(&home, &questions[0].id, Answer::Deny).unwrap();
+            assert!(again.await.is_err());
+            assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 1);
+            assert!(pending_requests(&home).unwrap().is_empty());
+        }),
+    )
+    .await;
+}
+
 #[test]
 fn invocation_digest_covers_every_command_boundary_and_old_producers_offer_no_remember_choice() {
     let directory = tempfile::tempdir().unwrap();
@@ -327,11 +410,10 @@ fn invocation_digest_covers_every_command_boundary_and_old_producers_offer_no_re
     for (field, value) in alterations {
         let mut changed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         changed["action"][field] = value;
-        assert!(!workspace::has_command_grant(
-            &settings,
-            &serde_json::from_value(changed).unwrap()
-        )
-        .unwrap());
+        assert!(
+            !workspace::has_command_grant(&settings, &serde_json::from_value(changed).unwrap())
+                .unwrap()
+        );
     }
     for (field, value) in [
         ("mode", serde_json::json!("read_only")),
