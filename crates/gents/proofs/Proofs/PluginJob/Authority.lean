@@ -119,8 +119,8 @@ def packJobBlockAdmissible (via : InstallProvenance) (closure : List String)
 /-- `gents pack wire … --targets-from <pack>`: the pack's targets join
 the job targets, every job target joins the caller's AgentTools target list,
 and the pack joins `trusted_packs`. Content packs ship no job block, so
-this operator wiring, not a pack-shipped block, makes their scripts
-installed-origin. -/
+this operator wiring, not a pack-shipped block, grants their targets.
+`trusted_packs` does not decide origin: the call does (`callOrigin`). -/
 def wireTargetsFrom (pack : String) (packTargets : List Target) (p : Policy)
     (jobTargets callerTargets : List Target) : Policy × List Target × List Target :=
   let job := jobTargets ∪ packTargets

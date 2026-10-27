@@ -373,7 +373,7 @@ theorem empty_source_fields_preserve_dynamic_classification (c : CallArgs) :
   simp [CallArgs.carriesScript, empty]
 
 /-- `policy.dynamic` for a dynamic-origin script: `off` admits no step of it
-(`admitStep` also refuses under `off` a pinless call that carries a script, `CallArgs.carriesScript`),
+(`admitStep` also refuses under `off` a pinless call that carries a script, `carriesScript`),
 `check` admits it but no fresh spawn (a re-served key is a no-op) and no message (it would start an agent request in a child session), and `run` admits spawns within
 `dynamicTargets`, which `effectiveTargets` applies. An installed-origin script
 is not gated by the mode. `admitStep` applies it to the pin's origin, so the host refuses with

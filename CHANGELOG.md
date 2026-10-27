@@ -33,7 +33,11 @@ source consistency checks, not a separate runtime compatibility version.
   artifact and is `installed`. Job next-call hints name `gents job` verbs.
   Upgrade: a Tools document that still sets `job.policy.project_roots`
   loads in this release with the key ignored and dropped on the next write;
-  remove it before the next release.
+  remove it before the next release. `policy.trusted_packs` no longer
+  affects a job's origin or admission; it remains the wiring default and
+  the list of promotion owners. The `next` hints a model sees in job
+  receipts and refusals name `gents job` verbs (`gents job show`), not the
+  plugin's own subcommands.
 
 ## 0.21.0 - 2026-10-23
 

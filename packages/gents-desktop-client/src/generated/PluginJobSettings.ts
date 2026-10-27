@@ -31,6 +31,6 @@ result_bytes: number,
  */
 max_wall_secs: number,
 /**
- * Operator-only rules for dynamic scripts, trusted packs and project roots.
+ * Operator-only rules for dynamic scripts and trusted packs.
  */
 policy: JobPolicy, };

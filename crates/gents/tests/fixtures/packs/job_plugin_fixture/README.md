@@ -1,7 +1,7 @@
 # job_plugin_fixture
 
 A fixture `documents` pack carrying one table-driven job plugin, `job_fixture`,
-a `FixtureNote` schema and the `fixture_assets` asset class. Test data, not a
+a `FixtureNote` schema and one plain asset, `fixture_assets/a.txt`. Test data, not a
 shipped pack.
 
 `plugins/job_fixture.afb` is built from `plugins/job_fixture/source` by `gents pack build` and checked in, and `plugins/job_fixture/Cargo.lock` pins the guest's dependencies so the build is reproducible.

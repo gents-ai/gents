@@ -1517,8 +1517,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// Records `coordinate` as an operator-installed documents pack whose
-    /// `workflows/` class holds `script`.
     /// An embedded node holding the caller's Agent, context and Tools (with
     /// `settings` as the live job block of `acme/engine`), a claimed caller
     /// request, and an installed `acme/engine` under a temp home.
