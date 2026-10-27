@@ -2,7 +2,6 @@ mod catalog;
 mod entry;
 mod install;
 
-pub(crate) use entry::select_entry;
 pub(crate) use install::prepare_loaded_graph_package_install;
 
 pub use catalog::{

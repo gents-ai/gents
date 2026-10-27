@@ -30,9 +30,7 @@ pub(crate) async fn load_document_runtime_view(
                     .remove(&owner)
                     .context("scoped principal is missing")?;
                 let mut unknown_kind_backends = RapidHashMap::new();
-                let (package_artifacts, graph_digests) =
-                    crate::graph_pipeline::load_runtime_graph_artifacts_in_txn(txn, &owner).await?;
-                let mut view = DocumentRuntimeView {
+                let view = DocumentRuntimeView {
                     node: principal,
                     agents: load_records(txn, &owner, Collection::Agent).await?,
                     contexts: load_records(txn, &owner, Collection::AgentContext).await?,
@@ -70,66 +68,12 @@ pub(crate) async fn load_document_runtime_view(
                     schedules: load_records(txn, &owner, Collection::Schedule).await?,
                     triggers: load_records(txn, &owner, Collection::Trigger).await?,
                     event_sources: load_records(txn, &owner, Collection::EventSource).await?,
-                    callbacks: load_records(txn, &owner, Collection::Callback).await?,
-                    callback_bindings: load_records(txn, &owner, Collection::CallbackBinding)
-                        .await?,
-                    chain_key_bindings: load_records(txn, &owner, Collection::ChainKeyBinding)
-                        .await?,
                     tool_services: load_records(txn, &owner, Collection::ToolServiceRegistry)
                         .await?,
-                    projection_acp_bindings: load_records(
-                        txn,
-                        &owner,
-                        Collection::ProjectionAcpBinding,
-                    )
-                    .await?,
-                    callback_modules: load_records(txn, &owner, Collection::CallbackModule).await?,
-                    repository_placements: load_records(
-                        txn,
-                        &owner,
-                        Collection::RepositoryPlacement,
-                    )
-                    .await?,
                     backend_observations: RapidHashMap::new(),
                     unknown_kind_backends,
                     oauth_credentials: RapidHashMap::new(),
                 };
-                // Retain ordinary authored documents; reserved package and
-                // graph resources execute only through their verified revision owner.
-                let visible = |id: &str| {
-                    (!id.starts_with("pkg-") || package_artifacts.contains(id))
-                        && crate::graph_pipeline::graph_artifact_is_visible(id, &graph_digests)
-                };
-                macro_rules! retain_visible {
-                    ($($field:ident),+ $(,)?) => { $(view.$field.retain(|id, _| visible(id));)+ };
-                }
-                retain_visible!(
-                    agents,
-                    contexts,
-                    compactions,
-                    tools,
-                    agent_targets,
-                    skills,
-                    datastore_tool_surfaces,
-                    eth_tools,
-                    inference_profiles,
-                    inference_sampling,
-                    inference_execution,
-                    inference_retry_policies,
-                    backends,
-                    unknown_kind_backends,
-                    tasks,
-                    schedules,
-                    triggers,
-                    event_sources,
-                    callbacks,
-                    callback_bindings,
-                    chain_key_bindings,
-                    tool_services,
-                    projection_acp_bindings,
-                    callback_modules,
-                    repository_placements,
-                );
                 Ok(view)
             })
         },

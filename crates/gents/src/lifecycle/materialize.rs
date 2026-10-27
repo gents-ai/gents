@@ -119,13 +119,6 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
         trigger_doc_id,
     )
     .await?;
-    if create
-        .caused_by_trigger_id
-        .as_deref()
-        .is_some_and(crate::graph_pipeline::graph_artifact_is_reserved)
-    {
-        return publish_graph_root_request(node, actor, &create).await;
-    }
     let escaped_request_id = escape_graphql_string(&request_id);
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
     let mutation = &mutation;
@@ -152,33 +145,6 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
         doc_id,
         request_id,
         session_id,
-    })
-}
-
-async fn publish_graph_root_request(
-    node: &std::sync::Arc<EmbeddedNode>,
-    actor: ::identity::Did,
-    create: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<EnqueuedAgentRequest> {
-    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-    let mutation = &mutation;
-    let doc_id = crate::config_client::ConfigAccess::transact_local_write(
-        node,
-        Some(actor),
-        "lifecycle.publish_graph_root",
-        move |txn| {
-            Box::pin(async move {
-                crate::graph_pipeline::fence_graph_root_request_in_txn(txn, create).await?;
-                let response = txn.execute(mutation).await?;
-                crate::graphql::created_doc_id(&response, "AgentRequest")
-            })
-        },
-    )
-    .await?;
-    Ok(EnqueuedAgentRequest {
-        doc_id,
-        request_id: create.request_id.clone(),
-        session_id: create.session_id.clone(),
     })
 }
 
@@ -1561,7 +1527,6 @@ async fn stage_task_delivery_with_receipt(
                 "Task target session is closed"
             );
         }
-        crate::graph_pipeline::fence_graph_root_request_in_txn(txn, create).await?;
         txn.execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
             .await?;
     }

@@ -26,10 +26,9 @@ impl ConfigCommandTool {
         let resource = match requested {
             "agent" => "agent",
             "event_source" => "event-source",
-            "graphs" => "graph",
             other => other,
         };
-        let granted = matches!(resource, "get" | "graph")
+        let granted = resource == "get"
             || enabled
                 .iter()
                 .any(|name| name.split(' ').next() == Some(resource));
@@ -228,12 +227,6 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             notes: "Shows agent, context, Tools, the profile chain, automation, runtime_effective and self_config grants. Reads never change anything.",
             next: "change one part with its resource, e.g. [\"help\",\"tools\"].",
         },
-        "graph" => Page {
-            what: "a graph is a typed, acyclic set of stages over documents, with declared entries and results. Config does not author graphs; a pack installs one as a graph revision.",
-            commands: &[],
-            notes: "Graph tools (when granted): list_graphs shows installed graphs; run_graph starts one, so keep its run_id; get_graph_run and get_graph_result inspect it; cancel_graph_run stops it. preview_graph checks a proposed intent's syntax and topology only; nothing publishes it. Loops such as retry are document automation (help automation), because graphs are acyclic. Workspaces for coding stages (RepositoryPlacement, workspace callbacks, sealed worktrees and integration) come with packs such as repo_maintenance; config does not author callbacks.",
-            next: "[\"help\",\"pack\"] to install one, then list_graphs.",
-        },
         "validate" => Page {
             what: "audit saved configuration for your authenticated node; read-only (agent catalog grant).",
             commands: &["validate"],
@@ -353,7 +346,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
             next: "Read tools get and effective config get to verify resolved selection. Start a fresh request to call the selected plugin.",
         },
         "pack" => Page {
-            what: "inspect verified local plugin artifacts and discover registry packs; install document, graph or plugins-only packs (pack grant).",
+            what: "inspect verified local plugin artifacts and discover registry packs; install document or plugins-only packs (pack grant).",
             commands: &[
                 "pack search  options: query (omit to browse), page (starts at 1); reads the registry",
                 "pack list  options: limit, cursor; reads this home's store",
@@ -361,7 +354,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "pack preview install|update PACKAGE [--inference-slot NAME=PROFILE_ID ...] [--var NAME=VALUE ...]",
                 "pack install|update PACKAGE  the same pairs, and options.digest from the preview",
                 "pack remove PACKAGE",
-                "pack scaffold NAME  options: namespace (default gents), kind (documents|graph|assets|plugins), template, language",
+                "pack scaffold NAME  options: namespace (default gents), kind (documents|assets|plugins), template, language",
                 "pack check [DIR]  every validation an install runs; reports unverified in problems' place, never full success",
                 "pack verify PACK  verify a built .pack file in place",
                 "pack scaffold --help",
@@ -369,7 +362,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
                 "pack verify --help",
             ],
             notes: "Bind every declared inference slot to an existing profile whose backend is account-free or its provider's default account. Local .pack paths require the held file read grant and explicit tool root; symlinks and request workspace paths use the file owner. Local pack authoring: scaffold, check and verify run inside the effective tool root; scaffold needs readwrite file tools, check and verify only read, and all take the pack grant. pack build (compiles plugin sources through language toolchains) and pack test (author tests) are unavailable through config; run them from the operator CLI. A digest opens only the runtime home store. A named pack resolves from the home's pack store first, then the operator's registry; NAME alone means the gents namespace, NAMESPACE/NAME[@VERSION] names any other, and update looks up the newest version on the registry. Plugin permissions and increased resource limits need operator approval. Inspect installation_blockers; a preview with ready:false supplies no apply call. Existing operator grants may satisfy those requirements. Installing does not run a graph or select model tools. Inspect plugins with plugin get, then explicitly select integrations.plugins on Tools and start a fresh request. A plugins-only pack can carry workflow plugins: one whose manifest declares `job: true` (a Tools job block on a plugin that does not declare `job: true` is refused at tool resolution). Selecting it and starting a fresh request exposes it as a model tool named after the plugin (the name part of its namespace/name), and its calls run as jobs on the runtime's job driver. No model tool action lists jobs: observe runs with the operator CLI `gents job list`. Remove deletes the package's graph and documents, refused while a run has not finished; it releases no plugin bytes or archive, and schemas and run history stay.",
-            next: "Inspect plugin selection with plugin get, run the installed graph with graph tools, or call an installed workflow plugin by its tool name in a fresh request and list its runs with gents job list.",
+            next: "Inspect plugin selection with plugin get, or call an installed workflow plugin by its tool name in a fresh request and list its runs with gents job list.",
         },
         _ => return None,
     })
@@ -391,7 +384,7 @@ pub(crate) fn recipes(resource: &str) -> Vec<(&'static str, Vec<Step>)> {
             vec![
                 (
                     json!({"argv":["pack","get","<PACKAGE>"]}),
-                    Some("read its inference slots and the collections its graph reads and writes"),
+                    Some("read its inference slots and plugins"),
                 ),
                 (
                     json!({"argv":["pack","preview","install","<PACKAGE>","--inference-slot","<SLOT>=<PROFILE_ID>"]}),

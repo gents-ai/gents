@@ -233,21 +233,7 @@ impl MaterializerHandle for ProductionMaterializer {
             let runtime_actor = runtime_actor?;
             crate::lifecycle::TriggerExecutionContext::parse(trigger_context.as_deref())?;
             let explicit = WorkspaceLineage::from_trigger_context(trigger_context.as_deref())?;
-            let graph = match trigger_id.as_deref() {
-                Some(trigger) => {
-                    crate::graph_pipeline::resolve_graph_workspace(
-                        node.as_ref(),
-                        trigger,
-                        correlation.as_deref(),
-                        &node_did,
-                        source_doc_id.as_deref(),
-                        &explicit,
-                    )
-                    .await?
-                }
-                None => None,
-            };
-            let mut workspace = graph.map(|resolved| resolved.lineage).unwrap_or(explicit);
+            let mut workspace = explicit;
             crate::workspace::stamp_workspace_lineage(&node, &node_did, &mut workspace).await?;
             workspace.require_authority_if_workspace_id()?;
             let lineage = TriggerLineage {
@@ -429,28 +415,6 @@ impl MaterializerHandle for ProductionMaterializer {
             } else {
                 Ok(enqueued.request_id)
             }
-        })
-    }
-
-    fn resolve_graph_session(
-        &self,
-        task: &crate::runtime_snapshot::ResolvedTask,
-        trigger_id: &str,
-        correlation: Option<&str>,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + '_>> {
-        let node = self.node.clone();
-        let resolved = self.resolve_agent(task);
-        let trigger_id = trigger_id.to_owned();
-        let correlation = correlation.map(str::to_owned);
-        Box::pin(async move {
-            let (_, owner, _, _) = resolved?;
-            crate::graph_pipeline::resolve_graph_session(
-                node.as_ref(),
-                &trigger_id,
-                correlation.as_deref(),
-                &owner,
-            )
-            .await
         })
     }
 

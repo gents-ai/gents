@@ -102,7 +102,6 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
             "{name}"
         );
         let built_ins = tools.built_ins.as_ref().unwrap();
-        assert_eq!(built_ins.enable_graph_tools, Some(true), "{name}");
         assert_eq!(built_ins.enable_session_history_tool, Some(true), "{name}");
         assert_eq!(built_ins.enable_schema_tool, Some(true), "{name}");
         let datastore = tools.datastore.as_ref().unwrap();

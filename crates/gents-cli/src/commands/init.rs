@@ -920,10 +920,6 @@ async fn initialize_runtime_home(
         args.defra_query_collections.clone(),
     );
     tools.self_config = Some(engineer_self_config());
-    tools
-        .built_ins
-        .get_or_insert_with(Default::default)
-        .enable_graph_tools = Some(true);
     let engineer_mailbox = args
         .engineer
         .then(|| engineer_tools(&mut tools, node_did, !args.disable_defra_query));
@@ -1163,7 +1159,6 @@ fn tools_for_package(
         remote: None,
         agents: None,
         built_ins: Some(BuiltInTools {
-            enable_graph_tools: None,
             enable_goal_tools: privileged.then_some(true),
             enable_goal_creation: Some(false),
             enable_memory: Some(enable_memory),
