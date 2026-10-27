@@ -271,6 +271,10 @@ where
             event = changes.next(), if subscription_open => match event {
                 Some(event) => {
                     for change in event.changes {
+                        // Branchable collection-block updates have no document identity.
+                        if change.doc_id.is_empty() {
+                            continue;
+                        }
                         if let Some(kind) = collections.get(&change.collection_id) {
                             ids.push((*kind, change.doc_id.clone()));
                         }
@@ -288,6 +292,9 @@ where
         };
     }
 }
+
+#[cfg(test)]
+mod notification_tests;
 
 #[cfg(test)]
 mod tests {
