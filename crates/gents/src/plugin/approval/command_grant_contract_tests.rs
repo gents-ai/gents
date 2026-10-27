@@ -410,10 +410,11 @@ fn invocation_digest_covers_every_command_boundary_and_old_producers_offer_no_re
     for (field, value) in alterations {
         let mut changed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         changed["action"][field] = value;
-        assert!(
-            !workspace::has_command_grant(&settings, &serde_json::from_value(changed).unwrap())
-                .unwrap()
-        );
+        assert!(!workspace::has_command_grant(
+            &settings,
+            &serde_json::from_value(changed).unwrap()
+        )
+        .unwrap());
     }
     for (field, value) in [
         ("mode", serde_json::json!("read_only")),
