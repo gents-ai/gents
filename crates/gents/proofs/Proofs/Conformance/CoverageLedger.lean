@@ -1210,6 +1210,16 @@ def caseCoverage : List CoverageEntry :=
       "Drives a real failed call without idempotency metadata and observes no retry or eviction. Explicit idempotency metadata and native-command cases are not exercised by this path.")
       "tool-call" [Surface.agentFacing]
   , tagged (consumerCoverage
+      "claude_output_config_cases"
+      "ClaudeStructuredOutput"
+      "gents_loop::claude_messages_body::output_tests::checkpoint_wire_claude_output_matches_executed_model")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "checkpoint_fallback_cases"
+      "CompactionCheckpointRepresentation"
+      "gents_loop::compaction::summary::tests::checkpoint_wire_fallback_matches_executed_model")
+      "compaction" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "command_policy_cases"
       "CommandPolicyValidation"
       "toolset::tests::generated_command_policy_cases_match_rust_validation")
