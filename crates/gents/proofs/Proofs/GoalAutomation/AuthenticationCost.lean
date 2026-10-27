@@ -51,6 +51,23 @@ theorem newest_chain_checks_linear (edges : Nat) : newestChainChecks edges ≤ 3
   rw [newest_chain_checks_exact]
   omega
 
+/-- Membership of a valid linear Goal chain resolves its newest path once and
+reuses those authenticated suffixes within the same immutable observation. Cache
+lookups perform no receipt verification. This measures signature checks, not
+all CPU work or invalid/branching histories. -/
+def membershipChainChecks (edges : Nat) : Nat := pathChecks (newestChainPlan edges)
+
+theorem membership_chain_checks_exact (edges : Nat) :
+    membershipChainChecks edges = 3 * edges + 1 := by
+  have h := newest_chain_checks_exact edges
+  simp only [newestChainChecks, membershipChainChecks] at *
+  omega
+
+theorem membership_chain_checks_linear (edges : Nat) :
+    membershipChainChecks edges ≤ 3 * (edges + 1) := by
+  rw [membership_chain_checks_exact]
+  omega
+
 /-- Rejected candidates can repeat assignment ancestry work. This budget
 charges those paths only; selector supersession-edge checks are additional.
 The newest-chain bound does not extend to arbitrary selections. -/
