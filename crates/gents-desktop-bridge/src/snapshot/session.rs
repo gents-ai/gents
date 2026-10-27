@@ -40,6 +40,8 @@ mod pending_turn;
 mod projection;
 #[path = "session/request_context.rs"]
 mod request_context;
+#[path = "session/terminal_tool_output.rs"]
+mod terminal_tool_output;
 #[path = "session/timeline_page.rs"]
 mod timeline_page;
 
