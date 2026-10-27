@@ -78,7 +78,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@gents/ui/components/to
 import { listViews, useListViews } from "@/app/listViews";
 import { useApp } from "@/app/AppContext";
 import { usePinnedSessions } from "@/preferences";
-import { NO_SESSIONS, useFleet } from "../hooks/useFleet";
+import { useFleet } from "../hooks/useFleet";
 import { RenameField } from "./SessionHeader";
 
 /* a session, and after an open group that leaves some out, the way to all

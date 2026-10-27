@@ -26,6 +26,7 @@ import type { ShellStores } from "./shellProjection";
 import { createShellView, type ShellViewStore } from "./shellView";
 import { seenMarks } from "../ui/app/sessionViews";
 import { seenMarkOf } from "../ui/lib/seen";
+import { listedSession, sessionKeyOf } from "./fleetStore";
 
 export type DesktopBridge = {
   api: DesktopApiAdapter;
@@ -110,9 +111,9 @@ function keepSeen(stores: ShellStores) {
   const stamp = () => {
     if (typeof document !== "undefined" && document.visibilityState === "hidden")
       return;
-    const { sessionId } = stores.selection.getState();
-    const session = sessionId ? stores.fleet.getState().bySessionId[sessionId] : null;
-    if (session) seenMarks.set(session.sessionId, seenMarkOf(session));
+    const { nodeDid, sessionId } = stores.selection.getState();
+    const session = listedSession(stores.fleet.getState(), nodeDid, sessionId);
+    if (session) seenMarks.set(sessionKeyOf(session), seenMarkOf(session));
   };
   stores.selection.subscribe(stamp);
   stores.fleet.subscribe(stamp);

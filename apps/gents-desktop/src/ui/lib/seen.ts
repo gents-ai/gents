@@ -1,11 +1,13 @@
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { useSeenMark, useSeenSince, type SeenMark } from "@/app/sessionViews";
+import { sessionKeyOf } from "../../hooks/fleetStore";
 import { stateOf } from "./live";
 
 type Seeable = Pick<
   SessionSummary,
   "latestRequestId" | "turnState" | "updatedAt" | "startedBy"
 >;
+type IdentifiedSession = Pick<SessionSummary, "sessionId" | "nodeDid" | "requesterDid">;
 
 const ended = (s: Seeable) => {
   const state = stateOf(s.turnState);
@@ -36,8 +38,8 @@ export function isNew(
 }
 
 /** `isNew` for one session, following its mark and the device's start. */
-export function useIsNew(s: Seeable & { sessionId: string }): boolean {
-  const seen = useSeenMark(s.sessionId);
+export function useIsNew(s: Seeable & IdentifiedSession): boolean {
+  const seen = useSeenMark(sessionKeyOf(s));
   const since = useSeenSince();
   return isNew(s, seen, since);
 }

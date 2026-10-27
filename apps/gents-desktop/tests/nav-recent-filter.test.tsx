@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 import { NavPanel } from "@/app/RailFlyout";
 import { listViews, restoreListViews } from "@/app/listViews";
 import { isShown, toggleShown } from "@/lib/session-filter";
+import { preferences } from "@/preferences";
+import { sessionKeyOf } from "../src/hooks/fleetStore";
 import { deployment } from "./config-panel-wiring/fixtures";
 import { node, renderIn, testApp } from "./app-fixture";
 
@@ -67,6 +69,18 @@ const recentTitles = () =>
     .filter((t) => t === "Done" || t === "Busy");
 
 describe("the side nav's recent sessions filter", () => {
+  it("keeps the owning node in pinned and recent session links", () => {
+    preferences.setPinned(sessionKeyOf(sessions[0]!), true);
+    showNav();
+
+    for (const session of sessions) {
+      expect(screen.getByText(session.title!).closest("a")).toHaveAttribute(
+        "href",
+        `/nodes/${encodeURIComponent(session.nodeDid)}/sessions/${session.sessionId}`,
+      );
+    }
+  });
+
   it("starts with every choice checked, and hides a state when it is unchecked", async () => {
     const { u } = showNav();
     expect(recentTitles()).toEqual(["Busy", "Done"]);

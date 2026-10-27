@@ -101,7 +101,11 @@ describe("edit an earlier message in a new branch", () => {
 
     fireEvent.click(branchButtons()[1]!);
     await waitFor(() =>
-      expect(navigate).toHaveBeenCalledWith({ name: "session", sessionId: "branch" }),
+      expect(navigate).toHaveBeenCalledWith({
+        name: "session",
+        sessionId: "branch",
+        nodeDid: NODE,
+      }),
     );
     expect(fork).toHaveBeenCalledWith({
       nodeDid: NODE,

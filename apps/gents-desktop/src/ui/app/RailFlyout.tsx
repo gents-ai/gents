@@ -349,7 +349,7 @@ function SessionLink({
   return (
     <li>
       <a
-        href={href({ name: "session", sessionId: c.sessionId })}
+        href={href({ name: "session", sessionId: c.sessionId, nodeDid: c.nodeDid })}
         aria-current={current === c.sessionId ? "page" : undefined}
         className={cn(
           "flex h-8 items-center gap-2.5 rounded-lg px-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",

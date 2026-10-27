@@ -37,7 +37,11 @@ export function useEditInBranch(item: SentUserMessage | null): Action | null {
         writeDraft(drafts, key, text);
         if (!actions.acceptsComposeIntent(intent)) return;
         focusDraft(drafts, key);
-        navigate({ name: "session", sessionId: branch.sessionId });
+        navigate({
+          name: "session",
+          sessionId: branch.sessionId,
+          nodeDid: branch.nodeDid,
+        });
       } catch (error) {
         toastFailure("start a branch", error);
       } finally {

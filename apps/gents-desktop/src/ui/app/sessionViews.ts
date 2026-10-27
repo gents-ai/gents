@@ -3,6 +3,7 @@ import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
 
 import { browserStorage } from "@/lib/storage";
+import type { SessionKey } from "../../hooks/fleetStore";
 
 /** Where the reader left a session: the row read, its distance below the
     top of the view, and its message number, for reading the page around it
@@ -22,8 +23,8 @@ export type SessionViews = {
   /** by session, the started sessions its dock shows nested, the most
       recently changed first */
   opened: { session: string; rows: string[] }[];
-  /** by session, the most recently seen first */
-  seen: { session: string; mark: SeenMark }[];
+  /** by node-qualified session key, the most recently seen first */
+  seen: { session: SessionKey; mark: SeenMark }[];
   /** when this device started keeping `seen`: work that ended before it,
       in a session never seen here, is not new */
   since: string | null;
@@ -130,11 +131,11 @@ export const sessionViews = {
   },
 };
 
-const seenOf = (state: SessionViews, session: string) =>
+const seenOf = (state: SessionViews, session: SessionKey) =>
   state.seen.find((entry) => entry.session === session)?.mark ?? null;
 
 /** What `session` had done when it was last on screen here, kept current. */
-export const useSeenMark = (session: string): SeenMark | null =>
+export const useSeenMark = (session: SessionKey): SeenMark | null =>
   useStore(store, (state) => seenOf(state, session));
 
 /** When this device started keeping what was seen, kept current. */
@@ -142,9 +143,9 @@ export const useSeenSince = (): string | null =>
   useStore(store, (state) => state.since);
 
 export const seenMarks = {
-  of: (session: string) => seenOf(store.getState(), session),
+  of: (session: SessionKey) => seenOf(store.getState(), session),
   /** a mark saved moves its session to the front; one unchanged writes nothing */
-  set(session: string, mark: SeenMark) {
+  set(session: SessionKey, mark: SeenMark) {
     const state = store.getState();
     const was = seenOf(state, session);
     if (was && was.request === mark.request && was.done === mark.done) return;
