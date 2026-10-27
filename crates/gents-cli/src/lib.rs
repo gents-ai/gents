@@ -474,7 +474,6 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Command::Mcp { command } => commands::mcp::dispatch(command).await,
         Command::Fleet { command } => commands::fleet::dispatch(command).await,
         Command::Task { command } => commands::task::dispatch(command).await,
-        Command::Graph { command } => commands::graph::dispatch(command).await,
         Command::Pack { command } => commands::pack::dispatch(command).await,
         Command::Plugin { command } => commands::plugin::dispatch(command).await,
         Command::Ux { command } => commands::ux::dispatch(command).await,
