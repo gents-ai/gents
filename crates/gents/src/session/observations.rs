@@ -1003,6 +1003,7 @@ mod observation_refresh_tests {
                     "observation": {
                         "last_activity_at": "2030-01-01T00:00:03Z",
                         "preview": "prompt",
+                        "reply_preview": "Finished",
                         "latest_request": {
                             "request_doc_id": foreign_doc_id,
                             "request_id": "refresh-request",
