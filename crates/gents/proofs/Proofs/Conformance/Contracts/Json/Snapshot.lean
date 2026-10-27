@@ -5,6 +5,7 @@ import Proofs.Conformance.AccessReview
 import Proofs.Conformance.OperatorPaths
 import Proofs.Conformance.WorkspaceCommandRoot
 import Proofs.Conformance.CommandIsolation
+import Proofs.Conformance.CompactionCheckpoint
 import Proofs.Conformance.ClientDataPublicationCases
 import Proofs.Conformance.ClientObservationScope
 import Proofs.Conformance.ClientInstallation
@@ -682,6 +683,9 @@ def snapshotJson : String :=
       ++ promptAssemblyClaudeMapCasesJson ++ ","
     ++ "\"prompt_assembly_claude_body_cases\":"
       ++ promptAssemblyClaudeBodyCasesJson ++ ","
+    ++ "\"claude_output_config_cases\":" ++ Conformance.CompactionCheckpoint.outputCasesJson.compress ++ ","
+    ++ "\"checkpoint_fallback_cases\":" ++ Conformance.CompactionCheckpoint.checkpointCasesJson.compress ++ ","
+    ++ "\"checkpoint_list_fields\":" ++ Conformance.CompactionCheckpoint.listFieldsJson.compress ++ ","
     ++ "\"prompt_assembly_claude_stream_cases\":"
       ++ promptAssemblyClaudeStreamCasesJson ++ ","
     ++ "\"prompt_assembly_claude_thinking_stream_cases\":"
