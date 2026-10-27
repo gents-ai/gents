@@ -54,6 +54,7 @@ import {
   pendingInputState,
 } from "./TranscriptInputs";
 import { type ParentWork } from "./parentWork";
+import { useEditInBranch } from "./session/editInBranch";
 import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
 import { readableReasoning, reasoningWithheld } from "./tool-summary";
 import { groupTranscript, type TranscriptEntry } from "./transcript-groups";
@@ -96,6 +97,30 @@ function copyActions(text: string | null | undefined) {
 }
 
 const ParentContext = createContext<ParentWork | null>(null);
+
+function OwnInput({
+  item,
+  state,
+}: {
+  item: Extract<RenderedTimelineItem, { kind: "userMessage" | "pendingUserTurn" }>;
+  state: string | null;
+}) {
+  const branch = useEditInBranch(item.kind === "userMessage" ? item : null);
+  return (
+    <div>
+      <UserInputWithState
+        content={item.content ?? ""}
+        state={state}
+        actions={[...copyActions(item.content), ...(branch ? [branch] : [])]}
+      />
+      <SentAttachments
+        items={item.attachments}
+        requestId={item.requestId}
+        messageKey={item.kind === "userMessage" ? item.itemKey : undefined}
+      />
+    </div>
+  );
+}
 
 function ModelInputReduction({
   item,
@@ -182,22 +207,7 @@ const TranscriptItem = memo(function TranscriptItem({
         );
       }
       const sender = parentWork?.sentBy(item.requestId) ?? null;
-      if (!sender) {
-        return (
-          <div>
-            <UserInputWithState
-              content={item.content ?? ""}
-              state={state}
-              actions={copyActions(item.content)}
-            />
-            <SentAttachments
-              items={item.attachments}
-              requestId={item.requestId}
-              messageKey={item.kind === "userMessage" ? item.itemKey : undefined}
-            />
-          </div>
-        );
-      }
+      if (!sender) return <OwnInput item={item} state={state} />;
       const message = (
         <div>
           <UserMessage actions={copyActions(item.content)}>{item.content}</UserMessage>

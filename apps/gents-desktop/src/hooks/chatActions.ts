@@ -17,6 +17,7 @@ import {
 import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
 import type { DesktopJobControlRequest } from "@source-inc/gents-desktop-client/generated/DesktopJobControlRequest";
 import type { QueueDelivery } from "@source-inc/gents-desktop-client/generated/QueueDelivery";
+import type { SessionForkResult } from "@source-inc/gents-desktop-client/generated/SessionForkResult";
 
 import {
   adoptNewChatFolder,
@@ -112,6 +113,7 @@ export function createChatActions({
 }: ChatActionParams) {
   const store = stores.selection;
   let submissionInFlight = false;
+  const forkDestinations = new Map<string, string>();
 
   const selectedNode = () => nodeOf(stores.fleet.getState(), store.getState().nodeDid);
 
@@ -510,6 +512,43 @@ export function createChatActions({
     }
   }
 
+  async function forkBeforeMessage(
+    sessionId: string,
+    messageKey: string,
+  ): Promise<SessionForkResult> {
+    const nodeDid =
+      heldFor(readSession(stores.session), sessionId, null)?.nodeDid ??
+      store.getState().nodeDid;
+    const clientDid = stores.client.getState().snapshot?.client?.clientDid;
+    const retained = JSON.stringify([nodeDid, sessionId, messageKey]);
+    try {
+      if (!nodeDid) throw new Error("no node holds this session");
+      if (!clientDid) throw new Error("the desktop client is not running");
+      // A failed reply may still have committed the branch; asking again for
+      // the same destination recovers it instead of copying the prefix twice.
+      const childSessionId = forkDestinations.get(retained) ?? crypto.randomUUID();
+      forkDestinations.set(retained, childSessionId);
+      const result = await api.forkSessionBeforeMessage({
+        nodeDid,
+        sessionId,
+        messageKey,
+        clientDid,
+        childSessionId,
+      });
+      forkDestinations.delete(retained);
+      const folder = folderOf(stores.chat.getState().folders, sessionId);
+      if (folder)
+        writeChatFolders(stores.chat, (folders) =>
+          withFolder(folders, result.sessionId, folder),
+        );
+      await refreshSnapshot();
+      return result;
+    } catch (err) {
+      reportFailure(actionFailure("start a branch", err));
+      throw shownFailure(err);
+    }
+  }
+
   async function interruptRequest(
     request: Omit<DesktopInterruptRequestRequest, "cause">,
   ) {
@@ -535,6 +574,7 @@ export function createChatActions({
     setGoal,
     controlGoal,
     setSessionArchived,
+    forkBeforeMessage,
     interruptRequest,
     backgroundTool: (request: Parameters<DesktopApiAdapter["backgroundTool"]>[0]) =>
       api.backgroundTool(request),
