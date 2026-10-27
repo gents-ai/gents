@@ -773,9 +773,11 @@ async fn terminalize_execution_in_txn(
             agent,
             row.requester_did.as_deref(),
             session_id,
-            request_doc_id,
-            &row.request_id,
-            Some(reply_preview.as_deref()),
+            session::SessionRequestRefresh {
+                request_doc_id,
+                request_id: &row.request_id,
+                reply_preview: Some(reply_preview.as_deref()),
+            },
             &timestamp,
         )
         .await?;

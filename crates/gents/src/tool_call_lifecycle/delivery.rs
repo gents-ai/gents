@@ -1929,9 +1929,11 @@ async fn terminalize_transaction(
         node_did,
         requester_did,
         session_id,
-        request_doc_id,
-        request_id,
-        None,
+        crate::session::SessionRequestRefresh {
+            request_doc_id,
+            request_id,
+            reply_preview: None,
+        },
         &completed_at,
     )
     .await?;

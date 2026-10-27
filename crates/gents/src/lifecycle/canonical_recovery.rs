@@ -509,7 +509,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                 txn, agent, &row.request_id, &target, "execution lease expired", &timestamp,
             ).await?;
             if !is_auxiliary {
-                session::refresh_session_request_observation_in_txn(txn, agent, row.requester_did.as_deref(), session_id, &request_doc_id, &row.request_id, Some(reply_preview.as_deref()), &timestamp).await?;
+                session::refresh_session_request_observation_in_txn(txn, agent, row.requester_did.as_deref(), session_id, session::SessionRequestRefresh { request_doc_id: &request_doc_id, request_id: &row.request_id, reply_preview: Some(reply_preview.as_deref()) }, &timestamp).await?;
             }
             Ok(RecoveryResult::Won { published: published.len() })
         })},

@@ -477,18 +477,27 @@ async fn advance_observation_in_txn(
     Ok(true)
 }
 
-/// A terminal boundary supplies `Some`, including `Some(None)` for no readable
-/// final text. Ordinary activity supplies `None` and preserves the last reply.
+pub(crate) struct SessionRequestRefresh<'a> {
+    pub request_doc_id: &'a str,
+    pub request_id: &'a str,
+    /// A terminal boundary supplies `Some`, including `Some(None)` for no readable
+    /// final text. Ordinary activity supplies `None` and preserves the last reply.
+    pub reply_preview: Option<Option<&'a str>>,
+}
+
 pub(crate) async fn refresh_session_request_observation_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     requester_did: Option<&str>,
     session_id: &str,
-    request_doc_id: &str,
-    request_id: &str,
-    reply_preview: Option<Option<&str>>,
+    refresh: SessionRequestRefresh<'_>,
     now: &str,
 ) -> Result<bool> {
+    let SessionRequestRefresh {
+        request_doc_id,
+        request_id,
+        reply_preview,
+    } = refresh;
     let Some(session) =
         load_agent_session_row_in_txn(txn, node_did, session_id, requester_did).await?
     else {
@@ -952,7 +961,7 @@ mod observation_refresh_tests {
                 }}"#)).await?;
                 assert!(refresh_session_request_observation_in_txn(
                     txn, "did:test:refresh", None, "refresh-session",
-                    &fact.observed.request_doc_id, "refresh-request", Some(Some("Finished")), now,
+                    SessionRequestRefresh { request_doc_id: &fact.observed.request_doc_id, request_id: "refresh-request", reply_preview: Some(Some("Finished")) }, now,
                 ).await?);
                 patch_session_in_txn(txn, &owner.doc_id, serde_json::json!({
                     "closed_at": "2030-01-01T00:00:02Z", "tags": ["review"]
@@ -1013,7 +1022,7 @@ mod observation_refresh_tests {
                 })).await?;
                 assert!(!refresh_session_request_observation_in_txn(
                     txn, "did:test:refresh", None, "refresh-session",
-                    foreign_doc_id, "refresh-request", Some(Some("Wrong scope")), now,
+                    SessionRequestRefresh { request_doc_id: foreign_doc_id, request_id: "refresh-request", reply_preview: Some(Some("Wrong scope")) }, now,
                 ).await?);
                 let session = load_agent_session_row_in_txn(
                     txn, "did:test:refresh", "refresh-session", None,
