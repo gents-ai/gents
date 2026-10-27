@@ -294,7 +294,7 @@ export function Item({
           </div>
         </div>
       </article>
-      {question?.version !== 2 && (
+      {(!question || question.version < 2) && (
         <Button
           size="sm"
           variant="raised"

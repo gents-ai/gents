@@ -38,7 +38,7 @@ export function QuestionAnswer({
   const [other, setOther] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<"answer" | "skip" | null>(null);
-  const unavailable = question.version === 2 && !questionHash;
+  const unavailable = question.version >= 2 && !questionHash;
   const send = async (answer: MailboxQuestionAnswer) => {
     if (unavailable || sending || pending || confirmed) return;
     setSending(true);
@@ -46,7 +46,7 @@ export function QuestionAnswer({
       const applied = await onAnswer(
         {
           ...answer,
-          ...(question.version === 2 ? { question_hash: questionHash } : {}),
+          ...(question.version >= 2 ? { question_hash: questionHash } : {}),
         },
         () => mounted.current,
       );
@@ -62,7 +62,7 @@ export function QuestionAnswer({
   };
   const note = other.trim() || null;
   const deferred =
-    question.version === 2 ||
+    question.version >= 2 ||
     question.multi_select ||
     (question.allow_free_text && note !== null);
   const choose = (id: string) => {
@@ -136,9 +136,7 @@ export function QuestionAnswer({
           below.
         </p>
       )}
-      {(question.version === 2 ||
-        question.allow_free_text ||
-        question.multi_select) && (
+      {(question.version >= 2 || question.allow_free_text || question.multi_select) && (
         <form
           className="mt-2 flex items-center gap-2"
           onSubmit={(event) => {
@@ -164,7 +162,7 @@ export function QuestionAnswer({
           >
             Send
           </Button>
-          {question.version === 2 && question.optional && (
+          {question.version >= 2 && question.optional && (
             <Button
               type="button"
               size="sm"

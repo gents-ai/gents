@@ -191,39 +191,42 @@ it("keeps Check and Resume available after reloading an uncertain question", asy
   expect(screen.queryByRole("button", { name: "This computer" })).toBeNull();
 });
 
-it("retains the signed source for an optional skip whose delivery is uncertain", async () => {
-  const question = {
-    ...item(),
-    questionHash: "observed-question",
-    payload: JSON.stringify({
-      ...JSON.parse(item().payload!),
-      version: 2,
-      optional: true,
-    }),
-  };
-  const f = fixture([question]);
-  f.send.mockImplementationOnce(async (request) => ({
-    ...acceptedChat(request),
-    outcome: "deliveryUnknown",
-  }));
-  render(<MailboxScreen />, { wrapper: withApp(f.app) });
-  fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+it.each([2, 3])(
+  "retains version %i signed source for an optional skip whose delivery is uncertain",
+  async (version) => {
+    const question = {
+      ...item(),
+      questionHash: "observed-question",
+      payload: JSON.stringify({
+        ...JSON.parse(item().payload!),
+        version,
+        optional: true,
+      }),
+    };
+    const f = fixture([question]);
+    f.send.mockImplementationOnce(async (request) => ({
+      ...acceptedChat(request),
+      outcome: "deliveryUnknown",
+    }));
+    render(<MailboxScreen />, { wrapper: withApp(f.app) });
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
 
-  await screen.findByText(
-    "Your answer is not confirmed. Use Check answer delivery or Resume saved answer below.",
-  );
-  expect(f.send.mock.calls[0][0].answer).toEqual({
-    option_ids: [],
-    free_text: null,
-    skip: true,
-    question_hash: "observed-question",
-  });
-  expect(screen.queryByText("Question skipped.")).toBeNull();
-  expect(screen.getByRole("button", { name: "Skip" })).toBeDisabled();
-  expect(JSON.parse(loadChatDrafts().chatDrafts[0].requestJson).answer).toEqual(
-    f.send.mock.calls[0][0].answer,
-  );
-});
+    await screen.findByText(
+      "Your answer is not confirmed. Use Check answer delivery or Resume saved answer below.",
+    );
+    expect(f.send.mock.calls[0][0].answer).toEqual({
+      option_ids: [],
+      free_text: null,
+      skip: true,
+      question_hash: "observed-question",
+    });
+    expect(screen.queryByText("Question skipped.")).toBeNull();
+    expect(screen.getByRole("button", { name: "Skip" })).toBeDisabled();
+    expect(JSON.parse(loadChatDrafts().chatDrafts[0].requestJson).answer).toEqual(
+      f.send.mock.calls[0][0].answer,
+    );
+  },
+);
 
 it("retains confirmed acceptance across reload while the native question is still open", async () => {
   const f = fixture();
