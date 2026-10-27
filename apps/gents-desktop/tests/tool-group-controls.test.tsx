@@ -113,9 +113,7 @@ describe("canonical tool selections", () => {
     const { api, app } = harness();
     const user = userEvent.setup();
     renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
-    expect(
-      screen.getByRole("switch", { name: "Install packs" }),
-    ).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Install packs" })).not.toBeChecked();
     await user.click(screen.getByRole("switch", { name: "Memory" }));
     expect(api.saveToolsConfig).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Save" }));
