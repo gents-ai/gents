@@ -122,6 +122,7 @@ export type DesktopUiHarnessScenario =
   | "mobile-performance"
   | "session-hydration"
   | "sync-offline"
+  | "storage-recovery"
   | "sync-failed";
 
 export type DesktopUiHarnessOptions = {
@@ -426,6 +427,17 @@ export function createDesktopUiHarness(
     runtimeBooting: false,
     error: null,
   };
+  if (scenario === "storage-recovery") {
+    managedServer = {
+      ...managedServer,
+      state: "running",
+      nodeName: deployment.label,
+      nodeDid: NODE_DID,
+      effectiveToolCeiling: "readonly",
+      effectiveToolRoot: "/tmp/gents-bombadil/workspace",
+      pairingReady: true,
+    };
+  }
   let p2pStatus: "healthy" | "degraded" | "wedged" =
     scenario === "sync-offline" ? "wedged" : "healthy";
   let syncHealth: SyncHealthView = initialSyncHealth(scenario);
@@ -1219,7 +1231,7 @@ export function createDesktopUiHarness(
     async listUxDataSurfaces() {
       return { surfaces: [] };
     },
-    ...(scenario === "empty-fleet"
+    ...(scenario === "empty-fleet" || scenario === "storage-recovery"
       ? ({
           async managedServerStatus() {
             if (managedServer.state === "running" && !managedServer.pairingReady) {
@@ -3839,6 +3851,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "mobile-performance":
     case "session-hydration":
     case "sync-offline":
+    case "storage-recovery":
     case "sync-failed":
       return value;
     default:
