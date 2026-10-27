@@ -49,7 +49,7 @@ impl ToolCallLifecycle {
         state: ToolCallState,
         output: &str,
         reason: Option<&str>,
-        progress: Option<(JobState, Option<JobPauseReason>)>,
+        progress: Option<(JobState, Option<JobPauseReason>, Option<String>)>,
     ) -> Result<bool> {
         let terminal = ConfigAccess::transact_local_idempotent(
             &self.node,
@@ -75,7 +75,7 @@ impl ToolCallLifecycle {
         state: ToolCallState,
         output: &str,
         reason: Option<&str>,
-        progress: Option<(JobState, Option<JobPauseReason>)>,
+        progress: Option<(JobState, Option<JobPauseReason>, Option<String>)>,
         inline: bool,
     ) -> Result<PluginJobTerminal> {
         anyhow::ensure!(
@@ -88,20 +88,32 @@ impl ToolCallLifecycle {
             .as_deref()
             .context("plugin job row lacks physical identity")?;
         let job_progress = match progress {
-            Some((job_state, pause_reason)) => {
-                let stored = read_progress(txn, doc_id)
-                    .await?
-                    .context("a paused or awaiting job row has no stored progress to update")?;
-                Some(TerminalJobProgress {
-                    expected_revision: stored.revision,
-                    host: HostProgressFacts {
-                        spawned: stored.spawned,
-                        budget: stored.budget.clone(),
-                        observed_terminal_children: stored.observed_terminal_children,
-                        state: job_state,
-                        pause_reason,
-                    },
-                    guest: stored,
+            Some((job_state, pause_reason, last_event)) => {
+                let stored = match (read_progress(txn, doc_id).await?, job_state) {
+                    (Some(stored), _) => Some(stored),
+                    (None, JobState::Paused | JobState::AwaitingUser) => {
+                        anyhow::bail!(
+                            "a paused or awaiting job row has no stored progress to update"
+                        )
+                    }
+                    // A row killed before it pinned has no progress to stamp.
+                    (None, _) => None,
+                };
+                stored.map(|mut stored| {
+                    if let Some(last_event) = last_event {
+                        stored.last_event = last_event;
+                    }
+                    TerminalJobProgress {
+                        expected_revision: stored.revision,
+                        host: HostProgressFacts {
+                            spawned: stored.spawned,
+                            budget: stored.budget.clone(),
+                            observed_terminal_children: stored.observed_terminal_children,
+                            state: job_state,
+                            pause_reason,
+                        },
+                        guest: stored,
+                    }
                 })
             }
             None => None,

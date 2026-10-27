@@ -253,10 +253,20 @@ pub async fn kill(
     lifecycle: &mut ToolCallLifecycle,
     cause: KillCause,
 ) -> Result<KillOutcome> {
+    kill_as(access, lifecycle, cause, cause.settlement()).await
+}
+
+pub(super) async fn kill_as(
+    access: &ConfigAccess,
+    lifecycle: &mut ToolCallLifecycle,
+    cause: KillCause,
+    settlement: Settlement,
+) -> Result<KillOutcome> {
     let lifecycle_ref: &ToolCallLifecycle = lifecycle;
     let (outcome, terminal) = access
         .transact_write("plugin_job.kill", |txn| {
-            Box::pin(kill_in_txn(txn, lifecycle_ref, cause))
+            let settlement = settlement.clone();
+            Box::pin(kill_in_txn(txn, lifecycle_ref, cause, settlement))
         })
         .await?;
     if let Some(terminal) = terminal {
@@ -269,6 +279,7 @@ async fn kill_in_txn(
     txn: &ConfigApplyTxn<'_>,
     lifecycle: &ToolCallLifecycle,
     cause: KillCause,
+    settlement: Settlement,
 ) -> Result<(KillOutcome, Option<PluginJobTerminal>)> {
     let current = read_step_row_in_txn(
         txn,
@@ -296,9 +307,7 @@ async fn kill_in_txn(
             .unwrap_or(KillObservation::Unresolved)
     };
     let outcome = kill_decision(job, cause, &observe);
-    let Some(terminal) =
-        settle_plugin_job_in_txn(txn, lifecycle, cause.settlement(), false).await?
-    else {
+    let Some(terminal) = settle_plugin_job_in_txn(txn, lifecycle, settlement, false).await? else {
         return Ok((
             KillOutcome {
                 row: job.clone(),
@@ -486,7 +495,7 @@ async fn control_lifecycle(
     let (killed, terminal) = access
         .transact_write("plugin_job.control", |txn| {
             let lifecycle = &lifecycle;
-            Box::pin(async move { kill_in_txn(txn, lifecycle, cause).await })
+            Box::pin(async move { kill_in_txn(txn, lifecycle, cause, cause.settlement()).await })
         })
         .await
         .map_err(unavailable)?;
@@ -857,7 +866,13 @@ mod tests {
             .transact_write("test.control.kill_rollback", |txn| {
                 let lifecycle = &admission.tool;
                 Box::pin(async move {
-                    let (killed, terminal) = kill_in_txn(txn, lifecycle, KillCause::Stop).await?;
+                    let (killed, terminal) = kill_in_txn(
+                        txn,
+                        lifecycle,
+                        KillCause::Stop,
+                        KillCause::Stop.settlement(),
+                    )
+                    .await?;
                     assert!(killed.won);
                     assert!(terminal.is_some_and(|terminal| terminal.won()));
                     anyhow::bail!("abort the staged kill")

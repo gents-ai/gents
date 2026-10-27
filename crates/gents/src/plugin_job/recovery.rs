@@ -574,7 +574,7 @@ mod tests {
             step.output(&vanished).await["code"],
             "plugin_job_not_available"
         );
-        assert_eq!(step.progress(&vanished).await.revision, 1);
+        assert_eq!(step.progress(&vanished).await.revision, 2);
         step.close().await;
     }
 
@@ -620,7 +620,13 @@ mod tests {
         assert_eq!(redrive_running_jobs(&driver).await.unwrap(), 1);
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "failed");
         assert_eq!(step.output(&step.row).await["code"], "plugin_job_stalled");
-        assert_eq!(step.progress(&step.row).await.revision, 1);
+        let progress = step.progress(&step.row).await;
+        assert_eq!(progress.revision, 2, "the stall stamp is the only write");
+        assert_eq!(progress.state, JobState::Failed);
+        assert!(
+            progress.last_event.contains("stopped making progress"),
+            "{progress:?}"
+        );
         step.close().await;
     }
 
@@ -632,7 +638,7 @@ mod tests {
         assert_eq!(redrive_running_jobs(&driver).await.unwrap(), 1);
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "failed");
         assert_eq!(step.output(&step.row).await["code"], "plugin_job_stalled");
-        assert_eq!(step.progress(&step.row).await.revision, 2);
+        assert_eq!(step.progress(&step.row).await.revision, 3);
         step.close().await;
     }
 

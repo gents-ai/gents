@@ -21,7 +21,7 @@ use super::admit::{
     admit_step, fresh_spawns, root_call_of, HostFacts, Refusal, StepCall, StepContext, StepRow,
 };
 use super::control::{
-    kill, kill_decision, observe_live_children, KillCause, KillObservation, KillOutcome,
+    kill, kill_as, kill_decision, observe_live_children, KillCause, KillObservation, KillOutcome,
 };
 use super::effects::{
     interrupt_slots, recover_step_commit, stage_recorded_effects_in_txn, write_scratch, JobContext,
@@ -68,6 +68,11 @@ pub enum Settlement {
     Fail(JobFailure),
     Suspend(JobSuspend),
     Refused(Refusal),
+    /// `Refused(StepFailed)` with the third step's own error, so the caller
+    /// learns what the guest got wrong without reading the host log.
+    StepFailed {
+        last_error: String,
+    },
     Control(JobControlKind),
 }
 
@@ -78,7 +83,11 @@ pub(super) struct Terminal {
     pub(super) state: ToolCallState,
     output: Value,
     reason: Option<String>,
-    progress: Option<(JobState, Option<JobPauseReason>)>,
+    /// The job state, pause reason and, for a host-ended row, the last event
+    /// the stored progress is stamped with, so a killed row reads as ended. A
+    /// guest terminal (`Result`, `Fail`) is stamped by its own step
+    /// transaction and carries `None`.
+    progress: Option<(JobState, Option<JobPauseReason>, Option<String>)>,
 }
 
 /// The settlement table. `None` for `Refused(Terminal)`: the row already ended.
@@ -89,11 +98,36 @@ fn terminal(settlement: Settlement, tool: &str, address: &str) -> Option<Termina
         reason,
         progress: None,
     };
+    let killed = |state, output, reason, event: String| Terminal {
+        state,
+        output,
+        reason,
+        progress: Some((job_state(state, None), None, Some(event))),
+    };
+    let refused = |refusal: Refusal, last_error: Option<&str>| {
+        let code = refusal.code()?;
+        let (state, status) = if refusal == Refusal::TimedOut {
+            (ToolCallState::TimedOut, "timed_out")
+        } else {
+            (ToolCallState::Failed, "failed")
+        };
+        let (message, next) = refusal_text(refusal, tool, address);
+        let message = match last_error {
+            Some(last_error) => format!("{message}; last: {last_error}"),
+            None => message.to_owned(),
+        };
+        Some(killed(
+            state,
+            json!({"status": status, "code": code, "message": message, "next": next}),
+            Some(code.to_owned()),
+            message,
+        ))
+    };
     let paused = |reason: Option<JobPauseReason>, message: &str| Terminal {
         state: ToolCallState::Completed,
         output: json!({"status": "paused", "reason": reason, "message": message}),
         reason: None,
-        progress: Some((JobState::Paused, reason)),
+        progress: Some((JobState::Paused, reason, None)),
     };
     Some(match settlement {
         Settlement::Result(result) => ended(ToolCallState::Completed, result, None),
@@ -117,26 +151,15 @@ fn terminal(settlement: Settlement, tool: &str, address: &str) -> Option<Termina
             state: ToolCallState::Completed,
             output: json!({"status": "awaiting_user", "question": question, "message": message}),
             reason: None,
-            progress: Some((JobState::AwaitingUser, None)),
+            progress: Some((JobState::AwaitingUser, None, None)),
         },
-        Settlement::Refused(refusal) => {
-            let code = refusal.code()?;
-            let (state, status) = if refusal == Refusal::TimedOut {
-                (ToolCallState::TimedOut, "timed_out")
-            } else {
-                (ToolCallState::Failed, "failed")
-            };
-            let (message, next) = refusal_text(refusal, tool, address);
-            ended(
-                state,
-                json!({"status": status, "code": code, "message": message, "next": next}),
-                Some(code.to_owned()),
-            )
-        }
-        Settlement::Control(JobControlKind::Stop) => ended(
+        Settlement::StepFailed { last_error } => refused(Refusal::StepFailed, Some(&last_error))?,
+        Settlement::Refused(refusal) => refused(refusal, None)?,
+        Settlement::Control(JobControlKind::Stop) => killed(
             ToolCallState::Cancelled,
             json!({"status": "cancelled", "message": "the job was stopped"}),
             Some("explicit_cancel".to_owned()),
+            "the job was stopped".to_owned(),
         ),
         Settlement::Control(JobControlKind::Pause) => {
             paused(Some(JobPauseReason::User), "the job was paused")
@@ -148,7 +171,10 @@ fn terminal(settlement: Settlement, tool: &str, address: &str) -> Option<Termina
 pub(super) fn refusal_text(refusal: Refusal, tool: &str, address: &str) -> (&'static str, String) {
     let inspect = format!("Next: `{tool} status {address}`, then `{tool} resume {address}`");
     match refusal {
-        Refusal::Stalled => ("the job stopped making progress", inspect),
+        Refusal::Stalled => (
+            "the job stopped making progress: every child is terminal and the step spawned nothing and sent no message",
+            inspect,
+        ),
         Refusal::PolicyDenied => ("the job asked for something its policy refuses", inspect),
         Refusal::DynamicCodeDisabled => (
             "`job.policy.dynamic` is `off`; dynamic script execution is disabled",
@@ -1143,10 +1169,13 @@ impl JobDriver {
             .read = Some((row.clone(), observed));
         let verdict = self.on_step_failure(row_doc_id, error);
         if verdict == FailureVerdict::Settle {
-            kill(
+            kill_as(
                 &access,
                 &mut lifecycle,
                 KillCause::FailClosed(Refusal::StepFailed),
+                Settlement::StepFailed {
+                    last_error: error.to_string(),
+                },
             )
             .await?;
             self.failures
@@ -1664,6 +1693,55 @@ pub(crate) mod tests {
             payload(&stored_output(&admission).await)["code"],
             "plugin_job_timed_out"
         );
+        finish(admission).await;
+    }
+
+    /// The terminal stamp never fails a host kill: a row whose guest progress
+    /// sits just under the cap still settles.
+    #[tokio::test]
+    async fn a_host_kill_settles_a_row_whose_progress_sits_just_under_the_cap() {
+        use super::super::records::{write_progress_in_txn, HostProgressFacts};
+        use gents_protocol::job::{JobPhase, JobPhaseState, JOB_PROGRESS_MAX_BYTES};
+        let mut admission = job_row("driver-full-progress").await;
+        let mut full = stored_progress(&admission).await;
+        full.last_event = String::new();
+        let phase = JobPhase {
+            title: "p".repeat(200),
+            state: JobPhaseState::Done,
+        };
+        let bytes = |progress: &JobProgress| {
+            serde_json::to_vec(&JobProgress {
+                revision: progress.revision + 1,
+                ..progress.clone()
+            })
+            .unwrap()
+            .len()
+        };
+        while bytes(&full) + 250 < JOB_PROGRESS_MAX_BYTES {
+            full.phases.push(phase.clone());
+        }
+        full.title
+            .push_str(&"t".repeat(JOB_PROGRESS_MAX_BYTES - bytes(&full) - 4));
+        let doc_id = admission.tool.doc_id().unwrap().to_owned();
+        ConfigAccess::transact_local_write(&admission.node, None, "test.driver.full", |txn| {
+            let (doc_id, full) = (doc_id.clone(), full.clone());
+            Box::pin(async move {
+                let host = HostProgressFacts {
+                    spawned: full.spawned,
+                    budget: full.budget.clone(),
+                    observed_terminal_children: full.observed_terminal_children,
+                    state: full.state,
+                    pause_reason: None,
+                };
+                write_progress_in_txn(txn, &doc_id, full.revision, full, host).await
+            })
+        })
+        .await
+        .unwrap();
+        settle_plugin_job(&mut admission.tool, Settlement::Refused(Refusal::TimedOut))
+            .await
+            .unwrap();
+        assert_eq!(stored_row(&admission).await["lifecycle_state"], "timedOut");
         finish(admission).await;
     }
 
@@ -2887,6 +2965,18 @@ pub(crate) mod tests {
             next.contains("workflow status") && next.contains("workflow resume"),
             "{next}"
         );
+        let message = output["message"].as_str().unwrap();
+        assert!(
+            message.starts_with("three consecutive job steps failed; last: ")
+                && message.contains("malformed step output"),
+            "the failure must name the last step error: {message}"
+        );
+        let progress = step.progress(&step.row).await;
+        assert_eq!(progress.state, JobState::Failed, "{progress:?}");
+        assert!(
+            message.starts_with(progress.last_event.as_str()),
+            "the last event is the failure message (cut to the record cap): {progress:?}"
+        );
         assert_eq!(
             stored_receipt(&row),
             PluginExecutionReceipt {
@@ -2896,9 +2986,8 @@ pub(crate) mod tests {
             }
         );
         assert_eq!(
-            step.progress(&step.row).await.revision,
-            1,
-            "nothing committed"
+            progress.revision, 2,
+            "the failed steps committed nothing; the terminal stamp is the only write"
         );
         step.close().await;
     }
