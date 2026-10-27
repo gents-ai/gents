@@ -2625,6 +2625,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "event_delivery_convergence_traces_match_runtime_or_deviation",
         },
         ConformanceConsumer::RustTest {
+            id: "prompt::tests::mcp_discovery_guidance_matches_presented_operations_model",
+            package: "gents",
+            source_path: "crates/gents/src/prompt/tests.rs",
+            module_path: "prompt::tests",
+            function: "mcp_discovery_guidance_matches_presented_operations_model",
+        },
+        ConformanceConsumer::RustTest {
             id: "toolset::tests::generated_command_env_cases_match_rust_filtering",
             package: "gents",
             source_path: "crates/gents/src/toolset/tests.rs",
