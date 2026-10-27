@@ -392,3 +392,6 @@ fn generated_launchd_definition_passes_plutil_lint_without_loading_it() -> Resul
     );
     Ok(())
 }
+
+#[path = "native_service/environment.rs"]
+mod environment;
