@@ -352,7 +352,7 @@ const AgentRow = memo(function AgentRow({
 }) {
   const {
     stores,
-    actions: { selectNode, fetchPeerStatus },
+    actions: { fetchPeerStatus },
   } = useApp();
   const configRead = useStore(stores.client, (state) =>
     state.snapshot ? configIsRead(state.snapshot, d.nodeDid) : false,
@@ -389,7 +389,7 @@ const AgentRow = memo(function AgentRow({
     >
       <a
         href={href({ name: "sessions", nodeDid: d.nodeDid })}
-        onClick={() => selectNode(d.nodeDid)}
+
         aria-label={`${name} sessions`}
         className="-my-4 -ml-5 flex min-w-0 flex-1 items-center gap-3 overflow-hidden py-4 pl-5"
       >
@@ -444,7 +444,7 @@ const AgentRow = memo(function AgentRow({
       {waiting > 0 && (
         <a
           href={href({ name: "mailbox", nodeDid: d.nodeDid })}
-          onClick={() => selectNode(d.nodeDid)}
+
           className="flex items-center gap-1.5 rounded-full px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
           title={`${waiting} item${waiting === 1 ? "" : "s"} need${waiting === 1 ? "s" : ""} your attention`}
         >
@@ -465,7 +465,7 @@ const AgentRow = memo(function AgentRow({
         aria-label={`Configure ${name}`}
         title="Configure"
         nativeButton={false}
-        render={<a href={config} onClick={() => selectNode(d.nodeDid)} />}
+        render={<a href={config} />}
       >
         <SlidersHorizontal />
       </Button>
@@ -489,15 +489,10 @@ const AgentRow = memo(function AgentRow({
                   })}
                 />
               }
-              onClick={() => selectNode(d.nodeDid)}
             >
               Open sessions
             </DropdownMenuItem>
-            <DropdownMenuItem
-              nativeButton={false}
-              render={<a href={config} />}
-              onClick={() => selectNode(d.nodeDid)}
-            >
+            <DropdownMenuItem nativeButton={false} render={<a href={config} />}>
               Configure
             </DropdownMenuItem>
             <DropdownMenuItem

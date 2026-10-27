@@ -14,16 +14,12 @@ export type ListViews = {
   /* the side nav's recent sessions narrow on their own */
   recentFilter: SessionFilter;
 
-  sessionNodes: string[] | null;
-  mailboxNodes: string[];
   mailboxKinds: string[];
 };
 
 const initial = (): ListViews => ({
   sessionFilter: emptyFilter,
   recentFilter: emptyFilter,
-  sessionNodes: null,
-  mailboxNodes: [],
   mailboxKinds: [],
 });
 
@@ -35,10 +31,6 @@ export function restoreListViews(stored: unknown): ListViews {
   return {
     sessionFilter: restoreSessionFilter(saved.sessionFilter),
     recentFilter: restoreSessionFilter(saved.recentFilter),
-    sessionNodes: Array.isArray(saved.sessionNodes)
-      ? storedStrings(saved.sessionNodes)
-      : null,
-    mailboxNodes: storedStrings(saved.mailboxNodes),
     mailboxKinds: storedStrings(saved.mailboxKinds),
   };
 }
@@ -59,12 +51,6 @@ export const listViews = {
 
   setRecentFilter(recentFilter: SessionFilter) {
     store.setState({ recentFilter });
-  },
-  setSessionNodes(sessionNodes: string[] | null) {
-    store.setState({ sessionNodes });
-  },
-  setMailboxNodes(mailboxNodes: string[]) {
-    store.setState({ mailboxNodes });
   },
   setMailboxKinds(mailboxKinds: string[]) {
     store.setState({ mailboxKinds });

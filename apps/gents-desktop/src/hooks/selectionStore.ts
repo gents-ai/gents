@@ -106,6 +106,7 @@ export const selection = {
 
   startNewSession(store: SelectionStore, nodeDid: string, agentId: string | null) {
     commit(store, {
+      nodeDid,
       sessionId: null,
       agentId,
       mailboxRoute: null,

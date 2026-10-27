@@ -1,6 +1,13 @@
 import { acceptedChatReply } from "./chat-delivery-fixture";
 import { goalDeliveryStorage } from "./goal-delivery-storage";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import type { ReactElement } from "react";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
@@ -345,7 +352,8 @@ describe("a mailbox opened from a node", () => {
     const app = testApp({
       deployments: [nodeWith("did:key:a", "From A"), nodeWith("did:key:b", "From B")],
     });
-    const view = render(<MailboxScreen nodeDid="did:key:b" />, {
+    act(() => app.actions.selectNode("did:key:b"));
+    const view = render(<MailboxScreen />, {
       wrapper: withApp(app),
     });
     expect(screen.getByRole("heading", { name: "From B" })).toBeInTheDocument();
@@ -354,7 +362,7 @@ describe("a mailbox opened from a node", () => {
     expect(screen.queryByRole("heading", { name: "From A" })).not.toBeInTheDocument();
   });
 
-  it("keeps the filters when the routed node has nothing open, so it can be cleared", () => {
+  it("keeps an empty active node scoped until another node is selected", () => {
     const app = testApp({
       deployments: [
         node({
@@ -366,10 +374,63 @@ describe("a mailbox opened from a node", () => {
         node({ nodeDid: "did:key:quiet", mailboxItems: [] }),
       ],
     });
-    render(<MailboxScreen nodeDid="did:key:quiet" />, { wrapper: withApp(app) });
+    act(() => app.actions.selectNode("did:key:quiet"));
+    render(<MailboxScreen />, { wrapper: withApp(app) });
     expect(screen.queryByRole("heading", { name: "From A" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull();
+    act(() => app.actions.selectNode("did:key:a"));
     expect(screen.getByRole("heading", { name: "From A" })).toBeInTheDocument();
+  });
+});
+
+describe("mailbox selection follows the active node", () => {
+  function fixture(dismiss = vi.fn().mockResolvedValue(undefined)) {
+    const app = testApp({
+      api: { dismissMailboxItem: dismiss },
+      deployments: ["a", "b"].map((suffix) =>
+        node({
+          nodeDid: `did:key:${suffix}`,
+          mailboxItems: [1, 2].map((n) =>
+            item({
+              itemId: `shared-${n}`,
+              nodeDid: `did:key:${suffix}`,
+              title: `${suffix}-${n}`,
+            }),
+          ),
+        }),
+      ),
+      selection: { nodeDid: "did:key:a" },
+    });
+    renderMailbox(app);
+    return { app, dismiss };
+  }
+
+  it("does not carry checked item IDs to another node", () => {
+    const f = fixture();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select: a-1" }));
+    expect(screen.getByTestId("mailbox-selection")).toHaveTextContent("1 selected");
+    act(() => f.app.actions.selectNode("did:key:b"));
+    expect(screen.queryByTestId("mailbox-selection")).toBeNull();
+    expect(screen.getByRole("checkbox", { name: "Select: b-1" })).not.toBeChecked();
+  });
+
+  it("stops a dismissal batch when its node changes while awaiting a response", async () => {
+    let release!: () => void;
+    const dismiss = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const f = fixture(dismiss);
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select: a-1" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select: a-2" }));
+    fireEvent.click(screen.getByRole("button", { name: /Dismiss 2/ }));
+    expect(dismiss).toHaveBeenCalledExactlyOnceWith("shared-1");
+    act(() => f.app.actions.selectNode("did:key:b"));
+    await act(async () => release());
+    expect(dismiss).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId("mailbox-selection")).toBeNull();
   });
 });
 

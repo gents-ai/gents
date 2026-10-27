@@ -107,6 +107,7 @@ function harnessAssistantItem(
 
 export type DesktopUiHarnessScenario =
   | "default"
+  | "active-nodes"
   | "empty-fleet"
   | "loading"
   | "bridge-unavailable"
@@ -804,6 +805,50 @@ export function createDesktopUiHarness(
       chatSafe: p2pStatus === "healthy",
     };
     const deployments = !provisioned || removed ? [] : [visibleDeployment];
+    if (scenario === "active-nodes" && deployments.length) {
+      const remoteDid = "did:key:harness-remote";
+      deployments.push({
+        ...visibleDeployment,
+        nodeDid: remoteDid,
+        peerId: "peer-harness-remote",
+        source: "enrollment",
+        label: "studio-1",
+        graphql: null,
+        node: {
+          ...visibleDeployment.node,
+          nodeDid: remoteDid,
+          displayName: "Amy",
+          defaultAgentId: "remote-agent",
+        },
+        nodeConfig: {
+          ...visibleDeployment.nodeConfig,
+          node_did: remoteDid,
+          display_name: "Amy",
+          default_agent_id: "remote-agent",
+        },
+        nodeReadiness: {
+          ...visibleDeployment.nodeReadiness,
+          agents: [{ state: "ready", agentId: "remote-agent" }],
+        },
+        agents: [
+          {
+            ...visibleDeployment.agents[0]!,
+            nodeDid: remoteDid,
+            agentId: "remote-agent",
+            displayName: "Remote worker",
+          },
+        ],
+        agentEnvironments: [
+          {
+            ...visibleDeployment.agentEnvironments[0]!,
+            agentId: "remote-agent",
+            displayName: "Remote worker",
+          },
+        ],
+        sessions: [],
+        mailboxItems: [],
+      });
+    }
     const health = {
       status: p2pStatus,
       connectedPeerCount: p2pStatus === "healthy" ? 1 : 0,
@@ -3779,6 +3824,7 @@ function clone<T>(value: T): T {
 
 function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
   switch (value) {
+    case "active-nodes":
     case "empty-fleet":
     case "loading":
     case "bridge-unavailable":

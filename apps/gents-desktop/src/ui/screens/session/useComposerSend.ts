@@ -1,5 +1,5 @@
 import type { RequestAttachment } from "@source-inc/gents-desktop-client";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { writeAttachments } from "../../../hooks/draftStore";
 import type { QueueDelivery } from "@source-inc/gents-desktop-client/generated/QueueDelivery";
 import { useApp, useView } from "@/app/AppContext";
@@ -37,11 +37,29 @@ export function useComposerSend(agentId: string | null | undefined) {
   const [draft, setDraft] = useDraft(drafts, draftKey);
   const selectedSessionId = stores.selection.use.sessionId();
   const selectedNodeDid = stores.selection.use.nodeDid();
+  const displayedIntent = captureComposeIntent();
+  const [destinationError, setDestinationError] = useState<string | null>(null);
+  const destinationMatches = () => {
+    const current = stores.selection.getState();
+    if (
+      current.nodeDid === selectedNodeDid &&
+      current.sessionId === selectedSessionId &&
+      acceptsComposeIntent(displayedIntent)
+    ) {
+      setDestinationError(null);
+      return true;
+    }
+    setDestinationError(
+      "The message destination changed. Review it before sending again. Your draft is saved.",
+    );
+    return false;
+  };
   const failure = stores.chat.use.submissionError();
   const error =
-    failure?.nodeDid === selectedNodeDid && failure?.sessionId === selectedSessionId
+    destinationError ??
+    (failure?.nodeDid === selectedNodeDid && failure?.sessionId === selectedSessionId
       ? failure.message
-      : null;
+      : null);
 
   const follow = (
     intentGeneration: ReturnType<typeof captureComposeIntent>,
@@ -54,11 +72,16 @@ export function useComposerSend(agentId: string | null | undefined) {
       result.sessionId !== selectedSessionId
     ) {
       if (!selectedSessionId) workspace.adoptNewSessionDock(result.sessionId);
-      navigate({ name: "session", sessionId: result.sessionId });
+      navigate({
+        name: "session",
+        sessionId: result.sessionId,
+        ...(selectedNodeDid ? { nodeDid: selectedNodeDid } : {}),
+      });
     }
   };
 
   const goal = async (text: string, objective = text) => {
+    if (!destinationMatches()) return false;
     const clientDid = stores.client.getState().snapshot?.client?.clientDid;
     const pending = setGoal(
       objective.replace(GOAL_COMMAND, "").trim(),
@@ -82,6 +105,7 @@ export function useComposerSend(agentId: string | null | undefined) {
     supplied?: RequestAttachment[],
     followUp?: QueueDelivery,
   ) => {
+    if (!destinationMatches()) return false;
     if (!supplied && GOAL_COMMAND.test(text)) return goal(text);
     const selected = drafts.getState().attachments[draftKey] ?? [];
     if (!supplied && selected.some((a) => !a.content || a.error)) return false;
