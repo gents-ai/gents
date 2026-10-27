@@ -149,6 +149,69 @@ const questionItem = (question: Record<string, unknown>) =>
   });
 
 describe("mailbox question", () => {
+  it("skips an optional question with its observed source and without a selected answer", async () => {
+    const answer = vi.fn().mockResolvedValue(undefined);
+    const ask = {
+      ...questionItem({ version: 2, optional: true }),
+      questionHash: "original-question",
+    };
+    renderMailbox(mailboxWith([ask], answer));
+    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Local model" }));
+    expect(answer).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Skip" }));
+    expect(answer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        causedBySourceDocId: ask.itemId,
+        answer: {
+          option_ids: [],
+          free_text: null,
+          skip: true,
+          question_hash: "original-question",
+        },
+      }),
+    );
+    expect(await screen.findByText("Question skipped.")).toBeVisible();
+  });
+
+  it("keeps required free-text questions pending until an explicit answer", async () => {
+    const answer = vi.fn().mockResolvedValue(undefined);
+    const ask = {
+      ...questionItem({ version: 2, options: [], allow_free_text: true }),
+      questionHash: "required-question",
+    };
+    renderMailbox(mailboxWith([ask], answer));
+    expect(screen.queryByRole("button", { name: "Skip" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    fireEvent.change(screen.getByRole("textbox", { name: "Your answer" }), {
+      target: { value: "Ship Friday" },
+    });
+    expect(answer).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(answer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        answer: {
+          option_ids: [],
+          free_text: "Ship Friday",
+          question_hash: "required-question",
+        },
+      }),
+    );
+    expect(await screen.findByText("Answer sent to the agent.")).toBeVisible();
+  });
+
+  it("refuses to invent a source observation for a modern question", () => {
+    const answer = vi.fn();
+    renderMailbox(mailboxWith([questionItem({ version: 2, optional: true })], answer));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Reconnect to load this question",
+    );
+    expect(screen.getByRole("button", { name: "Skip" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Local model" })).toBeDisabled();
+    expect(answer).not.toHaveBeenCalled();
+  });
+
   it("sends a single choice on click and hides the raw payload", async () => {
     const answer = vi.fn().mockResolvedValue(undefined);
     const ask = questionItem({});
