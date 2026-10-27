@@ -149,7 +149,7 @@ impl Fixture<'_> {
             )? == providers,
             "replacement changed provider settings"
         );
-        super::wait_chat_deployment(client, id, self.node_did).await?;
+        super::wait_chat_deployment(client, id, self.node_did, self.access).await?;
         let receipt = client
             .call(
                 *id,
