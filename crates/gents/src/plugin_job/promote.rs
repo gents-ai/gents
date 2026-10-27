@@ -29,7 +29,8 @@ pub struct DynamicRun {
     pub args: Option<Value>,
     /// The run's spawn targets plus the caller job block's `policy.dynamic_targets`.
     pub targets: Vec<String>,
-    /// The caller job block's `policy.trusted_packs`: the packs that own the targets.
+    /// The installed packs that ship `targets`; empty when some target is
+    /// shipped by no installed pack.
     pub owners: Vec<String>,
     /// The ceiling recorded on the run's pin.
     pub ceiling: JobCeiling,
@@ -83,7 +84,7 @@ impl std::fmt::Display for PromoteRefusal {
                 "the recorded script hashes to {actual}, not the pinned {pinned}, so it is not the script that ran"
             ),
             Self::NoTargetOwner => f.write_str(
-                "the caller's job block trusts no pack that owns the run's targets; add it to policy.trusted_packs",
+                "a target of the run is shipped by no installed pack, so the promoted pack cannot depend on its owner",
             ),
             Self::BadName(name) => write!(
                 f,
@@ -182,12 +183,28 @@ pub async fn load_dynamic_run(
         .map(|child| child.target.clone())
         .collect();
     let targets = effective_targets(&children, &policy.dynamic_targets, &ceiling.targets);
+    let node = &view.scope.node_did;
+    let mut shipped = Vec::new();
+    for pack in crate::pack::list_installed_packs(access, node)
+        .await
+        .map_err(unreadable)?
+    {
+        let ids = crate::pack::installed_pack_documents(access, node, &pack.coordinate)
+            .await
+            .map_err(unreadable)?
+            .into_iter()
+            .filter(|(collection, _)| *collection == crate::collection::Collection::AgentTarget)
+            .map(|(_, id)| id)
+            .collect();
+        shipped.push((pack.coordinate, ids));
+    }
+    let owners = target_owners(&targets, &shipped).unwrap_or_default();
     Ok(DynamicRun {
         view,
         script,
         args,
         targets,
-        owners: policy.trusted_packs,
+        owners,
         ceiling,
         caller_agent_id: session.agent_id,
     })
@@ -220,6 +237,24 @@ pub fn effective_targets(
         union
     };
     chosen.into_iter().cloned().collect()
+}
+
+/// The packs in `shipped` (pack, the AgentTarget ids it ships) that ship
+/// `targets`, or `None` when some target is shipped by no pack.
+pub fn target_owners(targets: &[String], shipped: &[(String, Vec<String>)]) -> Option<Vec<String>> {
+    let mut owners = BTreeSet::new();
+    for target in targets {
+        let packs: Vec<&String> = shipped
+            .iter()
+            .filter(|(_, ids)| ids.contains(target))
+            .map(|(pack, _)| pack)
+            .collect();
+        if packs.is_empty() {
+            return None;
+        }
+        owners.extend(packs.into_iter().cloned());
+    }
+    Some(owners.into_iter().collect())
 }
 
 /// `name` is `^[a-z][a-z0-9_]*$` and not yet `gents/<name>` as an installed
@@ -299,8 +334,10 @@ pub fn generate_pack(dir: &Path, name: &str, run: &DynamicRun) -> Result<Generat
             "result_bytes": run.ceiling.result_bytes,
         },
     });
+    // `pack test` checks this fixture against the compiled artifact, which
+    // keeps the wrapper's pin; a script run would stamp the wrapper's digest.
     let outcome =
-        SourceRunner::new(main.clone(), &plugin).call(&input, &PluginBudget::default())?;
+        SourceRunner::new(main.clone(), &plugin).call_unpinned(&input, &PluginBudget::default())?;
     anyhow::ensure!(
         outcome.verdict == PluginVerdict::Success,
         "the script fails on step 0: {}",
@@ -400,7 +437,8 @@ pub fn generate_pack(dir: &Path, name: &str, run: &DynamicRun) -> Result<Generat
 }
 
 /// `script` followed by a wrapper that gives a spawning step-0 output without a
-/// pin the given `pin`, as the host did for the dynamic run.
+/// pin the given `pin`, as the host did for the dynamic run. The caller's
+/// `input.agent_budget` wins over `pin.agent_budget`, the recorded default.
 pub fn wrap_script(script: &str, pin: &JobGuestPin) -> String {
     let quote = |text: &str| serde_json::to_string(text).expect("a string serializes");
     format!(
@@ -409,7 +447,7 @@ pub fn wrap_script(script: &str, pin: &JobGuestPin) -> String {
          module.exports = (input) => {{\n  \
            const out = __gents_step(input);\n  \
            if (!input || input.pin || !out || !out.effects || !Array.isArray(out.effects.spawn) || out.effects.spawn.length === 0 || out.effects.pin) return out;\n  \
-           out.effects.pin = {{ script_id: {script_id}, source_digest: {source_digest}, agent_budget: {agent_budget}, handle: {handle} }};\n  \
+           out.effects.pin = {{ script_id: {script_id}, source_digest: {source_digest}, agent_budget: input.agent_budget == null ? {agent_budget} : input.agent_budget, handle: {handle} }};\n  \
            return out;\n\
          }};\n",
         script_id = quote(&pin.script_id),
@@ -443,7 +481,8 @@ pub fn write_promotion(home: &Path, record: &PromotionRecord) -> Result<()> {
         .with_context(|| format!("writing {}", path.display()))
 }
 
-/// Every promotion record in the home, newest first.
+/// Every promotion record in the home whose `gents/<name>` pack is still
+/// installed, newest first; `pack remove` leaves the record behind.
 pub fn list_promotions(home: &Path) -> Result<Vec<PromotionRecord>> {
     let dir = promoted_dir(home);
     let entries = match std::fs::read_dir(&dir) {
@@ -458,10 +497,16 @@ pub fn list_promotions(home: &Path) -> Result<Vec<PromotionRecord>> {
             continue;
         }
         let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-        records.push(
-            serde_json::from_slice::<PromotionRecord>(&bytes)
-                .with_context(|| format!("parsing {}", path.display()))?,
-        );
+        let record = serde_json::from_slice::<PromotionRecord>(&bytes)
+            .with_context(|| format!("parsing {}", path.display()))?;
+        let coordinate = format!("{NAMESPACE}/{}", record.name);
+        // An unreadable install record still takes the name (`validate_name`).
+        if !matches!(
+            crate::pack::home_install::read_home_install(home, &coordinate),
+            Ok(None)
+        ) {
+            records.push(record);
+        }
     }
     records.sort_by(|a, b| b.promoted_at.cmp(&a.promoted_at));
     Ok(records)
@@ -485,7 +530,7 @@ mod tests {
 
     fn run_js(source: String, input: Value) -> Value {
         let outcome = SourceRunner::new(source, "gents/test")
-            .call(&input, &PluginBudget::default())
+            .call_unpinned(&input, &PluginBudget::default())
             .unwrap();
         assert_eq!(
             outcome.verdict,
@@ -507,6 +552,15 @@ mod tests {
         assert_eq!(step0["effects"]["spawn"][0]["slot"], "a");
         let later = run_js(wrapped, json!({"pin": {"script_id": "abc123"}, "args": {}}));
         assert_eq!(later, json!({"effects": {}}));
+    }
+
+    #[test]
+    fn wrap_script_pins_the_callers_agent_budget_over_the_recorded_one() {
+        let wrapped = wrap_script(SPAWNING, &guest_pin());
+        let given = run_js(wrapped.clone(), json!({"pin": null, "agent_budget": 2}));
+        assert_eq!(given["effects"]["pin"]["agent_budget"], 2);
+        let default = run_js(wrapped, json!({"pin": null}));
+        assert_eq!(default["effects"]["pin"]["agent_budget"], 8);
     }
 
     #[test]
@@ -694,6 +748,31 @@ mod tests {
     }
 
     #[test]
+    fn target_owners_are_the_packs_that_ship_the_targets() {
+        let s = |items: &[&str]| {
+            items
+                .iter()
+                .map(|&item| item.to_owned())
+                .collect::<Vec<_>>()
+        };
+        // `acme/trusted` is what a caller block would trust; it ships no target.
+        let shipped = vec![
+            ("acme/trusted".to_owned(), vec![]),
+            ("acme/targets".to_owned(), s(&["t1", "t2"])),
+            ("acme/other".to_owned(), s(&["t3"])),
+        ];
+        assert_eq!(
+            target_owners(&s(&["t2", "t1"]), &shipped),
+            Some(s(&["acme/targets"]))
+        );
+        assert_eq!(
+            target_owners(&s(&["t1", "t3"]), &shipped),
+            Some(s(&["acme/other", "acme/targets"]))
+        );
+        assert_eq!(target_owners(&s(&["t1", "local"]), &shipped), None);
+    }
+
+    #[test]
     fn validate_name_rules() {
         let home = tempfile::tempdir().unwrap();
         for bad in ["Rome", "1x", "a-b", ""] {
@@ -733,10 +812,48 @@ mod tests {
         let newer = record("newer", "2026-10-02T00:00:00Z");
         write_promotion(home.path(), &older).unwrap();
         write_promotion(home.path(), &newer).unwrap();
+        install(home.path(), "older");
+        install(home.path(), "newer");
         assert!(home
             .path()
             .join("packs/promoted/newer/promotion.json")
             .exists());
         assert_eq!(list_promotions(home.path()).unwrap(), vec![newer, older]);
+    }
+
+    fn install(home: &Path, name: &str) {
+        crate::pack::home_install::write_home_install(
+            home,
+            &crate::pack::home_install::HomePackInstall {
+                coordinate: format!("{NAMESPACE}/{name}"),
+                version: "0.1.0".into(),
+                digest: format!("sha256:{}", "a".repeat(64)),
+                kind: crate::pack::PackKind::Documents,
+                assets: String::new(),
+                dependency_assets: vec![],
+                plugins: vec![],
+                installed_at: "2026-10-01T00:00:00Z".into(),
+                ux: vec![],
+                installed_via: None,
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_promotion_whose_pack_was_removed_is_not_listed() {
+        let home = tempfile::tempdir().unwrap();
+        let record = PromotionRecord {
+            name: "rome".into(),
+            plugin: "gents/rome".into(),
+            script_id: "abc".into(),
+            address: "session-1:call_1".into(),
+            session_id: "session-1".into(),
+            promoted_at: "2026-10-01T00:00:00Z".into(),
+        };
+        write_promotion(home.path(), &record).unwrap();
+        assert!(list_promotions(home.path()).unwrap().is_empty());
+        install(home.path(), "rome");
+        assert_eq!(list_promotions(home.path()).unwrap(), vec![record]);
     }
 }

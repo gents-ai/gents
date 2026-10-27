@@ -150,6 +150,9 @@ pub async fn promote(
             .context("loading the agent's Tools")?
     };
     require_agent_tools(&agent, tools)?;
+    if run.owners.is_empty() {
+        return Err(PromoteRefusal::NoTargetOwner.into());
+    }
 
     report(PromoteStep::Generate);
     let dir = std::path::absolute(promoted_dir(home).join(&name))?;

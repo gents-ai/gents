@@ -57,6 +57,20 @@ impl SourceRunner {
 
     /// Runs one step: `input` in, the script's value out, bounded by `budget`.
     pub fn call(&self, input: &Value, budget: &PluginBudget) -> Result<PluginOutcome> {
+        let mut outcome = self.call_unpinned(input, budget)?;
+        if outcome.verdict == PluginVerdict::Success {
+            outcome.output = self.with_pin(std::mem::take(&mut outcome.output), input);
+        }
+        Ok(outcome)
+    }
+
+    /// Runs one step without the script-run pin rule: what a compiled
+    /// artifact of this source answers.
+    pub(crate) fn call_unpinned(
+        &self,
+        input: &Value,
+        budget: &PluginBudget,
+    ) -> Result<PluginOutcome> {
         let engine = engine()?;
         let started = Instant::now();
         let outcome = |verdict, output, diagnostics: String| PluginOutcome {
@@ -89,11 +103,7 @@ impl SourceRunner {
             ..FuelGauge::default()
         };
         Ok(match engine.run_with(&id, input, &limits) {
-            Ok(output) => outcome(
-                PluginVerdict::Success,
-                self.with_pin(output, input),
-                String::new(),
-            ),
+            Ok(output) => outcome(PluginVerdict::Success, output, String::new()),
             Err(AfterburnerError::FuelExhausted) => outcome(
                 PluginVerdict::OutOfFuel,
                 Value::Null,
