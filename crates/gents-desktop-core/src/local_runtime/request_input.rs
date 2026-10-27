@@ -16,6 +16,7 @@ pub(crate) async fn ensure_request_input_supported(
     if input.captured_context.is_empty()
         && input.attachments.is_empty()
         && input.goal_assignment.is_none()
+        && input.question_reply.is_none()
     {
         return Ok(());
     }
@@ -47,6 +48,9 @@ fn decode(status: &Value, expected_did: &str, input: &RequestInput) -> Result<()
         input.goal_assignment_compatible(status.get(STATUS_GOAL_STOP_CONTRACT_FIELD).and_then(Value::as_u64)),
         "The extension and runtime use different goal controls. Update them together, then reconnect."
     );
+    anyhow::ensure!(input.question_reply_compatible(status.get(
+        gents_protocol::mailbox_question::STATUS_QUESTION_CONTRACT_FIELD).and_then(Value::as_u64)),
+        "This runtime does not support source-bound question replies. Update it and reconnect before answering.");
     anyhow::ensure!(
         input.captured_input_compatible(
             status
@@ -67,6 +71,35 @@ mod tests {
         matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
     };
+
+    #[tokio::test]
+    async fn question_evidence_requires_the_selected_runtime_support() {
+        let server = MockServer::start().await;
+        let mut record = PeerRecord::new("Remote", "iroh://peer", "did:key:selected");
+        record.graphql = Some(format!("{}/api/v0/graphql", server.uri()));
+        let input: RequestInput = serde_json::from_value(json!({ "question_reply": {
+            "source_doc_id": "question", "question_hash": "sha256:original", "answer": {"skip": true}
+        }})).unwrap();
+        for version in [None, Some(1), Some(2)] {
+            server.reset().await;
+            Mock::given(method("GET"))
+                .and(path("/status"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "node_did": "did:key:selected", "lifecycle": "ready",
+                    (gents_protocol::mailbox_question::STATUS_QUESTION_CONTRACT_FIELD): version
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            assert_eq!(
+                ensure_request_input_supported(Some(&record), &input)
+                    .await
+                    .is_ok(),
+                version == Some(2)
+            );
+            server.verify().await;
+        }
+    }
 
     fn captured_input() -> RequestInput {
         serde_json::from_value(json!({"captured_context": [{

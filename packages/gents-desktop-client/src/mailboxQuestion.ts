@@ -47,14 +47,26 @@ export function parseMailboxQuestion(
       "options",
       "multi_select",
       "allow_free_text",
+      "optional",
     ])
   ) {
     return null;
   }
-  const { version, prompt, options, multi_select, allow_free_text } =
+  const { version, prompt, options, multi_select, allow_free_text, optional } =
     value as Record<string, unknown>;
-  if (version !== 1 || !text(prompt) || !Array.isArray(options)) return null;
-  if (options.length < 2 || options.length > 4) return null;
+  if (
+    (version !== 1 && version !== 2) ||
+    !text(prompt) ||
+    !Array.isArray(options)
+  )
+    return null;
+  if (optional !== null && !flag(optional)) return null;
+  if (version === 1 && optional === true) return null;
+  if (!(
+    (options.length >= 2 && options.length <= 4) ||
+    (version === 2 && options.length === 0 && allow_free_text === true)
+  ))
+    return null;
   if (!flag(multi_select) || !flag(allow_free_text)) return null;
   const parsed = options.map(option);
   if (parsed.some((entry) => entry === null)) return null;
@@ -67,5 +79,8 @@ export function parseMailboxQuestion(
     options: valid,
     multi_select: multi_select === true,
     allow_free_text: allow_free_text === true,
+    ...(optional === undefined
+      ? {}
+      : { optional: optional === null ? null : optional === true }),
   };
 }

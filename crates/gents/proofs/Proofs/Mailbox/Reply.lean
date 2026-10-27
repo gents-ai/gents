@@ -20,10 +20,13 @@ structure ReplyEnvelope where
   agentId : String
   sessionId : Option String
   deadlineValid : Bool
+  questionCurrent : Bool := true
   deriving DecidableEq, Repr
 
 def replyMatches (item : Item) (envelope : ReplyEnvelope) (reply : ReplyEvidence) : Prop :=
   envelope.handling = .startRequest ∧ reply.authenticated = true ∧ reply.interactive = true ∧
+  (envelope.questionCurrent = true ∨
+    (item.status = .acted ∧ item.resolvedDocId = reply.requestDocId)) ∧
   (envelope.deadlineValid = true ∨
     (item.status = .acted ∧ item.resolvedDocId = reply.requestDocId)) ∧
   reply.requestDocId ≠ "" ∧ reply.requesterDid ≠ "" ∧

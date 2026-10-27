@@ -93,6 +93,7 @@ async fn client_main(args: Args) -> Result<()> {
                 "name": env!("CARGO_PKG_NAME"),
                 "version": env!("CARGO_PKG_VERSION"),
                 "protocolVersion": protocol::PROTOCOL_VERSION,
+                "mailboxQuestionVersion": gents_protocol::mailbox_question::MAILBOX_QUESTION_VERSION,
                 "maxFrameBytes": protocol::MAX_FRAME_BYTES,
                 "commands": protocol::ClientCommand::NAMES,
                 "os": std::env::consts::OS,

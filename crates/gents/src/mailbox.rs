@@ -15,7 +15,9 @@ use crate::graphql::{
 };
 use crate::llm::tool::ToolDefinition;
 
+mod dismiss;
 mod domain;
+pub use dismiss::dismiss_mailbox_item;
 mod notification;
 mod reply;
 pub(crate) use reply::claim_reply_in_txn;
@@ -635,7 +637,7 @@ impl crate::llm::tool::Tool for MailboxCreateTool {
         ToolDefinition {
             name: FILE_MAILBOX_ITEM_TOOL_NAME.to_string(),
             description: format!(
-                "{} Configured policy: {}. Supply findings only; never supply IDs or routing. Receipt reports created, reused, or updated and the stored item. To ask the person to decide, pass `question` instead of `payload`: the item becomes an `ask` they answer with a button, and the answer arrives later in this session as a new user message starting \"Decision on <title>:\". Filing never waits: keep working if you can proceed without the answer, or end your turn to wait for it.",
+                "{} Configured policy: {}. Supply findings only; never supply IDs or routing. Receipt reports created, reused, or updated and the stored item. To ask the person to decide, pass `question` instead of `payload`: the item becomes an `ask`; an answer or explicit optional Skip arrives later in this session through its original signed reply. Filing never waits: keep working if you can proceed without the answer, or end your turn to wait for it.",
                 canonical_mailbox_write_decl().description,
                 serde_json::to_string(&self.policy).expect("serialize policy")
             ),
@@ -650,11 +652,12 @@ impl crate::llm::tool::Tool for MailboxCreateTool {
                         "type": "object",
                         "additionalProperties": false,
                         "properties": {
-                            "version": {"type": "integer", "enum": [gents_protocol::mailbox_question::MAILBOX_QUESTION_VERSION]},
+                            "version": {"type": "integer", "enum": [1, gents_protocol::mailbox_question::MAILBOX_QUESTION_VERSION], "description": "Use 1 for ordinary choices; use 2 for optional Skip or a free-text-only question. The recipient needs version 2 support for those features."},
                             "prompt": {"type": "string"},
                             "options": {
                                 "type": "array",
-                                "minItems": gents_protocol::mailbox_question::MAILBOX_QUESTION_MIN_OPTIONS,
+                                "minItems": 0,
+                                "description": "Use two to four choices, or an empty list with allow_free_text for a free-text-only question.",
                                 "maxItems": gents_protocol::mailbox_question::MAILBOX_QUESTION_MAX_OPTIONS,
                                 "items": {
                                     "type": "object",
@@ -668,6 +671,7 @@ impl crate::llm::tool::Tool for MailboxCreateTool {
                                 }
                             },
                             "multi_select": {"type": "boolean"},
+                            "optional": {"type": "boolean", "description": "Allow an explicit Skip. Omit or set false when an answer is required."},
                             "allow_free_text": {"type": "boolean", "description": "Offer an \"Other\" free-text answer."}
                         },
                         "required": ["version", "prompt", "options"]
@@ -822,29 +826,6 @@ pub async fn list_mailbox_items(
     );
     let response = graphql_with_transaction_retry(node, &query, "list mailbox items").await?;
     rows(&response, MAILBOX_COLLECTION)
-}
-
-pub async fn dismiss_mailbox_item(
-    node: &Arc<EmbeddedNode>,
-    doc_id: &str,
-    principal_did: &str,
-) -> Result<MailboxItem> {
-    let item = load_mailbox_item(node, doc_id)
-        .await?
-        .context("MailboxItem not found")?;
-    if item.requester_did != principal_did.trim() {
-        bail!("only requester_did may dismiss a MailboxItem");
-    }
-    if item.parsed_status().is_some_and(MailboxStatus::is_terminal) {
-        return Ok(item);
-    }
-    if item.parsed_status() != Some(MailboxStatus::Open) {
-        bail!("MailboxItem has unknown status {:?}", item.status);
-    }
-    transition_open_item(node, &item, MailboxStatus::Dismissed, None).await?;
-    load_mailbox_item(node, doc_id)
-        .await?
-        .context("dismissed MailboxItem disappeared")
 }
 
 async fn transition_open_item(
