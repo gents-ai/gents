@@ -1699,7 +1699,7 @@ mod tests {
         .await;
         let reply = host_reply(&service, "wf-pause", "/workflow pause alpha").await;
         assert!(reply.contains("alpha"), "{reply}");
-        assert!(reply.contains("/workflow resume alpha"), "{reply}");
+        assert!(reply.contains("how a paused run is resumed"), "{reply}");
         assert_eq!(
             job_state(&service, "wf-pause", "call-a").await,
             JobState::Paused
