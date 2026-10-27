@@ -1,3 +1,5 @@
+#[path = "support/p2p_bind.rs"]
+mod p2p_bind;
 mod support;
 use support::graphql::graphql_mutation_with_variables;
 use support::*;
@@ -1791,6 +1793,8 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
+    p2p_bind::assert_ipv4_bind_scope(serve.child.id(), &readiness, "127.0.0.1:0".parse()?).await?;
+
     assert_eq!(
         readiness.get("node_did").and_then(Value::as_str),
         Some(node_did.as_str())
@@ -1902,6 +1906,12 @@ async fn server_listens_where_the_homes_network_settings_say() -> Result<()> {
 
     let (mut serve, readiness) = spawn_server_with_ready_json(&home_dir, port, &[], &[])?;
     wait_for_port(port, &mut serve)?;
+    p2p_bind::assert_ipv4_bind_scope(
+        serve.child.id(),
+        &readiness,
+        std::net::SocketAddr::from(([127, 0, 0, 1], p2p_port)),
+    )
+    .await?;
     let listen = readiness
         .get("p2p_listen_addresses")
         .and_then(Value::as_array)
