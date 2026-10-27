@@ -91,6 +91,37 @@ function harnessRequestOutcome(
   };
 }
 
+/* a conversation that runs from yesterday into today */
+function dayItems(): RenderedTimelineItem[] {
+  const at = (daysAgo: number, hour: number) => {
+    const date = new Date();
+    date.setDate(date.getDate() - daysAgo);
+    date.setHours(hour, 15, 0, 0);
+    return date.toISOString();
+  };
+  const user = (sequence: number, content: string, timestamp: string) => ({
+    kind: "userMessage" as const,
+    itemKey: `day-user-${sequence}`,
+    requestId: `day-request-${sequence}`,
+    ownsTurn: true,
+    sequence,
+    content,
+    timestamp,
+    reconstruction: HARNESS_READY_RECONSTRUCTION,
+  });
+  return [
+    user(2, "Can you look at why the parser drops trailing comments?", at(1, 16)),
+    harnessAssistantItem({
+      itemKey: "day-assistant-3",
+      sequence: 3,
+      content: "It stops at the last token, so a comment after it is never read.",
+      reasoning: null,
+      timestamp: at(1, 16),
+    }),
+    user(4, "Good morning. Let's fix it and add a test.", at(0, 9)),
+  ];
+}
+
 function harnessAssistantItem(
   item: Omit<
     Extract<RenderedTimelineItem, { kind: "assistantMessage" }>,
@@ -120,7 +151,8 @@ export type DesktopUiHarnessScenario =
   | "mobile-performance"
   | "session-hydration"
   | "sync-offline"
-  | "sync-failed";
+  | "sync-failed"
+  | "days";
 
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
@@ -485,6 +517,7 @@ export function createDesktopUiHarness(
             },
           ]
         : []),
+      ...(scenario === "days" ? dayItems() : []),
       ...(scenario === "coding"
         ? [
             {
@@ -3687,6 +3720,7 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "session-hydration":
     case "sync-offline":
     case "sync-failed":
+    case "days":
       return value;
     default:
       return "default";

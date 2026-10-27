@@ -55,6 +55,7 @@ import {
 } from "./TranscriptInputs";
 import { type ParentWork } from "./parentWork";
 import { useEditInBranch } from "./session/editInBranch";
+import { DayMarker, dayOpenings } from "./TranscriptMarker";
 import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
 import { readableReasoning, reasoningWithheld } from "./tool-summary";
 import { groupTranscript, type TranscriptEntry } from "./transcript-groups";
@@ -379,11 +380,14 @@ const ItemRow = memo(function ItemRow({
   rowKey,
   item,
   final,
+  day,
 }: {
   /** the key the row is drawn under, shared by every row for the message */
   rowKey: string;
   item: RenderedTimelineItem;
   final: boolean;
+  /** the day this row opens, when it is the first of its day */
+  day: number | null;
 }) {
   return (
     <div
@@ -393,6 +397,11 @@ const ItemRow = memo(function ItemRow({
       }
       className="group/response min-w-0 pb-5"
     >
+      {day !== null && (
+        <div className="pb-5">
+          <DayMarker day={day} />
+        </div>
+      )}
       <TranscriptItem item={item} final={final} />
     </div>
   );
@@ -582,6 +591,18 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     return keys;
   }, [entries, inFlight]);
   const groupState = useGroupState(sessionKey);
+  const dayOpens = useMemo(
+    () =>
+      dayOpenings(
+        entries,
+        (entry) => entry.key,
+        (entry) =>
+          entry.kind === "item" && "timestamp" in entry.item
+            ? entry.item.timestamp
+            : null,
+      ),
+    [entries],
+  );
 
   const entryKey = useCallback(
     (entry: TranscriptEntry) =>
@@ -759,6 +780,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
                         rowKey={drawKey(keys, entry.item)}
                         item={entry.item}
                         final={finalKeys.has(entry.key)}
+                        day={dayOpens.get(entry.key) ?? null}
                       />
                     ) : (
                       <GroupRow entry={entry} workers={workers} />
