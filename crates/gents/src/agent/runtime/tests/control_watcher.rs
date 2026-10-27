@@ -99,6 +99,23 @@ async fn run_test_control_watcher(inputs: ControlWatcherInputs) -> Result<()> {
     run_control_watcher_with_timing(inputs, TEST_CONTROL_WATCHER_TIMING).await
 }
 
+fn test_tool_runtime(
+    node: &Arc<defra_node::EmbeddedNode>,
+    node_did: &str,
+    resolve_context: &crate::agent::DocumentResolveContext,
+) -> crate::tool_surface::ToolRuntimeContext {
+    crate::tool_surface::ToolRuntimeContext::new_with_node_did(
+        node.clone(),
+        crate::mcp_pool::McpPool::default(),
+        crate::health_checker::ServiceHealthMap::default(),
+        "localhost",
+        None,
+        node_did,
+        Some(resolve_context.identity.clone()),
+    )
+    .with_plugins(resolve_context.plugins.clone())
+}
+
 async fn update_node_enabled(node: &defra_node::EmbeddedNode, node_did: &str, enabled: bool) {
     let escaped_node_did = escape_graphql_string(node_did);
     let mutation = format!(
@@ -214,6 +231,7 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
             node: node.clone(),
             subscription,
             node_did: agent.node_did().to_string(),
+            tool_runtime: test_tool_runtime(&node, agent.node_did(), &resolve_context),
             resolve_context,
             proposals_tx: proposal_tx,
             runtime_status: runtime_status.clone(),
@@ -330,6 +348,7 @@ async fn control_watcher_reconciles_a_local_write_without_the_replication_deboun
             node: node.clone(),
             subscription,
             node_did: agent.node_did().to_string(),
+            tool_runtime: test_tool_runtime(&node, agent.node_did(), &resolve_context),
             resolve_context,
             proposals_tx: proposal_tx,
             runtime_status,
@@ -420,6 +439,7 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
             node: node.clone(),
             subscription: subscribe_control_changes(&node).unwrap(),
             node_did: agent.node_did().to_string(),
+            tool_runtime: test_tool_runtime(&node, agent.node_did(), &resolve_context),
             resolve_context,
             proposals_tx: proposal_tx,
             runtime_status: runtime_status.clone(),
@@ -544,6 +564,7 @@ async fn control_watcher_recovers_after_resolve_error() {
             node: node.clone(),
             subscription: subscribe_control_changes(&node).unwrap(),
             node_did: agent.node_did().to_string(),
+            tool_runtime: test_tool_runtime(&node, agent.node_did(), &resolve_context),
             resolve_context,
             proposals_tx: proposal_tx,
             runtime_status: runtime_status.clone(),
@@ -617,6 +638,7 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
         node: node.clone(),
         subscription: subscribe_control_changes(&node).unwrap(),
         node_did: agent.node_did().to_string(),
+        tool_runtime: test_tool_runtime(&node, agent.node_did(), &resolve_context),
         resolve_context,
         proposals_tx: proposal_tx,
         runtime_status: runtime_status.clone(),
@@ -765,6 +787,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
         node: node.clone(),
         subscription,
         node_did: node_did.clone(),
+        tool_runtime: test_tool_runtime(&node, &node_did, &resolve_context),
         resolve_context,
         proposals_tx: proposal_tx,
         runtime_status: runtime_status.clone(),
@@ -902,6 +925,7 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
         node: node.clone(),
         subscription: subscribe_control_changes(&node).unwrap(),
         node_did: node_did.clone(),
+        tool_runtime: test_tool_runtime(&node, &node_did, &resolve_context),
         resolve_context,
         proposals_tx: proposal_tx,
         runtime_status,
@@ -915,23 +939,10 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
         .await
         .expect("the Tools write naming a missing plugin must reach the reconcile owner")
         .expect("proposal channel");
-    let absent_surface = absent
-        .tool_surfaces
-        .get(&agent_id)
-        .expect("default agent_config tool surface");
     assert_eq!(
-        absent_surface.plugin_resolutions(),
-        &[(
-            crate::document_config::PluginToolRef {
-                tool_calls: false,
-                plugin: "fixture/list_files".to_string(),
-                digest: None,
-                input_fields: Vec::new(),
-                job: None,
-            },
-            None
-        )],
-        "while the plugin is missing the surface records no identity"
+        absent.unavailable_agents[&agent_id].public_reason,
+        AgentReadinessUnavailableReason::ToolSurfaceUnavailable,
+        "while the plugin is missing the agent's tools cannot build"
     );
 
     crate::plugin::store::write_record(plugin_home.path(), &installed_record()).unwrap();
@@ -960,6 +971,75 @@ async fn control_watcher_proposes_a_new_fingerprint_when_the_named_plugin_instal
     assert!(
         proposal_rx.try_recv().is_err(),
         "a settled same-fingerprint observation must not keep proposing"
+    );
+
+    let _ = shutdown_tx.send(true);
+    watcher_task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn control_watcher_keeps_an_agent_whose_tools_fail_to_build_demoted() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("control-watcher-unbuildable-tools"));
+    bind_default_agent_backend(
+        &node,
+        identity.did(),
+        "backend-unbuildable-tools",
+        "http://127.0.0.1:8116/v1",
+    )
+    .await;
+    let plugin_home = tempfile::tempdir().unwrap();
+    let agent = crate::Gents::from_default_agent_documents(
+        node.clone(),
+        identity,
+        crate::agent::DocumentRuntimeOptions {
+            tool_ceiling: ToolCeiling::meta_only(),
+            plugin_home: Some(plugin_home.path().to_path_buf()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let node_did = agent.node_did().to_string();
+    let agent_id = agent.default_agent_id().to_string();
+    // As at startup: the Tools document already names a plugin that is not
+    // installed, so the agent's tool surface resolves but cannot build.
+    write_tools_naming_plugin(&node, &node_did, &format!("{agent_id}:tools")).await;
+    let resolve_context = agent
+        .document_runtime_context()
+        .cloned()
+        .expect("document-backed agent");
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), node_did.clone());
+    runtime_status.initialize_startup(&agent_id).await.unwrap();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (proposal_tx, mut proposal_rx) = mpsc::channel(8);
+    let (health_tx, health_rx) = mpsc::channel::<()>(1);
+    let watcher_task = tokio::spawn(run_test_control_watcher(ControlWatcherInputs {
+        node: node.clone(),
+        subscription: subscribe_control_changes(&node).unwrap(),
+        node_did: node_did.clone(),
+        tool_runtime: test_tool_runtime(&node, &node_did, &resolve_context),
+        resolve_context,
+        proposals_tx: proposal_tx,
+        runtime_status,
+        health_events_rx: health_rx,
+        shutdown: shutdown_rx,
+    }));
+
+    // The watcher's first resolve after startup, woken by an unrelated event.
+    health_tx.send(()).await.unwrap();
+    let proposal = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
+        .await
+        .expect("the health event must reach the reconcile owner")
+        .expect("proposal channel");
+    assert!(
+        !proposal.agents.contains_key(&agent_id),
+        "an agent whose tools fail to build must not come back runnable"
+    );
+    assert_eq!(
+        proposal.unavailable_agents[&agent_id].public_reason,
+        AgentReadinessUnavailableReason::ToolSurfaceUnavailable
     );
 
     let _ = shutdown_tx.send(true);

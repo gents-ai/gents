@@ -173,7 +173,8 @@ pub(super) fn refusal_text(refusal: Refusal, tool: &str, address: &str) -> (&'st
             "Next: wait for a background completion notification, then retry".to_owned(),
         ),
         Refusal::Terminal => ("the job already ended", inspect),
-        Refusal::ResumeUnknown | Refusal::ResumeNotHead => {
+        Refusal::ResumeUnknown => ("the job's resume named a row that does not exist", inspect),
+        Refusal::ResumeNotHead => {
             ("the job's resume named a row that is not the newest of a run", inspect)
         }
     }
@@ -349,11 +350,13 @@ async fn step_on(
             let trapped = error
                 .chain()
                 .any(|cause| cause.downcast_ref::<GuestTrap>().is_some());
-            let error = if trapped {
-                anyhow::Error::new(StepFailure::Trap(format!("{error:#}")))
+            // A non-trap call error counts too: it raises no progress
+            // revision, so recovery would otherwise re-step the row every sweep.
+            let error = anyhow::Error::new(if trapped {
+                StepFailure::Trap(format!("{error:#}"))
             } else {
-                error
-            };
+                StepFailure::NotRun(format!("{error:#}"))
+            });
             return Err(error.context(format!("the step of job row {row_doc_id} did not run")));
         }
     };
@@ -837,7 +840,7 @@ async fn fail_closed(
     Ok(StepOutcome::Refused(refusal))
 }
 
-/// A step invocation that failed: the three failures that count towards
+/// A step invocation that failed: the failures that count towards
 /// `plugin_job_step_failed`.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum StepFailure {
@@ -847,6 +850,8 @@ pub enum StepFailure {
     BudgetExhausted,
     #[error("the guest returned a malformed step output: {0}")]
     MalformedOutput(String),
+    #[error("the plugin call did not run: {0}")]
+    NotRun(String),
 }
 
 /// What a step failure means for the row.
@@ -2951,6 +2956,35 @@ pub(crate) mod tests {
             "{error:#}"
         );
         assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "running");
+        step.close().await;
+    }
+
+    #[tokio::test]
+    async fn a_step_call_error_that_is_not_a_trap_counts_towards_step_failed() {
+        let step = stepper_wat(r#"(module (memory (export "memory") 1))"#).await;
+        let error = run_step(&step.job.runtime, &step.row).await.unwrap_err();
+        assert!(
+            matches!(
+                error.downcast_ref::<StepFailure>(),
+                Some(StepFailure::NotRun(_))
+            ),
+            "the call error is not a trap: {error:#}"
+        );
+        let driver = JobDriver::new(step.job.runtime.clone());
+        let sweep = crate::plugin_job::recovery::redrive_running_jobs;
+        // The sweep re-steps the row, which has not stepped since adoption.
+        sweep(&driver).await.unwrap();
+        idle(&driver).await;
+        assert_eq!(step.row_json(&step.row).await["lifecycle_state"], "failed");
+        assert_eq!(
+            step.output(&step.row).await["code"],
+            "plugin_job_step_failed"
+        );
+        assert_eq!(
+            sweep(&driver).await.unwrap(),
+            0,
+            "a failed row is not re-stepped"
+        );
         step.close().await;
     }
 }

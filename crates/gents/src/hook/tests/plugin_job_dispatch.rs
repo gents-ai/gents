@@ -875,6 +875,11 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
     assert_eq!(again["code"], "plugin_job_resume_not_head", "{again}");
     let address = format!("{}:call-2", step.session_id);
     assert_eq!(
+        again["message"],
+        format!("{root_id} was already resumed by {address}; only a run's newest row resumes"),
+        "{again}"
+    );
+    assert_eq!(
         again["next"],
         format!("Next: `{TOOL} resume {address}`"),
         "{again}"
@@ -909,54 +914,6 @@ async fn resume_of_a_missing_row_names_the_cause_and_the_next_call() {
         "{refused}"
     );
     failed(&step.row_of("call-1").await, "policyDenied");
-    step.finish().await;
-}
-
-#[tokio::test]
-async fn resume_of_a_continued_row_names_the_newest_rows_address() {
-    let step = step0(adopting(), idle()).await;
-    step.call_as("call-1", ARGS).await;
-    let root = step.row_of("call-1").await["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    // The continuation row is pinned directly; a live resume is not what is under test.
-    step.reinstall(&json!({"result": "x"}));
-    step.call_as("call-2", ARGS).await;
-    let continuation = step.row_of("call-2").await["_docID"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let pin = JobPin {
-        plugin_ref: "team/plugin".to_owned(),
-        chain_root_doc_id: root.clone(),
-        resume_of: Some(root.clone()),
-        ..fixture_job_pin()
-    };
-    crate::config_client::ConfigAccess::transact_local_write(&step.node, None, "test.pin", |txn| {
-        let (doc, pin) = (&continuation, &pin);
-        Box::pin(async move { write_pin_in_txn(txn, doc, pin).await })
-    })
-    .await
-    .unwrap();
-
-    step.reinstall(&resuming(&root));
-    let refused = step
-        .call_as("call-3", r#"{"argv": ["resume", "root"]}"#)
-        .await;
-    assert_eq!(refused["code"], "plugin_job_resume_not_head", "{refused}");
-    let address = format!("{}:call-2", step.session_id);
-    assert_eq!(
-        refused["message"],
-        format!("{root} was already resumed by {address}; only a run's newest row resumes"),
-        "{refused}"
-    );
-    assert_eq!(
-        refused["next"],
-        format!("Next: `{TOOL} resume {address}`"),
-        "{refused}"
-    );
-    failed(&step.row_of("call-3").await, "policyDenied");
     step.finish().await;
 }
 

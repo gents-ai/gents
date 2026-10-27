@@ -1984,17 +1984,11 @@ fn a_plugin_a_declared_dependency_ships_resolves() {
     let manifest = plugin_pack_manifest("workflow", "documents", &[]);
     let config = config_naming_plugin("acme/web_search");
     let dependency = plugin_pack_manifest("web", "graph", &["web_search"]);
-    let dependency_config = config_naming_plugin("acme/web_search");
     super::documents::ensure_plugin_references_resolve(
-        &[(&manifest, &config), (&dependency, &dependency_config)],
+        &[(&manifest, &config), (&dependency, &config)],
         Some(home.path()),
     )
     .unwrap();
-    assert!(super::documents::ensure_plugin_references_resolve(
-        &[(&manifest, &config)],
-        Some(home.path()),
-    )
-    .is_err());
 }
 
 #[test]

@@ -1,6 +1,6 @@
 use super::support::*;
 use super::*;
-use crate::identity::NodeIdentity;
+use crate::identity::{KeyIdentity, NodeIdentity};
 
 const STARTUP_DEADLOCK_GUARD: Duration = Duration::from_secs(30);
 
@@ -1131,48 +1131,37 @@ async fn write_runtime_documents(
     .unwrap();
 }
 
-fn tools_naming_missing_plugin(node_did: &str, tools_id: &str) -> (crate::Collection, Value) {
-    (
-        crate::Collection::Tools,
-        serde_json::json!({"node_did": node_did, "tools_id": tools_id,
-            "integrations": {"plugins": [{"plugin": "acme/missing_plugin"}]}}),
-    )
-}
-
-#[tokio::test]
-async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
+/// A node with runtime schemas, an identity and a default agent backend
+/// bound to the returned model endpoint, which the caller keeps alive.
+async fn missing_plugin_node(
+    label: &str,
+) -> (
+    Arc<defra_node::EmbeddedNode>,
+    Arc<KeyIdentity>,
+    String,
+    MockModelEndpoint,
+) {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("startup-missing-plugin"));
+    let identity = Arc::new(test_identity(&format!("startup-{label}")));
     let endpoint = MockModelEndpoint::start("default").unwrap();
     bind_default_agent_backend(
         &node,
         identity.did(),
-        "backend-missing-plugin",
+        &format!("backend-{label}"),
         endpoint.endpoint(),
     )
     .await;
     let node_did = identity.did().to_string();
-    let default_agent_id = crate::default_agent_id_for_node(&node_did);
-    let broken = "web_persona";
-    write_runtime_documents(
-        &node,
-        vec![
-            (
-                crate::Collection::Agent,
-                serde_json::json!({"node_did": node_did, "agent_id": broken,
-                    "context_id": "web_persona:context",
-                    "inference_profile_id": format!("{default_agent_id}:inference")}),
-            ),
-            (
-                crate::Collection::AgentContext,
-                serde_json::json!({"node_did": node_did, "context_id": "web_persona:context",
-                    "tools_id": "web_persona:tools"}),
-            ),
-            tools_naming_missing_plugin(&node_did, "web_persona:tools"),
-        ],
-    )
-    .await;
+    (node, identity, node_did, endpoint)
+}
+
+/// An agent loaded from the node's documents with a meta-only tool ceiling
+/// and an empty plugin home, which the caller keeps alive.
+async fn documents_agent(
+    node: &Arc<defra_node::EmbeddedNode>,
+    identity: &Arc<KeyIdentity>,
+) -> (crate::Gents, tempfile::TempDir) {
     let plugin_home = tempfile::tempdir().unwrap();
     let agent = crate::Gents::from_default_agent_documents(
         node.clone(),
@@ -1185,6 +1174,50 @@ async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
     )
     .await
     .unwrap();
+    (agent, plugin_home)
+}
+
+fn agent_document(node_did: &str, agent_id: &str) -> (crate::Collection, Value) {
+    let default_agent_id = crate::default_agent_id_for_node(node_did);
+    (
+        crate::Collection::Agent,
+        serde_json::json!({"node_did": node_did, "agent_id": agent_id,
+            "context_id": format!("{agent_id}:context"),
+            "inference_profile_id": format!("{default_agent_id}:inference")}),
+    )
+}
+
+fn context_document(node_did: &str, agent_id: &str) -> (crate::Collection, Value) {
+    (
+        crate::Collection::AgentContext,
+        serde_json::json!({"node_did": node_did, "context_id": format!("{agent_id}:context"),
+            "tools_id": format!("{agent_id}:tools")}),
+    )
+}
+
+fn tools_naming_missing_plugin(node_did: &str, tools_id: &str) -> (crate::Collection, Value) {
+    (
+        crate::Collection::Tools,
+        serde_json::json!({"node_did": node_did, "tools_id": tools_id,
+            "integrations": {"plugins": [{"plugin": "acme/missing_plugin"}]}}),
+    )
+}
+
+#[tokio::test]
+async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
+    let (node, identity, node_did, _endpoint) = missing_plugin_node("missing-plugin").await;
+    let default_agent_id = crate::default_agent_id_for_node(&node_did);
+    let broken = "web_persona";
+    write_runtime_documents(
+        &node,
+        vec![
+            agent_document(&node_did, broken),
+            context_document(&node_did, broken),
+            tools_naming_missing_plugin(&node_did, "web_persona:tools"),
+        ],
+    )
+    .await;
+    let (agent, _plugin_home) = documents_agent(&node, &identity).await;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
@@ -1239,36 +1272,14 @@ async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
 
 #[tokio::test]
 async fn run_agent_fails_when_every_agent_names_a_missing_plugin() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("startup-all-missing-plugin"));
-    let endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
-        "backend-all-missing-plugin",
-        endpoint.endpoint(),
-    )
-    .await;
-    let node_did = identity.did().to_string();
+    let (node, identity, node_did, _endpoint) = missing_plugin_node("all-missing-plugin").await;
     let tools_id = format!("{}:tools", crate::default_agent_id_for_node(&node_did));
     write_runtime_documents(
         &node,
         vec![tools_naming_missing_plugin(&node_did, &tools_id)],
     )
     .await;
-    let plugin_home = tempfile::tempdir().unwrap();
-    let agent = crate::Gents::from_default_agent_documents(
-        node.clone(),
-        identity.clone(),
-        crate::agent::DocumentRuntimeOptions {
-            tool_ceiling: ToolCeiling::meta_only(),
-            plugin_home: Some(plugin_home.path().to_path_buf()),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
+    let (agent, _plugin_home) = documents_agent(&node, &identity).await;
 
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
     let error = agent
@@ -1289,43 +1300,15 @@ async fn run_agent_fails_when_every_agent_names_a_missing_plugin() {
 
 #[tokio::test]
 async fn startup_demotion_cascades_to_targets_schedules_and_tasks() {
-    let node = test_node().await;
-    ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let identity = Arc::new(test_identity("startup-demotion-cascade"));
-    let endpoint = MockModelEndpoint::start("default").unwrap();
-    bind_default_agent_backend(
-        &node,
-        identity.did(),
-        "backend-demotion-cascade",
-        endpoint.endpoint(),
-    )
-    .await;
-    let node_did = identity.did().to_string();
-    let default_agent_id = crate::default_agent_id_for_node(&node_did);
-    let inference_profile_id = format!("{default_agent_id}:inference");
-    let agent_document = |agent_id: &str| {
-        (
-            crate::Collection::Agent,
-            serde_json::json!({"node_did": node_did, "agent_id": agent_id,
-                "context_id": format!("{agent_id}:context"),
-                "inference_profile_id": inference_profile_id}),
-        )
-    };
-    let context_document = |agent_id: &str| {
-        (
-            crate::Collection::AgentContext,
-            serde_json::json!({"node_did": node_did, "context_id": format!("{agent_id}:context"),
-                "tools_id": format!("{agent_id}:tools")}),
-        )
-    };
+    let (node, identity, node_did, _endpoint) = missing_plugin_node("demotion-cascade").await;
     write_runtime_documents(
         &node,
         vec![
-            agent_document("web_persona"),
-            context_document("web_persona"),
+            agent_document(&node_did, "web_persona"),
+            context_document(&node_did, "web_persona"),
             tools_naming_missing_plugin(&node_did, "web_persona:tools"),
-            agent_document("caller"),
-            context_document("caller"),
+            agent_document(&node_did, "caller"),
+            context_document(&node_did, "caller"),
             (
                 crate::Collection::Tools,
                 serde_json::json!({"node_did": node_did, "tools_id": "caller:tools",
@@ -1354,18 +1337,7 @@ async fn startup_demotion_cascades_to_targets_schedules_and_tasks() {
         ],
     )
     .await;
-    let plugin_home = tempfile::tempdir().unwrap();
-    let agent = crate::Gents::from_default_agent_documents(
-        node.clone(),
-        identity.clone(),
-        crate::agent::DocumentRuntimeOptions {
-            tool_ceiling: ToolCeiling::meta_only(),
-            plugin_home: Some(plugin_home.path().to_path_buf()),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
+    let (agent, _plugin_home) = documents_agent(&node, &identity).await;
     let tool_runtime = crate::tool_surface::ToolRuntimeContext::new_with_node_did(
         agent.node.clone(),
         agent.mcp_pool.clone(),
