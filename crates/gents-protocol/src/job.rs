@@ -1049,9 +1049,22 @@ pub struct PluginJobSettings {
     /// Seconds the job may run.
     #[serde(default = "PluginJobSettings::default_max_wall_secs")]
     pub max_wall_secs: u64,
-    /// Operator-only rules for dynamic scripts, trusted packs and project roots.
-    #[serde(default)]
+    /// Operator-only rules for dynamic scripts and trusted packs.
+    #[serde(default, deserialize_with = "policy_without_project_roots")]
     pub policy: JobPolicy,
+}
+
+/// Reads a policy, dropping the `project_roots` a 0.21 Tools document may
+/// still carry. Accepted for this release only.
+fn policy_without_project_roots<'de, D>(deserializer: D) -> Result<JobPolicy, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut policy = serde_json::Value::deserialize(deserializer)?;
+    if let Some(fields) = policy.as_object_mut() {
+        fields.remove("project_roots");
+    }
+    serde_json::from_value(policy).map_err(serde::de::Error::custom)
 }
 
 impl PluginJobSettings {

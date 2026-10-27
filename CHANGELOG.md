@@ -31,6 +31,9 @@ source consistency checks, not a separate runtime compatibility version.
   A job's origin is decided by its call: a call that carries a `script` is
   `dynamic` and the job policy gates it; any other call runs the plugin
   artifact and is `installed`. Job next-call hints name `gents job` verbs.
+  Upgrade: a Tools document that still sets `job.policy.project_roots`
+  loads in this release with the key ignored and dropped on the next write;
+  remove it before the next release.
 
 ## 0.21.0 - 2026-10-23
 

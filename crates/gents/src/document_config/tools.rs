@@ -1455,6 +1455,21 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_0_21_job_policy_with_project_roots_still_loads_and_drops_them() {
+        let tools = document(
+            json!({"integrations":{"plugins":[{"plugin":"ns/runner","job":{
+                "agent_targets":["a"],
+                "policy":{"trusted_packs":["ns/pack"],"project_roots":["/work"]},
+            }}]}}),
+        );
+        tools.validate().unwrap();
+        let policy =
+            &serde_json::to_value(&tools).unwrap()["integrations"]["plugins"][0]["job"]["policy"];
+        assert_eq!(policy["trusted_packs"], json!(["ns/pack"]), "{policy}");
+        assert!(policy.get("project_roots").is_none(), "{policy}");
+    }
+
     mod wire {
         use super::super::*;
         use crate::document_config::AgentContext;

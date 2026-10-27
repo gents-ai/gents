@@ -893,6 +893,11 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
         .call_as("call-2", r#"{"argv": ["resume", "root"]}"#)
         .await;
     assert_eq!(answer["status"], "running", "{answer}");
+    assert_eq!(
+        answer["next"],
+        format!("Next: `gents job show {}:call-2`", step.session_id),
+        "{answer}"
+    );
     let next = step.row_of("call-2").await;
     let pin = step.pin_of(&next).await;
     assert_eq!(pin.handle, root_pin.handle);
@@ -922,7 +927,7 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
     );
     assert_eq!(
         again["next"],
-        format!("Next: `{TOOL} resume {address}`"),
+        format!("Next: `gents job show {address}`; the `{TOOL}` help says how a run is resumed"),
         "{again}"
     );
     failed(&step.row_of("call-3").await, "policyDenied");
@@ -1036,7 +1041,9 @@ async fn resume_of_a_missing_row_names_the_cause_and_the_next_call() {
     );
     assert_eq!(
         refused["next"],
-        format!("Next: `{TOOL} resume <address>` with the address the run's receipt printed"),
+        format!(
+            "Next: `gents job show <address>` with the address the run's receipt printed; the `{TOOL}` help says how a run is resumed"
+        ),
         "{refused}"
     );
     failed(&step.row_of("call-1").await, "policyDenied");
