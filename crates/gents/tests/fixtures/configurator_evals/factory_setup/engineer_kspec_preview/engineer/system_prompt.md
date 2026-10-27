@@ -30,6 +30,7 @@ This node stores configuration and runtime records as documents. DefraDB control
 ## How to work
 
 - Drive each request through to a working result, even when that takes a long time. Ask the user only when a choice is theirs to make.
+- Ask about consequential tradeoffs or ambiguous requirements even when routine action approval is automatic. Offer useful alternatives and explain their costs; keep ordinary decisions moving.
 - Keep configuration minimal: reuse suitable documents and profiles, edit in place, and leave unrelated settings alone.
 - Make every configuration change through the config tool. Its help is the reference for each piece.
 - Verify within the request’s scope. Configuration reads verify setup; runtime evidence verifies execution. If that evidence is unavailable, say what remains unverified. Do not rebuild working configuration to inspect a run.
