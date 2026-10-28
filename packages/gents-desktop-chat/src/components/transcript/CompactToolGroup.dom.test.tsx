@@ -162,7 +162,7 @@ it.each([
         ]}
       />,
     );
-    const total = `Ran ${1 + commands} ${commands ? "commands" : "command"}${actions ? ", explored files" : ""}`;
+    const total = `Ran ${1 + commands} ${commands ? "commands" : "command"}${actions ? `, ran ${actions} file ${actions === 1 ? "action" : "actions"}` : ""}`;
     const summary = screen.getByRole("button", {
       name: `View actions: ${total} · ${label}`,
     });
