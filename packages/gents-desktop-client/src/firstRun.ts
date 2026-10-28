@@ -102,11 +102,15 @@ export function projectFirstRunPhase(
   initConfigStatus: DesktopClientSnapshot["bootstrap"]["initConfigStatus"],
   needsSetup: boolean,
   authoritative: boolean,
+  localRuntimeAllowed = true,
+  remoteConfigured = false,
 ): FirstRunPhase {
   if (phase !== "unknown") return phase;
   if (!snapshotReady) return "unknown";
+  if (initConfigStatus !== "absent" && initConfigStatus !== "configured")
+    return "unknown";
+  if (!localRuntimeAllowed) return remoteConfigured ? "done" : "active";
   if (initConfigStatus === "absent") return "active";
-  if (initConfigStatus !== "configured") return "unknown";
   if (!authoritative) return "unknown";
   return needsSetup ? "active" : "done";
 }

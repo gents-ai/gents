@@ -9,15 +9,13 @@ import {
   type FirstRunPhase,
 } from "../lib/firstRun";
 import { useApp } from "./AppContext";
+import { supportsLocalManagedServer } from "../../lib/shellPlatform";
 
-/**
- * Setup starts only when init.json is explicitly absent or a configured
- * home has a complete operator config read. Unreadable and partial state
- * remain pending. Once the wizard owns the window, it remains there until
- * its own completion callback releases it.
- */
+/** Remote clients have no local init.json; persisted enrollment records setup
+ * completion independently of live route readiness after a restart. */
 export function useFirstRun(generation: number, startupReady: boolean) {
   const { stores } = useApp();
+  const localRuntimeAllowed = supportsLocalManagedServer();
   const facts = useStore(
     stores.client,
     useShallow((state) => {
@@ -28,6 +26,9 @@ export function useFirstRun(generation: number, startupReady: boolean) {
         hasSnapshot: snapshot !== null,
         initConfigStatus,
         needsSetup: snapshot !== null && needsFirstRunSetup(snapshot),
+        remoteConfigured:
+          snapshot?.client?.deployments.some((node) => node.source === "enrollment") ??
+          false,
         authoritative:
           initConfigStatus === "configured" &&
           snapshot !== null &&
@@ -47,6 +48,8 @@ export function useFirstRun(generation: number, startupReady: boolean) {
       facts.initConfigStatus,
       facts.needsSetup,
       facts.authoritative,
+      localRuntimeAllowed,
+      facts.remoteConfigured,
     );
   }
   if (held.generation !== generation || held.phase !== phase) {

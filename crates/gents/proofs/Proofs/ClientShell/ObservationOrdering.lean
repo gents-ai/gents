@@ -129,19 +129,40 @@ inductive FirstRunPhase where
   | unknown | active | done
   deriving DecidableEq, Repr
 
-/-- First-run enters setup only after the local init-config owner explicitly
-reports absence, or after a configured home has a complete operator snapshot.
-Unreadable init state and partial operator snapshots remain unresolved. Once
-setup owns the window, observations cannot restart or dismiss it. -/
-def observeFirstRun (phase : FirstRunPhase) (snapshotReady initConfigAbsent needsSetup authoritative : Bool) : FirstRunPhase :=
+inductive InitConfigStatus where
+  | absent | configured | unreadable | unknown
+  deriving DecidableEq, Repr
+
+/-- Remote-only clients have no local init file. A persisted enrollment marks
+configuration complete even while the live route reconnects after restart.
+Enrollment authority and send readiness remain with their existing owners;
+operator configuration access is not required. Unreadable bootstrap state stays
+unresolved, and an active wizard retains ownership until explicit completion. -/
+def observeFirstRun (phase : FirstRunPhase) (snapshotReady : Bool)
+    (initConfigStatus : InitConfigStatus)
+    (needsSetup authoritative localRuntimeAllowed remoteConfigured : Bool) : FirstRunPhase :=
   match phase with
   | .active => .active
   | .done => .done
   | .unknown =>
       if !snapshotReady then .unknown
-      else if initConfigAbsent then .active
-      else if !authoritative then .unknown
-      else if needsSetup then .active else .done
+      else match initConfigStatus with
+        | .unreadable | .unknown => .unknown
+        | status =>
+          if !localRuntimeAllowed then
+            if remoteConfigured then .done else .active
+          else if status == .absent then .active
+          else if !authoritative then .unknown
+          else if needsSetup then .active else .done
+
+theorem configured_remote_completes_without_operator_access :
+    observeFirstRun .unknown true .absent true false false true = .done := by rfl
+
+theorem unconfigured_remote_keeps_setup :
+    observeFirstRun .unknown true .absent false true false false = .active := by rfl
+
+theorem unreadable_remote_bootstrap_stays_unresolved (ready : Bool) :
+    observeFirstRun .unknown true .unreadable false true false ready = .unknown := by rfl
 
 /-- A client observation can recover a client error, not managed-server authority.
 

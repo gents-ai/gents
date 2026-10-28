@@ -553,6 +553,34 @@ describe("first-run local node startup", () => {
     expect(summary).not.toHaveTextContent("Remote Node");
   }, 15_000);
 
+  it("does not provision an unrelated node when the initialized node is absent", async () => {
+    const run = firstRun();
+    const remote = {
+      ...deployment,
+      nodeDid: "did:key:unrelated",
+      source: "enrollment",
+    };
+    run.api.fetchDesktopSnapshot = vi.fn(async () => ({
+      bootstrap,
+      client: { deployments: [remote] },
+    }));
+    renderIn(
+      testApp({ api: run.api, snapshot: run.snapshot }),
+      <SetupScreen onDone={vi.fn()} />,
+    );
+    const next = screen.getByTestId("setup-next");
+    await waitFor(() => expect(next).toBeEnabled());
+    await userEvent.click(next);
+    run.finishStart();
+    await screen.findByText(
+      "The initialized node is not available in the client snapshot.",
+    );
+    expect(run.api.patchConfigComponents).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("heading", { name: "Gents is ready" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("keeps observing a runtime its start left migrating, then continues without restarting it", async () => {
     const run = firstRun();
     renderIn(
