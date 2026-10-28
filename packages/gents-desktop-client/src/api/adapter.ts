@@ -127,6 +127,8 @@ export function createDesktopApiAdapter(
         request,
       }),
     listMailbox: () => invokeDesktop("desktop_mailbox_list"),
+    observeMailboxItem: (request) =>
+      invokeDesktop("desktop_mailbox_observe", { request }),
     startMailboxRequest: (itemId) =>
       invokeDesktop("desktop_mailbox_start_request", {
         request: { itemId },

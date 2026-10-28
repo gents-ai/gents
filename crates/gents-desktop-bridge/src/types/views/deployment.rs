@@ -300,6 +300,14 @@ pub struct MailboxItemView {
     pub created_at: String,
 }
 
+/// An exact native item read; absence from the open mailbox is not closure.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MailboxItemObservation {
+    pub item: MailboxItemView,
+    pub terminal: bool,
+}
+
 impl From<&MailboxItemRow> for MailboxItemView {
     fn from(row: &MailboxItemRow) -> Self {
         Self {

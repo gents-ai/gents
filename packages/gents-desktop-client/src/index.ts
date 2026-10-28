@@ -29,6 +29,8 @@ export type {
   ManagedServerResetResult,
   HomeResetDisposition,
 } from "./api/types.js";
+export type { MailboxItemObservation } from "./generated/MailboxItemObservation.js";
+export type { MailboxItemObservationRequest } from "./generated/MailboxItemObservationRequest.js";
 export type { IncompatibleStoreView } from "./generated/IncompatibleStoreView.js";
 export type { ManagedServerToolCeiling } from "./generated/ManagedServerToolCeiling.js";
 export type { FileChangeImages } from "./generated/FileChangeImages.js";

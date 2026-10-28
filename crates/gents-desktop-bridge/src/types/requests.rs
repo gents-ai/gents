@@ -141,6 +141,13 @@ pub struct MailboxItemRequest {
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MailboxItemObservationRequest {
+    pub client_did: String,
+    pub item_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionForkBeforeRequest {
     pub node_did: String,
     pub session_id: String,

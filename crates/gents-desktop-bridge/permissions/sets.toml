@@ -74,7 +74,7 @@ permissions = [
 [[set]]
 identifier = "mailbox-read"
 description = "Owner-scoped mailbox envelope reads"
-permissions = ["allow-desktop-mailbox-list"]
+permissions = ["allow-desktop-mailbox-list", "allow-desktop-mailbox-observe"]
 
 [[set]]
 identifier = "mailbox-control"

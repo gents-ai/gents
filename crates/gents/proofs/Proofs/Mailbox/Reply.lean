@@ -94,4 +94,56 @@ theorem reply_claim_preserves_identity (item post : Item) (envelope : ReplyEnvel
       rfl
   · simp at h
 
+/-- Confirmation is a persisted, verified caller receipt. The observation is a
+native read of the exact item; filtered-list absence supplies no observation.
+Acknowledgement must complete before the local answer cache is retired. -/
+structure AnswerCacheBinding where
+  client : String
+  node : String
+  agent : String
+  session : String
+  item : String
+  sourceItem : String
+  confirmed : Bool
+  deriving DecidableEq, Repr
+
+structure AnswerCacheObservation where
+  requester : String
+  node : String
+  agent : String
+  session : String
+  item : String
+  kind : Kind
+  handling : Handling
+  status : Status
+  deriving DecidableEq, Repr
+
+def mayRetireAnswerCache (binding : AnswerCacheBinding)
+    (observation : Option AnswerCacheObservation) (currentClient : String)
+    (acknowledged : Bool) : Bool :=
+  binding.confirmed && acknowledged && currentClient == binding.client &&
+    binding.sourceItem == binding.item &&
+    [binding.client, binding.node, binding.agent, binding.session, binding.item].all (· != "") &&
+    match observation with
+    | none => false
+    | some observed =>
+        observed.requester == binding.client && observed.node == binding.node &&
+        observed.agent == binding.agent && observed.session == binding.session &&
+        observed.item == binding.item && observed.kind == .ask &&
+        observed.handling == .startRequest && observed.status.terminal
+
+theorem retirement_requires_confirmed_acknowledgement
+    (binding : AnswerCacheBinding) (observation : Option AnswerCacheObservation)
+    (currentClient : String) (acknowledged : Bool)
+    (h : mayRetireAnswerCache binding observation currentClient acknowledged = true) :
+    binding.confirmed = true ∧ acknowledged = true := by
+  simp only [mayRetireAnswerCache, Bool.and_eq_true] at h
+  aesop
+
+theorem missing_item_cannot_retire_answer (binding : AnswerCacheBinding)
+    (currentClient : String) (acknowledged : Bool) :
+    mayRetireAnswerCache binding none currentClient acknowledged = false := by
+  simp [mayRetireAnswerCache]
+
+
 end Mailbox

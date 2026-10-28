@@ -80,6 +80,7 @@ const COMMANDS: &[&str] = &[
     "desktop_session_archive",
     "desktop_session_history",
     "desktop_mailbox_list",
+    "desktop_mailbox_observe",
     "desktop_mailbox_start_request",
     "desktop_mailbox_dismiss",
     "desktop_request_resend",
