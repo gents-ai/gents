@@ -249,6 +249,9 @@ function AddAgentDialog({ open, onClose }: { open: boolean; onClose: () => void 
           </label>
           <Input
             id="enrol-address"
+            inputMode="url"
+            autoCapitalize="none"
+            autoCorrect="off"
             value={address}
             onChange={(e) => setAddress(e.target.value)}
             placeholder="100.69.4.79:9191"

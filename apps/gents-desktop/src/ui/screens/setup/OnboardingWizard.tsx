@@ -29,8 +29,6 @@ import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { shortPath } from "@/lib/paths";
 import { Field, Frame, Nav, Option, Title } from "./parts";
 import { InferenceSetup } from "./InferenceSetup";
-import { nodeSetUp } from "@/lib/firstRun";
-import type { NodeView } from "../../../hooks/fleetStore";
 import type { ProviderId } from "./inferenceSetupForm";
 
 type Step = "welcome" | "starting" | "enrollment" | "inference";
@@ -237,13 +235,15 @@ export function OnboardingWizard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [actions, homeRoot, step, allowLocal]);
 
-  const finishProvisioning = async (
-    setUp: (snapshot: DesktopClientSnapshot) => NodeView | null | undefined,
-  ) => {
+  const finishProvisioning = async (nodeDid: string) => {
     const next = await actions.readSnapshot();
-    const nextDeployment = setUp(next);
-    const engineer = nextDeployment ? engineerPatches(nextDeployment) : [];
-    if (engineer.length && nextDeployment) {
+    const nextDeployment = next.client?.deployments.find(
+      (node) => node.nodeDid === nodeDid,
+    );
+    if (!nextDeployment)
+      throw new Error("The initialized node is not available in the client snapshot.");
+    const engineer = engineerPatches(nextDeployment);
+    if (engineer.length) {
       await changeConfig("patchConfigComponents", {
         nodeDid: nextDeployment.nodeDid,
         patches: engineer,
@@ -254,10 +254,8 @@ export function OnboardingWizard({
     dispatch({
       type: "provisioned",
       at: Date.now(),
-      client: nextDeployment
-        ? `Connected securely to ${nextDeployment.label}`
-        : "Secure client started",
-      name: nextDeployment?.label ?? null,
+      client: `Connected securely to ${nextDeployment.label}`,
+      name: nextDeployment.label,
     });
   };
 
@@ -305,7 +303,7 @@ export function OnboardingWizard({
       }
       dispatch({ type: "reached", phase: "loading-configuration" });
       failedPhase = "configuration-error";
-      await initLocalRuntime(requestedName);
+      const initialized = await initLocalRuntime(requestedName);
       dispatch({
         type: "reached",
         phase: "starting-client",
@@ -314,7 +312,7 @@ export function OnboardingWizard({
       failedPhase = "client-error";
       await actions.commitLocalServerAutoStart(requestedName);
       await actions.awaitLocalServerPairing();
-      await finishProvisioning(nodeSetUp);
+      await finishProvisioning(initialized.nodeDid);
     } catch (e) {
       dispatch({ type: "failed", phase: failedPhase, error: setupErrorMessage(e) });
       await incompatibleHome?.adopt(e);
@@ -441,7 +439,7 @@ export function OnboardingWizard({
           note={
             allowLocal
               ? "Start a node on this computer, or connect to a node that already runs."
-              : "Connect this phone to Gents running on your computer or server. Your agents and their history stay on that node."
+              : "Connect this device to Gents running on your computer or server. Your agents and their history stay on that node."
           }
         >
           {allowLocal ? "Let’s get set up" : "Connect to your node"}

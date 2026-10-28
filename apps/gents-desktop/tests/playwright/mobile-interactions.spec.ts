@@ -61,6 +61,12 @@ test("dialogs fit inside the visible viewport", async ({ page }) => {
   await expect
     .poll(() => dialog.evaluate((el) => el.getBoundingClientRect().top))
     .toBeGreaterThanOrEqual(50);
+  const save = page.getByRole("button", { name: "Save dialog" });
+  await save.scrollIntoViewIfNeeded();
+  await expect
+    .poll(() => save.evaluate((el) => el.getBoundingClientRect().bottom))
+    .toBeLessThanOrEqual(350);
+  await expect(save).toBeInViewport();
 });
 
 test("focusing a field reveals it in the editor's real scroll container", async ({

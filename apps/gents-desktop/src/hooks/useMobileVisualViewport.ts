@@ -115,8 +115,7 @@ export function useMobileVisualViewport() {
     document.addEventListener("wheel", cancelReveal, { passive: true });
     return () => {
       if (frame != null) cancelAnimationFrame(frame);
-      if (revealFrame != null) cancelAnimationFrame(revealFrame);
-      if (settleTimer != null) clearTimeout(settleTimer);
+      cancelReveal();
       viewport.removeEventListener("resize", schedule);
       viewport.removeEventListener("scroll", schedule);
       window.removeEventListener("resize", schedule);
