@@ -55,7 +55,7 @@ for (const colorScheme of ["light", "dark"] as const) {
     await dialog.getByRole("button", { name: "Restart runtime", exact: true }).click();
     await expect(dialog).toBeHidden();
     await expect(panel).toContainText("restarting did not resend it");
-    await expect(input).toHaveValue("Keep this newer draft");
+    await expect(input).toHaveText("Keep this newer draft");
     expect(
       await page.evaluate((key) => JSON.parse(localStorage.getItem(key)!), key),
     ).toEqual(draft);

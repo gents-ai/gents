@@ -64,7 +64,7 @@ export function useGoalMode({
     }
     if (await onSet(text)) setMode(null);
   };
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (!mode) return;
     if (event.key === "Escape" || (event.key === "Backspace" && draft === "")) {
       event.preventDefault();

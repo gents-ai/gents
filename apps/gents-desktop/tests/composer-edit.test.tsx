@@ -13,6 +13,7 @@ import { SessionScreen } from "../src/ui/screens/SessionScreen";
 import { writeSession } from "../src/hooks/sessionStore";
 import { node, testApp, withApp } from "./app-fixture";
 import { deployment } from "./config-panel-wiring/fixtures";
+import { composerText, typeInComposer, typeText } from "./composer-field";
 
 const toast = vi.hoisted(() => vi.fn());
 vi.mock("sonner", () => ({ toast }));
@@ -106,11 +107,11 @@ describe("editing a waiting message in the composer", () => {
     );
     await user.click(within(rowFor("a")).getByRole("button", { name: "Edit" }));
     expect(screen.getByTestId("editing-message")).toBeInTheDocument();
-    expect(composerBox()).toHaveValue("message a");
+    expect(composerText(composerBox())).toBe("message a");
     expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
-    await user.clear(composerBox());
-    await user.type(composerBox(), "corrected instruction{Enter}");
+    typeInComposer(composerBox(), "");
+    await typeText(composerBox(), "corrected instruction{Enter}");
     await waitFor(() =>
       expect(editPendingQueue).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -126,13 +127,13 @@ describe("editing a waiting message in the composer", () => {
   it("keeps the draft aside and gives it back on Esc", async () => {
     const user = userEvent.setup();
     setup([entry("a")]);
-    await user.type(composerBox(), "half a thought");
+    await typeText(composerBox(), "half a thought");
     await user.click(within(rowFor("a")).getByRole("button", { name: "Edit" }));
-    expect(composerBox()).toHaveValue("message a");
+    expect(composerText(composerBox())).toBe("message a");
     await waitFor(() => expect(composerBox()).toHaveFocus());
     await user.keyboard("{Escape}");
     expect(screen.queryByTestId("editing-message")).toBeNull();
-    expect(composerBox()).toHaveValue("half a thought");
+    expect(composerText(composerBox())).toBe("half a thought");
   });
 
   it("edits the last waiting message on ↑ in an empty composer", async () => {
@@ -140,7 +141,7 @@ describe("editing a waiting message in the composer", () => {
     setup([entry("a"), entry("b")]);
     await user.click(composerBox());
     await user.keyboard("{ArrowUp}");
-    expect(composerBox()).toHaveValue("message b");
+    expect(composerText(composerBox())).toBe("message b");
     expect(rowFor("b").dataset.editing).toBe("true");
     expect(within(rowFor("b")).getByText("Editing…")).toBeInTheDocument();
   });
@@ -153,14 +154,14 @@ describe("editing a waiting message in the composer", () => {
     );
     setup([entry("a"), entry("b")], editPendingQueue);
     await user.click(within(rowFor("a")).getByRole("button", { name: "Edit" }));
-    await user.clear(composerBox());
-    await user.type(composerBox(), "corrected{Enter}");
+    typeInComposer(composerBox(), "");
+    await typeText(composerBox(), "corrected{Enter}");
     await waitFor(() => expect(editPendingQueue).toHaveBeenCalled());
     expect(screen.getByTestId("editing-message")).toBeInTheDocument();
     expect(within(rowFor("b")).getByRole("button", { name: "Remove" })).toBeDisabled();
     await act(async () => reject(new Error("The message queue changed.")));
     expect(screen.getByTestId("editing-message")).toBeInTheDocument();
-    expect(composerBox()).toHaveValue("corrected");
+    expect(composerText(composerBox())).toBe("corrected");
     expect(within(rowFor("a")).getByText("message a")).toBeInTheDocument();
   });
 
@@ -169,7 +170,7 @@ describe("editing a waiting message in the composer", () => {
     const sendChatMessage = vi.fn(acceptedChatReply);
     const { app } = setup([entry("a")], vi.fn(), sendChatMessage);
     await user.click(within(rowFor("a")).getByRole("button", { name: "Edit" }));
-    await user.type(composerBox(), " and more");
+    await typeText(composerBox(), " and more");
     act(() => writeSession(app.stores.session, session([])));
     await waitFor(() =>
       expect(screen.getByTestId("editing-message").dataset.reached).toBe("true"),
@@ -177,7 +178,7 @@ describe("editing a waiting message in the composer", () => {
     await user.click(composerBox());
     await user.keyboard("{Enter}");
     expect(sendChatMessage).not.toHaveBeenCalled();
-    expect(composerBox()).toHaveValue("message a and more");
+    expect(composerText(composerBox())).toBe("message a and more");
     await user.click(screen.getByRole("button", { name: "Send as a new message" }));
     await waitFor(() =>
       expect(sendChatMessage).toHaveBeenCalledWith(
@@ -197,7 +198,7 @@ describe("editing a waiting message in the composer", () => {
     await user.click(composerBox());
     await user.keyboard("{Escape}");
     expect(screen.queryByTestId("editing-message")).toBeNull();
-    expect(composerBox()).toHaveValue("message a");
+    expect(composerText(composerBox())).toBe("message a");
   });
 
   it("keeps an edit the agent took when sending it as a new message is refused", async () => {
@@ -205,14 +206,14 @@ describe("editing a waiting message in the composer", () => {
     const sendChatMessage = vi.fn().mockRejectedValue(new Error("Sending is paused."));
     const { app } = setup([entry("a")], vi.fn(), sendChatMessage);
     await user.click(within(rowFor("a")).getByRole("button", { name: "Edit" }));
-    await user.type(composerBox(), " and more");
+    await typeText(composerBox(), " and more");
     act(() => writeSession(app.stores.session, session([])));
     await waitFor(() =>
       expect(screen.getByTestId("editing-message").dataset.reached).toBe("true"),
     );
     await user.click(screen.getByRole("button", { name: "Send as a new message" }));
     await waitFor(() => expect(sendChatMessage).toHaveBeenCalled());
-    await waitFor(() => expect(composerBox()).toHaveValue("message a and more"));
+    await waitFor(() => expect(composerText(composerBox())).toBe("message a and more"));
     expect(screen.getByTestId("editing-message")).toBeInTheDocument();
   });
 
@@ -222,11 +223,11 @@ describe("editing a waiting message in the composer", () => {
     const editPendingQueue = vi.fn(() => new Promise<void>((done) => (resolve = done)));
     setup([entry("a"), entry("b")], editPendingQueue);
     await user.click(within(rowFor("a")).getByRole("button", { name: "Edit" }));
-    await user.clear(composerBox());
-    await user.type(composerBox(), "corrected{Enter}");
+    typeInComposer(composerBox(), "");
+    await typeText(composerBox(), "corrected{Enter}");
     await waitFor(() => expect(editPendingQueue).toHaveBeenCalled());
-    await user.type(composerBox(), " again");
-    expect(composerBox()).toHaveValue("corrected");
+    await typeText(composerBox(), " again");
+    expect(composerText(composerBox())).toBe("corrected");
     await act(async () => resolve());
     await waitFor(() => expect(screen.queryByTestId("editing-message")).toBeNull());
   });
