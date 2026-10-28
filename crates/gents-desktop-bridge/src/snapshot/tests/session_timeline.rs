@@ -159,6 +159,7 @@ fn session_timeline_pages_are_bounded_and_cursor_stable() {
             content: Some(format!("row {index}")),
             captured_context: None,
             attachments: None,
+            selected_skill_ids: None,
             timestamp: None,
             reconstruction: ready(),
         })
@@ -203,6 +204,7 @@ fn queried_timeline_page_reports_database_work_and_does_not_rescan_for_cursor() 
             content: Some(format!("row {index}")),
             captured_context: None,
             attachments: None,
+            selected_skill_ids: None,
             timestamp: None,
             reconstruction: ready(),
         })

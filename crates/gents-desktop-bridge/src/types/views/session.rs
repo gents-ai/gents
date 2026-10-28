@@ -34,6 +34,12 @@ pub struct MessageView {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub attachments: Option<Vec<gents_protocol::request_input::AttachmentView>>,
+    /// The skills its request selected, which gents takes from the opening
+    /// `/name` lines and strips from the text; shown so a sent message still
+    /// says which skills shaped the reply.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub selected_skill_ids: Option<Vec<String>>,
     pub reasoning: Option<String>,
     pub has_tool_calls: bool,
     pub has_tool_results: bool,
@@ -428,6 +434,12 @@ pub enum RenderedTimelineItem {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         #[ts(optional = nullable)]
         attachments: Option<Vec<gents_protocol::request_input::AttachmentView>>,
+        /// The skills its request selected, which gents takes from the opening
+        /// `/name` lines and strips from the text; shown so a sent message still
+        /// says which skills shaped the reply.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        #[ts(optional = nullable)]
+        selected_skill_ids: Option<Vec<String>>,
         timestamp: Option<String>,
         reconstruction: MessageReconstructionView,
     },
