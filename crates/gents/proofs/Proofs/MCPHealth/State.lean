@@ -36,6 +36,8 @@ def initial : ServiceModel := { state := .healthy, failureCount := 0 }
 
 end ServiceModel
 
+/-- Events are completed observations. Cancelling an in-flight probe supplies no
+event: it is neither failure evidence nor a complete registry observation. -/
 inductive Event where
   | probeSuccess (staleness : Bool)
   | probeFail
