@@ -192,7 +192,7 @@ impl Tool for AgentMessageTool {
         });
         properties["interrupt"] = serde_json::json!({
             "type": "boolean",
-            "description": "Stop the session's current turn first, then queue the message for a new turn. Allowed only for sessions this conversation started."
+            "description": "Stop the session's current turn first, then queue the message for a new turn. Check interrupt permission with agent_session_list."
         });
         ToolDefinition {
             name: Self::NAME.to_string(),
@@ -230,14 +230,14 @@ impl Tool for AgentInterruptTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Interrupt the current turn and pause its Goal, preserving ordinary queued messages. Allowed only for sessions this conversation started. agent_message queues further input; agent_resume resumes paused Goal work."
+            description: "Interrupt the current turn and pause its Goal, preserving ordinary queued messages. Check interrupt permission with agent_session_list. agent_message queues further input; agent_resume resumes paused Goal work."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "session_id": {
                         "type": "string",
-                        "description": "A session this conversation started with agent_new."
+                        "description": "A session with interrupt permission in agent_session_list."
                     }
                 },
                 "required": ["session_id"]
