@@ -21,10 +21,16 @@ test.describe("transcript input at its scroll boundary", () => {
       const viewport = page.locator(
         '[data-slot="scroll-area-viewport"][data-following]',
       );
+      await viewport.hover();
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if ((await viewport.evaluate((scroller) => scroller.scrollTop)) <= 1) break;
+        await page.mouse.wheel(0, -4000);
+      }
+      await expect
+        .poll(() => viewport.evaluate((scroller) => scroller.scrollTop))
+        .toBe(0);
+      await page.waitForTimeout(400);
       await viewport.evaluate((scroller, input) => {
-        /* Put the view at the boundary before its pending scroll notification
-           is delivered, then send input that cannot move it farther. */
-        scroller.scrollTop = 0;
         if (input === "wheel")
           scroller.dispatchEvent(
             new WheelEvent("wheel", { deltaY: -40, bubbles: true }),
