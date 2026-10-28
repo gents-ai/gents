@@ -3,9 +3,9 @@ import { isUnreachable, type SessionScope } from "./recordedFiles";
 
 type Fetch = NonNullable<DesktopApiAdapter["fetchToolFileChanges"]>;
 
-/* Reads overlapping in the bridge can make it resync and answer null, so
-   the panel's reads go one at a time, the file the reader chose first. Once
-   a node cannot be reached, the reads still waiting for it fail at once
+/* The panel's reads go one at a time, the file the reader chose first, so
+   a turn with many files never holds up the one being looked at. Once a
+   node cannot be reached, the reads still waiting for it fail at once
    rather than each waiting for the bridge to give up. */
 const waiting: { file: string; start: () => Promise<void> }[] = [];
 let running = false;

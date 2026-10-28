@@ -111,9 +111,7 @@ async function changeOf(
     requestId: edit.requestId,
     toolCallDocId: edit.toolCallDocId,
   };
-  /* the bridge also answers null while its view of the request is being
-     resynced, so one more read separates that from an edit with no record */
-  const recorded: ToolFileChanges | null = (await fetch(args)) ?? (await fetch(args));
+  const recorded: ToolFileChanges | null = await fetch(args);
   const change = recorded?.changes.find((c) => isReported(c, edit.path));
   if (!change) throw new Unavailable("This edit recorded no file versions.");
   return change;
