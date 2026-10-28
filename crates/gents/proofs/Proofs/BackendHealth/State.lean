@@ -56,6 +56,8 @@ def initial : Model := { state := .unknown, failureCount := 0 }
 
 end Model
 
+/-- Events are completed observations. Cancelling an in-flight probe supplies no
+event: it is neither failure evidence nor a complete registry observation. -/
 inductive Event where
   | probeSuccess
   | probeFail
