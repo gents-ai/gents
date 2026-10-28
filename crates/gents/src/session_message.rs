@@ -284,6 +284,7 @@ pub(crate) struct Plan {
     session_id: String,
     hop: u32,
     write: PlannedWrite,
+    interrupt_local: bool,
 }
 
 impl Plan {
@@ -303,6 +304,7 @@ impl Plan {
                 create,
                 delivery: Delivery::Request,
             },
+            interrupt_local: false,
         }
     }
 
@@ -521,6 +523,7 @@ pub(crate) async fn plan(
         session_id: target.session_id.clone(),
         hop,
         write,
+        interrupt_local: interrupt && local,
     }))
 }
 
@@ -635,10 +638,10 @@ async fn commit_once(
 /// transaction. It writes no tool row.
 pub(crate) async fn stage_planned_write_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    _cause: &SessionMessageCause,
+    cause: &SessionMessageCause,
     plan: &Plan,
 ) -> Result<crate::lifecycle::EnqueuedAgentRequest> {
-    match &plan.write {
+    let enqueued = match &plan.write {
         PlannedWrite::Request { create, .. } => {
             ensure_planned_hop_current(txn, create).await?;
             let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
@@ -666,7 +669,25 @@ pub(crate) async fn stage_planned_write_in_txn(
             )
             .await
         }
+    }?;
+    if plan.interrupt_local {
+        let active = crate::interrupt::interrupt_active_session_in_txn(
+            txn,
+            &plan.session_id,
+            &cause.caller_node_did,
+            Some(&cause.caller_node_did),
+        )
+        .await?;
+        if active.is_none() {
+            crate::goal::pause_goal_for_interrupt_in_txn(
+                txn,
+                &cause.caller_node_did,
+                &plan.session_id,
+            )
+            .await?;
+        }
     }
+    Ok(enqueued)
 }
 
 async fn ensure_planned_hop_current(
@@ -1482,6 +1503,105 @@ mod agent_tools_tests {
             .await
             .unwrap()
             .is_some());
+        node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn interrupting_message_commits_with_the_active_request_latch() {
+        let (message, mut caller_owner) =
+            crate::tool_call_lifecycle::admission_fixture::published_session_message_with_owner(
+                PublishedAdmissionOptions {
+                    name: "agent-message-interrupt-commit".to_owned(),
+                    real_identity: true,
+                    await_mode: AwaitMode::Background,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let node = message.admission.node.clone();
+        let caller = caller_owner.request().clone();
+        let active = crate::request_binding::load_agent_request_by_doc_id(
+            &node,
+            &message.caused_request_doc_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        materialize_session(&node, &active).await;
+        set_state(&node, &active.doc_id, "processing").await;
+        let mut tool = crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request(
+            node.clone(), &mut caller_owner, &caller.node_did, 1,
+            crate::toolset::AGENT_MESSAGE_TOOL_NAME, "interrupt-message",
+            serde_json::json!({"session_id": active.session_id, "message": "new direction", "interrupt": true}),
+            AwaitMode::Background, false,
+        ).await.unwrap();
+        let cause = SessionMessageCause {
+            caller_node_did: caller.node_did.clone(),
+            caller_agent_id: caller.agent_id.clone(),
+            caller_session_id: caller.session_id.clone(),
+            caller_request_id: caller.request_id.clone(),
+            caller_request_doc_id: caller.doc_id.clone(),
+            caller_hop: caller.request_hop,
+            tool_call_id: tool.tool_call_id().to_owned(),
+            tool_call_doc_id: tool.doc_id().unwrap().to_owned(),
+            correlation: None,
+        };
+        let target = SessionMessageTarget {
+            node_did: active.node_did.clone(),
+            agent_id: active.agent_id.clone(),
+            session_id: active.session_id.clone(),
+        };
+        let plan = plan(
+            &node,
+            &cause,
+            &target,
+            RenderedBody {
+                content: "new direction".to_owned(),
+                goal: None,
+            },
+            None,
+            true,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let aborted: anyhow::Result<()> = ConfigAccess::transact_local_write(
+            &node,
+            None,
+            "test.abort_interrupting_message",
+            |txn| {
+                let cause = &cause;
+                let plan = &plan;
+                Box::pin(async move {
+                    stage_planned_write_in_txn(txn, cause, plan).await?;
+                    anyhow::bail!("abort after staging")
+                })
+            },
+        )
+        .await;
+        assert!(aborted.is_err());
+        assert!(
+            crate::interrupt::fetch_interrupt_requested_at_by_doc_id(&node, &active.doc_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let receipt = commit(&node, &cause, &mut tool, plan, true).await.unwrap();
+        assert!(
+            crate::interrupt::fetch_interrupt_requested_at_by_doc_id(&node, &active.doc_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(crate::interrupt::fetch_interrupt_requested_at_by_doc_id(
+            &node,
+            &receipt.request_doc_id
+        )
+        .await
+        .unwrap()
+        .is_none());
         node.shutdown().await;
         std::fs::remove_dir_all(&message.admission.path).unwrap();
     }

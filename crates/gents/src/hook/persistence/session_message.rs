@@ -280,10 +280,9 @@ impl DefraSessionHook {
                     );
                 }
             };
-        // Stop the target's turn only once the message is durably delivered,
-        // so a failed commit never interrupts without delivering. The new
-        // request waits behind the interrupted one.
-        if interrupt {
+        // The local interrupt is committed with the message. Remote delivery
+        // requires the existing peer-scoped interrupt after the commit.
+        if interrupt && target.node_did != caller.node_did {
             let scope = crate::session_message::target_scope(&caller.node_did, &target);
             if let Err(error) = crate::session_message::interrupt_session(&self.node, &scope).await
             {

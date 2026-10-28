@@ -8,8 +8,8 @@ inductive AgentMessageMode where
   | interrupt
   deriving DecidableEq, Repr
 
-/-- An interrupt requires separate authority and is requested only after the
-message is durably admitted. The delivery marker alone does not grant a lease or
+/-- An interrupt requires separate authority and is committed with, or after,
+the message's durable admission. The delivery marker alone does not grant a lease or
 allow input to pass an earlier queue entry. -/
 def agentMessageDelivery? (mode : AgentMessageMode) (mayInterrupt : Bool) :
     Option (QueueDelivery × Bool) :=
