@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { cn } from "@gents/ui/lib/utils";
 import { useDock } from "@/app/workspace";
 import { CARD_FILES } from "@/lib/rowHeights";
@@ -49,11 +50,14 @@ export function FileRow({
   within,
   chosen,
   onChoose,
+  mark,
 }: {
   file: ChangedFile;
   within: string;
   chosen: boolean;
   onChoose: () => void;
+  /** shown after the file's name, such as that it was viewed */
+  mark?: ReactNode;
 }) {
   return (
     <button
@@ -65,7 +69,10 @@ export function FileRow({
         chosen && "bg-accent",
       )}
     >
-      <FileLabel path={file.path} within={within} />
+      <span className="flex min-w-0 items-center gap-1.5">
+        <FileLabel path={file.path} within={within} />
+        {mark}
+      </span>
       <Counts added={file.added} removed={file.removed} />
     </button>
   );

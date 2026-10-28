@@ -1,6 +1,7 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { cn } from "@gents/ui/lib/utils";
 import type { SurfaceContext } from "@/app/surfaces";
+import { viewedFiles } from "@/app/viewedFiles";
 import { useRecordedDiffReader } from "../../hooks/fileChanges";
 import { useHomeDid } from "@/hooks/useClient";
 import { useSelectedSessionValue } from "@/hooks/useSelectedSession";
@@ -56,7 +57,15 @@ function TurnDiffs({ shown }: { shown: ShownChanges }) {
   const pinned = useRef<string | null>(null);
   const align = useRef(() => {});
   const [current, setCurrent] = useState(shown.path);
-  const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
+  /* files marked viewed start folded away */
+  const [closed, setClosed] = useState<ReadonlySet<string>>(
+    () =>
+      new Set(
+        files
+          .filter((f) => f.path !== shown.path && viewedFiles.isViewed(shown.scope, f))
+          .map((f) => f.path),
+      ),
+  );
   const [near, setNear] = useState<ReadonlySet<string>>(() => new Set([shown.path]));
   const listOpen = useFileListOpen();
   const home = useHomeDid();
@@ -210,6 +219,7 @@ function TurnDiffs({ shown }: { shown: ShownChanges }) {
         </div>
         {files.length > 1 && listOpen && (
           <ChangesFileList
+            scope={shown.scope}
             files={files}
             within={within}
             current={current}

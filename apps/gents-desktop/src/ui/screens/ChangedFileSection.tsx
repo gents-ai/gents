@@ -1,6 +1,9 @@
 import { lazy, memo, Suspense, useState } from "react";
 import {
+  Check,
   ChevronRight,
+  Circle,
+  CircleCheck,
   Copy,
   EllipsisVertical,
   FoldVertical,
@@ -19,6 +22,7 @@ import {
 import { Skeleton } from "@gents/ui/components/skeleton";
 import { cn } from "@gents/ui/lib/utils";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
+import { useViewed, viewedFiles } from "@/app/viewedFiles";
 import { shortPath } from "@/lib/paths";
 import { useRecordedDiffReader } from "../../hooks/fileChanges";
 import type { SessionScope } from "../../lib/recordedFiles";
@@ -58,6 +62,12 @@ export const ChangedFileSection = memo(function ChangedFileSection({
 }) {
   const [whole, setWhole] = useState(false);
   const [draws, setDraws] = useState(0);
+  const viewed = useViewed(scope, file);
+  /* viewed folds the file away, and not viewed brings it back */
+  const markViewed = (next: boolean) => {
+    viewedFiles.set(scope, file, next);
+    if (next === open) onToggle(file.path);
+  };
   return (
     <section
       ref={(el) => {
@@ -85,6 +95,7 @@ export const ChangedFileSection = memo(function ChangedFileSection({
               )}
             />
             <FileLabel path={file.path} within={within} />
+            {viewed && <ViewedMark />}
           </span>
           <Counts added={file.added} removed={file.removed} />
         </button>
@@ -93,6 +104,8 @@ export const ChangedFileSection = memo(function ChangedFileSection({
           file={file}
           within={within}
           remote={remote}
+          viewed={viewed}
+          onViewed={markViewed}
           whole={open ? whole : null}
           onWhole={(next) => {
             /* hiding draws the diff anew, so lines opened from its own
@@ -122,6 +135,8 @@ function FileMenu({
   file,
   within,
   remote,
+  viewed,
+  onViewed,
   whole,
   onWhole,
 }: {
@@ -129,6 +144,8 @@ function FileMenu({
   file: ChangedFile;
   within: string;
   remote: boolean;
+  viewed: boolean;
+  onViewed: (viewed: boolean) => void;
   /** whether the open diff shows every line; null while it is closed */
   whole: boolean | null;
   onWhole: (whole: boolean) => void;
@@ -157,15 +174,17 @@ function FileMenu({
         <EllipsisVertical />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-auto min-w-48">
+        <DropdownMenuItem onClick={() => onViewed(!viewed)}>
+          {viewed ? <Circle /> : <CircleCheck />}
+          {viewed ? "Mark as not viewed" : "Mark as viewed"}
+        </DropdownMenuItem>
         {whole !== null && (
-          <>
-            <DropdownMenuItem onClick={() => onWhole(!whole)}>
-              {whole ? <FoldVertical /> : <UnfoldVertical />}
-              {whole ? "Hide unchanged lines" : "Show all lines"}
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-          </>
+          <DropdownMenuItem onClick={() => onWhole(!whole)}>
+            {whole ? <FoldVertical /> : <UnfoldVertical />}
+            {whole ? "Hide unchanged lines" : "Show all lines"}
+          </DropdownMenuItem>
         )}
+        <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => copy(file.path)}>
           <Copy />
           Copy path
@@ -199,6 +218,17 @@ function FileMenu({
         )}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/** A file marked viewed, beside its name. */
+export function ViewedMark() {
+  return (
+    <Check
+      role="img"
+      aria-label="Viewed"
+      className="size-3.5 shrink-0 text-muted-foreground"
+    />
   );
 }
 

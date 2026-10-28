@@ -7,7 +7,10 @@ import {
 import { cn } from "@gents/ui/lib/utils";
 import { thinScrollbar } from "@/lib/scrollbar";
 import { shortFolder, type ChangedFile } from "@/lib/turnChanges";
+import { useViewed } from "@/app/viewedFiles";
+import type { SessionScope } from "../../lib/recordedFiles";
 import { keepFileListWidth, setFileListWidth, useFileListWidth } from "./changes";
+import { ViewedMark } from "./ChangedFileSection";
 import { FileRow } from "./TurnChanges";
 
 const LIST_MIN = 140;
@@ -15,12 +18,14 @@ const LIST_MIN = 140;
 /** A turn's files beside their diffs, in a panel wide enough for both;
     its handle drags it wider. */
 export function ChangesFileList({
+  scope,
   files,
   within,
   current,
   row,
   onChoose,
 }: {
+  scope: SessionScope;
   files: readonly ChangedFile[];
   within: string;
   current: string;
@@ -56,8 +61,9 @@ export function ChangesFileList({
           </p>
         )}
         {files.map((f) => (
-          <FileRow
+          <ListedFile
             key={f.path}
+            scope={scope}
             file={f}
             within={within}
             chosen={f.path === current}
@@ -67,6 +73,14 @@ export function ChangesFileList({
       </nav>
     </div>
   );
+}
+
+function ListedFile({
+  scope,
+  ...row
+}: Omit<Parameters<typeof FileRow>[0], "mark"> & { scope: SessionScope }) {
+  const viewed = useViewed(scope, row.file);
+  return <FileRow {...row} mark={viewed ? <ViewedMark /> : undefined} />;
 }
 
 /** Drags the file list wider or narrower, up to most of the panel; arrow
