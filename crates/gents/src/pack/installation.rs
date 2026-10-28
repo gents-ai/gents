@@ -15,6 +15,7 @@ use crate::Collection;
 
 mod dependencies;
 mod documents;
+pub mod plugin_references;
 pub use documents::{
     document_pack_schema_paths, install_prepared_document_pack, plugin_data_unique_keys,
     prepare_document_pack_install, PreparedDependency, PreparedDocumentPackInstall,

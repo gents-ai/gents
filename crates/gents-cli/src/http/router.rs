@@ -165,6 +165,10 @@ pub(crate) fn runtime_contract_router(
     };
 
     let operator_routes = Router::new()
+        .route(
+            gents::pack::plugin_references::CHECK_PATH,
+            post(super::plugins::check_handler),
+        )
         .route("/metrics", get(metrics_handler))
         .route("/healthz", get(healthz_handler))
         .route("/activation", get(activation_handler))

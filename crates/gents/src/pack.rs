@@ -25,6 +25,7 @@ pub use inference::{
     install_pack_documents, install_pack_documents_with_expectations,
     preview_pack_inference_bindings, PackInferenceBindingPreview, PackInferenceProfileOption,
 };
+pub use installation::plugin_references;
 pub use installation::{
     document_pack_schema_paths, install_prepared_document_pack, installed_pack_documents,
     installed_packs, list_installed_packs, plugin_data_unique_keys, prepare_document_pack_install,

@@ -72,6 +72,10 @@ struct Fixture {
 
 impl Fixture {
     async fn start() -> Self {
+        Self::start_with_home(None).await
+    }
+
+    async fn start_with_home(home: Option<String>) -> Self {
         let temp = tempfile::tempdir().unwrap();
         let owner_paths = DesktopPaths::from_root(temp.path().join("owner"));
         let other_paths = DesktopPaths::from_root(temp.path().join("other"));
@@ -93,7 +97,7 @@ impl Fixture {
             "readwrite".into(),
             Ok(Some("/private/operator/workspace".into())),
             Vec::new(),
-            Some("/private/operator/home".into()),
+            Some(home.unwrap_or_else(|| "/private/operator/home".into())),
             None,
             None,
             None,
@@ -329,4 +333,60 @@ async fn foreign_host_is_refused_on_public_private_and_independently_authenticat
             .unwrap();
         assert_eq!(response.status(), StatusCode::MISDIRECTED_REQUEST, "{path}");
     }
+}
+
+#[tokio::test]
+async fn plugin_preflight_requires_the_operator_and_reads_the_runtime_store() {
+    use gents::pack::plugin_references::{CheckResult, CHECK_PATH};
+    let home = tempfile::tempdir().unwrap();
+    let record = serde_json::from_value(serde_json::json!({
+        "namespace": "acme", "name": "search", "version": "1.0.0",
+        "digest": format!("sha256:{}", "a".repeat(64)), "language": "rust",
+        "declaration": {"name": "search", "description": "Search", "artifact": "plugins/search.afb", "language": "rust", "input_schema": {"type": "object"}}
+    })).unwrap();
+    gents::plugin::store::write_record(home.path(), &record).unwrap();
+    let f = Fixture::start_with_home(Some(home.path().to_str().unwrap().into())).await;
+    for (identity, expected) in [
+        (None, StatusCode::UNAUTHORIZED),
+        (Some(&f.other), StatusCode::FORBIDDEN),
+        (Some(&f.owner), StatusCode::OK),
+    ] {
+        let mut request = f
+            .client
+            .post(format!("{}{CHECK_PATH}", f.endpoint))
+            .json(&serde_json::json!({"plugins": ["acme/search", "acme/missing"]}));
+        if let Some(identity) = identity {
+            request = gents::config_client::GraphqlEndpoint::as_principal(
+                format!("{}/api/v0/graphql", f.endpoint),
+                identity.did(),
+            )
+            .authorize(request)
+            .unwrap();
+        }
+        let response = request.send().await.unwrap();
+        assert_eq!(response.status(), expected);
+        if expected == StatusCode::OK {
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            let result: CheckResult = response.json().await.unwrap();
+            assert_eq!(
+                result.missing.into_iter().collect::<Vec<_>>(),
+                ["acme/missing"]
+            );
+        }
+    }
+    let request = f
+        .client
+        .post(format!("{}{CHECK_PATH}", f.endpoint))
+        .json(&serde_json::json!({"plugins": ["../search"]}));
+    let response = gents::config_client::GraphqlEndpoint::as_principal(
+        format!("{}/api/v0/graphql", f.endpoint),
+        f.owner.did(),
+    )
+    .authorize(request)
+    .unwrap()
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(f.queries.load(std::sync::atomic::Ordering::SeqCst), 0);
 }

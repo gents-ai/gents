@@ -1939,16 +1939,15 @@ fn a_plugin_a_declared_dependency_ships_resolves() {
     let config = config_naming_plugin("acme/web_search");
     let dependency = plugin_pack_manifest("web", "documents", &["web_search"]);
     let dependency_config = config_naming_plugin("acme/web_search");
-    super::documents::ensure_plugin_references_resolve(
+    super::plugin_references::ensure_local(
         &[(&manifest, &config), (&dependency, &dependency_config)],
         Some(home.path()),
     )
     .unwrap();
-    assert!(super::documents::ensure_plugin_references_resolve(
-        &[(&manifest, &config)],
-        Some(home.path()),
-    )
-    .is_err());
+    assert!(
+        super::plugin_references::ensure_local(&[(&manifest, &config)], Some(home.path()),)
+            .is_err()
+    );
 }
 
 #[test]
@@ -1958,7 +1957,7 @@ fn a_documents_dependency_naming_an_unresolved_plugin_is_refused() {
     let config = config_naming_plugin("acme/web_search");
     let dependency = plugin_pack_manifest("base", "documents", &[]);
     let dependency_config = config_naming_plugin("acme/missing");
-    let error = super::documents::ensure_plugin_references_resolve(
+    let error = super::plugin_references::ensure_local(
         &[(&manifest, &config), (&dependency, &dependency_config)],
         Some(home.path()),
     )
@@ -1970,8 +1969,8 @@ fn a_documents_dependency_naming_an_unresolved_plugin_is_refused() {
     );
 }
 
-#[test]
-fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
+#[tokio::test]
+async fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
     fn names(value: &Value) -> Vec<&str> {
         value
             .as_array()
@@ -2008,7 +2007,7 @@ fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
             })).unwrap();
             crate::plugin::store::write_record(home.path(), &record).unwrap();
         }
-        let result = super::documents::ensure_plugin_references_resolve(
+        let result = super::plugin_references::ensure_local(
             &[(&root, &root_config), (&dependency, &dependency_config)],
             Some(home.path()),
         );
@@ -2016,6 +2015,79 @@ fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
             result.is_ok(),
             case["accepted"].as_bool().unwrap(),
             "{case}: {result:?}"
+        );
+        let root_path = home.path().to_owned();
+        let router = axum::Router::new().route(
+            super::plugin_references::CHECK_PATH,
+            axum::routing::post(move |headers: axum::http::HeaderMap, axum::Json(request): axum::Json<super::plugin_references::Check>| {
+                let root_path = root_path.clone();
+                async move {
+                    assert_eq!(headers["authorization"], "Bearer fixture");
+                    axum::Json(tokio::task::spawn_blocking(move ||
+                        super::plugin_references::check_installed(&root_path, &request).unwrap()
+                    ).await.unwrap())
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = crate::config_client::GraphqlEndpoint::with_delegated_authorization(
+            format!("http://{}/api/v0/graphql", listener.local_addr().unwrap()),
+            "Bearer fixture",
+        )
+        .unwrap();
+        let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        }));
+        let remote = super::plugin_references::ensure(
+            &ConfigAccess::Graphql(endpoint),
+            &[(&root, &root_config), (&dependency, &dependency_config)],
+            None,
+        )
+        .await;
+        assert_eq!(
+            remote.is_ok(),
+            case["accepted"].as_bool().unwrap(),
+            "remote {case}: {remote:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn remote_plugin_verification_refuses_unavailable_or_invalid_responses() {
+    for (status, body) in [
+        (404, json!({"error": "unsupported"})),
+        (403, json!({"error": "forbidden"})),
+        (500, json!({"error": "store unavailable"})),
+        (200, json!({})),
+        (200, json!({"missing": ["acme/unrequested"]})),
+    ] {
+        let router = axum::Router::new().route(
+            super::plugin_references::CHECK_PATH,
+            axum::routing::post(move || {
+                let body = body.clone();
+                async move {
+                    (
+                        axum::http::StatusCode::from_u16(status).unwrap(),
+                        axum::Json(body),
+                    )
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let access = ConfigAccess::graphql(format!(
+            "http://{}/api/v0/graphql",
+            listener.local_addr().unwrap()
+        ));
+        let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        }));
+        let manifest = plugin_pack_manifest("workflow", "documents", &[]);
+        let config = config_naming_plugin("acme/web_search");
+        assert!(
+            super::plugin_references::ensure(&access, &[(&manifest, &config)], None)
+                .await
+                .is_err(),
+            "HTTP {status}"
         );
     }
 }

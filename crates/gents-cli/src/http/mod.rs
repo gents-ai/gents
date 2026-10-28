@@ -11,6 +11,7 @@ pub(crate) mod job_control;
 pub(crate) mod liveness;
 pub(crate) mod mcp_pool;
 pub(crate) mod mcp_server;
+pub(crate) mod plugins;
 pub(crate) mod prometheus;
 pub(crate) mod router;
 pub(crate) mod runtime_control;
