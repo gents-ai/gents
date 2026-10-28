@@ -124,7 +124,9 @@ export function UserMessageItem({
           <MessageTime value={item.timestamp} />
           {item.kind === "userMessage" &&
           item.reconstruction.state === "ready" &&
-          (content || item.capturedContext?.length) &&
+          (content ||
+            item.capturedContext?.length ||
+            item.attachments?.length) &&
           onEdit ? (
             <button
               type="button"
