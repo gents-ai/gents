@@ -22,6 +22,7 @@ pub enum ClientStartProgress {
 }
 
 pub struct DesktopAppState {
+    pub(crate) explorer_origin: Mutex<Option<tauri::Url>>,
     pub(crate) app_exit: Arc<crate::app_exit::AppExitState>,
     pub bridge: Mutex<DesktopBridge>,
     pub client_lifecycle: Arc<tokio::sync::Mutex<()>>,
@@ -113,6 +114,7 @@ impl DesktopBridge {
 impl DesktopAppState {
     pub fn new(policy: ResolvedBridgePolicy) -> Self {
         Self {
+            explorer_origin: Mutex::new(None),
             bridge: Mutex::new(DesktopBridge {
                 core: None,
                 #[cfg(any(unix, windows))]
@@ -156,6 +158,12 @@ impl DesktopAppState {
     pub(crate) fn window_event(&self, label: &str, event: &tauri::WindowEvent) {
         if !matches!(event, tauri::WindowEvent::Destroyed) {
             return;
+        }
+        if label == crate::navigation::EXPLORER_WINDOW {
+            *self
+                .explorer_origin
+                .lock()
+                .expect("explorer origin lock poisoned") = None;
         }
         let mut bridge = self.bridge.lock().expect("desktop bridge lock poisoned");
         bridge.approvals_prompt_subscriptions.remove_window(label);

@@ -12,12 +12,15 @@ export type DraftAttachment = {
 export type DraftStore = StoreApi<{
   drafts: Record<string, string>;
   attachments: Record<string, DraftAttachment[]>;
+  /** each draft's rich field as the composer last saved it, so its chips
+      come back; the text in `drafts` stays what is sent */
+  fields: Record<string, string>;
   /** the draft whose composer takes focus once it next accepts input */
   focus: string | null;
 }>;
 
 export function createDraftStore(): DraftStore {
-  return createStore(() => ({ drafts: {}, attachments: {}, focus: null }));
+  return createStore(() => ({ drafts: {}, attachments: {}, fields: {}, focus: null }));
 }
 
 export function writeDraft(
@@ -32,8 +35,29 @@ export function writeDraft(
     const drafts = { ...state.drafts };
     if (value) drafts[key] = value;
     else delete drafts[key];
-    return { drafts };
+    if (value || !(key in state.fields)) return { drafts };
+    const fields = { ...state.fields };
+    delete fields[key];
+    return { drafts, fields };
   });
+}
+
+/** the composer's saved field for a draft; an emptied draft drops it */
+export function useDraftField(
+  store: DraftStore,
+  key: string,
+): [string | null, (field: string) => void] {
+  const field = useStore(store, (state) => state.fields[key] ?? null);
+  const setField = useCallback(
+    (next: string) =>
+      store.setState((state) =>
+        !state.drafts[key] || state.fields[key] === next
+          ? state
+          : { fields: { ...state.fields, [key]: next } },
+      ),
+    [store, key],
+  );
+  return [field, setField];
 }
 
 export function focusDraft(store: DraftStore, key: string | null) {

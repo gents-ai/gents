@@ -257,6 +257,7 @@ pub async fn verify(
             );
             for receipt in receipts {
                 let demand = gents_protocol::file_image_hydration::FileImageDemand {
+                    inventory_reference: None,
                     admission: gents_protocol::session_hydration::HydrationRequest {
                         request_key: text(&receipt, "request_key")?.into(),
                         peer_id: text(&receipt, "peer_id")?.into(),

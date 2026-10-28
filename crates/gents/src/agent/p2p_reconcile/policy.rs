@@ -236,6 +236,7 @@ fn client_route_filters(
     );
     for collection in [
         "FileImageHydrationRequest",
+        "FileInventoryImageRequest",
         "FileInventoryRequest",
         "AgentSessionInputEdit",
         "AgentSessionGoalControl",

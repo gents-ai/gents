@@ -89,7 +89,10 @@ async fn create_fixture_request(
         ),
     )
     .await?;
-    gents_protocol::graphql::extract_mutation_doc_id(&request, "AgentRequest")
+    Ok(gents_protocol::graphql::extract_mutation_doc_id(
+        &request,
+        "AgentRequest",
+    )?)
 }
 
 async fn stamp_terminal_message(

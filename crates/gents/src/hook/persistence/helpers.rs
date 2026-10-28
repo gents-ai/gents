@@ -46,7 +46,7 @@ where
         }}"#
     );
     let response = reader.execute_read(&query).await.map_err(|error| {
-        error.context(format!(
+        anyhow::Error::from(error).context(format!(
             "query live backgrounded tool count for request document {request_doc_id} failed"
         ))
     })?;

@@ -1178,15 +1178,17 @@ impl ConfigCommandTool {
                         let owner = owner.clone();
                         let target_id = target_id.clone();
                         Box::pin(async move {
-                            Ok(ops::read_owned_doc(
-                                txn,
-                                SelfConfigTarget::AgentTarget,
-                                &owner,
-                                &target_id,
+                            Ok::<_, anyhow::Error>(
+                                ops::read_owned_doc(
+                                    txn,
+                                    SelfConfigTarget::AgentTarget,
+                                    &owner,
+                                    &target_id,
+                                )
+                                .await?
+                                .and_then(|(_, doc)| doc.get("target_node_did").cloned())
+                                    == Some(json!(owner)),
                             )
-                            .await?
-                            .and_then(|(_, doc)| doc.get("target_node_did").cloned())
-                                == Some(json!(owner)))
                         })
                     },
                 )
@@ -1663,7 +1665,7 @@ impl ConfigCommandTool {
                             .await?
                             .is_some()
                         {
-                            return Ok(Ok(candidate));
+                            return Ok::<_, anyhow::Error>(Ok(candidate));
                         }
                     }
                     Ok(Err(txn.execute(&listing).await?))
@@ -1786,7 +1788,7 @@ impl ConfigCommandTool {
             .map(|(field, _)| field.clone());
         let collection = request.target.collection_name();
         self.patch_outcome(core, verb, request).await.map_err(|error| {
-            match stringified.filter(|_| format!("{error:#}").contains("invalid type: string")) {
+            match stringified.filter(|_| serde_found_string(&error)) {
                 Some(field) => anyhow!(
                     "{collection} field {field:?} holds a JSON string; send a native JSON object or array in set, not a string. ({error:#})"
                 ),
@@ -1979,7 +1981,7 @@ impl ConfigCommandTool {
             "self_config.account_inventory",
             |txn| {
                 Box::pin(async move {
-                    Ok((
+                    Ok::<_, anyhow::Error>((
                         crate::config_client::list_inference_backends_in_txn(txn, node_did).await?,
                         crate::config_client::list_inference_profiles_in_txn(txn, node_did).await?,
                     ))
@@ -2088,7 +2090,7 @@ impl ConfigCommandTool {
             SelfConfigTarget::InferenceBackend => (
                 "InferenceBackend",
                 "backend_id",
-                "backend_id name provider_kind openai_wire_api endpoint connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled catalogs probe_status last_probe",
+                "backend_id name provider_kind openai_wire_api endpoint connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled catalogs catalog_freshness probe_status last_probe",
             ),
             _ => (
                 target.collection_name(),
@@ -2155,7 +2157,8 @@ impl ConfigCommandTool {
         if target == SelfConfigTarget::InferenceBackend {
             for row in &mut rows {
                 let observation: crate::document_config::InferenceBackendObservation =
-                    serde_json::from_value(row.clone()).context("decoding backend observation")?;
+                    crate::backend_registry::decode_backend_observation(row.clone())
+                        .context("decoding backend observation")?;
                 let provider_kind = serde_json::from_value(
                     row.get("provider_kind")
                         .cloned()
@@ -2171,6 +2174,7 @@ impl ConfigCommandTool {
                     .as_object_mut()
                     .context("backend row must be an object")?;
                 object.remove("catalogs");
+                object.remove("catalog_freshness");
                 object.insert("catalog".into(), view["catalog"].clone());
             }
         }
@@ -2913,4 +2917,10 @@ pub(super) fn agent_params(
         enable_lsp: None,
         network_mode: None,
     })
+}
+
+/// External premise: serde reports a JSON string decoded where a map or
+/// sequence was expected only in its `invalid type: string` message.
+fn serde_found_string(error: &anyhow::Error) -> bool {
+    format!("{error:#}").contains("invalid type: string")
 }

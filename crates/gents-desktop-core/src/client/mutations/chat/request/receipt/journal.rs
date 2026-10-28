@@ -145,7 +145,7 @@ pub(crate) async fn forget(node: &Arc<EmbeddedNode>, request_id: &str) {
                     ))
                     .await?;
                 }
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         },
     )

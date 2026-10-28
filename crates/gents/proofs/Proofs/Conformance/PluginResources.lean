@@ -182,6 +182,22 @@ private def publicationJson : Json := toJson <| [false, true].flatMap fun previo
       ("expected", if PluginPublication.installedNew events then toJson "new"
         else if previous then toJson "previous" else Json.null)]
 
+/-- `PackPlugin.host_imports`: a plugin that declares `run_script` gets the
+`gents` imports linked on every call; one that does not gets none, so a guest
+importing them fails to instantiate. The import answers `result` when the call
+carries a script and `no_script` when it does not. (declared, callHasScript) -/
+def hostImportCases : List (Bool × Bool) :=
+  [(false, false), (false, true), (true, false), (true, true)]
+
+/-- (linked, answer). -/
+def hostImportVerdict (c : Bool × Bool) : Bool × Option String :=
+  (c.1, if c.1 then some (if c.2 then "result" else "no_script") else none)
+
+private def hostImportJson : Json := toJson <| hostImportCases.map fun c =>
+  let (linked, answer) := hostImportVerdict c
+  Json.mkObj [("declared", toJson c.1), ("call_has_script", toJson c.2),
+    ("linked", toJson linked), ("answer", toJson answer)]
+
 section Scratch
 
 structure ScratchCase where
@@ -403,5 +419,6 @@ def casesJson : String := (Json.mkObj [("consent", consentJson), ("budgets", bud
   ("tool_effect_accounting", PluginEffects.accountingCasesJson),
   ("model_slots", modelSlotsJson), ("network", networkJson),
   ("call_access", callAccessJson), ("invocation", invocationJson), ("receipt", Conformance.PluginReceipt.casesJson),
-  ("scratch", scratchJson)]).compress
+  ("scratch", scratchJson),
+  ("host_import", hostImportJson)]).compress
 end Conformance.PluginResources

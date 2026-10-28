@@ -107,10 +107,6 @@ vi.mock("../src/ui/screens/Markdown", () => ({
   Markdown: ({ children }: { children: string }) => <div>{children}</div>,
 }));
 vi.mock("../src/ui/screens/BehaviorPicker", () => ({ AgentPicker: () => null }));
-vi.mock("../src/ui/screens/TracePanel", () => ({
-  TracePanel: () => <p>Trace</p>,
-  TraceSurface: () => <p>Trace</p>,
-}));
 vi.stubGlobal(
   "IntersectionObserver",
   class {
@@ -217,7 +213,7 @@ describe("shell dialogs take turns (#1778)", () => {
 
     const [more] = screen.getAllByRole("button", { name: "More" });
     await user.click(more!);
-    await user.click(await screen.findByRole("menuitem", { name: "Trace" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Started sessions" }));
     expect(dialogs()).toHaveLength(1);
     expect(
       screen.queryByRole("dialog", { name: "Side panel" }),

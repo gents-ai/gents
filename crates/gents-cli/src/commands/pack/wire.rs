@@ -131,7 +131,7 @@ pub(crate) async fn wire_in(
                     ])?;
                     apply_desired_state_plan(txn, &plan).await?;
                 }
-                Ok(report)
+                Ok::<_, anyhow::Error>(report)
             })
         })
         .await?;

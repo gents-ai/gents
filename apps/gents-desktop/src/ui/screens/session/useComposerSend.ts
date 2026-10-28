@@ -100,10 +100,14 @@ export function useComposerSend(agentId: string | null | undefined) {
     return Boolean(result);
   };
 
+  /* `text` is the draft as typed, which decides a goal and is cleared once
+     sent; `content` is what goes out when the composer adds to it, such as
+     an opening line for a skill named mid-sentence */
   const send = async (
     text: string,
     supplied?: RequestAttachment[],
     followUp?: QueueDelivery,
+    content = text,
   ) => {
     if (!destinationMatches()) return false;
     if (!supplied && GOAL_COMMAND.test(text)) return goal(text);
@@ -114,7 +118,7 @@ export function useComposerSend(agentId: string | null | undefined) {
     const ids = new Set(selected.map((a) => a.id));
     const clientDid = stores.client.getState().snapshot?.client?.clientDid;
     const pending = sendMessage(
-      text,
+      content,
       agentId,
       attachments,
       followUp,

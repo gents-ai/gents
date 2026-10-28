@@ -63,3 +63,9 @@ invoke("desktop_session_archive", {
     expectedRevision: 1,
   },
 });
+
+invoke("desktop_mailbox_observe", {
+  request: { clientDid: "reader", itemId: "question" },
+});
+// @ts-expect-error The exact reader identity is required for a mailbox observation.
+invoke("desktop_mailbox_observe", { request: { itemId: "question" } });

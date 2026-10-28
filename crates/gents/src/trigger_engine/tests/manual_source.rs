@@ -102,7 +102,7 @@ async fn production_materializer_persists_event_source_document_lineage() {
                 )
                 .await?
                 .expect("created trigger");
-                Ok(id)
+                Ok::<_, anyhow::Error>(id)
             })
         },
     )
@@ -215,7 +215,7 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
                 )
                 .await?
                 .expect("created trigger");
-                Ok(id)
+                Ok::<_, anyhow::Error>(id)
             })
         },
     )
@@ -367,7 +367,7 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
                 )
                 .await?
                 .expect("created trigger");
-                Ok(id)
+                Ok::<_, anyhow::Error>(id)
             })
         },
     )

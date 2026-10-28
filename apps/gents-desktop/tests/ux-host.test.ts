@@ -4,7 +4,7 @@
    contract under test. */
 import { createDesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import { createMemoryTransport } from "@source-inc/gents-desktop-client/testing";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildUxHost } from "../src/ui/hooks/useUxHost";
 import { node, testApp } from "./app-fixture";
@@ -33,6 +33,7 @@ const appOver = (answer: (command: string, args: unknown) => unknown) =>
 const route = () => ({ name: "sessions" as const });
 
 describe("buildUxHost: ctx.send", () => {
+  beforeEach(() => vi.spyOn(window, "confirm").mockReturnValue(true));
   const gesture = (active: boolean) => {
     Object.defineProperty(navigator, "userActivation", {
       configurable: true,
@@ -41,6 +42,7 @@ describe("buildUxHost: ctx.send", () => {
   };
   afterEach(() => {
     delete (navigator as { userActivation?: unknown }).userActivation;
+    vi.restoreAllMocks();
   });
 
   it("refuses without a selected session, so a plugin never opens one", async () => {
@@ -69,7 +71,51 @@ describe("buildUxHost: ctx.send", () => {
     const sendMessage = vi.spyOn(app.actions, "sendMessage").mockResolvedValue(null);
     const host = buildUxHost(app, route);
     await host.shell.send("hi");
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("hi"));
     expect(sendMessage).toHaveBeenCalledWith("hi", "b1");
+  });
+
+  it("does not send when the proposed text is declined", async () => {
+    gesture(true);
+    vi.mocked(window.confirm).mockReturnValue(false);
+    const app = testApp({ selection: { sessionId: "s1", nodeDid: "did:a" } });
+    const send = vi.spyOn(app.actions, "sendMessage");
+    await expect(buildUxHost(app, route).shell.send("proposed text")).rejects.toThrow(
+      "not confirmed",
+    );
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it.each(["sessionId", "nodeDid", "agentId"] as const)(
+    "does not retarget a confirmed message after %s changes",
+    async (field) => {
+      gesture(true);
+      const app = testApp({
+        selection: { sessionId: "s1", nodeDid: "did:a", agentId: "a1" },
+      });
+      vi.mocked(window.confirm).mockImplementation(() => {
+        app.stores.selection.setState({ [field]: "different" });
+        return true;
+      });
+      const send = vi.spyOn(app.actions, "sendMessage");
+      await expect(buildUxHost(app, route).shell.send("text")).rejects.toThrow(
+        "selected chat changed",
+      );
+      expect(send).not.toHaveBeenCalled();
+    },
+  );
+
+  it("allows only one confirmation at a time and recovers after cancellation", async () => {
+    gesture(true);
+    vi.mocked(window.confirm).mockReturnValue(false);
+    const host = buildUxHost(testApp({ selection: { sessionId: "s1" } }), route);
+    const first = host.shell.send("first");
+    await expect(host.shell.send("second")).rejects.toThrow(
+      "already awaiting confirmation",
+    );
+    await expect(first).rejects.toThrow("not confirmed");
+    await expect(host.shell.send("third")).rejects.toThrow("not confirmed");
+    expect(window.confirm).toHaveBeenCalledTimes(2);
   });
 });
 

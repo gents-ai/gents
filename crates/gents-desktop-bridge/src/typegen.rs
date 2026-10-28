@@ -236,6 +236,8 @@ fn export_all(dir: &Path) -> Result<(), String> {
         GoalSubmissionRecovery,
         PendingQueueEntryView,
         MailboxItemRequest,
+        MailboxItemObservationRequest,
+        MailboxItemObservation,
         gents_protocol::mailbox_question::MailboxQuestion,
         SessionForkBeforeRequest,
         SessionForkResult,

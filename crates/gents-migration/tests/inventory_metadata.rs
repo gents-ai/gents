@@ -163,3 +163,76 @@ async fn inventory_client_progress_has_its_pinned_protected_local_schema() {
         .contains(&FILE_INVENTORY_PROGRESS_NAME));
     node.shutdown().await;
 }
+
+#[tokio::test]
+async fn selected_inventory_image_demand_has_its_pinned_fresh_schema() {
+    let node = common::fresh_node().await;
+    node.add_collection(gents_protocol::schemas::FILE_INVENTORY_IMAGE_REQUEST)
+        .await
+        .unwrap();
+    let collection = node
+        .get_collection("FileInventoryImageRequest")
+        .unwrap()
+        .unwrap();
+    let entry = gents_migration::DEFAULT_BASELINE
+        .iter()
+        .find(|entry| entry.name == "FileInventoryImageRequest")
+        .unwrap();
+    assert_eq!(collection.version_id, entry.expected_version.unwrap());
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn bound_image_request_install_preserves_existing_image_demands() {
+    let node = common::fresh_node().await;
+    node.add_collection(gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST)
+        .await
+        .unwrap();
+    let before = node
+        .get_collection("FileImageHydrationRequest")
+        .unwrap()
+        .unwrap();
+    let created = node
+        .execute(
+            r#"mutation {create_FileImageHydrationRequest(input: {
+        request_key:"retained", peer_id:"peer", requester_did:"reader", node_did:"source",
+        session_id:"session", request_doc_id:"request", tool_call_doc_id:"tool",
+        status:"rejected", status_detail:"retained refusal", outcome_signature:"retained-signature"
+    }) {_docID}}"#,
+        )
+        .await;
+    assert!(!created.has_errors(), "{created:?}");
+    let query = "{FileImageHydrationRequest {_docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id status status_detail outcome_signature}}";
+    let retained = node.execute(query).await.data.unwrap();
+    gents_migration::ensure_migrations(&node).await.unwrap();
+    let after = node
+        .get_collection("FileImageHydrationRequest")
+        .unwrap()
+        .unwrap();
+    assert_eq!(before.version_id, after.version_id);
+    assert_eq!(before.collection_id, after.collection_id);
+    for field in before.fields {
+        assert_eq!(
+            after
+                .fields
+                .iter()
+                .find(|current| current.name == field.name)
+                .unwrap()
+                .id,
+            field.id
+        );
+    }
+    assert_eq!(node.execute(query).await.data.unwrap(), retained);
+    assert!(node
+        .get_collection("FileInventoryImageRequest")
+        .unwrap()
+        .is_some());
+    assert_eq!(
+        gents_migration::ensure_migrations(&node)
+            .await
+            .unwrap()
+            .steps_applied,
+        0
+    );
+    node.shutdown().await;
+}

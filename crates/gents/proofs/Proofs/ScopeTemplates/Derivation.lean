@@ -104,6 +104,10 @@ def clientRouteFilters (direction : RouteDirection) (requesterDid ownerDid : Did
       , clauses :=
           [ { field := "requester_did", value := requesterDid }
           , { field := "node_did", value := ownerDid } ] }
+    , { collection := "FileInventoryImageRequest"
+      , clauses :=
+          [ { field := "requester_did", value := requesterDid }
+          , { field := "node_did", value := ownerDid } ] }
     , { collection := "FileInventoryRequest"
       , clauses :=
           [ { field := "requester_did", value := requesterDid }

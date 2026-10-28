@@ -1,4 +1,12 @@
-import { useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  useDeferredValue,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
@@ -25,6 +33,7 @@ import {
 } from "@/lib/search";
 import { useApp } from "@/app/AppContext";
 import { useSelectedNodeDid } from "@/hooks/useClient";
+import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { useFleet } from "../hooks/useFleet";
 import { isListed, useAgentSections } from "./agent/sections";
 import { SETTINGS_SECTIONS } from "./settings/sections";
@@ -105,17 +114,29 @@ export function SearchButton({ className }: { className?: string }) {
 
 /** Search sessions, agents, settings and actions from anywhere. */
 export function SearchPalette() {
-  const open = useStore(store, (s) => s.open);
+  const wanted = useStore(store, (s) => s.open);
+  const searchInput = useRef<HTMLInputElement | null>(null);
+  const palette = useExclusivePopover(closeSearch);
+  const { open, onOpenChange } = palette;
+  useEffect(() => {
+    if (wanted !== open) onOpenChange(wanted);
+  }, [wanted, open, onOpenChange]);
   return (
-    <Dialog open={open} onOpenChange={(next) => (next ? openSearch() : closeSearch())}>
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      onOpenChangeComplete={palette.onOpenChangeComplete}
+    >
       <DialogContent
+        ref={palette.popupRef}
+        initialFocus={searchInput}
         showCloseButton={false}
         aria-modal="true"
         className="top-[12vh] flex max-h-[76dvh] translate-y-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-xl"
         data-testid="search-palette"
       >
         <DialogTitle className="sr-only">Search</DialogTitle>
-        {open && <PaletteBody />}
+        {open && <PaletteBody searchInput={searchInput} />}
       </DialogContent>
     </Dialog>
   );
@@ -179,7 +200,11 @@ function useEntries(): SearchEntry[] {
   }, [fleet, selected, sections]);
 }
 
-function PaletteBody() {
+function PaletteBody({
+  searchInput,
+}: {
+  searchInput: RefObject<HTMLInputElement | null>;
+}) {
   const { actions } = useApp();
   const entries = useEntries();
   const [query, setQuery] = useState("");
@@ -235,7 +260,7 @@ function PaletteBody() {
       <div className="flex items-center gap-2 px-4 pt-4 pb-3">
         <Search className="size-4 shrink-0 text-muted-foreground" />
         <input
-          autoFocus
+          ref={searchInput}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search sessions, agents and settings"

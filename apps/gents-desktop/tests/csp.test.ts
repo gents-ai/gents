@@ -37,11 +37,14 @@ const directives = parse;
 const dev = parse(conf.app.security.devCsp ?? conf.app.security.csp ?? "");
 
 describe("the webview CSP", () => {
-  it("is set, and admits script only from the app, in-realm blobs and the frame bootstrap", () => {
+  it("is set, and admits script only from the app, in-realm blobs and the frame bootstrap, and WebAssembly", () => {
     expect(conf.app.security.csp).toBeTruthy();
+    /* 'wasm-unsafe-eval' lets the shell compile WebAssembly, for the diff
+       view's highlighter; it admits no eval and no inline script */
     expect(prod["script-src"]).toEqual([
       "'self'",
       "blob:",
+      "'wasm-unsafe-eval'",
       expect.stringMatching(/^'sha256-[A-Za-z0-9+/=]+'$/),
     ]);
     expect(prod["default-src"]).toEqual(["'self'"]);
@@ -72,7 +75,12 @@ describe("the webview CSP", () => {
   });
 
   it("relaxes the dev policy only for Vite: inline scripts and its own server", () => {
-    expect(dev["script-src"]).toEqual(["'self'", "blob:", "'unsafe-inline'"]);
+    expect(dev["script-src"]).toEqual([
+      "'self'",
+      "blob:",
+      "'wasm-unsafe-eval'",
+      "'unsafe-inline'",
+    ]);
     const extra = (dev["connect-src"] ?? []).filter(
       (s) => !(prod["connect-src"] ?? []).includes(s),
     );
@@ -94,6 +102,8 @@ describe("the sandbox document", () => {
 
   it("carries a policy of its own that reaches no origin, no network and no frame", () => {
     expect(policy["default-src"]).toEqual(["'none'"]);
+    /* no 'wasm-unsafe-eval': a frame obeys its own policy and the shell's,
+       so plugins compile no WebAssembly though the shell may */
     expect(policy["script-src"]).toEqual([`'nonce-${nonce}'`, "blob:"]);
     expect(policy["connect-src"]).toEqual(["'none'"]);
     expect(policy["frame-src"]).toEqual(["'none'"]);
@@ -125,10 +135,15 @@ describe("the sandbox document", () => {
 
   it("is admitted by the shell's built policy by the hash of its exact text", () => {
     const hash = `'sha256-${createHash("sha256").update(FRAME_BOOTSTRAP).digest("base64")}'`;
-    expect(prod["script-src"]).toEqual(["'self'", "blob:", hash]);
+    expect(prod["script-src"]).toEqual(["'self'", "blob:", "'wasm-unsafe-eval'", hash]);
     /* the dev policy keeps 'unsafe-inline' for Vite; a hash beside it would
        switch that off and break the dev server's own inline scripts */
-    expect(dev["script-src"]).toEqual(["'self'", "blob:", "'unsafe-inline'"]);
+    expect(dev["script-src"]).toEqual([
+      "'self'",
+      "blob:",
+      "'wasm-unsafe-eval'",
+      "'unsafe-inline'",
+    ]);
     expect(FRAME_BOOTSTRAP).toBe(
       readFileSync(join(__dirname, "../src/ui/sandbox/bootstrap.js"), "utf8"),
     );

@@ -29,7 +29,10 @@ impl<'a> MeasuredRead<'a> {
 
 #[async_trait::async_trait]
 impl crate::config_client::ConfigRead for MeasuredRead<'_> {
-    async fn execute_read(&self, document: &str) -> anyhow::Result<Value> {
+    async fn execute_read(
+        &self,
+        document: &str,
+    ) -> Result<Value, crate::config_client::ConfigClientError> {
         self.queries.fetch_add(1, Ordering::Relaxed);
         self.max_bytes.fetch_max(document.len(), Ordering::Relaxed);
         self.total_bytes

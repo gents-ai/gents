@@ -50,7 +50,7 @@ where
         lifecycle: &L,
         key: &str,
         message: &Message,
-    ) -> impl std::future::Future<Output = anyhow::Result<String>> + Send;
+    ) -> impl std::future::Future<Output = Result<String, Self::Error>> + Send;
 
     /// Atomically validates and publishes one candidate; `None` fences a stale
     /// candidate and its remaining ordered batch out of provider input.
@@ -59,7 +59,7 @@ where
         lifecycle: &L,
         key: &str,
         message: &Message,
-    ) -> impl std::future::Future<Output = anyhow::Result<Option<String>>> + Send {
+    ) -> impl std::future::Future<Output = Result<Option<String>, Self::Error>> + Send {
         async move {
             self.publish_authored_message(lifecycle, key, message)
                 .await
@@ -72,7 +72,7 @@ where
         _lifecycle: &mut L,
         _message_doc_id: &str,
         _pending_request_doc_ids: &[String],
-    ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send {
+    ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
         async { Ok(true) }
     }
 
@@ -88,7 +88,7 @@ where
         &self,
         lifecycle: &L,
         message: &Message,
-    ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send;
+    ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send;
 
     fn close_provider_attempt(
         &self,
@@ -96,7 +96,7 @@ where
         turn: usize,
         attempt: u32,
         close: ProviderAttemptClose,
-    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 
     fn publish_native_turn(
         &self,
@@ -105,16 +105,18 @@ where
         attempt: u32,
         message: &Message,
     ) -> impl std::future::Future<
-        Output = anyhow::Result<CanonicalPublishedTurn<Self::AcceptedToolCall>>,
+        Output = Result<CanonicalPublishedTurn<Self::AcceptedToolCall>, Self::Error>,
     > + Send;
 }
 
 pub trait StreamWriter: Send + Sync {
+    type Error: Into<Box<dyn std::error::Error + Send + Sync>> + Send + Sync + 'static;
+
     fn mark_pending_output(
         &self,
         _doc_id: &str,
         _output: PendingOutput,
-    ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send {
+    ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
         std::future::ready(Ok(true))
     }
 
@@ -122,18 +124,18 @@ pub trait StreamWriter: Send + Sync {
         &self,
         doc_id: &str,
         tokens: &str,
-    ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send;
+    ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send;
 
     fn write_reasoning(
         &self,
         doc_id: &str,
         reasoning: &str,
-    ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send;
+    ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send;
 
     fn flush_pending(
         &self,
         doc_id: &str,
-    ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send;
+    ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send;
 
     /// When the next batch of buffered tokens is due, if any; a driver waits
     /// on this instead of polling so a quiet stream still lands its tokens.
@@ -152,5 +154,5 @@ pub trait StreamWriter: Send + Sync {
     fn reset_tail(
         &self,
         doc_id: &str,
-    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 }

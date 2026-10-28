@@ -753,3 +753,61 @@ fn request_projection_retains_every_field_needed_to_verify_signed_ancestry() {
         );
     }
 }
+
+#[tokio::test]
+async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers() -> Result<()> {
+    let node = Arc::new(crate::test_support::node_builder().build().await?);
+    ensure_runtime_schemas(&node).await?;
+    let backend: InferenceBackend = serde_json::from_value(serde_json::json!({
+        "node_did":"did:key:catalog-owner", "backend_id":"catalog-backend", "name":"Catalog",
+        "provider_kind":"OpenAiCompatible", "endpoint":"http://127.0.0.1:1/v1",
+        "auth":{"kind":"unauthenticated"}
+    }))?;
+    gents::ensure_node(&node, &backend.node_did).await?;
+    let access = gents::ConfigAccess::local(node.clone());
+    gents::config_client::write_inference_backend_document(&access, &backend).await?;
+    for observed_at in ["2026-10-28T01:00:00Z", "2026-10-28T02:00:00Z"] {
+        let catalog: gents::document_config::BackendModelCatalog =
+            serde_json::from_value(serde_json::json!({
+                "node_did":null, "observed_at":observed_at,
+                "models":[{"model_name":"retained-model"}]
+            }))?;
+        access
+            .transact_write("test.catalog.refresh", |txn| {
+                let backend = &backend;
+                let catalog = catalog.clone();
+                Box::pin(async move {
+                    gents::backend_registry::record_model_catalog_in_txn(txn, backend, catalog)
+                        .await
+                })
+            })
+            .await?;
+    }
+    let response = access.execute("{ InferenceBackend { _docID } }").await?;
+    let doc_id = response["data"]["InferenceBackend"][0]["_docID"]
+        .as_str()
+        .unwrap();
+    let snapshot = load_full_snapshot(&node).await?;
+    let operator = load_inference_configuration(&access, &backend.node_did).await?;
+    let patch = fetch_doc_patch(&node, INFERENCE_BACKEND_NAME, &[doc_id])
+        .await?
+        .store;
+    for store in [snapshot, operator, patch] {
+        assert_eq!(store.backend_observations.len(), 1);
+        assert_eq!(
+            store.backend_observations[0].catalogs[0].observed_at,
+            "2026-10-28T02:00:00Z"
+        );
+        assert_eq!(
+            store.backend_observations[0].catalogs[0].models[0].model_name,
+            "retained-model"
+        );
+        assert_eq!(
+            store.backend_observation_source_node_dids,
+            [Some(backend.node_did.clone())]
+        );
+        assert_eq!(store.inference_backends.len(), 1);
+    }
+    node.shutdown().await;
+    Ok(())
+}

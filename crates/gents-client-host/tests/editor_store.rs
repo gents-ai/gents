@@ -116,6 +116,105 @@ async fn a_retained_editor_cache_miss_stops_before_identity_or_store_startup() {
     );
 }
 
+/// The custody record names a disposable Keychain item that was never created.
+/// A successful cold open therefore requires the private cache exchange; any
+/// native Keychain lookup would fail instead of silently authorizing startup.
+#[tokio::test]
+async fn cached_editor_key_reopens_keychain_custody_without_a_native_item() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = retained_history(directory.path().join("cached editor")).await;
+    let record = std::fs::read(paths.store_encryption_path()).unwrap();
+    let cached_key = vec![29_u8; 32];
+    let mut identity = None;
+    for _ in 0..2 {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_gents-client-host"))
+            .args(["--serve", "--editor-store", "--home"])
+            .arg(paths.root())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let mut input = FramedWrite::new(child.stdin.take().unwrap(), LengthDelimitedCodec::new());
+        let mut output = FramedRead::new(child.stdout.take().unwrap(), LengthDelimitedCodec::new());
+        let bootstrap: Value = serde_json::from_slice(
+            &tokio::time::timeout(Duration::from_secs(30), output.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(bootstrap["kind"], "store");
+        assert_eq!(
+            bootstrap["record"],
+            serde_json::from_slice::<Value>(&record).unwrap()
+        );
+        input
+            .send(Bytes::from(
+                serde_json::to_vec(&json!({"kind":"use", "bytes":cached_key})).unwrap(),
+            ))
+            .await
+            .unwrap();
+        let ready: Value = serde_json::from_slice(
+            &tokio::time::timeout(Duration::from_secs(30), output.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            ready["kind"], "ready",
+            "cached startup did not complete: {ready}"
+        );
+        let mut connection = tokio_util::codec::Framed::new(
+            local::connect(&paths).await.unwrap(),
+            LengthDelimitedCodec::new(),
+        );
+        connection.send(Bytes::from(serde_json::to_vec(&json!({"kind":"hello", "version":gents_desktop_bridge::host::protocol::PROTOCOL_VERSION})).unwrap())).await.unwrap();
+        let hello: Value = serde_json::from_slice(
+            &tokio::time::timeout(Duration::from_secs(10), connection.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(hello["kind"], "hello");
+        let current = std::fs::read(paths.identity_key_path()).unwrap();
+        if let Some(previous) = &identity {
+            assert!(
+                &current == previous,
+                "cached reopen changed the client identity"
+            );
+        }
+        identity = Some(current);
+        assert!(
+            !paths.store_key_path().exists(),
+            "cached startup created plaintext key custody"
+        );
+        assert_eq!(
+            std::fs::read(paths.store_encryption_path()).unwrap(),
+            record
+        );
+        drop(connection);
+        // SAFETY: this is the live disposable server above; its successful
+        // handshake proves the listener and interrupt handler are installed.
+        assert_eq!(
+            unsafe { libc::kill(child.id().unwrap() as libc::pid_t, libc::SIGINT) },
+            0
+        );
+        drop(input);
+        assert!(tokio::time::timeout(Duration::from_secs(30), child.wait())
+            .await
+            .unwrap()
+            .unwrap()
+            .success());
+    }
+}
+
 /// Child::wait closes stdin. Keep it open until the store lock is released so
 /// EOF cannot win the SIGTERM race; then close it to release Tokio's blocking
 /// stdin read before waiting for the attachment's runtime to exit.
@@ -154,7 +253,7 @@ async fn terminating_an_editor_attachment_releases_its_unready_installation() {
                     drop(guard);
                     break;
                 }
-                Err(error) if error.is::<gents::home::StoreLockHeld>() => {
+                Err(error) if error.lock_held().is_some() => {
                     tokio::time::sleep(Duration::from_millis(10)).await
                 }
                 Err(error) => panic!("unexpected client lock error: {error}"),
@@ -221,7 +320,7 @@ async fn closing_editor_input_releases_an_unready_installation() {
                     drop(guard);
                     break;
                 }
-                Err(error) if error.is::<gents::home::StoreLockHeld>() => {
+                Err(error) if error.lock_held().is_some() => {
                     tokio::time::sleep(Duration::from_millis(10)).await
                 }
                 Err(error) => panic!("unexpected client lock error: {error}"),

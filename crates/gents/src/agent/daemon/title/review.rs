@@ -359,7 +359,7 @@ where
             Ok(Err(error)) => {
                 super::super::request::flush_received_preparation_partial("access review failure")
                     .await?;
-                Err(error)
+                Err(error.into())
             }
             Err(error) => {
                 super::super::request::flush_received_preparation_partial("access review timeout")

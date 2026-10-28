@@ -15,9 +15,11 @@ pub async fn rename_session(
 ) -> Result<()> {
     let mutation =
         build_rename_session_mutation(store, node_did, requester_did, session_id, title)?;
-    gents::config_client::ConfigAccess::write_local(node, "rename_session", &mutation)
-        .await
-        .map(|_| ())
+    Ok(
+        gents::config_client::ConfigAccess::write_local(node, "rename_session", &mutation)
+            .await
+            .map(|_| ())?,
+    )
 }
 
 fn build_rename_session_mutation(

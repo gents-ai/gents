@@ -597,7 +597,7 @@ async fn full_storage_stops_readiness_retries_and_keeps_close_bounded() {
         .await
         .unwrap()
         .unwrap_err();
-    assert!(crate::graphql::is_storage_full(&error));
+    assert!(crate::graphql::is_storage_full(error.as_ref()));
     assert!(attempts_rx.try_recv().is_ok());
     assert!(attempts_rx.try_recv().is_err());
     assert!(writer.persisted.lock().await.is_empty());

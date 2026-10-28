@@ -265,6 +265,7 @@ pub async fn execute_command(
         query
     };
     let response = access.execute_read(&query).await.map_err(|error| {
+        let error = anyhow::Error::from(error);
         let diagnostic =
             super::diagnose_failed_query(&params, Some(&schema), &format!("{error:#}"));
         error.context(format!(

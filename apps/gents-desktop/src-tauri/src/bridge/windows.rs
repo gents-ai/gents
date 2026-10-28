@@ -174,7 +174,10 @@ pub fn create_window(app: &AppHandle, tab: bool) -> tauri::Result<WebviewWindow>
     config.label = format!("gents-view-{}", NEXT_WINDOW.fetch_add(1, Ordering::Relaxed));
     config.visible = false;
     config.tabbing_identifier = Some(TABBING_IDENTIFIER.into());
-    let window = WebviewWindowBuilder::from_config(app, &config)?.build()?;
+    let window = gents_desktop_bridge::navigation::restrict_window(
+        WebviewWindowBuilder::from_config(app, &config)?,
+    )
+    .build()?;
     with_native_window(&window, |native| {
         native.setTabbingMode(if tab {
             NSWindowTabbingMode::Preferred

@@ -267,6 +267,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
     let lastMotionAt = -Infinity;
     let touching = false;
     let dragging = false;
+    let readerScrolling = false;
     let restTimer = 0;
     let quiet = 0;
     let landingFrames = -1;
@@ -477,6 +478,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       const s = el();
       if (s) seenTop = s.scrollTop;
       lastInputAt = -Infinity;
+      readerScrolling = false;
     }
 
     /* the carried difference written now: the list sits where it belongs
@@ -496,6 +498,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       window.clearTimeout(restTimer);
       restTimer = window.setTimeout(() => {
         if (!resting()) return scheduleRest();
+        readerScrolling = false;
         if (hidden) setHidden(0);
         reconcile();
       }, REST_MS);
@@ -537,7 +540,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
         ahead();
         return;
       }
-      if (dragging || performance.now() - lastInputAt < INTENT_MS) {
+      if (readerScrolling || dragging || performance.now() - lastInputAt < INTENT_MS) {
         const foot = s.scrollHeight - live.current.room - s.clientHeight;
         const atFoot = s.scrollTop >= foot - REPIN_PX;
         /* coming down to the foot follows again; a scroll up that starts
@@ -565,10 +568,13 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
     }
     const release = () => {
       lastInputAt = performance.now();
+      readerScrolling = true;
       if (mode.kind !== "read") capture();
+      scheduleRest();
     };
     const onWheel = (event: WheelEvent) => {
       lastInputAt = performance.now();
+      readerScrolling = true;
       lastMotionAt = lastInputAt;
       if (event.deltaY < 0) release();
       const s = el();
@@ -577,6 +583,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       if (s && s.scrollTop <= 0 && event.deltaY < 0) {
         if (hidden) landCarried();
         ahead();
+        scheduleRest();
       } else {
         scheduleRest();
       }
@@ -584,6 +591,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
     let touchY = 0;
     const onTouchStart = (event: TouchEvent) => {
       touching = true;
+      readerScrolling = true;
       touchY = event.touches[0]?.clientY ?? 0;
       lastInputAt = performance.now();
     };
@@ -609,13 +617,18 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       else if (event.key === "End") {
         setMode({ kind: "follow" });
         reconcile();
-      } else if (DOWN_KEYS.has(event.key)) lastInputAt = performance.now();
+      } else if (DOWN_KEYS.has(event.key)) {
+        lastInputAt = performance.now();
+        readerScrolling = true;
+        scheduleRest();
+      }
     };
     const onPointerDown = (event: PointerEvent) => {
       if (
         (event.target as Element | null)?.closest("[data-slot=scroll-area-scrollbar]")
       ) {
         dragging = true;
+        readerScrolling = true;
         lastInputAt = performance.now();
       }
     };
@@ -696,6 +709,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
         s.addEventListener("touchstart", onTouchStart, { passive: true });
         s.addEventListener("touchmove", onTouchMove, { passive: true });
         s.addEventListener("touchend", onTouchEnd, { passive: true });
+        s.addEventListener("touchcancel", onTouchEnd, { passive: true });
         s.addEventListener("transcript:hold", onHold);
         s.addEventListener("transcript:step", onStep);
         window.addEventListener("keydown", onKey);
@@ -707,6 +721,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
           s.removeEventListener("touchstart", onTouchStart);
           s.removeEventListener("touchmove", onTouchMove);
           s.removeEventListener("touchend", onTouchEnd);
+          s.removeEventListener("touchcancel", onTouchEnd);
           s.removeEventListener("transcript:hold", onHold);
           s.removeEventListener("transcript:step", onStep);
           window.removeEventListener("keydown", onKey);

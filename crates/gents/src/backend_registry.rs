@@ -1,3 +1,6 @@
+mod catalog_freshness;
+pub use catalog_freshness::decode_backend_observation;
+
 use crate::backend_provider::BackendProviderKind;
 pub use crate::document_config::InferenceBackend;
 use crate::document_config::{
@@ -37,6 +40,7 @@ impl InferenceBackend {
             "_deleted",
             "updated_at",
             "catalogs",
+            "catalog_freshness",
             "probe_status",
             "last_probe",
         ] {
@@ -361,7 +365,7 @@ pub async fn lookup_backend_observation_in_txn(
 ) -> Result<Option<InferenceBackendObservation>> {
     let filter = scope_filter(node_did, backend_id)?;
     let response = txn.execute(&format!(
-        "query {{ InferenceBackend(filter: {filter}) {{ backend_id catalogs probe_status last_probe }} }}"
+        "query {{ InferenceBackend(filter: {filter}) {{ backend_id catalogs catalog_freshness probe_status last_probe }} }}"
     )).await?;
     let rows = response
         .get("data")
@@ -370,7 +374,7 @@ pub async fn lookup_backend_observation_in_txn(
         .context("backend observation query did not return rows")?;
     anyhow::ensure!(rows.len() <= 1, "ambiguous backend observation reference");
     rows.first()
-        .map(|row| serde_json::from_value(row.clone()).context("decoding backend observation"))
+        .map(|row| decode_backend_observation(row.clone()).context("decoding backend observation"))
         .transpose()
 }
 
@@ -478,7 +482,7 @@ pub async fn record_model_catalog_in_txn(
     }
     let filter = scope_filter(&backend.node_did, &backend.backend_id)?;
     let response = txn.execute(&format!(
-                    "{{ InferenceBackend(filter: {filter}, limit: 2) {{ _docID {BACKEND_CONFIG_FIELDS} catalogs }} }}"
+                    "{{ InferenceBackend(filter: {filter}, limit: 2) {{ _docID {BACKEND_CONFIG_FIELDS} catalogs catalog_freshness }} }}"
                 )).await?;
     let rows = response
         .get("data")
@@ -509,33 +513,47 @@ pub async fn record_model_catalog_in_txn(
         matching.len() <= 1,
         "ambiguous catalog authentication scope"
     );
+    let mut freshness = catalog_freshness::Freshness::load(row, &catalogs)?;
+    let mut content_changed = true;
+    let scope_index;
+    let stamp = catalog.observed_at.clone();
     if let Some((index, old)) = matching.first() {
-        if chrono::DateTime::parse_from_rfc3339(&old.observed_at)? > observed_at
-            || old.models == catalog.models
-        {
+        let latest = freshness.observed_at(old)?;
+        if observed_at < latest {
             return Ok(());
         }
-        let index = *index;
-        catalogs[index] = catalog;
+        scope_index = *index;
+        if old.models == catalog.models {
+            if observed_at == latest && freshness.contains_scope(&catalog.node_did) {
+                return Ok(());
+            }
+            content_changed = false;
+        } else {
+            catalogs[scope_index] = catalog;
+        }
     } else {
+        scope_index = catalogs.len();
         catalogs.push(catalog);
     }
-    // DefraDB represents a top-level JSON array as JsonArray, which is not a
-    // Scalar(Json). Keep the array inside a JSON object so the declared scalar
-    // kind and the stored value agree.
-    let catalogs = serde_json::json!({ "entries": catalogs });
+    freshness.record(&catalogs[scope_index], stamp)?;
+    let mut input = serde_json::Map::new();
+    input.insert("catalog_freshness".into(), serde_json::to_value(freshness)?);
+    if content_changed {
+        // A JSON scalar keeps its model array inside an object, rather than
+        // publishing a top-level JsonArray to DefraDB's Scalar(Json) field.
+        input.insert(
+            "catalogs".into(),
+            serde_json::json!({ "entries": catalogs }),
+        );
+    }
     let doc_id = row
         .get("_docID")
         .and_then(serde_json::Value::as_str)
         .context("backend catalog target has no physical identity")?;
     txn.execute_with_variables(
-        &format!(
-            "mutation($catalogs: JSON) {{ update_InferenceBackend(docID: \"{}\", input: {{ catalogs: $catalogs }}) {{ _docID }} }}",
-            escape_graphql_string(doc_id)
-        ),
-        &serde_json::json!({ "catalogs": catalogs }),
-    )
-    .await?;
+        &format!("mutation($input: InferenceBackendMutationInputArg!) {{ update_InferenceBackend(docID: \"{}\", input: $input) {{ _docID }} }}", escape_graphql_string(doc_id)),
+        &serde_json::json!({"input":input}),
+    ).await?;
     Ok(())
 }
 

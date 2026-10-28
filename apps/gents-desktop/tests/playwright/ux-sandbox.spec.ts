@@ -196,6 +196,30 @@ test.describe("the plugin frame", () => {
     expect(placed).toEqual({ visibility: "visible", overViewport: true });
   });
 
+  for (const layout of ["block", "flex"] as const) {
+    test(`fills a ${layout} page parent with a visible frame`, async ({ page }) => {
+      await loadProbe(page);
+      await page.getByTestId("page-viewport").evaluate((element, display) => {
+        element.style.display = display;
+        element.style.flexDirection = "column";
+      }, layout);
+      await expect
+        .poll(
+          async () =>
+            (await page.getByTestId("ux-frame-viewport").boundingBox())?.height,
+        )
+        .toBe(320);
+      await expect
+        .poll(
+          async () =>
+            (await page.locator('iframe[data-ux-frame="harness/probe"]').boundingBox())
+              ?.height,
+        )
+        .toBe(320);
+      await expect(frameOf(page).getByTestId("plugin-page")).toBeVisible();
+    });
+  }
+
   test("takes the frame down with a disable and builds a new one on enable", async ({
     page,
   }) => {

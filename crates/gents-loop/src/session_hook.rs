@@ -21,12 +21,16 @@ pub trait CanonicalSessionHook<Accepted>: SessionHook
 where
     Accepted: Send,
 {
-    async fn adopt_accepted_tool_calls(&self, calls: Vec<(String, Accepted)>)
-        -> anyhow::Result<()>;
+    async fn adopt_accepted_tool_calls(
+        &self,
+        calls: Vec<(String, Accepted)>,
+    ) -> Result<(), Self::Error>;
 }
 
 #[async_trait]
 pub trait SessionHook: Send + Sync {
+    type Error: Into<Box<dyn std::error::Error + Send + Sync>> + Send + Sync + 'static;
+
     async fn run_foreground_tool(
         &self,
         _name: &str,
@@ -63,13 +67,13 @@ pub trait SessionHook: Send + Sync {
     /// Only writer-acknowledged candidates may enter the provider projection.
     async fn pending_steering_inputs(
         &self,
-    ) -> anyhow::Result<Vec<crate::loop_stream::FoldedPrompt>> {
+    ) -> Result<Vec<crate::loop_stream::FoldedPrompt>, Self::Error> {
         Ok(Vec::new())
     }
 
     async fn finish_steering_snapshot(
         &self,
-    ) -> anyhow::Result<Option<crate::loop_stream::SteeringSnapshot>> {
+    ) -> Result<Option<crate::loop_stream::SteeringSnapshot>, Self::Error> {
         Ok(None)
     }
 
@@ -127,6 +131,8 @@ pub struct NoopSessionHook;
 
 #[async_trait]
 impl SessionHook for NoopSessionHook {
+    type Error = std::convert::Infallible;
+
     async fn on_completion_call_with_context(
         &self,
         _prompt: &Message,

@@ -45,8 +45,8 @@ pub use enrollment_reconcile::{
     EnrollmentAuthorityOwner, EnrollmentAuthorizationFence, PeerAdmissionAuthority,
 };
 pub use enrollment_store::{
-    ActiveEnrollment, DeniedEnrollment, EnrollmentDecisionOutcome, EnrollmentProjection,
-    GraphqlEnrollmentStore, PendingEnrollment,
+    ActiveEnrollment, DeniedEnrollment, EnrollmentDecisionOutcome, EnrollmentDecisionRefusal,
+    EnrollmentProjection, GraphqlEnrollmentStore, PendingEnrollment,
 };
 pub use error_class::{classify_remote_admin_error, PairingErrorClass};
 pub use policy::{

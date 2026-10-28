@@ -836,3 +836,27 @@ fn file_review_availability_keeps_its_typed_code_through_host_context() {
         assert_eq!(encoded["message"], expected.message);
     }
 }
+
+#[test]
+fn image_attachment_read_commands_keep_scope_index_and_cancellation() {
+    let args = json!({"nodeDid":"node", "sessionId":"session", "requestId":"request", "messageKey":"message", "index":1});
+    let command: protocol::ClientCommand =
+        serde_json::from_value(json!({"name":"desktop_request_attachments", "args": args}))
+            .unwrap();
+    assert!(command.is_cancellable());
+    assert!(protocol::ClientCommand::NAMES.contains(&"desktop_request_attachments"));
+    for field in ["nodeDid", "sessionId", "requestId"] {
+        let mut missing = args.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(serde_json::from_value::<protocol::ClientCommand>(
+            json!({"name":"desktop_request_attachments", "args": missing})
+        )
+        .is_err());
+    }
+    let mut negative = args;
+    negative["index"] = json!(-1);
+    assert!(serde_json::from_value::<protocol::ClientCommand>(
+        json!({"name":"desktop_request_attachments", "args": negative})
+    )
+    .is_err());
+}

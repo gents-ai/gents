@@ -650,10 +650,7 @@ impl PluginExecutor {
                 calls.tools.is_some(),
             ));
             receipt.verdict = PluginExecutionVerdict::ExecutionError;
-            let round = match script_of(&record.declaration, &input) {
-                Some(source) => script_round(source, &record.name),
-                None => artifact_round(admitted.runner.clone(), bound),
-            };
+            let round = artifact_round(admitted.runner.clone(), bound);
             let outcome = drive_with_calls(&coordinate, round, calls, input, admitted.budget)
             .await
             .inspect_err(|error| {
@@ -811,25 +808,6 @@ fn artifact_round(runner: Arc<PluginRunner>, bound: Option<BoundDir>) -> rounds:
         Some(bound) => runner.call_bound(&input, &budget, bound),
         None => runner.call(&input, &budget),
     })
-}
-
-/// The round of a `script_runtime` plugin whose call carries `script`: the
-/// source runs as the step through the host's embedded engine.
-fn script_round(source: String, plugin: &str) -> rounds::Round {
-    let runner = super::source_runner::SourceRunner::new(source, plugin);
-    Arc::new(move |input, budget| runner.call(&input, &budget))
-}
-
-/// The `script` a call carries when `declaration` runs scripts; an empty or
-/// absent script runs the artifact (its non-job verbs). Whitespace is source
-/// (Lean `CallArgs.carriesScript`), so the run and its digest see it.
-fn script_of(declaration: &crate::pack::PackPlugin, input: &serde_json::Value) -> Option<String> {
-    declaration.script_runtime?;
-    input
-        .get("script")
-        .and_then(serde_json::Value::as_str)
-        .filter(|script| !script.is_empty())
-        .map(str::to_owned)
 }
 
 async fn drive_with_calls(

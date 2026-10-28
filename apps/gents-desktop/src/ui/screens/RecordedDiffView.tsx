@@ -34,9 +34,12 @@ function versionsOf(key: string, path: string, diff: RecordedDiff): Versions | n
 export default function RecordedDiffView({
   scope,
   file,
+  whole = false,
 }: {
   scope: SessionScope;
   file: ChangedFile;
+  /** show the unchanged lines too, not only those around each change */
+  whole?: boolean;
 }) {
   const diff = useRecordedDiff(scope, file);
   const key = recordedKey(scope, file);
@@ -64,7 +67,7 @@ export default function RecordedDiffView({
         This file was not changed.
       </p>
     );
-  const options = optionsFor(theme, "file");
+  const options = optionsFor(theme, whole ? "whole-file" : "file");
   return (
     <DiffWorkers>
       <div style={TOKENS}>

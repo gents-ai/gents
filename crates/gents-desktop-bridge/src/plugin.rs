@@ -91,6 +91,7 @@ where
             Ok(())
         })
         .on_webview_ready(register_window)
+        .on_navigation(crate::navigation::allow_navigation)
         .on_page_load(|webview, payload| {
             if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
                 webview
@@ -189,6 +190,7 @@ where
             tauri_commands::chat::desktop_request_resend,
             tauri_commands::chat::desktop_request_retry,
             tauri_commands::mailbox::desktop_mailbox_list,
+            tauri_commands::mailbox::desktop_mailbox_observe,
             tauri_commands::mailbox::desktop_mailbox_start_request,
             tauri_commands::mailbox::desktop_mailbox_dismiss,
             tauri_commands::config::desktop_node_config_save,

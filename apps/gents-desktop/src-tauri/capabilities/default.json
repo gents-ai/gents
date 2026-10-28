@@ -14,6 +14,7 @@
     "core:webview:allow-set-webview-zoom",
     "opener:default",
     "dialog:allow-open",
+    "dialog:allow-message",
     "gents-desktop-bridge:default",
     "gents-desktop-bridge:full",
     "native-swipe"

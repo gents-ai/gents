@@ -8,10 +8,12 @@ use gents::session::canonical_rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
+#[cfg(unix)]
+use gents_protocol::output::ReasoningPart;
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
-    OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, ReasoningPart, SegmentRun,
-    SourceClose, StreamDeclaration, StreamPayload, TranscriptMessage,
+    OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
+    StreamDeclaration, StreamPayload, TranscriptMessage,
 };
 use serde_json::json;
 
@@ -22,6 +24,7 @@ use serde_json::json;
 )]
 pub(super) mod streaming_backend;
 
+#[cfg(unix)]
 pub(super) async fn configure_runtime_agent(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
@@ -135,6 +138,7 @@ pub(super) async fn configure_runtime_agent(
     .unwrap();
 }
 
+#[cfg(unix)]
 pub(super) async fn seed_canonical_assistant_message(
     node: &EmbeddedNode,
     request: &gents_protocol::row::AgentRequestRow,
@@ -485,7 +489,7 @@ pub(crate) async fn seed_canonical_tool_call(
                     "AgentToolCall",
                 )?;
                 if is_spawned_child {
-                    return Ok(tool_doc_id);
+                    return Ok::<_, anyhow::Error>(tool_doc_id);
                 }
                 let admitted_response = txn
                     .execute_with_variables(
@@ -687,6 +691,7 @@ pub(crate) async fn seed_background_receipt(
 
 /// Complete an already-admitted ordinary tool through its canonical output
 /// and ToolDelivery owners, then publish the terminal lifecycle marker.
+#[cfg(unix)]
 pub(super) async fn complete_canonical_tool_call(
     node: &EmbeddedNode,
     request: &gents_protocol::row::AgentRequestRow,
@@ -779,6 +784,7 @@ pub(super) async fn complete_canonical_tool_call(
 }
 
 /// Append an open canonical ToolOutput window for an admitted running tool.
+#[cfg(unix)]
 pub(super) async fn seed_canonical_live_tool_output(
     node: &EmbeddedNode,
     request: &gents_protocol::row::AgentRequestRow,
@@ -823,6 +829,7 @@ pub(super) async fn seed_canonical_live_tool_output(
 
 /// A spawned process closes its raw output without inventing a native reply;
 /// the spawn_process invocation owns its separate admission reply.
+#[cfg(unix)]
 pub(super) async fn complete_canonical_spawned_process_output(
     node: &EmbeddedNode,
     request: &gents_protocol::row::AgentRequestRow,
@@ -882,6 +889,7 @@ pub(super) async fn complete_canonical_spawned_process_output(
 
 /// Record that `session_id` was started by `parent_request_doc_id`, the
 /// stored provenance every lineage reader follows. Idempotent per scope.
+#[cfg(unix)]
 pub(super) async fn seed_started_session(
     node: &EmbeddedNode,
     node_did: &str,
@@ -1076,6 +1084,7 @@ async fn seed_signed_request(
     serde_json::from_value(row.data.unwrap()["AgentRequest"][0].clone()).unwrap()
 }
 
+#[cfg(unix)]
 pub(super) async fn seed_test_agent_configuration(
     node: &Arc<EmbeddedNode>,
     node_did: &str,

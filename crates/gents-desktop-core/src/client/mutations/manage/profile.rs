@@ -251,7 +251,7 @@ mod tests {
                         assert_eq!(agent["display_name"], id);
                         assert_eq!(agent["tags"], json!(["preserved"]));
                     }
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             })
             .await?;
@@ -394,7 +394,7 @@ mod tests {
                     retained.reasoning_effort,
                     Some(gents::config::ReasoningEffort::High)
                 );
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await?;

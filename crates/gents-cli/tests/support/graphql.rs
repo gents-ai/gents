@@ -48,9 +48,9 @@ pub fn served_endpoint(graphql: &str) -> gents::config_client::GraphqlEndpoint {
 pub async fn graphql_query(graphql: &str, query: &str) -> Result<Value> {
     let access = gents::config_client::ConfigAccess::Graphql(served_endpoint(graphql));
     if query.trim_start().starts_with("mutation") {
-        access.write("test.fixture", query).await
+        Ok(access.write("test.fixture", query).await?)
     } else {
-        access.execute(query).await
+        Ok(access.execute(query).await?)
     }
 }
 
@@ -59,13 +59,13 @@ pub async fn graphql_mutation_with_variables(
     query: &str,
     variables: &Value,
 ) -> Result<Value> {
-    access
+    Ok(access
         .transact_write("test.fixture.variables", |txn| {
             let query = query.to_owned();
             let variables = variables.clone();
             Box::pin(async move { txn.execute_with_variables(&query, &variables).await })
         })
-        .await
+        .await?)
 }
 
 pub fn first_graphql_row<'a>(response: &'a Value, field: &str) -> Result<&'a Value> {

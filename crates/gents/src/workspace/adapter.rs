@@ -428,6 +428,8 @@ fn git_show_blob(repo: &Path, base_sha: &str, path: &str) -> Result<Option<Vec<u
     bail!("git show {spec} failed: {}", stderr.trim())
 }
 
+/// External premise: `git show` reports a path absent from a revision only in
+/// its stderr wording, with the exit status every failure shares.
 fn git_blob_missing(stderr: &str) -> bool {
     let lower = stderr.to_ascii_lowercase();
     lower.contains("does not exist") || lower.contains("exists on disk, but not in")

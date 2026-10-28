@@ -369,10 +369,9 @@ pub async fn message_attachments(
         .map(|did| format!(", requester_did: {{ _eq: \"{}\" }}", escape(did)))
         .unwrap_or_default();
     let query = format!("{{ AgentMessage(filter: {{ session_id: {{ _eq: \"{}\" }}, node_did: {{ _eq: \"{}\" }}, message_key: {{ _eq: \"{}\" }}{requester} }}, limit: 2) {{ _docID }} }}", escape(session_id), escape(node_did), escape(message_key));
-    let rows = access
-        .execute(&query)
-        .await
-        .map_err(|e| BridgeError::untyped(format!("{e:#}")))?;
+    let rows = access.execute(&query).await.map_err(|e| {
+        BridgeError::untyped(gents_protocol::error_chain::ErrorChain(&e).to_string())
+    })?;
     let rows = rows["data"]["AgentMessage"]
         .as_array()
         .ok_or_else(|| BridgeError::untyped("Message attachments are unavailable"))?;
@@ -411,7 +410,7 @@ pub async fn session_rows(
     window: SessionRowsWindow,
     limit: Option<usize>,
 ) -> Result<SessionRowsView, BridgeError> {
-    use gents_desktop_core::client::{SessionTranscriptQueryPage, TranscriptWindow};
+    use gents_desktop_core::client::TranscriptWindow;
     let node_did = resolve_session_node(core, &session_id, node_did)?;
     let empty = |unreadable: Option<String>| SessionRowsView {
         session_id: session_id.clone(),
@@ -469,9 +468,8 @@ pub async fn session_rows(
         Err(error) => BridgeError::untyped(format!("{error:#}")),
     };
     let store = core.store().snapshot();
-    let render = |page: &SessionTranscriptQueryPage| {
-        crate::snapshot::render_transcript_rows(&store, page, &session_id)
-    };
+    let local_access = gents::config_client::ConfigAccess::local(core.node_arc());
+    let provenance_access = operator_access.as_ref().unwrap_or(&local_access);
     let mut view = empty(None);
     let mut messages = Vec::new();
     /* a read against the node's own runtime sees every message it has; a
@@ -492,7 +490,14 @@ pub async fn session_rows(
             )
             .await
             .map_err(error)?;
-            view.rows = render(&page);
+            view.rows = crate::snapshot::render_transcript_rows_with_provenance(
+                provenance_access,
+                &store,
+                &page,
+                &node_did,
+                &session_id,
+            )
+            .await;
             view.covered_from = page.covered.from;
             view.covered_through = page.covered.through;
             view.has_older = match window {
@@ -517,8 +522,24 @@ pub async fn session_rows(
             let newer = read(TranscriptWindow::After(sequence - 1), half)
                 .await
                 .map_err(error)?;
-            let mut rows = render(&older);
-            rows.extend(render(&newer));
+            let mut rows = crate::snapshot::render_transcript_rows_with_provenance(
+                provenance_access,
+                &store,
+                &older,
+                &node_did,
+                &session_id,
+            )
+            .await;
+            rows.extend(
+                crate::snapshot::render_transcript_rows_with_provenance(
+                    provenance_access,
+                    &store,
+                    &newer,
+                    &node_did,
+                    &session_id,
+                )
+                .await,
+            );
             view.rows = rows;
             view.covered_from = older.covered.from;
             view.covered_through = newer.covered.through;
@@ -535,9 +556,8 @@ pub async fn session_rows(
         .find(|session| session.session_id == session_id && session.node_did == node_did)
         .map(|session| session.requester_did.clone());
     if let Some(requester) = requester {
-        let local_access = gents::config_client::ConfigAccess::local(core.node_arc());
         crate::snapshot::attach_context_history_rows(
-            operator_access.as_ref().unwrap_or(&local_access),
+            provenance_access,
             &session_id,
             &node_did,
             requester.as_deref(),

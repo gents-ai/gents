@@ -104,7 +104,7 @@ impl BridgeError {
     }
 
     pub fn classify_transport_error(error: anyhow::Error) -> Self {
-        if gents::graphql::is_storage_full(&error) {
+        if gents::graphql::is_storage_full(error.as_ref()) {
             return Self::storage_full();
         }
         if let Some(classified) = error.chain().find_map(|cause| cause.downcast_ref::<Self>()) {

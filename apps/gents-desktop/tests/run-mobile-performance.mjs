@@ -492,6 +492,9 @@ async function typeBurstToNextPaint(page, text) {
   );
 }
 
+/* Typing is counted by beforeinput, once per keystroke: the composer's rich
+   editor applies most typing itself and cancels the browser's insert, so an
+   input event may never follow. Timing from it includes the editor's work. */
 async function prepareTypingPaintMeasurement(page) {
   await page.evaluate(() => {
     const samples = [];
@@ -499,14 +502,20 @@ async function prepareTypingPaintMeasurement(page) {
       value: samples,
       configurable: true,
     });
-    const input = document.querySelector('textarea[aria-label="Message"]');
-    if (!(input instanceof HTMLTextAreaElement)) {
+    const input = document.querySelector(
+      '[data-slot="composer"] [aria-label="Message"]',
+    );
+    if (!(input instanceof HTMLElement)) {
       throw new Error("mobile performance composer is unavailable");
     }
     if (window.__GENTS_TYPING_INPUT_HANDLER__) {
-      document.removeEventListener("input", window.__GENTS_TYPING_INPUT_HANDLER__, {
-        capture: true,
-      });
+      document.removeEventListener(
+        "beforeinput",
+        window.__GENTS_TYPING_INPUT_HANDLER__,
+        {
+          capture: true,
+        },
+      );
     }
     const recordNextPaint = (event) => {
       const eventAt = event.timeStamp;
@@ -515,7 +524,7 @@ async function prepareTypingPaintMeasurement(page) {
       });
     };
     window.__GENTS_TYPING_INPUT_HANDLER__ = recordNextPaint;
-    document.addEventListener("input", recordNextPaint, { capture: true });
+    document.addEventListener("beforeinput", recordNextPaint, { capture: true });
   });
 }
 
@@ -556,12 +565,12 @@ async function typeBurstWithConcurrentStreamDeltas(page, text) {
           .bridgeCalls.filter(
             (call) => call.command === "fetchSessionLiveDelta",
           ).length;
-        document.removeEventListener("input", observeTypingBoundary, {
+        document.removeEventListener("beforeinput", observeTypingBoundary, {
           capture: true,
         });
       }
     };
-    document.addEventListener("input", observeTypingBoundary, { capture: true });
+    document.addEventListener("beforeinput", observeTypingBoundary, { capture: true });
   }, text.length);
   const input = page.getByRole("textbox", { name: "Message" });
   await input.focus();

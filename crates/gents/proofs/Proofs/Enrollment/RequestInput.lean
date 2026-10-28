@@ -108,8 +108,11 @@ decode them. It grants no authority; the selected runtime's identity, readiness
 and request admission retain their existing owners. Plain input does not need
 this new contract advertisement. -/
 def capturedInputCompatible (input : RequestInput) (runtimeVersion : Option Nat) : Bool :=
-  (input.attachments.isEmpty || runtimeVersion == some 2) &&
-    (input.capturedContext.isEmpty || runtimeVersion == some 1 || runtimeVersion == some 2)
+  (input.attachments.isEmpty || runtimeVersion == some 2 || runtimeVersion == some 3) &&
+    (input.capturedContext.isEmpty || runtimeVersion == some 1 || runtimeVersion == some 2 ||
+      runtimeVersion == some 3) &&
+    (input.capturedContext.all (fun context => context.source != .composer) ||
+      runtimeVersion == some 3)
 
 def goalAssignmentCompatible (input : RequestInput) (runtimeVersion : Option Nat) : Bool :=
   input.goalAssignment.isNone || runtimeVersion == some 3

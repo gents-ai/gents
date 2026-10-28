@@ -142,33 +142,40 @@ fn request_assignment_scope(
 #[cfg(test)]
 mod contract_tests;
 
-fn supersedes_assignment(left: &super::GoalVersion, right: &super::GoalVersion) -> bool {
-    left.goal.doc_id == right.goal.doc_id
-        && left.goal.node_did == right.goal.node_did
-        && left.goal.session_id == right.goal.session_id
-        && left.goal.goal_id == right.goal.goal_id
-        && (left.goal.assignment_root_request_doc_id == right.goal.assignment_root_request_doc_id
-            || left.goal.assignment_root_request_doc_id.is_none()
-                && right.goal.assignment_root_request_doc_id.is_some())
+fn supersedes_assignment(
+    left: &super::GoalAssignmentVersion,
+    right: &super::GoalAssignmentVersion,
+) -> bool {
+    left.identity.doc_id == right.identity.doc_id
+        && left.identity.node_did == right.identity.node_did
+        && left.identity.session_id == right.identity.session_id
+        && left.identity.goal_id == right.identity.goal_id
+        && (left.identity.assignment_root_request_doc_id
+            == right.identity.assignment_root_request_doc_id
+            || left.identity.assignment_root_request_doc_id.is_none()
+                && right.identity.assignment_root_request_doc_id.is_some())
 }
 
-pub(crate) fn latest_assignment_goals(
-    versions: &[super::GoalVersion],
-) -> anyhow::Result<Vec<GoalDocument>> {
+pub(super) fn latest_assignment_versions(
+    versions: &[super::GoalAssignmentVersion],
+) -> anyhow::Result<Vec<&super::GoalAssignmentVersion>> {
     use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
     let mut by_commit = RapidHashMap::new();
     for version in versions {
         anyhow::ensure!(
             version.height >= 0
                 && !version.commit_cid.is_empty()
-                && !version.goal.doc_id.is_empty()
-                && version.goal.parsed_status().is_some(),
+                && !version.identity.doc_id.is_empty()
+                && super::GoalStatus::parse(&version.identity.status).is_some(),
             "Goal history has an invalid native revision or status"
         );
         anyhow::ensure!(
             by_commit
                 .insert(
-                    (version.goal.doc_id.as_str(), version.commit_cid.as_str()),
+                    (
+                        version.identity.doc_id.as_str(),
+                        version.commit_cid.as_str()
+                    ),
                     version
                 )
                 .is_none(),
@@ -178,7 +185,7 @@ pub(crate) fn latest_assignment_goals(
     for version in versions {
         for parent in &version.parent_commit_cids {
             let prior = by_commit
-                .get(&(version.goal.doc_id.as_str(), parent.as_str()))
+                .get(&(version.identity.doc_id.as_str(), parent.as_str()))
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "Goal history is incomplete at revision {}",
@@ -203,9 +210,9 @@ pub(crate) fn latest_assignment_goals(
             if !visited.insert(cid) {
                 continue;
             }
-            let ancestor = by_commit[&(later.goal.doc_id.as_str(), cid)];
+            let ancestor = by_commit[&(later.identity.doc_id.as_str(), cid)];
             if supersedes_assignment(ancestor, later) {
-                superseded.insert((later.goal.doc_id.as_str(), cid));
+                superseded.insert((later.identity.doc_id.as_str(), cid));
             }
             pending.extend(ancestor.parent_commit_cids.iter().map(String::as_str));
         }
@@ -213,10 +220,13 @@ pub(crate) fn latest_assignment_goals(
     let mut unique_assignments = RapidHashSet::new();
     let mut goals = Vec::new();
     for version in versions {
-        if superseded.contains(&(version.goal.doc_id.as_str(), version.commit_cid.as_str())) {
+        if superseded.contains(&(
+            version.identity.doc_id.as_str(),
+            version.commit_cid.as_str(),
+        )) {
             continue;
         }
-        let goal = &version.goal;
+        let goal = &version.identity;
         anyhow::ensure!(
             unique_assignments.insert((
                 &goal.doc_id,
@@ -227,9 +237,24 @@ pub(crate) fn latest_assignment_goals(
             )),
             "Goal assignment has concurrent native revisions; refresh before observing its outcome"
         );
-        goals.push(goal.clone());
+        goals.push(version);
     }
     Ok(goals)
+}
+
+pub(crate) fn latest_assignment_goals(
+    versions: &[super::GoalAssignmentVersion],
+) -> anyhow::Result<Vec<GoalDocument>> {
+    use anyhow::Context;
+    latest_assignment_versions(versions)?
+        .into_iter()
+        .map(|version| {
+            version
+                .snapshot
+                .clone()
+                .context("Goal assignment frontier has no native snapshot")
+        })
+        .collect()
 }
 
 pub(crate) async fn load_request_assignment(
@@ -367,7 +392,7 @@ pub(crate) async fn load_request_assignments_in_txn(
     session: &str,
 ) -> anyhow::Result<RequestAssignments> {
     let rows = super::request_head::load_session_requests(txn, owner, session).await?;
-    let versions = super::load_goal_versions_for_session(txn, owner, session).await?;
+    let versions = super::load_assignment_versions_for_session(txn, owner, session).await?;
     request_assignments(owner, session, rows, latest_assignment_goals(&versions)?)
 }
 
@@ -426,7 +451,7 @@ where
             Ok(Some(scope)) => scope,
             _ => {
                 if !self.history_loaded {
-                    let versions = super::load_goal_versions_for_session(
+                    let versions = super::load_assignment_versions_for_session(
                         self.access,
                         &self.requests.owner,
                         &self.requests.session,

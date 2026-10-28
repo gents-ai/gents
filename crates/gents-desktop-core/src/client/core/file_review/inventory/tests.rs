@@ -182,7 +182,7 @@ async fn insert(
             "mutation($input: {collection}MutationInputArg!) {{ create_{collection}(input: $input) {{ _docID }} }}",
         ), &serde_json::json!({"input":input})).await })
     }).await?;
-    gents::graphql::created_doc_id(&response, collection)
+    Ok(gents::graphql::created_doc_id(&response, collection)?)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -537,4 +537,70 @@ async fn recorded_origin_review_retains_metadata_without_a_route_but_does_not_gr
     core.shutdown().await?;
     node.shutdown().await;
     Ok(())
+}
+
+#[test]
+fn independent_reader_image_demand_binds_received_page_without_impersonating_author() {
+    let (mut observation, reference, _) = fixture();
+    let view = observation.current.as_mut().unwrap();
+    view.entries[0].scope.node_did = view.binding.admission.request.node_did.clone();
+    let demand =
+        selected_image_demand(&observation, &reference, "target-requester", "client-peer").unwrap();
+    assert_eq!(demand.admission.requester_did, "target-requester");
+    assert_eq!(demand.admission.session_id, "target-session");
+    assert_eq!(
+        selected_entry(&observation, &reference)
+            .unwrap()
+            .scope
+            .requester_did,
+        "origin-requester"
+    );
+    let selected = demand.inventory_reference.as_ref().unwrap();
+    assert_eq!(selected.page.admission.session_doc_id, "target-physical");
+    assert_eq!(selected.snapshot_digest, "signed-snapshot");
+    assert_eq!(selected.page.attempt_id, reference.cursor.attempt_id);
+    assert!(selected.page.cursor.is_none());
+    assert_eq!(demand.request_doc_id, "request-physical");
+    demand.validate_reference().unwrap();
+    assert!(
+        selected_image_demand(&observation, &reference, "wrong-reader", "client-peer").is_err()
+    );
+    assert!(
+        selected_image_demand(&observation, &reference, "target-requester", "wrong-peer").is_err()
+    );
+    let later_view = observation.current.as_mut().unwrap();
+    later_view.offset = 64;
+    later_view.binding.coverage.entries = 65;
+    later_view.received_entries = 65;
+    let later = FileInventoryImageReference {
+        cursor: FileInventoryViewCursor {
+            offset: 64,
+            ..reference.cursor.clone()
+        },
+        ..reference.clone()
+    };
+    let demand =
+        selected_image_demand(&observation, &later, "target-requester", "client-peer").unwrap();
+    let selected = demand.inventory_reference.as_ref().unwrap();
+    assert_eq!(selected.page.cursor.as_ref().unwrap().offset, 64);
+    demand.validate_reference().unwrap();
+    observation.previous = observation.current.take();
+    assert_eq!(
+        selected_image_demand(&observation, &later, "target-requester", "client-peer").unwrap(),
+        demand
+    );
+}
+
+#[test]
+fn canonical_author_keeps_existing_image_receipt_binding() {
+    let (observation, reference, _) = fixture();
+    let demand =
+        selected_image_demand(&observation, &reference, "origin-requester", "client-peer").unwrap();
+    assert!(demand.inventory_reference.is_none());
+    assert_eq!(
+        demand.receipt_version(),
+        gents_protocol::file_image_hydration::FILE_IMAGE_RECEIPT_VERSION
+    );
+    assert_eq!(demand.admission.requester_did, "origin-requester");
+    assert_eq!(demand.admission.session_id, "origin-session");
 }

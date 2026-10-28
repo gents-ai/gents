@@ -491,7 +491,10 @@ pub fn select_replay(
     strip_first_reasoning(selection.rows, total - kept)
 }
 
-pub fn build_messages_body(model: &str, request: &CompletionRequest) -> anyhow::Result<Value> {
+pub fn build_messages_body(
+    model: &str,
+    request: &CompletionRequest,
+) -> Result<Value, AssistantCodecError> {
     let history: Vec<Message> = request
         .chat_history
         .iter()
@@ -540,7 +543,7 @@ pub fn build_messages_body_native(
     max_tokens: Option<u64>,
     history: &[Message],
     tools: &[ToolDefinition],
-) -> anyhow::Result<Value> {
+) -> Result<Value, AssistantCodecError> {
     let mut system: Vec<Value> = vec![json!({ "type": "text", "text": CLAUDE_CODE_IDENTITY })];
     if let Some(preamble) = preamble.map(str::trim).filter(|value| !value.is_empty()) {
         system.push(json!({ "type": "text", "text": preamble }));
@@ -597,7 +600,7 @@ fn system_rows(history: &[Message]) -> Vec<String> {
         })
         .collect()
 }
-fn anthropic_messages(history: &[Message]) -> anyhow::Result<Vec<Value>> {
+fn anthropic_messages(history: &[Message]) -> Result<Vec<Value>, AssistantCodecError> {
     let mut omissions = image_omissions(history).into_iter();
     let mut out = Vec::new();
     for message in history {

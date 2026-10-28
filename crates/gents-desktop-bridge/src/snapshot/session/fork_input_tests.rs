@@ -136,7 +136,7 @@ async fn real_fork_reads_exact_input_metadata_and_preserves_provider_history() {
                 &transcript_message_create_variables(&header)?,
             )
             .await?;
-            Ok(())
+            Ok::<_, anyhow::Error>(())
         })
     })
     .await

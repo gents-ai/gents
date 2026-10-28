@@ -1,10 +1,43 @@
 //! Immutable signed pending-input commands and runtime-owned terminal receipts.
 use crate::{enrollment::canonical_domain_payload, request_admission::AgentRequestCreate};
-use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const SESSION_INPUT_EDIT_VERSION: u8 = 1;
+
+#[derive(Debug, thiserror::Error)]
+pub enum SessionInputEditError {
+    #[error("unsupported session input edit version")]
+    UnsupportedVersion,
+    #[error("empty session input edit identity")]
+    EmptyIdentity,
+    #[error("empty requester peer identity")]
+    EmptyRequesterPeer,
+    #[error(transparent)]
+    Timestamp(#[from] chrono::ParseError),
+    #[error("session input edit expiry must follow issuance")]
+    ExpiryNotAfterIssue,
+    #[error("invalid session input edit signature length")]
+    InvalidSignatureLength,
+    #[error("session input edit selects no requests")]
+    NoRequestsSelected,
+    #[error("message and presigned replacement counts differ")]
+    ReplacementCountMismatch,
+    #[error("unsupported session input edit receipt version")]
+    UnsupportedReceiptVersion,
+    #[error("invalid session input edit receipt signature length")]
+    InvalidReceiptSignatureLength,
+    #[error("replacement receipt identity counts differ")]
+    ReceiptIdentityCountMismatch,
+    #[error("rejected edit cannot contain replacements")]
+    RejectedWithReplacements,
+    #[error("session input edit receipt scope differs from intent")]
+    ReceiptScopeDiffers,
+    #[error("session input edit receipt replacements differ from intent")]
+    ReceiptReplacementsDiffer,
+}
+
+type Result<T, E = SessionInputEditError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -102,45 +135,40 @@ impl SessionInputEdit {
     }
 
     pub fn validate_shape(&self) -> Result<()> {
-        ensure!(
-            self.version == SESSION_INPUT_EDIT_VERSION,
-            "unsupported session input edit version"
-        );
+        if self.version != SESSION_INPUT_EDIT_VERSION {
+            return Err(SessionInputEditError::UnsupportedVersion);
+        }
         for value in [
             &self.command_id,
             &self.requester_did,
             &self.node_did,
             &self.session_id,
         ] {
-            ensure!(
-                !value.trim().is_empty(),
-                "empty session input edit identity"
-            );
+            if value.trim().is_empty() {
+                return Err(SessionInputEditError::EmptyIdentity);
+            }
         }
-        ensure!(
-            self.requester_peer_id
-                .as_ref()
-                .is_none_or(|peer| !peer.trim().is_empty()),
-            "empty requester peer identity"
-        );
+        if self
+            .requester_peer_id
+            .as_ref()
+            .is_some_and(|peer| peer.trim().is_empty())
+        {
+            return Err(SessionInputEditError::EmptyRequesterPeer);
+        }
         let issued = chrono::DateTime::parse_from_rfc3339(&self.issued_at)?;
         let expires = chrono::DateTime::parse_from_rfc3339(&self.expires_at)?;
-        ensure!(
-            expires > issued,
-            "session input edit expiry must follow issuance"
-        );
-        ensure!(
-            self.signature.len() == 64,
-            "invalid session input edit signature length"
-        );
-        ensure!(
-            !self.edit.selected_request_doc_ids.is_empty(),
-            "session input edit selects no requests"
-        );
-        ensure!(
-            self.edit.messages.len() == self.replacements.len(),
-            "message and presigned replacement counts differ"
-        );
+        if expires <= issued {
+            return Err(SessionInputEditError::ExpiryNotAfterIssue);
+        }
+        if self.signature.len() != 64 {
+            return Err(SessionInputEditError::InvalidSignatureLength);
+        }
+        if self.edit.selected_request_doc_ids.is_empty() {
+            return Err(SessionInputEditError::NoRequestsSelected);
+        }
+        if self.edit.messages.len() != self.replacements.len() {
+            return Err(SessionInputEditError::ReplacementCountMismatch);
+        }
         Ok(())
     }
 }
@@ -196,22 +224,18 @@ impl SessionInputEditReceipt {
         )
     }
     pub fn validate_shape(&self) -> Result<()> {
-        ensure!(
-            self.version == SESSION_INPUT_EDIT_VERSION,
-            "unsupported session input edit receipt version"
-        );
-        ensure!(
-            self.signature.len() == 64,
-            "invalid session input edit receipt signature length"
-        );
-        ensure!(
-            self.request_doc_ids.len() == self.request_ids.len(),
-            "replacement receipt identity counts differ"
-        );
-        ensure!(
-            self.outcome != SessionInputEditOutcome::Rejected || self.request_ids.is_empty(),
-            "rejected edit cannot contain replacements"
-        );
+        if self.version != SESSION_INPUT_EDIT_VERSION {
+            return Err(SessionInputEditError::UnsupportedReceiptVersion);
+        }
+        if self.signature.len() != 64 {
+            return Err(SessionInputEditError::InvalidReceiptSignatureLength);
+        }
+        if self.request_doc_ids.len() != self.request_ids.len() {
+            return Err(SessionInputEditError::ReceiptIdentityCountMismatch);
+        }
+        if self.outcome == SessionInputEditOutcome::Rejected && !self.request_ids.is_empty() {
+            return Err(SessionInputEditError::RejectedWithReplacements);
+        }
         chrono::DateTime::parse_from_rfc3339(&self.processed_at)?;
         Ok(())
     }
@@ -219,24 +243,23 @@ impl SessionInputEditReceipt {
     /// The receipt is signed by `node_did`; verification uses its existing DID owner.
     pub fn validate_for(&self, command: &SessionInputEdit) -> Result<()> {
         self.validate_shape()?;
-        ensure!(
-            self.command_id == command.command_id
-                && self.command_digest == command.computed_digest()
-                && self.requester_did == command.requester_did
-                && self.node_did == command.node_did
-                && self.session_id == command.session_id,
-            "session input edit receipt scope differs from intent"
-        );
-        if self.outcome == SessionInputEditOutcome::Applied {
-            ensure!(
-                self.request_ids
-                    == command
-                        .replacements
-                        .iter()
-                        .map(|r| r.request_id.clone())
-                        .collect::<Vec<_>>(),
-                "session input edit receipt replacements differ from intent"
-            );
+        if !(self.command_id == command.command_id
+            && self.command_digest == command.computed_digest()
+            && self.requester_did == command.requester_did
+            && self.node_did == command.node_did
+            && self.session_id == command.session_id)
+        {
+            return Err(SessionInputEditError::ReceiptScopeDiffers);
+        }
+        if self.outcome == SessionInputEditOutcome::Applied
+            && self.request_ids
+                != command
+                    .replacements
+                    .iter()
+                    .map(|r| r.request_id.clone())
+                    .collect::<Vec<_>>()
+        {
+            return Err(SessionInputEditError::ReceiptReplacementsDiffer);
         }
         Ok(())
     }

@@ -70,6 +70,22 @@ pub struct MailboxQuestionReply {
     pub answer: MailboxQuestionAnswer,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum MailboxQuestionReplyError {
+    #[error(transparent)]
+    Question(#[from] MailboxQuestionError),
+    #[error(transparent)]
+    Serialize(#[from] serde_json::Error),
+    #[error("the question changed; reload its current prompt before replying")]
+    SourceChangedBeforeReply,
+    #[error("the question changed; review its current prompt before replying")]
+    SourceChangedBeforeReview,
+    #[error("the question version changed; reload its current prompt before replying")]
+    VersionChanged,
+    #[error("the signed reply does not match its question answer")]
+    SignedAnswerMismatch,
+}
+
 /// DefraDB represents empty nested lists as null. Normalize only stored
 /// evidence; public answer bytes also identify retained caller submissions.
 fn serialize_stored_answer<S>(
@@ -95,13 +111,12 @@ impl MailboxQuestionReply {
         payload: &str,
         request_id: Option<&str>,
         answer: MailboxQuestionAnswer,
-    ) -> anyhow::Result<Self> {
+    ) -> Result<Self, MailboxQuestionReplyError> {
         let question = MailboxQuestion::from_payload(payload)?;
         let question_hash = question_source_hash(title, summary, payload, request_id)?;
-        anyhow::ensure!(
-            answer.question_hash.as_deref() == Some(question_hash.as_str()),
-            "the question changed; reload its current prompt before replying"
-        );
+        if answer.question_hash.as_deref() != Some(question_hash.as_str()) {
+            return Err(MailboxQuestionReplyError::SourceChangedBeforeReply);
+        }
         Ok(Self {
             question_version: (question.version >= 3).then_some(question.version),
             source_doc_id: source_doc_id.into(),
@@ -118,24 +133,25 @@ impl MailboxQuestionReply {
         payload: &str,
         request_id: Option<&str>,
         content: &str,
-    ) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            self.source_doc_id == source_doc_id
-                && self.question_hash == question_source_hash(title, summary, payload, request_id)?
-                && self.answer.question_hash.as_deref() == Some(self.question_hash.as_str()),
-            "the question changed; review its current prompt before replying"
-        );
+    ) -> Result<(), MailboxQuestionReplyError> {
+        if self.source_doc_id != source_doc_id
+            || self.question_hash != question_source_hash(title, summary, payload, request_id)?
+            || self.answer.question_hash.as_deref() != Some(self.question_hash.as_str())
+        {
+            return Err(MailboxQuestionReplyError::SourceChangedBeforeReview);
+        }
         let question = MailboxQuestion::from_payload(payload)?;
-        anyhow::ensure!(
-            self.question_version
-                .map_or(question.version <= 2, |version| version >= 3
-                    && version == question.version),
-            "the question version changed; reload its current prompt before replying"
-        );
-        anyhow::ensure!(
-            question.reply_content(title, &self.answer)? == content,
-            "the signed reply does not match its question answer"
-        );
+        if !self
+            .question_version
+            .map_or(question.version <= 2, |version| {
+                version >= 3 && version == question.version
+            })
+        {
+            return Err(MailboxQuestionReplyError::VersionChanged);
+        }
+        if question.reply_content(title, &self.answer)? != content {
+            return Err(MailboxQuestionReplyError::SignedAnswerMismatch);
+        }
         Ok(())
     }
 }
@@ -145,7 +161,7 @@ pub fn question_source_hash(
     summary: Option<&str>,
     payload: &str,
     request_id: Option<&str>,
-) -> anyhow::Result<String> {
+) -> Result<String, MailboxQuestionReplyError> {
     use sha2::{Digest, Sha256};
     Ok(format!(
         "sha256:{:x}",

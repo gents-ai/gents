@@ -70,7 +70,9 @@ private def providerString (text : String) : String :=
 metadata marker belongs to native storage and is not a provider parameter.
 Member order follows the captured record, independent of JSON object-map iteration. -/
 def providerText (context : Enrollment.CapturedContext) : String :=
-  "Editor context (captured text; URI identifies its editor location):\n" ++
+  (if context.source == .composer then
+    "Composer context (captured text; URI identifies its source):\n"
+   else "Editor context (captured text; URI identifies its editor location):\n") ++
     "{" ++ String.intercalate "," ((metadataFields context ++ [("content", Json.str context.content)]).map
       (fun (key, value) => providerString key ++ ":" ++
         (match value with | .str text => providerString text | _ => value.compress))) ++ "}"

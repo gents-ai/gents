@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -9,6 +8,112 @@ use crate::client_protocol::{
 };
 use crate::output::TranscriptMessage;
 use crate::row::{AgentRequestRow, AgentToolCallRow};
+
+#[derive(Debug, thiserror::Error)]
+pub enum GraphqlError {
+    #[error("invalid identifier {name:?}: must start with a letter or underscore, got {first:?}")]
+    IdentifierStart { name: String, first: char },
+    #[error("invalid identifier: empty string")]
+    EmptyIdentifier,
+    #[error("invalid identifier {name:?}: only ASCII letters, digits, and underscore are allowed, got {character:?}")]
+    IdentifierCharacter { name: String, character: char },
+    #[error(
+        "invalid collection name {name:?}: the __ prefix is reserved for GraphQL introspection"
+    )]
+    ReservedCollectionPrefix { name: String },
+    #[error("invalid filter: empty")]
+    EmptyFilter,
+    #[error("invalid filter: must be an object literal")]
+    FilterNotObject,
+    #[error("invalid filter: object keys are unquoted GraphQL names, e.g. {{kind: {{_eq: \"review\"}}}}")]
+    FilterQuotedKey,
+    #[error("invalid filter: trailing content after the object literal")]
+    FilterTrailingContent,
+    #[error("invalid filter: unbalanced {character:?} at byte {byte}")]
+    FilterUnbalanced { character: char, byte: usize },
+    #[error("invalid filter: mismatched {opener:?} closed by {closer:?} at byte {byte}")]
+    FilterMismatched {
+        opener: char,
+        closer: char,
+        byte: usize,
+    },
+    #[error(
+        "invalid filter: character {character:?} at byte {byte} is not allowed in a filter object"
+    )]
+    FilterCharacter { character: char, byte: usize },
+    #[error("invalid filter: unterminated string literal")]
+    FilterUnterminatedString,
+    #[error("invalid filter: unclosed {opener:?}")]
+    FilterUnclosed { opener: Option<char> },
+    #[cfg(feature = "native")]
+    #[error("encoding Authorization header")]
+    AuthorizationHeader(#[source] reqwest::header::InvalidHeaderValue),
+    #[cfg(feature = "native")]
+    #[error(transparent)]
+    ClientTask(#[from] tokio::task::JoinError),
+    #[cfg(feature = "native")]
+    #[error(transparent)]
+    ClientBuild(reqwest::Error),
+    #[cfg(feature = "native")]
+    #[error("posting GraphQL to {graphql}")]
+    Post {
+        graphql: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[cfg(feature = "native")]
+    #[error("reading GraphQL response from {graphql}")]
+    ReadResponse {
+        graphql: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[cfg(feature = "native")]
+    #[error("decoding GraphQL response body from {graphql}")]
+    DecodeBody {
+        graphql: String,
+        #[source]
+        source: reqwest::Error,
+    },
+    #[cfg(feature = "native")]
+    #[error("GraphQL request retries exhausted for {graphql}")]
+    RetriesExhausted { graphql: String },
+    #[cfg(feature = "native")]
+    #[error("GraphQL read transport requires a query document")]
+    QueryDocumentRequired,
+    #[cfg(feature = "native")]
+    #[error(transparent)]
+    Database(#[from] crate::database_error::GraphqlFailure),
+    #[error("graphql response missing data: {response}")]
+    MissingData { response: String },
+    #[error("graphql mutation returned no _docID for {collection}: {response}")]
+    MutationDocId {
+        collection: String,
+        response: String,
+    },
+    #[error("graphql returned no rows for {collection}")]
+    NoRows { collection: String },
+    #[error("parsing RFC3339 timestamp {raw}")]
+    Rfc3339 {
+        raw: String,
+        #[source]
+        source: chrono::ParseError,
+    },
+}
+
+type Result<T, E = GraphqlError> = std::result::Result<T, E>;
+
+impl GraphqlError {
+    /// The GraphQL errors DefraDB answered with, which its transparent
+    /// variant hides from `source()`.
+    pub fn database_failure(&self) -> Option<&crate::database_error::GraphqlFailure> {
+        match self {
+            #[cfg(feature = "native")]
+            Self::Database(failure) => Some(failure),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphqlSubmittedRequest {
@@ -73,20 +178,22 @@ pub fn validate_graphql_name(name: &str) -> Result<()> {
     let mut chars = name.chars();
     match chars.next() {
         Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
-        Some(c) => {
-            return Err(anyhow!(
-                "invalid identifier {name:?}: must start with a letter or underscore, got {c:?}"
-            ));
+        Some(first) => {
+            return Err(GraphqlError::IdentifierStart {
+                name: name.to_owned(),
+                first,
+            });
         }
-        None => return Err(anyhow!("invalid identifier: empty string")),
+        None => return Err(GraphqlError::EmptyIdentifier),
     }
-    if let Some(c) = name
+    if let Some(character) = name
         .chars()
         .find(|c| !c.is_ascii_alphanumeric() && *c != '_')
     {
-        return Err(anyhow!(
-            "invalid identifier {name:?}: only ASCII letters, digits, and underscore are allowed, got {c:?}"
-        ));
+        return Err(GraphqlError::IdentifierCharacter {
+            name: name.to_owned(),
+            character,
+        });
     }
     Ok(())
 }
@@ -99,9 +206,9 @@ pub fn validate_graphql_name(name: &str) -> Result<()> {
 pub fn validate_collection_identifier(name: &str) -> Result<()> {
     validate_graphql_name(name)?;
     if name.starts_with("__") {
-        return Err(anyhow!(
-            "invalid collection name {name:?}: the __ prefix is reserved for GraphQL introspection"
-        ));
+        return Err(GraphqlError::ReservedCollectionPrefix {
+            name: name.to_owned(),
+        });
     }
     Ok(())
 }
@@ -123,10 +230,10 @@ pub fn validate_collection_identifier(name: &str) -> Result<()> {
 pub fn validate_graphql_filter_fragment(filter: &str) -> Result<()> {
     let trimmed = filter.trim();
     if trimmed.is_empty() {
-        return Err(anyhow!("invalid filter: empty"));
+        return Err(GraphqlError::EmptyFilter);
     }
     if !trimmed.starts_with('{') {
-        return Err(anyhow!("invalid filter: must be an object literal"));
+        return Err(GraphqlError::FilterNotObject);
     }
 
     let mut stack: Vec<char> = Vec::new();
@@ -153,28 +260,27 @@ pub fn validate_graphql_filter_fragment(filter: &str) -> Result<()> {
         if after_string && !ch.is_whitespace() {
             after_string = false;
             if ch == ':' {
-                return Err(anyhow!(
-                    "invalid filter: object keys are unquoted GraphQL names, e.g. {{kind: {{_eq: \"review\"}}}}"
-                ));
+                return Err(GraphqlError::FilterQuotedKey);
             }
         }
         if closed_at.is_some() && !ch.is_whitespace() {
-            return Err(anyhow!(
-                "invalid filter: trailing content after the object literal"
-            ));
+            return Err(GraphqlError::FilterTrailingContent);
         }
         match ch {
             '"' => in_string = true,
             '{' | '[' => stack.push(ch),
             '}' | ']' => {
-                let opener = stack
-                    .pop()
-                    .ok_or_else(|| anyhow!("invalid filter: unbalanced {ch:?} at byte {index}"))?;
+                let opener = stack.pop().ok_or(GraphqlError::FilterUnbalanced {
+                    character: ch,
+                    byte: index,
+                })?;
                 let expected = if ch == '}' { '{' } else { '[' };
                 if opener != expected {
-                    return Err(anyhow!(
-                        "invalid filter: mismatched {opener:?} closed by {ch:?} at byte {index}"
-                    ));
+                    return Err(GraphqlError::FilterMismatched {
+                        opener,
+                        closer: ch,
+                        byte: index,
+                    });
                 }
                 if stack.is_empty() {
                     closed_at = Some(index);
@@ -185,18 +291,21 @@ pub fn validate_graphql_filter_fragment(filter: &str) -> Result<()> {
             '-' | '+' | '.' => {}
             c if c.is_whitespace() => {}
             c => {
-                return Err(anyhow!(
-                    "invalid filter: character {c:?} at byte {index} is not allowed in a filter object"
-                ));
+                return Err(GraphqlError::FilterCharacter {
+                    character: c,
+                    byte: index,
+                });
             }
         }
     }
 
     if in_string {
-        return Err(anyhow!("invalid filter: unterminated string literal"));
+        return Err(GraphqlError::FilterUnterminatedString);
     }
     if !stack.is_empty() {
-        return Err(anyhow!("invalid filter: unclosed {:?}", stack.last()));
+        return Err(GraphqlError::FilterUnclosed {
+            opener: stack.last().copied(),
+        });
     }
     Ok(())
 }
@@ -245,7 +354,7 @@ async fn graphql_http_client() -> Result<&'static reqwest::Client> {
             // Native certificate loading can block; initialize once off the executor.
             tokio::task::spawn_blocking(|| reqwest::Client::builder().build())
                 .await?
-                .map_err(anyhow::Error::from)
+                .map_err(GraphqlError::ClientBuild)
         })
         .await
 }
@@ -290,7 +399,7 @@ async fn execute_graphql_async_with_tx(
     txn_id: Option<&str>,
 ) -> Result<serde_json::Value> {
     let client = graphql_http_client().await?;
-    let mut last_error = None;
+    let mut last_error: Option<GraphqlError> = None;
 
     for attempt in 0..options.max_attempts.max(1) {
         let mut request = client
@@ -302,7 +411,7 @@ async fn execute_graphql_async_with_tx(
         }
         if let Some(authorization) = authorization {
             let mut value = reqwest::header::HeaderValue::from_str(authorization)
-                .context("encoding Authorization header")?;
+                .map_err(GraphqlError::AuthorizationHeader)?;
             value.set_sensitive(true);
             request = request.header(reqwest::header::AUTHORIZATION, value);
         }
@@ -323,16 +432,18 @@ async fn execute_graphql_async_with_tx(
                     timeout_ms = options.timeout.as_millis() as u64,
                     "retrying async GraphQL request after transport error"
                 );
-                last_error = Some(
-                    anyhow::Error::new(error).context(format!("posting GraphQL to {graphql}")),
-                );
+                last_error = Some(GraphqlError::Post {
+                    graphql: graphql.to_owned(),
+                    source: error,
+                });
                 tokio::time::sleep(scale_backoff(options.retry_backoff, attempt)).await;
                 continue;
             }
             Err(error) => {
-                return Err(
-                    anyhow::Error::new(error).context(format!("posting GraphQL to {graphql}"))
-                );
+                return Err(GraphqlError::Post {
+                    graphql: graphql.to_owned(),
+                    source: error,
+                });
             }
         };
 
@@ -348,16 +459,18 @@ async fn execute_graphql_async_with_tx(
                     error = %error,
                     "retrying async GraphQL request after response status error"
                 );
-                last_error = Some(
-                    anyhow::Error::new(error)
-                        .context(format!("reading GraphQL response from {graphql}")),
-                );
+                last_error = Some(GraphqlError::ReadResponse {
+                    graphql: graphql.to_owned(),
+                    source: error,
+                });
                 tokio::time::sleep(scale_backoff(options.retry_backoff, attempt)).await;
                 continue;
             }
             Err(error) => {
-                return Err(anyhow::Error::new(error)
-                    .context(format!("reading GraphQL response from {graphql}")));
+                return Err(GraphqlError::ReadResponse {
+                    graphql: graphql.to_owned(),
+                    source: error,
+                });
             }
         };
 
@@ -373,16 +486,18 @@ async fn execute_graphql_async_with_tx(
                     error = %error,
                     "retrying async GraphQL request after decode error"
                 );
-                last_error = Some(
-                    anyhow::Error::new(error)
-                        .context(format!("decoding GraphQL response body from {graphql}")),
-                );
+                last_error = Some(GraphqlError::DecodeBody {
+                    graphql: graphql.to_owned(),
+                    source: error,
+                });
                 tokio::time::sleep(scale_backoff(options.retry_backoff, attempt)).await;
                 continue;
             }
             Err(error) => {
-                return Err(anyhow::Error::new(error)
-                    .context(format!("decoding GraphQL response body from {graphql}")));
+                return Err(GraphqlError::DecodeBody {
+                    graphql: graphql.to_owned(),
+                    source: error,
+                });
             }
         };
 
@@ -391,7 +506,11 @@ async fn execute_graphql_async_with_tx(
         return finish_graphql_response(graphql, value);
     }
 
-    Err(last_error.unwrap_or_else(|| anyhow!("GraphQL request retries exhausted for {graphql}")))
+    Err(
+        last_error.unwrap_or_else(|| GraphqlError::RetriesExhausted {
+            graphql: graphql.to_owned(),
+        }),
+    )
 }
 
 #[cfg(feature = "native")]
@@ -400,7 +519,7 @@ fn ensure_query_document(document: &str) -> Result<()> {
     if document.starts_with('{') || document.starts_with("query") {
         Ok(())
     } else {
-        anyhow::bail!("GraphQL read transport requires a query document")
+        Err(GraphqlError::QueryDocumentRequired)
     }
 }
 
@@ -410,7 +529,9 @@ pub fn extract_mutation_doc_id(
 ) -> Result<String> {
     let data = response
         .get("data")
-        .ok_or_else(|| anyhow!("graphql response missing data: {response}"))?;
+        .ok_or_else(|| GraphqlError::MissingData {
+            response: response.to_string(),
+        })?;
     for field_name in [
         format!("upsert_{collection_name}"),
         format!("update_{collection_name}"),
@@ -434,7 +555,10 @@ pub fn extract_mutation_doc_id(
             return Ok(doc_id.to_string());
         }
     }
-    anyhow::bail!("graphql mutation returned no _docID for {collection_name}: {response}");
+    Err(GraphqlError::MutationDocId {
+        collection: collection_name.to_owned(),
+        response: response.to_string(),
+    })
 }
 
 pub fn first_graphql_row<'a>(
@@ -446,7 +570,9 @@ pub fn first_graphql_row<'a>(
         .and_then(|data| data.get(collection_name))
         .and_then(serde_json::Value::as_array)
         .and_then(|rows| rows.first())
-        .ok_or_else(|| anyhow!("graphql returned no rows for {collection_name}"))
+        .ok_or_else(|| GraphqlError::NoRows {
+            collection: collection_name.to_owned(),
+        })
 }
 
 pub fn graphql_rows_from_response(response: &Value, collection_name: &str) -> Vec<Value> {
@@ -458,6 +584,9 @@ pub fn graphql_rows_from_response(response: &Value, collection_name: &str) -> Ve
         .unwrap_or_default()
 }
 
+/// External premise: DefraDB reports an unknown collection only in its
+/// GraphQL error message.
+///
 /// Returns true only when GraphQL reports that the collection's root field is
 /// absent. A missing column on an existing collection must remain an error;
 /// treating every `Cannot query field` mentioning the collection type as a
@@ -545,8 +674,12 @@ pub fn graphql_bool_literal(value: bool) -> &'static str {
 pub fn normalize_optional_rfc3339(value: Option<&str>) -> Result<Option<String>> {
     match value.map(str::trim).filter(|value| !value.is_empty()) {
         Some(raw) => {
-            let parsed = chrono::DateTime::parse_from_rfc3339(raw)
-                .with_context(|| format!("parsing RFC3339 timestamp {raw}"))?;
+            let parsed = chrono::DateTime::parse_from_rfc3339(raw).map_err(|source| {
+                GraphqlError::Rfc3339 {
+                    raw: raw.to_owned(),
+                    source,
+                }
+            })?;
             Ok(Some(
                 parsed
                     .with_timezone(&chrono::Utc)
@@ -745,51 +878,41 @@ fn finish_graphql_response(graphql: &str, value: serde_json::Value) -> Result<se
     Ok(value)
 }
 
-/// Whether GraphQL/DefraDB error text describes a retryable store conflict.
-pub fn retryable_graphql_error_text(message: &str) -> bool {
-    let message = message.to_ascii_lowercase();
-    message.contains("transaction conflict") || message.contains("please retry")
-}
-
+/// External premise: reqwest classifies a connection the peer drops before
+/// the response head as a request failure and one dropped mid-body as a body
+/// or decode failure; its message carries only that kind and the URL.
 #[cfg(feature = "native")]
 fn graphql_transport_error_is_retryable(error: &reqwest::Error) -> bool {
-    if error.is_timeout() || error.is_connect() || error.is_request() {
-        return true;
-    }
-
-    let message = error.to_string();
-    message.contains("connection closed before message completed")
-        || message.contains("connection reset")
-        || message.contains("broken pipe")
-        || message.contains("channel closed")
-        || message.contains("unexpected eof")
-        || message.contains("end of file before message length reached")
-        || message.contains("error decoding response body")
+    error.is_timeout()
+        || error.is_connect()
+        || error.is_request()
+        || error.is_body()
+        || error.is_decode()
 }
 
-/// Whether an anyhow error is retryable under the GraphQL transport policy.
+/// Whether an error in its `source()` chain is retryable under the GraphQL transport policy.
 #[cfg(feature = "native")]
-pub fn graphql_error_is_retryable(error: &anyhow::Error) -> bool {
+pub fn graphql_error_is_retryable(error: &(dyn std::error::Error + 'static)) -> bool {
     if crate::database_error::is_storage_full(error) {
         return false;
     }
     graphql_transport_error_in_chain(error)
-        || error
-            .chain()
-            .any(|cause| retryable_graphql_error_text(&cause.to_string()))
+        || crate::error_chain::find_source::<GraphqlError>(error)
+            .and_then(GraphqlError::database_failure)
+            .or_else(|| {
+                crate::error_chain::find_source::<crate::database_error::GraphqlFailure>(error)
+            })
+            .is_some_and(crate::database_error::GraphqlFailure::is_retryable_conflict)
 }
 
-/// Whether an anyhow error wraps a retryable GraphQL transport failure.
+/// Whether an error's `source()` chain wraps a retryable GraphQL transport failure.
 ///
 /// Auto-commit reads must use this rather than [`graphql_error_is_retryable`]:
 /// DefraDB's HTTP handler already retried their store conflicts.
 #[cfg(feature = "native")]
-pub fn graphql_transport_error_in_chain(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<reqwest::Error>()
-            .is_some_and(graphql_transport_error_is_retryable)
-    })
+pub fn graphql_transport_error_in_chain(error: &(dyn std::error::Error + 'static)) -> bool {
+    crate::error_chain::find_source::<reqwest::Error>(error)
+        .is_some_and(graphql_transport_error_is_retryable)
 }
 
 #[cfg(feature = "native")]
@@ -1059,23 +1182,43 @@ mod tx_tests {
     }
 
     #[test]
-    fn retryable_graphql_error_text_matches_store_conflict_variants() {
-        assert!(retryable_graphql_error_text("Transaction conflict"));
-        assert!(retryable_graphql_error_text(
-            "wrapped backend: PLEASE RETRY the TRANSACTION CONFLICT"
-        ));
-        assert!(retryable_graphql_error_text("please retry"));
-        assert!(!retryable_graphql_error_text(
-            "validation error: unknown collection"
-        ));
-    }
+    fn retryable_graphql_conflicts_are_the_responses_defradb_reports() {
+        let failure = |code: &str| {
+            crate::database_error::GraphqlFailure::new(
+                "test",
+                serde_json::json!([{ "message": "opaque", "extensions": { "code": code } }]),
+            )
+        };
+        #[derive(Debug, thiserror::Error)]
+        #[error("outer shim context")]
+        struct Outer(#[source] crate::database_error::GraphqlFailure);
+        #[derive(Debug, thiserror::Error)]
+        #[error("outer protocol context")]
+        struct OuterProtocol(#[source] GraphqlError);
 
-    #[test]
-    fn retryable_graphql_error_walks_wrapped_cause_chain_case_insensitively() {
-        let error = anyhow::anyhow!("TRANSACTION CONFLICT")
-            .context("request submit failed")
-            .context("outer shim context");
-        assert!(graphql_error_is_retryable(&error));
-        assert!(!graphql_transport_error_in_chain(&error));
+        let conflict = || failure(crate::database_error::TXN_CONFLICT_CODE);
+        assert!(graphql_error_is_retryable(&conflict()));
+        assert!(graphql_error_is_retryable(&Outer(conflict())));
+        assert!(graphql_error_is_retryable(&GraphqlError::Database(
+            conflict()
+        )));
+        assert!(graphql_error_is_retryable(&OuterProtocol(
+            GraphqlError::Database(conflict())
+        )));
+        assert!(!graphql_transport_error_in_chain(&GraphqlError::Database(
+            conflict()
+        )));
+        assert!(!graphql_error_is_retryable(&GraphqlError::Database(
+            failure("TXN_RETRY_EXHAUSTED")
+        )));
+
+        let worded = crate::database_error::GraphqlFailure::new(
+            "test",
+            serde_json::json!([{ "message": "transaction conflict. Please retry" }]),
+        );
+        assert!(
+            !graphql_error_is_retryable(&GraphqlError::Database(worded)),
+            "conflict wording without DefraDB's code is not a retryable conflict"
+        );
     }
 }

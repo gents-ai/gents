@@ -95,8 +95,37 @@ pub enum AuxiliaryOutputEvent {
     ClosePartial,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum AuxiliaryOutputError {
+    #[error("auxiliary output has no request scope")]
+    NoRequestScope,
+    #[error("auxiliary output has no canonical sink")]
+    NoCanonicalSink,
+    #[error("auxiliary attempt already active")]
+    AttemptAlreadyActive,
+    #[error("auxiliary reminder changed source")]
+    ReminderChangedSource,
+    #[error("auxiliary output changed source")]
+    OutputChangedSource,
+    #[error("active auxiliary has no audit receiver")]
+    NoAuditReceiver,
+    #[error("active auxiliary audit receiver changed source")]
+    AuditReceiverChangedSource,
+    #[error("queued auxiliary audit changed source")]
+    QueuedAuditChangedSource,
+    #[error("active auxiliary output could not be closed")]
+    NotClosed,
+    #[error("auxiliary output sink failed")]
+    Sink {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+}
+
 pub type AuxiliaryObserve = Arc<
-    dyn Fn(AuxiliaryOutputObservation) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>
+    dyn Fn(
+            AuxiliaryOutputObservation,
+        ) -> Pin<Box<dyn Future<Output = Result<(), AuxiliaryOutputError>> + Send>>
         + Send
         + Sync,
 >;
@@ -106,14 +135,21 @@ pub type AuxiliaryNextFlushDeadline = Arc<
             CaptureScope,
             usize,
             u32,
-        )
-            -> Pin<Box<dyn Future<Output = anyhow::Result<Option<tokio::time::Instant>>> + Send>>
-        + Send
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<Option<tokio::time::Instant>, AuxiliaryOutputError>>
+                    + Send,
+            >,
+        > + Send
         + Sync,
 >;
 
 pub type AuxiliaryFlushPending = Arc<
-    dyn Fn(CaptureScope, usize, u32) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>
+    dyn Fn(
+            CaptureScope,
+            usize,
+            u32,
+        ) -> Pin<Box<dyn Future<Output = Result<(), AuxiliaryOutputError>> + Send>>
         + Send
         + Sync,
 >;

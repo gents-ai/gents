@@ -1,5 +1,22 @@
-use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, thiserror::Error)]
+pub enum UsageError {
+    #[error(transparent)]
+    Counter(#[from] std::num::TryFromIntError),
+    #[error("complete usage requires both input and output counters")]
+    IncompleteCounters,
+    #[error("{name} token counter exceeds the durable range")]
+    CounterRange { name: &'static str },
+    #[error("{name} exceeds its containing token counter")]
+    PartExceedsWhole { name: &'static str },
+    #[error("cache read and write exceed input tokens")]
+    CacheExceedsInput,
+    #[error("token usage summary exceeds the durable range")]
+    SummaryRange,
+}
+
+type Result<T, E = UsageError> = std::result::Result<T, E>;
 
 pub const TOKEN_COUNTER_LIMIT: u64 = i64::MAX as u64;
 
@@ -56,11 +73,11 @@ impl TokenUsageColumns {
             final_response: self.usage_completeness == Some(UsageCompleteness::Complete),
         };
         observation.validate()?;
-        ensure!(
-            self.usage_completeness != Some(UsageCompleteness::Complete)
-                || observation.completeness() == UsageCompleteness::Complete,
-            "complete usage requires both input and output counters"
-        );
+        if self.usage_completeness == Some(UsageCompleteness::Complete)
+            && observation.completeness() != UsageCompleteness::Complete
+        {
+            return Err(UsageError::IncompleteCounters);
+        }
         Ok(observation)
     }
 }
@@ -105,10 +122,9 @@ impl TokenUsage {
             ("reasoning", self.reasoning_output_tokens),
             ("provider total", self.provider_total_tokens),
         ] {
-            ensure!(
-                value.is_none_or(|value| value <= TOKEN_COUNTER_LIMIT),
-                "{name} token counter exceeds the durable range"
-            );
+            if value.is_some_and(|value| value > TOKEN_COUNTER_LIMIT) {
+                return Err(UsageError::CounterRange { name });
+            }
         }
         for (name, part, whole) in [
             ("cache read", self.cached_input_tokens, self.input_tokens),
@@ -124,7 +140,9 @@ impl TokenUsage {
             ),
         ] {
             if let (Some(part), Some(whole)) = (part, whole) {
-                ensure!(part <= whole, "{name} exceeds its containing token counter");
+                if part > whole {
+                    return Err(UsageError::PartExceedsWhole { name });
+                }
             }
         }
         if let (Some(input), Some(read), Some(write)) = (
@@ -132,10 +150,9 @@ impl TokenUsage {
             self.cached_input_tokens,
             self.cache_creation_input_tokens,
         ) {
-            ensure!(
-                read + write <= input,
-                "cache read and write exceed input tokens"
-            );
+            if read + write > input {
+                return Err(UsageError::CacheExceedsInput);
+            }
         }
         Ok(())
     }
@@ -245,5 +262,5 @@ fn add_counter(left: u64, right: u64) -> Result<u64> {
     let sum = left
         .checked_add(right)
         .filter(|sum| *sum <= TOKEN_COUNTER_LIMIT);
-    sum.ok_or_else(|| anyhow::anyhow!("token usage summary exceeds the durable range"))
+    sum.ok_or(UsageError::SummaryRange)
 }

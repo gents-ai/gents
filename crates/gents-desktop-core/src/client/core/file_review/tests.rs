@@ -4,6 +4,7 @@ use serde_json::json;
 
 fn demand(node: &str) -> FileImageDemand {
     let mut demand = FileImageDemand {
+        inventory_reference: None,
         admission: HydrationRequest {
             request_key: String::new(),
             peer_id: "peer\"\\id".into(),
@@ -36,8 +37,11 @@ async fn signed_demand_row(
     for (field, value) in demand.reference_fields() {
         row[field] = json!(value);
     }
+    if let Some(reference) = &demand.inventory_reference {
+        row["inventory_reference"] = serde_json::to_value(reference).unwrap();
+    }
     let mut receipt = FileImageHydrationReceipt {
-        version: FILE_IMAGE_RECEIPT_VERSION,
+        version: demand.receipt_version(),
         demand: demand.clone(),
         selection,
         detail: String::new(),
@@ -354,4 +358,57 @@ fn assert_inactive_file_review_error(error: &anyhow::Error) {
         classified.message,
         "Reconnect this runtime to load new file versions."
     );
+}
+
+#[tokio::test]
+async fn inventory_bound_admission_and_signed_receipt_keep_structured_reference() {
+    let root = tempfile::tempdir().unwrap();
+    let identity = KeyIdentity::load_or_create(root.path().join("node.key"), None).unwrap();
+    let node = std::sync::Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    gents::ensure_runtime_schemas(&node).await.unwrap();
+    let mut demand = demand(identity.did());
+    demand.inventory_reference = Some(FileImageInventoryReference {
+        page: gents_protocol::file_inventory::FileInventoryPageDemand {
+            admission: gents_protocol::file_inventory::FileInventoryAdmission {
+                request: demand.admission.clone(),
+                session_doc_id: "physical-root".into(),
+            },
+            attempt_id: "metadata-attempt".into(),
+            cursor: None,
+        },
+        snapshot_digest: "metadata-snapshot".into(),
+        entry_index: 0,
+    });
+    demand.admission.request_key = demand.derive_request_key();
+    admit_image_demand(&node, &demand).await.unwrap();
+    admit_image_demand(&node, &demand).await.unwrap();
+    let stored = ConfigAccess::local(node.clone())
+        .execute(&demand_query(&demand))
+        .await
+        .unwrap();
+    let row = demand_row(&stored).unwrap().unwrap();
+    assert!(row["inventory_reference"].is_object());
+    ensure_demand(row, &demand).unwrap();
+    let signed = signed_demand_row(
+        &identity,
+        &demand,
+        FileImageSelection::Selected {
+            document: "physical-image".into(),
+        },
+    )
+    .await;
+    assert!(verified_receipt(&signed, &demand, &identity)
+        .await
+        .unwrap()
+        .is_some());
+    let mut wrong = signed.clone();
+    wrong["inventory_reference"]["snapshot_digest"] = json!("different-snapshot");
+    assert!(verified_receipt(&wrong, &demand, &identity).await.is_err());
+    node.shutdown().await;
 }

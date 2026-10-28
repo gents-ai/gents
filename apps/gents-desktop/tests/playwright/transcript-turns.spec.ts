@@ -83,6 +83,7 @@ test.describe("a sent turn kept near the top", () => {
       !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
       "one layout per engine",
     );
+    await page.clock.install();
     await page.setViewportSize({ width: 1280, height: 900 });
     await gotoHarness(page, "mobile-performance");
     /* the preference, as the store keeps it, then the harness again with it */
@@ -111,6 +112,7 @@ test.describe("a sent turn kept near the top", () => {
     );
     await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.holdSends());
     await composer(page).fill("again");
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 60_000));
     /* the view goes to the turn as the app draws its copy of the message,
        or once the session makes it the latest request: the turn is sampled
        inside the page every frame from before the send, since driver round
@@ -143,13 +145,16 @@ test.describe("a sent turn kept near the top", () => {
       });
       Object.assign(window, { __glide: done });
     });
-    await sendButton(page).click();
+    await sendButton(page).dispatchEvent("click");
+    await page.clock.runFor(32);
     const turn = panel.locator("[data-turn]").last();
     await expect(turn).toContainText("again");
     await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.userTurn("pending"));
+    await page.clock.runFor(500);
     const offsets = await page.evaluate(
       () => (window as unknown as { __glide: Promise<number[]> }).__glide,
     );
+    await page.clock.resume();
     const seen = { from: offsets[0]!, offsets };
     await expect(viewport).toHaveAttribute("data-following", "false");
     const offset = async () =>

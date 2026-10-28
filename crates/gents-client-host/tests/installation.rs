@@ -77,7 +77,10 @@ async fn check_shared_installation(home: &str) {
             panic!("a second owner opened the installation store");
         }
     };
-    assert!(error.is::<gents::home::StoreLockHeld>(), "{error:#}");
+    assert!(
+        gents::home::store_lock_held(error.as_ref()).is_some(),
+        "{error:#}"
+    );
     first.close().await;
     assert_eq!(second.snapshot(2).await["client"]["localPeerId"], peer_id);
     second.close().await;
@@ -235,7 +238,7 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
                     drop(lock);
                     break;
                 }
-                Err(error) if error.is::<gents::home::StoreLockHeld>() => {
+                Err(error) if error.lock_held().is_some() => {
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
                 Err(error) => panic!("{error:#}"),

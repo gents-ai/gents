@@ -468,6 +468,23 @@ impl ClientHost {
                     .await
                     .map_err(backend_error)?,
             ),
+            ClientCommand::RequestAttachments {
+                node_did,
+                session_id,
+                request_id,
+                message_key,
+                index,
+            } => encode(crate::commands::bounded_attachment_response(
+                crate::commands::request_attachments(
+                    &self.core,
+                    &node_did,
+                    &session_id,
+                    &request_id,
+                    message_key.as_deref(),
+                    index,
+                )
+                .await?,
+            )?),
             ClientCommand::SpeechServices { node_did } => encode(
                 self.speech
                     .services(&self.core, &node_did)

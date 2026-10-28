@@ -1,6 +1,7 @@
 use super::*;
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::required_rows;
+use crate::session_origin::SessionScope;
 
 pub(super) async fn load_hydration_selection(
     node: &Arc<EmbeddedNode>,
@@ -19,7 +20,26 @@ pub(super) async fn load_hydration_selection_in_txn(
     txn: &ConfigApplyTxn<'_>,
     request: &HydrationRequest,
 ) -> Result<HydrationSelection> {
-    let response = pages::load_session_rows(txn, request).await?;
+    let scope = SessionScope {
+        node_did: request.node_did.clone(),
+        session_id: request.session_id.clone(),
+        requester_did: Some(request.requester_did.clone()),
+    };
+    load_canonical_selection_in_txn(txn, &scope).await
+}
+
+/// Canonical authorship selects immutable conversation data; it is independent
+/// of the authenticated reader whose access the delivery owner must observe.
+pub(super) async fn load_canonical_selection_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    scope: &SessionScope,
+) -> Result<HydrationSelection> {
+    let requester = scope
+        .requester_did
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .context("canonical hydration selection omitted its requester")?;
+    let response = pages::load_session_rows(txn, scope).await?;
 
     let mut root_headers = required_rows::<serde_json::Value>(&response, "AgentMessage")?
         .iter()
@@ -41,7 +61,8 @@ pub(super) async fn load_hydration_selection_in_txn(
                     .context("terminal hydration request omitted physical id")?,
             );
             match request_row
-                .terminal_output
+                .observed_terminal_output()
+                .cloned()
                 .context("terminal hydration request omitted terminal_output")?
             {
                 gents_protocol::output::TerminalOutput::Message { message_doc_id } => {
@@ -50,7 +71,7 @@ pub(super) async fn load_hydration_selection_in_txn(
                         .find(|row| row.doc_id == message_doc_id)
                         .context("terminal hydration selection is missing its exact header")?;
                     anyhow::ensure!(
-                        selected.message.session_id == request.session_id
+                        selected.message.session_id == scope.session_id
                             && selected.message.request_doc_id == request_row.doc_id,
                         "terminal hydration selection does not belong to the exact request"
                     );
@@ -71,13 +92,7 @@ pub(super) async fn load_hydration_selection_in_txn(
     }
     root_header_ids.sort();
     root_header_ids.dedup();
-    load_origin_headers(
-        txn,
-        &mut root_headers,
-        &request.node_did,
-        &request.requester_did,
-    )
-    .await?;
+    load_origin_headers(txn, &mut root_headers, &scope.node_did, requester).await?;
     let mut output_segments = required_rows::<serde_json::Value>(&response, "AgentOutputSegment")?
         .iter()
         .map(decode_output_segment_row)
@@ -86,8 +101,8 @@ pub(super) async fn load_hydration_selection_in_txn(
         txn,
         &root_headers,
         &mut output_segments,
-        &request.node_did,
-        &request.requester_did,
+        &scope.node_did,
+        requester,
     )
     .await?;
     let mut bases = Vec::new();
@@ -120,11 +135,11 @@ pub(super) async fn load_hydration_selection_in_txn(
         &output_segments,
         &mut bases,
         &mut effects,
-        &request.node_did,
-        &request.requester_did,
+        &scope.node_did,
+        requester,
     )
     .await?;
-    load_effect_children(txn, request, &bases, &mut effects).await?;
+    load_effect_children(txn, scope, &bases, &mut effects).await?;
     let parents = bases
         .iter()
         .filter(|row| {
@@ -157,13 +172,13 @@ pub(super) async fn load_hydration_selection_in_txn(
         txn,
         effect_requests,
         &mut output_segments,
-        &request.node_did,
-        &request.requester_did,
+        &scope.node_did,
+        requester,
     )
     .await?;
     let session_bases = bases
         .iter()
-        .filter(|row| row.session_id == request.session_id)
+        .filter(|row| row.session_id == scope.session_id)
         .cloned()
         .collect::<Vec<_>>();
     let canonical = build_canonical_selection(CanonicalClosureInput {
@@ -176,9 +191,9 @@ pub(super) async fn load_hydration_selection_in_txn(
         denied_headers: &[],
         denied_segments: &[],
         dependency_denials: &[],
-        node_did: &request.node_did,
-        requester_did: Some(&request.requester_did),
-        session_id: &request.session_id,
+        node_did: &scope.node_did,
+        requester_did: Some(requester),
+        session_id: &scope.session_id,
     })
     .context("build authorized canonical hydration closure")?;
     let mut documents = canonical.documents;
@@ -201,7 +216,7 @@ pub(super) async fn load_hydration_selection_in_txn(
     }
     let authorized_reference_closure = documents
         .iter()
-        .filter(|document| document.session_id != request.session_id)
+        .filter(|document| document.session_id != scope.session_id)
         .map(|document| SessionHydrationDocumentKey {
             collection: document.collection,
             doc_id: document.doc_id.clone(),
@@ -442,7 +457,7 @@ fn observe_tool_call(
 
 pub(super) async fn load_effect_children(
     txn: &ConfigApplyTxn<'_>,
-    request: &HydrationRequest,
+    scope: &SessionScope,
     bases: &[ScopedDocument],
     effects: &mut Vec<ToolEffectRow>,
 ) -> Result<()> {
@@ -451,7 +466,7 @@ pub(super) async fn load_effect_children(
         .filter(|row| {
             row.collection
                 == gents_protocol::session_hydration::SessionHydrationCollection::AgentToolCall
-                && row.session_id != request.session_id
+                && row.session_id != scope.session_id
         })
         .map(|row| row.doc_id.as_str())
         .collect::<BTreeSet<_>>();
@@ -459,8 +474,13 @@ pub(super) async fn load_effect_children(
         return Ok(());
     }
     let parents: Vec<_> = parents.into_iter().collect();
-    let agent = escape_graphql_string(&request.node_did);
-    let requester = escape_graphql_string(&request.requester_did);
+    let agent = escape_graphql_string(&scope.node_did);
+    let requester = escape_graphql_string(
+        scope
+            .requester_did
+            .as_deref()
+            .context("canonical effect scope omitted requester")?,
+    );
     let mut ignored = Vec::new();
     for parents in parents.chunks(pages::PAGE_SIZE) {
         let parents = crate::graphql::graphql_string_list_literal(parents.iter().copied());

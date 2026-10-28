@@ -108,6 +108,7 @@ pub(crate) async fn delete_definition(fixture: &Fixture) {
                 ))
                 .await
                 .map(|_| ())
+                .map_err(anyhow::Error::from)
             })
         })
         .await

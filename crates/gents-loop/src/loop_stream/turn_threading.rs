@@ -128,6 +128,7 @@ pub(super) fn close_streaming_turn(
 #[cfg(all(test, feature = "native"))]
 mod tests {
     use super::*;
+    use gents_protocol::error_chain::ErrorChain;
 
     fn image_output(data_len: usize, response_len: usize) -> String {
         serde_json::json!({
@@ -175,7 +176,7 @@ mod tests {
             ];
             counter
                 .estimate_message_request(&messages)
-                .unwrap_or_else(|error| panic!("{:?}: {error:#}", counter.profile()));
+                .unwrap_or_else(|error| panic!("{:?}: {}", counter.profile(), ErrorChain(&error)));
         }
     }
 }

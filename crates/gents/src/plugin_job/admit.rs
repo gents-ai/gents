@@ -102,6 +102,10 @@ pub struct StepContext {
     pub started_by_job: bool,
     pub cwd_allowed: Vec<String>,
     pub within: Vec<(String, String)>,
+    /// Lean `scriptDigest`: the sha256 (hex) of the call's non-empty `script`,
+    /// computed by the host; `None` when the call carries none. A step-0 pin
+    /// of such a call must name it (`pin_mismatch`).
+    pub script_digest: Option<String>,
     pub adoption_facts: HostFacts,
     pub caller_scope: ProcessControlScope,
     pub control_targets: Vec<(String, Option<(ProcessControlScope, bool)>)>,
@@ -124,6 +128,8 @@ pub enum Refusal {
     BackgroundBudgetExceeded,
     ResumeUnknown,
     ResumeNotHead,
+    /// A step-0 pin of a call carrying `script` did not name that script.
+    PinMismatch,
 }
 
 impl Refusal {
@@ -141,6 +147,7 @@ impl Refusal {
             Self::BackgroundBudgetExceeded => Some("background_tool_budget_exceeded"),
             Self::ResumeUnknown => Some("plugin_job_resume_unknown"),
             Self::ResumeNotHead => Some("plugin_job_resume_not_head"),
+            Self::PinMismatch => Some("plugin_job_pin_mismatch"),
         }
     }
 }
@@ -273,6 +280,9 @@ fn admit(ctx: &StepContext, job: &StepRow, out: &JobStepOutput) -> Result<StepRo
     if job.state != JobState::Running {
         return Err(Refusal::Terminal);
     }
+    if pin_mismatch(ctx, job, out) {
+        return Err(Refusal::PinMismatch);
+    }
     if !ctx.available || !ctx.engine_provenance_operator {
         return Err(Refusal::NotAvailable);
     }
@@ -318,6 +328,33 @@ fn admit(ctx: &StepContext, job: &StepRow, out: &JobStepOutput) -> Result<StepRo
         },
         out,
     )
+}
+
+/// Lean `pinMismatch` (`admitStepGuarded`): a step-0 pin of a call carrying
+/// `script` must name that script, `script_id` its sha256 and `source_digest`
+/// `"sha256:" + script_id`. A pinned row, a call without a script and an output
+/// without a pin are not subject to the rule.
+fn pin_mismatch(ctx: &StepContext, job: &StepRow, out: &JobStepOutput) -> bool {
+    if job.pin.is_some() {
+        return false;
+    }
+    match (&ctx.script_digest, out_pin(out)) {
+        (Some(digest), Some(guest)) => {
+            !(guest.script_id == *digest && guest.source_digest == format!("sha256:{digest}"))
+        }
+        _ => false,
+    }
+}
+
+/// The host fact behind `StepContext::script_digest`: the sha256 (hex) of a
+/// non-empty `script`, `None` otherwise. Whitespace is source.
+pub fn script_digest_of(script: Option<&str>) -> Option<String> {
+    script.filter(|script| !script.is_empty()).map(|script| {
+        format!(
+            "{:x}",
+            <sha2::Sha256 as sha2::Digest>::digest(script.as_bytes())
+        )
+    })
 }
 
 /// Lean `Ceiling.empty`: an absent job block.
@@ -933,6 +970,7 @@ mod tests {
             started_by_job: false,
             cwd_allowed: Vec::new(),
             within: Vec::new(),
+            script_digest: None,
             adoption_facts: facts(),
             caller_scope: scope("session"),
             control_targets: Vec::new(),
@@ -1114,6 +1152,96 @@ mod tests {
             pin: None,
             resume: None,
         }
+    }
+
+    fn script_digest_of(script: &str) -> String {
+        format!(
+            "{:x}",
+            <sha2::Sha256 as sha2::Digest>::digest(script.as_bytes())
+        )
+    }
+
+    fn pinned_effects(guest: JobGuestPin) -> JobStepOutput {
+        let JobStepOutput::Effects { effects: mut step0 } = effects(vec![spawn("s1", 0, "a")], &[])
+        else {
+            unreachable!()
+        };
+        step0.pin = Some(guest);
+        JobStepOutput::Effects { effects: step0 }
+    }
+
+    /// A dynamic run's job: the call carries `script`, step 0 is unpinned, and
+    /// the host computed the script's digest for the context.
+    fn script_step0(script: Option<&str>) -> (StepContext, StepRow) {
+        let ctx = StepContext {
+            script_digest: script.map(script_digest_of),
+            adoption_facts: HostFacts {
+                origin: JobOrigin::Dynamic,
+                ..facts()
+            },
+            ..base_context()
+        };
+        let row = running_row(Vec::new());
+        let job = StepRow {
+            pin: None,
+            call: StepCall {
+                script: script.map(str::to_owned),
+                ..row.call.clone()
+            },
+            ..row
+        };
+        (ctx, job)
+    }
+
+    #[test]
+    fn a_step0_pin_must_name_the_calls_script() {
+        let script = "module.exports = (i) => i";
+        let digest = script_digest_of(script);
+        let (ctx, job) = script_step0(Some(script));
+        let good = JobGuestPin {
+            script_id: digest.clone(),
+            source_digest: format!("sha256:{digest}"),
+            agent_budget: 2,
+            handle: "h".to_owned(),
+        };
+        admit_step(&ctx, &job, &pinned_effects(good.clone())).unwrap();
+        let wrong_id = JobGuestPin {
+            script_id: "other".to_owned(),
+            ..good.clone()
+        };
+        assert_eq!(
+            admit_step(&ctx, &job, &pinned_effects(wrong_id))
+                .unwrap_err()
+                .refusal,
+            Refusal::PinMismatch
+        );
+        let wrong_prefix = JobGuestPin {
+            source_digest: format!("sha1:{digest}"),
+            ..good
+        };
+        assert_eq!(
+            admit_step(&ctx, &job, &pinned_effects(wrong_prefix))
+                .unwrap_err()
+                .refusal,
+            Refusal::PinMismatch
+        );
+    }
+
+    #[test]
+    fn a_scriptless_call_is_not_subject_to_the_pin_digest_rule() {
+        let (ctx, job) = script_step0(None);
+        let any = JobGuestPin {
+            script_id: "whatever".to_owned(),
+            source_digest: "source".to_owned(),
+            agent_budget: 2,
+            handle: "h".to_owned(),
+        };
+        admit_step(&ctx, &job, &pinned_effects(any)).unwrap();
+    }
+
+    #[test]
+    fn pin_mismatch_has_its_code() {
+        assert_eq!(Refusal::PinMismatch.code(), Some("plugin_job_pin_mismatch"));
     }
 
     fn code(ctx: &StepContext, job: &StepRow, out: &JobStepOutput) -> Option<&'static str> {

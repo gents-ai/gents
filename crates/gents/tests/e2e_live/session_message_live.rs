@@ -1203,7 +1203,7 @@ const RELAY_AGENT_ID: &str = "live-relay";
 fn code_word(prefix: &str) -> String {
     format!(
         "{prefix}-{}",
-        &uuid::Uuid::new_v4().simple().to_string()[..8].to_uppercase()
+        uuid::Uuid::new_v4().simple().to_string()[..8].to_uppercase()
     )
 }
 
@@ -2969,7 +2969,7 @@ struct SoakCoverage {
 async fn soak_coverage(fx: &LiveNode, op_requests: &[String]) -> SoakCoverage {
     let mut coverage = SoakCoverage::default();
     for request_id in op_requests {
-        for tool in timeline_tools(&fx.db.node, &request_id)
+        for tool in timeline_tools(&fx.db.node, request_id)
             .await
             .into_iter()
             .filter(|tool| tool.request_id.as_deref() == Some(request_id.as_str()))

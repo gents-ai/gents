@@ -362,7 +362,7 @@ async fn load_prefix_items(
         kind.as_str(),
     );
     let response = graphql_with_transaction_retry(node, &query, "load mailbox item prefix").await?;
-    rows(&response, MAILBOX_COLLECTION)
+    Ok(rows(&response, MAILBOX_COLLECTION)?)
 }
 
 pub async fn load_mailbox_item(node: &EmbeddedNode, doc_id: &str) -> Result<Option<MailboxItem>> {
@@ -813,7 +813,7 @@ pub async fn list_mailbox_items(
         escape_graphql_string(requester_did)
     );
     let response = graphql_with_transaction_retry(node, &query, "list mailbox items").await?;
-    rows(&response, MAILBOX_COLLECTION)
+    Ok(rows(&response, MAILBOX_COLLECTION)?)
 }
 
 async fn transition_open_item(
@@ -1073,15 +1073,6 @@ async fn sweep_open_mailbox_items_with_clock(
         };
         let satisfying = match satisfying {
             Ok(found) => found,
-            Err(error)
-                if error
-                    .to_string()
-                    .contains("unsupported mailbox expected_collection") =>
-            {
-                report.skipped_unsupported += 1;
-                tracing::warn!(item_id = %item.doc_id, %error, "leaving unsupported mailbox item open");
-                continue;
-            }
             Err(error) => {
                 report.skipped_errors += 1;
                 tracing::warn!(item_id = %item.doc_id, %error, "mailbox item close check failed; leaving item open");

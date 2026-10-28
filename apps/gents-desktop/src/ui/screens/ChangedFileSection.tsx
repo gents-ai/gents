@@ -1,5 +1,12 @@
-import { lazy, memo, Suspense } from "react";
-import { ChevronRight, Copy, EllipsisVertical, FolderOpen } from "lucide-react";
+import { lazy, memo, Suspense, useState } from "react";
+import {
+  ChevronRight,
+  Copy,
+  EllipsisVertical,
+  FoldVertical,
+  FolderOpen,
+  UnfoldVertical,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -49,6 +56,8 @@ export const ChangedFileSection = memo(function ChangedFileSection({
   /** where the panel finds each file's section to scroll to and watch */
   sections: Map<string, HTMLElement>;
 }) {
+  const [whole, setWhole] = useState(false);
+  const [draws, setDraws] = useState(0);
   return (
     <section
       ref={(el) => {
@@ -79,12 +88,24 @@ export const ChangedFileSection = memo(function ChangedFileSection({
           </span>
           <Counts added={file.added} removed={file.removed} />
         </button>
-        <FileMenu scope={scope} file={file} within={within} remote={remote} />
+        <FileMenu
+          scope={scope}
+          file={file}
+          within={within}
+          remote={remote}
+          whole={open ? whole : null}
+          onWhole={(next) => {
+            /* hiding draws the diff anew, so lines opened from its own
+               separators fold back too */
+            if (!next) setDraws((count) => count + 1);
+            setWhole(next);
+          }}
+        />
       </div>
       {open &&
         (near ? (
           <Suspense fallback={<Loading remote={remote} file={file} />}>
-            <RecordedDiffView scope={scope} file={file} />
+            <RecordedDiffView key={draws} scope={scope} file={file} whole={whole} />
           </Suspense>
         ) : (
           <Loading remote={remote} file={file} />
@@ -93,18 +114,24 @@ export const ChangedFileSection = memo(function ChangedFileSection({
   );
 });
 
-/** What can be done with one changed file: copy its path or its recorded
-    change, and, for a session on this computer, show it in its folder. */
+/** What can be done with one changed file: show all its lines or only those
+    around its changes, copy its path or its recorded change, and, for a
+    session on this computer, show it in its folder. */
 function FileMenu({
   scope,
   file,
   within,
   remote,
+  whole,
+  onWhole,
 }: {
   scope: SessionScope;
   file: ChangedFile;
   within: string;
   remote: boolean;
+  /** whether the open diff shows every line; null while it is closed */
+  whole: boolean | null;
+  onWhole: (whole: boolean) => void;
 }) {
   const readDiff = useRecordedDiffReader(scope);
   const home = useHomeFolder();
@@ -130,6 +157,15 @@ function FileMenu({
         <EllipsisVertical />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-auto min-w-48">
+        {whole !== null && (
+          <>
+            <DropdownMenuItem onClick={() => onWhole(!whole)}>
+              {whole ? <FoldVertical /> : <UnfoldVertical />}
+              {whole ? "Hide unchanged lines" : "Show all lines"}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
         <DropdownMenuItem onClick={() => copy(file.path)}>
           <Copy />
           Copy path

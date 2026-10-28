@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { expect, gotoHarness, seedLocalStorage, test } from "./desktopTest";
+import { expect, gotoHarness, seedLocalStorage, test, type Page } from "./desktopTest";
 
 /* The webview enforces the app's CSP, which the harness server does not
    send; a highlighter the policy blocks would leave the panel blank in the
@@ -24,12 +24,9 @@ test.use({
   ],
 });
 
-test("a turn's changed files open their recorded diffs, highlighted under the app's CSP", async ({
-  page,
-  baseURL,
-}) => {
-  const origin = new URL(baseURL!);
-  const csp = devCsp
+async function openHighlightedDiff(page: Page, baseURL: string, policy: string) {
+  const origin = new URL(baseURL);
+  const csp = policy
     .replaceAll("ws://localhost:1420", `ws://${origin.host}`)
     .replaceAll("http://localhost:1420", origin.origin);
   await page.route("**/tests/ui-harness/harness.html*", async (route) => {
@@ -65,6 +62,20 @@ test("a turn's changed files open their recorded diffs, highlighted under the ap
       )
       .first(),
   ).toBeAttached();
+}
+
+test("a turn's changed files open their recorded diffs, highlighted under the app's CSP", async ({
+  page,
+  baseURL,
+}) => {
+  await openHighlightedDiff(page, baseURL!, devCsp);
+});
+
+test("diffs are still highlighted where WebAssembly is refused", async ({
+  page,
+  baseURL,
+}) => {
+  await openHighlightedDiff(page, baseURL!, devCsp.replace(" 'wasm-unsafe-eval'", ""));
 });
 
 /* read by the harness's recorded-versions fetch */
@@ -137,4 +148,31 @@ test("choosing a collapsed file opens it again", async ({ page }) => {
   await page.getByRole("button", { name: /^Choose a file/ }).click();
   await page.getByRole("menuitem", { name: /parser\.rs/ }).click();
   await expect(header).toHaveAttribute("aria-expanded", "true");
+});
+
+test("a file shows all its lines from its menu, and hides the unchanged ones again", async ({
+  page,
+}) => {
+  await gotoHarness(page, "coding");
+  await page
+    .getByTestId("sessions-screen")
+    .getByRole("link", { name: /introduction-and-greetings/ })
+    .click();
+  await page
+    .getByTestId("turn-changes")
+    .getByRole("button", { name: /lexer\.rs/ })
+    .click();
+  const section = page.locator("section[data-path='src/lexer.rs']");
+  const tail = section.getByText("fn rule_24", { exact: false });
+  await expect(section.getByText("split_whitespace", { exact: false })).toBeVisible();
+  await expect(tail).toHaveCount(0);
+
+  const menu = section.getByRole("button", { name: "lexer.rs actions" });
+  await menu.click();
+  await page.getByRole("menuitem", { name: "Show all lines" }).click();
+  await expect(tail).toBeVisible();
+  await menu.click();
+  await page.getByRole("menuitem", { name: "Hide unchanged lines" }).click();
+  await expect(tail).toHaveCount(0);
+  await expect(section.getByText("split_whitespace", { exact: false })).toBeVisible();
 });

@@ -42,7 +42,7 @@ pub(super) fn sent(submitted: Result<SubmittedRequest>) -> Result<ChatSendResult
             let delivery_error = unknown
                 .cause
                 .as_ref()
-                .filter(|cause| gents::graphql::is_storage_full(cause))
+                .filter(|cause| gents::graphql::is_storage_full(cause.as_ref()))
                 .map(|_| crate::error::BridgeError::storage_full());
             let mut result = ChatSendResult::with_outcome(
                 unknown.pending.result,

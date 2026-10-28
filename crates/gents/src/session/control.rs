@@ -214,16 +214,25 @@ async fn ensure_session_executions_settled_in_txn(
         .await?,
         "session-owned background execution is still active; retry agent_resume after it settles"
     );
-    let unexited = background_executions
-        .try_process_record_list()
-        .context(
-            "cannot verify retained process ownership before resume; retry after runtime recovery",
-        )?
-        .into_iter()
-        .filter(|record| {
-            record.identity.observe() != crate::managed_exec::ownership::ProcessObservation::Exited
-        })
-        .map(|record| record.tool_call_doc_id);
+    let executions = background_executions.clone();
+    let unexited = tokio::task::spawn_blocking(move || {
+        Ok::<_, anyhow::Error>(
+            executions
+                .try_process_record_list()?
+                .into_iter()
+                .filter(|record| {
+                    record.identity.observe()
+                        != crate::managed_exec::ownership::ProcessObservation::Exited
+                })
+                .map(|record| record.tool_call_doc_id)
+                .collect::<Vec<_>>(),
+        )
+    })
+    .await
+    .context("inspecting retained process ownership before resume")?
+    .context(
+        "cannot verify retained process ownership before resume; retry after runtime recovery",
+    )?;
     anyhow::ensure!(
         !session_doc_exists_in_txn(txn, &scope, unexited).await?,
         "session-owned process has not been observed exited; retry agent_resume after settlement"

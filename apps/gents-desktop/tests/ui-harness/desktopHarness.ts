@@ -201,6 +201,10 @@ export type MobilePerformanceHarnessController = {
 
   streamText(text: string): void;
   setOlderPageDelay(ms: number): void;
+  holdOlderPages(): void;
+  pendingOlderPages(): number;
+  releaseOlderPages(): void;
+  setHistorySize(items: number): void;
   endReply(step: { live: "keep" | "drop"; saved: boolean; completed: boolean }): void;
   /** a new reply begins at the end of the transcript: an empty live tail
       that `streamText` then grows, the turn running */
@@ -274,9 +278,12 @@ const HARNESS_EDIT_CALL = "call-intro-edit";
 const PARSER_BEFORE =
   "pub struct Parser;\n\nimpl Parser {\n    fn parse() -> Ast { todo!() }\n}\n";
 const HARNESS_LEXER_CALL = "call-intro-edit-lexer";
-const LEXER_BEFORE = "pub fn tokens(source: &str) -> Vec<Token> {\n    Vec::new()\n}\n";
-const LEXER_AFTER =
-  "pub fn tokens(source: &str) -> Vec<Token> {\n    source.split_whitespace().map(Token::from).collect()\n}\n";
+/* unchanged lines after the edit, which the diff folds away */
+const LEXER_TAIL = Array.from({ length: 24 }, (_, i) => `\nfn rule_${i + 1}() {}`).join(
+  "",
+);
+const LEXER_BEFORE = `pub fn tokens(source: &str) -> Vec<Token> {\n    Vec::new()\n}\n${LEXER_TAIL}\n`;
+const LEXER_AFTER = `pub fn tokens(source: &str) -> Vec<Token> {\n    source.split_whitespace().map(Token::from).collect()\n}\n${LEXER_TAIL}\n`;
 
 const HARNESS_FILE_CHANGES_UNREACHABLE = "harness.fileChangesUnreachable";
 
@@ -479,6 +486,18 @@ export function createDesktopUiHarness(
   let storeVersion = 1;
   let liveSourceEpoch = 1;
   let olderPageDelayMs = 0;
+  let olderPageGate: Promise<void> | null = null;
+  let releaseOlderPageGate: (() => void) | null = null;
+  let pendingOlderPages = 0;
+  async function waitForOlderPage() {
+    pendingOlderPages += 1;
+    try {
+      if (olderPageGate) await olderPageGate;
+      if (olderPageDelayMs > 0) await wait(olderPageDelayMs);
+    } finally {
+      pendingOlderPages -= 1;
+    }
+  }
   let streamSequence = 0;
   let bridgeCalls: MobilePerformanceBridgeCall[] = [];
   let commits: MobilePerformanceCommit[] = [];
@@ -1544,8 +1563,7 @@ export function createDesktopUiHarness(
       const sessionId = _sessionId;
       const session = sessions.get(sessionId);
       if (!session) return null;
-      if (timelinePage?.beforeItemKey && olderPageDelayMs > 0)
-        await wait(olderPageDelayMs);
+      if (timelinePage?.beforeItemKey) await waitForOlderPage();
       const snapshot = clone(session);
       snapshot.projectionRevision = {
         storeVersion,
@@ -1611,7 +1629,7 @@ export function createDesktopUiHarness(
     async fetchSessionRows({ sessionId, window, limit }) {
       const session = sessions.get(sessionId);
       if (!session) return null;
-      if (window.kind !== "tip" && olderPageDelayMs > 0) await wait(olderPageDelayMs);
+      if (window.kind !== "tip") await waitForOlderPage();
       const durable = session.timelineItems.filter(
         (item) => harnessSequenceOf(item) !== null,
       );
@@ -1834,6 +1852,9 @@ export function createDesktopUiHarness(
         syncSessions();
         notify("store");
       }
+    },
+    async observeMailboxItem() {
+      throw new Error("Native mailbox observation is unavailable in this harness");
     },
     async listMailbox() {
       return deployment.mailboxItems;
@@ -3054,6 +3075,23 @@ export function createDesktopUiHarness(
             notify("store", true);
             return sequence;
           },
+          setHistorySize(items) {
+            sessions.set("session-large", createLargePerformanceSession(items));
+            syncSessions();
+          },
+          holdOlderPages() {
+            olderPageGate = new Promise((resolve) => {
+              releaseOlderPageGate = resolve;
+            });
+          },
+          pendingOlderPages() {
+            return pendingOlderPages;
+          },
+          releaseOlderPages() {
+            releaseOlderPageGate?.();
+            olderPageGate = null;
+            releaseOlderPageGate = null;
+          },
           setOlderPageDelay(ms) {
             olderPageDelayMs = ms;
           },
@@ -3396,42 +3434,41 @@ export function createDesktopUiHarness(
   };
 }
 
-function createLargePerformanceSession(): DesktopSessionSnapshot {
+function createLargePerformanceSession(
+  items: number = MOBILE_PERFORMANCE_FIXTURE.largeSessionTimelineItems,
+): DesktopSessionSnapshot {
   const filler =
     "bounded durable transcript fixture with markdown `code`, stable prose, and comparable byte shape";
-  const timelineItems = Array.from(
-    { length: MOBILE_PERFORMANCE_FIXTURE.largeSessionTimelineItems },
-    (_, index) => {
-      if (index === MOBILE_PERFORMANCE_FIXTURE.largeSessionTimelineItems - 1) {
-        return {
-          kind: "liveAssistant" as const,
-          itemKey: "large-live",
-          content: "stream-start",
-          reasoning: null,
+  const timelineItems = Array.from({ length: items }, (_, index) => {
+    if (index === items - 1) {
+      return {
+        kind: "liveAssistant" as const,
+        itemKey: "large-live",
+        content: "stream-start",
+        reasoning: null,
+      };
+    }
+    return index % 2 === 0
+      ? {
+          kind: "userMessage" as const,
+          itemKey: `large-user-${index}`,
+          requestId: `large-request-${index}`,
+          ownsTurn: true,
+          sequence: index,
+          content: `User fixture row ${index}: ${filler}`,
+          timestamp: STARTED_AT,
+          reconstruction: HARNESS_READY_RECONSTRUCTION,
+        }
+      : {
+          kind: "assistantMessage" as const,
+          itemKey: `large-assistant-${index}`,
+          sequence: index,
+          content: `Assistant fixture row ${index}: ${filler}`,
+          reasoning: index % 10 === 1 ? `Reasoning fixture ${index}` : null,
+          timestamp: STARTED_AT,
+          reconstruction: HARNESS_READY_RECONSTRUCTION,
         };
-      }
-      return index % 2 === 0
-        ? {
-            kind: "userMessage" as const,
-            itemKey: `large-user-${index}`,
-            requestId: `large-request-${index}`,
-            ownsTurn: true,
-            sequence: index,
-            content: `User fixture row ${index}: ${filler}`,
-            timestamp: STARTED_AT,
-            reconstruction: HARNESS_READY_RECONSTRUCTION,
-          }
-        : {
-            kind: "assistantMessage" as const,
-            itemKey: `large-assistant-${index}`,
-            sequence: index,
-            content: `Assistant fixture row ${index}: ${filler}`,
-            reasoning: index % 10 === 1 ? `Reasoning fixture ${index}` : null,
-            timestamp: STARTED_AT,
-            reconstruction: HARNESS_READY_RECONSTRUCTION,
-          };
-    },
-  );
+  });
   return {
     sessionId: "session-large",
     nodeDid: NODE_DID,

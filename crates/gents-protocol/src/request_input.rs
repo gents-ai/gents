@@ -12,7 +12,27 @@ pub use captured_context::*;
 #[cfg(test)]
 mod tests;
 
-pub const REQUEST_INPUT_CONTRACT_VERSION: u32 = 2;
+#[derive(Debug, thiserror::Error)]
+pub enum RequestInputError {
+    #[error(transparent)]
+    Serialize(#[from] serde_json::Error),
+    #[error("captured context metadata must be an object")]
+    MetadataNotObject,
+    #[error("captured context document contains unrelated provider parameters")]
+    UnrelatedProviderParameters,
+    #[error("captured context requires a text document")]
+    RequiresTextDocument,
+    #[error("captured context requires captured text, not a live source location")]
+    RequiresCapturedText,
+    #[error("captured context text must stay in its payload")]
+    ContentInMetadata,
+    #[error("captured context has an invalid buffer version or selection range")]
+    InvalidCapturedContext,
+}
+
+type Result<T, E = RequestInputError> = std::result::Result<T, E>;
+
+pub const REQUEST_INPUT_CONTRACT_VERSION: u32 = 3;
 pub const STATUS_INPUT_CONTRACT_FIELD: &str = "request_input_contract_version";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,8 +87,13 @@ impl RequestInput {
     /// The serving runtime must advertise support before a client publishes
     /// typed captures. This observation grants no request or workspace authority.
     pub fn captured_input_compatible(&self, runtime_version: Option<u64>) -> bool {
-        (self.attachments.is_empty() || runtime_version == Some(2))
-            && (self.captured_context.is_empty() || matches!(runtime_version, Some(1 | 2)))
+        (self.attachments.is_empty() || matches!(runtime_version, Some(2 | 3)))
+            && (self.captured_context.is_empty() || matches!(runtime_version, Some(1..=3)))
+            && (self
+                .captured_context
+                .iter()
+                .all(|context| context.source != CapturedContextSource::Composer)
+                || runtime_version == Some(3))
     }
 
     pub fn goal_assignment_compatible(&self, runtime_version: Option<u64>) -> bool {
@@ -116,7 +141,7 @@ impl RequestInput {
         }
     }
 
-    pub fn authored_message(&self, prose: &str) -> anyhow::Result<crate::message::Message> {
+    pub fn authored_message(&self, prose: &str) -> Result<crate::message::Message> {
         use crate::message::{Message, UserContent};
         let mut content = Vec::with_capacity(self.captured_context.len() + 1);
         if !prose.is_empty() || (self.captured_context.is_empty() && self.attachments.is_empty()) {

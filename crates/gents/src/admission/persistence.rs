@@ -11,7 +11,8 @@ use crate::graphql::escape_graphql_string;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ProviderCallUsage(pub(crate) gents_protocol::usage::TokenUsage);
 
-pub(super) fn completion_persistence_error(error: anyhow::Error) -> AdmissionError {
+pub(super) fn completion_persistence_error(error: impl Into<anyhow::Error>) -> AdmissionError {
+    let error = error.into();
     AdmissionError(format!("persisting InferenceCall failed: {error:#}"))
 }
 

@@ -87,7 +87,7 @@ where
 }
 
 fn observed_usage(row: &CallRow) -> Result<gents_protocol::usage::TokenUsage> {
-    row.usage.observation()
+    Ok(row.usage.observation()?)
 }
 
 fn totals_for_call(row: &CallRow) -> Result<AuditUsageTokens> {

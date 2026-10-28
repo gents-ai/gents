@@ -22,6 +22,9 @@ const MAX_STDERR_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy)]
 pub struct PluginBudget {
+    /// Per-VM execution limit. An embedded JS invocation has its own meter;
+    /// Afterburner does not expose its consumed fuel for aggregate accounting.
+    /// The wall-clock limit bounds the whole plugin call across host imports.
     pub fuel: Option<u64>,
     pub memory_bytes: u64,
     pub wall_clock: std::time::Duration,
@@ -309,8 +312,29 @@ impl PluginRunner {
         let request = plugin_run_request(stdin, manifold, budget);
 
         let started = Instant::now();
-        let output = run_afb_bytes(&self.afb_bytes, request)
-            .with_context(|| format!("plugin {:?} failed to start", self.plugin.name))?;
+        let session = (!self.plugin.host_imports.is_empty()).then(|| {
+            std::sync::Arc::new(std::sync::Mutex::new(host_imports::ImportSession {
+                script: host_imports::script_of(arguments),
+                plugin: self.plugin.name.clone(),
+                budget: *budget,
+                started,
+                stored: Vec::new(),
+                failure: None,
+            }))
+        });
+        let output = match &session {
+            None => run_afb_bytes(&self.afb_bytes, request).map_err(anyhow::Error::from),
+            Some(session) => {
+                let afb = afterburner_afb::Afb::from_bytes(&self.afb_bytes).map_err(|error| {
+                    anyhow::anyhow!(
+                        "plugin {:?}'s artifact is not a readable .afb: {error}",
+                        self.plugin.name
+                    )
+                })?;
+                host_imports::run_with_imports(&afb, request, session.clone())
+            }
+        }
+        .with_context(|| format!("plugin {:?} failed to start", self.plugin.name))?;
         let wall_ms = elapsed_ms(started);
 
         match output.outcome {
@@ -364,11 +388,10 @@ impl PluginRunner {
                     .into())
                 }
             }
-            AfbRunOutcome::Exited(code) => Ok(outcome_from_exit(
+            AfbRunOutcome::Exited(code) => Ok(host_imports::outcome_with_import_failure(
+                outcome_from_exit(code, output, wall_ms, budget.max_output_bytes),
                 code,
-                output,
-                wall_ms,
-                budget.max_output_bytes,
+                session.as_deref(),
             )),
         }
     }
@@ -610,13 +633,14 @@ pub fn retry_backoff(attempts: u32) -> std::time::Duration {
 }
 pub mod data;
 pub mod executor;
+pub mod host_imports;
 pub mod http_calls;
 pub mod install;
 pub mod job_calls;
 pub mod model_calls;
 mod rounds;
+pub(crate) mod script_engine;
 mod service;
-pub(crate) mod source_runner;
 pub mod store;
 pub mod tool;
 pub mod tool_calls;

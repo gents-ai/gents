@@ -21,6 +21,7 @@ import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import { cn } from "@gents/ui/lib/utils";
 import { AssistantMessage, UserMessage } from "@gents/ui/conversation";
+import { SentText } from "./SkillChips";
 import { useTranscriptList, type ReaderPlace } from "@/lib/transcriptList";
 import { useHeldRows } from "@/lib/useHeldRows";
 import { sequenceOf } from "@/lib/transcriptRows";
@@ -113,7 +114,9 @@ function OwnInput({
   return (
     <div>
       <UserInputWithState
-        content={item.content ?? ""}
+        content={
+          <SentText content={item.content ?? ""} skills={item.selectedSkillIds} />
+        }
         state={state}
         actions={[...copyActions(item.content), ...(branch ? [branch] : [])]}
       />
@@ -214,7 +217,9 @@ const TranscriptItem = memo(function TranscriptItem({
       if (!sender) return <OwnInput item={item} state={state} />;
       const message = (
         <div>
-          <UserMessage actions={copyActions(item.content)}>{item.content}</UserMessage>
+          <UserMessage actions={copyActions(item.content)}>
+            <SentText content={item.content ?? ""} skills={item.selectedSkillIds} />
+          </UserMessage>
           <SentAttachments
             items={item.attachments}
             requestId={item.requestId}

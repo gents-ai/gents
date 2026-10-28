@@ -390,6 +390,7 @@ fn context(
             .iter()
             .map(|w| (w.base.clone(), w.cwd.clone()))
             .collect(),
+        script_digest: c.script_digest.clone(),
         adoption_facts: host_facts(&c.adoption_facts),
         caller_scope: process_scope(&c.caller_scope),
         control_targets: c
@@ -455,8 +456,8 @@ fn generated_plugin_job_admission_cases_drive_admit_step() {
     let cases = lean_plugin_job_admission_cases();
     assert_eq!(
         cases.len(),
-        216,
-        "Lean supplies 24 admission regressions and 192 interrupted wire-to-recovery traces"
+        220,
+        "Lean supplies 28 admission regressions and 192 interrupted wire-to-recovery traces"
     );
     let mut names = BTreeSet::new();
     for case in cases {

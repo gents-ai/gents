@@ -49,7 +49,7 @@ async fn insert_request(node: &Arc<EmbeddedNode>, input: Value) -> String {
                     &json!({"input": input}),
                 )
                 .await?;
-            gents_protocol::graphql::extract_mutation_doc_id(&result, "AgentRequest")
+            Ok::<_, anyhow::Error>(gents_protocol::graphql::extract_mutation_doc_id(&result, "AgentRequest")?)
         })
     })
     .await

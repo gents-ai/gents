@@ -76,6 +76,6 @@ for (const colorScheme of ["light", "dark"] as const) {
     ).toBeVisible();
     await expect(
       page.getByRole("textbox", { name: "Message", exact: true }),
-    ).toHaveValue("Keep this newer message");
+    ).toHaveText("Keep this newer message");
   });
 }

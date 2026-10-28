@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Bot, Clock, Play, Timer, Workflow, Zap } from "lucide-react";
 import type {
   RenderedTimelineItem,
@@ -12,9 +13,11 @@ type Reconstruction = Extract<
   { kind: "automatedInput" }
 >["reconstruction"];
 import { Badge } from "@gents/ui/components/badge";
-import { ToolStep, UserMessage } from "@gents/ui/conversation";
+import { UserMessage } from "@gents/ui/conversation";
 import { cn } from "@gents/ui/lib/utils";
 import { href } from "@/lib/router";
+import { holdRow } from "@/lib/scroll";
+import { Markdown } from "./Markdown";
 
 export function pendingInputState(
   lifecycleState: string | null | undefined,
@@ -65,7 +68,7 @@ export function originLabel(
         ? `Goal continuation · ${origin.sequence}`
         : "Goal continuation";
     case "backgroundCompletion":
-      return "Background work finished";
+      return "Background activity";
   }
 }
 
@@ -87,15 +90,6 @@ function OriginIcon({ origin }: { origin: RequestOriginView }) {
     case "backgroundCompletion":
       return <Clock className={className} />;
   }
-}
-
-function firstLine(content: string | null | undefined) {
-  return (
-    content
-      ?.split("\n")
-      .map((line) => line.trim())
-      .find(Boolean) ?? ""
-  );
 }
 
 function unavailableReason(reconstruction: Reconstruction | undefined) {
@@ -130,53 +124,67 @@ export function AutomatedInput({
     senderSessionId ? (fleet.bySessionId[senderSessionId]?.title ?? null) : null,
   );
   const label = originLabel(origin, node, senderTitle);
-  const preview = firstLine(content);
+  const body =
+    origin.kind === "sessionMessage" ? (origin.displayBody ?? content) : content;
+  const control =
+    origin.kind === "backgroundCompletion" || origin.kind === "goalContinuation";
   return (
-    <div data-testid="automated-input">
-      <ToolStep
-        label={preview ? `${label} · ${preview}` : label}
-        copyText={content ?? label}
-        icon={<OriginIcon origin={origin} />}
-        meta={
-          senderSessionId || state ? (
-            <span className="flex items-center gap-2 font-sans">
-              {senderSessionId && (
-                <a
-                  href={href({ name: "session", sessionId: senderSessionId })}
-                  className="underline decoration-border underline-offset-4 hover:text-foreground"
-                >
-                  Open
-                </a>
-              )}
-              {state && (
-                <Badge
-                  variant="outline"
-                  className="border-border/60 text-[10px] font-normal text-muted-foreground"
-                >
-                  {state}
-                </Badge>
-              )}
-            </span>
-          ) : undefined
-        }
-      >
-        {unavailable ? (
-          <p
-            className="text-xs text-muted-foreground"
-            data-testid="automated-input-unavailable"
+    <section
+      data-testid="automated-input"
+      aria-label={label}
+      className="min-w-0 rounded-xl border border-border/60 px-4 py-3"
+    >
+      <header className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+        <OriginIcon origin={origin} />
+        <span className="min-w-0 flex-1 break-words font-medium">{label}</span>
+        {senderSessionId && (
+          <a
+            href={href({ name: "session", sessionId: senderSessionId })}
+            className="underline decoration-border underline-offset-4 hover:text-foreground"
           >
-            {unavailable}
-          </p>
-        ) : (
-          <pre
-            className="max-h-96 overflow-auto font-mono text-[11px] leading-relaxed whitespace-pre-wrap text-muted-foreground"
-            data-testid="automated-input-content"
-          >
-            {content ?? ""}
-          </pre>
+            Open sender
+          </a>
         )}
-      </ToolStep>
-    </div>
+        {state && (
+          <Badge variant="outline" className="font-normal">
+            {state}
+          </Badge>
+        )}
+      </header>
+      {unavailable ? (
+        <p
+          className="mt-2 text-sm text-muted-foreground"
+          data-testid="automated-input-unavailable"
+        >
+          {unavailable}
+        </p>
+      ) : (
+        <>
+          {!control && body && (
+            <div
+              className="prose-app mt-3 break-words"
+              data-testid="automated-input-body"
+            >
+              <Markdown>{body}</Markdown>
+            </div>
+          )}
+          <details
+            className="mt-2 min-w-0"
+            onClick={(event) => holdRow(event.currentTarget)}
+          >
+            <summary className="cursor-pointer text-xs text-muted-foreground">
+              Model input
+            </summary>
+            <pre
+              className="mt-3 max-h-96 overflow-auto font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-muted-foreground"
+              data-testid="automated-input-content"
+            >
+              {content ?? ""}
+            </pre>
+          </details>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -185,7 +193,7 @@ export function UserInputWithState({
   state,
   actions,
 }: {
-  content: string;
+  content: ReactNode;
   state: string | null;
   actions?: Parameters<typeof UserMessage>[0]["actions"];
 }) {

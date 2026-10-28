@@ -56,6 +56,20 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "backend_registry::tests::generated_catalog_refreshes_preserve_payload_commits_and_latest_freshness",
+            package: "gents",
+            source_path: "crates/gents/src/backend_registry/tests.rs",
+            module_path: "backend_registry::tests",
+            function: "generated_catalog_refreshes_preserve_payload_commits_and_latest_freshness",
+        },
+        ConformanceConsumer::RustTest {
+            id: "agent::p2p_reconcile::session_hydration_reconcile::selection::tests::generated_terminal_selections_preserve_superseded_session_hydration",
+            package: "gents",
+            source_path: "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/selection/tests.rs",
+            module_path: "agent::p2p_reconcile::session_hydration_reconcile::selection::tests",
+            function: "generated_terminal_selections_preserve_superseded_session_hydration",
+        },
+        ConformanceConsumer::RustTest {
             id: "gents_loop::claude_messages_body::output_tests::checkpoint_wire_claude_output_matches_executed_model",
             package: "gents-loop",
             source_path: "crates/gents-loop/src/claude_messages_output_tests.rs",
@@ -208,6 +222,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/inventory/tests.rs",
             module_path: "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests",
             function: "generated_fork_inventory_retains_only_selected_native_origins",
+        },
+        ConformanceConsumer::RustTest {
+            id: "agent::p2p_reconcile::file_image_hydration::tests::inventory::generated_inventory_images_keep_reader_root_snapshot_and_source_distinct",
+            package: "gents",
+            source_path: "crates/gents/src/agent/p2p_reconcile/file_image_hydration/tests/inventory.rs",
+            module_path: "agent::p2p_reconcile::file_image_hydration::tests::inventory",
+            function: "generated_inventory_images_keep_reader_root_snapshot_and_source_distinct",
+        },
+        ConformanceConsumer::RustTest {
+            id: "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::readers::shared_reader_metadata_preserves_canonical_authorship_and_image_privacy",
+            package: "gents",
+            source_path: "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/inventory/tests/readers.rs",
+            module_path: "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::readers",
+            function: "shared_reader_metadata_preserves_canonical_authorship_and_image_privacy",
         },
         ConformanceConsumer::RustTest {
             id: "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::generated_projection_cases_use_native_owners_and_scopes",
@@ -1804,6 +1832,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/tests/conformance/tool_policy.rs",
             module_path: "conformance::tool_policy",
             function: "generated_plugin_job_resource_cases_drive_scratch",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::tool_policy::generated_plugin_host_import_cases_drive_the_grant",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/tool_policy.rs",
+            module_path: "conformance::tool_policy",
+            function: "generated_plugin_host_import_cases_drive_the_grant",
         },
         ConformanceConsumer::RustTest {
             id: "conformance::tool_policy::generated_plugin_calls_route_cases_drive_supported",

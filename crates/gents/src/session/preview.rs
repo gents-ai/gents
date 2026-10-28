@@ -222,7 +222,7 @@ mod tests {
                     let mut missing = request.clone();
                     missing.caused_by_parent_request_doc_id = Some("missing-parent".into());
                     assert_eq!(request_preview_in_txn(txn, &missing).await?, content);
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             })
             .await;

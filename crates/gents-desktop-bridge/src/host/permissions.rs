@@ -300,7 +300,7 @@ mod tests {
                 let plan = &plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             })
             .await

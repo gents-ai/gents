@@ -140,7 +140,9 @@ test.describe("kit shell", () => {
           .querySelector('[data-testid="app-shell"]')!
           .getBoundingClientRect();
         const header = document.querySelector(".app-titlebar")!;
-        const editor = document.querySelector("textarea")!.getBoundingClientRect();
+        const editor = document
+          .querySelector('[data-slot="composer"] [aria-label="Message"]')!
+          .getBoundingClientRect();
         return {
           top: frame.top,
           bottom: frame.bottom,
@@ -442,6 +444,68 @@ test.describe("kit shell", () => {
     await expect(page.getByTestId("mailbox-screen")).toBeVisible();
   });
 
+  for (const method of ["button", "shortcut"] as const) {
+    test(`search ${method} waits for session context to close`, async ({ page }) => {
+      if (method === "button") {
+        await page.setViewportSize({ width: 1024, height: 768 });
+      }
+      await gotoHarness(page);
+      await page
+        .getByTestId("sessions-screen")
+        .getByRole("link", { name: /introduction-and-greetings/ })
+        .click();
+      await page.addStyleTag({
+        content:
+          '[data-slot="popover-content"] { animation-duration: 600ms !important; }',
+      });
+      await startDialogObservation(page);
+      await page.getByTestId("context-meter").click();
+      await expect(page.getByTestId("context-details")).toBeVisible();
+      if (method === "button")
+        await page.getByRole("button", { name: "Search", exact: true }).click();
+      else await page.keyboard.press("ControlOrMeta+k");
+      await expect(
+        page.getByRole("dialog", { name: "Search", exact: true }),
+      ).toBeVisible();
+      await expect(
+        page.getByRole("combobox", { name: "Search", exact: true }),
+      ).toBeFocused();
+      expect(await finishDialogObservation(page)).toEqual({
+        current: 1,
+        max: 1,
+        overlapping: [],
+      });
+    });
+  }
+
+  test("navigation sheet hands its dialog to Search on phones", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoHarness(page);
+    await page.addStyleTag({
+      content: '[data-slot="sheet-content"] { animation-duration: 600ms !important; }',
+    });
+    await startDialogObservation(page);
+    await page.getByRole("button", { name: "Menu", exact: true }).click();
+    await expect(
+      page.getByRole("dialog", { name: "Navigation", exact: true }),
+    ).toBeVisible();
+    await page
+      .getByRole("dialog", { name: "Navigation", exact: true })
+      .getByRole("button", { name: "Search", exact: true })
+      .click();
+    await expect(
+      page.getByRole("dialog", { name: "Search", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("combobox", { name: "Search", exact: true }),
+    ).toBeFocused();
+    expect(await finishDialogObservation(page)).toEqual({
+      current: 1,
+      max: 1,
+      overlapping: [],
+    });
+  });
+
   test("keeps dialogs inside short windows", async ({ page }) => {
     await page.setViewportSize({ width: 800, height: 300 });
     await gotoHarness(page);
@@ -563,7 +627,7 @@ test.describe("each session's dock", () => {
       .filter({ visible: true })
       .first()
       .click();
-    await page.getByRole("menuitem", { name: "Trace" }).click();
+    await page.getByRole("menuitem", { name: "Started sessions" }).click();
     const resize = page.getByRole("separator", { name: "Resize panel" });
     await expect(resize).toBeVisible();
     const cell = page.getByTestId("dock-cell");

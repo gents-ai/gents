@@ -46,7 +46,10 @@ pub(super) async fn flush_received_preparation_partial(context: &str) -> Result<
     ).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(error)) => Err(super::ShutdownDrainFailure {
-            reason: format!("{context} partial output persistence failed: {error:#}"),
+            reason: format!(
+                "{context} partial output persistence failed: {}",
+                gents_protocol::error_chain::ErrorChain(&error)
+            ),
         }.into()),
         Err(_) => Err(super::ShutdownDrainFailure {
             reason: format!("{context} partial output persistence exceeded the embedded storage-step deadline; commit outcome must be recovered from durable state"),
@@ -121,9 +124,9 @@ where
             .await
         };
         let provider_request = assembled.map_err(anyhow::Error::new)?;
-        config
+        Ok(config
             .provider_input_counter
-            .estimate_request(&provider_request)
+            .estimate_request(&provider_request)?)
     }
 
     pub(super) async fn handle_request(
@@ -750,5 +753,8 @@ where
 }
 
 fn is_stale_compaction_generation(error: &anyhow::Error) -> bool {
-    format!("{error:#}").contains("stale compaction generation")
+    gents_protocol::error_chain::find_source::<crate::session::StaleCompactionGeneration>(
+        error.as_ref(),
+    )
+    .is_some()
 }

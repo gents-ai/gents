@@ -45,7 +45,7 @@ fn a_held_store_lock_is_classified_with_its_home_and_holder() {
     let error = gents::home::lock_store(home.path(), &data).unwrap_err();
 
     let held = error
-        .downcast_ref::<gents::home::StoreLockHeld>()
+        .lock_held()
         .expect("a contended store lock is classified, not just described");
     assert_eq!(held.home, home.path());
     assert_eq!(held.holder_pid, Some(std::process::id()));

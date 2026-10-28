@@ -35,12 +35,13 @@ pub(super) async fn load_rows(
     collection: SessionHydrationCollection,
     filter: &str,
 ) -> Result<Vec<serde_json::Value>> {
-    txn.cursor_rows(
-        hydration_collection_name(collection),
-        fields(collection),
-        filter,
-    )
-    .await
+    Ok(txn
+        .cursor_rows(
+            hydration_collection_name(collection),
+            fields(collection),
+            filter,
+        )
+        .await?)
 }
 
 /// Additional scope fields beside `session_id` make DefraDB choose the node
@@ -48,27 +49,34 @@ pub(super) async fn load_rows(
 /// conjunction keeps this bounded cursor on the session index.
 pub(super) fn session_filter(
     collection: SessionHydrationCollection,
-    request: &HydrationRequest,
-) -> String {
-    if collection == SessionHydrationCollection::AgentOutputSegment {
-        format!(
-            r#"session_id: {{ _eq: "{}" }}, _or: [{{ node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}]"#,
-            escape_graphql_string(&request.session_id),
-            escape_graphql_string(&request.node_did),
-            escape_graphql_string(&request.requester_did)
-        )
-    } else {
-        crate::session::session_scope_filter(
-            &request.node_did,
-            &request.session_id,
-            Some(&request.requester_did),
-        )
-    }
+    scope: &SessionScope,
+) -> Result<String> {
+    let requester = scope
+        .requester_did
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .context("canonical page scope omitted requester")?;
+    Ok(
+        if collection == SessionHydrationCollection::AgentOutputSegment {
+            format!(
+                r#"session_id: {{ _eq: "{}" }}, _or: [{{ node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}]"#,
+                escape_graphql_string(&scope.session_id),
+                escape_graphql_string(&scope.node_did),
+                escape_graphql_string(requester)
+            )
+        } else {
+            crate::session::session_scope_filter(
+                &scope.node_did,
+                &scope.session_id,
+                Some(requester),
+            )
+        },
+    )
 }
 
 pub(super) async fn load_session_rows(
     txn: &ConfigApplyTxn<'_>,
-    request: &HydrationRequest,
+    scope: &SessionScope,
 ) -> Result<defra_node::QueryResponse> {
     let mut data = serde_json::Map::new();
     for collection in [
@@ -78,7 +86,7 @@ pub(super) async fn load_session_rows(
         SessionHydrationCollection::AgentOutputSegment,
         SessionHydrationCollection::CompactionEntry,
     ] {
-        let rows = load_rows(txn, collection, &session_filter(collection, request)).await?;
+        let rows = load_rows(txn, collection, &session_filter(collection, scope)?).await?;
         data.insert(
             hydration_collection_name(collection).to_owned(),
             serde_json::Value::Array(rows),

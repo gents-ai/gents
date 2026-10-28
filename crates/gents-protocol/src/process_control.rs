@@ -1,10 +1,19 @@
-use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::enrollment::canonical_domain_payload;
 
 pub const PROCESS_STOP_VERSION: u8 = 1;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ProcessStopError {
+    #[error("{0}")]
+    Invalid(&'static str),
+    #[error("invalid process stop timestamp: {0}")]
+    Timestamp(#[from] chrono::ParseError),
+}
+
+type Result<T> = std::result::Result<T, ProcessStopError>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -80,20 +89,24 @@ impl ProcessStopReceipt {
 
     /// Callers must also verify the receipt signature against the target DID.
     pub fn validate_for(&self, command: &ProcessStop) -> Result<()> {
-        ensure!(
-            self.version == PROCESS_STOP_VERSION,
-            "unsupported process stop receipt version"
-        );
-        ensure!(
-            self.command_id == command.command_id
-                && self.command_digest == command.digest()
-                && self.node_did == command.node_did,
-            "process stop receipt does not match the command"
-        );
-        ensure!(
-            self.signature.len() == 64,
-            "invalid process stop receipt signature length"
-        );
+        if self.version != PROCESS_STOP_VERSION {
+            return Err(ProcessStopError::Invalid(
+                "unsupported process stop receipt version",
+            ));
+        }
+        if !(self.command_id == command.command_id
+            && self.command_digest == command.digest()
+            && self.node_did == command.node_did)
+        {
+            return Err(ProcessStopError::Invalid(
+                "process stop receipt does not match the command",
+            ));
+        }
+        if self.signature.len() != 64 {
+            return Err(ProcessStopError::Invalid(
+                "invalid process stop receipt signature length",
+            ));
+        }
         chrono::DateTime::parse_from_rfc3339(&self.processed_at)?;
         Ok(())
     }
@@ -132,10 +145,11 @@ impl ProcessStop {
     }
 
     pub fn validate_shape(&self) -> Result<()> {
-        ensure!(
-            self.version == PROCESS_STOP_VERSION,
-            "unsupported process stop version"
-        );
+        if self.version != PROCESS_STOP_VERSION {
+            return Err(ProcessStopError::Invalid(
+                "unsupported process stop version",
+            ));
+        }
         for value in [
             &self.command_id,
             &self.requester_did,
@@ -144,21 +158,29 @@ impl ProcessStop {
             &self.tool_call_id,
             &self.tool_call_doc_id,
         ] {
-            ensure!(!value.trim().is_empty(), "empty process stop identity");
+            if value.trim().is_empty() {
+                return Err(ProcessStopError::Invalid("empty process stop identity"));
+            }
         }
-        ensure!(
-            self.requester_peer_id
-                .as_ref()
-                .is_none_or(|peer| !peer.trim().is_empty()),
-            "empty requester peer identity"
-        );
+        if !self
+            .requester_peer_id
+            .as_ref()
+            .is_none_or(|peer| !peer.trim().is_empty())
+        {
+            return Err(ProcessStopError::Invalid("empty requester peer identity"));
+        }
         let issued = chrono::DateTime::parse_from_rfc3339(&self.issued_at)?;
         let expires = chrono::DateTime::parse_from_rfc3339(&self.expires_at)?;
-        ensure!(expires > issued, "process stop expiry must follow issuance");
-        ensure!(
-            self.signature.len() == 64,
-            "invalid process stop signature length"
-        );
+        if expires <= issued {
+            return Err(ProcessStopError::Invalid(
+                "process stop expiry must follow issuance",
+            ));
+        }
+        if self.signature.len() != 64 {
+            return Err(ProcessStopError::Invalid(
+                "invalid process stop signature length",
+            ));
+        }
         Ok(())
     }
 }

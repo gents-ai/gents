@@ -436,15 +436,15 @@ fn result_is_error(call: &ToolCallRow) -> bool {
     gents::toolset::result_looks_failed(call.result.as_deref().unwrap_or(""))
 }
 
-fn summarize_calls<'a>(
-    calls: impl IntoIterator<Item = &'a ToolCallRow>,
-) -> Vec<(
+type CallSummary = (
     Option<String>,
     Option<String>,
     Option<String>,
     Option<String>,
     Option<String>,
-)> {
+);
+
+fn summarize_calls<'a>(calls: impl IntoIterator<Item = &'a ToolCallRow>) -> Vec<CallSummary> {
     calls
         .into_iter()
         .map(|call| {

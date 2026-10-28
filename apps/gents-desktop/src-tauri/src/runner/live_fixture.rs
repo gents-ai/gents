@@ -880,7 +880,7 @@ mod tests {
                         update: value,
                     }])?;
                     apply_desired_state_plan(txn, &plan).await?;
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             })
             .await?;

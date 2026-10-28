@@ -321,7 +321,7 @@ pub(crate) async fn load_backend_observation(
     backend_id: &str,
 ) -> anyhow::Result<gents::document_config::InferenceBackendObservation> {
     let query = format!(
-        "{{ InferenceBackend(filter: {{node_did: {{_eq: \"{}\"}}, backend_id: {{_eq: \"{}\"}}}}, limit: 2) {{backend_id catalogs probe_status last_probe}} }}",
+        "{{ InferenceBackend(filter: {{node_did: {{_eq: \"{}\"}}, backend_id: {{_eq: \"{}\"}}}}, limit: 2) {{backend_id catalogs catalog_freshness probe_status last_probe}} }}",
         gents::graphql::escape_graphql_string(node_did),
         gents::graphql::escape_graphql_string(backend_id),
     );
@@ -330,7 +330,7 @@ pub(crate) async fn load_backend_observation(
         rows.len() == 1,
         "backend observation is missing or ambiguous"
     );
-    Ok(serde_json::from_value(rows[0].clone())?)
+    gents::backend_registry::decode_backend_observation(rows[0].clone())
 }
 
 #[cfg(test)]

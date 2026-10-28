@@ -10,11 +10,11 @@ import { useStore } from "zustand";
 import { ArrowDown, Check, Pencil, X } from "lucide-react";
 import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
-import { Composer } from "@gents/ui/conversation";
+import { RichComposer } from "@gents/ui/conversation";
 import { cn } from "@gents/ui/lib/utils";
 import { useApp, useView } from "@/app/AppContext";
 import { useInterruptVisible, useSelectedNode } from "@/hooks/useClient";
-import { focusDraft } from "../../../hooks/draftStore";
+import { focusDraft, useDraftField } from "../../../hooks/draftStore";
 import { agentOf } from "@/lib/agents";
 import { placeholderFor } from "@/lib/send-status";
 import { SelectedChatFolder } from "../ChatFolderPicker";
@@ -22,7 +22,6 @@ import { LoadingStatus } from "../LoadingStatus";
 import { SelectedPendingTray, useSessionQueue } from "../PendingTray";
 import { ReplyingTo } from "../ReplyingTo";
 import { Goal } from "../SessionHeader";
-import { SlashMenu } from "../SlashMenu";
 import { useSlashMenu } from "../useSlashMenu";
 import {
   ComposerFooter,
@@ -62,7 +61,7 @@ export function OpenSessionComposer({
   const inFlight = useInterruptVisible();
   const deployment = useSelectedNode();
   const { draft, setDraft, send, setGoal, error: sendError } = useComposerSend(agentId);
-  const textarea = useRef<HTMLTextAreaElement | null>(null);
+  const textarea = useRef<HTMLDivElement | null>(null);
   const attachmentRoot = useRef<HTMLDivElement | null>(null);
   const { queue, onEdit } = useSessionQueue();
   const edit = useComposerEditing({ queue, onEdit, setDraft, send, textarea });
@@ -83,8 +82,6 @@ export function OpenSessionComposer({
       : undefined,
   });
   const slash = useSlashMenu(
-    draft,
-    setDraft,
     deployment?.skills ?? [],
     deployment?.contexts.find((c) => c.context_id === agent?.contextId),
     [goalCommand(goal, inFlight)],
@@ -107,6 +104,7 @@ export function OpenSessionComposer({
   const blocked = sendStatus.kind === "disabled" && !inFlight;
   const covered = blocked && loadingStatus !== null;
   const draftKey = useView((view) => view.draftKey);
+  const [field, setField] = useDraftField(drafts, draftKey);
   const focusRequested = useStore(drafts, (state) => state.focus === draftKey);
   useEffect(() => {
     if (!focusRequested || blocked) return;
@@ -127,7 +125,7 @@ export function OpenSessionComposer({
   );
   const queueing = status.kind === "queue";
 
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     if (editing) {
       if (event.key === "Escape") {
         event.preventDefault();
@@ -152,7 +150,6 @@ export function OpenSessionComposer({
         return;
       }
     }
-    slash.onKeyDown(event);
     if (
       !event.defaultPrevented &&
       turnRunning &&
@@ -163,7 +160,7 @@ export function OpenSessionComposer({
       draft.trim() !== ""
     ) {
       event.preventDefault();
-      void send(draft, undefined, otherWay);
+      void send(draft, undefined, otherWay, slash.prepare(draft));
     }
   };
 
@@ -216,15 +213,6 @@ export function OpenSessionComposer({
           attachments.over && "ring-2 ring-ring",
         )}
       >
-        {!editing && !goalMode.mode && (
-          <SlashMenu
-            open={slash.open}
-            query={slash.query}
-            items={slash.items}
-            active={slash.active}
-            onPick={slash.accept}
-          />
-        )}
         <input
           {...attachments.fileInputProps}
           className="hidden"
@@ -234,7 +222,10 @@ export function OpenSessionComposer({
           inert={covered || undefined}
           className={cn("[grid-area:1/1]", covered && "invisible")}
         >
-          <Composer
+          <RichComposer
+            key={editing ? `edit ${editing.docId}` : draftKey}
+            editorState={editing ? null : field}
+            onEditorStateChange={editing ? undefined : setField}
             className="text-foreground"
             value={editing ? editing.text : draft}
             onChange={editing ? edit.setText : setDraft}
@@ -244,7 +235,7 @@ export function OpenSessionComposer({
                     void (editing.reached ? edit.sendAsNew(text) : edit.save(text))
                 : goalMode.mode
                   ? (text) => void goalMode.submit(text)
-                  : (text) => send(text, undefined, followUp)
+                  : (text) => send(text, undefined, followUp, slash.prepare(text))
             }
             models={[]}
             onAttach={attachments.pick}
@@ -289,7 +280,14 @@ export function OpenSessionComposer({
               )
             }
             onKeyDown={onKeyDown}
-            textareaRef={textarea}
+            fieldRef={textarea}
+            /* a queued message keeps the skills it was sent with, so an
+               edit can't add one: no skill chips while editing */
+            commands={editing ? undefined : slash.names}
+            composerRef={slash.field}
+            commandsAt="word"
+            chipKinds={slash.chipKinds}
+            triggers={editing || goalMode.mode ? undefined : [slash.trigger]}
             clearable={!editing}
             submitLabel={
               editing

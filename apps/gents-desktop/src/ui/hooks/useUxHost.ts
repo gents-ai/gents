@@ -9,7 +9,11 @@ import type { DesktopApp, DesktopBridge } from "../../hooks/desktopApp";
 import { nodeOf } from "../../hooks/fleetStore";
 import { fleetNodes } from "@/lib/scope";
 import { navigate, useRoute, type Route } from "@/lib/router";
-import { pickDirectory, revealInFolder } from "../../lib/nativeShell";
+import {
+  confirmPluginMessage,
+  pickDirectory,
+  revealInFolder,
+} from "../../lib/nativeShell";
 import { discoverBundledUxPlugins } from "@/contrib/bundled";
 import { emitClientUpdated } from "@/contrib/events";
 import { installUxHost, type UxHost } from "@/contrib/plugin";
@@ -34,6 +38,7 @@ function notifyRouteChanged() {
 }
 
 export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
+  let confirmingMessage = false;
   const selection = () => app.stores.selection.getState();
   const fleet = () => app.stores.fleet.getState();
   /* the selected node, or the first while nothing is selected: the same
@@ -48,7 +53,8 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
       selectedDeployment: selectedNode,
       selectedSessionId: () => selection().sessionId,
       send: async (content) => {
-        if (selection().sessionId === null) {
+        const target = selection();
+        if (target.sessionId === null) {
           throw new Error("ctx.send: no session is selected");
         }
         if (!withinUserGesture()) {
@@ -56,7 +62,27 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
             "ctx.send: only from a user gesture (a click or a key press)",
           );
         }
-        await app.actions.sendMessage(content, selection().agentId);
+        if (confirmingMessage)
+          throw new Error("ctx.send: a message is already awaiting confirmation");
+        confirmingMessage = true;
+        try {
+          if (!(await confirmPluginMessage(content))) {
+            throw new Error("ctx.send: message was not confirmed");
+          }
+          const current = selection();
+          if (
+            current.nodeDid !== target.nodeDid ||
+            current.sessionId !== target.sessionId ||
+            current.agentId !== target.agentId
+          ) {
+            throw new Error(
+              "ctx.send: the selected chat changed; request the message again",
+            );
+          }
+          await app.actions.sendMessage(content, target.agentId);
+        } finally {
+          confirmingMessage = false;
+        }
       },
     },
     /* through the client's adapter, which sends the fields under `request` */

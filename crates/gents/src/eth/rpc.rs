@@ -152,7 +152,10 @@ where
         let method = normalize_method(method);
         reject_forbidden(&method)?;
         if !self.allowed_methods.contains(&method) {
-            bail!("eth method {method} is not in the configured query_methods ∩ builtin ceiling");
+            return Err(super::EthRefusal::Policy(format!(
+                "eth method {method} is not in the configured query_methods ∩ builtin ceiling"
+            ))
+            .into());
         }
         let params = default_block_if_needed(&method, params)?;
         if method == "eth_getLogs" {
@@ -291,7 +294,7 @@ fn decode_rpc_result(response: Value) -> Result<Value> {
             .to_string();
         let code = error.get("code").cloned().unwrap_or(Value::Null);
         if is_pruned_history_message(&message) {
-            bail!("eth pruned-history error (not retried): {message}");
+            return Err(super::EthRefusal::PrunedHistory(message).into());
         }
         if let Some(reason) = revert_reason_from_error(error) {
             bail!("eth call reverted: {reason}");
@@ -336,6 +339,9 @@ pub fn decode_revert_data(hex: &str) -> Option<String> {
     String::from_utf8(slice.to_vec()).ok()
 }
 
+/// External premise: JSON-RPC nodes (geth, erigon, nethermind and hosted
+/// providers) report missing historical state with no standard error code,
+/// only in their `error.message` wording.
 pub fn is_pruned_history_message(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
     lower.contains("metadata is not found")
@@ -352,7 +358,11 @@ fn default_block_if_needed(method: &str, params: Value) -> Result<Value> {
     let mut params = match params {
         Value::Null => Vec::new(),
         Value::Array(items) => items,
-        other => bail!("eth JSON-RPC params must be an array, got {other}"),
+        other => {
+            return Err(invalid(format!(
+                "eth JSON-RPC params must be an array, got {other}"
+            )))
+        }
     };
     if let Some(arity) = optional_trailing_block_arity(method) {
         if params.len() + 1 == arity {
@@ -367,7 +377,7 @@ pub fn preflight_get_logs(params: &Value) -> Result<()> {
         .as_array()
         .and_then(|items| items.first())
         .and_then(Value::as_object)
-        .ok_or_else(|| anyhow!("eth_getLogs requires a filter object as params[0]"))?;
+        .ok_or_else(|| invalid("eth_getLogs requires a filter object as params[0]"))?;
 
     let address_ok = match filter.get("address") {
         Some(Value::String(value)) if is_eth_address(value) => true,
@@ -382,15 +392,21 @@ pub fn preflight_get_logs(params: &Value) -> Result<()> {
     };
     let topics_ok = filter.get("topics").is_some_and(topic_filter_constrains);
     if !address_ok && !topics_ok {
-        bail!("eth_getLogs requires address and/or topics; unfiltered log queries are rejected");
+        return Err(policy(
+            "eth_getLogs requires address and/or topics; unfiltered log queries are rejected",
+        ));
     }
 
     if let Some(block_hash) = filter.get("blockHash") {
         if filter.contains_key("fromBlock") || filter.contains_key("toBlock") {
-            bail!("eth_getLogs blockHash cannot be combined with fromBlock/toBlock");
+            return Err(invalid(
+                "eth_getLogs blockHash cannot be combined with fromBlock/toBlock",
+            ));
         }
         if !is_block_hash(block_hash) {
-            bail!("eth_getLogs blockHash must be a 32-byte hex string");
+            return Err(invalid(
+                "eth_getLogs blockHash must be a 32-byte hex string",
+            ));
         }
         return Ok(());
     }
@@ -399,28 +415,38 @@ pub fn preflight_get_logs(params: &Value) -> Result<()> {
     let to = block_tag(filter.get("toBlock"))?.default_latest();
     match (from, to) {
         (BlockTag::Earliest, _) | (_, BlockTag::Earliest) => {
-            bail!("eth_getLogs fromBlock/toBlock earliest is unbounded and rejected")
+            return Err(policy(
+                "eth_getLogs fromBlock/toBlock earliest is unbounded and rejected",
+            ));
         }
         (BlockTag::Number(from_num), BlockTag::Number(to_num)) => {
             if to_num < from_num {
-                bail!("eth_getLogs toBlock is before fromBlock");
+                return Err(invalid("eth_getLogs toBlock is before fromBlock"));
             }
             let distance = to_num - from_num;
             if distance >= ETH_GET_LOGS_MAX_RANGE {
-                bail!(
+                return Err(policy(format!(
                     "eth_getLogs range {} exceeds max {ETH_GET_LOGS_MAX_RANGE} blocks",
                     distance.saturating_add(1)
-                );
+                )));
             }
         }
         (from_tag, to_tag) if from_tag == to_tag => {}
         _ => {
-            bail!(
-                "eth_getLogs numeric-to-dynamic or mixed dynamic ranges are unbounded and rejected"
-            )
+            return Err(policy(
+                "eth_getLogs numeric-to-dynamic or mixed dynamic ranges are unbounded and rejected",
+            ));
         }
     }
     Ok(())
+}
+
+fn invalid(message: impl Into<String>) -> anyhow::Error {
+    super::EthRefusal::InvalidArgument(message.into()).into()
+}
+
+fn policy(message: impl Into<String>) -> anyhow::Error {
+    super::EthRefusal::Policy(message.into()).into()
 }
 
 fn topic_filter_constrains(value: &Value) -> bool {
@@ -473,10 +499,12 @@ fn block_tag(value: Option<&Value>) -> Result<BlockTag> {
         Value::Number(number) => {
             let n = number
                 .as_u64()
-                .ok_or_else(|| anyhow!("eth block number {number} is not a u64"))?;
+                .ok_or_else(|| invalid(format!("eth block number {number} is not a u64")))?;
             Ok(BlockTag::Number(n))
         }
-        other => bail!("eth block tag must be a string or number, got {other}"),
+        other => Err(invalid(format!(
+            "eth block tag must be a string or number, got {other}"
+        ))),
     }
 }
 
@@ -488,7 +516,9 @@ fn parse_block_tag(tag: &str) -> Result<BlockTag> {
         "safe" => Ok(BlockTag::Safe),
         "finalized" => Ok(BlockTag::Finalized),
         "earliest" => Ok(BlockTag::Earliest),
-        hex => Ok(BlockTag::Number(parse_hex_u64(hex)?)),
+        hex => parse_hex_u64(hex)
+            .map(BlockTag::Number)
+            .map_err(|_| invalid(format!("eth block tag {hex} is not a tag or hex number"))),
     }
 }
 
@@ -613,6 +643,51 @@ mod tests {
         }]))
         .expect_err("unbounded mixed range");
         assert!(error.to_string().contains("unbounded"));
+    }
+
+    #[test]
+    fn local_log_refusals_are_never_transport_failures() {
+        use crate::tool_call_lifecycle::FailureClass;
+        let address = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+        let hash = format!("0x{}", "ab".repeat(32));
+        for (filter, class) in [
+            (
+                json!({"blockHash": hash, "fromBlock": "0x1", "address": address}),
+                FailureClass::ArgumentInvalid,
+            ),
+            (
+                json!({"blockHash": "0x12", "address": address}),
+                FailureClass::ArgumentInvalid,
+            ),
+            (
+                json!({"fromBlock": "0x5", "toBlock": "0x1", "address": address}),
+                FailureClass::ArgumentInvalid,
+            ),
+            (
+                json!({"fromBlock": "nope", "address": address}),
+                FailureClass::ArgumentInvalid,
+            ),
+            (
+                json!({"fromBlock": {}, "address": address}),
+                FailureClass::ArgumentInvalid,
+            ),
+            (
+                json!({"fromBlock": "earliest", "address": address}),
+                FailureClass::PolicyDenied,
+            ),
+            (
+                json!({"fromBlock": "safe", "toBlock": "latest", "address": address}),
+                FailureClass::PolicyDenied,
+            ),
+        ] {
+            let error = preflight_get_logs(&json!([filter])).expect_err("refused");
+            let refusal = error
+                .downcast_ref::<crate::eth::EthRefusal>()
+                .unwrap_or_else(|| panic!("untyped refusal for {filter}: {error:#}"));
+            assert_eq!(refusal.failure_class(), class, "{filter}");
+        }
+        let error = preflight_get_logs(&json!(["not a filter"])).expect_err("refused");
+        assert!(error.downcast_ref::<crate::eth::EthRefusal>().is_some());
     }
 
     #[test]

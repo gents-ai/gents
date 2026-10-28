@@ -1117,6 +1117,7 @@ impl TurnManager {
                 projections,
                 &mut progress_guard,
                 response_rx,
+                subscribe_projected_changes(&self.node),
             )
             .await;
         let outcome = outcome?;
@@ -1530,6 +1531,7 @@ impl TurnManager {
         projections: &ProjectionEngine,
         progress: &mut ObservedRequest,
         mut response_rx: oneshot::Receiver<Result<Value>>,
+        mut changes: Option<events::DocumentChangeSubscription>,
     ) -> Result<TerminalOutcome> {
         let request_id = request.request_id.as_str();
         let ObservedRequest {
@@ -1538,7 +1540,6 @@ impl TurnManager {
             ..
         } = progress;
         let mut consecutive_transient_read_failures = 0usize;
-        let mut changes = subscribe_projected_changes(&self.node);
         loop {
             if let Ok(result) = response_rx.try_recv() {
                 let value = result?;
@@ -2125,7 +2126,7 @@ async fn wait_for_retry_or_cancel(
 }
 
 fn register_transient_read_retry(error: &anyhow::Error, consecutive: &mut usize) -> bool {
-    if !gents_protocol::graphql::graphql_transport_error_in_chain(error)
+    if !gents_protocol::graphql::graphql_transport_error_in_chain(error.as_ref())
         || *consecutive >= MAX_TRANSIENT_GRAPHQL_READ_RETRIES
     {
         return false;
@@ -2303,6 +2304,8 @@ pub(super) fn parse_cancel_notification(params: &Value) -> Result<CancelNotifica
 
 #[cfg(test)]
 mod tests {
+    mod observation;
+
     use super::super::projection::ProjectionSequencer;
     use super::*;
     use gents::graphql::ensure_no_errors;

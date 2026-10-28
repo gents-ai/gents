@@ -128,7 +128,7 @@ pub(super) const AGENT_CONTEXT_FIELDS: &str = "context_id node_did display_name 
 pub(super) const COMPACTION_CONFIG_FIELDS: &str = "compaction_id node_did display_name strategy threshold keep_recent_tokens tool_result_max_chars summary_max_output_tokens summary_file_list_max inference_profile_id tags";
 pub(super) const INFERENCE_BACKEND_FIELDS: &str = "backend_id node_did name provider_kind openai_wire_api endpoint auth connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled tags";
 pub(super) const INFERENCE_BACKEND_OBSERVATION_FIELDS: &str =
-    "backend_id catalogs last_probe probe_status";
+    "backend_id catalogs catalog_freshness last_probe probe_status";
 pub(super) const INFERENCE_PROFILE_FIELDS: &str = "profile_id node_did display_name description backend_id model_name reasoning_effort service_tier context_window max_output_tokens sampling_id execution_id tags";
 pub(super) const INFERENCE_SAMPLING_FIELDS: &str = "sampling_id node_did display_name temperature top_p top_k seed min_p frequency_penalty presence_penalty repetition_penalty tags";
 pub(super) const INFERENCE_EXECUTION_FIELDS: &str = "execution_id node_did display_name max_turns max_total_tokens stream_batch_ms stream_liveness_timeout_secs provider_idle_timeout_secs deadline_duration_secs retry_policy_id tags";

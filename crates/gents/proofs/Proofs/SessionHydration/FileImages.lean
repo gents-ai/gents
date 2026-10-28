@@ -104,7 +104,8 @@ admission owner. A successful empty selection requires one accepted terminal
 tool. Missing rows and duplicate observations never widen access. -/
 def select (demand : Demand) (catalog : Catalog) (tools : List Tool)
     (images : List Image) : Selection :=
-  if !wellFormed demand || !decide (admits catalog demand.admission) then .rejected
+  if !wellFormed demand || !decide (admits catalog demand.admission) ||
+      !decide (ownedSession demand.admission ∈ catalog.sessions) then .rejected
   else match tools.filter (fun tool => tool.docId == demand.toolDocId) with
   | [tool] =>
       if !toolMatches demand tool then .rejected

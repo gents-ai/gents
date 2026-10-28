@@ -1,4 +1,5 @@
-use super::{selection::load_hydration_selection_in_txn, *};
+use super::super::session_hydration::HYDRATION_COLLECTIONS;
+use super::{selection::load_canonical_selection_in_txn, *};
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::required_rows;
 use crate::tool_call_lifecycle::ToolCallLifecycle;
@@ -102,6 +103,30 @@ struct ToolFact {
     execution_generation: String,
     capture: Capture,
     order: Option<super::inventory_order::Window>,
+}
+
+/// Enumeration uses the source actor to establish complete membership, then
+/// checks those exact dependencies as the reader in the same snapshot. A
+/// reader-filtered enumeration cannot distinguish hidden rows from an empty
+/// conversation. Public visibility does not require registered ownership.
+async fn require_reader_visibility(
+    txn: &ConfigApplyTxn<'_>,
+    reader: &identity::Did,
+    collection: &str,
+    documents: &[String],
+) -> Result<()> {
+    for ids in documents.chunks(query::owners::MAX_OWNER_OBSERVATIONS) {
+        let observed = txn.document_owners_as(reader, collection, ids).await?;
+        anyhow::ensure!(
+            observed.len() == ids.len()
+                && observed
+                    .iter()
+                    .zip(ids)
+                    .all(|(row, id)| row.doc_id == *id && row.visible),
+            InventoryRejection("file inventory dependencies are unavailable to this reader")
+        );
+    }
+    Ok(())
 }
 
 fn apply_request_coverage(facts: &[ToolFact], entries: &mut [FileInventoryEntry]) {
@@ -210,11 +235,10 @@ impl FileInventorySnapshot {
         admission: &FileInventoryAdmission,
     ) -> Result<Self> {
         let request = &admission.request;
-        let session = crate::session::load_agent_session_row_in_txn(
+        let session = crate::session::load_agent_session_owner_in_txn(
             txn,
             &request.node_did,
             &request.session_id,
-            Some(&request.requester_did),
         )
         .await?
         .context("file inventory session is unavailable")?;
@@ -222,7 +246,42 @@ impl FileInventorySnapshot {
             session.doc_id == admission.session_doc_id,
             InventoryRejection("file inventory session identity changed")
         );
-        let selected = load_hydration_selection_in_txn(txn, request).await?;
+        let scope = crate::session_origin::SessionScope::from(&session.session);
+        let reader: Option<identity::Did> =
+            if scope.requester_did.as_deref() == Some(request.requester_did.as_str()) {
+                None
+            } else {
+                Some(request.requester_did.parse().map_err(|_| {
+                    InventoryRejection("file inventory reader is not an authenticated DID")
+                })?)
+            };
+        if let Some(reader) = &reader {
+            require_reader_visibility(
+                txn,
+                reader,
+                "AgentSession",
+                std::slice::from_ref(&session.doc_id),
+            )
+            .await?;
+        }
+        let selected = load_canonical_selection_in_txn(txn, &scope).await?;
+        if let Some(reader) = &reader {
+            for collection in HYDRATION_COLLECTIONS {
+                let documents = selected
+                    .documents
+                    .iter()
+                    .filter(|document| document.collection == *collection)
+                    .map(|document| document.doc_id.clone())
+                    .collect::<Vec<_>>();
+                require_reader_visibility(
+                    txn,
+                    reader,
+                    hydration_collection_name(*collection),
+                    &documents,
+                )
+                .await?;
+            }
+        }
         let mut facts = Vec::new();
         let mut admissions = Vec::new();
         let mut entries = Vec::new();
@@ -299,12 +358,13 @@ impl FileInventorySnapshot {
                         "file inventory projection conflicts with its accepted physical tool"
                     )
                 );
-                let owners = txn
-                    .document_owners(
-                        "ToolFileInventory",
-                        std::slice::from_ref(&projection.doc_id),
-                    )
-                    .await?;
+                let ids = std::slice::from_ref(&projection.doc_id);
+                let owners = if let Some(reader) = &reader {
+                    txn.document_owners_as(reader, "ToolFileInventory", ids)
+                        .await?
+                } else {
+                    txn.document_owners("ToolFileInventory", ids).await?
+                };
                 anyhow::ensure!(
                     owners.len() == 1
                         && owners[0].doc_id == projection.doc_id

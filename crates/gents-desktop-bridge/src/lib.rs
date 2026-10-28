@@ -14,6 +14,8 @@ pub mod interrupt;
 pub mod job_control;
 mod local_pairing;
 pub mod logging;
+#[cfg(feature = "tauri-host")]
+pub mod navigation;
 pub mod package_tools;
 #[cfg(feature = "tauri-host")]
 pub mod plugin;

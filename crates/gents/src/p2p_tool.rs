@@ -607,7 +607,14 @@ impl P2pTool {
                     _ => store.revoke_request(id).await,
                 }
                 .map_err(|error| {
-                    if format!("{error:#}").contains("challenge is reused") {
+                    let reused = gents_protocol::error_chain::find_source::<
+                        crate::agent::p2p_reconcile::EnrollmentDecisionRefusal,
+                    >(error.as_ref())
+                    .is_some_and(|refusal| {
+                        refusal.code()
+                            == gents_protocol::enrollment::EnrollmentDecisionRefusalCode::ChallengeReused
+                    });
+                    if reused {
                         error.context("an offer token is single use: two nodes requested with one offer, so both requests are refused. Each joining node needs its own fresh offer; mint one per node and have each re-request; next call: p2p {\"action\":\"enrollment_offer\"}")
                     } else {
                         error

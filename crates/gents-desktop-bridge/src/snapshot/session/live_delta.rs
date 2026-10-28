@@ -84,7 +84,7 @@ pub(super) fn canonical_live_text(
             live_tools: Vec::new(),
         },
         request_terminal,
-        request.terminal_output.clone(),
+        request.observed_terminal_output().cloned(),
     );
     let streams = match view {
         LiveView::Live { streams } | LiveView::Settling { streams } => streams,

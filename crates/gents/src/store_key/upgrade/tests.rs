@@ -1,6 +1,8 @@
 use super::*;
 use crate::store_key::StoreKeyCustodyChoice;
 
+type Result<T, E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
+
 async fn plaintext(data: &Path) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
     let store = RegolithStore::open(data)?;
     let mut txn = store.new_txn(false).await?;
@@ -80,11 +82,13 @@ async fn assert_contents(
 }
 
 fn assert_engine_files_hide_entries(data: &Path, entries: &[(Vec<u8>, Vec<u8>)]) -> Result<()> {
-    anyhow::ensure!(
-        data.join("MANIFEST").is_file(),
-        "encrypted engine MANIFEST is missing from {}",
-        data.display()
-    );
+    if !data.join("MANIFEST").is_file() {
+        return Err(format!(
+            "encrypted engine MANIFEST is missing from {}",
+            data.display()
+        )
+        .into());
+    }
 
     fn scan(path: &Path, secrets: &[&[u8]]) -> Result<()> {
         if path.is_dir() {
@@ -94,11 +98,13 @@ fn assert_engine_files_hide_entries(data: &Path, entries: &[(Vec<u8>, Vec<u8>)])
         } else {
             let bytes = fs::read(path)?;
             for secret in secrets.iter().filter(|secret| !secret.is_empty()) {
-                anyhow::ensure!(
-                    !bytes.windows(secret.len()).any(|window| window == *secret),
-                    "plaintext store entry found in engine file {}",
-                    path.display()
-                );
+                if bytes.windows(secret.len()).any(|window| window == *secret) {
+                    return Err(format!(
+                        "plaintext store entry found in engine file {}",
+                        path.display()
+                    )
+                    .into());
+                }
             }
         }
         Ok(())

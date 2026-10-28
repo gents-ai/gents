@@ -350,8 +350,9 @@ pub struct JobStepInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(type = "Record<string, unknown> | null", optional = nullable))]
     pub args: Option<serde_json::Map<String, serde_json::Value>>,
-    /// The model's script text; the host runs it as the step when the plugin
-    /// declares `script_runtime`, and its presence makes the run `dynamic`.
+    /// The model's script text, sent on every step; its presence makes the
+    /// run `dynamic`, and a plugin that declares the `run_script` host import
+    /// asks the host to evaluate it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub script: Option<String>,

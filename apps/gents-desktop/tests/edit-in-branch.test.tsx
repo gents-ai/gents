@@ -17,6 +17,7 @@ import { node, testApp, withApp } from "./app-fixture";
 import { deployment } from "./config-panel-wiring/fixtures";
 import { shellStores } from "./shell-fixture";
 import { pendingUserTurn, userMessage } from "./timeline-fixture";
+import { composerText } from "./composer-field";
 
 const navigate = vi.hoisted(() => vi.fn());
 vi.mock("../src/ui/screens/Markdown", () => ({
@@ -123,7 +124,7 @@ describe("edit an earlier message in a new branch", () => {
       writeSession(app.stores.session, heldSession({ sessionId: "branch" }));
     });
     const composer = screen.getByLabelText("Message");
-    expect(composer).toHaveValue("second ask");
+    expect(composerText(composer)).toBe("second ask");
     expect(composer).toHaveFocus();
     expect(app.drafts.getState().drafts[sessionDraftKey(NODE, "source")]).toBe(
       undefined,

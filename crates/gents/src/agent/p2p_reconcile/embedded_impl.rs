@@ -198,7 +198,11 @@ impl EmbeddedRemoteP2pAdmin {
             },
         )
         .await
-        .map_err(|error| RemoteP2pAdminError::LocalError(format!("{error:#}")))?;
+        .map_err(|error| {
+            RemoteP2pAdminError::LocalError(
+                gents_protocol::error_chain::ErrorChain(&error).to_string(),
+            )
+        })?;
         Ok(response
             .pointer(&format!("/data/{collection}"))
             .and_then(serde_json::Value::as_array)
@@ -628,11 +632,21 @@ pub(super) mod tests {
     pub(in crate::agent::p2p_reconcile) async fn runtime_http_test_node(
         identity: &dyn NodeIdentity,
     ) -> (TestNode, String) {
+        runtime_http_test_node_with_schema(identity, None).await
+    }
+
+    pub(in crate::agent::p2p_reconcile) async fn runtime_http_test_node_with_schema(
+        identity: &dyn NodeIdentity,
+        initial_schema: Option<&str>,
+    ) -> (TestNode, String) {
         let address = std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
             .unwrap();
         let test = p2p_node_with_options(Some(identity.did()), Some(address)).await;
+        if let Some(schema) = initial_schema {
+            test.node.add_collection(schema).await.unwrap();
+        }
         ensure_runtime_schemas(&test.node).await.unwrap();
         let endpoint = format!("http://{address}/api/v0/graphql");
         let access = crate::config_client::ConfigAccess::graphql(&endpoint);
@@ -1632,6 +1646,7 @@ pub(super) mod tests {
             [true]
         );
         let mut demand = gents_protocol::file_image_hydration::FileImageDemand {
+            inventory_reference: None,
             admission: gents_protocol::session_hydration::HydrationRequest {
                 request_key: String::new(),
                 peer_id: peer_id.clone(),

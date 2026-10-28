@@ -130,19 +130,14 @@ impl ToolDyn for EthQueryTool {
                 text: error.to_string(),
             })?;
             let result = client.call(&parsed.method, params).await.map_err(|error| {
-                let text = error.to_string();
-                let class = if text.contains("not in the configured query_methods")
-                    || text.contains("not a read-only")
-                    || text.contains("unfiltered")
-                    || text.contains("exceeds max")
-                {
-                    FailureClass::PolicyDenied
-                } else if text.contains("pruned-history") {
-                    FailureClass::External
-                } else {
-                    FailureClass::Transport
-                };
-                ToolError::ReportedFailure { class, text }
+                let class = error.downcast_ref::<crate::eth::EthRefusal>().map_or(
+                    FailureClass::Transport,
+                    crate::eth::EthRefusal::failure_class,
+                );
+                ToolError::ReportedFailure {
+                    class,
+                    text: error.to_string(),
+                }
             })?;
             serde_json::to_string(&result).map_err(ToolError::JsonError)
         })

@@ -763,11 +763,7 @@ async fn serve_foreground(
     )
     .merge(
         embedded_http_probe_router(&bind_probe_path, bind_probe_token.clone())
-            .merge(crate::http::explorer::explorer_router())
-            .layer(axum::middleware::from_fn_with_state(
-                crate::http::access::HttpAuthority::for_endpoint(&graphql_url),
-                crate::http::access::require_authority,
-            )),
+            .merge(crate::http::explorer::explorer_router()),
     );
     if let Some(node_identity_did) = server_identity.node_identity_did.as_deref() {
         anyhow::ensure!(
@@ -775,9 +771,11 @@ async fn serve_foreground(
             "identity {node_identity_did} has no exportable private key, so it cannot own the served node's access control; re-initialize the home with a file or macos-keychain identity to serve it"
         );
     }
+    let http_config = crate::http::access::HttpAuthority::for_endpoint(&graphql_url)
+        .protect_http(defra_node::HttpConfig::with_addr(http_addr).with_extra_routes(extra_routes));
     let mut node_builder = crate::persistent_node_builder(&home_dir, &data_dir)
         .await?
-        .with_http(defra_node::HttpConfig::with_addr(http_addr).with_extra_routes(extra_routes));
+        .with_http(http_config);
     if args.keychain_startup_approval {
         drop(identity.sign(b"gents.runtime-key-unlock.v1").await?);
     }
@@ -802,7 +800,7 @@ async fn serve_foreground(
             Ok(access) => access,
             Err(error) => {
                 node.shutdown().await;
-                return Err(error);
+                return Err(error.into());
             }
         };
     *store_lifetime = Some(store_access.clone());
@@ -813,9 +811,7 @@ async fn serve_foreground(
     let serve_result: Result<()> = async {
         wait_for_embedded_http_bind(http_addr, &bind_probe_path, &bind_probe_token).await?;
         if let Err(error) = gents::migration::ensure_all_runtime_migrations(node.clone()).await {
-            return Err(gents::storage_backend::classify_store_error(
-                error, &data_dir,
-            ));
+            return Err(gents::storage_backend::classify_store_error(error, &data_dir).into());
         }
         gents::store_key::upgrade::finish(&data_dir)?;
         let schema = gents::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
@@ -1798,7 +1794,7 @@ pub(crate) fn resolve_grok_shim_socket_path(explicit: Option<&Path>) -> PathBuf 
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod grok_shim_tests {
     use super::*;
     use crate::cli::{Cli, Command};
@@ -1828,7 +1824,7 @@ mod grok_shim_tests {
             Ok(_) => panic!("an insecure key must not load"),
             Err(error) => error,
         };
-        let store = gents::storage_backend::incompatible_store(&error, Path::new(""))
+        let store = gents::storage_backend::incompatible_store(error.as_ref(), Path::new(""))
             .expect("typed refusal");
         assert_eq!(
             store.kind,

@@ -48,6 +48,32 @@ fn complete_output(outcome: ManagedExecOutcome) -> Vec<u8> {
 
 #[tokio::test]
 async fn supplied_path_preserves_relative_cwd_argv_zero_and_environment() {
+    #[cfg(target_os = "macos")]
+    {
+        const FIXTURE: &str = "GENTS_SUPPLIED_PATH_RELATIVE_FIXTURE";
+        if let Some(root) = std::env::var_os(FIXTURE) {
+            exercise_supplied_path_preserves_relative_cwd_argv_zero_and_environment().await;
+            tokio::fs::write(PathBuf::from(root).join("verified"), b"complete")
+                .await
+                .unwrap();
+            return;
+        }
+
+        let root = tempfile::tempdir().unwrap();
+        let mut environment = std::env::vars().collect::<RapidHashMap<_, _>>();
+        environment.insert(FIXTURE.into(), root.path().to_string_lossy().into_owned());
+        run_isolated_capture_test(
+            "managed_exec::process::spawn::tests::supplied_path_preserves_relative_cwd_argv_zero_and_environment",
+            root.path(),
+            environment,
+        )
+        .await;
+    }
+    #[cfg(not(target_os = "macos"))]
+    exercise_supplied_path_preserves_relative_cwd_argv_zero_and_environment().await;
+}
+
+async fn exercise_supplied_path_preserves_relative_cwd_argv_zero_and_environment() {
     let directory = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
     let bin = directory.path().join("bin");
     std::fs::create_dir(&bin).unwrap();
@@ -177,8 +203,26 @@ async fn concurrent_spawn_fixture(permission_search: bool) {
         "DYLD_INSERT_LIBRARIES".into(),
         library.to_str().unwrap().into(),
     );
-    let stdout_path = root.path().join("probe.stdout");
-    let stderr_path = root.path().join("probe.stderr");
+    run_isolated_capture_test(
+        if permission_search {
+            "managed_exec::process::spawn::tests::permission_search_releases_unrelated_output_writers"
+        } else {
+            "managed_exec::process::spawn::tests::concurrent_spawns_release_unrelated_output_writers"
+        },
+        root.path(),
+        environment,
+    )
+    .await;
+}
+
+#[cfg(target_os = "macos")]
+async fn run_isolated_capture_test(
+    test_name: &str,
+    root: &Path,
+    environment: RapidHashMap<String, String>,
+) {
+    let stdout_path = root.join("probe.stdout");
+    let stderr_path = root.join("probe.stderr");
     let stdout = tokio::fs::File::create(&stdout_path)
         .await
         .unwrap()
@@ -189,27 +233,20 @@ async fn concurrent_spawn_fixture(permission_search: bool) {
         .unwrap()
         .into_std()
         .await;
-    let child = tokio::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            if permission_search {
-                "managed_exec::process::spawn::tests::permission_search_releases_unrelated_output_writers"
-            } else {
-                "managed_exec::process::spawn::tests::concurrent_spawns_release_unrelated_output_writers"
-            },
-            "--nocapture",
-        ])
-        .current_dir(root.path())
-        .env_clear()
-        .envs(environment)
-        .stdin(std::process::Stdio::null())
-        .stdout(stdout)
-        .stderr(stderr)
-        .kill_on_drop(true)
-        .process_group(0)
-        .spawn()
-        .unwrap();
-    let mut child = super::super::ManagedChild::new(child);
+    let mut child = super::super::ManagedChild::new(
+        tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test_name, "--nocapture"])
+            .current_dir(root)
+            .env_clear()
+            .envs(environment)
+            .stdin(std::process::Stdio::null())
+            .stdout(stdout)
+            .stderr(stderr)
+            .kill_on_drop(true)
+            .process_group(0)
+            .spawn()
+            .unwrap(),
+    );
     let status = tokio::time::timeout(std::time::Duration::from_secs(30), child.inner.wait()).await;
     if matches!(&status, Ok(Ok(_))) {
         child.mark_finished(true);
@@ -225,7 +262,7 @@ async fn concurrent_spawn_fixture(permission_search: bool) {
         String::from_utf8_lossy(&stderr)
     );
     assert_eq!(
-        tokio::fs::read(root.path().join("verified")).await.unwrap(),
+        tokio::fs::read(root.join("verified")).await.unwrap(),
         b"complete"
     );
 }

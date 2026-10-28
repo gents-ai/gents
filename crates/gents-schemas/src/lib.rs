@@ -158,6 +158,9 @@ pub const ENROLLMENT_OPERATOR_NONCE: &str =
 pub const FILE_IMAGE_HYDRATION_REQUEST_NAME: &str = "FileImageHydrationRequest";
 pub const FILE_IMAGE_HYDRATION_REQUEST: &str =
     include_str!("../schemas/agent/file_image_hydration_request.graphql");
+pub const FILE_INVENTORY_IMAGE_REQUEST_NAME: &str = "FileInventoryImageRequest";
+pub const FILE_INVENTORY_IMAGE_REQUEST: &str =
+    include_str!("../schemas/agent/file_inventory_image_request.graphql");
 pub const FILE_INVENTORY_REQUEST_NAME: &str = "FileInventoryRequest";
 pub const FILE_INVENTORY_REQUEST: &str =
     include_str!("../schemas/agent/file_inventory_request.graphql");
@@ -254,6 +257,7 @@ pub const ALL: &[&str] = &[
     ENROLLMENT_OPERATOR_NONCE,
     SESSION_HYDRATION_REQUEST,
     FILE_IMAGE_HYDRATION_REQUEST,
+    FILE_INVENTORY_IMAGE_REQUEST,
     FILE_INVENTORY_REQUEST,
     FILE_INVENTORY_PAGE,
     FILE_INVENTORY_REPLY,
@@ -336,6 +340,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     ENROLLMENT_OPERATOR_NONCE_NAME,
     SESSION_HYDRATION_REQUEST_NAME,
     FILE_IMAGE_HYDRATION_REQUEST_NAME,
+    FILE_INVENTORY_IMAGE_REQUEST_NAME,
     FILE_INVENTORY_REQUEST_NAME,
     FILE_INVENTORY_PAGE_NAME,
     FILE_INVENTORY_REPLY_NAME,
@@ -382,6 +387,7 @@ pub const EXPLICIT_DELIVERY_COLLECTION_NAMES: &[&str] = &[
     TOOL_FILE_CHANGE_NAME,
     TOOL_FILE_INVENTORY_NAME,
     FILE_IMAGE_HYDRATION_REQUEST_NAME,
+    FILE_INVENTORY_IMAGE_REQUEST_NAME,
 ];
 
 pub fn requires_explicit_delivery(name: &str) -> bool {

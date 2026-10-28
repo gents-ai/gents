@@ -155,9 +155,20 @@ pub(super) async fn control_goal_with_reference(
             uuid::Uuid::new_v4().to_string()
         }
     };
+    if request
+        .attachments
+        .as_ref()
+        .is_some_and(|items| !items.is_empty())
+        && !matches!(operation, GoalOperation::Create { .. })
+    {
+        return Err(invalid_goal_argument(anyhow::anyhow!(
+            "Attachments belong to a new Goal's opening message"
+        )));
+    }
     let input = gents_protocol::request_input::RequestInput {
         cwd: super::chat::chat_folder(request.cwd.as_deref()).map_err(invalid_goal_argument)?,
         captured_context: request.captured_context.unwrap_or_default(),
+        attachments: request.attachments.unwrap_or_default(),
         ..Default::default()
     };
     let starts_goal = matches!(operation, GoalOperation::Create { .. });

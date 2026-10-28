@@ -12,6 +12,7 @@ use tempfile::TempDir;
     clippy::disallowed_methods,
     reason = "a test's #[tokio::test] runtime is its entry-point runtime"
 )]
+#[cfg(feature = "tauri-host")]
 pub fn runtime_handle() -> tokio::runtime::Handle {
     tokio::runtime::Handle::current()
 }
@@ -83,7 +84,10 @@ impl CountingRead {
 
 #[async_trait::async_trait]
 impl gents::config_client::ConfigRead for CountingRead {
-    async fn execute_read(&self, document: &str) -> anyhow::Result<serde_json::Value> {
+    async fn execute_read(
+        &self,
+        document: &str,
+    ) -> Result<serde_json::Value, gents::config_client::ConfigClientError> {
         self.queries
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.inner.execute_read(document).await

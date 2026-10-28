@@ -725,7 +725,7 @@ async fn commit_once(
                     &serde_json::to_string(&receipt)?,
                 )
                 .await?;
-                Ok((receipt, started_at))
+                Ok::<_, anyhow::Error>((receipt, started_at))
             })
         })
         .await?;

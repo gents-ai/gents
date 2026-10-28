@@ -1,6 +1,9 @@
 use super::*;
 
 use crate::claude_messages_body::{ReplayIssuer, ReplayTag, ReplayWire, ResolvedReplayEvidence};
+use crate::compaction::CompactionError;
+use crate::rendered_request::RenderedRequestError;
+use crate::stream_processor::StreamProcessorError;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaggedMessage {
@@ -31,11 +34,26 @@ pub struct ReplayEvidenceRow {
 #[error("{0}")]
 pub struct ReplayEvidenceViolation(pub String);
 
+#[derive(Debug, thiserror::Error)]
+pub enum ReplayEvidenceResolveError {
+    #[error(transparent)]
+    Violation(#[from] ReplayEvidenceViolation),
+    #[error("loading canonical Claude replay evidence failed")]
+    Storage {
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+}
+
 pub type ReplayEvidenceResolver = Arc<
     dyn Fn(
             Vec<ReplayTag>,
-        ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<ReplayEvidenceRow>>> + Send>>
-        + Send
+        ) -> Pin<
+            Box<
+                dyn Future<Output = Result<Vec<ReplayEvidenceRow>, ReplayEvidenceResolveError>>
+                    + Send,
+            >,
+        > + Send
         + Sync,
 >;
 
@@ -128,7 +146,7 @@ pub type RenderedRequestSink = Arc<
             u32,
             CompletionRequest,
             AssemblyTrace,
-        ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>
+        ) -> Pin<Box<dyn Future<Output = Result<(), RenderedRequestError>> + Send>>
         + Send
         + Sync,
 >;
@@ -154,11 +172,31 @@ pub enum TurnCompactionOutcome {
     CannotFit,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum TurnCompactionError {
+    #[error(transparent)]
+    Compaction(#[from] CompactionError),
+    #[error(transparent)]
+    Compactor(Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl TurnCompactionError {
+    pub fn aggregate_token_budget_exhaustion(&self) -> Option<String> {
+        match self {
+            Self::Compaction(error) => error
+                .aggregate_token_budget_exhaustion()
+                .map(ToString::to_string),
+            Self::Compactor(error) => aggregate_token_budget_exhaustion_message(error.as_ref()),
+        }
+    }
+}
+
 pub type TurnCompactor = Arc<
     dyn Fn(
             TurnCompactionRequest,
-        ) -> Pin<Box<dyn Future<Output = anyhow::Result<TurnCompactionOutcome>> + Send>>
-        + Send
+        ) -> Pin<
+            Box<dyn Future<Output = Result<TurnCompactionOutcome, TurnCompactionError>> + Send>,
+        > + Send
         + Sync,
 >;
 
@@ -250,16 +288,16 @@ pub enum LoopStreamItem {
     },
     FinishOrIntake {
         text: String,
-        reply: tokio::sync::oneshot::Sender<anyhow::Result<FinishOrIntake>>,
+        reply: tokio::sync::oneshot::Sender<Result<FinishOrIntake, StreamProcessorError>>,
     },
     SteeringBoundary {
-        reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<FoldedPrompt>>>,
+        reply: tokio::sync::oneshot::Sender<Result<Vec<FoldedPrompt>, StreamProcessorError>>,
     },
     AuthoredInputReady {
         context: Option<Message>,
         prompt: Message,
         folded: Vec<(String, Message)>,
-        reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<FoldedPrompt>>>,
+        reply: tokio::sync::oneshot::Sender<Result<Vec<FoldedPrompt>, StreamProcessorError>>,
     },
 }
 

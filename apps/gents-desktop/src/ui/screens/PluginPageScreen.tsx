@@ -3,8 +3,10 @@
    that id registered it in the `plugin.pages` area; the page is the first
    it registered there. Mounted behind a boundary, so a throw stays on this
    page; mounted once per registration, so the shell's re-renders reach it
-   as props and its drafts survive. */
-import { ScrollArea } from "@gents/ui/components/scroll-area";
+   as props and its drafts survive. The page fills the main pane, edge to
+   edge and top to bottom, not the reading column: a plugin page is an
+   app surface of its own (a board, a diff viewer) that lays itself out and
+   scrolls inside its frame. */
 import { ContribBoundary, ContribRender } from "@/contrib/react/boundary";
 import { useContributions } from "@/contrib/react/use-contributions";
 import { PLUGIN_PAGE_AREA } from "@/contrib/types";
@@ -23,15 +25,13 @@ export function PluginPageScreen({ pluginId }: { pluginId: string }) {
     );
   }
   return (
-    <ScrollArea className="h-full">
-      <div
-        className="mx-auto max-w-page px-4 py-6 md:px-8 md:py-8"
-        data-testid="plugin-page"
-      >
-        <ContribBoundary id={page.id} variant="pane">
-          <ContribRender render={page.render} />
-        </ContribBoundary>
-      </div>
-    </ScrollArea>
+    <div
+      className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-auto p-2 md:p-3"
+      data-testid="plugin-page"
+    >
+      <ContribBoundary id={page.id} variant="pane">
+        <ContribRender render={page.render} />
+      </ContribBoundary>
+    </div>
   );
 }

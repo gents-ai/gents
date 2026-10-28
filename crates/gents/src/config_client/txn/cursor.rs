@@ -1,6 +1,5 @@
-use super::ConfigApplyTxn;
-use crate::graphql::{cursor_page_data, cursor_query, CURSOR_PAGE_SIZE};
-use anyhow::{Context, Result};
+use super::{ConfigApplyTxn, ConfigClientError};
+use crate::graphql::{cursor_page_data, cursor_query, GraphqlResponseError, CURSOR_PAGE_SIZE};
 use rapidhash::{HashSetExt, RapidHashSet};
 use serde_json::Value;
 
@@ -14,7 +13,7 @@ impl ConfigApplyTxn<'_> {
         collection: &str,
         fields: &str,
         filter: &str,
-    ) -> Result<Vec<Value>> {
+    ) -> Result<Vec<Value>, ConfigClientError> {
         let mut after = None;
         let mut cursors = RapidHashSet::new();
         let mut ids = RapidHashSet::new();
@@ -24,27 +23,24 @@ impl ConfigApplyTxn<'_> {
                 .execute(&cursor_query(collection, fields, filter, after.as_deref()))
                 .await?;
             let (page, next) = cursor_page_data::<Value>(response.get("data"), collection)?;
-            anyhow::ensure!(
-                page.len() <= CURSOR_PAGE_SIZE,
-                "cursor page exceeded its native row bound"
-            );
+            if page.len() > CURSOR_PAGE_SIZE {
+                return Err(GraphqlResponseError::CursorPageOverflow.into());
+            }
             for row in page {
                 let id = row
                     .get("_docID")
                     .and_then(Value::as_str)
                     .filter(|id| !id.is_empty())
-                    .context("cursor row omitted physical identity")?;
-                anyhow::ensure!(
-                    ids.insert(id.to_owned()),
-                    "cursor repeated a physical document"
-                );
+                    .ok_or(GraphqlResponseError::CursorRowIdentityMissing)?;
+                if !ids.insert(id.to_owned()) {
+                    return Err(GraphqlResponseError::CursorRepeatedDocument.into());
+                }
                 rows.push(row);
             }
             let Some(next) = next else { break };
-            anyhow::ensure!(
-                !next.is_empty() && cursors.insert(next.clone()),
-                "cursor did not advance"
-            );
+            if next.is_empty() || !cursors.insert(next.clone()) {
+                return Err(GraphqlResponseError::CursorStalled.into());
+            }
             after = Some(next);
         }
         Ok(rows)
