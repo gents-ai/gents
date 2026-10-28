@@ -1504,7 +1504,11 @@ mod tests {
                     let mut effects = Vec::new();
                     selection::load_effect_children(
                         txn,
-                        request,
+                        &crate::session_origin::SessionScope {
+                            node_did: request.node_did.clone(),
+                            session_id: request.session_id.clone(),
+                            requester_did: Some(request.requester_did.clone()),
+                        },
                         &[ScopedDocument {
                             collection: SessionHydrationCollection::AgentToolCall,
                             doc_id: parent_doc.clone(),

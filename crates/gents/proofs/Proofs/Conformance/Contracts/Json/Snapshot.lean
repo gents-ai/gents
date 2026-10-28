@@ -594,6 +594,8 @@ def snapshotJson : String :=
       ++ Conformance.FileInventoryContracts.forkCasesJson ++ ","
     ++ "\"file_inventory_source_projection_cases\":"
       ++ Conformance.FileInventoryContracts.sourceProjectionCasesJson ++ ","
+    ++ "\"file_inventory_reader_cases\":"
+      ++ Conformance.FileInventoryContracts.readerCasesJson ++ ","
     ++ "\"file_inventory_receiver_cases\":"
       ++ Conformance.FileInventoryContracts.receiverCasesJson ++ ","
     ++ "\"file_inventory_order_window_cases\":"

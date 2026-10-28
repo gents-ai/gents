@@ -289,6 +289,7 @@ end Order
 
 inductive ReadBoundary where
   | atomicExhaustive
+  | readerBound (scope : CanonicalOutput.Hydration.AuthorizationScope)
   | incomplete
   | nonAtomic
   deriving DecidableEq, Repr
@@ -304,6 +305,17 @@ structure Source where
   projections : List Projection
   boundary : ReadBoundary
   deriving DecidableEq
+
+/-- An independent reader cannot reuse the source's privileged observations.
+`readerBound` certifies that every supplied canonical/metadata read observation
+belongs to that reader in the same exhaustive source snapshot. A missing or
+denied capture cannot be supplied as an authenticated projection. No image is
+read or granted by this boundary. -/
+def Source.completeRead (source : Source) (admission : Request) : Bool :=
+  match source.boundary with
+  | .atomicExhaustive => decide (ownedSession admission ∈ source.catalog.sessions)
+  | .readerBound scope => scope == admission.authorizationScope
+  | .incomplete | .nonAtomic => false
 
 inductive Error where
   | rejected
@@ -373,7 +385,7 @@ visible transcript window or request-turn closure. Unselected parent-session
 tools do not enter a fork's inventory. Physical sorting is only a stable page
 order; the existing before/after chain planner still owns review authority. -/
 private def assembleSnapshot (source : Source) (admission : Request) : Except Error Snapshot := do
-  if source.boundary != .atomicExhaustive then .error .unknown else pure ()
+  if !source.completeRead admission then .error .unknown else pure ()
   let selected ← selectedManifest source.catalog admission
   let toolIds := (selected.filter (fun key => key.collection == .agentToolCall)).map (·.id)
   let tools ← toolIds.mapM (toolFact source)

@@ -181,7 +181,12 @@ async fn hydration_segment_selection_uses_the_session_index() {
         requester_did: "did:key:requester-1".into(),
     };
     let collection = SessionHydrationCollection::AgentOutputSegment;
-    let filter = pages::session_filter(collection, &request);
+    let scope = crate::session_origin::SessionScope {
+        node_did: request.node_did,
+        session_id: request.session_id,
+        requester_did: Some(request.requester_did),
+    };
+    let filter = pages::session_filter(collection, &scope).unwrap();
     let query = pages::page_query(collection, &filter, None);
     let plan = ConfigAccess::local(node.clone())
         .execute(&format!("query @explain {query}"))
