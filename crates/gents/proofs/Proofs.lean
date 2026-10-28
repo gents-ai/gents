@@ -23,6 +23,7 @@ import Proofs.Session.Properties
 import Proofs.Session.Interrupt
 import Proofs.Session.InterruptCases
 import Proofs.Session.Control
+import Proofs.Session.ExecutionActivity
 import Proofs.Session.Fold
 import Proofs.Session.FoldCases
 import Proofs.Transcript
