@@ -1794,7 +1794,7 @@ pub(crate) fn resolve_grok_shim_socket_path(explicit: Option<&Path>) -> PathBuf 
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod grok_shim_tests {
     use super::*;
     use crate::cli::{Cli, Command};

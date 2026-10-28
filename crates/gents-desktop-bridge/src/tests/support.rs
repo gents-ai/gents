@@ -12,6 +12,7 @@ use tempfile::TempDir;
     clippy::disallowed_methods,
     reason = "a test's #[tokio::test] runtime is its entry-point runtime"
 )]
+#[cfg(feature = "tauri-host")]
 pub fn runtime_handle() -> tokio::runtime::Handle {
     tokio::runtime::Handle::current()
 }

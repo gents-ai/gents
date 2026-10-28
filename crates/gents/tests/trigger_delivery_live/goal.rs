@@ -19,12 +19,12 @@ async fn evidence(access: &ConfigAccess, owner: &str) -> Result<Value> {
         AgentToolCall(filter:{{session_id:{{_eq:"{SESSION}"}}}}){{request_id tool_name lifecycle_state}}
     }}"#
     );
-    access
+    Ok(access
         .transact_write("test.delivery_goal.snapshot", |txn| {
             let query = &query;
             Box::pin(async move { txn.execute(query).await })
         })
-        .await
+        .await?)
 }
 
 fn table<'a>(state: &'a Value, name: &str) -> &'a [Value] {

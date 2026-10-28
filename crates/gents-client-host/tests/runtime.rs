@@ -941,7 +941,9 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         None,
     )?;
     let port = ports::allocate_port()?;
-    let mut runtime_command = runtime_server_command(&cli, root, &node_home, port);
+    let runtime_command = runtime_server_command(&cli, root, &node_home, port);
+    #[cfg(unix)]
+    let mut runtime_command = runtime_command;
     #[cfg(unix)]
     let mut runtime = runtime_command
         .stdin(Stdio::null())

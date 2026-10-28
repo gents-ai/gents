@@ -2,13 +2,16 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, ensure, Context, Result};
+#[cfg(unix)]
+use anyhow::Context;
+use anyhow::{bail, ensure, Result};
 use gents::file_lock::FileLock;
 use serde::{Deserialize, Serialize};
 
 pub const VERSION: u32 = 1;
 const MAX_BYTES: usize = gents_desktop_bridge::host::protocol::MAX_FRAME_BYTES;
 const JOURNAL: &str = "editor-undo.v1.json";
+#[cfg(unix)]
 const EDITOR_UNDO_LOCK: &str = ".editor-undo.lock";
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -205,6 +208,7 @@ fn checkpoint_options(create: bool) -> OpenOptions {
     options
 }
 
+#[cfg(unix)]
 fn create_regular(path: &Path) -> Result<File> {
     let file = checkpoint_options(true).open(path)?;
     regular(&file.metadata()?)?;

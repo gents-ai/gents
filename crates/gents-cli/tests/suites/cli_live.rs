@@ -7,16 +7,26 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 use uuid::Uuid;
 
+struct LiveFileAgents<'a> {
+    tools_id: &'a str,
+    host: Value,
+    system_prompt: &'a std::path::Path,
+    agent_ids: &'a [&'a str],
+}
+
 fn apply_live_file_agent_config(
     home: &std::path::Path,
     root: &std::path::Path,
     graphql: &str,
     node_did: &str,
-    tools_id: &str,
-    host: Value,
-    system_prompt: &std::path::Path,
-    agent_ids: &[&str],
+    agents: LiveFileAgents<'_>,
 ) -> Result<()> {
+    let LiveFileAgents {
+        tools_id,
+        host,
+        system_prompt,
+        agent_ids,
+    } = agents;
     run_cli_text(
         home,
         &[
@@ -235,10 +245,12 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         &tempdir.path().join("live-config"),
         &graphql,
         &node_did,
-        &tools_id,
-        read_only_files(&home_dir)?,
-        &system_prompt,
-        &[&agent_id],
+        LiveFileAgents {
+            tools_id: &tools_id,
+            host: read_only_files(&home_dir)?,
+            system_prompt: &system_prompt,
+            agent_ids: &[&agent_id],
+        },
     )?;
     wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
 
@@ -388,10 +400,12 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
         &tempdir.path().join("projection-config"),
         &graphql,
         &node_did,
-        &tools_id,
-        read_only_files(&home_dir)?,
-        &system_prompt,
-        &[&agent_id],
+        LiveFileAgents {
+            tools_id: &tools_id,
+            host: read_only_files(&home_dir)?,
+            system_prompt: &system_prompt,
+            agent_ids: &[&agent_id],
+        },
     )?;
     wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
 
@@ -804,10 +818,12 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         &tempdir.path().join("smoke-config"),
         &graphql,
         &node_did,
-        &tools_id,
-        read_only_files(&home_dir)?,
-        &system_prompt,
-        &agent_ids,
+        LiveFileAgents {
+            tools_id: &tools_id,
+            host: read_only_files(&home_dir)?,
+            system_prompt: &system_prompt,
+            agent_ids: &agent_ids,
+        },
     )?;
     wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_secs(6)).await?;
 
@@ -1111,13 +1127,15 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         &tempdir.path().join("steering-config"),
         &graphql,
         &node,
-        &tools_id,
-        serde_json::json!({
-            "root": workspace.to_str().context("workspace is not UTF-8")?,
-            "bash": {"mode": "Unrestricted"}
-        }),
-        &system_prompt,
-        &[&agent_id],
+        LiveFileAgents {
+            tools_id: &tools_id,
+            host: serde_json::json!({
+                "root": workspace.to_str().context("workspace is not UTF-8")?,
+                "bash": {"mode": "Unrestricted"}
+            }),
+            system_prompt: &system_prompt,
+            agent_ids: &[&agent_id],
+        },
     )?;
     wait_for_runtime_quiescence(&graphql, &node, 2, Duration::from_secs(6)).await?;
 

@@ -179,7 +179,14 @@ mod tests {
 
     #[tokio::test]
     async fn example_uses_scoped_config_preserving_auth_and_capacity() -> Result<()> {
-        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        let directory = tempfile::tempdir()?;
+        let identity = KeyIdentity::load_or_create(directory.path().join("node.key"), None)?;
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .with_node_identity_did(identity.did())
+                .build()
+                .await?,
+        );
         ensure_runtime_schemas(&node).await?;
         let access = ConfigAccess::local(node.clone());
         for owner in ["did:test:demo-a", "did:test:demo-b"] {
@@ -263,6 +270,8 @@ mod tests {
         )
         .await
         .is_err());
+        drop(access);
+        node.shutdown().await;
         Ok(())
     }
 }

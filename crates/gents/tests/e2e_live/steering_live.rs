@@ -94,7 +94,7 @@ async fn enqueue(db: &TestDb, id: &str, content: &str) -> Result<String> {
             &create.graphql_mutation().map_err(anyhow::Error::msg)?,
         )
         .await?;
-    gents::graphql::created_doc_id(&result, "AgentRequest")
+    Ok(gents::graphql::created_doc_id(&result, "AgentRequest")?)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
