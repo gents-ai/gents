@@ -2,10 +2,11 @@ use anyhow::{ensure, Context, Result};
 use gents::config_client::ConfigAccess;
 use gents::tool_call_lifecycle::{load_tool_file_change_observation, ToolFileChangeRead};
 use gents_protocol::file_changes::{ToolFileChanges, FILE_CHANGES_VERSION};
-use gents_protocol::file_image_hydration::FileImageDemand;
+use gents_protocol::file_image_hydration::{FileImageDemand, FileImageInventoryReference};
 use gents_protocol::file_inventory::{
-    FileChangeMetadata, FileInventoryEntry, FileInventoryImage, FileInventoryImageReference,
-    FileInventoryObservation, FileInventoryReadAction,
+    FileChangeMetadata, FileInventoryCursor, FileInventoryEntry, FileInventoryImage,
+    FileInventoryImageReference, FileInventoryObservation, FileInventoryPageDemand,
+    FileInventoryReadAction, FileInventorySnapshotView,
 };
 use gents_protocol::session_hydration::HydrationRequest;
 
@@ -13,8 +14,8 @@ use super::{resumable_image_demand, ClientCore};
 
 impl ClientCore {
     /// The verified inventory selects a physical reference, never read authority.
-    /// Image reads retain the origin's own admission, accepted-tool and byte
-    /// verification owners; foreign requesters are not relabeled to this client.
+    /// Independent readers bind their own admission to the received source page.
+    /// The selected capture retains its canonical author and accepted-tool checks.
     pub async fn inventory_file_change(
         &self,
         node_did: &str,
@@ -44,21 +45,12 @@ impl ClientCore {
             "multiple runtime routes own this file version"
         );
         let retained = if route.is_none_or(|route| route.is_enrollment()) {
-            ensure!(
-                entry.scope.requester_did == self.node_identity.did(),
-                "These recorded file versions require their original conversation's authorization."
-            );
-            let mut demand = FileImageDemand {
-                admission: HydrationRequest {
-                    request_key: String::new(),
-                    peer_id: self.local_peer_id().into(),
-                    requester_did: entry.scope.requester_did.clone(),
-                    node_did: entry.scope.node_did.clone(),
-                    session_id: entry.scope.session_id.clone(),
-                },
-                request_doc_id: entry.request_doc_id.clone(),
-                tool_call_doc_id: entry.tool_call_doc_id.clone(),
-            };
+            let mut demand = selected_image_demand(
+                &observation,
+                reference,
+                self.node_identity.did(),
+                self.local_peer_id(),
+            )?;
             demand.admission.request_key = match retry {
                 Some(id) => demand.derive_retry_request_key(&id.to_string()),
                 None => demand.derive_request_key(),
@@ -74,7 +66,7 @@ impl ClientCore {
                     .clone();
                 demand = resumable_image_demand(&access, &demand, &self.node_identity).await?;
             }
-            self.remote_file_observation(demand).await?
+            self.remote_file_observation(demand, Some(&entry)).await?
         } else {
             let route = route
                 .context("Connect the runtime that owns these recorded file versions.")?
@@ -111,12 +103,12 @@ impl ClientCore {
     }
 }
 
-fn selected_entry<'a>(
+fn selected_view<'a>(
     observation: &'a FileInventoryObservation,
     reference: &FileInventoryImageReference,
-) -> Result<&'a FileInventoryEntry> {
+) -> Result<&'a FileInventorySnapshotView> {
     let cursor = &reference.cursor;
-    let view = observation
+    observation
         .current
         .iter()
         .chain(observation.previous.iter())
@@ -125,10 +117,61 @@ fn selected_entry<'a>(
                 && view.binding.digest == cursor.snapshot_digest
                 && view.offset == cursor.offset
         })
-        .context("The recorded file selection changed. Open the changes again.")?;
-    view.entries
+        .context("The recorded file selection changed. Open the changes again.")
+}
+
+fn selected_entry<'a>(
+    observation: &'a FileInventoryObservation,
+    reference: &FileInventoryImageReference,
+) -> Result<&'a FileInventoryEntry> {
+    selected_view(observation, reference)?
+        .entries
         .get(usize::from(reference.entry_index))
         .context("The recorded file selection is outside its received page.")
+}
+
+fn selected_image_demand(
+    observation: &FileInventoryObservation,
+    reference: &FileInventoryImageReference,
+    reader: &str,
+    peer: &str,
+) -> Result<FileImageDemand> {
+    let view = selected_view(observation, reference)?;
+    let entry = selected_entry(observation, reference)?;
+    let shared = entry.scope.requester_did != reader;
+    let admission = if shared {
+        let root = &view.binding.admission.request;
+        ensure!(
+            root.requester_did == reader && root.peer_id == peer,
+            "The recorded file inventory belongs to a different reader. Reload its changes."
+        );
+        root.clone()
+    } else {
+        HydrationRequest {
+            request_key: String::new(),
+            peer_id: peer.into(),
+            requester_did: reader.into(),
+            node_did: entry.scope.node_did.clone(),
+            session_id: entry.scope.session_id.clone(),
+        }
+    };
+    Ok(FileImageDemand {
+        admission,
+        request_doc_id: entry.request_doc_id.clone(),
+        tool_call_doc_id: entry.tool_call_doc_id.clone(),
+        inventory_reference: shared.then(|| FileImageInventoryReference {
+            page: FileInventoryPageDemand {
+                admission: view.binding.admission.clone(),
+                attempt_id: view.attempt_id.clone(),
+                cursor: (view.offset != 0).then(|| FileInventoryCursor {
+                    binding: view.binding.clone(),
+                    offset: view.offset,
+                }),
+            },
+            snapshot_digest: view.binding.digest.clone(),
+            entry_index: u16::from(reference.entry_index),
+        }),
+    })
 }
 
 fn match_observation(

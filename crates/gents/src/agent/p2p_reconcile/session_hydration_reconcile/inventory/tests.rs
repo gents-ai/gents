@@ -3,6 +3,7 @@ use crate::tool_call_lifecycle::admission_fixture::{
     ensure_fixture_session, published_admission_with_owner, PublishedAdmissionOptions,
 };
 
+mod readers;
 mod turn_chronology;
 
 #[tokio::test]

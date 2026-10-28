@@ -224,6 +224,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_fork_inventory_retains_only_selected_native_origins",
         },
         ConformanceConsumer::RustTest {
+            id: "agent::p2p_reconcile::file_image_hydration::tests::inventory::generated_inventory_images_keep_reader_root_snapshot_and_source_distinct",
+            package: "gents",
+            source_path: "crates/gents/src/agent/p2p_reconcile/file_image_hydration/tests/inventory.rs",
+            module_path: "agent::p2p_reconcile::file_image_hydration::tests::inventory",
+            function: "generated_inventory_images_keep_reader_root_snapshot_and_source_distinct",
+        },
+        ConformanceConsumer::RustTest {
+            id: "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::readers::shared_reader_metadata_preserves_canonical_authorship_and_image_privacy",
+            package: "gents",
+            source_path: "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/inventory/tests/readers.rs",
+            module_path: "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::readers",
+            function: "shared_reader_metadata_preserves_canonical_authorship_and_image_privacy",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::generated_projection_cases_use_native_owners_and_scopes",
             package: "gents",
             source_path: "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/inventory/tests.rs",

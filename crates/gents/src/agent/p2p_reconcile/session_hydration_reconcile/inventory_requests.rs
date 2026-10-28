@@ -1,3 +1,4 @@
+use super::super::session_hydration::decide_inventory_hydration;
 use super::*;
 use crate::config_client::ConfigAccess;
 use crate::file_inventory::delivery::{
@@ -70,7 +71,7 @@ async fn serve_inventory(
     }
     let admission = store.inventory_admission(demand).await?;
     if let HydrationVerdict::Reject(reason) =
-        decide_hydration(&demand.admission.request, &admission.catalog)
+        decide_inventory_hydration(&demand.admission, &admission.catalog)
     {
         tracing::debug!(request_key = %row.request_key, attempt_id = %demand.attempt_id, cursor_offset = ?demand.cursor.as_ref().map(|cursor| cursor.offset), reason, "file inventory admission refused");
         return store
@@ -166,8 +167,12 @@ impl GraphqlHydrationStore {
         &self,
         demand: &FileInventoryPageDemand,
     ) -> Result<LoadedHydrationAdmission> {
-        self.load_admission_for_collection(&demand.admission.request, FILE_INVENTORY_REQUEST_NAME)
-            .await
+        self.load_source_admission(
+            &demand.admission.request,
+            FILE_INVENTORY_REQUEST_NAME,
+            Some(&demand.admission.session_doc_id),
+        )
+        .await
     }
 
     pub(super) async fn inventory_current(
@@ -176,9 +181,24 @@ impl GraphqlHydrationStore {
         fence: &EnrollmentAuthorizationFence,
     ) -> Result<bool> {
         let current = self.inventory_admission(demand).await?;
-        let verdict = decide_hydration(&demand.admission.request, &current.catalog);
+        let verdict = decide_inventory_hydration(&demand.admission, &current.catalog);
         let same_authorization = current.authorization.as_ref() == Some(fence);
-        let authorized = same_authorization && matches!(verdict, HydrationVerdict::Admit(_));
+        let mut authorized = same_authorization && matches!(verdict, HydrationVerdict::Admit(_));
+        let shared_reader = current
+            .catalog
+            .session_reads
+            .iter()
+            .any(|read| read.source.requester_did != demand.admission.request.requester_did);
+        if authorized && shared_reader {
+            if let Err(error) = FileInventorySnapshot::load(&self.node, &demand.admission).await {
+                if super::inventory::refusal_reason(&error) == FileInventoryRefusalReason::Rejected
+                {
+                    authorized = false;
+                } else {
+                    return Err(error);
+                }
+            }
+        }
         if !authorized {
             let (verdict_kind, rejection, admitted_documents) = match &verdict {
                 HydrationVerdict::Admit(documents) => ("admit", None, documents.len()),

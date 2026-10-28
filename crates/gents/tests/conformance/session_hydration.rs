@@ -109,10 +109,12 @@ fn admitted_catalog() -> HydrationCatalog {
             member_did: "did:key:requester-1".into(),
         }]),
         sessions: BTreeSet::from([SessionOwner {
+            session_doc_id: None,
             session_id: "session-1".into(),
             requester_did: "did:key:requester-1".into(),
             node_did: "did:key:node-1".into(),
         }]),
+        session_reads: BTreeSet::new(),
         authorized_reference_closure: BTreeSet::new(),
         documents: BTreeSet::from([
             document(

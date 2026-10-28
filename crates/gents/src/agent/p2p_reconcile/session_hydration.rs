@@ -26,9 +26,19 @@ pub fn hydration_collection_name(collection: SessionHydrationCollection) -> &'st
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SessionOwner {
+    pub session_doc_id: Option<String>,
     pub session_id: String,
     pub requester_did: String,
     pub node_did: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SessionReadObservation {
+    pub peer_id: String,
+    pub requester_did: String,
+    pub session_doc_id: String,
+    pub source: SessionOwner,
+    pub visible: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -59,6 +69,7 @@ pub struct HydrationCatalog {
     pub selected_network_id: String,
     pub verified_active_memberships: BTreeSet<VerifiedActiveMembership>,
     pub sessions: BTreeSet<SessionOwner>,
+    pub session_reads: BTreeSet<SessionReadObservation>,
     pub documents: BTreeSet<HydrationDocument>,
     pub authorized_reference_closure: BTreeSet<SessionHydrationDocumentKey>,
 }
@@ -143,6 +154,21 @@ pub fn decide_hydration(
     request: &HydrationRequest,
     catalog: &HydrationCatalog,
 ) -> HydrationVerdict {
+    decide_source_hydration(request, catalog, None)
+}
+
+pub fn decide_inventory_hydration(
+    admission: &gents_protocol::file_inventory::FileInventoryAdmission,
+    catalog: &HydrationCatalog,
+) -> HydrationVerdict {
+    decide_source_hydration(&admission.request, catalog, Some(&admission.session_doc_id))
+}
+
+fn decide_source_hydration(
+    request: &HydrationRequest,
+    catalog: &HydrationCatalog,
+    physical_root: Option<&str>,
+) -> HydrationVerdict {
     let pairing = AppliedPairingRoute {
         peer_id: request.peer_id.clone(),
         requester_did: request.requester_did.clone(),
@@ -160,14 +186,41 @@ pub fn decide_hydration(
             "requester membership is not verified active in the selected network",
         );
     }
-    let owner = SessionOwner {
-        session_id: request.session_id.clone(),
-        requester_did: request.requester_did.clone(),
-        node_did: request.node_did.clone(),
+    let owner = catalog.sessions.iter().find(|source| {
+        source.node_did == request.node_did
+            && source.session_id == request.session_id
+            && source.requester_did == request.requester_did
+            && physical_root.is_none_or(|root| source.session_doc_id.as_deref() == Some(root))
+    });
+    let source = if let Some(owner) = owner {
+        owner.clone()
+    } else {
+        let Some(physical_root) = physical_root.filter(|value| !value.is_empty()) else {
+            return HydrationVerdict::Reject(SESSION_OWNERSHIP_MISMATCH);
+        };
+        let mut observations = catalog.session_reads.iter().filter(|read| {
+            read.peer_id == request.peer_id
+                && read.requester_did == request.requester_did
+                && read.session_doc_id == physical_root
+                && read.source.node_did == request.node_did
+                && read.source.session_id == request.session_id
+                && read.source.session_doc_id.as_deref() == Some(physical_root)
+        });
+        let (Some(read), None) = (observations.next(), observations.next()) else {
+            return HydrationVerdict::Reject(SESSION_OWNERSHIP_MISMATCH);
+        };
+        let mut roots = catalog.sessions.iter().filter(|source| {
+            source.node_did == request.node_did && source.session_id == request.session_id
+        });
+        if !read.visible
+            || read.source.requester_did.is_empty()
+            || roots.next() != Some(&read.source)
+            || roots.next().is_some()
+        {
+            return HydrationVerdict::Reject(SESSION_OWNERSHIP_MISMATCH);
+        }
+        read.source.clone()
     };
-    if !catalog.sessions.contains(&owner) {
-        return HydrationVerdict::Reject(SESSION_OWNERSHIP_MISMATCH);
-    }
 
     HydrationVerdict::Admit(
         catalog
@@ -175,7 +228,7 @@ pub fn decide_hydration(
             .iter()
             .filter(|doc| {
                 HYDRATION_COLLECTIONS.contains(&doc.collection)
-                    && doc.requester_did == request.requester_did
+                    && doc.requester_did == source.requester_did
                     && doc.node_did == request.node_did
                     && (doc.session_id == request.session_id
                         || catalog.authorized_reference_closure.contains(

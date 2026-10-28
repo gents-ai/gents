@@ -3,6 +3,7 @@ mod storage;
 
 use super::*;
 use crate::agent::p2p_reconcile::file_image_hydration::image_delivery_target;
+use gents_protocol::file_image_hydration::FILE_IMAGE_RECEIPT_VERSION;
 use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
     Mutex,
@@ -83,6 +84,7 @@ impl HydrationDelivery for Delivery {
 
 fn fixture(selection: FileImageSelection, authorized: Vec<bool>) -> (Store, Delivery) {
     let demand = FileImageDemand {
+        inventory_reference: None,
         admission: HydrationRequest {
             request_key: "key".into(),
             peer_id: "peer".into(),
@@ -105,6 +107,7 @@ fn fixture(selection: FileImageSelection, authorized: Vec<bool>) -> (Store, Deli
             member_did: "requester".into(),
         }]),
         sessions: BTreeSet::from([SessionOwner {
+            session_doc_id: None,
             session_id: "session".into(),
             requester_did: "requester".into(),
             node_did: "node".into(),

@@ -7,7 +7,7 @@ use gents::tool_call_lifecycle::{
 use gents::NodeIdentity;
 use gents_protocol::file_changes::ToolFileChanges;
 use gents_protocol::file_image_hydration::{
-    FileImageDemand, FileImageHydrationReceipt, FileImageSelection, FILE_IMAGE_RECEIPT_VERSION,
+    FileImageDemand, FileImageHydrationReceipt, FileImageInventoryReference, FileImageSelection,
 };
 use gents_protocol::session_hydration::HydrationRequest;
 use serde_json::Value;
@@ -17,7 +17,7 @@ use super::writes::ensure_peer_chat_ready_at;
 use super::ClientCore;
 use crate::error::{BridgeError, BridgeErrorCode};
 
-const DEMAND_FIELDS: &str = "_docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id status status_detail observation_doc_id processed_at outcome_signer_did outcome_signature";
+const DEMAND_FIELDS: &str = "_docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id inventory_reference status status_detail observation_doc_id processed_at outcome_signer_did outcome_signature";
 
 mod inventory;
 mod scope;
@@ -86,6 +86,7 @@ impl ClientCore {
             "file review requester differs from the enrolled client"
         );
         let mut demand = FileImageDemand {
+            inventory_reference: None,
             admission: HydrationRequest {
                 request_key: String::new(),
                 peer_id: self.local_peer_id().into(),
@@ -112,7 +113,7 @@ impl ClientCore {
     /// cancels the wait without changing the durable demand or its authority.
     async fn remote_file_images(&self, demand: FileImageDemand) -> Result<Option<ToolFileChanges>> {
         Ok(self
-            .remote_file_observation(demand)
+            .remote_file_observation(demand, None)
             .await?
             .map(|(_, changes)| changes))
     }
@@ -120,11 +121,10 @@ impl ClientCore {
     async fn remote_file_observation(
         &self,
         demand: FileImageDemand,
+        inventory_entry: Option<&gents_protocol::file_inventory::FileInventoryEntry>,
     ) -> Result<Option<(String, ToolFileChanges)>> {
-        let mut changes = gents::subscribe_collections(
-            &self.node,
-            ["FileImageHydrationRequest", "ToolFileChange"],
-        )?;
+        let mut changes =
+            gents::subscribe_collections(&self.node, [demand.collection_name(), "ToolFileChange"])?;
         let access = self
             .store_access
             .lock()
@@ -156,7 +156,17 @@ impl ClientCore {
                         }
                         FileImageSelection::Missing => return Ok(None),
                         FileImageSelection::Selected { document } => {
-                            if receipt.grant_local_read(self.node.clone()).await? {
+                            if demand.inventory_reference.is_some() {
+                                let entry = inventory_entry.context(
+                                    "bound image read omitted its received inventory entry",
+                                )?;
+                                if let Some(changes) = receipt
+                                    .read_inventory_image(self.node.clone(), entry)
+                                    .await?
+                                {
+                                    return Ok(Some((document.clone(), changes)));
+                                }
+                            } else if receipt.grant_local_read(self.node.clone()).await? {
                                 match load_tool_file_change_observation(
                                     &access,
                                     &demand.tool_call_doc_id,
@@ -227,7 +237,9 @@ async fn resumable_image_demand(
         .collect::<Vec<_>>()
         .join(", ");
     let query = format!(
-        r#"{{ FileImageHydrationRequest(filter: {{ {fields}, status: {{ _in: ["pending", "served"] }} }}) {{ {DEMAND_FIELDS} }} }}"#,
+        r#"{{ FileImageHydrationRequest: {}(filter: {{ {fields}, status: {{ _in: ["pending", "served"] }} }}) {{ {} }} }}"#,
+        original.collection_name(),
+        demand_fields(original),
     );
     let response = access.execute(&query).await?;
     let rows = response["data"]["FileImageHydrationRequest"]
@@ -236,6 +248,11 @@ async fn resumable_image_demand(
     let mut candidates = Vec::new();
     let mut selected_document = None;
     for row in rows {
+        let reference: Option<FileImageInventoryReference> =
+            serde_json::from_value(row["inventory_reference"].clone())?;
+        if reference != original.inventory_reference {
+            continue;
+        }
         let mut demand = original.clone();
         demand.admission.request_key = row["request_key"]
             .as_str()
@@ -276,9 +293,19 @@ async fn resumable_image_demand(
 
 fn demand_query(demand: &FileImageDemand) -> String {
     format!(
-        r#"{{ FileImageHydrationRequest(filter: {{ request_key: {{ _eq: "{}" }} }}, limit: 2) {{ {DEMAND_FIELDS} }} }}"#,
-        escape_graphql_string(&demand.admission.request_key)
+        r#"{{ FileImageHydrationRequest: {}(filter: {{ request_key: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
+        demand.collection_name(),
+        escape_graphql_string(&demand.admission.request_key),
+        demand_fields(demand)
     )
+}
+
+fn demand_fields(demand: &FileImageDemand) -> String {
+    if demand.inventory_reference.is_some() {
+        DEMAND_FIELDS.into()
+    } else {
+        DEMAND_FIELDS.replace(" inventory_reference", "")
+    }
 }
 
 fn demand_row(response: &Value) -> Result<Option<&Value>> {
@@ -290,6 +317,12 @@ fn demand_row(response: &Value) -> Result<Option<&Value>> {
 }
 
 fn ensure_demand(row: &Value, demand: &FileImageDemand) -> Result<()> {
+    let reference: Option<FileImageInventoryReference> =
+        serde_json::from_value(row["inventory_reference"].clone())?;
+    anyhow::ensure!(
+        reference == demand.inventory_reference,
+        "file review demand differs from the selected metadata snapshot"
+    );
     for (field, expected) in demand.reference_fields() {
         anyhow::ensure!(
             row[field].as_str() == Some(expected),
@@ -304,31 +337,37 @@ async fn admit_image_demand(
     demand: &FileImageDemand,
 ) -> Result<()> {
     let query = demand_query(demand);
-    let mut fields = Vec::new();
-    for (field, value) in demand.reference_fields() {
-        fields.push(format!("{field}: \"{}\"", escape_graphql_string(value)));
+    let mut input: serde_json::Map<String, Value> = demand
+        .reference_fields()
+        .into_iter()
+        .map(|(field, value)| (field.to_owned(), Value::String(value.to_owned())))
+        .collect();
+    if let Some(reference) = &demand.inventory_reference {
+        input.insert(
+            "inventory_reference".into(),
+            serde_json::to_value(reference)?,
+        );
     }
-    fields.push(format!(
-        "created_at: \"{}\"",
-        escape_graphql_string(&chrono::Utc::now().to_rfc3339())
-    ));
-    fields.push("status: \"pending\"".into());
-    let mutation = format!(
-        "mutation {{ create_FileImageHydrationRequest(input: {{ {} }}) {{ _docID }} }}",
-        fields.join(", ")
+    input.insert(
+        "created_at".into(),
+        Value::String(chrono::Utc::now().to_rfc3339()),
     );
+    input.insert("status".into(), Value::String("pending".into()));
     let demand = demand.clone();
     ConfigAccess::transact_local_write(node, None, "desktop.file_review.admit", move |txn| {
         let query = query.clone();
-        let mutation = mutation.clone();
+        let input = input.clone();
         let demand = demand.clone();
         Box::pin(async move {
-            gents::graphql::fence_arrivals(txn, "FileImageHydrationRequest").await?;
+            gents::graphql::fence_arrivals(txn, demand.collection_name()).await?;
             let response = txn.execute(&query).await?;
             if let Some(row) = demand_row(&response)? {
                 ensure_demand(row, &demand)?;
             } else {
-                let response = txn.execute(&mutation).await?;
+                let response = txn.execute_with_variables(
+                    &format!("mutation($input: {0}MutationInputArg!) {{ create_FileImageHydrationRequest: create_{0}(input: $input) {{ _docID }} }}", demand.collection_name()),
+                    &serde_json::json!({"input": input}),
+                ).await?;
                 gents::graphql::created_doc_id(&response, "FileImageHydrationRequest")?;
             }
             Ok(())
@@ -367,7 +406,7 @@ async fn verified_receipt(
         _ => anyhow::bail!("file review receipt has an unknown status"),
     };
     let receipt = FileImageHydrationReceipt {
-        version: FILE_IMAGE_RECEIPT_VERSION,
+        version: demand.receipt_version(),
         demand: demand.clone(),
         selection,
         detail: text("status_detail")?.into(),

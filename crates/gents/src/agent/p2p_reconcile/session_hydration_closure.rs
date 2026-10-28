@@ -863,10 +863,12 @@ mod tests {
                     member_did: request.requester_did.clone(),
                 }]),
                 sessions: BTreeSet::from([SessionOwner {
+                    session_doc_id: None,
                     session_id: request.session_id.clone(),
                     requester_did: request.requester_did.clone(),
                     node_did: request.node_did.clone(),
                 }]),
+                session_reads: BTreeSet::new(),
                 documents: closure.iter().cloned().collect(),
                 authorized_reference_closure: closure
                     .iter()
@@ -944,10 +946,12 @@ mod tests {
                     member_did: closure_request.requester.clone(),
                 }]),
                 sessions: BTreeSet::from([SessionOwner {
+                    session_doc_id: None,
                     session_id: closure_request.session.clone(),
                     requester_did: closure_request.requester.clone(),
                     node_did: closure_request.node.clone(),
                 }]),
+                session_reads: BTreeSet::new(),
                 documents: closure.iter().cloned().collect(),
                 authorized_reference_closure: closure
                     .iter()

@@ -571,6 +571,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreihbcklqo55343lt7spcif4xftwqbsfe6flznvpge3sfcre3sakdgu"
     ),
     baseline_entry!(
+        gents_protocol::schemas::FILE_INVENTORY_IMAGE_REQUEST_NAME,
+        gents_protocol::schemas::FILE_INVENTORY_IMAGE_REQUEST,
+        "bafyreidafcfcocovwduklm6rjppadnof4t3bndhkmrqoqe55imm447ox3i"
+    ),
+    baseline_entry!(
         gents_protocol::schemas::FILE_INVENTORY_REQUEST_NAME,
         gents_protocol::schemas::FILE_INVENTORY_REQUEST,
         "bafyreie5fnoj47pu4shae63v7gx4mnxcovmrs5kttnries67sb2ftgk6rm"
@@ -949,6 +954,7 @@ pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::NETWORK_ENROLLMENT_ROUTE_RECEIPT_NAME,
     gents_protocol::schemas::SESSION_HYDRATION_REQUEST_NAME,
     gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME,
+    gents_protocol::schemas::FILE_INVENTORY_IMAGE_REQUEST_NAME,
     gents_protocol::schemas::FILE_INVENTORY_REQUEST_NAME,
     gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT_NAME,
     gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL_NAME,

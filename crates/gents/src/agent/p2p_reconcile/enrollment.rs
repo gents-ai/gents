@@ -594,6 +594,7 @@ impl EnrollmentState {
         let mut catalog = HydrationCatalog {
             selected_network_id: request.network_id.clone(),
             sessions: BTreeSet::from([SessionOwner {
+                session_doc_id: None,
                 session_id: hydration.session_id.clone(),
                 requester_did: hydration.requester_did.clone(),
                 node_did: hydration.node_did.clone(),

@@ -1684,24 +1684,51 @@ impl<'a> ConfigApplyTxn<'a> {
         collection: &str,
         doc_ids: &[String],
     ) -> Result<Vec<query::owners::DocumentOwnerObservation>> {
+        let TxnBackend::Embedded { identity, .. } = &self.backend else {
+            anyhow::bail!("authenticated transaction owner observations require embedded access");
+        };
+        self.observe_document_owners(collection, doc_ids, identity.clone())
+            .await
+    }
+
+    /// Checks a separately authenticated reader against known documents in this
+    /// transaction's snapshot without replacing its actor or signing identity.
+    /// The caller binds `reader` to its verified request, not an authored owner
+    /// field. An unknown result establishes neither absence nor completeness;
+    /// this read creates no document grant.
+    pub async fn document_owners_as(
+        &self,
+        reader: &identity::Did,
+        collection: &str,
+        doc_ids: &[String],
+    ) -> Result<Vec<query::owners::DocumentOwnerObservation>> {
+        self.observe_document_owners(collection, doc_ids, Some(reader.clone()))
+            .await
+    }
+
+    async fn observe_document_owners(
+        &self,
+        collection: &str,
+        doc_ids: &[String],
+        reader: Option<identity::Did>,
+    ) -> Result<Vec<query::owners::DocumentOwnerObservation>> {
         crate::graphql::validate_collection_identifier(collection)?;
         let TxnBackend::Embedded {
             node,
             handle,
-            identity,
             native_operations,
+            ..
         } = &self.backend
         else {
             anyhow::bail!("authenticated transaction owner observations require embedded access");
         };
         let node = Arc::clone(node);
         let handle = handle.clone();
-        let identity = identity.clone();
         let collection = collection.to_owned();
         let doc_ids = doc_ids.to_vec();
         execute_owned_native(
             async move {
-                node.observe_document_owners_in_txn(&handle, &collection, &doc_ids, identity)
+                node.observe_document_owners_in_txn(&handle, &collection, &doc_ids, reader)
                     .await
             },
             Arc::clone(native_operations),

@@ -289,6 +289,7 @@ end Order
 
 inductive ReadBoundary where
   | atomicExhaustive
+  | readerBound (scope : CanonicalOutput.Hydration.AuthorizationScope)
   | incomplete
   | nonAtomic
   deriving DecidableEq, Repr
@@ -304,6 +305,17 @@ structure Source where
   projections : List Projection
   boundary : ReadBoundary
   deriving DecidableEq
+
+/-- An independent reader cannot reuse the source's privileged observations.
+`readerBound` certifies that every supplied canonical/metadata read observation
+belongs to that reader in the same exhaustive source snapshot. A missing or
+denied capture cannot be supplied as an authenticated projection. No image is
+read or granted by this boundary. -/
+def Source.completeRead (source : Source) (admission : Request) : Bool :=
+  match source.boundary with
+  | .atomicExhaustive => decide (ownedSession admission ∈ source.catalog.sessions)
+  | .readerBound scope => scope == admission.authorizationScope
+  | .incomplete | .nonAtomic => false
 
 inductive Error where
   | rejected
@@ -373,7 +385,7 @@ visible transcript window or request-turn closure. Unselected parent-session
 tools do not enter a fork's inventory. Physical sorting is only a stable page
 order; the existing before/after chain planner still owns review authority. -/
 private def assembleSnapshot (source : Source) (admission : Request) : Except Error Snapshot := do
-  if source.boundary != .atomicExhaustive then .error .unknown else pure ()
+  if !source.completeRead admission then .error .unknown else pure ()
   let selected ← selectedManifest source.catalog admission
   let toolIds := (selected.filter (fun key => key.collection == .agentToolCall)).map (·.id)
   let tools ← toolIds.mapM (toolFact source)
@@ -694,6 +706,72 @@ def PageDemand.matchesPage (demand : PageDemand) (value : WirePage) (nonceMatche
     match demand.cursor with
     | none => value.offset == 0
     | some cursor => value.binding == cursor.binding && value.offset == cursor.offset
+
+/-- The selected page is the source's immutable, signature-verified preparation.
+Its exact demand, digest and entry index bind the image request to one physical
+root and historical snapshot. A metadata receipt alone grants no image read. -/
+structure ImageDemand where
+  image : FileImages.Demand
+  metadata : PageDemand
+  digest : String
+  entryIndex : Nat
+  deriving DecidableEq, Repr
+
+/-- Native ACP observations are obtained as the authenticated reader, in the
+same source transaction as the canonical root and selected physical tool.
+Authored requester fields and a readable public session cannot supply these
+protected projection/image observations. These facts are not caller claims. -/
+structure SelectedImageRead where
+  scope : CanonicalOutput.Hydration.AuthorizationScope
+  projection : DocId
+  observation : DocId
+  projectionVisible : Bool
+  imageVisible : Bool
+  projectionOwner : String
+  imageOwner : String
+  deriving DecidableEq, Repr
+
+def selectImage (demand : ImageDemand) (catalog : Catalog) (page : PageEnvelope)
+    (nonceMatches : Bool) (pageOwner : String) (read : SelectedImageRead)
+    (tools : List FileImages.Tool) (images : List FileImages.Image) : FileImages.Selection :=
+  if !FileImages.wellFormed demand.image || !decide (admits catalog demand.image.admission) ||
+      demand.image.admission.authorizationScope != demand.metadata.admission.authorizationScope ||
+      !page.signatureVerified || page.requestKey.isEmpty || page.purpose != .fileInventoryV2 ||
+      page.signer != demand.image.admission.node || pageOwner != page.signer ||
+      !demand.metadata.matchesPage page.page nonceMatches || !page.page.wellFormed ||
+      demand.digest.isEmpty || demand.digest != page.page.binding.digest then .rejected
+  else match page.page.entries[demand.entryIndex]? with
+  | none => .rejected
+  | some entry =>
+      if read.scope != demand.image.admission.authorizationScope ||
+          read.projection != entry.projection || read.observation != entry.observation ||
+          !read.projectionVisible || !read.imageVisible ||
+          read.projectionOwner != entry.scope.node || read.imageOwner != entry.scope.node ||
+          entry.scope.node != demand.image.admission.node ||
+          demand.image.toolDocId != toString entry.tool ||
+          demand.image.requestDocId != toString entry.request then .rejected
+      else match tools.filter (fun tool => tool.docId == demand.image.toolDocId),
+          images.filter (fun image => image.toolDocId == demand.image.toolDocId) with
+      | [tool], [image] =>
+          if tool.accepted && tool.terminal && tool.scope == entry.scope &&
+              tool.requestDocId == demand.image.requestDocId && image.scope == entry.scope &&
+              image.docId == toString entry.observation &&
+              image.toolDocId == tool.docId && image.requestDocId == tool.requestDocId then
+            .selected image.docId
+          else .rejected
+      | _, _ => .rejected
+
+theorem metadata_cannot_replace_image_permission (demand : ImageDemand) (catalog : Catalog)
+    (page : PageEnvelope) (nonceMatches : Bool) (pageOwner : String) (read : SelectedImageRead)
+    (tools : List FileImages.Tool) (images : List FileImages.Image)
+    (denied : read.imageVisible = false) :
+    selectImage demand catalog page nonceMatches pageOwner read tools images = .rejected := by
+  simp only [selectImage]
+  split
+  · rfl
+  · split
+    · rfl
+    · simp [denied]
 
 /-- The existing admission and enrollment owners supply the two current
 observations. Issuance withholds the signed value if authorization changes

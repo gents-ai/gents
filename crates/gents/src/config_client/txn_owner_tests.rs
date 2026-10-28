@@ -1879,6 +1879,153 @@ resources:
 }
 
 #[tokio::test]
+async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
+    let home = tempfile::tempdir().unwrap();
+    let key_path = home.path().join("owner.key");
+    let key =
+        tokio::task::spawn_blocking(move || crate::KeyIdentity::load_or_create(key_path, None))
+            .await
+            .unwrap()
+            .unwrap();
+    let owner = key.did();
+    const READER: &str = "did:key:z6MkfXG2FkNy3u7Eg3jm8e2YQpGz7Z1JqWgHDAP1hLk9r2bR";
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .with_node_identity_did(owner)
+            .build()
+            .await
+            .unwrap(),
+    );
+    let policy = node
+        .add_dac_policy(
+            owner,
+            "name: Independent reader\nresources:\n  - name: facts\n    relations:\n      - name: reader\n    permissions:\n      - name: read\n        expr: reader\n      - name: update\n      - name: delete\n",
+        )
+        .await
+        .unwrap();
+    ConfigAccess::local(Arc::clone(&node))
+        .add_collection(&format!(
+            "type IndependentReadFact @policy(id: \"{policy}\", resource: \"facts\") {{ requester_did: String }}"
+        ))
+        .await
+        .unwrap();
+    let created = ConfigAccess::transact_local_write(
+        &node,
+        Some(identity::Did::new(owner).unwrap()),
+        "test.independent_reader.seed",
+        |txn| {
+            Box::pin(async move {
+                txn.execute(&format!(
+            "mutation {{ add_IndependentReadFact(input: {{requester_did: \"{}\"}}) {{ _docID }} }}",
+            crate::graphql::escape_graphql_string(READER),
+        ))
+                .await
+            })
+        },
+    )
+    .await
+    .unwrap();
+    let id = created["data"]["add_IndependentReadFact"][0]["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for (step, authorized) in [false, true, false, true].into_iter().enumerate() {
+        if step > 0 {
+            if authorized {
+                node.add_dac_actor_relationship(
+                    owner,
+                    "IndependentReadFact",
+                    &id,
+                    "reader",
+                    READER,
+                )
+                .await
+                .unwrap();
+            } else {
+                node.delete_dac_actor_relationship(
+                    owner,
+                    "IndependentReadFact",
+                    &id,
+                    "reader",
+                    READER,
+                )
+                .await
+                .unwrap();
+            }
+        }
+        let ids = vec![id.clone()];
+        let owners = ConfigAccess::transact_local_readonly(
+            &node,
+            Some(identity::Did::new(READER).unwrap()),
+            "test.independent_reader.observe",
+            move |txn| {
+                let ids = ids.clone();
+                Box::pin(async move {
+                    let rows = txn
+                        .execute("{ IndependentReadFact { _docID requester_did } }")
+                        .await?;
+                    let owners = txn.document_owners("IndependentReadFact", &ids).await?;
+                    assert_eq!(
+                        rows["data"]["IndependentReadFact"]
+                            .as_array()
+                            .unwrap()
+                            .len(),
+                        usize::from(authorized),
+                        "step {step}",
+                    );
+                    Ok(owners)
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(owners.len(), 1);
+        assert_eq!(owners[0].doc_id, id);
+        assert_eq!(
+            owners[0].owner.as_ref().map(identity::Did::as_str),
+            authorized.then_some(owner),
+            "step {step}",
+        );
+        ConfigAccess::transact_local_readonly(
+            &node,
+            Some(identity::Did::new(owner).unwrap()),
+            "test.independent_reader.source_snapshot",
+            |txn| {
+                let id = id.clone();
+                Box::pin(async move {
+                    let ids = [id];
+                    let source_before = txn.document_owners("IndependentReadFact", &ids).await?;
+                    assert_eq!(
+                        source_before[0].owner.as_ref().map(identity::Did::as_str),
+                        Some(owner)
+                    );
+                    let observed = txn
+                        .document_owners_as(
+                            &identity::Did::new(READER).unwrap(),
+                            "IndependentReadFact",
+                            &ids,
+                        )
+                        .await?;
+                    assert_eq!(
+                        observed[0].owner.as_ref().map(identity::Did::as_str),
+                        authorized.then_some(owner),
+                        "source snapshot step {step}"
+                    );
+                    assert_eq!(
+                        txn.document_owners("IndependentReadFact", &ids).await?,
+                        source_before
+                    );
+                    Ok(())
+                })
+            },
+        )
+        .await
+        .unwrap();
+    }
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn readonly_transaction_preserves_snapshot_and_rejects_native_mutation() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     ConfigAccess::local(Arc::clone(&node))

@@ -496,6 +496,7 @@ pub async fn verify(
             "an unseen image was requested"
         );
         let demand = FileImageDemand {
+            inventory_reference: None,
             admission: gents_protocol::session_hydration::HydrationRequest {
                 request_key: field(receipt, "request_key")?.into(),
                 peer_id: field(receipt, "peer_id")?.into(),
