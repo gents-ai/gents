@@ -2,6 +2,34 @@ import Proofs.Session.Properties.Coalescing
 
 namespace SessionQueue
 
+inductive AgentMessageMode where
+  | queue
+  | steer
+  | interrupt
+  deriving DecidableEq, Repr
+
+/-- An interrupt requires separate authority and is requested only after the
+message is durably admitted. The delivery marker alone does not grant a lease or
+allow input to pass an earlier queue entry. -/
+def agentMessageDelivery? (mode : AgentMessageMode) (mayInterrupt : Bool) :
+    Option (QueueDelivery × Bool) :=
+  match mode with
+  | .queue => some (.queue, false)
+  | .steer => some (.steer, false)
+  | .interrupt => if mayInterrupt then some (.queue, true) else none
+
+theorem agent_message_interrupt_requires_authority :
+    agentMessageDelivery? .interrupt false = none := by
+  rfl
+
+theorem agent_message_interrupt_is_queued :
+    agentMessageDelivery? .interrupt true = some (.queue, true) := by
+  rfl
+
+theorem agent_message_steer_does_not_interrupt (allowed : Bool) :
+    agentMessageDelivery? .steer allowed = some (.steer, false) := by
+  rfl
+
 def steersInto (active candidate : QueueEntry) : Prop :=
   candidate.fresh = true ∧ candidate.delivery = .steer ∧ candidate.policy = .append ∧
   (candidate.source = .user ∨ candidate.source = .steering) ∧
