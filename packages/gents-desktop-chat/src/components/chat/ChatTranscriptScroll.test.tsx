@@ -126,17 +126,23 @@ test("retains the latest user row when scrolling away from an active long turn",
     content: `streamed response ${index}`,
     reconstruction: { state: "ready" as const },
   }));
-  rerender(
-    <ChatTranscriptPanel
-      selectedSessionId="s"
-      session={{
-        ...session,
-        timelineItems: [...timelineItems, appended, ...streamed],
-      }}
-      activity={null}
-    />,
-  );
-  expect(screen.queryByText("latest user marker")).not.toBeNull();
+  for (let count = 1; count <= streamed.length; count += 1) {
+    rerender(
+      <ChatTranscriptPanel
+        selectedSessionId="s"
+        session={{
+          ...session,
+          timelineItems: [
+            ...timelineItems,
+            appended,
+            ...streamed.slice(0, count),
+          ],
+        }}
+        activity={null}
+      />,
+    );
+    expect(screen.queryByText("latest user marker")).not.toBeNull();
+  }
   expect(panel.querySelectorAll("li[data-index]").length).toBeGreaterThan(0);
   expect(panel.querySelectorAll("li[data-index]").length).toBeLessThanOrEqual(
     200,
