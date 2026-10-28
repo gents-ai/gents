@@ -399,7 +399,10 @@ export function ChatTranscriptPanel({
           : TRANSCRIPT_PAGE_SIZE;
       const nextVisibleCount = atTip
         ? Math.min(currentVisibleCount, TRANSCRIPT_RETAINED_ITEMS)
-        : currentVisibleCount;
+        : Math.max(
+            currentVisibleCount,
+            timelineItems.length - firstVisibleIndex,
+          );
       if (
         current.sessionId === selectedSessionId &&
         current.timelineLength === timelineItems.length &&
