@@ -18,7 +18,8 @@ const keyOf = (scope: SessionScope, path: string) =>
   [scope.nodeDid, scope.sessionId, path].join("\0");
 
 /* a file's version in a turn: its last edit there */
-const versionOf = (file: ChangedFile) => file.edits.at(-1)?.toolCallDocId ?? null;
+const versionOf = (file: ChangedFile) =>
+  file.edits[file.edits.length - 1]?.toolCallDocId ?? null;
 
 const isViewed = (state: ViewedFiles, scope: SessionScope, file: ChangedFile) => {
   const edit = versionOf(file);
