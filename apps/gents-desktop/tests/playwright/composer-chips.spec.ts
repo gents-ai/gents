@@ -58,7 +58,9 @@ test.describe("paste chips in the composer", () => {
     await field(page).click();
     await paste(page);
     await page.keyboard.type(" after");
-    await page.keyboard.press("Meta+ArrowLeft");
+    await page.keyboard.press(
+      process.platform === "darwin" ? "Meta+ArrowLeft" : "Home",
+    );
     await page.keyboard.type("before ");
     await expect(field(page)).toContainText("before Pasted 8 lines after");
     await expect(chips(page)).toHaveCount(1);
