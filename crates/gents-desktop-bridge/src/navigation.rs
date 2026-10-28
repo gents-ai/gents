@@ -165,23 +165,13 @@ mod tests {
             assert!(!allow_navigation(explorer.as_ref(), &url));
         }
         let proofs = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../gents/proofs");
-        gents_lean_contract::run_lake_build(&proofs).unwrap();
-        let output = std::process::Command::new("lake")
-            .args([
-                "env",
-                "lean",
-                "--run",
-                "Proofs/Conformance/DesktopShellSecurity.lean",
-            ])
-            .current_dir(proofs)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let cases: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let output = gents_lean_contract::run_prepared_generator(
+            &proofs,
+            "Proofs.Conformance.DesktopShellSecurity:olean",
+            "Proofs/Conformance/DesktopShellSecurity.lean",
+        )
+        .unwrap();
+        let cases: serde_json::Value = serde_json::from_str(&output).unwrap();
         let cases = cases["navigation"].as_array().unwrap();
         assert_eq!(cases.len(), 10);
         for case in cases {
