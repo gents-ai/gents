@@ -8,6 +8,10 @@ const PASTE = Array.from(
 const field = (page: Page) => page.getByRole("textbox", { name: "Message" });
 const chips = (page: Page) => page.locator('[data-slot="paste-chip"]');
 const card = (page: Page) => page.locator('[data-slot="paste-chip-preview"]');
+/* the field's text as shown, without the zero-width guard before a chip
+   that starts a line */
+const shownText = (page: Page) =>
+  field(page).evaluate((el) => (el.textContent ?? "").replaceAll("\u200B", ""));
 
 async function paste(page: Page, text = PASTE) {
   await field(page).evaluate((el, value) => {
@@ -151,7 +155,7 @@ test.describe("paste chips in the composer", () => {
     for (let i = 0; i < 4; i++) await page.keyboard.press("ArrowLeft");
     await page.keyboard.press("Backspace");
     await expect(chips(page)).toHaveCount(1);
-    await expect(field(page)).toHaveText("Pasted 8 linesnext");
+    await expect.poll(() => shownText(page)).toBe("Pasted 8 linesnext");
   });
 
   test("typing over a selection that holds a chip replaces it", async ({ page }) => {
