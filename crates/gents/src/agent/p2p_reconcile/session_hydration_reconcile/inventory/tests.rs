@@ -3,6 +3,8 @@ use crate::tool_call_lifecycle::admission_fixture::{
     ensure_fixture_session, published_admission_with_owner, PublishedAdmissionOptions,
 };
 
+mod turn_chronology;
+
 #[tokio::test]
 async fn uncaptured_terminal_is_unknown_and_an_empty_closure_is_known() {
     let (fixture, _request) = published_admission_with_owner(PublishedAdmissionOptions {
