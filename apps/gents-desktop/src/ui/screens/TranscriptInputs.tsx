@@ -176,7 +176,7 @@ export function AutomatedInput({
               Model input
             </summary>
             <pre
-              className="mt-3 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-muted-foreground"
+              className="mt-3 max-h-96 overflow-auto font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-muted-foreground"
               data-testid="automated-input-content"
             >
               {content ?? ""}
