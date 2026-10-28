@@ -378,7 +378,7 @@ fn encode_hex(bytes: &[u8]) -> String {
 }
 
 fn decode_hex(text: &str) -> Result<Vec<u8>> {
-    anyhow::ensure!(text.len() % 2 == 0, "file content blob is not hex");
+    anyhow::ensure!(text.len().is_multiple_of(2), "file content blob is not hex");
     (0..text.len())
         .step_by(2)
         .map(|at| u8::from_str_radix(&text[at..at + 2], 16).context("file content blob is not hex"))
