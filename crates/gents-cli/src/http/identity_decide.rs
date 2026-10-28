@@ -81,8 +81,10 @@ async fn decide_identity_access(
         .timeout(Duration::from_secs(10))
         .build()
         .map_err(|error| IdentityDecideError::Internal(error.to_string()))?;
-    let response = client
-        .post(url)
+    let response = state
+        .p2p_graphql
+        .authorize(client.post(url))
+        .map_err(|error| IdentityDecideError::Internal(error.to_string()))?
         .json(&json!({
             "actor": body.actor,
             "permission": permission,
@@ -198,8 +200,13 @@ mod tests {
 
     async fn mock_defradb_decide(
         State(acp): State<Arc<LocalDocumentACP>>,
+        identity: defra_http::ExtractIdentity,
         Json(body): Json<DefraDbDecisionRequest>,
     ) -> Response {
+        assert!(
+            identity.did().is_some(),
+            "operator proxy must authenticate to DefraDB"
+        );
         let actor = match Did::new(body.actor) {
             Ok(actor) => actor,
             Err(error) => {
@@ -288,28 +295,19 @@ mod tests {
         })
     }
 
-    async fn spawn_mock_defradb(acp: LocalDocumentACP) -> anyhow::Result<String> {
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
-        let addr = listener.local_addr()?;
-        let router = Router::new()
-            .route("/api/v0/acp/document/decide", post(mock_defradb_decide))
-            .with_state(Arc::new(acp));
-        tokio::spawn(async move {
-            let _ = axum::serve(listener, router).await;
-        });
-        Ok(format!("http://{addr}"))
-    }
-
-    async fn spawn_runtime_router(graphql: String) -> anyhow::Result<SocketAddr> {
+    async fn spawn_runtime_router(
+        acp: LocalDocumentACP,
+        owner: &gents_desktop_core::client::PrincipalIdentity,
+    ) -> anyhow::Result<SocketAddr> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
         let (activation_runtime, activation_observation) =
             crate::http::router::empty_activation_state();
         let router = crate::http::runtime_contract_router(
-            graphql,
-            "identity-test-agent".to_string(),
-            "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK".to_string(),
-            "readwrite".to_string(),
+            format!("http://{addr}/api/v0/graphql"),
+            "identity-test".into(),
+            owner.did().into(),
+            "readwrite".into(),
             Ok(None),
             Vec::new(),
             None,
@@ -323,6 +321,11 @@ mod tests {
             activation_observation,
             Default::default(),
             Default::default(),
+        )
+        .merge(
+            Router::new()
+                .route("/api/v0/acp/document/decide", post(mock_defradb_decide))
+                .with_state(Arc::new(acp)),
         );
         tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;
@@ -332,12 +335,22 @@ mod tests {
 
     async fn post_identity_decide(
         runtime_addr: SocketAddr,
+        owner: &gents_desktop_core::client::PrincipalIdentity,
         actor: &str,
         permission: &str,
         resource: &str,
     ) -> anyhow::Result<IdentityDecideResponse> {
         let response = reqwest::Client::new()
             .post(format!("http://{runtime_addr}/identity/decide"))
+            .header(
+                axum::http::header::AUTHORIZATION,
+                gents::config_client::GraphqlEndpoint::as_principal(
+                    format!("http://{runtime_addr}/api/v0/graphql"),
+                    owner.did(),
+                )
+                .authorization()?
+                .expect("operator authorization"),
+            )
             .json(&json!({
                 "actor": actor,
                 "permission": permission,
@@ -354,6 +367,11 @@ mod tests {
     #[tokio::test]
     async fn identity_decide_endpoint_matches_resolved_lean_permission_cases() -> anyhow::Result<()>
     {
+        let temp = tempfile::tempdir()?;
+        let paths =
+            gents_desktop_core::client::DesktopPaths::from_root(temp.path().join("operator"));
+        paths.ensure_root_dirs().await?;
+        let owner = gents_desktop_core::client::PrincipalIdentity::load_or_create(&paths).await?;
         let cases = lean_identity_permission_cases();
         assert!(!cases.is_empty());
 
@@ -361,21 +379,29 @@ mod tests {
             if case.expected_actor_node.is_none() || case.expected_peer_node.is_none() {
                 continue;
             }
-            let defradb_base =
-                spawn_mock_defradb(build_local_acp_from_lean_case(case).await?).await?;
             let runtime_addr =
-                spawn_runtime_router(format!("{defradb_base}/api/v0/graphql")).await?;
+                spawn_runtime_router(build_local_acp_from_lean_case(case).await?, &owner).await?;
             let resource = format!(
                 "{IDENTITY_PERMISSION_POLICY_ID}/{IDENTITY_PERMISSION_RESOURCE_NAME}/{}",
                 case.row_owner
             );
 
-            let actor =
-                post_identity_decide(runtime_addr, &case.actor_node, &case.permission, &resource)
-                    .await?;
-            let peer =
-                post_identity_decide(runtime_addr, &case.peer_node, &case.permission, &resource)
-                    .await?;
+            let actor = post_identity_decide(
+                runtime_addr,
+                &owner,
+                &case.actor_node,
+                &case.permission,
+                &resource,
+            )
+            .await?;
+            let peer = post_identity_decide(
+                runtime_addr,
+                &owner,
+                &case.peer_node,
+                &case.permission,
+                &resource,
+            )
+            .await?;
 
             assert_eq!(
                 actor.allowed, case.expected_actor_allowed,

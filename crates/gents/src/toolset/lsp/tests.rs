@@ -469,6 +469,7 @@ async fn workspace_edit_preflights_every_file_before_writing_any_file() {
         vec![server.clone()],
     );
     let key = PoolKey {
+        runtime_home: None,
         session_id: "s-atomic-preflight".into(),
         agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
@@ -847,6 +848,7 @@ async fn request_cancel_does_not_kill_pooled_server() {
         vec![server.clone()],
     );
     let key = PoolKey {
+        runtime_home: None,
         session_id: "s-cancel".into(),
         agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
@@ -1001,6 +1003,7 @@ async fn simultaneous_first_calls_share_one_process() {
         vec![server.clone()],
     );
     let key = PoolKey {
+        runtime_home: None,
         session_id: "s-singleflight".into(),
         agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
@@ -1018,6 +1021,208 @@ async fn simultaneous_first_calls_share_one_process() {
     assert!(a.is_ok(), "first start failed");
     assert!(b.is_ok(), "second start failed");
     assert_eq!(pool.live_count().await, 1);
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn runtime_home_changes_exclude_cached_servers_without_workspace_consent() {
+    use crate::tool_call_lifecycle::runtime::{
+        scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let first_home = root.join("first-runtime");
+    let second_home = root.join("second-runtime");
+    for home in [&first_home, &second_home] {
+        std::fs::create_dir_all(crate::home::keys_dir(home)).unwrap();
+        std::fs::write(
+            crate::home::default_key_path(home, "fixture"),
+            "fixture credential",
+        )
+        .unwrap();
+    }
+    let server = fixture_server(FIXTURE_PY.into());
+    let config = sample_config(
+        root.clone(),
+        FileToolMode::ReadOnly,
+        "s-runtime-guard",
+        vec![server.clone()],
+    );
+    let key = PoolKey {
+        runtime_home: Some(first_home.clone()),
+        session_id: config.session_id.clone(),
+        agent_id: config.agent_id.clone(),
+        workspace_root: root.clone(),
+        server_name: server.name.clone(),
+        config_digest: config.digest.clone(),
+        operator_guard_home: None,
+    };
+    let pool = LspPool::new();
+    let initial = scope_request_tool_execution_with_workspace_overlay(
+        None,
+        Default::default(),
+        ToolWorkspaceScope {
+            runtime_home: Some(first_home),
+            ..Default::default()
+        },
+        None,
+        None,
+        None,
+        Default::default(),
+        false,
+        pool.get_or_start(key.clone(), &server, &config),
+    )
+    .await
+    .unwrap();
+    let next_key = PoolKey {
+        runtime_home: Some(second_home.clone()),
+        ..key.clone()
+    };
+    let next = scope_request_tool_execution_with_workspace_overlay(
+        None,
+        Default::default(),
+        ToolWorkspaceScope {
+            runtime_home: Some(second_home),
+            ..Default::default()
+        },
+        None,
+        None,
+        None,
+        Default::default(),
+        false,
+        async {
+            assert!(pool.get_ready(&key).await.is_none());
+            assert!(pool
+                .inspect_session(&config.session_id, &config.agent_id, &root, &config.digest)
+                .await
+                .unwrap()
+                .is_empty());
+            let error = pool
+                .get_or_start(key.clone(), &server, &config)
+                .await
+                .err()
+                .unwrap();
+            assert!(error.contains("runtime protection changed"), "{error}");
+            pool.get_or_start(next_key.clone(), &server, &config)
+                .await
+                .unwrap()
+        },
+    )
+    .await;
+    assert!(!std::ptr::eq(initial.client(), next.client()));
+    drop(initial);
+    drop(next);
+    pool.retire(&key).await;
+    pool.retire(&next_key).await;
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn pooled_server_restarts_when_same_runtime_home_credential_path_changes() {
+    use crate::tool_call_lifecycle::runtime::{
+        scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
+    };
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname='t'\nversion='0.1.0'\n",
+    )
+    .unwrap();
+    let home = root.join("runtime");
+    std::fs::create_dir_all(&home).unwrap();
+    let home = home.canonicalize().unwrap();
+    let first_key = root.join("identity-a.key");
+    let second_key = root.join("identity-b.key");
+    std::fs::write(&first_key, "first identity credential").unwrap();
+    std::fs::write(&second_key, "second identity credential").unwrap();
+    let write_config = |key_path: &std::path::Path| {
+        crate::home::write_init_config(
+            &home,
+            &crate::home::StoredInitConfig::<String, String> {
+                home: home.to_string_lossy().into_owned(),
+                node_name: "fixture".into(),
+                node_did: "did:key:fixture".into(),
+                key_path: Some(key_path.to_string_lossy().into_owned()),
+                identity_backend: None,
+                keychain_label: None,
+                secure_enclave_label: None,
+                tool_package: None,
+                tool_ceiling: "readwrite".into(),
+                tool_root: None,
+                store_encryption: None,
+            },
+        )
+        .unwrap();
+    };
+    write_config(&first_key);
+
+    let starts = root.join("starts.txt");
+    let script = FIXTURE_PY.replace(
+        "while True:\n    msg = read()",
+        &format!(
+            "open({:?}, 'a').write('start\\n')\nwhile True:\n    msg = read()",
+            starts
+        ),
+    );
+    let server = fixture_server(script);
+    let config = sample_config(
+        root.clone(),
+        FileToolMode::ReadWrite,
+        "s-credential-guard",
+        vec![server.clone()],
+    );
+    let key = PoolKey {
+        runtime_home: Some(home.clone()),
+        session_id: config.session_id.clone(),
+        agent_id: config.agent_id.clone(),
+        workspace_root: root,
+        server_name: server.name.clone(),
+        config_digest: config.digest.clone(),
+        operator_guard_home: None,
+    };
+    let pool = LspPool::new();
+    scope_request_tool_execution_with_workspace_overlay(
+        None,
+        Default::default(),
+        ToolWorkspaceScope {
+            runtime_home: Some(home.clone()),
+            workspace_authority: Some(crate::toolset::WorkspaceAuthority::ReadWrite),
+            ..Default::default()
+        },
+        None,
+        None,
+        None,
+        Default::default(),
+        false,
+        async {
+            let first = pool
+                .get_or_start(key.clone(), &server, &config)
+                .await
+                .unwrap();
+            let unchanged = pool
+                .get_or_start(key.clone(), &server, &config)
+                .await
+                .unwrap();
+            assert!(std::ptr::eq(first.client(), unchanged.client()));
+            assert_eq!(std::fs::read_to_string(&starts).unwrap().lines().count(), 1);
+            drop(unchanged);
+            drop(first);
+
+            write_config(&second_key);
+            assert!(pool.get_ready(&key).await.is_none());
+            let refreshed = pool
+                .get_or_start(key.clone(), &server, &config)
+                .await
+                .unwrap();
+            assert_eq!(std::fs::read_to_string(&starts).unwrap().lines().count(), 2);
+            assert!(pool.has_ready(&key).await);
+            drop(refreshed);
+            pool.shutdown().await;
+        },
+    )
+    .await;
 }
 
 #[cfg(target_os = "macos")]
@@ -1056,6 +1261,7 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
         vec![server.clone()],
     );
     let key = PoolKey {
+        runtime_home: None,
         session_id: config.session_id.clone(),
         agent_id: config.agent_id.clone(),
         workspace_root: root.clone(),
@@ -1103,6 +1309,7 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
             .unwrap();
         assert!(error.contains("protection changed"), "{error}");
         let guarded_key = PoolKey {
+            runtime_home: None,
             operator_guard_home: Some(home.clone()),
             ..key.clone()
         };
@@ -1181,6 +1388,7 @@ async fn operator_guard_selection_is_rechecked_after_server_initialization() {
         vec![server.clone()],
     );
     let key = PoolKey {
+        runtime_home: None,
         session_id: config.session_id.clone(),
         agent_id: config.agent_id.clone(),
         workspace_root: root.clone(),
@@ -1265,6 +1473,7 @@ async fn resolved_executable_path_is_subject_to_command_prefix_policy() {
     config.constraints.forbidden_argv_prefixes = vec![vec![admitted.to_string_lossy().into()]];
     config.digest = config_digest(&config.workspace, &config.servers, &config.constraints);
     let key = PoolKey {
+        runtime_home: None,
         session_id: "s-resolved-prefix".into(),
         agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
@@ -1345,6 +1554,7 @@ while True:
         vec![server.clone()],
     );
     let key = PoolKey {
+        runtime_home: None,
         session_id: "s-empty-array".into(),
         agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
@@ -1523,6 +1733,7 @@ async fn busy_fixture_symbols(
         vec![server.clone()],
     );
     let key = PoolKey {
+        runtime_home: None,
         session_id,
         agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
@@ -1565,6 +1776,7 @@ async fn ensure_open_resyncs_when_disk_text_changes_out_of_band() {
         vec![server.clone()],
     );
     let key = PoolKey {
+        runtime_home: None,
         session_id: "s-resync".into(),
         agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
@@ -1641,6 +1853,7 @@ while True:
         vec![server.clone()],
     );
     let key = PoolKey {
+        runtime_home: None,
         session_id: "s-restart".into(),
         agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
@@ -1692,6 +1905,7 @@ async fn rust_analyzer_readiness_waits_for_workspace_and_quiescence() {
         vec![server.clone()],
     );
     let key = PoolKey {
+        runtime_home: None,
         session_id: "s-readiness".into(),
         agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
@@ -1770,6 +1984,7 @@ while True:
         vec![server.clone()],
     );
     let key = PoolKey {
+        runtime_home: None,
         session_id: "s-backoff".into(),
         agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
@@ -1817,6 +2032,7 @@ async fn idle_sweep_retires_zero_lease_ready_clients() {
         vec![server.clone()],
     );
     let key = PoolKey {
+        runtime_home: None,
         session_id: "s-idle".into(),
         agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
@@ -1901,6 +2117,7 @@ while True:
     );
     config.format_on_write = true;
     let key = PoolKey {
+        runtime_home: None,
         session_id: "s-fmt".into(),
         agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
@@ -2490,6 +2707,7 @@ while True:
         vec![server.clone()],
     );
     let key = PoolKey {
+        runtime_home: None,
         session_id: "s-start-cancel".into(),
         agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
@@ -2570,6 +2788,7 @@ while True:
         vec![server.clone()],
     );
     let key = PoolKey {
+        runtime_home: None,
         session_id: "s-drop-cancel".into(),
         agent_id: "b1".into(),
         workspace_root: root.path().to_path_buf(),
@@ -2769,6 +2988,7 @@ async fn overlay_read_write_meets_unrestricted_lsp_sandbox_to_workspace_write() 
             None,
             tokio_util::sync::CancellationToken::new(),
             crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+                runtime_home: None,
                 workspace_cwd: None,
                 workspace_root: Some(std::env::temp_dir()),
                 workspace_authority: Some(crate::toolset::WorkspaceAuthority::ReadWrite),
@@ -2808,6 +3028,7 @@ async fn start_client_initializes_with_pool_key_workspace() {
         vec![server.clone()],
     );
     let key = PoolKey {
+        runtime_home: None,
         session_id: "s-overlay-root".into(),
         agent_id: "b1".into(),
         workspace_root: overlay.path().to_path_buf(),
@@ -2866,6 +3087,7 @@ pub(crate) async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispa
     let pool = LspPool::new();
     let tool = LspTool::new(config.clone(), pool.clone()).unwrap();
     let key = PoolKey {
+        runtime_home: None,
         session_id: config.session_id.clone(),
         agent_id: config.agent_id.clone(),
         workspace_root: source.clone(),
@@ -2877,6 +3099,7 @@ pub(crate) async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispa
         None,
         tokio_util::sync::CancellationToken::new(),
         crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+            runtime_home: None,
             workspace_cwd: Some(source.clone()),
             workspace_root: Some(source.clone()),
             workspace_authority: Some(crate::toolset::WorkspaceAuthority::ReadOnly),

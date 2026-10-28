@@ -270,10 +270,7 @@ async fn inactive_file_review_preserves_attempts_without_new_admission() {
     .await
     .expect("inactive route must fail before the delivery timeout")
     .unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "Reconnect this runtime to load new file versions."
-    );
+    assert_inactive_file_review_error(&error);
     let response = ConfigAccess::local(core.node_arc())
         .execute("{ FileImageHydrationRequest { _docID } }")
         .await
@@ -292,10 +289,7 @@ async fn inactive_file_review_preserves_attempts_without_new_admission() {
     .await
     .expect("inactive pending delivery must fail promptly")
     .unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "Reconnect this runtime to load new file versions."
-    );
+    assert_inactive_file_review_error(&error);
     let after = access.execute(&demand_query(&pending)).await.unwrap();
     assert_eq!(before, after);
 
@@ -346,11 +340,18 @@ async fn inactive_file_review_preserves_attempts_without_new_admission() {
     .await
     .expect("an undelivered selected image must not wait on an inactive route")
     .unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "Reconnect this runtime to load new file versions."
-    );
+    assert_inactive_file_review_error(&error);
     let after = access.execute(&demand_query(&selected)).await.unwrap();
     assert_eq!(before, after);
     core.shutdown().await.unwrap();
+}
+
+fn assert_inactive_file_review_error(error: &anyhow::Error) {
+    let classified = error.downcast_ref::<BridgeError>().unwrap();
+    assert_eq!(classified.code, BridgeErrorCode::EndpointUnreachable);
+    assert!(classified.retryable);
+    assert_eq!(
+        classified.message,
+        "Reconnect this runtime to load new file versions."
+    );
 }

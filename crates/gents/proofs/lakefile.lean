@@ -12,6 +12,7 @@ require mathlib from git
 
 def proofRoots : Array Lean.Name := #[
   `Proofs,
+  `Proofs.Conformance.HttpAccess,
   `Proofs.Conformance.ClientObservationOrdering,
   `Proofs.Conformance.ClientSubmissionReceipt,
   `Proofs.Conformance.GoalClientDelivery,

@@ -230,6 +230,9 @@ impl DefraSessionHook {
             .await;
         let runtime_context = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
         let workspace = crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+            runtime_home: runtime_context
+                .as_ref()
+                .and_then(|runtime| runtime.runtime_home.clone()),
             workspace_cwd: runtime_context
                 .as_ref()
                 .and_then(|runtime| runtime.workspace_cwd.clone()),

@@ -511,8 +511,16 @@ fn service_command(command: ServiceCommand) -> Result<()> {
     let home = config.home.clone();
     let manager = NativeServiceManager::new(config)?;
     match action {
-        ServiceAction::Install { network } => {
-            network_settings::install_service(&manager, &home, &network).map(drop)
+        ServiceAction::Install {
+            network,
+            environment_file,
+        } => {
+            let environment = environment_file
+                .as_deref()
+                .map(native_service::read_environment_file)
+                .transpose()?;
+            network_settings::install_service(&manager, &home, &network, environment.as_ref())
+                .map(drop)
         }
         ServiceAction::Start { enable } => manager.start(enable),
         ServiceAction::Stop { keep_enabled } => manager.stop(!keep_enabled),

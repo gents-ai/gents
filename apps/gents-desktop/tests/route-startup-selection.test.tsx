@@ -29,3 +29,15 @@ describe("startup under a route", () => {
     });
   });
 });
+
+it("makes an explicit configuration route the active destination", () => {
+  const app = testApp({
+    deployments: [node({ nodeDid: "did:key:a" }), node({ nodeDid: "did:key:b" })],
+  });
+  function Route() {
+    useFollowRoute({ name: "agent", nodeDid: "did:key:b", section: "profiles" });
+    return null;
+  }
+  renderIn(app, <Route />);
+  expect(app.stores.selection.getState().nodeDid).toBe("did:key:b");
+});

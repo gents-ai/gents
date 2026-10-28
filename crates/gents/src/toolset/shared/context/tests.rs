@@ -154,6 +154,7 @@ async fn request_runtime_workspace_root_replaces_static_root() {
             None,
             tokio_util::sync::CancellationToken::new(),
             crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+                runtime_home: None,
                 workspace_cwd: Some(placement.clone()),
                 workspace_root: Some(std::fs::canonicalize(&placement).unwrap()),
                 workspace_artifact: None,

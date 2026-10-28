@@ -12,21 +12,29 @@ use super::support::streaming_backend::{
 const MODEL: &str = "default";
 const BACKEND_ID: &str = "backend-compaction-gate";
 const REQUEST_MARKER: &str = "compaction-gate-request";
-const COMPACTION_MARKER: &str = "supplied structured-output schema";
 const REUSED_CALL_ID: &str = "provider-call-reused-across-turns";
 const SEEDED_TURNS: usize = 12;
 const SEEDED_TURN_BYTES: usize = 10_000;
 
 pub(super) async fn compaction_runtime_reduces_valid_canonical_history() {
     let db = test_db("compaction-gate").await;
+    let compaction_marker = gents_loop::compaction::summary::compaction_request_prompt();
+    let checkpoint =
+        serde_json::to_string(&gents_loop::compaction::summary::ContinuationCheckpoint {
+            goal: "continue".into(),
+            completed_work: vec!["canonical history summarized".into()],
+            next_actions: vec!["finish the current request".into()],
+            ..Default::default()
+        })
+        .expect("serialize canonical checkpoint");
     let backend = MockStreamingBackend::start_with_plans(
         MODEL,
         vec![
-            StreamPlan::new(
-                COMPACTION_MARKER,
-                vec![StreamResponse::completes(
-                    COMPACTION_MARKER,
-                    [r#"{"goal":"continue","completed_work":["canonical history summarized"]}"#],
+            StreamPlan::current_authored_user(
+                compaction_marker,
+                vec![StreamResponse::streams(
+                    compaction_marker,
+                    vec![StreamChunk::text(checkpoint)],
                 )],
             ),
             StreamPlan::current_authored_user(
@@ -60,7 +68,7 @@ pub(super) async fn compaction_runtime_reduces_valid_canonical_history() {
 
     let first = run_request(&db, &agent, &session_id, "first").await;
     assert_eq!(first.lifecycle_state, RequestLifecycleState::Completed);
-    assert!(backend.observed_requests(COMPACTION_MARKER) >= 1);
+    assert!(backend.observed_requests(compaction_marker) >= 1);
     assert_eq!(
         tool_call_count(db.node.as_ref(), &session_id, REUSED_CALL_ID).await,
         2,

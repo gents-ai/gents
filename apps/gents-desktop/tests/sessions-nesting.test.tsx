@@ -61,7 +61,7 @@ const toggle = (sessionId: string) =>
   screen.getByTestId(`sessions-toggle-${sessionId}`);
 const page = (route: Route) =>
   route.name === "sessions" ? (
-    <SessionsScreen nodeDid={route.nodeDid} entry={route} />
+    <SessionsScreen entry={route} />
   ) : route.name === "sessionsUnder" ? (
     <SessionsScreen under={route.session} entry={route} />
   ) : (
@@ -236,7 +236,6 @@ describe("sessions started by another session", () => {
     const lead = on("did:key:a", "lead");
     const worker = on("did:key:b", "worker", lead);
     const helper = on("did:key:a", "helper", worker);
-    act(() => listViews.setSessionNodes(["did:key:a"]));
     renderRouted(
       testApp({
         deployments: [

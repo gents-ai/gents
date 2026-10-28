@@ -45,11 +45,27 @@ pub enum BackendHealthState {
     Healthy,
     Degraded,
     Unhealthy,
+    CredentialsRequired,
+    SubscriptionNotEntitled,
 }
 
 impl BackendHealthState {
     pub fn blocks_routing(self) -> bool {
-        matches!(self, Self::Unhealthy)
+        matches!(
+            self,
+            Self::Unhealthy | Self::CredentialsRequired | Self::SubscriptionNotEntitled
+        )
+    }
+
+    pub(crate) fn readiness_reason(
+        self,
+    ) -> Option<gents_protocol::node_readiness::AgentReadinessUnavailableReason> {
+        use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
+        match self {
+            Self::CredentialsRequired => Some(Reason::CredentialsRequired),
+            Self::SubscriptionNotEntitled => Some(Reason::SubscriptionNotEntitled),
+            _ => None,
+        }
     }
 
     pub fn as_str(self) -> &'static str {
@@ -58,6 +74,8 @@ impl BackendHealthState {
             Self::Healthy => "healthy",
             Self::Degraded => "degraded",
             Self::Unhealthy => "unhealthy",
+            Self::CredentialsRequired => "credentials_required",
+            Self::SubscriptionNotEntitled => "subscription_not_entitled",
         }
     }
 }
@@ -66,6 +84,9 @@ impl BackendHealthState {
 enum ProbeEvent {
     ProbeSuccess,
     ProbeFail,
+    CredentialsRejected,
+    SubscriptionNotEntitled,
+    ConfigurationChanged,
 }
 
 #[derive(Debug, Clone)]
@@ -74,6 +95,7 @@ struct BackendHealthEntry {
     failure_count: u32,
     last_probe_at: DateTime<Utc>,
     last_error: Option<String>,
+    configuration_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -83,6 +105,17 @@ pub struct BackendHealthSnapshot {
     pub failure_count: u32,
     pub last_probe_at: DateTime<Utc>,
     pub last_error: Option<String>,
+    configuration_fingerprint: Option<String>,
+}
+
+impl BackendHealthSnapshot {
+    pub(crate) fn state_for(&self, backend: &InferenceBackend) -> Option<BackendHealthState> {
+        let fingerprint = probe_configuration_fingerprint(backend);
+        self.configuration_fingerprint
+            .as_ref()
+            .is_none_or(|measured| measured == &fingerprint)
+            .then_some(self.state)
+    }
 }
 
 #[derive(Clone, Default)]
@@ -130,13 +163,33 @@ impl BackendHealthMap {
             .is_some_and(|entry| entry.state.blocks_routing())
     }
 
-    async fn get_model(&self, backend_id: &str) -> (BackendHealthState, u32) {
+    async fn get_model(
+        &self,
+        backend_id: &str,
+        fingerprint: &str,
+        threshold_k: u32,
+    ) -> ((BackendHealthState, u32), BackendHealthState) {
         self.inner
             .read()
             .await
             .get(backend_id)
-            .map(|entry| (entry.state, entry.failure_count))
-            .unwrap_or((BackendHealthState::Unknown, 0))
+            .map(|entry| {
+                let previous = (entry.state, entry.failure_count);
+                let model = if entry
+                    .configuration_fingerprint
+                    .as_ref()
+                    .is_some_and(|measured| measured != fingerprint)
+                {
+                    step_backend(previous, ProbeEvent::ConfigurationChanged, threshold_k)
+                } else {
+                    previous
+                };
+                (model, entry.state)
+            })
+            .unwrap_or((
+                (BackendHealthState::Unknown, 0),
+                BackendHealthState::Unknown,
+            ))
     }
 
     async fn set_entry(&self, backend_id: String, entry: BackendHealthEntry) {
@@ -164,6 +217,7 @@ impl BackendHealthMap {
                 failure_count,
                 last_probe_at: Utc::now(),
                 last_error: None,
+                configuration_fingerprint: None,
             },
         )
         .await;
@@ -177,6 +231,7 @@ fn snapshot_from_entry(backend_id: &str, entry: &BackendHealthEntry) -> BackendH
         failure_count: entry.failure_count,
         last_probe_at: entry.last_probe_at,
         last_error: entry.last_error.clone(),
+        configuration_fingerprint: entry.configuration_fingerprint.clone(),
     }
 }
 
@@ -188,9 +243,20 @@ fn step_backend(
     let threshold_k = threshold_k.max(1);
     match event {
         ProbeEvent::ProbeSuccess => (BackendHealthState::Healthy, 0),
+        ProbeEvent::CredentialsRejected => (
+            BackendHealthState::CredentialsRequired,
+            prev.1.saturating_add(1),
+        ),
+        ProbeEvent::SubscriptionNotEntitled => (
+            BackendHealthState::SubscriptionNotEntitled,
+            prev.1.saturating_add(1),
+        ),
+        ProbeEvent::ConfigurationChanged => (BackendHealthState::Unknown, 0),
         ProbeEvent::ProbeFail => {
             let n = prev.1.saturating_add(1);
-            if n >= threshold_k {
+            if prev.0.readiness_reason().is_some() {
+                (prev.0, n)
+            } else if n >= threshold_k {
                 (BackendHealthState::Unhealthy, n)
             } else {
                 (BackendHealthState::Degraded, n)
@@ -233,8 +299,17 @@ impl ProbeSchedule {
     }
 }
 
+fn probe_configuration_fingerprint(backend: &InferenceBackend) -> String {
+    let connection = crate::admission::backend_connection_fingerprint(&backend.backend_fields());
+    format!(
+        "{connection}:connect={:?}:discovery={:?}",
+        backend.connect_timeout_secs, backend.discovery_timeout_secs
+    )
+}
+
 fn same_probe_inputs(previous: &InferenceBackend, current: &InferenceBackend) -> bool {
     previous.provider_kind == current.provider_kind
+        && previous.openai_wire_api == current.openai_wire_api
         && previous.endpoint == current.endpoint
         && previous.auth == current.auth
         && previous.connect_timeout_secs == current.connect_timeout_secs
@@ -416,7 +491,22 @@ async fn probe_selected_backends(
                         Err(_) => (ProbeEvent::ProbeFail, Some("probe timed out".to_string())),
                     }
                 }
-                Err(error) => (ProbeEvent::ProbeFail, Some(format!("{error:#}"))),
+                Err(error) => {
+                    use crate::oauth_credential::{OAuthAuthProblem, OAuthCredentialAuthError};
+                    let event = match error
+                        .downcast_ref::<OAuthCredentialAuthError>()
+                        .map(|error| &error.problem)
+                    {
+                        Some(
+                            OAuthAuthProblem::Missing
+                            | OAuthAuthProblem::WrongMode { .. }
+                            | OAuthAuthProblem::Expired,
+                        ) => ProbeEvent::CredentialsRejected,
+                        Some(OAuthAuthProblem::NotEntitled) => ProbeEvent::SubscriptionNotEntitled,
+                        _ => ProbeEvent::ProbeFail,
+                    };
+                    (event, Some(format!("{error:#}")))
+                }
             };
             record_probe_event(node, backend, event, error_text, env, &mut outcome).await;
             continue;
@@ -468,19 +558,26 @@ async fn record_probe_event(
         health_map,
         options,
     } = env;
-    let previous = health_map.get_model(&backend.backend_id).await;
+    let fingerprint = probe_configuration_fingerprint(backend);
+    let (previous, observed_state) = health_map
+        .get_model(
+            &backend.backend_id,
+            &fingerprint,
+            options.failure_threshold_k,
+        )
+        .await;
     let next = step_backend(previous, event, options.failure_threshold_k);
-    let veto_flipped = previous.0.blocks_routing() != next.0.blocks_routing();
+    let veto_flipped = observed_state.blocks_routing() != next.0.blocks_routing();
 
-    if veto_flipped {
+    if veto_flipped || observed_state.readiness_reason() != next.0.readiness_reason() {
         tracing::warn!(
             backend_id = %backend.backend_id,
             endpoint = %backend.endpoint,
-            previous_state = %previous.0.as_str(),
+            previous_state = %observed_state.as_str(),
             next_state = %next.0.as_str(),
             failure_count = next.1,
             error = error_text.as_deref().unwrap_or(""),
-            "backend probe: measured health crossed the routing threshold"
+            "backend probe: routing availability or account recovery changed"
         );
         outcome.flipped.push(backend.backend_id.clone());
     } else if event == ProbeEvent::ProbeFail {
@@ -526,6 +623,7 @@ async fn record_probe_event(
                 failure_count: next.1,
                 last_probe_at: now,
                 last_error: error_text,
+                configuration_fingerprint: Some(fingerprint),
             },
         )
         .await;
@@ -690,6 +788,8 @@ mod tests {
             "healthy" => BackendHealthState::Healthy,
             "degraded" => BackendHealthState::Degraded,
             "unhealthy" => BackendHealthState::Unhealthy,
+            "credentials_required" => BackendHealthState::CredentialsRequired,
+            "subscription_not_entitled" => BackendHealthState::SubscriptionNotEntitled,
             other => panic!("Lean backend health case {name} produced unknown state {other:?}"),
         }
     }
@@ -710,6 +810,9 @@ mod tests {
             let event = match case.event.as_str() {
                 "probeSuccess" => ProbeEvent::ProbeSuccess,
                 "probeFail" => ProbeEvent::ProbeFail,
+                "credentialsRejected" => ProbeEvent::CredentialsRejected,
+                "subscriptionNotEntitled" => ProbeEvent::SubscriptionNotEntitled,
+                "configurationChanged" => ProbeEvent::ConfigurationChanged,
                 other => panic!(
                     "Lean backend health case {} produced unknown event {other:?}",
                     case.name
@@ -734,6 +837,18 @@ mod tests {
                 next_state.blocks_routing(),
                 case.blocks_routing,
                 "Lean backend health case {} must match the blocksRouting projection",
+                case.name
+            );
+            assert_eq!(
+                next_state
+                    .readiness_reason()
+                    .map(|reason| serde_json::to_value(reason)
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_owned()),
+                case.readiness_reason,
+                "Lean backend health case {} must match the readiness reason",
                 case.name
             );
         }
@@ -1035,9 +1150,24 @@ mod tests {
         current: &BackendHealthSnapshot,
         event: &str,
     ) {
-        let (state, count) = previous
+        let (mut state, mut count) = previous
             .map(|snapshot| (snapshot.state, snapshot.failure_count))
             .unwrap_or((BackendHealthState::Unknown, 0));
+        if previous.is_some_and(|snapshot| {
+            snapshot.configuration_fingerprint != current.configuration_fingerprint
+        }) {
+            let reset = lean_backend_health_cases()
+                .iter()
+                .find(|case| {
+                    case.start_state == state.as_str()
+                        && case.start_count == count as usize
+                        && case.event == "configurationChanged"
+                        && case.threshold_k == probe_options().failure_threshold_k as usize
+                })
+                .expect("the model emits this connection change");
+            state = state_from_lean(&reset.name, &reset.next_state);
+            count = reset.next_count.try_into().unwrap();
+        }
         let modeled = lean_backend_health_cases()
             .iter()
             .find(|case| {
@@ -1995,12 +2125,138 @@ mod tests {
         )
         .await;
         let snap = health_map.get("codex").await.expect("entry");
-        assert_eq!(snap.state, BackendHealthState::Degraded);
+        assert_eq!(snap.state, BackendHealthState::CredentialsRequired);
         assert!(snap
             .last_error
             .clone()
             .unwrap_or_default()
             .contains("gents codex-login --node-did did:key:z6MkNobody"));
+    }
+
+    #[tokio::test]
+    async fn subscription_probe_preserves_typed_refresh_rejections() {
+        let node = test_node().await;
+        let models = ModelsListener::start();
+        let _env = TOKEN_URL_ENV.lock().await;
+        for (provider, override_env, kind, forbidden_event) in [
+            (
+                crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+                crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
+                crate::backend_provider::BackendProviderKind::ClaudeCliSubscription,
+                "subscriptionNotEntitled",
+            ),
+            (
+                crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+                gents_protocol::chatgpt_oauth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
+                crate::backend_provider::BackendProviderKind::ChatGptCodex,
+                "probeFail",
+            ),
+        ] {
+            let _guard = TokenUrlOverrideGuard(override_env);
+            for (status, body, event) in [
+                (401, r#"{"error":"invalid_grant"}"#, "credentialsRejected"),
+                (400, r#"{"error":"invalid_grant"}"#, "credentialsRejected"),
+                (403, r#"{"error":"forbidden"}"#, forbidden_event),
+                (500, r#"{"error":"unavailable"}"#, "probeFail"),
+            ] {
+                let did = format!("did:key:z6MkRejectedRefresh{provider}{status}");
+                seed_credential(
+                    &node,
+                    &did,
+                    provider,
+                    Utc::now() - chrono::Duration::minutes(1),
+                )
+                .await;
+                let mut backend = oauth_backend(kind, provider, &models.endpoint());
+                backend.node_did = did.clone();
+                let (url, server) = one_shot_token_server(status, body).await;
+                std::env::set_var(override_env, url);
+                let health = BackendHealthMap::new();
+                let outcome = probe_backends_cycle(
+                    &node,
+                    &reqwest::Client::new(),
+                    &[backend],
+                    Utc::now(),
+                    &health,
+                    &probe_options(),
+                    Some(OAuthProbeContext {
+                        node: node.clone(),
+                        node_did: &did,
+                    }),
+                )
+                .await;
+                server.await.unwrap();
+                let snapshot = health.get(provider).await.unwrap();
+                assert_modeled_probe(None, &snapshot, event);
+                assert_eq!(!outcome.flipped.is_empty(), snapshot.state.blocks_routing());
+                assert_eq!(
+                    models.requests(),
+                    0,
+                    "a failed credential resolution must not call discovery"
+                );
+                let error = snapshot.last_error.as_deref().unwrap();
+                assert!(!error.contains("refresh-TEST") && !error.contains("access-TEST"));
+            }
+        }
+        models.shutdown().await;
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn subscription_probe_account_changes_retire_previous_measurement() {
+        let node = test_node().await;
+        let mut backend = claude_backend();
+        backend.auth = crate::document_config::BackendAuth::NodeOAuth {
+            account_ref: Some("account-one".into()),
+        };
+        let health = BackendHealthMap::new();
+        let options = probe_options();
+        let mut outcome = ProbeCycleOutcome::default();
+        record_probe_event(
+            &node,
+            &backend,
+            ProbeEvent::CredentialsRejected,
+            None,
+            ProbeEnv {
+                now: Utc::now(),
+                health_map: &health,
+                options: &options,
+            },
+            &mut outcome,
+        )
+        .await;
+        let rejected = health.get("claude").await.unwrap();
+        assert_modeled_probe(None, &rejected, "credentialsRejected");
+        assert!(rejected.state_for(&backend).unwrap().blocks_routing());
+
+        backend.auth = crate::document_config::BackendAuth::NodeOAuth {
+            account_ref: Some("account-two".into()),
+        };
+        assert_eq!(
+            rejected.state_for(&backend),
+            None,
+            "another account must not inherit the rejected account's measurement"
+        );
+        record_probe_event(
+            &node,
+            &backend,
+            ProbeEvent::ProbeFail,
+            Some("network unavailable".into()),
+            ProbeEnv {
+                now: Utc::now(),
+                health_map: &health,
+                options: &options,
+            },
+            &mut outcome,
+        )
+        .await;
+        let changed = health.get("claude").await.unwrap();
+        assert_modeled_probe(None, &changed, "probeFail");
+        assert_eq!(
+            changed.state_for(&backend),
+            Some(BackendHealthState::Degraded)
+        );
+        node.shutdown().await;
     }
 
     #[tokio::test]

@@ -12,6 +12,7 @@ structure TransitionCase where
   nextState     : HealthState
   nextCount     : Nat
   blocksRouting : Bool
+  readinessReason : Option String
   deriving Repr
 
 namespace TransitionCase
@@ -32,12 +33,13 @@ def build (startState : HealthState) (startCount : Nat) (event : Event)
   , thresholdK := thresholdK
   , nextState := next.state
   , nextCount := next.failureCount
-  , blocksRouting := next.state.blocksRouting }
+  , blocksRouting := next.state.blocksRouting
+  , readinessReason := next.state.readinessReason.map RuntimeState.AgentUnavailableReason.code }
 
 end TransitionCase
 
 def countRange (K : Nat) : List Nat :=
-  List.range K
+  List.range (K + 2)
 
 def transitionCasesFor (K : Nat) (hk : K ≥ 1) : List TransitionCase :=
   HealthState.all.flatMap fun s =>

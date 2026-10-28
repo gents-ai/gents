@@ -25,17 +25,27 @@ const summary = (over: Partial<SessionSummary>) =>
     ...over,
   }) as SessionSummary;
 
-function twoNodes(remote: Record<string, unknown> = {}) {
+function twoNodes(
+  remote: Record<string, unknown> = {},
+  {
+    selectedNodeDid = "did:key:here",
+    localSessions = [],
+  }: { selectedNodeDid?: string; localSessions?: SessionSummary[] } = {},
+) {
   return testApp({
     deployments: [
-      node({ nodeDid: "did:key:here", agents: [agent("default", "Default")] }),
+      node({
+        nodeDid: "did:key:here",
+        agents: [agent("default", "Default")],
+        sessions: localSessions,
+      }),
       node({
         nodeDid: "did:key:there",
         agents: [agent("reviewer", "Code Reviewer")],
         ...remote,
       }),
     ],
-    selection: { nodeDid: "did:key:here" },
+    selection: { nodeDid: selectedNodeDid },
   });
 }
 
@@ -125,19 +135,28 @@ describe("a agent on another node", () => {
       createdAt: new Date().toISOString(),
     } satisfies MailboxItemView;
     renderIn(
-      twoNodes({
-        mailboxItems: [item],
-        sessions: [
-          summary({
-            sessionId: "remote-session",
-            nodeDid: "did:key:there",
-            title: "Diff review",
-          }),
-        ],
-      }),
+      twoNodes(
+        {
+          mailboxItems: [item],
+          sessions: [
+            summary({
+              sessionId: "remote-session",
+              nodeDid: "did:key:there",
+              title: "Diff review",
+            }),
+          ],
+        },
+        {
+          selectedNodeDid: "did:key:there",
+          localSessions: [
+            summary({ sessionId: "remote-session", title: "Wrong title" }),
+          ],
+        },
+      ),
       <MailboxScreen />,
     );
     expect(screen.getByText("in Diff review")).toBeInTheDocument();
+    expect(screen.queryByText("in Wrong title")).not.toBeInTheDocument();
     expect(screen.getByText("Code Reviewer")).toBeInTheDocument();
   });
 });

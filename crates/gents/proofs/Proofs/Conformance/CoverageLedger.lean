@@ -734,6 +734,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::enrollment::generated_enrollment_durable_cases_drive_current_projection")
       "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "enrollment_hydration_route_cases"
+      "EnrollmentHydrationRoutes"
+      "agent::p2p_reconcile::session_hydration_reconcile::tests::generated_hydration_routes_require_current_enrollment_materialization")
+      "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "enrollment_pending_request_cases"
       "EnrollmentPendingRequests"
       "client::core::enrollment::tests::generated_pending_request_satisfaction_matches_lean")
@@ -1210,6 +1215,16 @@ def caseCoverage : List CoverageEntry :=
       "Drives a real failed call without idempotency metadata and observes no retry or eviction. Explicit idempotency metadata and native-command cases are not exercised by this path.")
       "tool-call" [Surface.agentFacing]
   , tagged (consumerCoverage
+      "claude_output_config_cases"
+      "ClaudeStructuredOutput"
+      "gents_loop::claude_messages_body::output_tests::checkpoint_wire_claude_output_matches_executed_model")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "checkpoint_fallback_cases"
+      "CompactionCheckpointRepresentation"
+      "gents_loop::compaction::summary::tests::checkpoint_wire_fallback_matches_executed_model")
+      "compaction" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "command_policy_cases"
       "CommandPolicyValidation"
       "toolset::tests::generated_command_policy_cases_match_rust_validation")
@@ -1224,6 +1239,16 @@ def caseCoverage : List CoverageEntry :=
       "CommandPolicyEnv"
       "toolset::tests::generated_command_env_cases_match_rust_filtering")
       "command-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "command_isolation_cases"
+      "CommandIsolation"
+      "toolset::shared::command::network_enforcement_disclosure_tests::generated_command_isolation_matches_native_policy")
+      "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "command_isolation_cases"
+      "CommandIsolationSeatbelt"
+      "toolset::shared::command::command_credentials::tests::generated_bounded_sandboxes_deny_credentials_and_default_network")
+      "command-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "command_policy_cases"
       "CommandPolicyOperatorUi"

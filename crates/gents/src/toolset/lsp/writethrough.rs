@@ -150,6 +150,8 @@ impl LspWritethrough {
             .unwrap_or_else(|| self.config.session_id.clone());
         let workspace_root = super::overlay_workspace_or(&self.config.workspace);
         let key = PoolKey {
+            runtime_home: crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+                .and_then(|context| context.runtime_home),
             session_id,
             agent_id: self.config.agent_id.clone(),
             workspace_root,

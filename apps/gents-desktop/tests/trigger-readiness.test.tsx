@@ -25,7 +25,7 @@ describe("trigger readiness", () => {
     ] as DeploymentView["nodeReadiness"]["agents"]);
     expect(triggerReadiness(blocked, trigger)).toEqual({
       ok: false,
-      reason: expect.stringContaining("inference credentials are required"),
+      reason: expect.stringContaining("sign in or select another inference account"),
     });
   });
 

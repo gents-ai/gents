@@ -5,6 +5,89 @@ mod common;
 use common::fresh_node;
 
 #[tokio::test]
+async fn applied_pairing_generation_upgrade_preserves_routes_without_granting_authority() {
+    let node = fresh_node().await;
+    let previous = schemas::PEER_PAIRING_APPLIED
+        .replace("    enrollment_request_digest: String\n", "")
+        .replace("    enrollment_authorization_sequence: Int\n", "")
+        .replace("    enrollment_authorization_expires_at: DateTime\n", "");
+    node.add_collection(&previous).await.unwrap();
+    let before = node.get_collection("PeerPairingApplied").unwrap().unwrap();
+    assert_eq!(
+        before.version_id,
+        "bafyreifunn7vevp6b6rzg232gjfypp2lqviafe5now5ldlwo3na5nfinq4"
+    );
+    let created = node
+        .execute(
+            r#"mutation {
+        add_PeerPairingApplied(input: {
+            peer_id: "retained-peer", replicator_addresses: ["retained-address"],
+            updated_at: "2026-10-28T00:00:00Z"
+        }) { _docID }
+    }"#,
+        )
+        .await;
+    assert!(!created.has_errors(), "{created:?}");
+    let identity = created.data.unwrap()["add_PeerPairingApplied"][0]["_docID"]
+        .as_str()
+        .expect("created route identity")
+        .to_owned();
+    let report = ensure_migrations(node.as_ref()).await.unwrap();
+    assert_eq!(report.steps_applied, 1);
+    let after = node.get_collection("PeerPairingApplied").unwrap().unwrap();
+    assert_eq!(
+        after.version_id,
+        "bafyreifiujskeayi7adradcst2jit3srboodcd6ejy2m6gppwy2mv6k7ri"
+    );
+    for field in before.fields {
+        assert_eq!(
+            after
+                .fields
+                .iter()
+                .find(|value| value.name == field.name)
+                .unwrap()
+                .id,
+            field.id,
+            "{} moved",
+            field.name
+        );
+    }
+    let read = node
+        .execute(
+            r#"{ PeerPairingApplied {
+        _docID peer_id replicator_addresses updated_at enrollment_request_digest
+        enrollment_authorization_sequence enrollment_authorization_expires_at
+    } }"#,
+        )
+        .await;
+    assert!(!read.has_errors(), "{read:?}");
+    let data = read.data.unwrap();
+    let row = &data["PeerPairingApplied"][0];
+    assert_eq!(row["_docID"], identity);
+    assert_eq!(row["peer_id"], "retained-peer");
+    assert_eq!(
+        row["replicator_addresses"],
+        serde_json::json!(["retained-address"])
+    );
+    assert_eq!(row["updated_at"], "2026-10-28T00:00:00Z");
+    for field in [
+        "enrollment_request_digest",
+        "enrollment_authorization_sequence",
+        "enrollment_authorization_expires_at",
+    ] {
+        assert!(row[field].is_null(), "upgrade invented {field}");
+    }
+    assert_eq!(
+        ensure_migrations(node.as_ref())
+            .await
+            .unwrap()
+            .steps_applied,
+        0
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn rc1_upgrade_preserves_rows_field_ids_and_restarts() {
     let node = fresh_node().await;
     let profile = schemas::INFERENCE_PROFILE.replace("    service_tier: String\n", "");

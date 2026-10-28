@@ -1313,25 +1313,54 @@ async fn wait_for_hydrated_history(
     }
 }
 
-async fn wait_for_enrollment_desired(node: &EmbeddedNode, peer_id: &str, timeout: Duration) {
+#[derive(Debug, Deserialize)]
+struct HydrationRouteGeneration {
+    enrollment_request_digest: String,
+    enrollment_authorization_sequence: u64,
+    enrollment_authorization_expires_at: String,
+}
+
+async fn wait_for_enrollment_desired(
+    node: &EmbeddedNode,
+    peer_id: &str,
+    timeout: Duration,
+) -> HydrationRouteGeneration {
     let deadline = Instant::now() + timeout;
     let peer_id = escape_graphql_string(peer_id);
     loop {
-        let response = node
-            .execute(&format!(
+        let response = gents::graphql::graphql_with_transaction_retry(
+            node,
+            &format!(
                 r#"{{ PeerPairingDesired(filter: {{
                     peer_id: {{ _eq: "{peer_id}" }}, source: {{ _eq: "enrollment" }}
-                }}) {{ peer_id source }} }}"#,
-            ))
-            .await;
-        let ready = response
+                }}) {{
+                    enrollment_request_digest enrollment_authorization_sequence
+                    enrollment_authorization_expires_at
+                }} }}"#,
+            ),
+            "test.hydration.enrollment_generation",
+        )
+        .await
+        .expect("read enrolled hydration generation");
+        let rows = response
             .data
             .as_ref()
             .and_then(|data| data.get("PeerPairingDesired"))
-            .and_then(Value::as_array)
-            .is_some_and(|rows| rows.len() == 1);
-        if ready {
-            return;
+            .and_then(Value::as_array);
+        if let Some(row) = rows
+            .filter(|rows| rows.len() == 1)
+            .and_then(|rows| rows.first())
+            .filter(|row| {
+                [
+                    "enrollment_request_digest",
+                    "enrollment_authorization_sequence",
+                    "enrollment_authorization_expires_at",
+                ]
+                .iter()
+                .all(|field| !row[*field].is_null())
+            })
+        {
+            return serde_json::from_value(row.clone()).expect("typed enrollment generation");
         }
         assert!(
             Instant::now() < deadline,
@@ -1349,6 +1378,7 @@ async fn install_control_only_authenticated_hydration_route(
     client_addr: &str,
     requester_did: &str,
     node_did: &str,
+    generation: &HydrationRouteGeneration,
 ) {
     use gents::agent::p2p_reconcile::{
         resolve_template, resolve_template_filters, PairingDirection, CLIENT_COLLECTIONS,
@@ -1415,6 +1445,10 @@ async fn install_control_only_authenticated_hydration_route(
     let filters = escape_graphql_string(&serde_json::to_string(&filters).expect("pairing filters"));
     let client_peer = escape_graphql_string(client_peer);
     let client_addr = escape_graphql_string(client_addr);
+    let request_digest = escape_graphql_string(&generation.enrollment_request_digest);
+    let authorization_sequence = generation.enrollment_authorization_sequence;
+    let authorization_expires_at =
+        escape_graphql_string(&generation.enrollment_authorization_expires_at);
     let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let response = server
         .execute(&format!(
@@ -1423,6 +1457,9 @@ async fn install_control_only_authenticated_hydration_route(
                 collections: ["SessionHydrationRequest"],
                 replicator_addresses: ["{client_addr}"],
                 replicator_filter: "{filters}",
+                enrollment_request_digest: "{request_digest}",
+                enrollment_authorization_sequence: {authorization_sequence},
+                enrollment_authorization_expires_at: "{authorization_expires_at}",
                 created_at: "{now}",
                 updated_at: "{now}"
             }}) {{ _docID }} }}"#,
@@ -1476,7 +1513,9 @@ async fn authenticated_enrollment_hydrates_preexisting_session_history() {
         authority_owner,
         enrollment_cancel.clone(),
     ));
-    wait_for_enrollment_desired(server.node.as_ref(), &client_peer, Duration::from_secs(30)).await;
+    let generation =
+        wait_for_enrollment_desired(server.node.as_ref(), &client_peer, Duration::from_secs(30))
+            .await;
     install_control_only_authenticated_hydration_route(
         server.node.as_ref(),
         client.node.as_ref(),
@@ -1484,6 +1523,7 @@ async fn authenticated_enrollment_hydrates_preexisting_session_history() {
         &client_addr,
         &client_did,
         &server_did,
+        &generation,
     )
     .await;
 

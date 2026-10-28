@@ -53,7 +53,7 @@ impl<'a> MakeWriter<'a> for CapturedOutput {
     clippy::disallowed_methods,
     reason = "synchronous test waiting for the wall-clock summary flush"
 )]
-fn filter_caps_a_flood_and_reports_suppression_on_rollover() {
+fn filter_caps_burst_and_sustained_worker_floods_with_context_and_summaries() {
     let output = CapturedOutput::default();
     let filter = RateLimitFilter::with_clock(
         RateLimitConfig {
@@ -91,12 +91,82 @@ fn filter_caps_a_flood_and_reports_suppression_on_rollover() {
         "post-rollover event should be admitted"
     );
 
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let summary_seen = loop {
-        if output
+    CLOCK_OFFSET_MS.store(120_000, Ordering::SeqCst);
+    for _ in 0..=120 {
+        tracing::warn!(
+            target: "workers::worker",
+            task = "idle query",
+            worker = 2,
+            elapsed_ms = 13,
+            limit_ms = 10,
+            "a task held its worker past the limit; move blocking work to spawn_blocking"
+        );
+        CLOCK_OFFSET_MS.fetch_add(500, Ordering::SeqCst);
+    }
+    let worker_lines: Vec<_> = output
+        .lines()
+        .into_iter()
+        .filter(|line| line.contains("a task held its worker past the limit"))
+        .collect();
+    assert_eq!(worker_lines.len(), 2, "one diagnostic per minute");
+    for line in worker_lines {
+        for context in [
+            "task=\"idle query\"",
+            "worker=2",
+            "elapsed_ms=13",
+            "limit_ms=10",
+        ] {
+            assert!(line.contains(context), "missing {context}: {line}");
+        }
+    }
+    for _ in 0..10 {
+        tracing::warn!(target: "workers::worker", task = "panicked query", worker = 2,
+            "a task panicked; its caller gets the error and the worker goes on");
+    }
+    assert_eq!(
+        output
             .lines()
             .iter()
-            .any(|l| l.contains(SUMMARY_TARGET) && l.contains("suppressed=995"))
+            .filter(|line| line.contains("a task panicked"))
+            .count(),
+        5,
+        "other worker diagnostics retain the ordinary ceiling"
+    );
+
+    for _ in 0..10 {
+        tracing::error!(target: "workers::worker", task = "failed query", worker = 2,
+            elapsed_ms = 13, limit_ms = 10, "worker failure with timings");
+        tracing::warn!(target: "different::worker", task = "different task", worker = 2,
+            elapsed_ms = 13, limit_ms = 10, "another subsystem diagnostic");
+    }
+    for message in [
+        "worker failure with timings",
+        "another subsystem diagnostic",
+    ] {
+        assert_eq!(
+            output
+                .lines()
+                .iter()
+                .filter(|line| line.contains(message))
+                .count(),
+            5,
+            "{message} retains the ordinary ceiling"
+        );
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let summary_seen = loop {
+        let lines = output.lines();
+        if lines
+            .iter()
+            .any(|line| line.contains(SUMMARY_TARGET) && line.contains("suppressed=995"))
+            && lines.iter().any(|line| {
+                line.contains(SUMMARY_TARGET)
+                    && line.contains("suppressed=119")
+                    && line.contains("original_target=workers::worker")
+                    && line.contains("original_file=")
+                    && line.contains("original_line=")
+            })
         {
             break true;
         }

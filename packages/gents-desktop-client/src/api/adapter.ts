@@ -96,6 +96,13 @@ export function createDesktopApiAdapter(
         window: request.window,
         limit: request.limit ?? null,
       }),
+    fetchToolFileChanges: (request) =>
+      invokeDesktop("desktop_tool_file_changes", {
+        nodeDid: request.nodeDid,
+        sessionId: request.sessionId,
+        requestId: request.requestId,
+        toolCallDocId: request.toolCallDocId,
+      }),
     fetchSessionLiveDelta: (request) =>
       invokeDesktop("desktop_session_live_delta", {
         sessionId: request.sessionId,

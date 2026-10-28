@@ -764,6 +764,7 @@ async fn read_only_workspace_authority_denies_file_writes() {
             None,
             tokio_util::sync::CancellationToken::new(),
             crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+                runtime_home: None,
                 workspace_cwd: Some(root.clone()),
                 workspace_root: Some(std::fs::canonicalize(&root).unwrap()),
                 workspace_authority: Some(WorkspaceAuthority::ReadOnly),
@@ -817,6 +818,7 @@ async fn read_write_overlay_meets_unrestricted_bash_to_workspace_write() {
             None,
             tokio_util::sync::CancellationToken::new(),
             crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+                runtime_home: None,
                 workspace_cwd: Some(root.clone()),
                 workspace_root: Some(std::fs::canonicalize(&root).unwrap()),
                 workspace_authority: Some(WorkspaceAuthority::ReadWrite),
@@ -2648,6 +2650,7 @@ async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_lau
             crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
                 None, tokio_util::sync::CancellationToken::new(),
                 crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+                    runtime_home: None,
                     workspace_cwd: Some(root.clone()), workspace_root: Some(root.clone()),
                     workspace_authority: Some(WorkspaceAuthority::ReadOnly), workspace_artifact: grant,
                 }, None, None, None, Default::default(), background,
@@ -2715,6 +2718,7 @@ with socket.socket() as connection:
             None,
             tokio_util::sync::CancellationToken::new(),
             crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+                runtime_home: None,
                 workspace_cwd: Some(root.clone()),
                 workspace_root: Some(root.clone()),
                 workspace_authority: Some(WorkspaceAuthority::ReadOnly),
@@ -2847,6 +2851,7 @@ async fn run_artifact_compiler_fixture(build_script: Option<&str>) {
         let result = crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
             None, tokio_util::sync::CancellationToken::new(),
             crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+                runtime_home: None,
                 workspace_cwd: Some(root.clone()), workspace_root: Some(root.clone()),
                 workspace_authority: Some(WorkspaceAuthority::ReadOnly), workspace_artifact: Some(fx.grant.clone()),
             }, None, None, None, Default::default(), false,

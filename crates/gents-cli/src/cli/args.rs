@@ -256,6 +256,12 @@ pub(crate) enum ServiceCommand {
         target: ServiceTargetArgs,
         #[command(flatten)]
         network: ServiceNetworkArgs,
+        #[arg(
+            long,
+            value_name = "JSON",
+            help = "Replace custom non-secret service environment from a JSON string dictionary; {} clears it. Omit to preserve entries. PATH and GENTS_SYSTEM_LOG remain managed"
+        )]
+        environment_file: Option<PathBuf>,
     },
     #[command(about = "Start the native service")]
     Start {
@@ -313,9 +319,16 @@ pub(crate) struct ServiceNetworkArgs {
 }
 
 pub(crate) enum ServiceAction {
-    Install { network: ServiceNetworkArgs },
-    Start { enable: bool },
-    Stop { keep_enabled: bool },
+    Install {
+        network: ServiceNetworkArgs,
+        environment_file: Option<PathBuf>,
+    },
+    Start {
+        enable: bool,
+    },
+    Stop {
+        keep_enabled: bool,
+    },
     Restart,
     Enable,
     Disable,
@@ -326,7 +339,17 @@ pub(crate) enum ServiceAction {
 impl ServiceCommand {
     pub(crate) fn into_parts(self) -> (Option<PathBuf>, Option<PathBuf>, ServiceAction) {
         let (target, action) = match self {
-            Self::Install { target, network } => (target, ServiceAction::Install { network }),
+            Self::Install {
+                target,
+                network,
+                environment_file,
+            } => (
+                target,
+                ServiceAction::Install {
+                    network,
+                    environment_file,
+                },
+            ),
             Self::Start { target, enable } => (target, ServiceAction::Start { enable }),
             Self::Stop {
                 target,

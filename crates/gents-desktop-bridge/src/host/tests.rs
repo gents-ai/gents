@@ -798,3 +798,19 @@ fn generated_storage_failures_keep_their_code_in_host_errors() {
         }
     }
 }
+
+#[test]
+fn file_review_availability_keeps_its_typed_code_through_host_context() {
+    for code in [
+        crate::BridgeErrorCode::ProjectionPending,
+        crate::BridgeErrorCode::EndpointUnreachable,
+        crate::BridgeErrorCode::Unsupported,
+    ] {
+        let expected = crate::BridgeError::new(code, "File review is unavailable.");
+        let error = anyhow::Error::new(expected.clone()).context("loading recorded versions");
+        let encoded = serde_json::to_value(super::backend_error(error)).unwrap();
+        assert_eq!(encoded["code"], code.as_str());
+        assert_eq!(encoded["retryable"], expected.retryable);
+        assert_eq!(encoded["message"], expected.message);
+    }
+}

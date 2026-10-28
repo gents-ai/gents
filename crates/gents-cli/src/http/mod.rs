@@ -1,3 +1,4 @@
+pub(crate) mod access;
 pub(crate) mod enrollment;
 pub(crate) mod explorer;
 pub(crate) mod file_inventory;

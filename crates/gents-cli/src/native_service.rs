@@ -6,6 +6,9 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 
+mod environment;
+pub use environment::read_environment_file;
+
 #[cfg(not(all(feature = "native-e2e", debug_assertions)))]
 pub const SERVICE_LABEL: &str = "ai.gents.runtime";
 #[cfg(all(feature = "native-e2e", debug_assertions))]
@@ -446,6 +449,22 @@ where
     }
 
     pub fn install(&self) -> Result<()> {
+        self.install_environment(None)
+    }
+
+    /// Explicit replacement of custom entries; an empty map clears them.
+    /// Ordinary reinstalls and desktop updates preserve its custom entries.
+    pub fn install_with_environment(
+        &self,
+        environment: &std::collections::BTreeMap<String, String>,
+    ) -> Result<()> {
+        self.install_environment(Some(environment))
+    }
+
+    fn install_environment(
+        &self,
+        replacement: Option<&std::collections::BTreeMap<String, String>>,
+    ) -> Result<()> {
         validate_config(&self.config)?;
         ensure_durable_service_executable(
             &self.config.executable,
@@ -458,19 +477,31 @@ where
             .context("native service definition has no parent")?;
         fs::create_dir_all(parent)
             .with_context(|| format!("creating service directory {}", parent.display()))?;
+        let installed = match fs::read(&path) {
+            Ok(installed) => {
+                self.ensure_owned_definition(&installed)?;
+                Some(installed)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error).context("reading the installed native service"),
+        };
+        let contents = environment::apply(
+            self.platform,
+            self.render_definition()?,
+            installed.as_deref(),
+            replacement,
+        )?;
         self.prepare_stderr_log()?;
-        let contents = self.render_definition()?;
-        if path.exists() {
-            let installed = fs::read(&path)
-                .with_context(|| format!("reading installed native service {}", path.display()))?;
-            self.ensure_owned_definition(&installed)?;
+        if let Some(installed) = installed {
             if installed != contents.as_bytes() {
                 let status = self.status()?;
                 if status.running
                     || (self.platform == NativeServicePlatform::Linux
                         && status.is_active_or_transitioning())
                 {
-                    bail!("native service is running or transitioning; stop it before updating its executable or environment");
+                    bail!(
+                        "native service is running or transitioning; stop it before updating its executable or environment"
+                    );
                 }
                 if self.platform == NativeServicePlatform::Macos {
                     let target = format!("gui/{}/{}", self.current_uid()?, SERVICE_LABEL);
@@ -1042,6 +1073,8 @@ pub(crate) fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
 /// Adaptive classification follows XPC activity, while the desktop bridge uses
 /// loopback HTTP, so it cannot reflect active requests; keep this service in
 /// the Interactive class intended for jobs whose responsiveness is user-facing.
+/// A successful child exit is not an operator Stop. Supervision ends when the
+/// job is unloaded; repeated exits remain subject to launchd's restart throttle.
 fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
     let executable = xml_path(&config.executable, "executable")?;
     let home = xml_path(&config.home, "home")?;
@@ -1057,7 +1090,9 @@ fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
         })
         .transpose()?
         .unwrap_or_default();
-    let environment = format!("\n  <key>EnvironmentVariables</key>\n  <dict><key>GENTS_SYSTEM_LOG</key><string>1</string>{search_path}</dict>");
+    let environment = format!(
+        "\n  <key>EnvironmentVariables</key>\n  <dict><key>GENTS_SYSTEM_LOG</key><string>1</string>{search_path}</dict>"
+    );
     let stderr = config
         .stderr_path
         .as_deref()
@@ -1089,7 +1124,8 @@ fn render_launchd(config: &NativeServiceConfig) -> Result<String> {
     <string>{executable}</string><string>server</string><string>--home</string><string>{home}</string>
   </array>{environment}{associated_bundle}{stderr}
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
   <key>ProcessType</key><string>Interactive</string>
 </dict></plist>
 "#
@@ -1109,20 +1145,28 @@ fn render_systemd(config: &NativeServiceConfig) -> Result<String> {
             .to_str()
             .context("home path is not valid UTF-8")?,
     )?;
-    let search_path = config
-        .search_path
-        .as_ref()
-        .map(|value| systemd_environment("PATH", &value.to_string_lossy()))
-        .transpose()?
-        .map(|value| format!("Environment={value}\n"))
-        .unwrap_or_default();
+    // systemd applies EnvironmentFile and UnsetEnvironment after Environment.
+    // Set the installer-owned values in the executed process environment so
+    // preserved operator directives cannot replace or remove them.
+    let mut command = vec![systemd_arg("/usr/bin/env")?, "--".to_owned()];
+    command.push(systemd_arg("GENTS_SYSTEM_LOG=1")?);
+    if let Some(path) = &config.search_path {
+        command.push(systemd_arg(&format!("PATH={}", path.to_string_lossy()))?);
+    }
+    command.push(executable);
+    command.push(systemd_arg("server")?);
+    command.push(systemd_arg("--home")?);
+    command.push(home);
     let stderr = config
         .stderr_path
         .as_deref()
         .map(systemd_append_target)
         .transpose()?
         .unwrap_or_else(|| "journal".to_string());
-    Ok(format!("[Unit]\nDescription=Gents node runtime\n\n[Service]\nType=simple\nExecStart={executable} \"server\" \"--home\" {home}\nEnvironment=\"GENTS_SYSTEM_LOG=1\"\n{search_path}StandardOutput=journal\nStandardError={stderr}\nRestart=on-failure\nRestartPreventExitStatus={INCOMPATIBLE_STORE_EXIT_CODE} {INSECURE_KEY_EXIT_CODE} {FOREIGN_STORE_EXIT_CODE}\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n"))
+    Ok(format!(
+        "[Unit]\nDescription=Gents node runtime\n\n[Service]\nType=simple\nExecStart={}\nStandardOutput=journal\nStandardError={stderr}\nRestart=always\nRestartPreventExitStatus={INCOMPATIBLE_STORE_EXIT_CODE} {INSECURE_KEY_EXIT_CODE} {FOREIGN_STORE_EXIT_CODE}\nRestartSec=2\n\n[Install]\nWantedBy=default.target\n",
+        command.join(" ")
+    ))
 }
 
 /// `append:` takes the rest of the line as the path after specifier expansion.
@@ -1252,10 +1296,18 @@ fn systemd_executable(unit: &str) -> Result<String> {
         .lines()
         .find_map(|line| line.strip_prefix("ExecStart="))
         .context("systemd definition has no ExecStart")?;
-    let (executable, _) = exec
+    let (prefix, _) = exec
         .split_once(" \"server\" \"--home\" ")
         .context("systemd definition is not a Gents foreground server invocation")?;
-    parse_systemd_quoted(executable)
+    match prefix.split_once(" -- ") {
+        Some(("\"/usr/bin/env\"", _)) => {
+            let start = prefix
+                .rfind(" \"")
+                .context("systemd environment wrapper has no executable argument")?;
+            parse_systemd_quoted(&prefix[start + 1..])
+        }
+        _ => parse_systemd_quoted(prefix),
+    }
 }
 
 fn parse_systemd_quoted(value: &str) -> Result<String> {

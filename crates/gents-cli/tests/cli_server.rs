@@ -331,6 +331,33 @@ async fn server_rejects_ephemeral_http_port_before_publishing_readiness() -> Res
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn server_rejects_unspecified_explicit_http_addresses() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("home");
+    fs::create_dir_all(&home)?;
+    for address in ["0.0.0.0", "::"] {
+        let stderr = run_cli_failure_stderr(
+            &home,
+            &[
+                "server",
+                "--home",
+                home.to_str().unwrap(),
+                "--http-addr",
+                address,
+                "--http-port",
+                &allocate_port()?.to_string(),
+            ],
+        )?;
+        assert!(
+            stderr.contains("refusing to bind") && stderr.contains("unspecified address"),
+            "{stderr}"
+        );
+        assert!(!home.join("runtime.json").exists());
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_fails_closed_when_http_port_is_occupied() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
@@ -562,9 +589,22 @@ async fn served_home_admits_only_its_principal_over_http() -> Result<()> {
                     .any(|row| row["compaction_key"] == format!("nac-{phase}"))),
             "{phase}: principal could not read its row: {owner_rows}"
         );
+        let operator_authorization = support::graphql::served_endpoint(&graphql)
+            .authorization()?
+            .context("served principal authorization")?;
         for surface in ["self", "sessions"] {
+            let anonymous = reqwest::Client::new()
+                .get(format!("http://127.0.0.1:{port}/{surface}"))
+                .send()
+                .await?;
+            assert_eq!(
+                anonymous.status(),
+                reqwest::StatusCode::UNAUTHORIZED,
+                "{phase}: anonymous /{surface} must require the served principal"
+            );
             let response = reqwest::Client::new()
                 .get(format!("http://127.0.0.1:{port}/{surface}"))
+                .header(reqwest::header::AUTHORIZATION, &operator_authorization)
                 .send()
                 .await?;
             assert!(
@@ -722,7 +762,14 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
 
-    let client = reqwest::Client::new();
+    let authorization = support::graphql::served_endpoint(&graphql)
+        .authorization()?
+        .context("fixture operator is missing")?;
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(reqwest::header::AUTHORIZATION, authorization.parse()?);
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()?;
 
     let version_response = client
         .get(format!("http://127.0.0.1:{port}/version"))
@@ -754,6 +801,49 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         version.get("build").and_then(Value::as_object).is_some(),
         "expected build metadata in /version body: {version}"
     );
+
+    let bootstrap = gents_desktop_core::local_runtime::fetch_runtime_connection_payload(&format!(
+        "http://127.0.0.1:{port}"
+    ))
+    .await?;
+    assert_eq!(bootstrap["node_did"], node_did);
+    assert!(bootstrap.get("enrollment").is_some());
+    for field in [
+        "home",
+        "tool_root",
+        "agents",
+        "backends",
+        "runtimes",
+        "p2p",
+        "context_budget",
+    ] {
+        assert!(bootstrap.get(field).is_none(), "{field}: {bootstrap}");
+    }
+    let anonymous = reqwest::Client::new();
+    let refused = anonymous
+        .get(format!("http://127.0.0.1:{port}/sessions"))
+        .send()
+        .await?;
+    assert_eq!(refused.status(), reqwest::StatusCode::UNAUTHORIZED);
+    for path in [
+        "/sessions",
+        "/status",
+        "/version",
+        "/explorer",
+        "/explorer/",
+        "/explorer/assets/missing.js",
+    ] {
+        let rebound = anonymous
+            .get(format!("http://127.0.0.1:{port}{path}"))
+            .header(reqwest::header::HOST, "attacker.example")
+            .send()
+            .await?;
+        assert_eq!(
+            rebound.status(),
+            reqwest::StatusCode::MISDIRECTED_REQUEST,
+            "{path}"
+        );
+    }
 
     let health_response = client
         .get(format!("http://127.0.0.1:{port}/healthz"))
@@ -789,6 +879,12 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
 
     let status_response = client
         .get(format!("http://127.0.0.1:{port}/status"))
+        .header(
+            reqwest::header::AUTHORIZATION,
+            support::graphql::served_endpoint(&graphql)
+                .authorization()?
+                .context("fixture operator is missing")?,
+        )
         .send()
         .await
         .context("fetching /status")?;
@@ -1000,6 +1096,12 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
 
     let status_response = client
         .get(format!("http://127.0.0.1:{port}/status"))
+        .header(
+            reqwest::header::AUTHORIZATION,
+            support::graphql::served_endpoint(&graphql)
+                .authorization()?
+                .context("fixture operator is missing")?,
+        )
         .send()
         .await
         .context("fetching /status after seeding context fixtures")?;
@@ -1470,7 +1572,14 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
     .await?;
     wait_for_inference_call_state(&graphql, &request_id, "running").await?;
 
-    let client = reqwest::Client::new();
+    let authorization = support::graphql::served_endpoint(&graphql)
+        .authorization()?
+        .context("fixture operator is missing")?;
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(reqwest::header::AUTHORIZATION, authorization.parse()?);
+    let client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()?;
     let stable_deadline = Instant::now() + Duration::from_secs(5);
     let (
         snapshot,
@@ -1818,6 +1927,12 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
 
     let status_response = reqwest::Client::new()
         .get(format!("http://127.0.0.1:{port}/status"))
+        .header(
+            reqwest::header::AUTHORIZATION,
+            support::graphql::served_endpoint(&graphql)
+                .authorization()?
+                .context("fixture operator is missing")?,
+        )
         .send()
         .await
         .context("fetching /status")?;

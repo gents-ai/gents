@@ -99,22 +99,7 @@ export async function openChat(page: Page) {
 
 export async function openConfig(page: Page) {
   await expect(page.getByTestId("app-shell")).toBeVisible();
-  const configLink = page
-    .getByRole("link", { name: /configuration|configure/i })
-    .filter({ visible: true });
-  if ((await configLink.count()) > 0) {
-    /* a pointer on the rail opens the nav panel over this link 80 ms later,
-       and focus opens it and the avatar's card at once: a slow click, or a
-       keyboard press, leaves them covering the page it opens */
-    await configLink.first().dispatchEvent("click");
-  } else {
-    await page.getByRole("button", { name: "Menu" }).click();
-    await page
-      .getByRole("link", { name: /configuration|Configure/i })
-      .filter({ visible: true })
-      .first()
-      .click();
-  }
+  await page.getByRole("link", { name: "Active node", exact: true }).click();
   await expect(page.getByTestId("agent-screen")).toBeVisible();
 }
 

@@ -9,6 +9,7 @@ fn readiness_reason(code: &str) -> gents_protocol::row::AgentReadinessUnavailabl
         "backend_disabled" => Reason::BackendDisabled,
         "backend_temporarily_unavailable" => Reason::BackendTemporarilyUnavailable,
         "credentials_required" => Reason::CredentialsRequired,
+        "subscription_not_entitled" => Reason::SubscriptionNotEntitled,
         "inference_profile_invalid" => Reason::InferenceProfileInvalid,
         "tool_configuration_invalid" => Reason::ToolConfigurationInvalid,
         "tool_surface_unavailable" => Reason::ToolSurfaceUnavailable,

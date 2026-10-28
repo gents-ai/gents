@@ -34,6 +34,8 @@ pub(super) fn generated_backend_health_cases_pin_threshold_and_veto_shape() {
         gents::BackendHealthState::Healthy,
         gents::BackendHealthState::Degraded,
         gents::BackendHealthState::Unhealthy,
+        gents::BackendHealthState::CredentialsRequired,
+        gents::BackendHealthState::SubscriptionNotEntitled,
     ];
 
     for case in cases {
@@ -43,8 +45,15 @@ pub(super) fn generated_backend_health_cases_pin_threshold_and_veto_shape() {
             case.name
         );
         assert!(
-            matches!(case.event.as_str(), "probeSuccess" | "probeFail"),
-            "case {} carries unknown event {:?}: the prober models only the two probe outcomes",
+            matches!(
+                case.event.as_str(),
+                "probeSuccess"
+                    | "probeFail"
+                    | "credentialsRejected"
+                    | "subscriptionNotEntitled"
+                    | "configurationChanged"
+            ),
+            "case {} carries unknown backend health event {:?}",
             case.name,
             case.event
         );

@@ -63,6 +63,9 @@ pub(crate) struct LeanContractVocabulary<'a> {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanContractSnapshot {
+    pub(crate) claude_output_config_cases: Vec<serde_json::Value>,
+    pub(crate) checkpoint_fallback_cases: Vec<serde_json::Value>,
+    pub(crate) checkpoint_list_fields: Vec<String>,
     pub(crate) generated_by: String,
     pub(crate) schema_publication_cases: Vec<serde_json::Value>,
     pub(crate) root_admission_cases: Vec<LeanRootAdmissionCase>,
@@ -219,6 +222,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) session_hydration_admission_cases: Vec<LeanSessionHydrationAdmissionCase>,
     pub(crate) enrollment_cases: Vec<LeanEnrollmentCase>,
     pub(crate) enrollment_durable_projection_cases: Vec<LeanEnrollmentDurableProjectionCase>,
+    pub(crate) enrollment_hydration_route_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_pending_request_cases: Vec<serde_json::Value>,
     pub(crate) enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
     pub(crate) enrollment_digest_cases: Vec<LeanEnrollmentDigestCase>,
@@ -290,6 +294,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) deviations: Vec<LeanDeviation>,
     pub(crate) command_policy_cases: Vec<LeanCommandPolicyCase>,
     pub(crate) command_sandbox_cases: Vec<LeanCommandSandboxCase>,
+    pub(crate) command_isolation_cases: Vec<serde_json::Value>,
     pub(crate) artifact_mode_meet_cases: Vec<serde_json::Value>,
     pub(crate) artifact_admission_cases: Vec<serde_json::Value>,
     pub(crate) artifact_spawn_cases: Vec<serde_json::Value>,
