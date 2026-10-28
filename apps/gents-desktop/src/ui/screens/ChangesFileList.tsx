@@ -10,7 +10,7 @@ import { shortFolder, type ChangedFile } from "@/lib/turnChanges";
 import { useViewed } from "@/app/viewedFiles";
 import type { SessionScope } from "../../lib/recordedFiles";
 import { keepFileListWidth, setFileListWidth, useFileListWidth } from "./changes";
-import { ViewedMark } from "./ChangedFileSection";
+import { FileContextMenu, ViewedMark } from "./ChangedFileSection";
 import { FileRow } from "./TurnChanges";
 
 const LIST_MIN = 140;
@@ -19,6 +19,8 @@ const LIST_MIN = 140;
     its handle drags it wider. */
 export function ChangesFileList({
   scope,
+  remote,
+  onViewed,
   files,
   within,
   current,
@@ -26,6 +28,9 @@ export function ChangesFileList({
   onChoose,
 }: {
   scope: SessionScope;
+  /** the session ran on another node */
+  remote: boolean;
+  onViewed: (file: ChangedFile, viewed: boolean) => void;
   files: readonly ChangedFile[];
   within: string;
   current: string;
@@ -64,6 +69,8 @@ export function ChangesFileList({
           <ListedFile
             key={f.path}
             scope={scope}
+            remote={remote}
+            onViewed={onViewed}
             file={f}
             within={within}
             chosen={f.path === current}
@@ -75,12 +82,32 @@ export function ChangesFileList({
   );
 }
 
+/* a file in the list, whose right-click holds the file's own items */
 function ListedFile({
   scope,
+  remote,
+  onViewed,
   ...row
-}: Omit<Parameters<typeof FileRow>[0], "mark"> & { scope: SessionScope }) {
+}: Omit<Parameters<typeof FileRow>[0], "mark"> & {
+  scope: SessionScope;
+  remote: boolean;
+  onViewed: (file: ChangedFile, viewed: boolean) => void;
+}) {
   const viewed = useViewed(scope, row.file);
-  return <FileRow {...row} mark={viewed ? <ViewedMark /> : undefined} />;
+  return (
+    <FileContextMenu
+      scope={scope}
+      file={row.file}
+      within={row.within}
+      remote={remote}
+      viewed={viewed}
+      onViewed={(next) => onViewed(row.file, next)}
+      whole={null}
+      render={<div />}
+    >
+      <FileRow {...row} mark={viewed ? <ViewedMark /> : undefined} />
+    </FileContextMenu>
+  );
 }
 
 /** Drags the file list wider or narrower, up to most of the panel; arrow

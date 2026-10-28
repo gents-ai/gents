@@ -201,3 +201,36 @@ test("a file marked viewed folds away with a check, stays folded, and opens agai
   await expect(header).toHaveAttribute("aria-expanded", "true");
   await expect(section.getByRole("img", { name: "Viewed" })).toHaveCount(0);
 });
+
+test("a right-click on a file's header or its row in the list gives the file's menu", async ({
+  page,
+}) => {
+  await gotoHarness(page, "coding");
+  await page
+    .getByTestId("sessions-screen")
+    .getByRole("link", { name: /introduction-and-greetings/ })
+    .click();
+  await page
+    .getByTestId("turn-changes")
+    .getByRole("button", { name: /lexer\.rs/ })
+    .click();
+  const lexer = page.locator("section[data-path='src/lexer.rs']");
+  await lexer.locator("button[aria-expanded]").first().click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Copy diff" })).toBeVisible();
+  await page.getByRole("menuitem", { name: "Mark as viewed" }).click();
+  await expect(lexer.locator("button[aria-expanded]").first()).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+
+  const list = page.getByRole("navigation", { name: "Files changed in this turn" });
+  test.skip(!(await list.isVisible()), "the panel is too narrow for its file list");
+  await list.getByRole("button", { name: /parser\.rs/ }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Mark as viewed" }).click();
+  const parser = page.locator("section[data-path='src/parser.rs']");
+  await expect(parser.locator("button[aria-expanded]").first()).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  await expect(list.getByRole("img", { name: "Viewed" })).toHaveCount(2);
+});

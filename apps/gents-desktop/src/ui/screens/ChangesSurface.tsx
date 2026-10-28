@@ -6,7 +6,7 @@ import { useRecordedDiffReader } from "../../hooks/fileChanges";
 import { useHomeDid } from "@/hooks/useClient";
 import { useSelectedSessionValue } from "@/hooks/useSelectedSession";
 import { thinScrollbar } from "@/lib/scrollbar";
-import { sharedFolder } from "@/lib/turnChanges";
+import { sharedFolder, type ChangedFile } from "@/lib/turnChanges";
 import { ChangedFileSection } from "./ChangedFileSection";
 import { ChangesFileList } from "./ChangesFileList";
 import { ChangesPicker } from "./ChangesPicker";
@@ -167,6 +167,19 @@ function TurnDiffs({ shown }: { shown: ShownChanges }) {
   }, [shown]);
 
   const choose = (path: string) => changesView.choose(shown.scope, path);
+  /* viewed folds a file away, and not viewed brings it back */
+  const markViewed = useCallback(
+    (file: ChangedFile, viewed: boolean) => {
+      viewedFiles.set(shown.scope, file, viewed);
+      setClosed((was) => {
+        const next = new Set(was);
+        if (viewed) next.add(file.path);
+        else next.delete(file.path);
+        return next;
+      });
+    },
+    [shown.scope],
+  );
   const toggle = useCallback(
     (path: string) =>
       setClosed((was) => {
@@ -209,6 +222,7 @@ function TurnDiffs({ shown }: { shown: ShownChanges }) {
                 near={near.has(file.path)}
                 remote={remote}
                 onToggle={toggle}
+                onViewed={markViewed}
                 sections={sections.current}
               />
             ))}
@@ -220,6 +234,8 @@ function TurnDiffs({ shown }: { shown: ShownChanges }) {
         {files.length > 1 && listOpen && (
           <ChangesFileList
             scope={shown.scope}
+            remote={remote}
+            onViewed={markViewed}
             files={files}
             within={within}
             current={current}
