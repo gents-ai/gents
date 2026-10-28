@@ -132,6 +132,21 @@ theorem queue_delivery_is_barrier (active entry : QueueEntry) (rest : List Queue
     steeringRun active admitted (entry :: rest) = [] := by
   simp [steeringRun, steersInto, h]
 
+theorem agent_message_queue_and_interrupt_are_barriers
+    (mode : AgentMessageMode) (allowed stop : Bool) (delivery : QueueDelivery)
+    (active entry : QueueEntry) (rest : List QueueEntry) (admitted : List RequestId)
+    (hmode : mode = .queue ∨ mode = .interrupt)
+    (hdecision : agentMessageDelivery? mode allowed = some (delivery, stop))
+    (hentry : entry.delivery = delivery) :
+    steeringRun active admitted (entry :: rest) = [] := by
+  have hqueue : delivery = .queue := by
+    rcases hmode with rfl | rfl
+    · simp [agentMessageDelivery?] at hdecision
+      exact hdecision.1.symm
+    · cases allowed <;> simp [agentMessageDelivery?] at hdecision
+      exact hdecision.1.symm
+  exact queue_delivery_is_barrier active entry rest admitted (hentry.trans hqueue)
+
 theorem stale_input_is_barrier (active entry : QueueEntry) (rest : List QueueEntry)
     (admitted : List RequestId) (h : entry.fresh = false) :
     steeringRun active admitted (entry :: rest) = [] := by
