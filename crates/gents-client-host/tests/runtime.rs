@@ -2438,6 +2438,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             "goal-delivery",
         )
         .await?;
+        editor_goal_delivery::verify_images(&provider)?;
         let evidence = editor_goal_delivery::verify(
             &access,
             &mut client,
