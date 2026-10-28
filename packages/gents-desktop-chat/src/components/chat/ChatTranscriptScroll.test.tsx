@@ -113,6 +113,12 @@ test("retains the latest user row when scrolling away from an active long turn",
   );
   expect(screen.queryByText("latest user marker")).not.toBeNull();
   expect(screen.queryByText("new response")).not.toBeNull();
+  panel.scrollTop = 11500;
+  fireEvent.scroll(panel);
+  expect(screen.queryByText("latest user marker")).not.toBeNull();
+  panel.scrollTop = 5000;
+  fireEvent.scroll(panel);
+  expect(screen.queryByText("latest user marker")).not.toBeNull();
 
   const streamed = Array.from({ length: 50 }, (_, index) => ({
     kind: "assistantMessage" as const,
