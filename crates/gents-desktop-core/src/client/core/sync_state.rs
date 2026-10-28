@@ -633,7 +633,7 @@ mod tests {
     async fn activation_failure_updates_notify_once_and_clear_on_recovery() {
         let (_temp, owner) = super::ClientSyncStateOwner::for_test(vec![], vec![]).await;
         let mut observed = owner.subscribe();
-        let failures = [(
+        let failures: std::collections::BTreeMap<_, _> = [(
             "request".to_owned(),
             super::super::EnrollmentActivationFailure {
                 request_digest: "digest".to_owned(),
