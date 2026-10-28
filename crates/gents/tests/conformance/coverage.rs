@@ -483,6 +483,16 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     ));
     for (category, domain, present) in [
         (
+            "catalog_refresh_cases",
+            "CatalogRefreshCases",
+            !snapshot.catalog_refresh_cases.is_empty(),
+        ),
+        (
+            "request_terminal_selection_cases",
+            "RequestTerminalSelectionCases",
+            !snapshot.request_terminal_selection_cases.is_empty(),
+        ),
+        (
             "claude_output_config_cases",
             "ClaudeStructuredOutput",
             !snapshot.claude_output_config_cases.is_empty(),

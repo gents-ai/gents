@@ -1,7 +1,7 @@
 use super::*;
 use gents::session::canonical_rows::{
-    AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS, decode_output_segment_row,
-    decode_transcript_message_row,
+    decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
+    AGENT_OUTPUT_SEGMENT_FIELDS,
 };
 
 pub struct DocumentPatch {

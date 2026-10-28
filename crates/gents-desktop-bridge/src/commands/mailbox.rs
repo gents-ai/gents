@@ -18,7 +18,7 @@ pub async fn observe_mailbox_item(
     );
     gents::mailbox::load_mailbox_item(core.node(), &request.item_id)
         .await?
-        .map(|item| mailbox_observation(&requester, &item))
+        .map(|item| mailbox_observation(requester, &item))
         .transpose()
 }
 

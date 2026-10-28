@@ -925,7 +925,7 @@ async fn catalog_freshness_survives_reopen_and_adopts_retained_payloads() -> Res
     assert!(row["catalog_freshness"].is_null());
     assert_eq!(
         decode_backend_observation(row)?.catalogs,
-        [original.clone()]
+        std::slice::from_ref(&original)
     );
     record_model_catalog(&node, &backend, original.clone()).await?;
     record_model_catalog(&node, &backend, catalog_action(&actions[1], &backend)?).await?;

@@ -56,6 +56,20 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "backend_registry::tests::generated_catalog_refreshes_preserve_payload_commits_and_latest_freshness",
+            package: "gents",
+            source_path: "crates/gents/src/backend_registry/tests.rs",
+            module_path: "backend_registry::tests",
+            function: "generated_catalog_refreshes_preserve_payload_commits_and_latest_freshness",
+        },
+        ConformanceConsumer::RustTest {
+            id: "agent::p2p_reconcile::session_hydration_reconcile::selection::tests::generated_terminal_selections_preserve_superseded_session_hydration",
+            package: "gents",
+            source_path: "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/selection/tests.rs",
+            module_path: "agent::p2p_reconcile::session_hydration_reconcile::selection::tests",
+            function: "generated_terminal_selections_preserve_superseded_session_hydration",
+        },
+        ConformanceConsumer::RustTest {
             id: "gents_loop::claude_messages_body::output_tests::checkpoint_wire_claude_output_matches_executed_model",
             package: "gents-loop",
             source_path: "crates/gents-loop/src/claude_messages_output_tests.rs",

@@ -296,7 +296,7 @@ test("a page landing mid-wheel keeps the wheel's whole travel", async ({
       const top = scroller.getBoundingClientRect().top;
       const row = Array.from(
         scroller.querySelectorAll<HTMLElement>("[data-timeline-key]"),
-      ).find((r) => r.getBoundingClientRect().bottom > top + 200)!;
+      ).find((r) => r.getBoundingClientRect().bottom > top + 72)!;
       return {
         key: row.dataset.timelineKey!,
         offset: Math.round(row.getBoundingClientRect().top - top),

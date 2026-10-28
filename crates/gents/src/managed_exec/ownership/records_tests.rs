@@ -113,7 +113,7 @@ fn strict_and_recovery_reads_ignore_staged_files_and_unrelated_entries() {
     std::fs::write(directory.path().join("staged.json.tmp"), b"partial").unwrap();
     std::fs::write(directory.path().join("other.txt"), b"other").unwrap();
     std::fs::create_dir(directory.path().join("unrelated")).unwrap();
-    assert_eq!(store.list(), [row.clone()]);
+    assert_eq!(store.list(), std::slice::from_ref(&row));
     assert_eq!(store.try_list().unwrap(), [row]);
 }
 
@@ -123,7 +123,7 @@ fn volatile_store_clones_share_the_same_strict_and_recovery_view() {
     let row = record("document");
     let clone = store.clone();
     store.write(&row).unwrap();
-    assert_eq!(clone.list(), [row.clone()]);
+    assert_eq!(clone.list(), std::slice::from_ref(&row));
     assert_eq!(clone.try_list().unwrap(), [row]);
     clone.remove("document");
     assert!(store.list().is_empty());

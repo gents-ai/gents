@@ -98,7 +98,10 @@ function PageSurface() {
   const page = registry.getArea(PLUGIN_PAGE_AREA)[0];
   if (!page?.render) return <p data-testid="no-page">no page</p>;
   return (
-    <div data-testid="page-viewport" style={{ height: 320 }}>
+    <div
+      data-testid="page-viewport"
+      style={{ display: "flex", flexDirection: "column", height: 320 }}
+    >
       <ContribBoundary id={page.id}>{page.render()}</ContribBoundary>
     </div>
   );

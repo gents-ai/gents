@@ -446,6 +446,9 @@ test.describe("kit shell", () => {
 
   for (const method of ["button", "shortcut"] as const) {
     test(`search ${method} waits for session context to close`, async ({ page }) => {
+      if (method === "button") {
+        await page.setViewportSize({ width: 1024, height: 768 });
+      }
       await gotoHarness(page);
       await page
         .getByTestId("sessions-screen")

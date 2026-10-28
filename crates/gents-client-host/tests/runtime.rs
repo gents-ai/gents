@@ -121,6 +121,9 @@ enum Journey {
     EditorRelatedWorkFailure,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorQuestions,
+    /// Restarts the client during reply recovery. Transient deltas need not
+    /// survive that outage, so hold the provider response through Goal controls
+    /// and qualify the same owned request plus its final durable output.
     Goal,
 }
 
@@ -840,6 +843,12 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             if journey.is_steering() && request["messages"].to_string().contains(STEERING_INPUT) {
                 return ChatAction::Sse(fake_llm::completion_text_sse(STEERING_REPLY));
             }
+            if matches!(journey, Journey::Goal) {
+                return ChatAction::WaitThenSse(
+                    provider_gate.clone(),
+                    fake_llm::completion_text_sse("First part and final part."),
+                );
+            }
             ChatAction::GatedSse(
                 vec![(
                     Duration::ZERO,
@@ -1251,29 +1260,31 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     })
     .await
     .context("the canonical session header was not observed")?;
-    tokio::time::timeout(Duration::from_secs(30), async {
-        loop {
-            let projection = read_session(&mut client, &mut id, node_did, session).await?;
-            let live = projection["timelineItems"].as_array().is_some_and(|items| {
-                items.iter().any(|item| {
-                    item["kind"] == "liveAssistant"
-                        && item["content"]
-                            .as_str()
-                            .is_some_and(|text| text.contains("First part"))
-                })
-            });
-            if live {
-                ensure!(
-                    projection["turnState"] != "completed",
-                    "stream bytes must precede completion"
-                );
-                return Ok::<_, anyhow::Error>(());
+    if !matches!(journey, Journey::Goal) {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let projection = read_session(&mut client, &mut id, node_did, session).await?;
+                let live = projection["timelineItems"].as_array().is_some_and(|items| {
+                    items.iter().any(|item| {
+                        item["kind"] == "liveAssistant"
+                            && item["content"]
+                                .as_str()
+                                .is_some_and(|text| text.contains("First part"))
+                    })
+                });
+                if live {
+                    ensure!(
+                        projection["turnState"] != "completed",
+                        "stream bytes must precede completion"
+                    );
+                    return Ok::<_, anyhow::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .context("live output was not observed before provider completion")??;
+        })
+        .await
+        .context("live output was not observed before provider completion")??;
+    }
     if matches!(journey, Journey::RuntimeReplacement) {
         runtime_replacement::refuse_busy(&host_binary, &node_home).await?;
         let unchanged = access.execute(&signed_query).await?;
@@ -1345,6 +1356,47 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     if matches!(journey, Journey::Goal) {
         let mut view = wait_goal(&mut client, &mut id, node_did, session, "active").await?;
         ensure!(view["goal"]["goalId"] == receipt["goalId"]);
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let captured = provider.captured_chat_requests();
+                if captured.iter().any(|request| {
+                    request["messages"].as_array().is_some_and(|messages| {
+                        messages.iter().any(|message| {
+                            message["role"] == "user"
+                                && match &message["content"] {
+                                    Value::String(text) => text == "Return the fixture response.",
+                                    Value::Array(parts) => parts
+                                        .iter()
+                                        .any(|part| part["text"] == "Return the fixture response."),
+                                    _ => false,
+                                }
+                        })
+                    })
+                }) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .context("the held Goal provider request was not observed")?;
+        let current = access
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id lifecycle_state interrupt_requested_at }} }}"#,
+                gents::graphql::escape_graphql_string(&original_doc_id)
+            ))
+            .await?;
+        let rows = current["data"]["AgentRequest"]
+            .as_array()
+            .context("current Goal request rows")?;
+        ensure!(
+            rows.len() == 1
+                && rows[0]["_docID"] == original_doc_id
+                && rows[0]["request_id"] == request
+                && rows[0]["lifecycle_state"] == "processing"
+                && rows[0]["interrupt_requested_at"].is_null(),
+            "Goal recovery must preserve the same processing request before controls: {rows:?}"
+        );
         for status in ["paused", "active", "paused"] {
             let result = client
                 .call(
@@ -1364,13 +1416,15 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             );
             view = wait_goal(&mut client, &mut id, node_did, session, status).await?;
             let requests = access.execute(&format!(r#"{{ AgentRequest(filter: {{ node_did: {{_eq: "{}"}},
-                session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ lifecycle_state interrupt_requested_at }} }}"#,
+                session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}} }}) {{ _docID request_id lifecycle_state interrupt_requested_at }} }}"#,
                 gents::graphql::escape_graphql_string(node_did), gents::graphql::escape_graphql_string(session))).await?;
             let rows = requests["data"]["AgentRequest"]
                 .as_array()
                 .context("goal request rows")?;
             ensure!(
                 rows.len() == 1
+                    && rows[0]["_docID"] == original_doc_id
+                    && rows[0]["request_id"] == request
                     && rows[0]["lifecycle_state"] == "processing"
                     && rows[0]["interrupt_requested_at"].is_null(),
                 "goal controls must preserve the current owned turn"
