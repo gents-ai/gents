@@ -137,15 +137,10 @@ pub(crate) fn inventory_image_entry<'a>(
     {
         return None;
     }
-    let Some(entry) = page
-        .receipt
+    page.receipt
         .page
         .entries
         .get(usize::from(reference.entry_index))
-    else {
-        return None;
-    };
-    Some(entry)
 }
 
 pub(crate) fn authorize_inventory_image_read<'a>(

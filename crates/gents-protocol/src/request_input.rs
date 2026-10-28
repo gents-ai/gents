@@ -85,7 +85,7 @@ impl RequestInput {
     /// typed captures. This observation grants no request or workspace authority.
     pub fn captured_input_compatible(&self, runtime_version: Option<u64>) -> bool {
         (self.attachments.is_empty() || matches!(runtime_version, Some(2 | 3)))
-            && (self.captured_context.is_empty() || matches!(runtime_version, Some(1 | 2 | 3)))
+            && (self.captured_context.is_empty() || matches!(runtime_version, Some(1..=3)))
             && (self
                 .captured_context
                 .iter()
