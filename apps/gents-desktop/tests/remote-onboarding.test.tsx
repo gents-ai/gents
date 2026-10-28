@@ -192,4 +192,26 @@ describe("remote onboarding", () => {
     expect(screen.getByRole("heading", { name: "Connect to your node" })).toBeVisible();
     expect(onDone).not.toHaveBeenCalled();
   });
+  it("keeps saved node choices disabled while submitting access", async () => {
+    const app = testApp({
+      snapshot: snapshot([request], true),
+      supportsManagedServer: false,
+    });
+    let finish!: (value: EnrollmentRequestView) => void;
+    vi.spyOn(app.actions, "requestStatusEnrollment").mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    renderIn(app, <SetupScreen onDone={vi.fn()} />);
+    await userEvent.type(screen.getByRole("textbox"), "https://other.example");
+    await userEvent.click(screen.getByRole("button", { name: "Request access" }));
+    expect(
+      screen.getByRole("button", { name: "View request to My computer" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Continue to My computer" }),
+    ).toBeDisabled();
+    await act(async () => finish(request));
+  });
 });

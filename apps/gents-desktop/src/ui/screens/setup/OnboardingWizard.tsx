@@ -454,6 +454,7 @@ export function OnboardingWizard({
                 key={node.nodeDid}
                 className="mb-3 w-full"
                 variant="outline"
+                disabled={busy}
                 onClick={() => onDone(snapshot, node.nodeDid)}
               >
                 <span className="truncate">Continue to {node.label}</span>
@@ -470,6 +471,7 @@ export function OnboardingWizard({
                 key={request.requestId}
                 className="min-w-0 w-full"
                 variant="outline"
+                disabled={busy}
                 onClick={() => {
                   setEnrollment(request);
                   dispatch({ type: "requested" });
@@ -485,6 +487,7 @@ export function OnboardingWizard({
         <div className="grid gap-3">
           {allowLocal && (
             <Option
+              disabled={busy}
               selected={where === "local"}
               onSelect={() => setWhere("local")}
               title="Local node"
@@ -572,6 +575,7 @@ export function OnboardingWizard({
             </Option>
           )}
           <Option
+            disabled={busy}
             selected={where === "remote"}
             onSelect={() => setWhere("remote")}
             title="Remote connect"
@@ -587,7 +591,8 @@ export function OnboardingWizard({
             >
               <Field label="Server address">
                 <Input
-                  type="url"
+                  inputMode="url"
+                  disabled={busy}
                   enterKeyHint="go"
                   autoCapitalize="none"
                   autoCorrect="off"

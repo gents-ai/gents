@@ -46,10 +46,21 @@ export function useMobileVisualViewport() {
     if (!viewport) return;
 
     const root = document.documentElement;
+    let width = 0;
+    let height = 0;
+    let followFocus = true;
     let frame: number | null = null;
     let revealFrame: number | null = null;
     let settleTimer: ReturnType<typeof setTimeout> | null = null;
+    const cancelReveal = () => {
+      followFocus = false;
+      if (revealFrame != null) cancelAnimationFrame(revealFrame);
+      if (settleTimer != null) clearTimeout(settleTimer);
+      revealFrame = null;
+      settleTimer = null;
+    };
     const scheduleReveal = () => {
+      if (!followFocus) return;
       if (revealFrame == null) {
         revealFrame = requestAnimationFrame(() => {
           revealFrame = null;
@@ -61,6 +72,10 @@ export function useMobileVisualViewport() {
         settleTimer = null;
         revealFocusedControl(viewport);
       }, KEYBOARD_SETTLE_DELAY_MS);
+    };
+    const onFocus = () => {
+      followFocus = true;
+      scheduleReveal();
     };
     const apply = () => {
       frame = null;
@@ -80,7 +95,9 @@ export function useMobileVisualViewport() {
       root.style.setProperty(WIDTH, `${viewport.width}px`);
       root.style.setProperty(TOP, `${Math.max(0, viewport.offsetTop)}px`);
       root.style.setProperty(LEFT, `${Math.max(0, viewport.offsetLeft)}px`);
-      scheduleReveal();
+      if (width !== viewport.width || height !== viewport.height) scheduleReveal();
+      width = viewport.width;
+      height = viewport.height;
     };
     const schedule = () => {
       if (frame == null) frame = requestAnimationFrame(apply);
@@ -93,7 +110,9 @@ export function useMobileVisualViewport() {
     window.addEventListener("resize", schedule);
     window.addEventListener("pageshow", schedule);
     window.addEventListener("orientationchange", schedule);
-    document.addEventListener("focusin", scheduleReveal);
+    document.addEventListener("focusin", onFocus);
+    document.addEventListener("touchmove", cancelReveal, { passive: true });
+    document.addEventListener("wheel", cancelReveal, { passive: true });
     return () => {
       if (frame != null) cancelAnimationFrame(frame);
       if (revealFrame != null) cancelAnimationFrame(revealFrame);
@@ -103,7 +122,9 @@ export function useMobileVisualViewport() {
       window.removeEventListener("resize", schedule);
       window.removeEventListener("pageshow", schedule);
       window.removeEventListener("orientationchange", schedule);
-      document.removeEventListener("focusin", scheduleReveal);
+      document.removeEventListener("focusin", onFocus);
+      document.removeEventListener("touchmove", cancelReveal);
+      document.removeEventListener("wheel", cancelReveal);
       root.style.removeProperty(HEIGHT);
       root.style.removeProperty(WIDTH);
       root.style.removeProperty(TOP);
