@@ -437,7 +437,9 @@ fn versioned_background_wake_never_projects_as_a_user_turn() {
         build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
             .expect("snapshot");
     assert!(snapshot.messages[0].runtime_control);
-    assert!(snapshot.timeline_items.is_empty());
+    assert!(matches!(snapshot.timeline_items.as_slice(), [
+        RenderedTimelineItem::AutomatedInput { content: Some(content), .. }
+    ] if content == "wake"));
 }
 
 #[test]
@@ -547,11 +549,12 @@ fn folded_user_input_stays_visible_when_a_runtime_request_consumes_it() {
         assert!(snapshot.messages[1].origin.is_none(), "{head_source}");
         assert!(
             matches!(snapshot.timeline_items.as_slice(), [
+            RenderedTimelineItem::AutomatedInput { content: Some(control), sequence: Some(1), .. },
             RenderedTimelineItem::UserMessage {
                 input_request_id: Some(input), content: Some(content), owns_turn: false, ..
             },
             RenderedTimelineItem::AssistantMessage { .. },
-        ] if input == "input-request" && content == "please include the latest change"),
+        ] if control == "runtime continuation" && input == "input-request" && content == "please include the latest change"),
             "{head_source}: {:?}",
             snapshot.timeline_items
         );

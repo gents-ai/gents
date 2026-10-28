@@ -168,7 +168,7 @@ pub(super) fn build_rendered_timeline(
         let automated = message.origin.clone().filter(|_| is_user);
         let is_background_control = is_user && message.runtime_control;
         let unresolved = message.reconstruction_state != ReconstructionState::Ready;
-        let keep = !is_background_control
+        let keep = (!is_background_control || automated.is_some())
             && (unresolved
                 || (!message.has_tool_results
                     && (!normalize_timeline_text(message.display_content.as_deref()).is_empty()
@@ -457,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn internal_completions_remain_hidden_when_their_origin_is_known() {
+    fn internal_completions_retain_inspectable_inputs_when_their_origin_is_known() {
         for text in [
             "<tool-completion tool_call_id=\"spawned:call\" tool_name=\"bash_unrestricted\" status=\"completed\"><result>finished</result></tool-completion>",
             "<tool-completion tool_call_id=\"spawned:call\" tool_name=\"bash_unrestricted\" status=\"failed\"><result>error: no bin target named `verad`</result><reason>tool_failed</reason></tool-completion>",
@@ -469,7 +469,8 @@ mod tests {
                 input_text: Some(text.into()),
                 ..user_message("internal-completion", 1, text)
             };
-            assert!(build_rendered_timeline(&[message], &[], &[]).is_empty());
+            assert!(matches!(build_rendered_timeline(&[message], &[], &[]).as_slice(),
+                [RenderedTimelineItem::AutomatedInput { content: Some(content), .. }] if content == text));
             assert!(matches!(build_rendered_timeline(&[user_message("person", 1, text)], &[], &[]).as_slice(),
                 [RenderedTimelineItem::UserMessage { content: Some(content), .. }] if content == text));
         }
