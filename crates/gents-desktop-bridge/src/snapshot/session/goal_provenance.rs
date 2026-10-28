@@ -9,15 +9,33 @@ use gents_protocol::output::{
 };
 use gents_protocol::row::AgentRequestRow;
 
-use crate::types::{DesktopSessionSnapshot, ReconstructionState, RenderedTimelineItem};
+use crate::types::{
+    DesktopSessionSnapshot, MessageView, PendingTurnView, ReconstructionState, RenderedTimelineItem,
+};
 
-pub(crate) async fn attach(
+struct ProvenanceView<'a> {
+    node_did: Option<&'a str>,
+    session_id: &'a str,
+    messages: &'a [MessageView],
+    pending: Vec<&'a PendingTurnView>,
+}
+
+struct ObservedProvenance<'source, 'request> {
+    confirmed: gents::goal::OpeningGoalProvenance,
+    candidates: Vec<&'request AgentRequestRow>,
+    copied: Vec<(
+        &'source str,
+        &'source gents_protocol::output::TranscriptMessage,
+    )>,
+}
+
+async fn observe<'source, 'request>(
     access: &dyn ConfigRead,
-    requests: &[AgentRequestRow],
-    headers: &[TranscriptMessageRow],
-    dependencies: Option<&CanonicalTranscriptDependencies>,
-    snapshot: &mut DesktopSessionSnapshot,
-) {
+    requests: &'request [AgentRequestRow],
+    headers: &'source [TranscriptMessageRow],
+    dependencies: Option<&'source CanonicalTranscriptDependencies>,
+    view: ProvenanceView<'_>,
+) -> Option<ObservedProvenance<'source, 'request>> {
     let mut read = BTreeSet::new();
     let mut candidates = Vec::new();
     for request in requests {
@@ -34,15 +52,14 @@ pub(crate) async fn attach(
         };
         let owner = gents::lifecycle::input_message_owner(request);
         let has_message = owner.as_ref().is_some_and(|(_, key)| {
-            snapshot.messages.iter().any(|message| {
+            view.messages.iter().any(|message| {
                 message.message_key == *key
                     && message.input_request_id.as_deref() == Some(&request.request_id)
             })
         });
-        let has_pending = snapshot
-            .pending_turn
+        let has_pending = view
+            .pending
             .iter()
-            .chain(snapshot.queued_turns.iter())
             .any(|turn| turn.request_doc_id.as_deref() == Some(doc));
         if !(has_message || has_pending) || !read.insert(doc) {
             continue;
@@ -65,11 +82,11 @@ pub(crate) async fn attach(
     let copied = headers
         .iter()
         .filter(|row| {
-            row.message.session_id == snapshot.session_id
-                && snapshot.node_did.as_deref() == Some(row.message.node_did.as_str())
+            row.message.session_id == view.session_id
+                && view.node_did == Some(row.message.node_did.as_str())
                 && row.message.role == MessageRole::User
                 && matches!(row.message.publication, MessagePublication::Fork { .. })
-                && snapshot.messages.iter().any(|message| {
+                && view.messages.iter().any(|message| {
                     message.message_key == row.message.message_key
                         && message.reconstruction_state == ReconstructionState::Ready
                 })
@@ -100,8 +117,46 @@ pub(crate) async fn attach(
         Ok(confirmed) => confirmed,
         Err(error) => {
             tracing::warn!(error = %error, "opening Goal provenance unavailable");
-            return;
+            return None;
         }
+    };
+    Some(ObservedProvenance {
+        confirmed,
+        candidates,
+        copied,
+    })
+}
+
+pub(crate) async fn attach(
+    access: &dyn ConfigRead,
+    requests: &[AgentRequestRow],
+    headers: &[TranscriptMessageRow],
+    dependencies: Option<&CanonicalTranscriptDependencies>,
+    snapshot: &mut DesktopSessionSnapshot,
+) {
+    let Some(ObservedProvenance {
+        confirmed,
+        candidates,
+        copied,
+    }) = observe(
+        access,
+        requests,
+        headers,
+        dependencies,
+        ProvenanceView {
+            node_did: snapshot.node_did.as_deref(),
+            session_id: &snapshot.session_id,
+            messages: &snapshot.messages,
+            pending: snapshot
+                .pending_turn
+                .iter()
+                .chain(snapshot.queued_turns.iter())
+                .collect(),
+        },
+    )
+    .await
+    else {
+        return;
     };
     for request in candidates {
         let Some(doc) = request.doc_id.as_deref() else {
@@ -176,6 +231,65 @@ pub(crate) async fn attach(
                 if item_key == key {
                     *started_goal_id = Some(goal_id.clone());
                 }
+            }
+        }
+    }
+}
+
+pub(super) async fn attach_messages(
+    access: &dyn ConfigRead,
+    requests: &[AgentRequestRow],
+    headers: &[TranscriptMessageRow],
+    dependencies: Option<&CanonicalTranscriptDependencies>,
+    scope: (&str, &str),
+    messages: &mut [MessageView],
+) {
+    let Some(ObservedProvenance {
+        confirmed,
+        candidates,
+        copied,
+    }) = observe(
+        access,
+        requests,
+        headers,
+        dependencies,
+        ProvenanceView {
+            node_did: Some(scope.0),
+            session_id: scope.1,
+            messages,
+            pending: Vec::new(),
+        },
+    )
+    .await
+    else {
+        return;
+    };
+    for request in candidates {
+        let Some(goal_id) = request
+            .doc_id
+            .as_deref()
+            .and_then(|doc| confirmed.by_request_doc_id.get(doc))
+        else {
+            continue;
+        };
+        let owner = gents::lifecycle::input_message_owner(request);
+        for message in messages.iter_mut() {
+            if owner
+                .as_ref()
+                .is_some_and(|(_, key)| message.message_key == *key)
+                && message.input_request_id.as_deref() == Some(&request.request_id)
+            {
+                message.started_goal_id = Some(goal_id.clone());
+            }
+        }
+    }
+    for (key, origin) in copied {
+        let Some(goal_id) = confirmed.by_message_key.get(&origin.message_key) else {
+            continue;
+        };
+        for message in messages.iter_mut() {
+            if message.message_key == key {
+                message.started_goal_id = Some(goal_id.clone());
             }
         }
     }
