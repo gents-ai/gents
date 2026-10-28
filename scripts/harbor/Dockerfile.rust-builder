@@ -8,4 +8,10 @@ RUN apt-get update \
         protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
-RUN rustup target add wasm32-unknown-unknown
+# Preserve the Bullseye glibc floor while selecting the repository's compiler.
+COPY rust-toolchain.toml /opt/gents-build-toolchain/rust-toolchain.toml
+RUN cd /opt/gents-build-toolchain \
+    && rustup toolchain install --no-self-update \
+    && gents_toolchain="$(rustup show active-toolchain)" \
+    && rustup default "${gents_toolchain%% *}" \
+    && rustup target add wasm32-unknown-unknown
