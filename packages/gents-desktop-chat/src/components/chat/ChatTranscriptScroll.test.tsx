@@ -27,6 +27,12 @@ test("retains the latest user row when scrolling away from an active long turn",
     value: vi.fn(),
   });
   const timelineItems: RenderedTimelineItem[] = [
+    ...Array.from({ length: 20 }, (_, index) => ({
+      kind: "assistantMessage" as const,
+      itemKey: `older-${index}`,
+      content: `older response ${index}`,
+      reconstruction: { state: "ready" as const },
+    })),
     {
       kind: "userMessage",
       itemKey: "user",
