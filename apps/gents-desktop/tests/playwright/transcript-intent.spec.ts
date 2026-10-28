@@ -19,8 +19,11 @@ test.describe("transcript input at its scroll boundary", () => {
       const viewport = page.locator(
         '[data-slot="scroll-area-viewport"][data-following]',
       );
-      await viewport.hover();
-      await page.mouse.wheel(0, -4000);
+      await viewport.evaluate((scroller) => {
+        scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }));
+        scroller.scrollTop = 0;
+        scroller.dispatchEvent(new Event("scroll"));
+      });
       await expect
         .poll(() => viewport.evaluate((scroller) => scroller.scrollTop))
         .toBe(0);

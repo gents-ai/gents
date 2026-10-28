@@ -17,90 +17,114 @@ function scroller(page: Page) {
   return page.locator('[data-slot="scroll-area-viewport"][data-following]');
 }
 
+/** Measure the action before idle timers or older-page delivery can add unrelated work. */
 async function cost(
+  page: Page,
   viewport: Locator,
   act: "scroll" | "chunk" | "jump",
 ): Promise<Cost> {
-  return viewport.evaluate(async (scroller, act) => {
-    const rect = Element.prototype.getBoundingClientRect;
-    const point = document.elementFromPoint;
-    if (act === "scroll") document.elementFromPoint = () => null;
-    const position = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
-    let rects = 0;
-    let rowRects = 0;
-    const measuredRows = new Set<Element>();
-    let writes = 0;
-    let scrolls = 0;
-    const onScroll = () => {
-      scrolls += 1;
-    };
-    scroller.addEventListener("scroll", onScroll);
-    const height = scroller.scrollHeight;
-    Element.prototype.getBoundingClientRect = function (this: Element) {
-      rects += 1;
-      if (this.matches("[data-row-key]")) {
-        rowRects += 1;
-        measuredRows.add(this);
-      }
-      return rect.call(this);
-    };
-    Object.defineProperty(scroller, "scrollTop", {
-      configurable: true,
-      get: () => position.get!.call(scroller),
-      set: (value: number) => {
-        writes += 1;
-        position.set!.call(scroller, value);
-      },
-    });
-    try {
-      if (act !== "chunk") {
-        const before = position.get!.call(scroller) as number;
-        const delta =
-          act === "jump" ? scroller.clientHeight * 2 : before >= 20 ? -20 : 20;
-        await new Promise<void>((resolve) => {
-          scroller.addEventListener("scroll", () => resolve(), { once: true });
-          scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: delta }));
-          position.set!.call(scroller, before + delta);
-        });
-      } else {
-        window.__GENTS_MOBILE_PERFORMANCE__!.streamText(
-          "\n\nMore of the reply, long enough to wrap onto a second line in the column.",
-        );
-        const deadline = performance.now() + 3000;
-        while (scroller.scrollHeight <= height && performance.now() < deadline)
-          await new Promise((resolve) => requestAnimationFrame(resolve));
-      }
-      await new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
-      );
-      return {
-        rects,
-        rowRects,
-        measuredRows: measuredRows.size,
-        writes,
-        scrolls,
-        rows: scroller.querySelectorAll("[data-row-key]").length,
-        loaded: Number(
-          scroller.querySelector("[data-transcript-list]")?.getAttribute("data-rows") ??
-            0,
-        ),
-        grew: scroller.scrollHeight > height,
+  await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.holdOlderPages());
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 60_000));
+  await page.clock.runFor(1000);
+  let finished = false;
+  const measurement = viewport
+    .evaluate(async (scroller, act) => {
+      const rect = Element.prototype.getBoundingClientRect;
+      const point = document.elementFromPoint;
+      if (act === "scroll") document.elementFromPoint = () => null;
+      const position = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")!;
+      let rects = 0;
+      let rowRects = 0;
+      const measuredRows = new Set<Element>();
+      let writes = 0;
+      let scrolls = 0;
+      const onScroll = () => {
+        scrolls += 1;
       };
-    } finally {
-      document.elementFromPoint = point;
-      scroller.removeEventListener("scroll", onScroll);
-      Element.prototype.getBoundingClientRect = rect;
-      delete (scroller as Partial<HTMLElement>).scrollTop;
-    }
-  }, act);
+      scroller.addEventListener("scroll", onScroll);
+      const height = scroller.scrollHeight;
+      Element.prototype.getBoundingClientRect = function (this: Element) {
+        rects += 1;
+        if (this.matches("[data-row-key]")) {
+          rowRects += 1;
+          measuredRows.add(this);
+        }
+        return rect.call(this);
+      };
+      Object.defineProperty(scroller, "scrollTop", {
+        configurable: true,
+        get: () => position.get!.call(scroller),
+        set: (value: number) => {
+          writes += 1;
+          position.set!.call(scroller, value);
+        },
+      });
+      scroller.dataset.measuringCost = "true";
+      try {
+        if (act !== "chunk") {
+          const before = position.get!.call(scroller) as number;
+          const delta =
+            act === "jump" ? scroller.clientHeight * 2 : before >= 20 ? -20 : 20;
+          await new Promise<void>((resolve) => {
+            scroller.addEventListener("scroll", () => resolve(), { once: true });
+            scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: delta }));
+            position.set!.call(scroller, before + delta);
+          });
+        } else {
+          window.__GENTS_MOBILE_PERFORMANCE__!.streamText(
+            "\n\nMore of the reply, long enough to wrap onto a second line in the column.",
+          );
+          const deadline = performance.now() + 3000;
+          while (scroller.scrollHeight <= height && performance.now() < deadline)
+            await new Promise((resolve) => requestAnimationFrame(resolve));
+        }
+        await new Promise((resolve) =>
+          requestAnimationFrame(() => requestAnimationFrame(resolve)),
+        );
+        return {
+          rects,
+          rowRects,
+          measuredRows: measuredRows.size,
+          writes,
+          scrolls,
+          rows: scroller.querySelectorAll("[data-row-key]").length,
+          loaded: Number(
+            scroller
+              .querySelector("[data-transcript-list]")
+              ?.getAttribute("data-rows") ?? 0,
+          ),
+          grew: scroller.scrollHeight > height,
+        };
+      } finally {
+        document.elementFromPoint = point;
+        scroller.removeEventListener("scroll", onScroll);
+        Element.prototype.getBoundingClientRect = rect;
+        delete (scroller as Partial<HTMLElement>).scrollTop;
+        delete scroller.dataset.measuringCost;
+      }
+    }, act)
+    .finally(() => {
+      finished = true;
+    });
+  void measurement.catch(() => {});
+  try {
+    await expect.poll(() => viewport.getAttribute("data-measuring-cost")).toBe("true");
+    for (let frame = 0; frame < 200 && !finished; frame += 1)
+      await page.clock.runFor(16);
+    expect(finished).toBe(true);
+    return await measurement;
+  } finally {
+    await page.clock.resume();
+    await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.releaseOlderPages());
+  }
 }
 
 /* a scroll's cost, as the middle of five scroll events: other work that
    lands while one is measured, a page read ahead or a write at rest, is
    not the scroll's own */
-async function scrollCost(viewport: Locator): Promise<Cost> {
+async function scrollCost(page: Page, viewport: Locator): Promise<Cost> {
   const costs: Cost[] = [];
-  for (let n = 0; n < 5; n += 1) costs.push(await cost(viewport, "scroll"));
+  for (let n = 0; n < 5; n += 1) costs.push(await cost(page, viewport, "scroll"));
   return costs.sort((a, b) => a.rects - b.rects)[2]!;
 }
 
@@ -165,6 +189,7 @@ test.describe("what a transcript scroll costs", () => {
       "one layout per engine",
     );
     test.slow();
+    await page.clock.install();
     await page.setViewportSize({ width: 1280, height: 900 });
     await gotoHarness(page, "mobile-performance");
     await page.locator('[data-testid="session-session-large"]').click();
@@ -185,14 +210,14 @@ test.describe("what a transcript scroll costs", () => {
     await expect(viewport).toHaveAttribute("data-following", "false");
     await page.waitForTimeout(800);
     const short = {
-      scroll: await scrollCost(viewport),
-      chunk: await cost(viewport, "chunk"),
+      scroll: await scrollCost(page, viewport),
+      chunk: await cost(page, viewport, "chunk"),
     };
 
     await loadEveryPage(page);
     const long = {
-      scroll: await scrollCost(viewport),
-      chunk: await cost(viewport, "chunk"),
+      scroll: await scrollCost(page, viewport),
+      chunk: await cost(page, viewport, "chunk"),
     };
     testInfo.annotations.push({
       type: "cost",
@@ -224,7 +249,7 @@ test.describe("what a transcript scroll costs", () => {
   }, testInfo) => {
     const viewport = scroller(page);
     await loadEveryPage(page);
-    const jump = await cost(viewport, "jump");
+    const jump = await cost(page, viewport, "jump");
     testInfo.annotations.push({ type: "cost", description: JSON.stringify(jump) });
     /* each row drawn on the way is measured as it mounts, and the reader's
        place is found by halving: the reads follow the rows drawn, never
@@ -251,10 +276,10 @@ test.describe("what a transcript scroll costs", () => {
     const viewport = scroller(page);
     await expect(viewport).toHaveAttribute("data-following", "true");
     await page.waitForTimeout(500);
-    const short = await cost(viewport, "chunk");
+    const short = await cost(page, viewport, "chunk");
     await loadEveryPage(page);
     await backToBottom(page);
-    const long = await cost(viewport, "chunk");
+    const long = await cost(page, viewport, "chunk");
     testInfo.annotations.push({
       type: "cost",
       description: JSON.stringify({ short, long }),
