@@ -1041,6 +1041,7 @@ pub(crate) enum TransactionOutcome<T> {
 enum TransactionMode {
     ConflictRetry,
     Idempotent(IdempotentTransactionRetry),
+    #[cfg(test)]
     ObserveConflict,
 }
 
@@ -1049,6 +1050,7 @@ impl TransactionMode {
         match self {
             Self::ConflictRetry => retry::TRANSACT_CONFLICT_MAX_RETRIES + 1,
             Self::Idempotent(policy) => policy.max_attempts(),
+            #[cfg(test)]
             Self::ObserveConflict => 1,
         }
     }
@@ -1056,7 +1058,9 @@ impl TransactionMode {
     const fn retry_owner(self) -> RetryOwner {
         match self {
             Self::Idempotent(_) => RetryOwner::GentsIdempotentTransaction,
-            Self::ConflictRetry | Self::ObserveConflict => RetryOwner::GentsTransaction,
+            Self::ConflictRetry => RetryOwner::GentsTransaction,
+            #[cfg(test)]
+            Self::ObserveConflict => RetryOwner::GentsTransaction,
         }
     }
 
@@ -1080,7 +1084,11 @@ impl TransactionMode {
     }
 
     const fn observes_conflicts(self) -> bool {
-        matches!(self, Self::ObserveConflict)
+        match self {
+            #[cfg(test)]
+            Self::ObserveConflict => true,
+            Self::ConflictRetry | Self::Idempotent(_) => false,
+        }
     }
 }
 
@@ -2950,6 +2958,7 @@ impl ConfigAccess {
         .map(expect_committed)
     }
 
+    #[cfg(test)]
     pub(crate) async fn transact_observing_conflict<'a, T, E, F>(
         &'a self,
         operation: &'static str,
@@ -3113,38 +3122,6 @@ impl ConfigAccess {
         )
         .await
         .map(expect_committed)
-    }
-    pub(crate) async fn transact_local_observing_conflict<'a, T, E, F>(
-        node: &'a Arc<EmbeddedNode>,
-        identity: Option<Did>,
-        operation: &'static str,
-        callback: F,
-    ) -> Result<TransactionOutcome<T>, E>
-    where
-        T: Send + 'a,
-        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
-        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
-    {
-        transact_owned(
-            operation,
-            WriteBackend::Embedded,
-            TransactionMode::ObserveConflict,
-            move |operation, rollback| {
-                let identity = identity.clone();
-                Box::pin(async move {
-                    ConfigApplyTxn::begin_local_owned(
-                        node,
-                        identity,
-                        operation,
-                        rollback,
-                        EmbeddedTransactionPurpose::Mutation,
-                    )
-                    .await
-                })
-            },
-            callback,
-        )
-        .await
     }
 }
 
