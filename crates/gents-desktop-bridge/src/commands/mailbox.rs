@@ -1,7 +1,46 @@
 use anyhow::{bail, Context, Result};
 use gents_desktop_core::client::ClientCore;
 
-use super::super::types::MailboxItemView;
+use super::super::types::{MailboxItemObservation, MailboxItemObservationRequest, MailboxItemView};
+
+pub async fn observe_mailbox_item(
+    core: &ClientCore,
+    request: &MailboxItemObservationRequest,
+) -> Result<Option<MailboxItemObservation>> {
+    let requester = core.node_identity().did();
+    anyhow::ensure!(
+        request.client_did == requester,
+        "the mailbox reader changed"
+    );
+    anyhow::ensure!(
+        !request.item_id.trim().is_empty(),
+        "a mailbox item is required"
+    );
+    gents::mailbox::load_mailbox_item(core.node(), &request.item_id)
+        .await?
+        .map(|item| mailbox_observation(&requester, &item))
+        .transpose()
+}
+
+fn mailbox_observation(
+    requester: &str,
+    item: &gents::mailbox::MailboxItem,
+) -> Result<MailboxItemObservation> {
+    anyhow::ensure!(
+        item.requester_did == requester,
+        "only requester_did may read a MailboxItem"
+    );
+    let terminal = item
+        .parsed_status()
+        .context("unknown MailboxItem status")?
+        .is_terminal();
+    let row: gents_protocol::row::MailboxItemRow =
+        serde_json::from_value(serde_json::to_value(item)?)?;
+    Ok(MailboxItemObservation {
+        item: MailboxItemView::from(&row),
+        terminal,
+    })
+}
 
 pub fn list_mailbox(core: &ClientCore) -> Vec<MailboxItemView> {
     let requester = core.node_identity().did();
@@ -144,6 +183,35 @@ mod tests {
         }))
         .unwrap();
         MailboxItemView::from(&row)
+    }
+
+    #[test]
+    fn exact_observation_preserves_closed_items_and_rejects_foreign_readers() {
+        let mut item: gents::mailbox::MailboxItem = serde_json::from_value(serde_json::json!({
+            "_docID": "question", "item_key": "key", "requester_did": "reader",
+            "node_did": "node", "status": "open", "kind": "ask",
+            "action": "start_request", "title": "Question", "source_kind": "session",
+            "source_id": "session", "session_id": "session", "target_node_did": "node",
+            "target_agent_id": "agent", "created_at": "2026-10-28T00:00:00Z"
+        }))
+        .unwrap();
+        for status in gents::mailbox::MailboxStatus::ALL {
+            item.status = status.as_str().to_owned();
+            let observation = mailbox_observation("reader", &item).unwrap();
+            assert_eq!(observation.item.item_id, "question");
+            assert_eq!(observation.item.status, status.as_str());
+            assert_eq!(observation.item.session_id.as_deref(), Some("session"));
+            assert_eq!(observation.terminal, status.is_terminal());
+            assert!(mailbox_observation("another-reader", &item).is_err());
+        }
+        item.status = "unrecognized".into();
+        assert!(mailbox_observation("reader", &item).is_err());
+        assert!(
+            serde_json::from_value::<MailboxItemObservationRequest>(serde_json::json!({
+                "clientDid": "reader", "itemId": "question", "requesterDid": "another-reader"
+            }))
+            .is_err()
+        );
     }
 
     #[test]

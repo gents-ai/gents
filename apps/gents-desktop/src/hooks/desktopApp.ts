@@ -24,6 +24,7 @@ import { createShellActions } from "./shellActions";
 import { createDraftStore } from "./draftStore";
 import type { ShellStores } from "./shellProjection";
 import { createShellView, type ShellViewStore } from "./shellView";
+import { observeMailboxAnswerRetirement } from "./mailboxAnswerRetirement";
 import { seenMarks } from "../ui/app/sessionViews";
 import { seenMarkOf } from "../ui/lib/seen";
 import { listedSession, sessionKeyOf } from "./fleetStore";
@@ -96,6 +97,7 @@ export function createDesktopApp({
     ...localServer,
     ...createProvenance({ api, stores }),
   };
+  observeMailboxAnswerRetirement({ api, stores });
   reconcileSelection(stores, actions.selectNode);
   keepSeen(stores);
   const drafts = createDraftStore();

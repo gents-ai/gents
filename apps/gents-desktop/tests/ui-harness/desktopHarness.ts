@@ -1835,6 +1835,9 @@ export function createDesktopUiHarness(
         notify("store");
       }
     },
+    async observeMailboxItem() {
+      throw new Error("Native mailbox observation is unavailable in this harness");
+    },
     async listMailbox() {
       return deployment.mailboxItems;
     },

@@ -1220,6 +1220,32 @@ Denies the desktop_mailbox_list command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-mailbox-observe`
+
+</td>
+<td>
+
+Enables the desktop_mailbox_observe command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-mailbox-observe`
+
+</td>
+<td>
+
+Denies the desktop_mailbox_observe command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-mailbox-start-request`
 
 </td>
