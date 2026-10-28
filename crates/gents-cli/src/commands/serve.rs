@@ -763,11 +763,7 @@ async fn serve_foreground(
     )
     .merge(
         embedded_http_probe_router(&bind_probe_path, bind_probe_token.clone())
-            .merge(crate::http::explorer::explorer_router())
-            .layer(axum::middleware::from_fn_with_state(
-                crate::http::access::HttpAuthority::for_endpoint(&graphql_url),
-                crate::http::access::require_authority,
-            )),
+            .merge(crate::http::explorer::explorer_router()),
     );
     if let Some(node_identity_did) = server_identity.node_identity_did.as_deref() {
         anyhow::ensure!(
@@ -775,9 +771,11 @@ async fn serve_foreground(
             "identity {node_identity_did} has no exportable private key, so it cannot own the served node's access control; re-initialize the home with a file or macos-keychain identity to serve it"
         );
     }
+    let http_config = crate::http::access::HttpAuthority::for_endpoint(&graphql_url)
+        .protect_http(defra_node::HttpConfig::with_addr(http_addr).with_extra_routes(extra_routes));
     let mut node_builder = crate::persistent_node_builder(&home_dir, &data_dir)
         .await?
-        .with_http(defra_node::HttpConfig::with_addr(http_addr).with_extra_routes(extra_routes));
+        .with_http(http_config);
     if args.keychain_startup_approval {
         drop(identity.sign(b"gents.runtime-key-unlock.v1").await?);
     }
