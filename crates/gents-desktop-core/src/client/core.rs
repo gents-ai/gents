@@ -6,6 +6,7 @@ mod file_review;
 mod goal;
 mod observation_scope;
 mod p2p_ops;
+mod process_control;
 mod route_manager;
 mod supervisor;
 pub(super) mod sync_state;

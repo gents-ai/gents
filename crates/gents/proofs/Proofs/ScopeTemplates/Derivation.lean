@@ -115,6 +115,10 @@ def clientRouteFilters (direction : RouteDirection) (requesterDid ownerDid : Did
     , { collection := "AgentSessionGoalControl"
       , clauses :=
           [ { field := "requester_did", value := requesterDid }
+          , { field := "node_did", value := ownerDid } ] }
+    , { collection := "AgentSessionProcessStop"
+      , clauses :=
+          [ { field := "requester_did", value := requesterDid }
           , { field := "node_did", value := ownerDid } ] } ] ++
     match direction with
     | .clientToRuntime => []
@@ -205,6 +209,9 @@ theorem machine_filter_eq (peerDid homeDid : Did) :
         , { collection := "AgentSessionGoalControl"
           , field := "requester_did"
           , value := peerDid }
+        , { collection := "AgentSessionProcessStop"
+          , field := "requester_did"
+          , value := peerDid }
         , { collection := "NodeDirectoryEntry"
           , field := "source_did"
           , value := homeDid } ] := by
@@ -214,7 +221,7 @@ theorem machine_filters_transcript_and_directory (peerDid homeDid : Did) :
     ((scopeFilter machineTemplate.scope [] peerDid homeDid).map
         (fun k => k.collection)).toFinset
       = (transcriptCollections ++
-          ["MailboxItem", "SessionHydrationRequest", "AgentSessionInputEdit", "AgentSessionGoalControl", "NodeDirectoryEntry"]).toFinset := by
+          ["MailboxItem", "SessionHydrationRequest", "AgentSessionInputEdit", "AgentSessionGoalControl", "AgentSessionProcessStop", "NodeDirectoryEntry"]).toFinset := by
   simp [scopeFilter, machineTemplate, machineRules, machineCollections,
     conversationRules, conversationCollections, transcriptCollections]
 
@@ -287,6 +294,19 @@ theorem client_goal_control_conjoins_requester_and_destination
         (fun predicate => predicate.collection = "AgentSessionGoalControl") =
       some
         { collection := "AgentSessionGoalControl"
+        , clauses :=
+            [ { field := "requester_did", value := requesterDid }
+            , { field := "node_did", value := ownerDid } ] } := by
+  cases direction <;>
+    simp [clientRouteFilters, clientTranscriptPredicates,
+      clientTranscriptCollections, transcriptCollections]
+
+theorem client_process_stop_conjoins_requester_and_destination
+    (direction : RouteDirection) (requesterDid ownerDid : Did) :
+    (clientRouteFilters direction requesterDid ownerDid).find?
+        (fun predicate => predicate.collection = "AgentSessionProcessStop") =
+      some
+        { collection := "AgentSessionProcessStop"
         , clauses :=
             [ { field := "requester_did", value := requesterDid }
             , { field := "node_did", value := ownerDid } ] } := by

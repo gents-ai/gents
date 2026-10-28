@@ -351,20 +351,26 @@ impl ToolCallLifecycle {
     }
 
     pub async fn cancel_before_dispatch(&mut self, cause: CancelCause) -> Result<()> {
-        self.ensure_state(&[ToolCallState::Pending], "cancel_before_dispatch")?;
-        let _ = self
-            .terminalize_with_delivery(
-                ToolCallState::Pending,
-                super::super::delivery::TerminalFields {
-                    state: ToolCallState::Cancelled,
-                    failure: None,
-                    cancel: Some(cause),
-                    completion_reason: None,
-                },
-                "tool call cancelled before dispatch",
-                "tool_call.cancel_before_dispatch_delivery",
-            )
-            .await?;
+        self.cancel_before_dispatch_owned(cause).await?;
         Ok(())
+    }
+
+    pub(crate) async fn cancel_before_dispatch_owned(
+        &mut self,
+        cause: CancelCause,
+    ) -> Result<bool> {
+        self.ensure_state(&[ToolCallState::Pending], "cancel_before_dispatch")?;
+        self.terminalize_with_delivery(
+            ToolCallState::Pending,
+            super::super::delivery::TerminalFields {
+                state: ToolCallState::Cancelled,
+                failure: None,
+                cancel: Some(cause),
+                completion_reason: None,
+            },
+            "tool call cancelled before dispatch",
+            "tool_call.cancel_before_dispatch_delivery",
+        )
+        .await
     }
 }

@@ -409,6 +409,15 @@ pub struct DesktopJobControlRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DesktopProcessStopRequest {
+    pub node_did: String,
+    pub session_id: String,
+    pub tool_call_id: String,
+    pub tool_call_doc_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopProbeMcpServiceRequest {
     pub node_did: String,

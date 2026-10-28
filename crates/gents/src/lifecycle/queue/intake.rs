@@ -131,6 +131,10 @@ pub(super) fn steering_compatible(
                 && queue.interrupted_request_id.is_none()
                 && queue.background_completion_wake_version.is_none()
         }) && input.cwd == head.input.cwd
+            && input
+                .steer_target_request_doc_id
+                .as_ref()
+                .is_none_or(|target| target == &head.doc_id)
             && input.selected_skill_ids == head.input.selected_skill_ids
             && input.initial_title.is_none()
             && input.goal_continuation.is_none()

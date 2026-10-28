@@ -8,7 +8,7 @@ inductive AgentMessageMode where
   | interrupt
   deriving DecidableEq, Repr
 
-/-- An interrupt requires separate authority and is committed with, or after,
+/-- An interrupt requires separate authority and is committed with
 the message's durable admission. The delivery marker alone does not grant a lease or
 allow input to pass an earlier queue entry. -/
 def agentMessageDelivery? (mode : AgentMessageMode) (mayInterrupt : Bool) :
@@ -29,6 +29,17 @@ theorem agent_message_interrupt_is_queued :
 theorem agent_message_steer_does_not_interrupt (allowed : Bool) :
     agentMessageDelivery? .steer allowed = some (.steer, false) := by
   rfl
+
+/-- A remote interrupt accompanies message admission. It may address only the
+physical request observed before admission, even if the session advances. -/
+def remoteInterruptTarget (observed : Option String) (_current : Option String) : Option String :=
+  observed
+
+theorem remote_interrupt_never_retargets (before after : String) :
+    remoteInterruptTarget (some before) (some after) = some before := by rfl
+
+theorem remote_idle_does_not_interrupt_later_work (later : String) :
+    remoteInterruptTarget none (some later) = none := by rfl
 
 def steersInto (active candidate : QueueEntry) : Prop :=
   candidate.fresh = true ∧ candidate.delivery = .steer ∧ candidate.policy = .append ∧
@@ -158,6 +169,11 @@ theorem stale_input_is_barrier (active entry : QueueEntry) (rest : List QueueEnt
     (admitted : List RequestId) (h : entry.fresh = false) :
     steeringRun active admitted (entry :: rest) = [] := by
   simp [steeringRun, steersInto, h]
+
+theorem unadmitted_input_is_barrier (active entry : QueueEntry) (rest : List QueueEntry)
+    (admitted : List RequestId) (h : entry.requestId ∉ admitted) :
+    steeringRun active admitted (entry :: rest) = [] := by
+  simp [steeringRun, h]
 
 theorem different_assignment_is_barrier (active entry : QueueEntry) (rest : List QueueEntry)
     (admitted : List RequestId) (different : entry.goalAssignment ≠ active.goalAssignment) :

@@ -493,7 +493,26 @@ describe("the running in background group", () => {
     });
   });
 
-  it("offers no stop for a native process", () => {
+  it("stops a native process by its physical tool document", () => {
+    const processStop = vi.fn().mockResolvedValue(undefined);
+    const { app } = appWith(
+      [command("build", "npm run build", { nodeDid: NODE })],
+      [],
+      { processStop },
+    );
+    render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Stop npm run build" }));
+    expect(processStop).toHaveBeenCalledWith({
+      nodeDid: NODE,
+      sessionId: "parent",
+      toolCallId: "build",
+      toolCallDocId: "doc-build",
+    });
+  });
+
+  it("offers no stop without a physical process identity", () => {
     const { app } = appWith([command("build", "npm run build")]);
     render(<BackgroundSurface placement="dock" sessionId="parent" />, {
       wrapper: withApp(app),

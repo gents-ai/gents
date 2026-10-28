@@ -619,7 +619,25 @@ pub(crate) async fn build_session_message_request_with_input(
     request_id: &str,
     retry_key: Option<String>,
     hop: u32,
+    input: gents_protocol::request_input::RequestInput,
+) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
+    build_session_message_request_for_steer(
+        cause, target, content, title, request_id, retry_key, hop, input, None,
+    )
+    .await
+}
+
+#[expect(clippy::too_many_arguments, reason = "signed session-message context")]
+pub(crate) async fn build_session_message_request_for_steer(
+    cause: &SessionMessageCause,
+    target: &SessionMessageTarget,
+    content: &str,
+    title: Option<&str>,
+    request_id: &str,
+    retry_key: Option<String>,
+    hop: u32,
     mut input: gents_protocol::request_input::RequestInput,
+    head: Option<&crate::AgentRequest>,
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
     anyhow::ensure!(
@@ -650,7 +668,30 @@ pub(crate) async fn build_session_message_request_with_input(
         execution_origin: ExecutionOrigin::Interactive,
         created_at,
     };
-    input.selected_skill_ids = prompt_selection.selected_skill_ids;
+    let workspace = if let Some(head) = head {
+        anyhow::ensure!(
+            prompt_selection.selected_skill_ids.is_empty()
+                || prompt_selection.selected_skill_ids == head.input.selected_skill_ids,
+            "steering cannot change the active turn's selected skills"
+        );
+        input.cwd = head.input.cwd.clone();
+        input.selected_skill_ids = head.input.selected_skill_ids.clone();
+        input.goal_assignment = head
+            .input
+            .goal_assignment
+            .as_ref()
+            .map(|assignment| assignment.continuation(&head.doc_id));
+        input.steer_target_request_doc_id = Some(head.doc_id.clone());
+        Some(WorkspaceLineage {
+            workspace_id: head.workspace_id.clone(),
+            workspace_owner_node_did: head.workspace_owner_node_did.clone(),
+            workspace_authority: head.workspace_authority.clone(),
+            workspace_seal_hash: head.workspace_seal_hash.clone(),
+        })
+    } else {
+        input.selected_skill_ids = prompt_selection.selected_skill_ids;
+        None
+    };
     input.initial_title = title
         .map(str::trim)
         .filter(|title| !title.is_empty())
@@ -671,6 +712,7 @@ pub(crate) async fn build_session_message_request_with_input(
             parent_tool_call_doc_id: Some(cause.tool_call_doc_id.clone()),
         }),
         input,
+        workspace,
         retry_key,
         ..RequestSpec::new(RequestPurpose::Normal, identity, admission)
     };

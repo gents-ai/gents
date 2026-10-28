@@ -239,6 +239,7 @@ fn client_route_filters(
         "FileInventoryRequest",
         "AgentSessionInputEdit",
         "AgentSessionGoalControl",
+        "AgentSessionProcessStop",
     ] {
         filters.insert(
             collection.to_owned(),

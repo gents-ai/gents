@@ -6,6 +6,9 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Agents may interrupt sessions they started and same-node sessions whose
+  opening request is verified as Task-triggered. Sessions without retained
+  creation evidence and unrelated sessions remain protected.
 - `gents job promote <address|tool_call_id> --name <snake_case>` installs a
   finished dynamic workflow run as a tool wired to its agent, so later calls
   run the script as an `installed` job. The generated pack lives at

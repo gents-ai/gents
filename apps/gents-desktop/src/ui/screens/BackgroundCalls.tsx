@@ -50,24 +50,31 @@ function ToneIcon({ tone, className }: { tone: Tone; className?: string }) {
 
 const warns = (tone: Tone) => tone === "failed" || tone === "stuck";
 
-/* only a job's row can be stopped from here; a native process has no
-   desktop stop control */
 const stoppable = (call: BackgroundCall) =>
   isActive(call) &&
-  (call.tool?.jobState ? call.tool.jobState === "running" : call.view?.job === true);
+  (call.tool?.jobState
+    ? call.tool.jobState === "running"
+    : call.view?.job === true || call.tool?.presentation.kind === "command");
 
-function Stop({ call }: { call: BackgroundCall; sessionId: string | null }) {
+function Stop({ call, sessionId }: { call: BackgroundCall; sessionId: string | null }) {
   const { actions } = useApp();
   const nodeDid = call.tool?.nodeDid;
   const toolCallDocId = call.tool?.toolCallDocId;
-  if (!nodeDid || !toolCallDocId || !stoppable(call)) return null;
+  if (!nodeDid || !toolCallDocId || !sessionId || !stoppable(call)) return null;
   return (
     <StopButton
       name={call.runs}
       onStop={() =>
-        void actions
-          .controlJob({ nodeDid, toolCallDocId, action: "stop" })
-          .catch((e: unknown) => toastFailure("stop", e))
+        void (
+          call.tool?.jobState || call.view?.job
+            ? actions.controlJob({ nodeDid, toolCallDocId, action: "stop" })
+            : actions.stopProcess({
+                nodeDid,
+                sessionId,
+                toolCallId: call.toolCallId,
+                toolCallDocId,
+              })
+        ).catch((e: unknown) => toastFailure("stop", e))
       }
     />
   );

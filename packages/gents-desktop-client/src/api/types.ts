@@ -20,6 +20,7 @@ import type { GoalSubmissionRecovery } from "../generated/GoalSubmissionRecovery
 import type { SessionGoalView } from "../generated/SessionGoalView.js";
 import type { OauthProvider } from "../transport.js";
 import type { DesktopJobControlRequest } from "../generated/DesktopJobControlRequest.js";
+import type { DesktopProcessStopRequest } from "../generated/DesktopProcessStopRequest.js";
 import type { JobControlOutcome } from "../generated/JobControlOutcome.js";
 import type { ConfigComponentsApplyRequest } from "../generated/ConfigComponentsApplyRequest.js";
 import type { ConfigComponentsPatchRequest } from "../generated/ConfigComponentsPatchRequest.js";
@@ -446,6 +447,7 @@ export type DesktopApiAdapter = {
   ) => Promise<InterruptRequestResult>;
   backgroundTool: (request: DesktopBackgroundToolRequest) => Promise<boolean>;
   jobControl: (request: DesktopJobControlRequest) => Promise<JobControlOutcome>;
+  processStop: (request: DesktopProcessStopRequest) => Promise<void>;
   listInstalledPacks: () => Promise<{ packs: InstalledPack[] }>;
   listPackPluginSlots: () => Promise<{
     plugins: PackPluginSlot[];
@@ -464,7 +466,9 @@ export type DesktopApiAdapter = {
   listPackWireSources: () => Promise<PackWireSources>;
   listDynamicWorkflows: () => Promise<DynamicWorkflows>;
   getDynamicWorkflow: (selector: string) => Promise<DynamicWorkflow>;
-  promoteWorkflow: (request: WorkflowPromoteRequest) => Promise<WorkflowPromoted>;
+  promoteWorkflow: (
+    request: WorkflowPromoteRequest,
+  ) => Promise<WorkflowPromoted>;
   signInToPackRegistry: (token: string) => Promise<void>;
   signOutOfPackRegistry: () => Promise<void>;
   listAllowedFolders: () => Promise<AllowedFolders>;

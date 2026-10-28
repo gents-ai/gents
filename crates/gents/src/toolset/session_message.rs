@@ -194,9 +194,14 @@ impl Tool for AgentMessageTool {
             "type": "boolean",
             "description": "Stop the session's current turn first, then queue the message for a new turn. Check interrupt permission with agent_session_list."
         });
+        properties["mode"] = serde_json::json!({
+            "type": "string",
+            "enum": ["queue", "steer", "interrupt"],
+            "description": "Queue after the current turn (default), admit a steer for the next safe tool boundary, or interrupt before a new turn. Earlier queued messages remain ahead of a steer. Steering a remote session requires its active turn to be visible."
+        });
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Send a message to an agent session you can reach. An idle session starts a new turn; a busy one queues it as a new request after the current request finishes unless interrupt is set. Returns request_id, delivery (request or steering) and tool_call_id immediately; the result arrives later as a message in this conversation."
+            description: "Send a message to an agent session you can reach. For a busy session, choose queue, steer or interrupt. The immediate receipt confirms admission, not consumption; the result arrives later as a message in this conversation."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -216,6 +221,8 @@ impl Tool for AgentMessageTool {
         }
         args.body()
             .map_err(|message| invalid_arguments_error(Self::NAME, "/", message))?;
+        args.mode()
+            .map_err(|message| invalid_arguments_error(Self::NAME, "/mode", message))?;
         Err(not_yet_executable_error(Self::NAME))
     }
 }

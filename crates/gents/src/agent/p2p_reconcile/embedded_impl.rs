@@ -2004,6 +2004,195 @@ pub(super) mod tests {
             "the caller's tool rows never replicate to the host"
         );
 
+        let active = load_admission_request_by_id(&host, &fresh_request_id).await;
+        exec(&host, &format!(r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "processing" }}) {{ _docID }} }}"#, escape_graphql_string(&active.doc_id)), "start peer steering fixture").await;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let observed = crate::interrupt::active_session_request(
+                    &coordinator,
+                    &active.session_id,
+                    &host_did,
+                    Some(&coordinator_did),
+                )
+                .await
+                .unwrap();
+                if observed.as_ref().and_then(|row| row.doc_id.as_deref())
+                    == Some(active.doc_id.as_str())
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("active request did not replicate to coordinator");
+        let mut followup = crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request(
+            coordinator.clone(), &mut parent_lifecycle, &coordinator_did, 2,
+            crate::toolset::AGENT_MESSAGE_TOOL_NAME, "peer-interrupt-message",
+            serde_json::json!({"session_id": active.session_id, "message": "change direction", "mode": "interrupt"}),
+            crate::tool_call_lifecycle::AwaitMode::Background, false,
+        ).await.unwrap();
+        let caller = parent_lifecycle.request();
+        let cause = crate::lifecycle::SessionMessageCause {
+            caller_node_did: caller.node_did.clone(),
+            caller_agent_id: caller.agent_id.clone(),
+            caller_session_id: caller.session_id.clone(),
+            caller_request_id: caller.request_id.clone(),
+            caller_request_doc_id: caller.doc_id.clone(),
+            caller_hop: caller.request_hop,
+            tool_call_id: followup.tool_call_id().into(),
+            tool_call_doc_id: followup.doc_id().unwrap().into(),
+            correlation: None,
+        };
+        let target = crate::lifecycle::SessionMessageTarget {
+            node_did: host_did.clone(),
+            agent_id: active.agent_id.clone(),
+            session_id: active.session_id.clone(),
+        };
+        let plan = crate::session_message::plan_with_mode(
+            &coordinator,
+            &cause,
+            &target,
+            crate::session_message::RenderedBody {
+                content: "change direction".into(),
+                goal: None,
+            },
+            None,
+            crate::session_message::AgentMessageMode::Interrupt,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let target_doc = plan.remote_interrupt_doc_id().unwrap().to_owned();
+        assert_eq!(target_doc, active.doc_id);
+        let planned_id = plan.request_id().to_owned();
+        let aborted: anyhow::Result<()> = crate::config_client::ConfigAccess::transact_local_write(
+            &coordinator,
+            None,
+            "test.abort_remote_message_interrupt",
+            |txn| {
+                let cause = &cause;
+                let plan = &plan;
+                Box::pin(async move {
+                    crate::session_message::stage_planned_write_in_txn(txn, cause, plan).await?;
+                    anyhow::bail!("abort staged message and interrupt")
+                })
+            },
+        )
+        .await;
+        assert!(aborted.is_err());
+        assert!(
+            !collection_values(&coordinator, "AgentRequest", "request_id")
+                .await
+                .contains(&planned_id)
+        );
+        assert!(crate::interrupt::fetch_interrupt_requested_at_by_doc_id(
+            &coordinator,
+            &target_doc
+        )
+        .await
+        .unwrap()
+        .is_none());
+        let receipt =
+            crate::session_message::commit(&coordinator, &cause, &mut followup, plan, true)
+                .await
+                .unwrap();
+        wait_for_value(&host, "AgentRequest", "request_id", &receipt.request_id).await;
+        let followup_on_host = load_admission_request_by_id(&host, &receipt.request_id).await;
+        exec(&host, &format!(r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#, escape_graphql_string(&followup_on_host.doc_id)), "settle peer interrupt followup fixture").await;
+        assert!(crate::interrupt::fetch_interrupt_requested_at_by_doc_id(
+            &coordinator,
+            &target_doc
+        )
+        .await
+        .unwrap()
+        .is_some());
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if crate::interrupt::fetch_interrupt_requested_at_by_doc_id(&host, &active.doc_id)
+                    .await
+                    .unwrap()
+                    .is_some()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("interrupt did not replicate to host");
+        exec(&coordinator, &format!(r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ interrupt_requested_at: null }}) {{ _docID }} }}"#, escape_graphql_string(&active.doc_id)), "clear peer interrupt fixture").await;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if crate::interrupt::fetch_interrupt_requested_at_by_doc_id(&host, &active.doc_id)
+                    .await
+                    .unwrap()
+                    .is_none()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("interrupt fixture did not clear");
+        let mut steering = gents_protocol::request_admission::AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            "peer-steer-boundary",
+            &host_did,
+            &coordinator_did,
+            &active.agent_id,
+            &active.session_id,
+            "continue with this direction",
+            "interactive",
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::peer(&coordinator_did),
+        );
+        steering.caused_by_parent_request_id = active.caused_by_parent_request_id.clone();
+        steering.caused_by_parent_request_doc_id = active.caused_by_parent_request_doc_id.clone();
+        steering.caused_by_parent_tool_call_id = active.caused_by_parent_tool_call_id.clone();
+        steering.caused_by_parent_tool_call_doc_id =
+            active.caused_by_parent_tool_call_doc_id.clone();
+        steering.request_hop = active.request_hop;
+        steering.input = active.input.clone();
+        steering.input.steer_target_request_doc_id = Some(active.doc_id.clone());
+        steering.input.queue = Some(gents_protocol::request_input::RequestQueue {
+            source: gents_protocol::request_input::QueueSource::Steering,
+            delivery: gents_protocol::request_input::QueueDelivery::Steer,
+            queued_after_request_id: Some(active.request_id.clone()),
+            policy: gents_protocol::request_input::QueuePolicy::Append,
+            position: None,
+            key: None,
+            interrupted_request_id: None,
+            background_completion_wake_version: None,
+        });
+        crate::sign_agent_request_create(coordinator_identity.as_ref(), &mut steering)
+            .await
+            .unwrap();
+        crate::config_client::ConfigAccess::write_local(
+            &coordinator,
+            "test.peer_steer.publish",
+            &steering.graphql_mutation().unwrap(),
+        )
+        .await
+        .unwrap();
+        wait_for_value(&host, "AgentRequest", "request_id", "peer-steer-boundary").await;
+        let verifier = crate::request_admission::AgentRequestAdmissionVerifier::new(
+            host.clone(),
+            host_identity.clone(),
+            authority.clone(),
+        );
+        let snapshot = crate::lifecycle::queue::steering_snapshot(&host, &active, &verifier)
+            .await
+            .unwrap();
+        assert_eq!(snapshot.inputs.len(), 1);
+        assert!(
+            format!("{:?}", snapshot.inputs[0].message).contains("continue with this direction")
+        );
+        let peer_steer = load_admission_request_by_id(&host, "peer-steer-boundary").await;
+        exec(&host, &format!(r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#, escape_graphql_string(&peer_steer.doc_id)), "finish peer steering fixture").await;
+        exec(&host, &format!(r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "pending" }}) {{ _docID }} }}"#, escape_graphql_string(&active.doc_id)), "restore peer fixture").await;
+
         let behavior = test_agent(host_identity.clone());
         let fresh_calls = Arc::new(AtomicUsize::new(0));
         let mut fresh_daemon = behavior_daemon(

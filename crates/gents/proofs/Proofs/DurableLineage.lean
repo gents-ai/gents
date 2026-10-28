@@ -90,10 +90,10 @@ theorem control_continuation_is_admissible (depth : Nat) :
 
 inductive Delivery where
   | request
-  | steering
+  | queued
   deriving DecidableEq, Repr
 
-/-- Deliveries carry the full calling edge; a steering continuation is queued
+/-- Deliveries carry the full calling edge; a queued continuation is ordered
 after the busy session's active request, which orders the queue and is never
 its origin. -/
 structure SessionMessageWrite where
@@ -109,7 +109,7 @@ def sessionMessageWrite (delivery : Delivery) (callerHop own : Nat) : SessionMes
       , hasParentToolCallDocId := true
       , requestHop := CausalHop.nextHop (.crossSession callerHop) own
       , requestOnlyControl := false }
-  , queuedAfterActive := delivery == .steering }
+  , queuedAfterActive := delivery == .queued }
 
 theorem session_message_write_names_its_caller (delivery : Delivery) (callerHop own : Nat) :
     admissible (sessionMessageWrite delivery callerHop own).lineage = true ∧
@@ -124,7 +124,7 @@ def jobSpawnWrite : Nat → Nat → SessionMessageWrite :=
   sessionMessageWrite .request
 
 /-- A plugin job's message to a child session is a session message, delivered
-    as a new request or as a steering continuation like `agent_message`. -/
+    as a new request or as a queued continuation like `agent_message`. -/
 def jobMessageWrite : Delivery → Nat → Nat → SessionMessageWrite :=
   sessionMessageWrite
 

@@ -183,6 +183,9 @@ pub const AGENT_SESSION_INPUT_EDIT: &str =
 pub const AGENT_SESSION_GOAL_CONTROL_NAME: &str = "AgentSessionGoalControl";
 pub const AGENT_SESSION_GOAL_CONTROL: &str =
     include_str!("../schemas/agent/agent_session_goal_control.graphql");
+pub const AGENT_SESSION_PROCESS_STOP_NAME: &str = "AgentSessionProcessStop";
+pub const AGENT_SESSION_PROCESS_STOP: &str =
+    include_str!("../schemas/agent/agent_session_process_stop.graphql");
 pub const GOAL_OBSERVATION_NAME: &str = "GoalObservation";
 pub const GOAL_OBSERVATION: &str = include_str!("../schemas/agent/goal_observation.graphql");
 
@@ -258,6 +261,7 @@ pub const ALL: &[&str] = &[
     FILE_IMAGE_HYDRATION_RECEIPT,
     AGENT_SESSION_INPUT_EDIT,
     AGENT_SESSION_GOAL_CONTROL,
+    AGENT_SESSION_PROCESS_STOP,
     GOAL_OBSERVATION,
     EVAL_DEFINITION,
     EVAL_RUN,
@@ -339,6 +343,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     FILE_IMAGE_HYDRATION_RECEIPT_NAME,
     AGENT_SESSION_INPUT_EDIT_NAME,
     AGENT_SESSION_GOAL_CONTROL_NAME,
+    AGENT_SESSION_PROCESS_STOP_NAME,
     GOAL_OBSERVATION_NAME,
     EVAL_DEFINITION_NAME,
     EVAL_RUN_NAME,

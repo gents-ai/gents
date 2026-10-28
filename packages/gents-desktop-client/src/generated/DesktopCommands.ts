@@ -30,6 +30,7 @@ import type { DesktopObserverMetrics } from "./DesktopObserverMetrics.js";
 import type { DesktopOperationsSnapshot } from "./DesktopOperationsSnapshot.js";
 import type { DesktopOperationsSnapshotRequest } from "./DesktopOperationsSnapshotRequest.js";
 import type { DesktopProbeMcpServiceRequest } from "./DesktopProbeMcpServiceRequest.js";
+import type { DesktopProcessStopRequest } from "./DesktopProcessStopRequest.js";
 import type { DesktopSessionProvenanceRequest } from "./DesktopSessionProvenanceRequest.js";
 import type { DesktopSessionSnapshot } from "./DesktopSessionSnapshot.js";
 import type { DynamicWorkflowView } from "./DynamicWorkflowView.js";
@@ -239,6 +240,7 @@ export type DesktopCommands = {
   desktop_plugin_call: { args: { request: PluginCallRequest }; result: JsonValue };
   desktop_probe_inference_endpoint: { args: { request: InferenceProbeRequest }; result: InferenceProbeResult };
   desktop_probe_mcp_service: { args: { request: DesktopProbeMcpServiceRequest }; result: McpServiceProbeResult };
+  desktop_process_stop: { args: { request: DesktopProcessStopRequest }; result: void };
   desktop_provider_account_disconnect: { args: { request: ProviderAccountDisconnectRequest }; result: void };
   desktop_provider_account_remove: { args: { request: ProviderAccountRemoveRequest }; result: void };
   desktop_provider_account_rename: { args: { request: ProviderAccountRenameRequest }; result: void };
