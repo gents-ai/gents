@@ -216,7 +216,7 @@ async fn live_digests<'a>(
 fn edited_error(coordinate: &str, edited: &[String]) -> anyhow::Error {
     anyhow::anyhow!(
         "{} of {coordinate}'s documents were edited since it was installed: {}; \
-         choose --overwrite to replace them or --keep to leave them",
+         use the operator CLI `gents pack install`, `gents pack update`, or `gents pack remove` with --overwrite or --keep to decide how to handle them; the agent pack command does not accept these flags",
         edited.len(),
         edited.join(", ")
     )

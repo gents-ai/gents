@@ -4,6 +4,16 @@ use super::*;
 
 const OWNER: &str = "did:key:zPackInstallOwner";
 
+#[test]
+fn edited_pack_error_identifies_the_operator_cli() {
+    let error = edited_error("acme/demo", &["Tools/t1".to_owned()]).to_string();
+    assert!(error.contains("Tools/t1"));
+    assert!(error.contains("operator CLI `gents pack install`"));
+    assert!(error.contains("--overwrite"));
+    assert!(error.contains("--keep"));
+    assert!(error.contains("agent pack command does not accept these flags"));
+}
+
 async fn access() -> ConfigAccess {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
