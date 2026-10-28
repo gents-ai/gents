@@ -5,6 +5,7 @@ test.describe("transcript input at its scroll boundary", () => {
     test.skip(testInfo.project.name !== "webkit-desktop", "one layout per engine");
     await page.setViewportSize({ width: 390, height: 844 });
     await gotoHarness(page, "mobile-performance");
+    await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.setHistorySize(20));
     await page.getByTestId("session-session-large").click();
     await page
       .getByTestId("transcript-panel")
@@ -19,10 +20,7 @@ test.describe("transcript input at its scroll boundary", () => {
         '[data-slot="scroll-area-viewport"][data-following]',
       );
       await viewport.hover();
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        if ((await viewport.evaluate((scroller) => scroller.scrollTop)) <= 1) break;
-        await page.mouse.wheel(0, -4000);
-      }
+      await page.mouse.wheel(0, -4000);
       await expect
         .poll(() => viewport.evaluate((scroller) => scroller.scrollTop))
         .toBe(0);

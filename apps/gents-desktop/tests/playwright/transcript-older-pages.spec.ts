@@ -72,12 +72,10 @@ test("a page landing views above the reader leaves their row in place", async ({
   );
   await page.setViewportSize({ width: 1500, height: 900 });
   await gotoHarness(page, "mobile-performance");
+  await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.holdOlderPages());
   await page.locator('[data-testid="session-session-large"]').click();
   const panel = page.getByTestId("transcript-panel");
   await panel.getByText("stream-start").last().waitFor();
-  await page.evaluate(() =>
-    window.__GENTS_MOBILE_PERFORMANCE__!.setOlderPageDelay(400),
-  );
 
   await panel.evaluate((node) => {
     const scroller = node.closest<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
@@ -91,6 +89,11 @@ test("a page landing views above the reader leaves their row in place", async ({
         requestAnimationFrame(() => requestAnimationFrame(resolve)),
       ),
   );
+  await expect
+    .poll(() =>
+      page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.pendingOlderPages()),
+    )
+    .toBeGreaterThan(0);
   const before = await panel.evaluate((node) => {
     const scroller = node.closest<HTMLElement>('[data-slot="scroll-area-viewport"]')!;
     const view = scroller.getBoundingClientRect();
@@ -106,6 +109,7 @@ test("a page landing views above the reader leaves their row in place", async ({
       ),
     };
   });
+  await page.evaluate(() => window.__GENTS_MOBILE_PERFORMANCE__!.releaseOlderPages());
   const row = page.locator(`[data-timeline-key="${before.key}"]`);
   await expect
     .poll(() =>
