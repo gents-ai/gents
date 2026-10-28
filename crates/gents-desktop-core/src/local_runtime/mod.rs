@@ -298,7 +298,9 @@ pub fn runtime_status_url(server_address: &str) -> Result<String> {
         anyhow::bail!("server_address is required");
     }
 
-    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+    let with_scheme = if trimmed.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    }) {
         trimmed.to_string()
     } else {
         format!("http://{trimmed}")
@@ -322,7 +324,9 @@ pub fn runtime_graphql_url(endpoint: &str) -> Result<String> {
         anyhow::bail!("graphql endpoint is required");
     }
 
-    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+    let with_scheme = if trimmed.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    }) {
         trimmed.to_string()
     } else {
         format!("http://{trimmed}")

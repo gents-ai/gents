@@ -4,8 +4,8 @@ use super::{
     cached_operator_endpoint, dangerously_overwrite_desktop_home,
     graphql_endpoint_for_desktop_access, init_standard_local_runtime, load_operator_node_identity,
     load_standard_runtime_identity, operator_signer, render_human_summary,
-    reset_desktop_runtime_state, serving_runtime, DesktopInitOptions, DesktopInitSummary,
-    StoredRuntimeState, LOCAL_STANDARD_SOURCE,
+    reset_desktop_runtime_state, runtime_graphql_url, runtime_status_url, serving_runtime,
+    DesktopInitOptions, DesktopInitSummary, StoredRuntimeState, LOCAL_STANDARD_SOURCE,
 };
 use crate::client::DesktopPaths;
 use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
@@ -92,6 +92,44 @@ fn init_summary_tells_demo_to_wait_for_desktop_bootstrap() {
     assert!(rendered.contains("desktop app completes P2P pairing"));
     assert!(rendered.contains("replication subscriptions armed"));
     assert!(rendered.contains("Then submit prompts from Chat"));
+}
+
+#[test]
+fn runtime_status_url_accepts_case_insensitive_http_schemes() {
+    for (input, expected) in [
+        ("HTTP://Example.COM:9191", "http://example.com:9191/status"),
+        (
+            "hTtPs://Example.COM:9191/api/v0/graphql?query=1#fragment",
+            "https://example.com:9191/status",
+        ),
+        (
+            "example.com:9191/prefix?query=1#fragment",
+            "http://example.com:9191/prefix/status",
+        ),
+    ] {
+        assert_eq!(runtime_status_url(input).unwrap(), expected, "{input}");
+    }
+}
+
+#[test]
+fn runtime_graphql_url_accepts_case_insensitive_http_schemes() {
+    for (input, expected) in [
+        (
+            "hTtP://Example.COM:9191/api/v0/graphql?query=1#fragment",
+            "http://example.com:9191/api/v0/graphql",
+        ),
+        (
+            "HTTPS://Example.COM:9191/api/v0/graphql/",
+            "https://example.com:9191/api/v0/graphql",
+        ),
+        (
+            "example.com:9191/prefix/graphql?query=1#fragment",
+            "http://example.com:9191/prefix/graphql",
+        ),
+    ] {
+        assert_eq!(runtime_graphql_url(input).unwrap(), expected, "{input}");
+    }
+    assert!(runtime_graphql_url("HTTPS://example.com:9191/status").is_err());
 }
 
 #[test]
