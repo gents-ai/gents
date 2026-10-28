@@ -4,4 +4,4 @@ export type EnrollmentRequestView = { requestId: string, networkId: string, admi
 /**
  * Presentation-only label; never enrollment authority or route selection.
  */
-serverLabel: string | null, ownerNode: string, state: string, expiresAt: string, };
+serverLabel: string | null, ownerNode: string, state: string, expiresAt: string, activationError: string | null, };

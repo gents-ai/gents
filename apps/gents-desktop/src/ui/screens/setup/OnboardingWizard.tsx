@@ -340,6 +340,7 @@ export function OnboardingWizard({
       (deployment) => deployment.nodeDid === enrollment.ownerNode,
     );
     const ready = Boolean(target?.chatSafe);
+    const activationError = !ready ? active?.activationError : null;
     const observed = enrollmentRequests != null;
     const label = target?.label ?? enrollment.serverLabel ?? "your node";
     return (
@@ -349,24 +350,33 @@ export function OnboardingWizard({
             note={
               ready
                 ? `Your secure connection to ${label} is ready.`
-                : active?.state === "approved"
-                  ? "Approval received. Finishing your secure connection…"
-                  : !observed
-                    ? "Approval status is unavailable. Refresh to check again."
-                    : active
-                      ? "Ask the node’s administrator to approve this device before the request expires. You can return to this request while it is active."
-                      : "This request is no longer listed. If the connection does not become ready, request access again."
+                : activationError
+                  ? "Access is approved. The client will retry the secure connection automatically."
+                  : active?.state === "approved"
+                    ? "Approval received. Finishing your secure connection…"
+                    : !observed
+                      ? "Approval status is unavailable. Refresh to check again."
+                      : active
+                        ? "Ask the node’s administrator to approve this device before the request expires. You can return to this request while it is active."
+                        : "This request is no longer listed. If the connection does not become ready, request access again."
             }
           >
             {ready
               ? "Connected to your node"
-              : !observed
-                ? "Checking access"
-                : active?.state === "approved"
-                  ? "Connecting to your node"
-                  : "Waiting for access"}
+              : activationError
+                ? "Connection retrying"
+                : !observed
+                  ? "Checking access"
+                  : active?.state === "approved"
+                    ? "Connecting to your node"
+                    : "Waiting for access"}
           </Title>
         </div>
+        {activationError && (
+          <p role="alert" className="mb-4 break-words text-sm text-destructive">
+            {activationError}
+          </p>
+        )}
         {!observed && (
           <Button variant="outline" onClick={() => void refreshSnapshot()}>
             Refresh status
@@ -374,7 +384,7 @@ export function OnboardingWizard({
         )}
         <div className="grid min-w-0 gap-3 text-sm">
           <p className="break-words">{label}</p>
-          {!ready && (
+          {!ready && active?.state !== "approved" && (
             <p className="text-muted-foreground">
               Request expires:{" "}
               <time dateTime={enrollment.expiresAt}>

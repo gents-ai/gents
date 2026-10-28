@@ -38,6 +38,29 @@ theorem pending_request_requires_current_applied_authority
       pendingRequestSatisfied requested current hasDecision true false = false := by
   simp [pendingRequestSatisfied]
 
+/-- An undecided request uses its request deadline. A decided request stays
+visible while its existing durable approval is current and its route is not
+applied; the request deadline cannot hide an activation failure after approval.
+`currentApproval` comes from the durable authority owner, never a UI clock. -/
+def activeRequestVisible (requestFresh hasDecision currentApproval routeApplied : Bool) : Bool :=
+  !routeApplied && (if hasDecision then currentApproval else requestFresh)
+
+theorem expired_pending_request_is_hidden (routeApplied : Bool) :
+    activeRequestVisible false false false routeApplied = false := by
+  simp [activeRequestVisible]
+
+theorem approved_unapplied_request_survives_request_expiry (requestFresh : Bool) :
+    activeRequestVisible requestFresh true true false = true := by
+  simp [activeRequestVisible]
+
+theorem decided_request_requires_current_approval (requestFresh routeApplied : Bool) :
+    activeRequestVisible requestFresh true false routeApplied = false := by
+  simp [activeRequestVisible]
+
+theorem applied_request_is_hidden (requestFresh hasDecision currentApproval : Bool) :
+    activeRequestVisible requestFresh hasDecision currentApproval true = false := by
+  simp [activeRequestVisible]
+
 structure DurableDocuments where
   offers : Finset Offer := ∅
   adminPins : Finset NetworkAdminPin := ∅

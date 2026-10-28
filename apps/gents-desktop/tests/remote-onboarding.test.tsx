@@ -8,6 +8,8 @@ import type {
 import { publishSnapshot, renderIn, testApp } from "./app-fixture";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
+import { AgentsScreen } from "../src/ui/screens/AgentsScreen";
+import { FleetDashboard } from "@source-inc/gents-desktop-fleet";
 
 vi.mock("../src/lib/shellPlatform", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/lib/shellPlatform")>()),
@@ -22,6 +24,7 @@ const request: EnrollmentRequestView = {
   serverLabel: "My computer",
   ownerNode: "did:key:target",
   state: "pending_approval",
+  activationError: null,
   expiresAt: "2030-01-01T00:00:00Z",
 };
 function snapshot(
@@ -213,5 +216,74 @@ describe("remote onboarding", () => {
       screen.getByRole("button", { name: "Continue to My computer" }),
     ).toBeDisabled();
     await act(async () => finish(request));
+  });
+  it("shows native activation failures and clears them when connection recovers", async () => {
+    const failed = {
+      ...request,
+      state: "approved",
+      activationError: "Server identity could not be authenticated",
+      expiresAt: "2000-01-01T00:00:00Z",
+    };
+    const app = testApp({ snapshot: snapshot([failed]), supportsManagedServer: false });
+    renderIn(app, <SetupScreen onDone={vi.fn()} />);
+    await userEvent.click(
+      screen.getByRole("button", { name: "View request to My computer" }),
+    );
+    expect(screen.getByRole("heading", { name: "Connection retrying" })).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(failed.activationError);
+    expect(screen.queryByText(/Request expires:/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+    act(() => publishSnapshot(app, snapshot([{ ...failed, activationError: null }])));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Connecting to your node" }),
+    ).toBeVisible();
+    act(() => publishSnapshot(app, snapshot([], true)));
+    expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
+  });
+
+  it("shows the same activation failure in the Nodes request list", () => {
+    const failed = {
+      ...request,
+      state: "approved",
+      activationError: "Secure route could not be configured",
+    };
+    const initial = snapshot([failed]);
+    initial.client!.deployments = [];
+    const app = testApp({ snapshot: initial, supportsManagedServer: false });
+    renderIn(app, <AgentsScreen />);
+    expect(screen.getByText("Access approved · connection retrying")).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(failed.activationError);
+    const recovered = snapshot([{ ...failed, activationError: null }]);
+    recovered.client!.deployments = [];
+    act(() => publishSnapshot(app, recovered));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Approval received · finishing secure route"),
+    ).toBeVisible();
+  });
+  it("keeps activation failures visible in the shared fleet dashboard", () => {
+    const failed = {
+      ...request,
+      state: "approved",
+      activationError: "Remote route failed",
+    };
+    const app = testApp();
+    renderIn(
+      app,
+      <FleetDashboard
+        addingPeer={false}
+        bootstrap={null}
+        deployments={[]}
+        enrollmentRequests={[failed]}
+        loading={false}
+        starting={false}
+        onRequestStatusEnrollment={vi.fn()}
+        onOpenChat={vi.fn()}
+        onOpenConfig={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(failed.activationError);
+    expect(screen.getByText("Access approved · connection retrying")).toBeVisible();
   });
 });

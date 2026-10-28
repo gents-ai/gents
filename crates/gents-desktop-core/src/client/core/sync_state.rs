@@ -12,7 +12,11 @@ use gents_protocol::peer_schema::{
 };
 use serde_json::Value;
 
-use super::{p2p_health_materially_changed, ClientPeerStatus, ClientSyncStateSnapshot, P2PHealth};
+use super::enrollment::EnrollmentAuthorizationGeneration;
+use super::{
+    p2p_health_materially_changed, ClientPeerStatus, ClientSyncStateSnapshot,
+    EnrollmentActivationError, P2PHealth,
+};
 use crate::client::peer_directory::RemovalCause;
 use crate::client::{PeerDirectory, PeerRecord};
 
@@ -77,6 +81,7 @@ impl ClientSyncStateOwner {
             transport,
             database_sync: None,
             database_sync_error: None,
+            enrollment_activation_errors: BTreeMap::new(),
             peer_schema_skew: BTreeMap::new(),
             directory: records,
             peers,
@@ -89,6 +94,38 @@ impl ClientSyncStateOwner {
             schema_observation_sequence: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             schema_observation_latest: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
         }
+    }
+
+    pub(super) fn retain_enrollment_activation_errors(
+        &self,
+        current: &BTreeMap<String, EnrollmentAuthorizationGeneration>,
+    ) {
+        self.tx.send_if_modified(|state| {
+            let before = state.enrollment_activation_errors.len();
+            state
+                .enrollment_activation_errors
+                .retain(|request_id, error| {
+                    current.get(request_id).is_some_and(|generation| {
+                        error.request_digest == generation.request_digest
+                            && error.authorization_sequence == generation.sequence
+                            && error.authorization_expires_at == generation.expires_at
+                    })
+                });
+            state.enrollment_activation_errors.len() != before
+        });
+    }
+
+    pub(super) fn replace_enrollment_activation_errors(
+        &self,
+        errors: BTreeMap<String, EnrollmentActivationError>,
+    ) {
+        self.tx.send_if_modified(|state| {
+            if state.enrollment_activation_errors == errors {
+                return false;
+            }
+            state.enrollment_activation_errors = errors;
+            true
+        });
     }
 
     pub(super) fn remember_enrollment_label(&self, server_peer: &str, label: &str) {
@@ -615,6 +652,48 @@ pub(super) fn conservative_status(record: &PeerRecord) -> ClientPeerStatus {
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn enrollment_activation_errors_notify_without_peers_and_expire_with_authority() {
+        use super::*;
+        let (_temp, owner) = ClientSyncStateOwner::for_test(Vec::new(), Vec::new()).await;
+        let mut updates = owner.subscribe();
+        let error = EnrollmentActivationError {
+            request_digest: "digest-one".into(),
+            authorization_sequence: 1,
+            authorization_expires_at: "2030-01-01T00:00:00Z".into(),
+            message: "server authentication rejected".into(),
+        };
+        owner.replace_enrollment_activation_errors(BTreeMap::from([(
+            "request".into(),
+            error.clone(),
+        )]));
+        assert!(updates.has_changed().unwrap());
+        assert!(updates.borrow_and_update().directory.is_empty());
+        let current = BTreeMap::from([(
+            "request".into(),
+            EnrollmentAuthorizationGeneration {
+                request_digest: error.request_digest.clone(),
+                sequence: 1,
+                expires_at: error.authorization_expires_at.clone(),
+            },
+        )]);
+        owner.retain_enrollment_activation_errors(&current);
+        assert!(!updates.has_changed().unwrap());
+        let mut newer = current;
+        newer.get_mut("request").unwrap().sequence = 2;
+        owner.retain_enrollment_activation_errors(&newer);
+        assert!(updates.has_changed().unwrap());
+        assert!(updates
+            .borrow_and_update()
+            .enrollment_activation_errors
+            .is_empty());
+        owner.replace_enrollment_activation_errors(BTreeMap::from([("request".into(), error)]));
+        updates.borrow_and_update();
+        owner.retain_enrollment_activation_errors(&BTreeMap::new());
+        assert!(updates.has_changed().unwrap());
+        assert!(updates.borrow().enrollment_activation_errors.is_empty());
+    }
 
     #[test]
     fn configured_peer_mutation_callers_cannot_bypass_the_owner() {

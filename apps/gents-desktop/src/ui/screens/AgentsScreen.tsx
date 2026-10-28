@@ -107,12 +107,22 @@ export function AgentsScreen() {
                 <Spinner className="text-foreground" />
                 <div className="min-w-0">
                   <p className="text-sm font-medium">
-                    {r.state === "approved"
-                      ? "Approval received · finishing secure route"
-                      : `Waiting for ${r.serverLabel ?? r.serverPeer} to accept`}
+                    {r.activationError
+                      ? "Access approved · connection retrying"
+                      : r.state === "approved"
+                        ? "Approval received · finishing secure route"
+                        : `Waiting for ${r.serverLabel ?? r.serverPeer} to accept`}
                   </p>
+                  {r.activationError && (
+                    <p role="alert" className="break-words text-sm text-destructive">
+                      {r.activationError}
+                    </p>
+                  )}
                   <p className="truncate font-mono text-[11px] text-muted-foreground">
-                    {r.requestId} · expires {new Date(r.expiresAt).toLocaleTimeString()}
+                    {r.requestId}
+                    {r.state !== "approved" && (
+                      <> · expires {new Date(r.expiresAt).toLocaleTimeString()}</>
+                    )}
                   </p>
                 </div>
               </li>

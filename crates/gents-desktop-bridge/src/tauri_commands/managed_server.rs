@@ -5264,6 +5264,7 @@ mod tests {
             owner_node: "did:key:managed".to_string(),
             state: state.to_string(),
             expires_at: expires_at.to_string(),
+            activation_error: None,
         }
     }
 

@@ -16,10 +16,10 @@ pub(crate) use query::load_inference_configuration;
 pub use collection_resolver::CollectionResolver;
 pub use core::{
     ClientCore, ClientCoreOptions, ClientObservationAttachment, ClientPeerStatus,
-    ClientRouteStatus, ClientStoreKeyProvider, ClientSyncStateSnapshot, EnrollmentRequestResult,
-    GoalSubmissionReference, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
-    RefreshedRequestProjection, RetainedGoalSubmission, RuntimeSchemaObservation,
-    STUCK_THRESHOLD_ATTEMPTS,
+    ClientRouteStatus, ClientStoreKeyProvider, ClientSyncStateSnapshot, EnrollmentActivationError,
+    EnrollmentRequestResult, GoalSubmissionReference, P2PHealth, P2PHealthStatus,
+    PairingCollectionStatus, RefreshedRequestProjection, RetainedGoalSubmission,
+    RuntimeSchemaObservation, STUCK_THRESHOLD_ATTEMPTS,
 };
 pub use gents::P2pSyncStatusSnapshot;
 pub use mutations::{ConfigEditorDocument, ConfigEditorRevision};

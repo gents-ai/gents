@@ -289,6 +289,16 @@ pub(super) fn p2p_health_materially_changed(previous: &P2PHealth, next: &P2PHeal
         || previous.last_error != next.last_error
 }
 
+/// A failed activation belongs to one signed enrollment authorization generation;
+/// it is diagnostic and never grants authority or changes retry policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnrollmentActivationError {
+    pub request_digest: String,
+    pub authorization_sequence: u64,
+    pub authorization_expires_at: String,
+    pub message: String,
+}
+
 // The transport counters are diagnostic. Product sync readiness is derived
 // from the configured peer rows in this same revision, never from an
 // independently sampled global connection count.
@@ -297,6 +307,7 @@ pub struct ClientSyncStateSnapshot {
     pub transport: P2PHealth,
     pub database_sync: Option<P2pSyncStatusSnapshot>,
     pub database_sync_error: Option<String>,
+    pub enrollment_activation_errors: BTreeMap<String, EnrollmentActivationError>,
     // DefraDB accepts the connection but never merges either side's writes;
     // schema skew is the only visible signal.
     pub peer_schema_skew: BTreeMap<String, ReplicatedSchemaSkew>,
