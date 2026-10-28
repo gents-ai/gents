@@ -3353,7 +3353,7 @@ mod tests {
                     .all(|request| request.activation_error.is_none()));
             }
         }
-        core.shutdown().await.unwrap();
+        Arc::new(core).shutdown().await.unwrap();
     }
 
     #[tokio::test]
