@@ -53,7 +53,7 @@ it("opens the actual failed action from mixed history while retaining every chro
     />,
   );
   const summary = screen.getByRole("button", {
-    name: /View actions: Ran 3 commands.*1 command failed/,
+    name: /View actions: 3 commands.*1 command failed/,
   });
   fireEvent.click(summary);
   const dialog = screen.getByRole("dialog", { name: /Actions 4/ });
@@ -162,7 +162,7 @@ it.each([
         ]}
       />,
     );
-    const total = `Ran ${1 + commands} ${commands ? "commands" : "command"}${actions ? ", explored files" : ""}`;
+    const total = `${1 + commands} ${commands ? "commands" : "command"}${actions ? `, ${actions} ${actions === 1 ? "file read" : "file reads"}` : ""}`;
     const summary = screen.getByRole("button", {
       name: `View actions: ${total} · ${label}`,
     });
@@ -194,7 +194,7 @@ it("keeps successful stderr warnings and cancelled commands out of failure count
   } satisfies RenderedToolCallView;
   render(<CompactToolGroup tools={[success, cancelled]} />);
   const summary = screen.getByRole("button", {
-    name: "View actions: Ran 1 command · 1 action stopped",
+    name: "View actions: 1 command · 1 action stopped",
   });
   expect(summary.querySelector(".tool-activity-errors")).toBeNull();
 });

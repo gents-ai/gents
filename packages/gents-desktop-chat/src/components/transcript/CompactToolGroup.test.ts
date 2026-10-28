@@ -77,7 +77,7 @@ describe("compact action history", () => {
       createElement(MessageList, { timelineItems: items, compactTools: true }),
     );
     expect(html.match(/class="tool-activity-row/g)).toHaveLength(2);
-    expect(html).toContain("Explored files");
+    expect(html).toContain("file read");
     expect(html).toContain("I found the cause.");
     expect(html).not.toContain("The complete file contents");
     expect(JSON.stringify(items)).toBe(original);
@@ -89,7 +89,7 @@ describe("compact action history", () => {
         createElement(CompactToolGroup, { tools: [tool("read", status)] }),
       );
     expect(html("running")).toContain("Reading README.md");
-    expect(html("success")).toContain("Explored files");
+    expect(html("success")).toContain("file read");
     expect(html("error")).toContain("1 action failed");
     expect(html("unknown")).toContain("Action status unavailable");
     expect(html("unknown")).not.toContain("Explored");
@@ -115,7 +115,7 @@ describe("compact action history", () => {
       }),
     );
     expect(html.match(/class="tool-activity-row/g)).toHaveLength(2);
-    expect(html).toContain("Explored files");
+    expect(html).toContain("file read");
     expect(html).toContain("Reading README.md");
   });
 
@@ -257,7 +257,7 @@ describe("compact action summaries", () => {
       createElement(CompactToolGroup, { tools }),
     );
     expect(html.match(/class="tool-activity-row/g)).toHaveLength(1);
-    expect(html).toContain("Explored files");
+    expect(html).toContain("file read");
     expect(html).toContain("1 action failed");
     expect(html).toContain("1 action stopped");
     expect(html).toContain("1 status unavailable");
@@ -276,7 +276,7 @@ describe("compact action summaries", () => {
       createElement(CompactToolGroup, { tools }),
     );
     expect(html.match(/class="tool-activity-row/g)).toHaveLength(3);
-    expect(html).toContain("Explored files");
+    expect(html).toContain("file read");
     expect(html).toContain("499 actions running");
     expect(html).toContain("Reading README.md");
   });
@@ -469,7 +469,7 @@ describe("activity totals and failures", () => {
     const html = renderToStaticMarkup(
       createElement(CompactToolGroup, { tools }),
     );
-    expect(html).toContain("Ran 4 commands");
+    expect(html).toContain("4 commands");
     expect(html).toContain(
       `${4 - succeeded} ${succeeded === 3 ? "command" : "commands"} failed`,
     );
@@ -485,10 +485,10 @@ describe("activity totals and failures", () => {
         ],
       }),
     );
-    expect(html).toContain("Ran 2 commands");
+    expect(html).toContain("2 commands");
     expect(html).toContain("2 commands failed");
     expect(html).toContain("1 action stopped");
     expect(html).toContain("1 status unavailable");
-    expect(html).not.toContain("Ran 4 commands");
+    expect(html).not.toContain("4 commands");
   });
 });
