@@ -1,8 +1,8 @@
 use crate::{
     error::BridgeError,
-    state::{current_core, DesktopAppState},
+    state::{DesktopAppState, current_core},
 };
-use base64::{engine::general_purpose::STANDARD, Engine};
+use base64::{Engine, engine::general_purpose::STANDARD};
 use gents_protocol::request_input::RequestAttachment;
 use std::io::Read;
 use tauri::State;
@@ -79,23 +79,20 @@ pub async fn desktop_request_attachments(
     session_id: String,
     request_id: String,
     message_key: Option<String>,
+    index: Option<u32>,
     state: State<'_, DesktopAppState>,
 ) -> Result<Vec<RequestAttachment>, BridgeError> {
     let core = current_core(&state)
         .ok_or_else(|| BridgeError::untyped("Desktop client is not running"))?;
-    if let Some(message_key) = message_key {
-        return crate::commands::message_attachments(&core, &session_id, &node_did, &message_key)
-            .await;
-    }
-    let row = core
-        .request_in_scope(&request_id, Some(&node_did))
-        .map_err(|e| BridgeError::untyped(e.to_string()))?;
-    if row.session_id.as_deref() != Some(&session_id) {
-        return Err(BridgeError::untyped(
-            "Attachment request belongs to another session",
-        ));
-    }
-    Ok(row.input.unwrap_or_default().attachments)
+    crate::commands::request_attachments(
+        &core,
+        &node_did,
+        &session_id,
+        &request_id,
+        message_key.as_deref(),
+        index,
+    )
+    .await
 }
 
 #[cfg(test)]
