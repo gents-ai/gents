@@ -1250,6 +1250,17 @@ pub(crate) struct LeanPluginCallsRouteCase {
     pub(crate) expected: bool,
 }
 
+/// `plugin_resource_cases.host_import`: whether the `gents` imports are
+/// linked for a plugin and what `run_script` answers.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginHostImportCase {
+    pub(crate) declared: bool,
+    pub(crate) call_has_script: bool,
+    pub(crate) linked: bool,
+    pub(crate) answer: Option<String>,
+}
+
 /// `plugin_resource_cases.scratch`: `scratchAdmitted`. `handle` is not an
 /// owner input; rows that differ only in it share a path.
 #[derive(Debug, Deserialize)]
@@ -1355,6 +1366,8 @@ pub(crate) struct LeanPluginJobContext {
     pub(crate) started_by_job: bool,
     pub(crate) cwd_allowed: Vec<String>,
     pub(crate) within: Vec<LeanPluginJobWithin>,
+    #[serde(default)]
+    pub(crate) script_digest: Option<String>,
     pub(crate) adoption_facts: LeanPluginJobHostFacts,
     pub(crate) caller_scope: LeanPluginJobProcessScope,
     pub(crate) control_targets: Vec<LeanPluginJobControlTarget>,
@@ -2378,6 +2391,11 @@ where
 {
     serde_json::from_value(lean_contract_snapshot().plugin_resource_cases[group].clone())
         .unwrap_or_else(|error| panic!("plugin_resource_cases.{group}: {error}"))
+}
+
+pub(crate) fn lean_plugin_host_import_cases() -> &'static [LeanPluginHostImportCase] {
+    static CASES: OnceLock<Vec<LeanPluginHostImportCase>> = OnceLock::new();
+    CASES.get_or_init(|| lean_plugin_resource_group("host_import"))
 }
 
 pub(crate) fn lean_plugin_scratch_cases() -> &'static [LeanPluginScratchCase] {

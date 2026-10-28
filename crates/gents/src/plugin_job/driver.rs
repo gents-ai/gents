@@ -202,6 +202,10 @@ pub(super) fn refusal_text(refusal: Refusal, tool: &str, address: &str) -> (&'st
         Refusal::ResumeNotHead => {
             ("the job's resume named a row that is not the newest of a run", inspect)
         }
+        Refusal::PinMismatch => (
+            "the job's step-0 pin did not name the script the call carries (its script_id must be the script's sha256 and its source_digest `sha256:` plus that)",
+            format!("Next: fix the plugin's pin, then call `{tool}` again"),
+        ),
     }
 }
 
@@ -767,6 +771,7 @@ pub(super) async fn step_context_for(
         started_by_job: false,
         cwd_allowed,
         within,
+        script_digest: super::admit::script_digest_of(input.script.as_deref()),
         adoption_facts: facts.clone(),
         caller_scope: ProcessControlScope {
             request_id: caller.request_id.clone(),

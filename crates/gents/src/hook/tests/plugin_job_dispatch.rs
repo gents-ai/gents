@@ -34,8 +34,9 @@ struct Options {
     /// Later steps of an adopted job end without effect and leave it running,
     /// instead of failing on a refused scratch file.
     idle: bool,
-    /// The plugin runs a call's `script` as its step (`script_runtime: js`).
-    script: bool,
+    /// The plugin declares the `run_script` host import and asks the host to
+    /// run the call's `script` as its step.
+    imports: bool,
 }
 
 /// The job block of `team/plugin` in the caller's Tools: it may start `worker`.
@@ -63,7 +64,7 @@ impl Default for Options {
             hop: 0,
             cwd: false,
             idle: false,
-            script: false,
+            imports: false,
         }
     }
 }
@@ -137,21 +138,25 @@ fn install_plugin(
     data: bool,
     via: InstalledVia,
     idle: bool,
-    script: bool,
+    imports: bool,
 ) {
     let later = if idle {
         json!({"effects": {}})
     } else {
         json!({"result": "x", "scratch": [{"name": "a/b", "content": "c"}]})
     };
-    let wat = branching_wat(output.to_string().as_bytes(), later.to_string().as_bytes());
+    let wat = if imports {
+        crate::plugin::tests::IMPORTING_WAT.to_owned()
+    } else {
+        branching_wat(output.to_string().as_bytes(), later.to_string().as_bytes())
+    };
     let (source, mut record) = installed_plugin(&wat, None);
     let hex = record.digest.strip_prefix("sha256:").unwrap().to_owned();
     store::store_bytes(home, &hex, &store::read_bytes(source.path(), &hex).unwrap()).unwrap();
     record.declaration.job = PluginJobDeclaration(true);
     record.owner_pack_coordinate = Some("team/plugin".into());
-    if script {
-        record.declaration.script_runtime = Some(crate::pack::ScriptRuntime::Js);
+    if imports {
+        record.declaration.host_imports = vec![crate::pack::HostImport::RunScript];
     }
     if data {
         record.declaration.data = Some(PluginDataDeclaration {
@@ -228,7 +233,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
         options.data,
         options.via,
         options.idle,
-        options.script,
+        options.imports,
     );
     let cwd = options.cwd.then(|| tempfile::tempdir().unwrap());
 
@@ -934,29 +939,45 @@ async fn resume_row_copies_the_chain_root_args_digest_handle_and_chain_root() {
     step.finish().await;
 }
 
-/// A `script_runtime: js` plugin runs the call's `script` as its step: a step-0
-/// spawn adopts with the host's pin (the script's digest), the run is `dynamic`,
-/// and the job policy applies to it like any dynamic origin.
+/// A step function that pins what the call's `args.pin` names, so a test can
+/// precompute the digest of this fixed text and pass the matching pin (the
+/// text itself never contains its own digest).
+const PASS_PIN: &str = "module.exports = (i) => i.pin ? {effects: {}} : {effects: {pin: i.args.pin, spawn: [{slot: \"s\", attempt: 0, target: \"t-worker\", prompt: \"go\", title: \"t\"}]}};";
+
+fn digest_of(script: &str) -> String {
+    format!(
+        "{:x}",
+        <sha2::Sha256 as sha2::Digest>::digest(script.as_bytes())
+    )
+}
+
+/// `args` carrying the pin that names `script`.
+fn pin_args(script: &str, budget: u32, handle: &str) -> Value {
+    let digest = digest_of(script);
+    json!({"pin": {"script_id": digest, "source_digest": format!("sha256:{digest}"), "agent_budget": budget, "handle": handle}})
+}
+
+/// A declaring plugin runs the call's `script` through the host import: a
+/// step-0 spawn adopts with the pin the script returns (here the digest the
+/// test computed), the run is `dynamic`, and the job policy applies to it like
+/// any dynamic origin.
 #[tokio::test]
-async fn a_js_script_step_adopts_with_the_hosts_pin_as_a_dynamic_run() {
+async fn a_script_step_through_the_import_adopts_its_pin_as_a_dynamic_run() {
     let step = step0(
         adopting(),
         Options {
-            script: true,
+            imports: true,
             ..Default::default()
         },
     )
     .await;
-    let script = "module.exports = (i) => i.pin ? {effects: {}} : {effects: {spawn: [{slot: \"s\", attempt: 0, target: \"t-worker\", prompt: \"go\", title: \"t\"}]}};";
-    let call = json!({"script": script, "agent_budget": 2, "args": {"handle": "js-run"}});
+    let call =
+        json!({"script": PASS_PIN, "agent_budget": 2, "args": pin_args(PASS_PIN, 2, "js-run")});
     let answer = step.call_as("call-1", &call.to_string()).await;
     assert_eq!(answer["status"], "running", "{answer}");
     let row = step.row_of("call-1").await;
     let pin = step.pin_of(&row).await;
-    let digest = format!(
-        "{:x}",
-        <sha2::Sha256 as sha2::Digest>::digest(script.as_bytes())
-    );
+    let digest = digest_of(PASS_PIN);
     assert_eq!(pin.script_id, digest);
     assert_eq!(pin.source_digest, format!("sha256:{digest}"));
     assert_eq!(pin.origin, gents_protocol::job::JobOrigin::Dynamic);
@@ -972,13 +993,63 @@ async fn a_js_script_step_adopts_with_the_hosts_pin_as_a_dynamic_run() {
     step.finish().await;
 }
 
-/// Under `policy.dynamic: check` the script's first spawn is refused like any dynamic run.
+/// A script that throws on a later step is one failed invocation: the row
+/// stays running under the three-strikes rule (the adoption kicks that later
+/// step at once) instead of ending, exactly as before the import.
 #[tokio::test]
-async fn a_js_script_spawn_is_refused_under_the_check_policy() {
+async fn a_script_that_throws_on_a_later_step_counts_one_failure_and_keeps_the_run() {
+    const THROWS_LATER: &str = "module.exports = (i) => { if (i.pin) { throw new Error(\"boom\") } return {effects: {pin: i.args.pin, spawn: [{slot: \"s\", attempt: 0, target: \"t-worker\", prompt: \"go\", title: \"t\"}]}} };";
     let step = step0(
         adopting(),
         Options {
-            script: true,
+            imports: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let call =
+        json!({"script": THROWS_LATER, "agent_budget": 2, "args": pin_args(THROWS_LATER, 2, "h")});
+    let answer = step.call_as("call-1", &call.to_string()).await;
+    assert_eq!(answer["status"], "running", "{answer}");
+    let row = step.row_of("call-1").await;
+    assert_eq!(row["lifecycle_state"], "running", "{row}");
+    let child = step
+        .child_request(row["_docID"].as_str().unwrap(), "s")
+        .await;
+    assert!(child["request_id"].is_string(), "{child}");
+    step.finish().await;
+}
+
+/// A script that throws on step 0 answers with the engine's wording through
+/// the import, as the host runtime did: "did not return a result: the script
+/// failed: …" plus the retry hint.
+#[tokio::test]
+async fn a_script_that_throws_on_step_0_answers_with_the_engines_message() {
+    let step = step0(
+        adopting(),
+        Options {
+            imports: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let call = json!({"script": "module.exports = () => { throw new Error(\"boom\") }", "agent_budget": 2});
+    let answer = step.call_as("call-1", &call.to_string()).await;
+    let text = answer.to_string();
+    assert!(text.contains("did not return a result"), "{text}");
+    assert!(text.contains("the script failed: "), "{text}");
+    assert!(text.contains("boom"), "{text}");
+    assert!(!text.contains("plugin exited with code"), "{text}");
+    step.finish().await;
+}
+
+/// Under `policy.dynamic: check` the script's first spawn is refused like any dynamic run.
+#[tokio::test]
+async fn a_script_spawn_is_refused_under_the_check_policy() {
+    let step = step0(
+        adopting(),
+        Options {
+            imports: true,
             settings: Some(worker_settings(JobPolicy {
                 dynamic: DynamicMode::Check,
                 ..Default::default()
@@ -987,7 +1058,7 @@ async fn a_js_script_spawn_is_refused_under_the_check_policy() {
         },
     )
     .await;
-    let call = json!({"script": "module.exports = (i) => ({effects: {spawn: [{slot: \"s\", attempt: 0, target: \"t-worker\", prompt: \"go\", title: \"t\"}]}});", "agent_budget": 2});
+    let call = json!({"script": PASS_PIN, "agent_budget": 2, "args": pin_args(PASS_PIN, 2, "h")});
     let answer = step.call_as("call-1", &call.to_string()).await;
     assert_eq!(answer["code"], "plugin_job_policy_denied", "{answer}");
     step.finish().await;
@@ -1131,6 +1202,48 @@ async fn background_receipt_shows_address_handle_script_id_and_tier_line() {
         .unwrap();
     assert_eq!(progress.title, "flow");
     assert_eq!(progress.last_event, "dynamic script, run mode");
+    step.finish().await;
+}
+
+/// A pin that does not name the call's script is refused: a script cannot
+/// claim another source's digest as its own, so the run cannot pass as that
+/// source.
+#[tokio::test]
+async fn a_pin_that_does_not_name_the_calls_script_is_refused() {
+    let step = step0(
+        adopting(),
+        Options {
+            imports: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let forged = json!({"pin": {"script_id": "s", "source_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000", "agent_budget": 2, "handle": "h"}});
+    let call = json!({"script": PASS_PIN, "agent_budget": 2, "args": forged});
+    let answer = step.call_as("call-1", &call.to_string()).await;
+    assert_eq!(answer["code"], "plugin_job_pin_mismatch", "{answer}");
+    step.finish().await;
+}
+
+/// Under `policy.dynamic: off` a call that carries a `script` runs dynamic
+/// code whatever its `argv`, so a pinless script answer is refused.
+#[tokio::test]
+async fn a_script_without_argv_is_refused_under_off() {
+    let step = step0(
+        adopting(),
+        Options {
+            imports: true,
+            settings: Some(worker_settings(JobPolicy {
+                dynamic: DynamicMode::Off,
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    let call = json!({"script": "module.exports = () => ({result: {answer: 42}})"});
+    let answer = step.call_as("call-1", &call.to_string()).await;
+    assert_eq!(answer["code"], "plugin_job_policy_denied", "{answer}");
     step.finish().await;
 }
 

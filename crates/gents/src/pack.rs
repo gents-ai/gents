@@ -142,19 +142,20 @@ pub struct PackPlugin {
     /// calls and writes may use; absent means it has no data access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<PluginDataDeclaration>,
-    /// When set, a call that carries `script` runs that source as the step
-    /// through the host's embedded engine instead of the artifact (a job
-    /// plugin only); absent means the artifact runs every call.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub script_runtime: Option<ScriptRuntime>,
+    /// The host functions the artifact imports under the `gents` module;
+    /// absent means it imports none and runs on WASI alone. Only a job plugin
+    /// whose input names `script` may ask for `run_script`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_imports: Vec<HostImport>,
 }
 
-/// The engine the host runs a call's `script` with.
+/// A host function a plugin artifact may import (wasm module `gents`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ScriptRuntime {
-    /// JavaScript through Afterburner's embedded QuickJS-on-Wasmtime engine.
-    Js,
+#[serde(rename_all = "snake_case")]
+pub enum HostImport {
+    /// `run_script(ptr, len) -> i32` and `read_result(ptr, cap) -> i32`: the
+    /// host evaluates the call's own `script` on the JSON the guest hands it.
+    RunScript,
 }
 
 /// For literals that set only the fields they need.
@@ -175,7 +176,7 @@ impl Default for PackPlugin {
             service: None,
             job: undeclared_job(),
             data: None,
-            script_runtime: None,
+            host_imports: Vec::new(),
         }
     }
 }
@@ -537,8 +538,13 @@ pub const SUPPORTED_PLUGIN_LANGUAGES: &[&str] = &[
 impl PackPlugin {
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
-            self.script_runtime.is_none() || self.job.0,
-            "script_runtime needs job: true; a script is a job step function"
+            self.host_imports.is_empty() || self.job.0,
+            "host_imports needs job: true; the host runs a call's script only as a job step"
+        );
+        anyhow::ensure!(
+            self.host_imports.is_empty()
+                || self.input_schema.pointer("/properties/script").is_some(),
+            "host_imports: run_script needs a `script` property in input_schema"
         );
         if let Some(service) = &self.service {
             anyhow::ensure!(
@@ -1149,6 +1155,46 @@ impl PackDigester {
 mod tests {
     use super::*;
     use gents_protocol::job::StampedField;
+
+    #[test]
+    fn a_run_script_import_needs_a_job_plugin_with_a_script_input() {
+        let ok = PackPlugin {
+            job: PluginJobDeclaration(true),
+            host_imports: vec![HostImport::RunScript],
+            input_schema: serde_json::json!({"type": "object", "properties": {"script": {"type": "string"}}}),
+            ..valid_plugin()
+        };
+        ok.validate().unwrap();
+        let no_job = PackPlugin {
+            job: PluginJobDeclaration(false),
+            ..ok.clone()
+        };
+        assert!(no_job
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("host_imports"));
+        let no_script = PackPlugin {
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            ..ok.clone()
+        };
+        assert!(no_script
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("script"));
+    }
+
+    #[test]
+    fn host_imports_round_trip_and_default_empty() {
+        let text = r#"{"name":"w","description":"d","artifact":"a.afb","language":"rust","input_schema":{},"job":true,"host_imports":["run_script"]}"#;
+        let plugin: PackPlugin = serde_json::from_str(text).unwrap();
+        assert_eq!(plugin.host_imports, vec![HostImport::RunScript]);
+        assert!(serde_json::to_value(PackPlugin::default())
+            .unwrap()
+            .get("host_imports")
+            .is_none());
+    }
 
     fn valid_plugin() -> PackPlugin {
         PackPlugin {

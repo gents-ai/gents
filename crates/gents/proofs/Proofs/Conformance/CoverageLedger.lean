@@ -1698,6 +1698,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::tool_policy::generated_plugin_job_resource_cases_drive_scratch")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
+      "plugin_resource_cases"
+      "PluginHostImportCases"
+      "conformance::tool_policy::generated_plugin_host_import_cases_drive_the_grant")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
       "plugin_calls_route_cases"
       "PluginCallsRouteCases"
       "conformance::tool_policy::generated_plugin_calls_route_cases_drive_supported")

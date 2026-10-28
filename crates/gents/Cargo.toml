@@ -126,6 +126,10 @@ afterburner-core = { git = "https://github.com/afterburner-sh/afterburner.git", 
 afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "bf86885d2408f29e5a9bcbb3c5392fbdf5fff9f2", default-features = false, features = [
     "afb-run",
 ] }
+# `wasmtime::Caller` for the host imports a declaring plugin may call (`plugin/host_imports.rs`);
+# the version follows the one afterburner pins so the lockfile holds a single wasmtime.
+wasmtime = { version = "49", default-features = false, features = ["runtime"] }
+
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = { version = "3.7.0", features = ["OSX_10_15"] }

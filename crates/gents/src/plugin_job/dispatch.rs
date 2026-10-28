@@ -988,6 +988,7 @@ fn step0_context(
         started_by_job: caller.started_by_job,
         cwd_allowed: Vec::new(),
         within: Vec::new(),
+        script_digest: super::admit::script_digest_of(input.script.as_deref()),
         adoption_facts: facts.clone(),
         caller_scope: ProcessControlScope {
             request_id: caller.request_id.clone(),
@@ -1054,6 +1055,7 @@ mod tests {
             started_by_job: false,
             cwd_allowed: Vec::new(),
             within: Vec::new(),
+            script_digest: None,
             adoption_facts: facts(),
             caller_scope: ProcessControlScope {
                 request_id: "request".to_owned(),
