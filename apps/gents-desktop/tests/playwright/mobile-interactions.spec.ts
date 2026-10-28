@@ -61,6 +61,12 @@ test("dialogs fit inside the visible viewport", async ({ page }) => {
   await expect
     .poll(() => dialog.evaluate((el) => el.getBoundingClientRect().top))
     .toBeGreaterThanOrEqual(50);
+  const save = page.getByRole("button", { name: "Save dialog" });
+  await save.scrollIntoViewIfNeeded();
+  await expect
+    .poll(() => save.evaluate((el) => el.getBoundingClientRect().bottom))
+    .toBeLessThanOrEqual(350);
+  await expect(save).toBeInViewport();
 });
 
 test("focusing a field reveals it in the editor's real scroll container", async ({
@@ -138,4 +144,25 @@ test("search stays reachable with the keyboard open", async ({ page }) => {
   await expect
     .poll(() => search.evaluate((el) => el.getBoundingClientRect().bottom))
     .toBeLessThanOrEqual(350);
+});
+
+test("reading away from a focused field survives viewport scroll notifications", async ({
+  page,
+}) => {
+  await page.getByRole("button", { name: "Open editor", exact: true }).click();
+  await keyboard(page);
+  const field = page.getByRole("textbox", { name: "Last field" });
+  await field.focus();
+  await expect
+    .poll(() => field.evaluate((el) => el.getBoundingClientRect().bottom))
+    .toBeLessThanOrEqual(334);
+  await field.evaluate((el) => {
+    el.dispatchEvent(new Event("touchmove", { bubbles: true }));
+    el.closest(".overflow-y-auto")!.scrollTop = 0;
+    window.visualViewport!.dispatchEvent(new Event("scroll"));
+  });
+  await page.waitForTimeout(400);
+  expect(await field.evaluate((el) => el.closest(".overflow-y-auto")!.scrollTop)).toBe(
+    0,
+  );
 });
