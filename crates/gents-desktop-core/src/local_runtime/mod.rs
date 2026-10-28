@@ -287,13 +287,19 @@ pub fn default_node_home() -> Result<PathBuf> {
     gents::home::default_home_dir()
 }
 
+fn has_http_scheme(address: &str) -> bool {
+    address.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    })
+}
+
 pub fn runtime_status_url(server_address: &str) -> Result<String> {
     let trimmed = server_address.trim();
     if trimmed.is_empty() {
         anyhow::bail!("server_address is required");
     }
 
-    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+    let with_scheme = if has_http_scheme(trimmed) {
         trimmed.to_string()
     } else {
         format!("http://{trimmed}")
@@ -317,7 +323,7 @@ pub fn runtime_graphql_url(endpoint: &str) -> Result<String> {
         anyhow::bail!("graphql endpoint is required");
     }
 
-    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+    let with_scheme = if has_http_scheme(trimmed) {
         trimmed.to_string()
     } else {
         format!("http://{trimmed}")

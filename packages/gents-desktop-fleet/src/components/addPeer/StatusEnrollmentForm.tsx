@@ -38,6 +38,9 @@ export function StatusEnrollmentForm({
           <span>Node server</span>
           <input
             className="mono"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
             data-testid="fleet-add-server-address"
             disabled={busy}
             onChange={(event) =>

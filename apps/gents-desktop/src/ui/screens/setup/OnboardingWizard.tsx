@@ -442,6 +442,9 @@ export function OnboardingWizard({
             <Field label="Server address">
               <Input
                 type="url"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 value={address}
                 onChange={(event) => setAddress(event.target.value)}
                 placeholder="https://gents.example.net:8787"

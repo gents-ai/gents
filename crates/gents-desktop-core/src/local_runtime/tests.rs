@@ -4,12 +4,45 @@ use super::{
     cached_operator_endpoint, dangerously_overwrite_desktop_home,
     graphql_endpoint_for_desktop_access, init_standard_local_runtime, load_operator_node_identity,
     load_standard_runtime_identity, operator_signer, render_human_summary,
-    reset_desktop_runtime_state, serving_runtime, DesktopInitOptions, DesktopInitSummary,
-    StoredRuntimeState, LOCAL_STANDARD_SOURCE,
+    reset_desktop_runtime_state, runtime_graphql_url, runtime_status_url, serving_runtime,
+    DesktopInitOptions, DesktopInitSummary, StoredRuntimeState, LOCAL_STANDARD_SOURCE,
 };
 use crate::client::DesktopPaths;
 use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
 use serde_json::json;
+
+#[test]
+fn runtime_endpoint_urls_accept_case_insensitive_http_schemes() {
+    for (scheme, normalized) in [
+        ("HTTP", "http"),
+        ("hTtP", "http"),
+        ("HTTPS", "https"),
+        ("HtTpS", "https"),
+    ] {
+        assert_eq!(
+            runtime_status_url(&format!(
+                " {scheme}://example.com:9191/api/v0/graphql/?q=1#part "
+            ))
+            .unwrap(),
+            format!("{normalized}://example.com:9191/status"),
+        );
+        assert_eq!(
+            runtime_graphql_url(&format!(
+                "{scheme}://example.com:9191/api/v0/graphql/?q=1#part"
+            ))
+            .unwrap(),
+            format!("{normalized}://example.com:9191/api/v0/graphql"),
+        );
+    }
+    assert_eq!(
+        runtime_status_url("example.com:9191").unwrap(),
+        "http://example.com:9191/status"
+    );
+    assert_eq!(
+        runtime_graphql_url("example.com:9191/api/v0/graphql").unwrap(),
+        "http://example.com:9191/api/v0/graphql"
+    );
+}
 
 fn sample_summary() -> DesktopInitSummary {
     DesktopInitSummary {
