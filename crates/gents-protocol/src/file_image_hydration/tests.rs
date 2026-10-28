@@ -4,6 +4,7 @@ fn receipt() -> FileImageHydrationReceipt {
     FileImageHydrationReceipt {
         version: FILE_IMAGE_RECEIPT_VERSION,
         demand: FileImageDemand {
+            inventory_reference: None,
             admission: HydrationRequest {
                 request_key: "demand-1".into(),
                 peer_id: "peer-1".into(),
@@ -150,4 +151,137 @@ fn explicit_retry_keys_preserve_scope_and_replay_identity() {
             "{field}"
         );
     }
+}
+
+fn inventory_receipt() -> FileImageHydrationReceipt {
+    use crate::file_inventory::{
+        FileInventoryAdmission, FileInventoryBinding, FileInventoryCoverage, FileInventoryCursor,
+    };
+    let mut result = receipt();
+    let mut root = result.demand.admission.clone();
+    root.request_key = "metadata-root".into();
+    let admission = FileInventoryAdmission {
+        request: root,
+        session_doc_id: "physical-root".into(),
+    };
+    result.demand.inventory_reference = Some(FileImageInventoryReference {
+        page: FileInventoryPageDemand {
+            admission: admission.clone(),
+            attempt_id: "metadata-attempt".into(),
+            cursor: Some(FileInventoryCursor {
+                binding: FileInventoryBinding {
+                    admission,
+                    digest: "reader-snapshot".into(),
+                    coverage: FileInventoryCoverage {
+                        entries: 65,
+                        pending: 0,
+                        unknown: 0,
+                    },
+                },
+                offset: 64,
+            }),
+        },
+        snapshot_digest: "reader-snapshot".into(),
+        entry_index: 0,
+    });
+    result.version = result.demand.receipt_version();
+    result
+}
+
+#[test]
+fn inventory_image_keys_and_receipts_bind_the_exact_page_and_selection() {
+    let original = inventory_receipt();
+    original.validate_shape().unwrap();
+    let key = original.demand.derive_request_key();
+    let retry = original.demand.derive_retry_request_key("explicit-retry");
+    let payload = original.signing_payload().unwrap();
+    assert_ne!(key, receipt().demand.derive_request_key());
+    assert_ne!(payload, receipt().signing_payload().unwrap());
+    for path in [
+        "/page/admission/session_doc_id",
+        "/page/admission/request/request_key",
+        "/page/admission/request/peer_id",
+        "/page/admission/request/requester_did",
+        "/page/admission/request/node_did",
+        "/page/admission/request/session_id",
+        "/page/attempt_id",
+        "/page/cursor/binding/digest",
+        "/page/cursor/binding/admission/session_doc_id",
+        "/page/cursor/binding/coverage/entries",
+        "/page/cursor/offset",
+        "/snapshot_digest",
+        "/entry_index",
+    ] {
+        let mut value = serde_json::to_value(&original.demand.inventory_reference).unwrap();
+        let field = value.pointer_mut(path).unwrap();
+        *field = if field.is_number() {
+            serde_json::json!(1)
+        } else {
+            serde_json::json!("other")
+        };
+        let mut changed = original.clone();
+        changed.demand.inventory_reference = serde_json::from_value(value).unwrap();
+        assert_ne!(changed.demand.derive_request_key(), key, "{path}");
+        assert_ne!(
+            changed.demand.derive_retry_request_key("explicit-retry"),
+            retry,
+            "{path}"
+        );
+        assert_ne!(changed.signing_payload().unwrap(), payload, "{path}");
+    }
+}
+
+#[test]
+fn inventory_image_reference_refuses_cross_reader_and_snapshot_bindings() {
+    let original = inventory_receipt();
+    for path in [
+        "/inventory_reference/page/admission/request/peer_id",
+        "/inventory_reference/page/admission/request/requester_did",
+        "/inventory_reference/page/admission/request/node_did",
+        "/inventory_reference/page/admission/request/session_id",
+        "/inventory_reference/snapshot_digest",
+    ] {
+        let mut value = serde_json::to_value(&original.demand).unwrap();
+        *value.pointer_mut(path).unwrap() = serde_json::json!("other");
+        let changed: FileImageDemand = serde_json::from_value(value).unwrap();
+        assert!(changed.validate_reference().is_err(), "{path}");
+    }
+    let mut oversized = original.clone();
+    oversized
+        .demand
+        .inventory_reference
+        .as_mut()
+        .unwrap()
+        .entry_index = 64;
+    assert!(oversized.validate_shape().is_err());
+    let mut downgraded = original;
+    downgraded.version = FILE_IMAGE_RECEIPT_VERSION;
+    assert!(downgraded.validate_shape().is_err());
+    let mut upgraded = receipt();
+    upgraded.version = FILE_INVENTORY_IMAGE_RECEIPT_VERSION;
+    assert!(upgraded.validate_shape().is_err());
+}
+
+#[test]
+fn legacy_receipts_keep_their_original_payload_and_omit_inventory_binding() {
+    let original = receipt();
+    let encoded = serde_json::to_value(&original).unwrap();
+    assert!(encoded["demand"].get("inventory_reference").is_none());
+    let decoded: FileImageHydrationReceipt = serde_json::from_value(encoded).unwrap();
+    decoded.validate_shape().unwrap();
+    assert_eq!(
+        decoded.signing_payload().unwrap(),
+        original.signing_payload().unwrap()
+    );
+    assert_eq!(
+        decoded.demand.derive_request_key(),
+        original.demand.derive_request_key()
+    );
+    let mut explicit_null = serde_json::to_value(&original).unwrap();
+    explicit_null["demand"]["inventory_reference"] = serde_json::Value::Null;
+    let explicit_null: FileImageHydrationReceipt = serde_json::from_value(explicit_null).unwrap();
+    assert_eq!(
+        explicit_null.signing_payload().unwrap(),
+        original.signing_payload().unwrap()
+    );
 }

@@ -113,6 +113,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) file_inventory_issuance_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_fork_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_reader_cases: Vec<serde_json::Value>,
+    pub(crate) file_inventory_selected_image_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_source_projection_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_receiver_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_order_window_cases: Vec<serde_json::Value>,

@@ -45,6 +45,61 @@ impl VerifiedFileImageReceipt {
         &self.0.detail
     }
 
+    /// A bound source receipt attests accepted-tool selection; a shared reader
+    /// need not replicate the original author's entire transcript to read it.
+    /// The caller supplies the entry from its verified inventory page.
+    pub async fn read_inventory_image(
+        &self,
+        node: Arc<EmbeddedNode>,
+        entry: &gents_protocol::file_inventory::FileInventoryEntry,
+    ) -> Result<Option<gents_protocol::file_changes::ToolFileChanges>> {
+        let demand = &self.0.demand;
+        anyhow::ensure!(
+            demand.inventory_reference.is_some(),
+            "inventory image reads require a page-bound source receipt"
+        );
+        let FileImageSelection::Selected { document } = self.selection() else {
+            anyhow::bail!("inventory image read requires a selected receipt")
+        };
+        anyhow::ensure!(
+            document == &entry.observation_doc_id
+                && demand.request_doc_id == entry.request_doc_id
+                && demand.tool_call_doc_id == entry.tool_call_doc_id
+                && demand.admission.node_did == entry.scope.node_did,
+            "selected file image crossed its inventory entry"
+        );
+        if !self.grant_local_read(node.clone()).await? {
+            return Ok(None);
+        }
+        let response = ConfigAccess::local(node).execute(&format!(
+            r#"{{ToolFileChange(docID: "{}") {{_docID request_doc_id tool_call_doc_id node_did session_id requester_did file_changes}}}}"#,
+            crate::graphql::escape_graphql_string(document),
+        )).await?;
+        let rows = response["data"]["ToolFileChange"]
+            .as_array()
+            .context("delivered inventory image omitted observations")?;
+        anyhow::ensure!(
+            rows.len() <= 1,
+            "delivered inventory image became ambiguous"
+        );
+        let Some(row) = rows.first() else {
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            row["_docID"] == *document
+                && row["request_doc_id"] == entry.request_doc_id
+                && row["tool_call_doc_id"] == entry.tool_call_doc_id
+                && row["node_did"] == entry.scope.node_did
+                && row["session_id"] == entry.scope.session_id
+                && row["requester_did"] == entry.scope.requester_did,
+            "delivered inventory image crossed its canonical source"
+        );
+        Ok(Some(crate::toolset::FileChanges::decode(
+            &entry.tool_call_doc_id,
+            row["file_changes"].clone(),
+        )?))
+    }
+
     /// The creator remains the DefraDB owner on a replica. Install the receipt's
     /// reader grant only after that signed creator registration has committed.
     pub async fn grant_local_read(&self, node: Arc<EmbeddedNode>) -> Result<bool> {

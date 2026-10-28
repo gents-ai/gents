@@ -344,6 +344,34 @@ private def demandJson (value : PageDemand) : String := object
    ("cursor", optional pageCursorJson value.cursor)]
 
 private def initialDemand : PageDemand := ⟨admission, "attempt-1", none⟩
+
+def selectedImageCasesJson : String := jsonArray (SessionHydration.ReaderExamples.imageCases.map fun value =>
+  object [("name", jsonString value.name), ("catalog", catalogJson value.catalog),
+    ("admission", hydrationRequestJson value.demand.image.admission),
+    ("request_doc_id", jsonString value.demand.image.requestDocId),
+    ("tool_doc_id", jsonString value.demand.image.toolDocId),
+    ("metadata", demandJson value.demand.metadata),
+    ("digest", jsonString value.demand.digest), ("entry_index", toString value.demand.entryIndex),
+    ("page", envelopeJson value.page), ("nonce_matches", boolString value.nonceMatches),
+    ("page_owner", jsonString value.pageOwner),
+    ("read", object [("scope", object [("peer", jsonString value.read.scope.peer),
+        ("requester", jsonString value.read.scope.requester), ("node", jsonString value.read.scope.node),
+        ("session", jsonString value.read.scope.session), ("native_session", toString value.read.scope.nativeSession)]),
+      ("projection", toString value.read.projection), ("observation", toString value.read.observation),
+      ("projection_visible", boolString value.read.projectionVisible),
+      ("image_visible", boolString value.read.imageVisible),
+      ("projection_owner", jsonString value.read.projectionOwner),
+      ("image_owner", jsonString value.read.imageOwner)]),
+    ("tools", jsonArray (value.tools.map fun tool => object
+      [("doc_id", jsonString tool.docId), ("request_doc_id", jsonString tool.requestDocId),
+       ("scope", scopeJson tool.scope), ("accepted", boolString tool.accepted), ("terminal", boolString tool.terminal)])),
+    ("images", jsonArray (value.images.map fun image => object
+      [("doc_id", jsonString image.docId), ("tool_call_doc_id", jsonString image.toolDocId),
+       ("request_doc_id", jsonString image.requestDocId), ("scope", scopeJson image.scope)])),
+    ("expected", match value.result with
+      | .rejected => tagged "rejected"
+      | .missing => tagged "missing"
+      | .selected document => tagged "selected" [("document", jsonString document)])])
 private def continuingDemand : PageDemand := ⟨admission, "attempt-1", some ⟨firstEnvelope.page.binding, 64⟩⟩
 
 def demandCasesJson : String :=

@@ -166,6 +166,7 @@ pub async fn verify(
     );
     let receipt = &receipts[0];
     let mut demand = gents_protocol::file_image_hydration::FileImageDemand {
+        inventory_reference: None,
         admission: gents_protocol::session_hydration::HydrationRequest {
             request_key: String::new(),
             peer_id: receipt["peer_id"].as_str().context("review peer")?.into(),
@@ -230,6 +231,7 @@ pub async fn verify_permission_recovery(
     ensure!(receipts.len() == 1, "initial review has multiple demands");
     let original = receipts[0].clone();
     let demand = FileImageDemand {
+        inventory_reference: None,
         admission: HydrationRequest {
             request_key: field(&original, "request_key")?.into(),
             peer_id: field(&original, "peer_id")?.into(),

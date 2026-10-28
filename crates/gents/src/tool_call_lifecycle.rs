@@ -142,6 +142,7 @@ mod file_review_access;
 pub(crate) mod query;
 pub(crate) use file_review_access::grant_source_file_read;
 pub use file_review_access::VerifiedFileImageReceipt;
+pub(crate) use query::load_tool_file_change_observation_in_txn;
 pub use query::{
     load_tool_call_arguments, load_tool_call_file_changes, load_tool_call_presentation,
     load_tool_call_result, load_tool_file_change_observation, render_tool_result,

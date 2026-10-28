@@ -74,4 +74,82 @@ theorem metadata_does_not_authorize_an_unbound_image :
           ⟨canonicalSource.requester, admission.node, admission.session⟩⟩] = .rejected := by
   native_decide
 
+def imagePage : PageEnvelope :=
+  ⟨.fileInventoryV2, "metadata-page-key", admission.node, true,
+    (makePage (getSnapshot shared) 0).toWire "reader-snapshot"⟩
+
+def imageDemand : ImageDemand :=
+  ⟨⟨{admission with key := "image-attempt"}, "1001", "1"⟩,
+    ⟨admission, "metadata-attempt", none⟩, "reader-snapshot", 0⟩
+
+def imageRead : SelectedImageRead :=
+  ⟨admission.authorizationScope, 3001, 2001, true, true, admission.node, admission.node⟩
+
+def selectedImageTool : FileImages.Tool :=
+  ⟨"1", "1001", ⟨canonicalSource.requester, admission.node, admission.session⟩, true, true⟩
+
+def imageTools : List FileImages.Tool := [selectedImageTool]
+
+def selectedImage : FileImages.Image :=
+  ⟨"2001", "1", "1001", ⟨canonicalSource.requester, admission.node, admission.session⟩⟩
+
+def images : List FileImages.Image := [selectedImage]
+
+structure ImageCase where
+  name : String
+  demand : ImageDemand := imageDemand
+  catalog : CatalogInput := shared.catalog
+  page : PageEnvelope := imagePage
+  nonceMatches : Bool := true
+  pageOwner : String := admission.node
+  read : SelectedImageRead := imageRead
+  tools : List FileImages.Tool := imageTools
+  images : List FileImages.Image := ReaderExamples.images
+  expected : FileImages.Selection := .rejected
+
+def imageCases : List ImageCase :=
+  [ { name := "shared_image_selected", expected := .selected "2001" }
+  , { name := "metadata_permission_is_not_image_permission", read := {imageRead with imageVisible := false} }
+  , { name := "projection_permission_revoked", read := {imageRead with projectionVisible := false} }
+  , { name := "image_permission_observed_for_another_reader", read := {imageRead with
+      scope := {imageRead.scope with requester := canonicalSource.requester}} }
+  , { name := "image_permission_observed_for_another_root", read := {imageRead with
+      scope := {imageRead.scope with nativeSession := 99}} }
+  , { name := "image_permission_observed_for_another_projection", read := {imageRead with projection := 99} }
+  , { name := "image_permission_observed_for_another_capture", read := {imageRead with observation := 99} }
+  , { name := "image_owned_by_another_node", read := {imageRead with imageOwner := "another-node"} }
+  , { name := "metadata_page_owned_by_another_node", pageOwner := "another-node" }
+  , { name := "metadata_page_signature_unverified", page := {imagePage with signatureVerified := false} }
+  , { name := "metadata_page_has_another_purpose", page := {imagePage with purpose := .transcriptV1} }
+  , { name := "metadata_page_nonce_mismatch", nonceMatches := false }
+  , { name := "metadata_page_digest_mismatch", demand := {imageDemand with digest := "another-snapshot"} }
+  , { name := "metadata_entry_out_of_range", demand := {imageDemand with entryIndex := 1} }
+  , { name := "image_request_crosses_physical_request", demand := {imageDemand with
+      image := {imageDemand.image with requestDocId := "another-request"}} }
+  , { name := "image_request_crosses_physical_root", demand := {imageDemand with
+      image := {imageDemand.image with admission := {admission with nativeSession := 99}},
+      metadata := {imageDemand.metadata with admission := {admission with nativeSession := 99}}} }
+  , { name := "missing_selected_image_is_not_empty_success", images := [] }
+  , { name := "ambiguous_tool_images_are_not_selected", images := [selectedImage,
+      {selectedImage with docId := "another-observation"}] }
+  , { name := "image_scope_cannot_impersonate_the_reader", images := [{selectedImage with
+      scope := scope}] }
+  , { name := "image_permission_reauthorized", expected := .selected "2001" }
+  , { name := "canonical_reader_can_use_a_bound_image", catalog := catalog [1],
+      page := {imagePage with page := (makePage (getSnapshot (source 1)) 0).toWire "reader-snapshot"},
+      tools := [{selectedImageTool with scope := scope}],
+      images := [{selectedImage with scope := scope}], expected := .selected "2001" } ]
+
+def ImageCase.result (test : ImageCase) : FileImages.Selection :=
+  selectImage test.demand test.catalog.model test.page test.nonceMatches test.pageOwner test.read
+    test.tools test.images
+
+theorem selected_image_regressions : imageCases.all (fun test => test.result == test.expected) = true := by
+  native_decide
+
+theorem legacy_image_cannot_impersonate_a_shared_requester :
+    FileImages.select ⟨admission, "1001", "1"⟩ shared.catalog.model
+      [{selectedImageTool with scope := scope}] [{selectedImage with scope := scope}] = .rejected := by
+  native_decide
+
 end SessionHydration.ReaderExamples

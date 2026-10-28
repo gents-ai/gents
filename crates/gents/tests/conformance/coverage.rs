@@ -780,6 +780,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.file_inventory_fork_cases,
         ),
         (
+            "file_inventory_selected_image_cases",
+            "FileInventorySelectedImageCases",
+            &snapshot.file_inventory_selected_image_cases,
+        ),
+        (
             "file_inventory_reader_cases",
             "FileInventoryReaderCases",
             &snapshot.file_inventory_reader_cases,

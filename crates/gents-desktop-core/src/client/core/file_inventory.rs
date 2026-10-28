@@ -48,9 +48,7 @@ impl ClientCore {
             {
                 if let Some(session) = &session {
                     ensure!(
-                        session.doc_id == retained.admission().session_doc_id
-                            && session.session.requester_did.as_deref()
-                                == Some(retained.admission().request.requester_did.as_str()),
+                        session.doc_id == retained.admission().session_doc_id,
                         "Retained file changes belong to a different physical session."
                     );
                 }
@@ -108,12 +106,17 @@ impl ClientCore {
         let Some(session) = session else {
             return Ok(None);
         };
-        let requester = session
+        let canonical_requester = session
             .session
             .requester_did
             .as_deref()
             .filter(|requester| !requester.is_empty())
             .context("File changes require an explicit session requester.")?;
+        let requester = if record.is_enrollment() {
+            self.node_identity.did()
+        } else {
+            canonical_requester
+        };
         let admission = FileInventoryAdmission {
             request: HydrationRequest {
                 request_key: format!("{}:{session_id}", self.local_peer_id()),
@@ -142,8 +145,6 @@ impl ClientCore {
                 .await?
             {
                 let reply = if record.is_enrollment() {
-                    ensure!(requester == self.node_identity.did(),
-                        "File changes for this received session require the sharing conversation's authorization.");
                     self.remote_inventory_page(&demand).await?
                 } else {
                     let endpoint = operator.as_ref().context(
@@ -540,6 +541,97 @@ mod tests {
             .unwrap()
             .iter()
             .any(|request| request.url.path().ends_with(FILE_INVENTORY_OPERATOR_PATH)));
+        Ok(())
+    }
+    #[tokio::test]
+    async fn enrolled_received_inventory_keeps_reader_and_canonical_author_separate_after_reload(
+    ) -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let paths = crate::client::DesktopPaths::from_root(root.path().join("client"));
+        let core = std::sync::Arc::new(
+            ClientCore::start_with_paths_and_options(
+                paths.clone(),
+                crate::client::ClientCoreOptions::local_only(),
+            )
+            .await?,
+        );
+        let source_key = root.path().join("source.key");
+        let source = tokio::task::spawn_blocking(move || {
+            gents::KeyIdentity::load_or_create(source_key, None)
+        })
+        .await??;
+        core.sync_state
+            .upsert_enrollment_peer(
+                "source-peer",
+                "Shared source",
+                "iroh://source-ticket",
+                source.did(),
+                "network",
+                "enrollment",
+                "request-digest",
+                source.did(),
+                1,
+                "2099-10-28T00:00:00Z",
+            )
+            .await?;
+        let node = core.node_arc();
+        let created = ConfigAccess::transact_local_write(&node, None, "test.inventory.received_author", |txn| {
+            let source = &source;
+            Box::pin(async move {
+                let response = txn.execute_with_variables(
+                    "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
+                    &json!({"input": {"node_did": source.did(), "session_id": "shared-received",
+                        "requester_did": source.did(), "agent_id": "fixture", "created_at": "2026-10-28T00:00:00Z"}}),
+                ).await?;
+                gents::graphql::created_doc_id(&response, "AgentSession")
+            })
+        }).await?;
+        let first = core
+            .session_file_inventory(
+                source.did(),
+                "shared-received",
+                FileInventoryReadAction::default(),
+            )
+            .await?
+            .unwrap();
+        assert_eq!(
+            first.admission.request.requester_did,
+            core.node_identity.did()
+        );
+        assert_ne!(first.admission.request.requester_did, source.did());
+        assert_eq!(first.admission.session_doc_id, created);
+        let session = load_inventory_session(
+            &ConfigAccess::local(node.clone()),
+            source.did(),
+            "shared-received",
+        )
+        .await?
+        .unwrap();
+        assert_eq!(session.session.requester_did.as_deref(), Some(source.did()));
+        let requests = ConfigAccess::local(node)
+            .execute("{FileInventoryRequest {_docID} FileImageHydrationRequest {_docID}}")
+            .await?;
+        assert_eq!(requests["data"]["FileInventoryRequest"], json!([]));
+        assert_eq!(requests["data"]["FileImageHydrationRequest"], json!([]));
+        core.shutdown().await?;
+        drop(core);
+        let core = std::sync::Arc::new(
+            ClientCore::start_with_paths_and_options(
+                paths,
+                crate::client::ClientCoreOptions::local_only(),
+            )
+            .await?,
+        );
+        assert_eq!(
+            core.session_file_inventory(
+                source.did(),
+                "shared-received",
+                FileInventoryReadAction::default()
+            )
+            .await?,
+            Some(first)
+        );
+        core.shutdown().await?;
         Ok(())
     }
 }

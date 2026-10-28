@@ -1508,6 +1508,12 @@ def caseCoverage : List CoverageEntry :=
       "Refines public-root visibility, exact physical binding, explicit projection read permission, revocation and reauthorization in one native source snapshot. Two enrolled identities, signed delivery and selected-image transport remain separate obligations.")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "file_inventory_selected_image_cases"
+      "FileInventorySelectedImageCases"
+      "agent::p2p_reconcile::file_image_hydration::tests::inventory::generated_inventory_images_keep_reader_root_snapshot_and_source_distinct"
+      "Executes snapshot-bound selection over native page, root, canonical tool and independent metadata/image-read observations. Source cryptographic/ACP interleavings, two enrolled identities and installed delivery remain separate obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "file_inventory_source_projection_cases"
       "FileInventorySourceProjectionCases"
       "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::generated_projection_cases_use_native_owners_and_scopes"
