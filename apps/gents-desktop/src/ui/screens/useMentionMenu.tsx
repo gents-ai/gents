@@ -24,6 +24,38 @@ const titleOf = (session: SessionSummary) => session.title?.trim() || "Untitled"
 const newestFirst = (a: SessionSummary, b: SessionSummary) =>
   (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "");
 
+/** How a session reference looks, in the composer and on a sent message:
+    its card names the session's agent and shows its latest text. */
+export function useSessionChipKind(nodeDid: string | null): ChipKind {
+  const { sessions, node } = useFleet(
+    useShallow((s) => ({
+      sessions: s.sessions,
+      node: nodeDid ? (s.nodes[nodeDid] ?? null) : null,
+    })),
+  );
+  return useMemo(
+    () =>
+      referenceKind("session", {
+        preview: (chip) => {
+          const session = Object.values(sessions).find(
+            (s) => s.nodeDid === nodeDid && s.sessionId === chip.id,
+          );
+          return (
+            <ChipCard
+              title={chip.label}
+              subtitle={
+                session ? `Session · ${agentName(session.agentId, node)}` : "Session"
+              }
+            >
+              {session?.previewText ?? undefined}
+            </ChipCard>
+          );
+        },
+      }),
+    [sessions, node, nodeDid],
+  );
+}
+
 /** The menu @ opens in the composer: the node's other sessions, the most
     recent first, or those whose title matches what follows the @. A session
     picked becomes a chip that sends `[title](gents:session/<id>)`, which the
@@ -83,24 +115,7 @@ export function useMentionMenu(nodeDid: string | null, sessionId: string | null)
       return { ...reference, text: formatReference(reference) };
     },
   };
-  /* the card over a session chip, whether picked or read back from text */
-  const chipKinds = useMemo<Record<string, ChipKind>>(
-    () => ({
-      session: referenceKind("session", {
-        preview: (chip) => {
-          const found = others.find((other) => other.session.sessionId === chip.id);
-          return (
-            <ChipCard
-              title={chip.label}
-              subtitle={found ? `Session · ${found.agent}` : "Session"}
-            >
-              {found?.session.previewText ?? undefined}
-            </ChipCard>
-          );
-        },
-      }),
-    }),
-    [others],
-  );
+  const session = useSessionChipKind(nodeDid);
+  const chipKinds = useMemo<Record<string, ChipKind>>(() => ({ session }), [session]);
   return { trigger, chipKinds };
 }

@@ -159,7 +159,7 @@ test("a skill picked mid-sentence becomes a chip and is named on an opening line
   await expect(field(page)).toHaveText("");
 });
 
-test("a session picked from the @ menu becomes a chip and sends a link to it", async ({
+test("a session picked from the @ menu becomes a chip, sends a link and shows as a chip that opens it", async ({
   page,
 }) => {
   await gotoHarness(page);
@@ -176,9 +176,15 @@ test("a session picked from the @ menu becomes a chip and sends a link to it", a
   );
   await page.keyboard.type("first");
   await page.keyboard.press("Enter");
-  await expect(page.getByTestId("transcript-panel")).toContainText(
-    "see [introduction-and-greetings](gents:session/session-intro) first",
+  const transcript = page.getByTestId("transcript-panel");
+  const sent = transcript.locator('[data-slot="session-chip"]');
+  await expect(sent).toHaveText("introduction-and-greetings");
+  await expect(transcript).toContainText("see introduction-and-greetings first");
+  await sent.click();
+  await expect(page.getByTestId("session-screen")).toContainText(
+    "introduction-and-greetings",
   );
+  await expect(transcript).not.toContainText("see introduction-and-greetings first");
 });
 
 test("an @ inside a word opens no menu", async ({ page }) => {
