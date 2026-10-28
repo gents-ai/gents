@@ -140,7 +140,7 @@ async fn reconcile_hydration_tick(
     let mut record_error = |request_key: &str, error: anyhow::Error| {
         tracing::warn!(
             request_key = %request_key,
-            error = %error,
+            error = %format!("{error:#}"),
             "session hydration reconcile failed; continuing sweep"
         );
         if first_error.is_none() {

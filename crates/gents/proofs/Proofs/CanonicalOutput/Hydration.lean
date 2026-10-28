@@ -70,6 +70,7 @@ structure TerminalRequirement where
   request : DocId
   session : SessionId
   selection : Option TerminalSelection
+  state : RequestState := .completed
   deriving DecidableEq, Repr
 
 inductive AccessState where
@@ -197,7 +198,8 @@ def terminalRoots (targetSession : SessionId) (messages : List MessageEnvelope)
   | requirement :: rest => do
       if requirement.session != targetSession then .error .rootSessionMismatch else pure ()
       let selected ← match resolveTerminal (messages.map (·.header)) deniedHeaders
-          requirement.request requirement.session requirement.selection with
+          requirement.request requirement.session
+            (observeTerminalSelection requirement.state requirement.selection) with
         | .ok selected => .ok selected
         | .error error => .error (.terminal error)
       let later ← terminalRoots targetSession messages deniedHeaders rest
@@ -562,23 +564,31 @@ example : resultMatches
     (.error (.reference (.lookup .denied))) = true := by native_decide
 
 example : resultMatches
-    (buildManifest originScope 1 [] [] [⟨10, 1, some (.message 999)⟩]
+    (buildManifest originScope 1 [] [] [⟨10, 1, some (.message 999), .completed⟩]
       [originMessage] [closing] originAccess [] [])
     (.error (.terminal .missingHeader)) = true := by native_decide
 
 example : resultMatches
-    (buildManifest originScope 1 [] [] [⟨10, 1, some (.message 200)⟩]
+    (buildManifest originScope 1 [] [] [⟨10, 1, some (.message 200), .completed⟩]
       [originMessage] [closing] originAccess [] [])
     (.ok [⟨.agentRequest, 10⟩, ⟨.agentMessage, 200⟩,
       ⟨.agentOutputSegment, 100⟩]) = true := by native_decide
 
 example : resultMatches
-    (buildManifest originScope 1 [] [] [⟨10, 1, some .noMessage⟩] [] [] originAccess [] [])
+    (buildManifest originScope 1 [] [] [⟨10, 1, some .noMessage, .completed⟩] [] [] originAccess [] [])
     (.ok [⟨.agentRequest, 10⟩]) = true := by native_decide
 
 example : resultMatches
-    (buildManifest originScope 1 [] [] [⟨10, 1, some .noMessage⟩] [] [] [] [] [])
+    (buildManifest originScope 1 [] [] [⟨10, 1, some .noMessage, .completed⟩] [] [] [] [] [])
     (.error (.provenanceMissing ⟨.agentRequest, 10⟩)) = true := by native_decide
+
+example : resultMatches
+    (buildManifest originScope 1 [] [] [⟨10, 1, none, .superseded⟩] [] [] originAccess [] [])
+    (.ok [⟨.agentRequest, 10⟩]) = true := by native_decide
+
+example : resultMatches
+    (buildManifest originScope 1 [] [] [⟨10, 1, none, .completed⟩] [] [] originAccess [] [])
+    (.error (.terminal .missingSelection)) = true := by native_decide
 
 def cycleLeft : MessageEnvelope :=
   { childMessage with header :=

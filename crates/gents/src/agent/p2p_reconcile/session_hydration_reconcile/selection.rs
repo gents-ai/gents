@@ -41,7 +41,8 @@ pub(super) async fn load_hydration_selection_in_txn(
                     .context("terminal hydration request omitted physical id")?,
             );
             match request_row
-                .terminal_output
+                .observed_terminal_output()
+                .cloned()
                 .context("terminal hydration request omitted terminal_output")?
             {
                 gents_protocol::output::TerminalOutput::Message { message_doc_id } => {

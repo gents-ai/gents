@@ -324,6 +324,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
     pub(crate) r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
     pub(crate) transcript_conformance_cases: Vec<LeanTranscriptCase>,
+    pub(crate) request_terminal_selection_cases: Vec<serde_json::Value>,
     pub(crate) canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
     pub(crate) reasoning_audit_cases: Vec<LeanReasoningAuditCase>,
     pub(crate) reasoning_signature_cases: Vec<LeanReasoningSignatureCase>,
@@ -4204,4 +4205,8 @@ pub(crate) fn lean_snapshot_demotion_cases() -> &'static [serde_json::Value] {
 
 pub(crate) fn lean_plugin_reference_cases() -> &'static [serde_json::Value] {
     &lean_contract_snapshot().plugin_reference_cases
+}
+
+pub(crate) fn lean_request_terminal_selection_cases() -> &'static [serde_json::Value] {
+    &lean_contract_snapshot().request_terminal_selection_cases
 }

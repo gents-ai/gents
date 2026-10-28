@@ -1,4 +1,5 @@
 import Proofs.CanonicalOutput.Reconstruction
+import Proofs.Request.State
 
 namespace CanonicalOutput
 
@@ -6,6 +7,28 @@ inductive TerminalSelection where
   | message (id : DocId)
   | noMessage
   deriving DecidableEq, Repr
+
+/-- Supersession ends unclaimed work without an execution answer. Its lifecycle
+certifies no message when no selection is recorded. Other terminal states keep
+requiring their terminal owner's selection; absence is never a latest-header
+fallback. Explicit selections retain their ordinary validation. -/
+def observeTerminalSelection (state : RequestState) (selection : Option TerminalSelection) :
+    Option TerminalSelection :=
+  match state, selection with
+  | .superseded, none => some .noMessage
+  | _, selection => selection
+
+theorem superseded_without_selection_has_no_message :
+    observeTerminalSelection .superseded none = some .noMessage := rfl
+
+theorem recorded_terminal_selection_is_preserved (state : RequestState)
+    (selection : TerminalSelection) :
+    observeTerminalSelection state (some selection) = some selection := by
+  cases state <;> rfl
+
+theorem other_missing_selections_remain_unavailable (state : RequestState)
+    (h : state ≠ .superseded) : observeTerminalSelection state none = none := by
+  cases state <;> simp_all [observeTerminalSelection]
 
 inductive TerminalError where
   | missingSelection
