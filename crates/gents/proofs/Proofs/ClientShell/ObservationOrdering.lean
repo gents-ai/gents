@@ -57,6 +57,50 @@ theorem other_pending_marker_preserved (current : Option Nat) (owned : Nat)
 
 end ClientObservationOrdering
 
+namespace EnrollmentActivationObservation
+
+structure Authority where
+  request : Nat
+  digest : Nat
+  generation : Nat
+  deriving DecidableEq, Repr
+
+inductive Failure where
+  | authentication | route
+  deriving DecidableEq, Repr
+
+structure State where
+  current : Option Authority
+  failure : Option Failure
+  deriving DecidableEq, Repr
+
+/-- The observation belongs to one verified request and authorization
+generation. Replacing that authority clears the previous diagnostic. -/
+def select (s : State) (authority : Option Authority) : State :=
+  if s.current = authority then s else ⟨authority, none⟩
+
+def finish (s : State) (authority : Authority) (failure : Option Failure) : State :=
+  if s.current = some authority then { s with failure } else s
+
+def project (s : State) (authority : Authority) (approved : Bool) : Option Failure :=
+  if approved && s.current == some authority then s.failure else none
+
+theorem stale_completion_ignored (s : State) (authority : Authority)
+    (failure : Option Failure) (h : s.current ≠ some authority) :
+    finish s authority failure = s := by
+  simp [finish, h]
+
+theorem success_clears_failure (s : State) (authority : Authority)
+    (h : s.current = some authority) :
+    (finish s authority none).failure = none := by
+  simp [finish, h]
+
+theorem unapproved_has_no_activation_error (s : State) (authority : Authority) :
+    project s authority false = none := by
+  simp [project]
+
+end EnrollmentActivationObservation
+
 /-!
 Accepted submission cleanup is scoped to the draft context that originated the
 mutation. Navigation does not revoke cleanup of the submitted text, while an
