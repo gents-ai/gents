@@ -161,7 +161,10 @@ pub(crate) async fn ensure_session_in_txn(
         &serde_json::json!({"input": {
             "session_id": session_id, "node_did": node_did,
             "requester_did": requester_did, "agent_id": agent_id,
-            "created_at": now, "title": title, "provenance": provenance
+            "created_at": now, "title": title,
+            "started_by_node_did": provenance.as_ref().and_then(|p| p.started_by.as_ref()).map(|s| &s.node_did),
+            "started_by_session_id": provenance.as_ref().and_then(|p| p.started_by.as_ref()).map(|s| &s.session_id),
+            "provenance": provenance
         }}),
     ).await?;
     let created = defra_node::QueryResponse::success(

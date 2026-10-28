@@ -106,6 +106,24 @@ impl From<&AgentSession> for SessionScope {
     }
 }
 
+impl From<&gents_protocol::session::SessionReference> for SessionScope {
+    fn from(source: &gents_protocol::session::SessionReference) -> Self {
+        Self {
+            node_did: source.node_did.clone(),
+            session_id: source.session_id.clone(),
+            requester_did: source.requester_did.clone(),
+        }
+    }
+}
+
+pub fn recorded_starter(session: &AgentSession) -> Option<SessionLink> {
+    let provenance = session.provenance.as_ref()?;
+    Some(SessionLink {
+        scope: SessionScope::from(provenance.started_by.as_ref()?),
+        cause_request_doc_id: provenance.parent_request_doc_id.clone()?,
+    })
+}
+
 pub async fn request_scopes<'a, R>(
     access: &R,
     doc_ids: impl IntoIterator<Item = &'a str>,
@@ -172,6 +190,9 @@ pub async fn started_by(
         ),
     )
     .await?;
+    if let Some(starter) = own.first().and_then(recorded_starter) {
+        return Ok(Some(starter));
+    }
     let Some(doc_id) = own.first().and_then(provenance_parent) else {
         return Ok(None);
     };
@@ -395,7 +416,18 @@ pub async fn lineage(access: &ConfigAccess, scope: &SessionScope) -> Result<Sess
         .filter_map(|row| row.get("caused_by_parent_request_doc_id")?.as_str())
         .filter(|doc_id| !own_doc_ids.contains(*doc_id))
         .collect::<BTreeSet<_>>();
-    let cause_scopes = request_scopes(access, causes).await?;
+    let mut cause_scopes = request_scopes(
+        access,
+        causes.into_iter().filter(|cause| {
+            started_by
+                .as_ref()
+                .is_none_or(|source| source.cause_request_doc_id != *cause)
+        }),
+    )
+    .await?;
+    if let Some(source) = &started_by {
+        cause_scopes.push((source.cause_request_doc_id.clone(), source.scope.clone()));
+    }
     let cause_scopes_by_doc = cause_scopes
         .iter()
         .cloned()
@@ -432,20 +464,36 @@ pub async fn lineage(access: &ConfigAccess, scope: &SessionScope) -> Result<Sess
             cause_request_doc_id: cause,
         });
     }
+    let mut started = Vec::new();
+    let indexed_filter = format!(
+        r#"started_by_node_did: {{ _eq: "{}" }}, started_by_session_id: {{ _eq: "{}" }}"#,
+        escape_graphql_string(&scope.node_did),
+        escape_graphql_string(&scope.session_id),
+    );
+    for session in sessions(access, &indexed_filter).await? {
+        if let Some(source) = recorded_starter(&session).filter(|link| link.scope == *scope) {
+            started.push(SessionLink {
+                scope: SessionScope::from(&session),
+                cause_request_doc_id: source.cause_request_doc_id,
+            });
+        }
+    }
     if own_doc_ids.is_empty() {
         return Ok(SessionLineage {
             started_by,
+            started,
             received,
             request_causes,
             ..Default::default()
         });
     }
 
-    let mut started = Vec::new();
+    // Older documents have no starter index; their parent request remains the
+    // only available evidence. New sessions never participate in this fallback.
     for session in sessions(
         access,
         &format!(
-            r#"requester_did: {{ _eq: "{}" }}"#,
+            r#"requester_did: {{ _eq: "{}" }}, started_by_session_id: {{ _eq: null }}"#,
             escape_graphql_string(&scope.node_did)
         ),
     )

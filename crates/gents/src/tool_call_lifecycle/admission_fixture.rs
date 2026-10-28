@@ -615,6 +615,7 @@ pub(crate) async fn materialize_session_message(
         caller_node_did: caller.node_did.clone(),
         caller_agent_id: caller.agent_id.clone(),
         caller_session_id: caller.session_id.clone(),
+        caller_requester_did: caller.requester_did.clone(),
         caller_request_id: caller.request_id.clone(),
         caller_request_doc_id: caller.doc_id.clone(),
         caller_hop: caller.request_hop,

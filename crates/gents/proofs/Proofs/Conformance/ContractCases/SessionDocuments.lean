@@ -14,7 +14,13 @@ def session : Document :=
     provenance := some
       { task := some 4
         parentRequestDoc := some 6
+        startedBy := some ⟨5, 6, some 7⟩
         fork := some ⟨7, 2⟩ } }
+example : starterIndex session = some (5, 6) := by decide
+example : startedBy session = some ⟨5, 6, some 7⟩ := by decide
+example : ensure? (some session) { session with provenance := none } = some session := by decide
+example : starterIndex { session with provenance := none } = none := by decide
+
 def request (id time : Nat) : RequestFact :=
   { purpose := .normal, scope, agent:= 3, createdAt := time, observed := ⟨id + 100, id, .failed⟩ }
 def old := request 1 2

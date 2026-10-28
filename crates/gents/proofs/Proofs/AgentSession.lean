@@ -31,6 +31,12 @@ structure ForkOrigin where
 structure Provenance where
   task : Option Nat := none
   parentRequestDoc : Option Nat := none
+  /-- The signed calling request carries its source session because the receiver
+      need not hold that request. Creation records the complete scope once;
+      neither this reference nor its indexed node/session projection grants
+      access or creates runtime hierarchy. The absent requester remains exact
+      absence, never a wildcard. Older sessions may have no recorded scope. -/
+  startedBy : Option Scope := none
   /-- The request whose claim or refusal created this session through a
       calling tool call. It is written once, with `parentRequestDoc`, and
       never rewritten (`advance`, `rename` and `setClosed` keep
@@ -76,6 +82,25 @@ def ensure? (existing : Option Document) (requested : Document) : Option Documen
 theorem ensure_existing_preserves_document (current requested : Document)
     (scope : current.scope = requested.scope) (agent : current.agent = requested.agent) :
     ensure? (some current) requested = some current := by simp [ensure?, scope, agent]
+
+def startedBy (session : Document) : Option Scope :=
+  session.provenance.bind (·.startedBy)
+
+/-- Scalar storage indexes are derived from the canonical provenance, not
+    independently writable origins. Requester scope remains in provenance. -/
+def starterIndex (session : Document) : Option (Nat × SessionId) :=
+  (startedBy session).map fun scope => (scope.node, scope.session)
+
+theorem ensure_preserves_starter (current requested : Document)
+    (scope : current.scope = requested.scope) (agent : current.agent = requested.agent) :
+    (ensure? (some current) requested).bind startedBy = startedBy current := by
+  rw [ensure_existing_preserves_document current requested scope agent]
+  rfl
+
+theorem starter_index_retains_node (session : Document) (source : Scope)
+    (h : startedBy session = some source) :
+    starterIndex session = some (source.node, source.session) := by
+  simp [starterIndex, h]
 
 theorem ensure_cannot_rebind_agent (current requested : Document)
     (agent : current.agent ≠ requested.agent) : ensure? (some current) requested = none := by

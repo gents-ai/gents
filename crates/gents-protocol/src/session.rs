@@ -109,6 +109,10 @@ pub struct SessionProvenance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub parent_request_doc_id: Option<String>,
+    /// Signed source scope recorded at creation; not an authorization grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub started_by: Option<SessionReference>,
     /// The request whose claim or refusal created this session through a
     /// calling tool call, recorded once with `parent_request_doc_id` and
     /// never rewritten (Lean `AgentSession.Provenance.openingRequestDoc`).
@@ -121,6 +125,18 @@ pub struct SessionProvenance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub fork: Option<SessionFork>,
+}
+
+/// Complete source scope; an absent requester is exact absence, never a wildcard.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct SessionReference {
+    pub node_did: String,
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub requester_did: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,6 +161,7 @@ fn provenance_is_empty(value: &Option<SessionProvenance>) -> bool {
     value.as_ref().is_none_or(|value| {
         value.task_id.is_none()
             && value.parent_request_doc_id.is_none()
+            && value.started_by.is_none()
             && value.opening_request_doc_id.is_none()
             && value.fork.is_none()
     })

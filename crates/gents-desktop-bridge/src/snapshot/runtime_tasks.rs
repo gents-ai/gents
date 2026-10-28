@@ -367,6 +367,15 @@ pub(super) async fn resolve_summary_starters<'a, R>(
         .into_iter()
         .filter_map(|summary| {
             let parent = summary.provenance.as_ref()?.parent_request_doc_id.clone()?;
+            if let Some(source) = summary.provenance.as_ref()?.started_by.as_ref() {
+                summary.started_by = Some(super::super::types::LinkedSessionView {
+                    node_did: source.node_did.clone(),
+                    session_id: source.session_id.clone(),
+                    requester_did: source.requester_did.clone(),
+                    cause_request_doc_id: parent,
+                });
+                return None;
+            }
             Some((summary, parent))
         })
         .collect::<Vec<_>>();

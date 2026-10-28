@@ -696,6 +696,7 @@ mod tests {
             caller_node_did: admission.node_did.clone(),
             caller_agent_id: "caller-agent".to_owned(),
             caller_session_id: "caller-session".to_owned(),
+            caller_requester_did: None,
             caller_request_id: caller.request_id,
             caller_request_doc_id: request_doc_id,
             caller_hop: 0,

@@ -219,6 +219,7 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
         caller_node_did: PIN_FIXED_DID.into(),
         caller_agent_id: "caller-agent".to_owned(),
         caller_session_id: "caller-session".to_owned(),
+        caller_requester_did: None,
         caller_request_id: "delivery-caller".into(),
         caller_request_doc_id: crate::graphql::created_doc_id(&caller, "AgentRequest").unwrap(),
         caller_hop: 0,

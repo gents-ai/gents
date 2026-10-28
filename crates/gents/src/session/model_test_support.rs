@@ -25,6 +25,17 @@ pub(super) fn model_session(value: &serde_json::Value) -> gents_protocol::sessio
         for name in ["task_id", "parent_request_doc_id", "opening_request_doc_id"] {
             object.insert(name.into(), model_id(&value["provenance"][name]));
         }
+        let starter = &value["provenance"]["started_by"];
+        if !starter.is_null() {
+            object.insert(
+                "started_by".into(),
+                serde_json::json!({
+                    "node_did": model_id(&starter["node"]),
+                    "session_id": model_id(&starter["session"]),
+                    "requester_did": model_id(&starter["requester"]),
+                }),
+            );
+        }
         if let Some(fork) = object
             .get_mut("fork")
             .and_then(serde_json::Value::as_object_mut)

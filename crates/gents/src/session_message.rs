@@ -1018,6 +1018,7 @@ mod hop_tests {
             caller_node_did: message.admission.node_did.clone(),
             caller_agent_id: "caller-agent".to_owned(),
             caller_session_id: "caller-session".to_owned(),
+            caller_requester_did: None,
             caller_request_id: "caller-request".to_owned(),
             caller_request_doc_id: message.admission.tool.request_doc_id().unwrap().to_owned(),
             caller_hop,
@@ -1439,6 +1440,7 @@ mod agent_tools_tests {
             caller_node_did: caller.node_did.clone(),
             caller_agent_id: "caller-agent".to_owned(),
             caller_session_id: "caller-session".to_owned(),
+            caller_requester_did: None,
             caller_request_id: caller.request_id.clone(),
             caller_request_doc_id: caller.doc_id.clone(),
             caller_hop: caller.request_hop,
@@ -1525,6 +1527,7 @@ mod agent_tools_tests {
                 caller_node_did: caller.node_did.clone(),
                 caller_agent_id: "caller-agent".to_owned(),
                 caller_session_id: "caller-session".to_owned(),
+                caller_requester_did: None,
                 caller_request_id: caller.request_id.clone(),
                 caller_request_doc_id: caller.doc_id.clone(),
                 caller_hop: caller.request_hop,
@@ -1862,6 +1865,7 @@ mod agent_tools_tests {
             caller_node_did: caller.node_did.clone(),
             caller_agent_id: "caller-agent".to_owned(),
             caller_session_id: "caller-session".to_owned(),
+            caller_requester_did: None,
             caller_request_id: caller.request_id.clone(),
             caller_request_doc_id: caller.doc_id.clone(),
             caller_hop: caller.request_hop,
@@ -1912,7 +1916,7 @@ mod agent_tools_tests {
     /// keeps it when a later request reaches the session.
     #[tokio::test]
     async fn caused_session_records_its_opening_request() {
-        let (message, _caller, caused) = started("opening-provenance").await;
+        let (message, caller, caused) = started("opening-provenance").await;
         let node = message.admission.node.clone();
         let access = ConfigAccess::local(node.clone());
         let provenance = || async {
@@ -1928,6 +1932,10 @@ mod agent_tools_tests {
             .unwrap()
         };
         let recorded = provenance().await;
+        assert_eq!(
+            crate::session_origin::SessionScope::from(recorded.started_by.as_ref().unwrap()),
+            crate::session_origin::SessionScope::of_request(&caller)
+        );
         assert_eq!(
             recorded.parent_request_doc_id,
             caused.caused_by_parent_request_doc_id

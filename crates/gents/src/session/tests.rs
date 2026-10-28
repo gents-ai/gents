@@ -1727,3 +1727,87 @@ async fn retry_frontier_matches_lean_admission() {
     }
     node.shutdown().await;
 }
+
+#[tokio::test]
+async fn recorded_starter_is_indexed_without_parent_requests_and_preserved_on_reuse() {
+    let case = crate::lean_vocab_test::lean_contract_snapshot()
+        .session_document_cases
+        .projection
+        .iter()
+        .find(|case| case["operation"] == "rename")
+        .unwrap();
+    let session = super::model_test_support::model_session(&case["before"]);
+    let source = session
+        .provenance
+        .as_ref()
+        .unwrap()
+        .started_by
+        .as_ref()
+        .unwrap();
+    let scope = crate::session_origin::SessionScope::from(source);
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    for provenance in [session.provenance.clone(), None] {
+        let session = &session;
+        crate::config_client::ConfigAccess::transact_local_write(
+            &node,
+            None,
+            "test.session_starter",
+            |txn| {
+                let provenance = provenance.clone();
+                Box::pin(async move {
+                    ensure_session_in_txn(
+                        txn,
+                        &session.session_id,
+                        &session.node_did,
+                        &session.agent_id,
+                        session.requester_did.as_deref(),
+                        session.title.clone(),
+                        provenance,
+                        &session.created_at,
+                    )
+                    .await
+                })
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let child_scope = crate::session_origin::SessionScope::from(&session);
+    let starter = crate::session_origin::started_by(&access, &child_scope)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(starter.scope, scope);
+    assert_eq!(
+        Some(&starter.cause_request_doc_id),
+        session
+            .provenance
+            .as_ref()
+            .unwrap()
+            .parent_request_doc_id
+            .as_ref()
+    );
+    let children = crate::session_origin::lineage(&access, &scope)
+        .await
+        .unwrap()
+        .started;
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].scope, child_scope);
+    let mut absent_requester = scope.clone();
+    absent_requester.requester_did = None;
+    assert!(crate::session_origin::lineage(&access, &absent_requester)
+        .await
+        .unwrap()
+        .started
+        .is_empty());
+    let mut foreign_node = scope;
+    foreign_node.node_did = "other-node".into();
+    assert!(crate::session_origin::lineage(&access, &foreign_node)
+        .await
+        .unwrap()
+        .started
+        .is_empty());
+    node.shutdown().await;
+}

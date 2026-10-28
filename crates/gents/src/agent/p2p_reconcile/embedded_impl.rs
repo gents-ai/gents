@@ -996,6 +996,7 @@ pub(super) mod tests {
             caller_node_did: lifecycle.request().node_did.clone(),
             caller_agent_id: lifecycle.request().agent_id.clone(),
             caller_session_id: lifecycle.request().session_id.clone(),
+            caller_requester_did: lifecycle.request().requester_did.clone(),
             caller_request_id: lifecycle.request().request_id.clone(),
             caller_request_doc_id: lifecycle.request().doc_id.clone(),
             caller_hop: lifecycle.request().request_hop,

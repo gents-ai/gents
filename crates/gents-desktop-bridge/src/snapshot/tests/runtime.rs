@@ -572,3 +572,38 @@ async fn fleet_snapshot_resolves_all_starters_with_one_query_per_build() {
         "a starter served from the cache must still be set"
     );
 }
+
+#[tokio::test]
+async fn recorded_summary_starters_need_no_parent_request_reads() {
+    struct NoReads;
+    #[async_trait::async_trait]
+    impl gents::config_client::ConfigRead for NoReads {
+        async fn execute_read(&self, _: &str) -> anyhow::Result<serde_json::Value> {
+            panic!("a recorded starter must not load its missing parent request");
+        }
+    }
+    for requester in [None, Some("did:test:source-requester")] {
+        let mut session = canonical_session(None);
+        let source = gents_protocol::session::SessionReference {
+            node_did: "did:test:remote-node".into(),
+            session_id: "source-session".into(),
+            requester_did: requester.map(str::to_owned),
+        };
+        session.provenance = Some(gents_protocol::session::SessionProvenance {
+            parent_request_doc_id: Some("missing-request".into()),
+            started_by: Some(source.clone()),
+            ..Default::default()
+        });
+        let mut summaries = session_summaries(&[session], &[], "did:test:owner", &[], &[]);
+        let cache = Default::default();
+        for _ in 0..2 {
+            super::super::runtime_tasks::resolve_summary_starters(&NoReads, &cache, &mut summaries)
+                .await;
+            let actual = summaries[0].started_by.as_ref().unwrap();
+            assert_eq!(actual.node_did, source.node_did);
+            assert_eq!(actual.session_id, source.session_id);
+            assert_eq!(actual.requester_did, source.requester_did);
+            assert_eq!(actual.cause_request_doc_id, "missing-request");
+        }
+    }
+}

@@ -33,6 +33,10 @@ pub struct RequestInput {
     /// Later title changes belong to the session title owner, not this input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_title: Option<SessionTitle>,
+    /// Source session carried by a signed session message because its receiver
+    /// may not hold the parent request. Consumed only when creating a session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_by: Option<crate::session::SessionReference>,
     /// Existing queue/steering/wake input, subject to request admission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue: Option<RequestQueue>,
@@ -104,6 +108,7 @@ impl RequestInput {
 
     pub fn for_fresh_session(&self) -> Self {
         Self {
+            started_by: None,
             question_reply: None,
             queue: None,
             goal_continuation: None,

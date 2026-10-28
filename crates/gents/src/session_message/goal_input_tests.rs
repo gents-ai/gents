@@ -157,6 +157,7 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             caller_node_did: caller.did().into(),
             caller_agent_id: "caller-agent".to_owned(),
             caller_session_id: "caller-session".to_owned(),
+            caller_requester_did: None,
             caller_request_id: "caller".into(),
             caller_request_doc_id: calling_doc.clone(),
             caller_hop: 0,

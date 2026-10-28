@@ -34,6 +34,23 @@ const SESSION_ARCHIVE_AFTER_STOP: &str =
     "bafyreih2muyccdxla5ox6f32aoriserpdko45a5fxqsb6zgrkkg2yeenrm";
 const SESSION_ARCHIVE_PATCH: &str = r#"[{"op":"add","path":"/AgentSession/Fields/-","value":{"Name":"archived_at","Kind":"String"}},{"op":"add","path":"/AgentSession/Fields/-","value":{"Name":"archive_revision","Kind":"Int"}}]"#;
 
+const SESSION_PRE_STARTER: &str = "bafyreigjtrpi4dok7u5lehp3n4ekttzafnok4eqmykcr46rxzvhfbd2m3q";
+const SESSION_STARTER_CURRENT: &str = "bafyreido3epv2t4dknlbw5a63tzj6xgxwoqlcnazubdhg4n3khl3bjql24";
+const SESSION_STARTER_AFTER_ARCHIVE: &str =
+    "bafyreie6lkf4ascdijkqrrpzmeoasakjmoloyxtedouksnv2difdk5jh7y";
+const SESSION_STARTER_AFTER_STOP: &str =
+    "bafyreiauwwgyvzce24ptednterbddvmruuqwnq7zbd66pedrlxgqblxj7a";
+const SESSION_STARTER_PATCH: &str = r#"[{"op":"add","path":"/AgentSession/Fields/-","value":{"Name":"started_by_node_did","Kind":"String","Immutable":true}},{"op":"add","path":"/AgentSession/Fields/-","value":{"Name":"started_by_session_id","Kind":"String","Immutable":true}}]"#;
+
+fn session_before_starter(version: &str) -> &str {
+    match version {
+        SESSION_STARTER_CURRENT => SESSION_PRE_STARTER,
+        SESSION_STARTER_AFTER_ARCHIVE => SESSION_ARCHIVE_CURRENT,
+        SESSION_STARTER_AFTER_STOP => SESSION_ARCHIVE_AFTER_STOP,
+        _ => version,
+    }
+}
+
 /// Desired-state apply stamps `updated_at` on every create so a document
 /// recreated after deletion gets a fresh content-addressed docID. DefraDB
 /// refuses fields a collection does not declare, so these collections append it.
@@ -180,15 +197,20 @@ pub(crate) fn include_existing(
         else {
             continue;
         };
+        let current_version = if name == "AgentSession" {
+            session_before_starter(&current.version_id)
+        } else {
+            &current.version_id
+        };
         let after_job_patch =
-            name == "AgentToolCall" && root == TOOL_TARGET && current.version_id == TOOL_ROOT;
+            name == "AgentToolCall" && root == TOOL_TARGET && current_version == TOOL_ROOT;
         let after_background_patch = name == "AgentToolCall"
             && root == TOOL_ROOT
-            && current.version_id == TOOL_LEGACY_BACKGROUND;
+            && current_version == TOOL_LEGACY_BACKGROUND;
         let after_session_archive =
-            name == "AgentSession" && current.version_id == SESSION_ARCHIVE_AFTER_STOP;
-        if current.version_id != root
-            && current.version_id != target
+            name == "AgentSession" && current_version == SESSION_ARCHIVE_AFTER_STOP;
+        if current_version != root
+            && current_version != target
             && !after_job_patch
             && !after_background_patch
             && !after_session_archive
@@ -211,6 +233,7 @@ pub(crate) fn include_existing(
         }
     }
     include_session_archive(node, baseline, steps)?;
+    include_session_starter(node, baseline, steps)?;
     Ok(())
 }
 
@@ -225,7 +248,7 @@ fn include_session_archive(
     else {
         return Ok(());
     };
-    let target = match current.version_id.as_str() {
+    let target = match session_before_starter(&current.version_id) {
         SESSION_ROOT | SESSION_TARGET | SESSION_ARCHIVE_AFTER_STOP => SESSION_ARCHIVE_AFTER_STOP,
         SESSION_CURRENT_ROOT | SESSION_ARCHIVE_CURRENT => {
             if let Some(entry) = baseline
@@ -246,6 +269,55 @@ fn include_session_archive(
         expected_version: Some(target),
         expected_transform: None,
         expected_state: CollectionExpectation::fields(&["archived_at", "archive_revision"]),
+    });
+    Ok(())
+}
+
+fn include_session_starter(
+    node: &EmbeddedNode,
+    baseline: &mut [BaselineCollection<'static>],
+    steps: &mut Vec<MigrationStep<'static>>,
+) -> Result<()> {
+    let Some(current) = node
+        .get_collection("AgentSession")
+        .map_err(|error| Error::Node(error.into()))?
+    else {
+        return Ok(());
+    };
+    let preceding = steps.iter().rev().find_map(|step| match step {
+        MigrationStep::PatchVersioned {
+            collection: "AgentSession",
+            expected_version,
+            ..
+        } => *expected_version,
+        _ => None,
+    });
+    let source = preceding.unwrap_or_else(|| session_before_starter(&current.version_id));
+    let (source, target) = match source {
+        SESSION_PRE_STARTER => (SESSION_PRE_STARTER, SESSION_STARTER_CURRENT),
+        SESSION_ARCHIVE_CURRENT => (SESSION_ARCHIVE_CURRENT, SESSION_STARTER_AFTER_ARCHIVE),
+        SESSION_ARCHIVE_AFTER_STOP => (SESSION_ARCHIVE_AFTER_STOP, SESSION_STARTER_AFTER_STOP),
+        _ => return Ok(()),
+    };
+    if preceding.is_none() {
+        if let Some(entry) = baseline
+            .iter_mut()
+            .find(|entry| entry.name == "AgentSession")
+        {
+            entry.expected_version = Some(source);
+        }
+    }
+    steps.push(MigrationStep::PatchVersioned {
+        id: "agent-session-add-starter-reference",
+        collection: "AgentSession",
+        patch: SESSION_STARTER_PATCH,
+        lens: None,
+        expected_version: Some(target),
+        expected_transform: None,
+        expected_state: CollectionExpectation::fields(&[
+            "started_by_node_did",
+            "started_by_session_id",
+        ]),
     });
     Ok(())
 }
