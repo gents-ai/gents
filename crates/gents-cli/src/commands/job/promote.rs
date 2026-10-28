@@ -76,12 +76,26 @@ impl std::fmt::Display for JavyMissing {
 
 impl std::error::Error for JavyMissing {}
 
-/// The refusal code of a promotion that was refused rather than failed.
-pub fn refusal_code(error: &anyhow::Error) -> Option<&'static str> {
-    error
-        .downcast_ref::<PromoteRefusal>()
-        .map(PromoteRefusal::code)
-        .or_else(|| error.downcast_ref::<JavyMissing>().map(JavyMissing::code))
+#[derive(Debug, thiserror::Error)]
+pub enum PromoteError {
+    #[error(transparent)]
+    Refusal(#[from] PromoteRefusal),
+    #[error("the run's handle is not a pack name; pass --name: {0}")]
+    InvalidDefaultName(PromoteRefusal),
+    #[error(transparent)]
+    Javy(#[from] JavyMissing),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl PromoteError {
+    pub fn refusal_code(&self) -> Option<&'static str> {
+        match self {
+            Self::Refusal(error) | Self::InvalidDefaultName(error) => Some(error.code()),
+            Self::Javy(error) => Some(error.code()),
+            Self::Other(_) => None,
+        }
+    }
 }
 
 /// The run's handle as the tool name, when it is a pack name.
@@ -154,7 +168,7 @@ pub async fn promote(
     name: Option<&str>,
     agent: Option<&str>,
     report: &mut dyn FnMut(PromoteStep),
-) -> Result<PromoteReport> {
+) -> std::result::Result<PromoteReport, PromoteError> {
     report(PromoteStep::Javy);
     let javy = javy_version()?;
 
@@ -163,9 +177,9 @@ pub async fn promote(
     let run = load_dynamic_run(access, JobKey::RowDocId(view.row_doc_id)).await?;
     let name = match name {
         Some(name) => name.to_owned(),
-        None => default_name(&run.view.handle)
-            .ok_or_else(|| PromoteRefusal::BadName(run.view.handle.clone()))
-            .context("the run's handle is not a pack name; pass --name")?,
+        None => default_name(&run.view.handle).ok_or_else(|| {
+            PromoteError::InvalidDefaultName(PromoteRefusal::BadName(run.view.handle.clone()))
+        })?,
     };
     validate_name(home, &name)?;
     let agent = agent.map_or_else(|| run.caller_agent_id.clone(), str::to_owned);
@@ -192,7 +206,9 @@ pub async fn promote(
     // The step-0 fixture runs the script under wasmtime, which blocks.
     let pack = {
         let (dir, name, run) = (dir.clone(), name.clone(), run.clone());
-        tokio::task::spawn_blocking(move || generate_pack(&dir, &name, &run)).await?
+        tokio::task::spawn_blocking(move || generate_pack(&dir, &name, &run))
+            .await
+            .map_err(anyhow::Error::from)?
     }
     .context("promote generate failed")?;
 
@@ -204,13 +220,19 @@ pub async fn promote(
         .await
         .context("promote test failed")?;
     if !matches!(cases.as_slice(), [only] if only.passed > 0 && only.failures.is_empty()) {
-        anyhow::bail!("promote test failed: {}", serde_json::to_string(&cases)?);
+        return Err(anyhow::anyhow!(
+            "promote test failed: {}",
+            serde_json::to_string(&cases).map_err(anyhow::Error::from)?
+        )
+        .into());
     }
 
     report(PromoteStep::Check);
     let checked = check_dir(&dir).await;
     if !checked.problems.is_empty() {
-        anyhow::bail!("promote check failed: {}", checked.problems.join("; "));
+        return Err(
+            anyhow::anyhow!("promote check failed: {}", checked.problems.join("; ")).into(),
+        );
     }
 
     report(PromoteStep::Install);
@@ -295,6 +317,20 @@ mod tests {
     use gents::plugin_job::promote::gate;
     use gents_protocol::job::{JobOrigin, JobPinSummary, JobScope, JobState, JobView};
 
+    #[test]
+    fn promotion_error_codes_cover_refusals_but_not_other_errors() {
+        let refusal = PromoteError::InvalidDefaultName(PromoteRefusal::BadName("bad name".into()));
+        assert_eq!(refusal.refusal_code(), Some("promote_bad_name"));
+        assert!(refusal.to_string().contains("pass --name"));
+        let other =
+            PromoteError::Other(anyhow::anyhow!("underlying failure").context("build failed"));
+        assert_eq!(other.refusal_code(), None);
+        assert_eq!(
+            format!("{:#}", anyhow::Error::new(other)),
+            "build failed: underlying failure"
+        );
+    }
+
     fn view(state: JobState, origin: JobOrigin) -> JobView {
         JobView {
             address: "session-1:call_1".into(),
@@ -356,8 +392,10 @@ mod tests {
             None => std::env::remove_var("JAVY"),
         }
         let error = result.expect_err("a missing javy refuses");
-        assert_eq!(refusal_code(&error), Some("promote_javy_missing"));
-        let missing = error.downcast_ref::<JavyMissing>().expect("a JavyMissing");
+        assert_eq!(error.refusal_code(), Some("promote_javy_missing"));
+        let PromoteError::Javy(missing) = error else {
+            panic!("expected a JavyMissing refusal");
+        };
         let message = missing.to_string();
         assert!(message.contains("8.1.1"), "{message}");
         assert!(

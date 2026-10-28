@@ -9,7 +9,6 @@ use rapidhash::{HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::{mpsc, RwLock};
@@ -20,7 +19,7 @@ use crate::backend_registry::{
     list_enabled_backends_for_agent, set_backend_probe_status_with_last_probe, InferenceBackend,
     UNKNOWN_PROBE_STATUS,
 };
-use crate::oauth_credential::{BearerSource, OAuthRefreshKind};
+use crate::oauth_credential::OAuthRefreshKind;
 
 #[derive(Clone, Debug)]
 pub struct BackendProberOptions {
@@ -324,11 +323,14 @@ pub struct OAuthProbeContext<'a> {
 async fn oauth_credential_for_probe(
     context: &OAuthProbeContext<'_>,
     backend: &InferenceBackend,
-) -> anyhow::Result<crate::oauth_credential::OAuthCredential> {
+) -> std::result::Result<
+    crate::oauth_credential::OAuthCredential,
+    crate::oauth_credential::OAuthBearerError,
+> {
     let Some(provider) = backend.provider_kind.oauth_provider() else {
-        anyhow::bail!("backend kind has no OAuth provider");
+        return Err(anyhow::anyhow!("backend kind has no OAuth provider").into());
     };
-    let (bearer, mut credential) = crate::oauth_http::bootstrap_oauth_client(
+    let (bearer, mut credential) = crate::oauth_http::bootstrap_oauth_client_checked(
         context.node.clone(),
         context.node_did,
         provider,
@@ -337,17 +339,17 @@ async fn oauth_credential_for_probe(
         crate::oauth_credential::AccountPick::Reference(backend.auth.oauth_account_ref()),
     )
     .await
-    .with_context(|| {
-        format!(
+    .map_err(|error| {
+        error.context(format!(
             "resolving OAuth credential for backend {} provider {provider}",
             backend.backend_id
-        )
+        ))
     })?;
-    credential.access_token = bearer.current_bearer().await.with_context(|| {
-        format!(
+    credential.access_token = bearer.current_bearer_checked().await.map_err(|error| {
+        error.context(format!(
             "resolving current bearer for backend {} provider {provider}",
             backend.backend_id
-        )
+        ))
     })?;
     tracing::debug!(
         backend_id = %backend.backend_id,
@@ -355,6 +357,19 @@ async fn oauth_credential_for_probe(
         "oauth credential probe ok: bearer current through the credential owner"
     );
     Ok(credential)
+}
+
+fn oauth_probe_failure(error: &crate::oauth_credential::OAuthBearerError) -> ProbeEvent {
+    use crate::oauth_credential::OAuthAuthProblem;
+    match error.auth_problem() {
+        Some(
+            OAuthAuthProblem::Missing
+            | OAuthAuthProblem::WrongMode { .. }
+            | OAuthAuthProblem::Expired,
+        ) => ProbeEvent::CredentialsRejected,
+        Some(OAuthAuthProblem::NotEntitled) => ProbeEvent::SubscriptionNotEntitled,
+        _ => ProbeEvent::ProbeFail,
+    }
 }
 
 pub(crate) fn oauth_refresh_kind(
@@ -511,20 +526,11 @@ async fn probe_selected_backends(
                     }
                 }
                 Err(error) => {
-                    use crate::oauth_credential::{OAuthAuthProblem, OAuthCredentialAuthError};
-                    let event = match error
-                        .downcast_ref::<OAuthCredentialAuthError>()
-                        .map(|error| &error.problem)
-                    {
-                        Some(
-                            OAuthAuthProblem::Missing
-                            | OAuthAuthProblem::WrongMode { .. }
-                            | OAuthAuthProblem::Expired,
-                        ) => ProbeEvent::CredentialsRejected,
-                        Some(OAuthAuthProblem::NotEntitled) => ProbeEvent::SubscriptionNotEntitled,
-                        _ => ProbeEvent::ProbeFail,
-                    };
-                    (event, Some(format!("{error:#}")))
+                    let event = oauth_probe_failure(&error);
+                    (
+                        event,
+                        Some(gents_protocol::error_chain::ErrorChain(&error).to_string()),
+                    )
                 }
             };
             record_probe_event(node, backend, event, error_text, env, &mut outcome).await;
@@ -820,6 +826,42 @@ mod tests {
         one_shot_token_server, seed_credential, seed_credential_with_refresh_token, test_node,
         TOKEN_URL_ENV,
     };
+
+    #[test]
+    fn oauth_probe_classifies_nested_authentication_failures() {
+        use crate::oauth_credential::{
+            OAuthAuthProblem, OAuthBearerError, OAuthCredentialAuthError,
+        };
+        for (problem, expected) in [
+            (OAuthAuthProblem::Missing, ProbeEvent::CredentialsRejected),
+            (OAuthAuthProblem::Expired, ProbeEvent::CredentialsRejected),
+            (
+                OAuthAuthProblem::WrongMode {
+                    found_mode: "disabled".into(),
+                },
+                ProbeEvent::CredentialsRejected,
+            ),
+            (
+                OAuthAuthProblem::NotEntitled,
+                ProbeEvent::SubscriptionNotEntitled,
+            ),
+            (
+                OAuthAuthProblem::Other("other".into()),
+                ProbeEvent::ProbeFail,
+            ),
+        ] {
+            let error = OAuthBearerError::from(OAuthCredentialAuthError {
+                problem,
+                message: "credential error".into(),
+            })
+            .context("probe".into());
+            assert_eq!(oauth_probe_failure(&error), expected);
+        }
+        assert_eq!(
+            oauth_probe_failure(&OAuthBearerError::from(anyhow::anyhow!("database"))),
+            ProbeEvent::ProbeFail
+        );
+    }
 
     fn state_from_lean(name: &str, state: &str) -> BackendHealthState {
         match state {

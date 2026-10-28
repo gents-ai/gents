@@ -911,8 +911,16 @@ pub fn graphql_error_is_retryable(error: &(dyn std::error::Error + 'static)) -> 
 /// DefraDB's HTTP handler already retried their store conflicts.
 #[cfg(feature = "native")]
 pub fn graphql_transport_error_in_chain(error: &(dyn std::error::Error + 'static)) -> bool {
+    http_transport_error_in_chain(error).is_some_and(graphql_transport_error_is_retryable)
+}
+
+/// Return the underlying HTTP transport error for callers that need its
+/// typed failure category or sanitized endpoint.
+#[cfg(feature = "native")]
+pub fn http_transport_error_in_chain<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a reqwest::Error> {
     crate::error_chain::find_source::<reqwest::Error>(error)
-        .is_some_and(graphql_transport_error_is_retryable)
 }
 
 #[cfg(feature = "native")]

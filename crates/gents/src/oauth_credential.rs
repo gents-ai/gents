@@ -83,6 +83,36 @@ pub(crate) struct OAuthCredentialAuthError {
     pub(crate) message: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum OAuthBearerError {
+    #[error(transparent)]
+    Auth(#[from] OAuthCredentialAuthError),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+    #[error("{message}")]
+    Context {
+        message: String,
+        source: Box<OAuthBearerError>,
+    },
+}
+
+impl OAuthBearerError {
+    pub(crate) fn context(self, message: String) -> Self {
+        Self::Context {
+            message,
+            source: Box::new(self),
+        }
+    }
+
+    pub(crate) fn auth_problem(&self) -> Option<&OAuthAuthProblem> {
+        match self {
+            Self::Auth(error) => Some(&error.problem),
+            Self::Context { source, .. } => source.auth_problem(),
+            Self::Other(_) => None,
+        }
+    }
+}
+
 pub fn classify_oauth_auth_error(
     product: &OAuthProduct,
     node_did: &str,
@@ -1640,7 +1670,7 @@ impl DbCredentialBearer {
         }
     }
 
-    async fn load_credential(&self) -> Result<OAuthCredential> {
+    async fn load_credential(&self) -> std::result::Result<OAuthCredential, OAuthBearerError> {
         let Some(credential) =
             lookup_oauth_credential_by_id(self.node.as_ref(), &self.credential_id).await?
         else {
@@ -1751,7 +1781,7 @@ impl DbCredentialBearer {
         &self,
         credential: &OAuthCredential,
         problem: &OAuthAuthProblem,
-    ) -> anyhow::Error {
+    ) -> OAuthCredentialAuthError {
         let state = match problem {
             OAuthAuthProblem::Expired => "signed out (expired or revoked)",
             OAuthAuthProblem::NotEntitled => "not entitled",
@@ -1765,7 +1795,6 @@ impl DbCredentialBearer {
                 classify_oauth_auth_error(&self.product, &self.node_did, &self.provider, problem),
             ),
         }
-        .into()
     }
 
     async fn refresh_tokens(
@@ -1786,8 +1815,10 @@ impl DbCredentialBearer {
     }
 }
 
-impl BearerSource for DbCredentialBearer {
-    async fn current_bearer(&self) -> Result<String> {
+impl DbCredentialBearer {
+    pub(crate) async fn current_bearer_checked(
+        &self,
+    ) -> std::result::Result<String, OAuthBearerError> {
         let forced = self.force_refresh.load(Ordering::SeqCst);
 
         if !forced {
@@ -1841,7 +1872,7 @@ impl BearerSource for DbCredentialBearer {
 
         if let Some((failed_at, problem)) = last_failure.as_ref() {
             if failed_at.elapsed() < REFRESH_FAILURE_COOLDOWN {
-                return Err(self.auth_error(&credential, problem));
+                return Err(self.auth_error(&credential, problem).into());
             }
         }
 
@@ -1850,7 +1881,7 @@ impl BearerSource for DbCredentialBearer {
             Err(problem) => {
                 let error = self.auth_error(&credential, &problem);
                 *last_failure = Some((std::time::Instant::now(), problem));
-                return Err(error);
+                return Err(error.into());
             }
         };
         *last_failure = None;
@@ -1889,6 +1920,14 @@ impl BearerSource for DbCredentialBearer {
         }
         Ok(credential.access_token)
     }
+}
+
+impl BearerSource for DbCredentialBearer {
+    async fn current_bearer(&self) -> Result<String> {
+        self.current_bearer_checked()
+            .await
+            .map_err(anyhow::Error::new)
+    }
 
     async fn invalidate(&self) {
         self.force_refresh.store(true, Ordering::SeqCst);
@@ -1900,6 +1939,23 @@ mod tests {
     use super::*;
 
     use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn credential_error_context_preserves_authentication_problem() {
+        let error = OAuthBearerError::from(OAuthCredentialAuthError {
+            problem: OAuthAuthProblem::NotEntitled,
+            message: "account is not entitled".into(),
+        })
+        .context("loading bearer".into())
+        .context("checking backend".into());
+        assert_eq!(error.auth_problem(), Some(&OAuthAuthProblem::NotEntitled));
+        assert_eq!(
+            gents_protocol::error_chain::ErrorChain(&error).to_string(),
+            "checking backend: loading bearer: account is not entitled"
+        );
+        let other = OAuthBearerError::from(anyhow::anyhow!("storage failed"));
+        assert_eq!(other.auth_problem(), None);
+    }
 
     fn sample_credential() -> OAuthCredential {
         OAuthCredential {

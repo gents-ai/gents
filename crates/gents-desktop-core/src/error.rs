@@ -110,9 +110,7 @@ impl BridgeError {
         if let Some(classified) = error.chain().find_map(|cause| cause.downcast_ref::<Self>()) {
             return classified.clone();
         }
-        let transport = error
-            .chain()
-            .find_map(|cause| cause.downcast_ref::<reqwest::Error>())
+        let transport = gents_protocol::graphql::http_transport_error_in_chain(error.as_ref())
             .filter(|error| error.is_connect() || error.is_timeout() || error.is_body());
         let message = error.to_string();
         let Some(transport) = transport else {
@@ -187,7 +185,7 @@ mod tests {
         let error = crate::local_runtime::fetch_runtime_connection_payload(&endpoint)
             .await
             .expect_err("closed temporary port must refuse the request");
-        let err = BridgeError::classify_transport_error(error);
+        let err = BridgeError::classify_transport_error(error.context("loading runtime status"));
         assert_eq!(err.code, BridgeErrorCode::EndpointUnreachable);
         assert_eq!(err.endpoint.as_deref(), Some(endpoint.as_str()));
     }
