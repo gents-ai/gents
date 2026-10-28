@@ -149,3 +149,30 @@ test("choosing a collapsed file opens it again", async ({ page }) => {
   await page.getByRole("menuitem", { name: /parser\.rs/ }).click();
   await expect(header).toHaveAttribute("aria-expanded", "true");
 });
+
+test("a file shows all its lines from its menu, and hides the unchanged ones again", async ({
+  page,
+}) => {
+  await gotoHarness(page, "coding");
+  await page
+    .getByTestId("sessions-screen")
+    .getByRole("link", { name: /introduction-and-greetings/ })
+    .click();
+  await page
+    .getByTestId("turn-changes")
+    .getByRole("button", { name: /lexer\.rs/ })
+    .click();
+  const section = page.locator("section[data-path='src/lexer.rs']");
+  const tail = section.getByText("fn rule_24", { exact: false });
+  await expect(section.getByText("split_whitespace", { exact: false })).toBeVisible();
+  await expect(tail).toHaveCount(0);
+
+  const menu = section.getByRole("button", { name: "lexer.rs actions" });
+  await menu.click();
+  await page.getByRole("menuitem", { name: "Show all lines" }).click();
+  await expect(tail).toBeVisible();
+  await menu.click();
+  await page.getByRole("menuitem", { name: "Hide unchanged lines" }).click();
+  await expect(tail).toHaveCount(0);
+  await expect(section.getByText("split_whitespace", { exact: false })).toBeVisible();
+});
