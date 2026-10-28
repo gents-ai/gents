@@ -1966,11 +1966,11 @@ pub(super) fn project_transcript_rows(
 /// The display rows of one transcript read, without the session's request
 /// state: no pending or queued turns and no live reply, which belong to the
 /// session's own read.
-pub(crate) fn render_transcript_rows(
+fn transcript_row_parts(
     store: &ClientStore,
     page: &gents_desktop_core::client::SessionTranscriptQueryPage,
     session_id: &str,
-) -> Vec<RenderedTimelineItem> {
+) -> (Vec<MessageView>, Vec<ToolCallView>) {
     let transcript = page.store.transcript(session_id);
     let requests = page.requests.iter().collect::<Vec<_>>();
     let requests_by_doc_id: RapidHashMap<&str, &AgentRequestRow> = requests
@@ -1985,7 +1985,37 @@ pub(crate) fn render_transcript_rows(
         &requests_by_doc_id,
         &page.result_messages.iter().collect::<Vec<_>>(),
     );
-    super::super::timeline::build_rendered_timeline(&messages, &tool_calls, &[])
+    (messages, tool_calls)
+}
+
+#[cfg(test)]
+pub(crate) fn render_transcript_rows(
+    store: &ClientStore,
+    page: &gents_desktop_core::client::SessionTranscriptQueryPage,
+    session_id: &str,
+) -> Vec<RenderedTimelineItem> {
+    let (messages, tools) = transcript_row_parts(store, page, session_id);
+    super::super::timeline::build_rendered_timeline(&messages, &tools, &[])
+}
+
+pub(crate) async fn render_transcript_rows_with_provenance(
+    access: &dyn gents::config_client::ConfigRead,
+    store: &ClientStore,
+    page: &gents_desktop_core::client::SessionTranscriptQueryPage,
+    node_did: &str,
+    session_id: &str,
+) -> Vec<RenderedTimelineItem> {
+    let (mut messages, tools) = transcript_row_parts(store, page, session_id);
+    super::goal_provenance::attach_messages(
+        access,
+        &page.requests,
+        &page.store.transcript_messages,
+        Some(&page.canonical_dependencies),
+        (node_did, session_id),
+        &mut messages,
+    )
+    .await;
+    super::super::timeline::build_rendered_timeline(&messages, &tools, &[])
 }
 
 #[cfg(test)]

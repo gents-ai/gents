@@ -23,6 +23,7 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
     let access = ConfigAccess::local(node.clone());
     let mut observed = Vec::new();
     let mut opening_doc = None;
+    let mut opening_rows = None;
     for (index, root, alter_assignment, omit_receipt, expected) in [
         (0, None, false, false, Some("goal-0")),
         (1, Some("original-opening"), false, false, None),
@@ -261,6 +262,7 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
         if index == 0 {
             super::super::session::goal_provenance::tests::assert_copied_opening(&access, &rows)
                 .await;
+            opening_rows = Some(rows.clone());
         }
         observed.push(rows.requests[0].clone());
         for reload in 0..2 {
@@ -307,6 +309,12 @@ async fn goal_provenance_agrees_before_transcript_publication_and_after_reload()
             );
         }
     }
+    super::super::session::goal_provenance::tests::assert_paged_native_forks(
+        &access,
+        &opening_rows.unwrap(),
+        &observed[1],
+    )
+    .await;
     let measured = crate::tests::support::CountingRead::new(access);
     let roots =
         gents::goal::load_applied_opening_goal_ids(&measured, &observed.iter().collect::<Vec<_>>())
