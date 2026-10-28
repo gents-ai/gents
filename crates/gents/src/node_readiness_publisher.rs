@@ -897,3 +897,7 @@ impl From<ProcessLifecycleState> for NodeReadinessProcessState {
 #[cfg(test)]
 #[path = "node_readiness_publisher/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "node_readiness_publisher/deep_history_tests.rs"]
+mod deep_history_tests;
