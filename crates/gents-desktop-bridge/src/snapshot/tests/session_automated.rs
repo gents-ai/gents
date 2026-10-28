@@ -162,7 +162,7 @@ fn automated_store() -> ClientStore {
 }
 
 #[test]
-fn external_inputs_keep_their_sender_while_internal_controls_stay_hidden() {
+fn external_inputs_keep_their_sender_and_internal_inputs_remain_inspectable() {
     let snapshot =
         build_session_snapshot_from_store(&automated_store(), "sess-1", None).expect("snapshot");
     let items = snapshot
@@ -192,6 +192,9 @@ fn external_inputs_keep_their_sender_while_internal_controls_stay_hidden() {
             "automated:sessionMessage",
             "assistant:reviewed",
             "automated:trigger",
+            "automated:background",
+            "automated:background",
+            "automated:goal",
             "assistant:goal answer",
         ]
     );
@@ -225,7 +228,7 @@ fn external_inputs_keep_their_sender_while_internal_controls_stay_hidden() {
             trigger_kind: Some("schedule".into()),
         }
     );
-    assert_eq!(automated.len(), 2);
+    assert_eq!(automated.len(), 5);
     assert_eq!(snapshot.messages.len(), 9);
     assert_eq!(
         snapshot
@@ -282,7 +285,7 @@ fn an_unexecuted_trigger_request_is_pending_with_its_origin() {
 }
 
 #[test]
-fn visible_automated_inputs_keep_request_identity_and_hidden_controls_remain_durable() {
+fn automated_inputs_keep_request_identity_including_internal_controls() {
     let snapshot =
         build_session_snapshot_from_store(&automated_store(), "sess-1", None).expect("snapshot");
     let identities = snapshot
@@ -297,7 +300,13 @@ fn visible_automated_inputs_keep_request_identity_and_hidden_controls_remain_dur
         .collect::<Vec<_>>();
     assert_eq!(
         identities,
-        [Some("message".to_owned()), Some("trigger".to_owned())]
+        [
+            Some("message".to_owned()),
+            Some("trigger".to_owned()),
+            None,
+            Some("wake".to_owned()),
+            Some("goal".to_owned())
+        ]
     );
     let control_identities = snapshot
         .messages

@@ -552,7 +552,7 @@ describe("SessionScreen automated inputs", () => {
     reconstruction: { state: "ready" as const },
   });
 
-  it("renders inputs nobody typed in stream order as compact items that expand", async () => {
+  it("shows agent and event bodies in order and keeps internal inputs inspectable", async () => {
     const user = userEvent.setup();
     const { app } = screenApp({
       session: heldSession({
@@ -571,8 +571,10 @@ describe("SessionScreen automated inputs", () => {
               senderNodeDid: NODE,
               senderSessionId: "sender-session",
               senderRequestId: "sender-request",
+              displayBody: "please review the diff\nit is in src/",
             },
-            content: "please review the diff\nit is in src/",
+            content:
+              "[message source envelope]\n\nplease review the diff\nit is in src/",
             ...durable("message", 3),
           },
           {
@@ -601,20 +603,37 @@ describe("SessionScreen automated inputs", () => {
     expect(items.map((item) => item.textContent)).toEqual([
       expect.stringContaining("Message from another session"),
       expect.stringContaining("Schedule · nightly"),
-      expect.stringContaining("Background work finished"),
+      expect.stringContaining("Background activity"),
       expect.stringContaining("Goal continuation · 2"),
     ]);
     const text = screen.getByTestId("transcript-panel").textContent ?? "";
     expect(text.indexOf("started")).toBeLessThan(text.indexOf("Message from"));
-    expect(screen.queryByTestId("automated-input-content")).not.toBeInTheDocument();
-    await user.click(within(items[0]!).getByRole("button", { name: "Show detail" }));
-    expect(screen.getByTestId("automated-input-content").textContent).toBe(
-      "please review the diff\nit is in src/",
+    expect(within(items[0]!).getByTestId("automated-input-body")).toHaveTextContent(
+      "please review the diff",
     );
+    expect(within(items[0]!).getByTestId("automated-input-body")).not.toHaveTextContent(
+      "[message source envelope]",
+    );
+    expect(within(items[1]!).getByTestId("automated-input-body")).toHaveTextContent(
+      "write the nightly report",
+    );
+    expect(within(items[2]!).queryByTestId("automated-input-body")).toBeNull();
+    expect(within(items[0]!).getByTestId("automated-input-content")).not.toBeVisible();
+    await user.click(within(items[0]!).getByText("Model input"));
+    expect(within(items[0]!).getByTestId("automated-input-content")).toBeVisible();
+    expect(within(items[0]!).getByTestId("automated-input-content").textContent).toBe(
+      "[message source envelope]\n\nplease review the diff\nit is in src/",
+    );
+    await user.click(within(items[2]!).getByText("Model input"));
+    expect(within(items[2]!).getByTestId("automated-input-content")).toBeVisible();
+    expect(within(items[2]!).getByTestId("automated-input-content").textContent).toBe(
+      "<agent-notification>done</agent-notification>",
+    );
+    await user.click(within(items[3]!).getByText("Model input"));
+    expect(within(items[3]!).getByTestId("automated-input-content")).toBeVisible();
   });
 
   it("says why an input is unavailable instead of expanding to nothing", async () => {
-    const user = userEvent.setup();
     const { app } = screenApp({
       session: heldSession({
         timelineItems: [
@@ -632,14 +651,10 @@ describe("SessionScreen automated inputs", () => {
       }),
     });
     renderScreen(app);
-    await user.click(
-      within(screen.getByTestId("automated-input")).getByRole("button", {
-        name: "Show detail",
-      }),
-    );
     expect(screen.getByTestId("automated-input-unavailable")).toHaveTextContent(
       "This input is not shared with this device.",
     );
+    expect(screen.queryByText("Model input")).toBeNull();
   });
 });
 
