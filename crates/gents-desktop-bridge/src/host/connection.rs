@@ -58,6 +58,7 @@ where
         .send(pack(HostMessage::Hello {
             version: PROTOCOL_VERSION,
             commands: host.advertised_commands.clone(),
+            goal_input_attachments: true,
             max_frame_bytes: MAX_FRAME_BYTES,
             installation_build: host.installation_build.clone(),
             installation_control_version: if host.installation_build.is_some() {
