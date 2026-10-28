@@ -1,6 +1,7 @@
 use gents_protocol::request_input::RequestInputError;
 use rig::completion::{CompletionError, CompletionRequest};
 use rig::message::MessageError;
+use rig::one_or_many::OneOrMany;
 #[cfg(feature = "native")]
 use serde_json::Map;
 use serde_json::Value;
@@ -33,7 +34,9 @@ pub enum ProviderInputError {
     TextAttachmentDecode(#[from] base64::DecodeError),
     #[error(transparent)]
     TextAttachmentUtf8(#[from] std::string::FromUtf8Error),
-    #[error("PDF attachments are not supported by the OpenAI Chat Completions transport; use a provider with document support")]
+    #[error(
+        "PDF attachments are not supported by the OpenAI Chat Completions transport; use a provider with document support"
+    )]
     ChatCompletionsPdfUnsupported,
     #[error(transparent)]
     Codec(#[from] AssistantCodecError),
@@ -444,9 +447,8 @@ impl ProviderInputCounter {
                 return Ok(0);
             }
         }
-        let chat_history =
-            rig::one_or_many::OneOrMany::many(crate::rig_compat::to_rig_messages(messages))
-                .map_err(|_| ProviderInputError::EmptyMessageProjection)?;
+        let chat_history = OneOrMany::many(crate::rig_compat::to_rig_messages(messages))
+            .map_err(|_| ProviderInputError::EmptyMessageProjection)?;
         let request = CompletionRequest {
             model: None,
             preamble: None,

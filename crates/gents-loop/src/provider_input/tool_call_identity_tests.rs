@@ -2,7 +2,6 @@ use super::*;
 use gents_protocol::message::{
     AssistantContent, Message, ToolCall, ToolFunction, ToolResult, ToolResultContent, UserContent,
 };
-use rig::one_or_many::OneOrMany;
 use serde::Deserialize;
 use serde_json::json;
 
