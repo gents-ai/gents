@@ -57,8 +57,6 @@ export const ChangedFileSection = memo(function ChangedFileSection({
   sections: Map<string, HTMLElement>;
 }) {
   const [whole, setWhole] = useState(false);
-  /* hiding draws the diff anew, so lines opened from its own separators
-     fold back too */
   const [draws, setDraws] = useState(0);
   return (
     <section
@@ -90,22 +88,19 @@ export const ChangedFileSection = memo(function ChangedFileSection({
           </span>
           <Counts added={file.added} removed={file.removed} />
         </button>
-        {open && (
-          <Button
-            variant="quiet"
-            size="icon-sm"
-            aria-label={`${whole ? "Hide unchanged lines in" : "Show all lines of"} ${fileName(file.path)}`}
-            title={whole ? "Hide unchanged lines" : "Show all lines"}
-            className="shrink-0"
-            onClick={() => {
-              if (whole) setDraws((count) => count + 1);
-              setWhole(!whole);
-            }}
-          >
-            {whole ? <FoldVertical /> : <UnfoldVertical />}
-          </Button>
-        )}
-        <FileMenu scope={scope} file={file} within={within} remote={remote} />
+        <FileMenu
+          scope={scope}
+          file={file}
+          within={within}
+          remote={remote}
+          whole={open ? whole : null}
+          onWhole={(next) => {
+            /* hiding draws the diff anew, so lines opened from its own
+               separators fold back too */
+            if (!next) setDraws((count) => count + 1);
+            setWhole(next);
+          }}
+        />
       </div>
       {open &&
         (near ? (
@@ -119,18 +114,24 @@ export const ChangedFileSection = memo(function ChangedFileSection({
   );
 });
 
-/** What can be done with one changed file: copy its path or its recorded
-    change, and, for a session on this computer, show it in its folder. */
+/** What can be done with one changed file: show all its lines or only those
+    around its changes, copy its path or its recorded change, and, for a
+    session on this computer, show it in its folder. */
 function FileMenu({
   scope,
   file,
   within,
   remote,
+  whole,
+  onWhole,
 }: {
   scope: SessionScope;
   file: ChangedFile;
   within: string;
   remote: boolean;
+  /** whether the open diff shows every line; null while it is closed */
+  whole: boolean | null;
+  onWhole: (whole: boolean) => void;
 }) {
   const readDiff = useRecordedDiffReader(scope);
   const home = useHomeFolder();
@@ -156,6 +157,15 @@ function FileMenu({
         <EllipsisVertical />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-auto min-w-48">
+        {whole !== null && (
+          <>
+            <DropdownMenuItem onClick={() => onWhole(!whole)}>
+              {whole ? <FoldVertical /> : <UnfoldVertical />}
+              {whole ? "Hide unchanged lines" : "Show all lines"}
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        )}
         <DropdownMenuItem onClick={() => copy(file.path)}>
           <Copy />
           Copy path
