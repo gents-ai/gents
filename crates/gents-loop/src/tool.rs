@@ -9,6 +9,24 @@ use crate::tool_call_lifecycle::FailureClass;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolEffects {
+    Unknown,
+    Known {
+        reads: Vec<String>,
+        writes: Vec<String>,
+    },
+}
+
+impl ToolEffects {
+    pub fn read_only(resource: impl Into<String>) -> Self {
+        Self::Known {
+            reads: vec![resource.into()],
+            writes: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolDefinition {
     pub name: String,
@@ -85,6 +103,11 @@ pub trait Tool: Sized + Send + Sync {
         Ok(())
     }
 
+    /// Unknown effects must be treated as a serialization barrier.
+    fn effects(&self, _args: &Self::Args) -> ToolEffects {
+        ToolEffects::Unknown
+    }
+
     fn into_dyn_error(error: Self::Error) -> ToolError {
         ToolError::ToolCallError(Box::new(error))
     }
@@ -120,6 +143,10 @@ pub trait ToolDyn: Send + Sync {
     fn admit(&self, _args: &str) -> Result<(), ToolError> {
         Ok(())
     }
+
+    fn effects(&self, _args: &str) -> ToolEffects {
+        ToolEffects::Unknown
+    }
 }
 
 fn serialize_tool_output(output: impl Serialize) -> serde_json::Result<String> {
@@ -139,6 +166,13 @@ where
 
     fn emits_command_envelope(&self) -> bool {
         T::EMITS_COMMAND_ENVELOPE
+    }
+
+    fn effects(&self, args: &str) -> ToolEffects {
+        match parse_tool_args::<<Self as Tool>::Args>(args) {
+            Ok(parsed) => <Self as Tool>::effects(self, &parsed),
+            Err(_) => ToolEffects::Unknown,
+        }
     }
 
     fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition> {

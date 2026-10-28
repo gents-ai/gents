@@ -753,3 +753,22 @@ async fn readonly_receipts_commit_without_images_and_survive_terminal_retry() {
     assert!(failed.result.is_err());
     assert!(failed.deferred_writes.is_none());
 }
+
+#[test]
+fn read_file_effects_require_valid_arguments() {
+    use gents_loop::tool::{ToolDyn, ToolEffects};
+    let root = tempfile::tempdir().unwrap();
+    let root_path = std::fs::canonicalize(root.path()).unwrap();
+    let tool = crate::toolset::file_tools::ReadFileTool::new(
+        ToolContext::new(root_path, false).unwrap(),
+        4096,
+    );
+    assert_eq!(
+        ToolDyn::effects(&tool, r#"{"path":"file.txt"}"#),
+        ToolEffects::read_only("filesystem")
+    );
+    assert_eq!(
+        ToolDyn::effects(&tool, r#"{"path":5}"#),
+        ToolEffects::Unknown
+    );
+}

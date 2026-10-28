@@ -367,6 +367,10 @@ impl Tool for ReadFileTool {
     type Args = ReadFileArgs;
     type Output = String;
 
+    fn effects(&self, _args: &Self::Args) -> gents_loop::tool::ToolEffects {
+        gents_loop::tool::ToolEffects::read_only("filesystem")
+    }
+
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
