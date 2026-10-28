@@ -144,8 +144,9 @@ pub struct BackendModelCatalog {
     /// None: the backend's shared credential scope; Some: the node whose
     /// OAuthCredential was used. Never contains secrets.
     pub node_did: Option<String>,
-    /// When a successful discovery first returned these models; rediscovering
-    /// the same models keeps it.
+    /// Latest successful discovery in public observations. The stored payload
+    /// retains its content timestamp; the observation owner overlays the
+    /// independently persisted freshness watermark.
     pub observed_at: String,
     #[serde(
         default,

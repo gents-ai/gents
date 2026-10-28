@@ -982,3 +982,17 @@ async fn load_node_scoped_snapshot_excludes_other_nodes() {
     assert_eq!(store.goals.len(), 1);
     assert_eq!(store.goals[0].session_id, "alpha-goal-only");
 }
+
+#[test]
+fn catalog_freshness_failure_keeps_other_backend_observations_and_scope_alignment() {
+    let data = serde_json::json!({"inference_backends":[
+        {"backend_id":"bad", "node_did":"did:bad", "catalogs":null,
+            "catalog_freshness":{"version":255,"entries":[]}},
+        {"backend_id":"good", "node_did":"did:good", "catalogs":null}
+    ]});
+    let (observations, sources) =
+        parse_backend_observation_rows(&data, "inference_backends").unwrap();
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].backend_id, "good");
+    assert_eq!(sources, [Some("did:good".into())]);
+}

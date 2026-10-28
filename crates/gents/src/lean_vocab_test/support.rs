@@ -248,6 +248,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) client_agent_readiness_cases: Vec<LeanClientAgentReadinessCase>,
     pub(crate) startup_readiness_cases: Vec<LeanStartupReadinessCase>,
     pub(crate) snapshot_demotion_cases: Vec<serde_json::Value>,
+    pub(crate) catalog_refresh_cases: Vec<serde_json::Value>,
     pub(crate) plugin_reference_cases: Vec<serde_json::Value>,
     pub(crate) readiness_publication_cases: Vec<LeanReadinessPublicationCase>,
     pub(crate) apply_reconcile_cases: Vec<LeanApplyReconcileCase>,
@@ -4204,4 +4205,8 @@ pub(crate) fn lean_snapshot_demotion_cases() -> &'static [serde_json::Value] {
 
 pub(crate) fn lean_plugin_reference_cases() -> &'static [serde_json::Value] {
     &lean_contract_snapshot().plugin_reference_cases
+}
+
+pub(crate) fn lean_catalog_refresh_cases() -> &'static [serde_json::Value] {
+    &lean_contract_snapshot().catalog_refresh_cases
 }

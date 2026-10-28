@@ -64,6 +64,14 @@ pub(crate) fn include_existing(
 ) -> Result<()> {
     for (name, root, target, id, patch, fields) in [
         (
+            "InferenceBackend",
+            "bafyreihvtdq5hp7qrehkfhgkdtqql6v6mq4podhdnfrpbrcy4x3xasddwy",
+            "bafyreiabl7unecvetnazzwctm4iihrsb7x3jeo6l3m45u6bbjodj7zxfxi",
+            "inference-backend-catalog-freshness",
+            r#"[{"op":"add","path":"/InferenceBackend/Fields/-","value":{"Name":"catalog_freshness","Kind":"JSON"}}]"#,
+            &["catalog_freshness"][..],
+        ),
+        (
             "PeerPairingApplied",
             "bafyreifunn7vevp6b6rzg232gjfypp2lqviafe5now5ldlwo3na5nfinq4",
             "bafyreifiujskeayi7adradcst2jit3srboodcd6ejy2m6gppwy2mv6k7ri",
