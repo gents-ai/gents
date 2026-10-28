@@ -7,6 +7,7 @@ import { createPortal } from "react-dom";
 
 import { ToolGroup } from "./ToolGroup.js";
 import { isEmptyAssistantMessage } from "./MessageItems.js";
+import { ActivityIcon, completedActivityLabel } from "./activitySummary.js";
 import {
   actionEntries,
   actionKind,
@@ -84,38 +85,6 @@ function activityCaption(value: string): string {
   if (last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff)
     end--;
   return `${value.slice(0, end)}…`;
-}
-
-function completedLabel(entries: ActionEntry[]) {
-  const counts = new Map<string, number>();
-  for (const entry of entries) {
-    const { tool } = entry;
-    const presentation =
-      actionKind(entry) === "command"
-        ? "command"
-        : tool.reconstruction.state === "ready"
-          ? tool.presentation.kind
-          : "generic";
-    const kind = ["fileRead", "fileEdit", "command"].includes(presentation)
-      ? presentation
-      : "generic";
-    counts.set(kind, (counts.get(kind) ?? 0) + 1);
-  }
-  return [...counts]
-    .map(([kind, count]) => {
-      switch (kind) {
-        case "fileRead":
-          return "explored files";
-        case "fileEdit":
-          return "edited files";
-        case "command":
-          return `ran ${count} ${count === 1 ? "command" : "commands"}`;
-        default:
-          return `ran ${count} ${count === 1 ? "action" : "actions"}`;
-      }
-    })
-    .join(", ")
-    .replace(/^./, (letter) => letter.toUpperCase());
 }
 
 function ActivityDetails({
@@ -243,7 +212,7 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
             .join(", ") + " failed";
         const settledParts = [
           succeeded.length + failures.length
-            ? completedLabel([...succeeded, ...failures])
+            ? completedActivityLabel([...succeeded, ...failures])
             : null,
           stopped
             ? `${stopped} ${stopped === 1 ? "action stopped" : "actions stopped"}`
@@ -295,17 +264,7 @@ export function CompactToolGroup({ tools }: { tools: RenderedToolCallView[] }) {
               })
             }
           >
-            <svg
-              className="tool-activity-icon"
-              viewBox="0 0 24 24"
-              aria-hidden="true"
-            >
-              {running ? (
-                <circle cx="12" cy="12" r="8" />
-              ) : (
-                <path d="M4 4h6a3 3 0 0 1 3 3v14a4 4 0 0 0-4-2H4V4Zm16 0h-4a3 3 0 0 0-3 3m0 14a4 4 0 0 1 4-2h3V4Z" />
-              )}
-            </svg>
+            <ActivityIcon entries={entries} running={running} />
             <span className="tool-activity-label" title={label}>
               {caption}
             </span>
