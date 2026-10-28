@@ -76,6 +76,16 @@ pub async fn verify(
     let queued = input(QueueDelivery::Queue).context("original queued input")?;
     let steered = input(QueueDelivery::Steer).context("promoted input")?;
     let ui: Value = serde_json::from_slice(&std::fs::read(root.join("editor-steering-ui.json"))?)?;
+    let image: gents_protocol::request_input::RequestAttachment =
+        serde_json::from_value(ui["image"].clone())?;
+    for row in [queued, steered] {
+        let input = row.input.as_ref().context("image-bearing steering input")?;
+        input.validate_attachments()?;
+        ensure!(
+            input.attachments == [image.clone()],
+            "Steer changed or dropped the frozen image"
+        );
+    }
     let captured = &queued
         .input
         .as_ref()
@@ -227,6 +237,25 @@ pub async fn verify(
         captured_parts == 1 && all_captured_parts == 1,
         "the provider lost, duplicated or received the capture before Steer"
     );
+    let image_url = format!("data:{};base64,{}", image.media_type, image.data);
+    let image_count = |body: &Value| {
+        body["messages"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|message| message["role"] == "user")
+            .filter_map(|message| message["content"].as_array())
+            .flatten()
+            .filter(|part| {
+                part.pointer("/image_url/url").and_then(Value::as_str) == Some(image_url.as_str())
+            })
+            .count()
+    };
+    let all_image_parts = requests.iter().map(|body| image_count(body)).sum::<usize>();
+    ensure!(
+        image_count(steered_rounds[0]) == 1 && all_image_parts == 1,
+        "the provider lost, duplicated or received the image before Steer"
+    );
     Ok(json!({
         "nodeDid": node_did, "sessionId": session, "authorDid": client_did,
         "activeRequestDocId": original_doc_id, "queuedRequestDocId": queued.doc_id,
@@ -238,5 +267,6 @@ pub async fn verify(
         "providerRequests": requests.len(),
         "verifiedSignatures": rows.len(), "goalContinuationDocId": continuation,
         "context": capture, "providerCaptureOccurrences": all_captured_parts,
+        "providerImageOccurrences": all_image_parts,
     }))
 }
