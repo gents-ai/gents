@@ -94,6 +94,9 @@ impl Facts {
                 "workspaceUri":"file:///workspace", "version":7, "unsaved":true,
                 "range":null, "content":"captured before the lost reply\n"
             }))?];
+            request.input.attachments = vec![serde_json::from_value(json!({
+                "name": "capture.png", "mediaType": "image/png", "data": "aW1hZ2U="
+            }))?];
             request.admission.signature = self.nodes[&node_id]
                 .sign(&request.signing_payload())
                 .await?;

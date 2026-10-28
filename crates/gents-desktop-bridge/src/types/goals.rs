@@ -70,6 +70,9 @@ pub struct GoalControlRequest {
     #[serde(default)]
     #[ts(optional = nullable)]
     pub captured_context: Option<Vec<gents_protocol::request_input::CapturedContext>>,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub attachments: Option<Vec<gents_protocol::request_input::RequestAttachment>>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

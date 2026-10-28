@@ -116,6 +116,9 @@ async fn goal_resume_refuses_reauthored_input_without_replacing_signed_preparati
             "workspaceUri":"file:///workspace", "version":7, "unsaved":true,
             "range":null, "content":"captured before the lost reply\n",
         }]);
+        request["attachments"] = json!([{
+            "name":"capture.png", "mediaType":"image/png", "data":"aW1hZ2U=",
+        }]);
         let submitted = request.clone();
         let submitting_core = core.clone();
         let submitting = tokio::spawn(async move {
@@ -137,6 +140,7 @@ async fn goal_resume_refuses_reauthored_input_without_replacing_signed_preparati
         submitting.abort();
         let submitted = submitting.await;
         let record = retained?.with_context(|| format!("native Goal preparation ended as {submitted:?}"))?;
+        assert_eq!(record["record"]["prepared"]["initial_request"]["input"]["attachments"], request["attachments"]);
         let mut receipt = submission()["receipt"].clone();
         receipt["clientDid"] = json!(did);
         receipt["nodeDid"] = json!(did);
@@ -149,6 +153,13 @@ async fn goal_resume_refuses_reauthored_input_without_replacing_signed_preparati
         let mut changed_revision = request.clone();
         changed_revision["expected"] = json!({"document":"another-goal","composite":"another-revision"});
         assert!(resume_goal_submission(&core, serde_json::from_value(changed_revision)?, receipt.clone()).await.is_err());
+        let mut changed_image = request.clone();
+        changed_image["attachments"][0]["data"] = json!("bmV3LWltYWdl");
+        let error = resume_goal_submission(&core, serde_json::from_value(changed_image)?, receipt.clone()).await.unwrap_err();
+        assert!(error.to_string().contains("different authored input"), "{error}");
+        let mut removed_image = request.clone();
+        removed_image["attachments"] = json!([]);
+        assert!(resume_goal_submission(&core, serde_json::from_value(removed_image)?, receipt.clone()).await.is_err());
         let mut changed_capture = request;
         changed_capture["capturedContext"][0]["content"] = json!("recaptured later");
         assert!(resume_goal_submission(&core, serde_json::from_value(changed_capture)?, receipt).await.is_err());
