@@ -133,7 +133,7 @@ function NewSessionComposer() {
         onSend={
           goalMode.mode
             ? (text) => void goalMode.submit(text)
-            : (text) => send(slash.prepare(text))
+            : (text) => send(text, undefined, undefined, slash.prepare(text))
         }
         models={[]}
         fieldRef={textarea}

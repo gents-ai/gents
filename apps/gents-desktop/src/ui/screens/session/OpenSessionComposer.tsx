@@ -160,7 +160,7 @@ export function OpenSessionComposer({
       draft.trim() !== ""
     ) {
       event.preventDefault();
-      void send(draft, undefined, otherWay);
+      void send(draft, undefined, otherWay, slash.prepare(draft));
     }
   };
 
@@ -237,7 +237,7 @@ export function OpenSessionComposer({
                       : edit.save(slash.prepare(text)))
                 : goalMode.mode
                   ? (text) => void goalMode.submit(text)
-                  : (text) => send(slash.prepare(text), undefined, followUp)
+                  : (text) => send(text, undefined, followUp, slash.prepare(text))
             }
             models={[]}
             onAttach={attachments.pick}

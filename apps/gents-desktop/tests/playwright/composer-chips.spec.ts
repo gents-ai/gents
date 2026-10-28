@@ -155,6 +155,8 @@ test("a skill picked mid-sentence becomes a chip and is named on an opening line
   await expect(page.getByTestId("transcript-panel")).toContainText(
     /\/host-diagnostics\s+please \/host-diagnostics now/,
   );
+  /* the draft clears though what went out has an added opening line */
+  await expect(field(page)).toHaveText("");
 });
 
 test.describe("on a touch screen", () => {
