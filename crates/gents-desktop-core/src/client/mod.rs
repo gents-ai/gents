@@ -16,7 +16,8 @@ pub(crate) use query::load_inference_configuration;
 pub use collection_resolver::CollectionResolver;
 pub use core::{
     ClientCore, ClientCoreOptions, ClientObservationAttachment, ClientPeerStatus,
-    ClientRouteStatus, ClientStoreKeyProvider, ClientSyncStateSnapshot, EnrollmentRequestResult,
+    ClientRouteStatus, ClientStoreKeyProvider, ClientSyncStateSnapshot,
+    EnrollmentActivationFailure, EnrollmentActivationStage, EnrollmentRequestResult,
     GoalSubmissionReference, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
     RefreshedRequestProjection, RetainedGoalSubmission, RuntimeSchemaObservation,
     STUCK_THRESHOLD_ATTEMPTS,

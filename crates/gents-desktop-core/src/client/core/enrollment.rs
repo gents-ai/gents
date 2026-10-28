@@ -70,6 +70,21 @@ pub struct EnrollmentRequestResult {
     pub owner_node: String,
     pub state: String,
     pub expires_at: String,
+    pub activation_error: Option<String>,
+}
+
+fn activation_failure_for(
+    failures: &BTreeMap<String, super::EnrollmentActivationFailure>,
+    request_id: &str,
+    digest: &str,
+    sequence: u64,
+) -> Option<&'static str> {
+    failures
+        .get(request_id)
+        .filter(|failure| {
+            failure.request_digest == digest && failure.authorization_sequence == sequence
+        })
+        .map(|failure| failure.stage.as_str())
 }
 
 impl ClientCore {
@@ -183,6 +198,7 @@ impl ClientCore {
             owner_node: request.owner_agent,
             state: "pending_approval".to_string(),
             expires_at: request.expires_at,
+            activation_error: None,
         })
     }
 
@@ -204,7 +220,9 @@ impl ClientCore {
         let request_rows = rows::<EnrollmentRequestRow>(&response, "NetworkEnrollmentRequest")?;
         let retired = self.sync_state.retired_enrollment_digests().await;
         let assembly_requests = listing_assembly_requests(&request_rows, &self.node_identity).await;
-        let peers = self.sync_state.records();
+        let sync = self.sync_state.snapshot();
+        let peers = sync.directory;
+        let activation_failures = sync.enrollment_activation_failures;
         let now = Utc::now();
         let mut satisfied_authorities = Vec::new();
         let mut active = Vec::new();
@@ -286,6 +304,7 @@ impl ClientCore {
             let authority = EnrollmentRequestAuthority::from(&projection.request);
             let has_decision = !projection.decisions.is_empty();
             let mut route_applied = false;
+            let mut activation_error = None;
             let state = match projection.decisions.as_slice() {
                 [] => "pending_approval",
                 [(decision, _)] if decision.decision == EnrollmentDecisionKind::Denied => continue,
@@ -298,6 +317,13 @@ impl ClientCore {
                     ) {
                         continue;
                     }
+                    activation_error = activation_failure_for(
+                        &activation_failures,
+                        &request.request_id,
+                        &request.request_digest,
+                        decision.authorization_sequence,
+                    )
+                    .map(str::to_owned);
                     route_applied = peers.iter().any(|peer| {
                         peer.is_enrollment()
                             && peer.is_chat_ready_at(now)
@@ -335,6 +361,7 @@ impl ClientCore {
                     owner_node: request.owner_agent,
                     state: state.to_string(),
                     expires_at: request.expires_at,
+                    activation_error,
                 },
             ));
         }
@@ -622,11 +649,20 @@ pub(super) async fn reconcile_status_enrollment_approvals(
     }
 
     let mut current_authority = BTreeMap::new();
+    let mut activation_failures = BTreeMap::new();
     while let Some((peer_id, approval, authentication)) = authentications.next().await {
         let address = match authentication {
             Ok(address) => address,
             Err(error) => {
                 tracing::warn!(peer_id, request_id = %approval.request_id, error = %error, "enrollment peer is temporarily unavailable");
+                activation_failures.insert(
+                    approval.request_id.clone(),
+                    super::EnrollmentActivationFailure {
+                        request_digest: approval.request_digest.clone(),
+                        authorization_sequence: approval.authorization_sequence,
+                        stage: super::EnrollmentActivationStage::Authentication,
+                    },
+                );
                 demote_enrollment_peer(sync_state, &peer_id).await;
                 continue;
             }
@@ -670,10 +706,19 @@ pub(super) async fn reconcile_status_enrollment_approvals(
             }
             Err(error) => {
                 tracing::warn!(peer_id, error = %error, "enrollment route activation failed closed for one peer");
+                activation_failures.insert(
+                    approval.request_id.clone(),
+                    super::EnrollmentActivationFailure {
+                        request_digest: approval.request_digest.clone(),
+                        authorization_sequence: approval.authorization_sequence,
+                        stage: super::EnrollmentActivationStage::Route,
+                    },
+                );
                 demote_enrollment_peer(sync_state, &peer_id).await;
             }
         }
     }
+    sync_state.replace_enrollment_activation_failures(activation_failures);
     Ok(current_authority)
 }
 
@@ -1834,6 +1879,45 @@ mod tests {
     use gents::agent::p2p_reconcile::enrollment_candidate::enrollment_request_input;
     use gents_protocol::enrollment::derive_enrollment_id;
     use serde_json::json;
+
+    #[test]
+    fn generated_activation_cases_project_only_the_current_approved_generation() {
+        let output = gents_lean_contract::run_prepared_generator(
+            &gents_lean_contract::proofs_dir().unwrap(),
+            "Proofs.Conformance.EnrollmentActivation:olean",
+            "Proofs/Conformance/EnrollmentActivation.lean",
+        )
+        .unwrap();
+        let cases: Vec<Value> = serde_json::from_str(&output).unwrap();
+        assert_eq!(cases.len(), 54);
+        for case in cases {
+            let mut failures = BTreeMap::new();
+            if let (Some(generation), Some(stage)) =
+                (case["current"].as_u64(), case["stored"].as_str())
+            {
+                failures.insert(
+                    "request".to_owned(),
+                    super::super::EnrollmentActivationFailure {
+                        request_digest: "digest".to_owned(),
+                        authorization_sequence: generation,
+                        stage: match stage {
+                            "authentication" => {
+                                super::super::EnrollmentActivationStage::Authentication
+                            }
+                            "route" => super::super::EnrollmentActivationStage::Route,
+                            other => panic!("unexpected activation stage {other}"),
+                        },
+                    },
+                );
+            }
+            let projected = case["approved"]
+                .as_bool()
+                .unwrap()
+                .then(|| activation_failure_for(&failures, "request", "digest", 3))
+                .flatten();
+            assert_eq!(projected, case["projected"].as_str(), "{case}");
+        }
+    }
 
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -3199,6 +3283,77 @@ mod tests {
         assert!(core.peer_records().await.is_empty());
 
         Arc::new(core).shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn authentication_failure_is_projected_and_cleared_on_recovery() {
+        use crate::client::paths::DesktopPaths;
+
+        let temp = tempfile::tempdir().unwrap();
+        let core = start_unsupervised_core(temp.path().join("desktop")).await;
+        let admin =
+            PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
+                .await
+                .unwrap();
+        let authority =
+            signed_enrollment_authority(&admin, core.node_identity(), core.local_peer_id());
+        commit_admin_pin(&core, &authority).await;
+        commit_enrollment_request(&core, &authority.request).await;
+        commit_decision(&core, &authority).await;
+        commit_revision(&core, &authority.revision).await;
+        commit_route_receipt(&core, &authority).await;
+        let principal = Arc::new(core.node_identity().clone());
+
+        for (resolved, expected_error) in [
+            (None, Some("authentication")),
+            (
+                Some(identity::Did::new(admin.did().to_string()).unwrap()),
+                None,
+            ),
+        ] {
+            let transport: Arc<dyn P2POps> = Arc::new(EnrollmentTransport {
+                peer: authority.offer.server_ticket.clone(),
+                resolved,
+                connected: false.into(),
+                dials: 0.into(),
+                observations: 0.into(),
+            });
+            let route_manager = Arc::new(ClientRouteManager::new(
+                core.node_arc(),
+                Arc::clone(&transport),
+                Arc::clone(&principal),
+                core.options().operator_identity_interaction,
+            ));
+            reconcile_status_enrollment_approvals(
+                &core.node_arc(),
+                &transport,
+                &principal,
+                core.local_peer_id(),
+                &core.sync_state,
+                &route_manager,
+            )
+            .await
+            .unwrap();
+            let errors = core.sync_state.snapshot().enrollment_activation_failures;
+            let observed = errors
+                .get(&authority.request.request_id)
+                .map(|failure| failure.stage.as_str());
+            assert_eq!(observed, expected_error);
+            let listed = core.active_status_enrollment_requests().await.unwrap();
+            if expected_error.is_some() {
+                let request = listed
+                    .iter()
+                    .find(|request| request.request_id == authority.request.request_id)
+                    .unwrap();
+                assert_eq!(request.state, "approved");
+                assert_eq!(request.activation_error.as_deref(), expected_error);
+            } else {
+                assert!(listed
+                    .iter()
+                    .all(|request| request.activation_error.is_none()));
+            }
+        }
+        core.shutdown().await.unwrap();
     }
 
     #[tokio::test]

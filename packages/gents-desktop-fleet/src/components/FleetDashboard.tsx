@@ -6,6 +6,7 @@ import type {
   EnrollmentRequestView,
   SyncHealthView,
 } from "@source-inc/gents-desktop-client";
+import { enrollmentActivationMessage } from "@source-inc/gents-desktop-client";
 import type { FleetCopy } from "../copy.js";
 import { needsInferenceSetup } from "../fleetMetrics.js";
 import { AddPeerForm, type AddPeerFormProps } from "./AddPeerForm.js";
@@ -108,10 +109,15 @@ export function FleetDashboard({
             <div>
               <p className="eyebrow">Enrollment requested</p>
               <strong>
-                {request.state === "approved"
-                  ? "Approval received · finishing secure route"
-                  : "Waiting for pairing request acceptance"}
+                {enrollmentActivationMessage(request)
+                  ? "Secure connection needs attention"
+                  : request.state === "approved"
+                    ? "Approval received · finishing secure route"
+                    : "Waiting for pairing request acceptance"}
               </strong>
+              {enrollmentActivationMessage(request) && (
+                <p className="muted">{enrollmentActivationMessage(request)}</p>
+              )}
               <p className="muted">
                 Request <span className="mono">{request.requestId}</span> ·
                 expires {request.expiresAt}

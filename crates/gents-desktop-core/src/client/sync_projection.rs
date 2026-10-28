@@ -161,6 +161,7 @@ mod tests {
             database_sync,
             database_sync_error: None,
             peer_schema_skew: Default::default(),
+            enrollment_activation_failures: Default::default(),
             directory: Vec::new(),
             peers,
         })
@@ -181,6 +182,7 @@ mod tests {
             database_sync: None,
             database_sync_error: Some("incompatible sync status".into()),
             peer_schema_skew: Default::default(),
+            enrollment_activation_failures: Default::default(),
             directory: Vec::new(),
             peers: Vec::new(),
         })
@@ -207,6 +209,7 @@ mod tests {
             }),
             database_sync_error: Some("decode failure".into()),
             peer_schema_skew: [("peer-1".to_string(), skew.clone())].into(),
+            enrollment_activation_failures: Default::default(),
             directory: Vec::new(),
             peers: vec![peer(false)],
         })
@@ -225,6 +228,7 @@ mod tests {
             database_sync: None,
             database_sync_error: None,
             peer_schema_skew: [("peer-1".to_string(), skew)].into(),
+            enrollment_activation_failures: Default::default(),
             directory: Vec::new(),
             peers: Vec::new(),
         })

@@ -73,6 +73,7 @@ fn sync_health_view_keeps_database_quarantine_failed() {
         }),
         database_sync_error: None,
         peer_schema_skew: Default::default(),
+        enrollment_activation_failures: Default::default(),
         directory: Vec::new(),
         peers: Vec::new(),
     })

@@ -293,6 +293,28 @@ pub(super) fn p2p_health_materially_changed(previous: &P2PHealth, next: &P2PHeal
 // from the configured peer rows in this same revision, never from an
 // independently sampled global connection count.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnrollmentActivationFailure {
+    pub request_digest: String,
+    pub authorization_sequence: u64,
+    pub stage: EnrollmentActivationStage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnrollmentActivationStage {
+    Authentication,
+    Route,
+}
+
+impl EnrollmentActivationStage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Authentication => "authentication",
+            Self::Route => "route",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientSyncStateSnapshot {
     pub transport: P2PHealth,
     pub database_sync: Option<P2pSyncStatusSnapshot>,
@@ -300,6 +322,7 @@ pub struct ClientSyncStateSnapshot {
     // DefraDB accepts the connection but never merges either side's writes;
     // schema skew is the only visible signal.
     pub peer_schema_skew: BTreeMap<String, ReplicatedSchemaSkew>,
+    pub enrollment_activation_failures: BTreeMap<String, EnrollmentActivationFailure>,
     // Bridge projections consume this copy instead of racing a second
     // directory read after receiving a sync update.
     pub directory: Vec<PeerRecord>,

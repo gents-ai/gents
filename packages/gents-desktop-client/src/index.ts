@@ -46,6 +46,7 @@ export * from "./sessionTimeline.js";
 export * from "./pendingQueue.js";
 
 export * from "./firstRun.js";
+export * from "./enrollmentActivation.js";
 export * from "./inferenceSetup.js";
 export * from "./inferenceSettings.js";
 export * from "./inferenceSetupForm.js";

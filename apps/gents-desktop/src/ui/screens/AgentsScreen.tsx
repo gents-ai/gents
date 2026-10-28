@@ -2,6 +2,7 @@ import { memo, useState } from "react";
 import { useStore } from "zustand";
 import { EllipsisVertical, Inbox, Plus, SlidersHorizontal } from "lucide-react";
 import { toast } from "sonner";
+import { enrollmentActivationMessage } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import {
   AlertDialog,
@@ -107,10 +108,17 @@ export function AgentsScreen() {
                 <Spinner className="text-foreground" />
                 <div className="min-w-0">
                   <p className="text-sm font-medium">
-                    {r.state === "approved"
-                      ? "Approval received · finishing secure route"
-                      : `Waiting for ${r.serverLabel ?? r.serverPeer} to accept`}
+                    {enrollmentActivationMessage(r)
+                      ? "Secure connection needs attention"
+                      : r.state === "approved"
+                        ? "Approval received · finishing secure route"
+                        : `Waiting for ${r.serverLabel ?? r.serverPeer} to accept`}
                   </p>
+                  {enrollmentActivationMessage(r) && (
+                    <p className="text-sm text-muted-foreground">
+                      {enrollmentActivationMessage(r)}
+                    </p>
+                  )}
                   <p className="truncate font-mono text-[11px] text-muted-foreground">
                     {r.requestId} · expires {new Date(r.expiresAt).toLocaleTimeString()}
                   </p>

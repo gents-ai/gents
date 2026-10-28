@@ -78,6 +78,7 @@ impl ClientSyncStateOwner {
             database_sync: None,
             database_sync_error: None,
             peer_schema_skew: BTreeMap::new(),
+            enrollment_activation_failures: BTreeMap::new(),
             directory: records,
             peers,
         });
@@ -111,6 +112,19 @@ impl ClientSyncStateOwner {
 
     pub(super) fn snapshot(&self) -> ClientSyncStateSnapshot {
         self.tx.borrow().clone()
+    }
+
+    pub(super) fn replace_enrollment_activation_failures(
+        &self,
+        failures: BTreeMap<String, super::EnrollmentActivationFailure>,
+    ) {
+        self.tx.send_if_modified(|state| {
+            if state.enrollment_activation_failures == failures {
+                return false;
+            }
+            state.enrollment_activation_failures = failures;
+            true
+        });
     }
 
     pub(super) fn subscribe(&self) -> watch::Receiver<ClientSyncStateSnapshot> {
