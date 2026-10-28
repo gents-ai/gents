@@ -1,11 +1,11 @@
 import { useMemo, useRef, type ReactNode } from "react";
 import { BookOpen, Target } from "lucide-react";
 import {
-  ChipCard,
   type ChipKind,
   type ComposerHandle,
   type ComposerTrigger,
 } from "@gents/ui/conversation";
+import { skillCard } from "./SkillChips";
 import type { AgentContext, SkillView } from "@source-inc/gents-desktop-client";
 import { effectiveContextSkills } from "@source-inc/gents-desktop-chat";
 import { noteSlash, rankSlash, recentSlash } from "../lib/slashRecent";
@@ -27,8 +27,6 @@ type SlashRow = {
   disabled?: boolean;
   item: SlashItem;
 };
-
-const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 
 /** The menu a slash opens in the composer: commands, which only begin a
     message, then the agent's skills, the last few used first, anywhere a
@@ -95,32 +93,7 @@ export function useSlashMenu(
   };
   /* the card over a command chip, whether picked from the menu or typed out */
   const chipKinds = useMemo<Record<string, ChipKind>>(
-    () => ({
-      command: {
-        preview: (chip) => {
-          const skill = offered.find((s) => s.skillId === chip.id);
-          if (skill)
-            return (
-              <ChipCard
-                title={skill.displayName ?? skill.name ?? chip.label}
-                subtitle={
-                  skill.sourceDirectory
-                    ? `Skill · from ${folderName(skill.sourceDirectory)}`
-                    : "Skill"
-                }
-              >
-                {skill.description}
-              </ChipCard>
-            );
-          const command = available.find((c) => c.id === chip.id);
-          return command ? (
-            <ChipCard title={chip.label} subtitle="Command">
-              {command.description}
-            </ChipCard>
-          ) : null;
-        },
-      },
-    }),
+    () => ({ command: { preview: (chip) => skillCard(chip, offered, available) } }),
     [offered, available],
   );
   const names = useMemo(() => offered.map((skill) => skill.skillId), [offered]);

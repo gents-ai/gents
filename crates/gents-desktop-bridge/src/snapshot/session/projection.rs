@@ -1399,6 +1399,111 @@ mod tests {
     }
 
     #[test]
+    fn a_published_message_names_the_skills_its_request_selected() {
+        let request = |id: &str, skills: &[&str], second: u32| AgentRequestRow {
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+            doc_id: Some(format!("doc-{id}")),
+            request_id: id.into(),
+            session_id: Some("session-1".into()),
+            node_did: Some("did:test:amy".into()),
+            content: Some(format!("{id} text")),
+            input: Some(gents_protocol::request_input::RequestInput {
+                selected_skill_ids: skills.iter().map(|skill| skill.to_string()).collect(),
+                ..Default::default()
+            }),
+            lifecycle_state: Some(RequestLifecycleState::Completed),
+            created_at: Some(format!("2026-04-21T12:00:{second:02}Z")),
+            ..Default::default()
+        };
+        let mut rows = ClientStoreRows {
+            requests: vec![request("skilled", &["review"], 0), request("plain", &[], 1)],
+            ..Default::default()
+        };
+        for (key, doc, sequence, role, text) in [
+            (
+                "authored:doc-skilled:prompt",
+                "doc-skilled",
+                1,
+                MessageRole::User,
+                "fix it",
+            ),
+            (
+                "answer-skilled",
+                "doc-skilled",
+                2,
+                MessageRole::Assistant,
+                "done",
+            ),
+            (
+                "authored:doc-plain:prompt",
+                "doc-plain",
+                3,
+                MessageRole::User,
+                "thanks",
+            ),
+        ] {
+            push_canonical_text_message(
+                &mut rows,
+                key,
+                "session-1",
+                Some(doc),
+                sequence,
+                role,
+                text,
+            );
+        }
+        let store = ClientStore::from_rows(rows);
+        let mut ownership = gents_desktop_core::client::RequestPromptOwnership::default();
+        for (doc, first_sequence) in [("doc-skilled", 1), ("doc-plain", 3)] {
+            ownership.by_request_doc_id.insert(
+                doc.into(),
+                gents_desktop_core::client::RequestPromptFact {
+                    node_did: "did:test:amy".into(),
+                    session_id: "session-1".into(),
+                    requester_did: None,
+                    materialized: true,
+                    first_sequence: Some(first_sequence),
+                },
+            );
+        }
+        let snapshot = build_session_snapshot_from_store_for_node_with_transcript(
+            &store,
+            &store,
+            &store,
+            None,
+            Some(&ownership),
+            true,
+            false,
+            false,
+            true,
+            Some("did:test:amy"),
+            "session-1",
+            None,
+            None,
+        )
+        .unwrap();
+        let sent = snapshot
+            .timeline_items
+            .iter()
+            .filter_map(|item| match item {
+                RenderedTimelineItem::UserMessage {
+                    content,
+                    selected_skill_ids,
+                    ..
+                } => Some((content.clone(), selected_skill_ids.clone())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sent,
+            [
+                (Some("fix it".to_owned()), Some(vec!["review".to_owned()])),
+                (Some("thanks".to_owned()), None),
+            ]
+        );
+    }
+
+    #[test]
     fn historical_pending_input_is_not_repeated_outside_its_visible_anchor() {
         let request = |id: &str, session: &str, state| AgentRequestRow {
             purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
@@ -1818,6 +1923,17 @@ pub(super) fn project_transcript_rows(
                     .map(gents_protocol::request_input::RequestAttachment::from_message)
                     .map(|v| v.iter().map(|a| a.view()).collect())
                     .filter(|v: &Vec<_>| !v.is_empty()),
+                /* only the message a request's own author wrote carries the
+                skills that request selected */
+                selected_skill_ids: row
+                    .message
+                    .request_doc_id
+                    .as_deref()
+                    .filter(|doc_id| row.message.message_key == authored_prompt_message_key(doc_id))
+                    .and_then(|doc_id| requests_by_doc_id.get(doc_id))
+                    .and_then(|request| request.input.as_ref())
+                    .map(|input| input.selected_skill_ids.clone())
+                    .filter(|ids| !ids.is_empty()),
                 reasoning: presentation.as_ref().and_then(|presentation| {
                     presentation
                         .reasoning_markdown

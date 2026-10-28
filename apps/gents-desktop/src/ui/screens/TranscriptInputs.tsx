@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Bot, Clock, Play, Timer, Workflow, Zap } from "lucide-react";
 import type {
   RenderedTimelineItem,
@@ -185,7 +186,7 @@ export function UserInputWithState({
   state,
   actions,
 }: {
-  content: string;
+  content: ReactNode;
   state: string | null;
   actions?: Parameters<typeof UserMessage>[0]["actions"];
 }) {
