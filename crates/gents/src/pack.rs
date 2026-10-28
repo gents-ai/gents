@@ -278,6 +278,8 @@ pub struct PluginLimits {
     pub max_output_mib: Option<u32>,
 }
 
+/// Bounds model-facing instructions loaded from a pack so one document cannot
+/// add unbounded prompt text or allocation to each provider turn.
 pub const MAX_TOOL_INSTRUCTIONS_BYTES: usize = 64 * 1024;
 
 /// Where a UX plugin's files must live inside a pack, by convention

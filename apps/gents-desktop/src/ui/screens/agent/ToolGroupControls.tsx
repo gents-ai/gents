@@ -22,6 +22,12 @@ export const FILE_LIMITS = {
   max_matches: { label: "File search match limit", max: 5_000, fallback: "200" },
 } as const;
 
+export const BASH_OUTPUT_LIMIT = {
+  label: "Bash output byte limit",
+  max: 1_000_000,
+  fallback: "16000",
+} as const;
+
 type RemoteService = NonNullable<NonNullable<Tools["remote"]>["services"]>[number];
 
 const REMOTE_TIMEOUTS = {
@@ -240,6 +246,19 @@ export function ToolGroupControls({
       }
     />
   );
+  const bashOutputLimit = (
+    <WholeNumberRow
+      id="tools-bash-max-output-chars"
+      label={BASH_OUTPUT_LIMIT.label}
+      value={groups.host?.bash?.max_output_chars}
+      placeholder={BASH_OUTPUT_LIMIT.fallback}
+      max={BASH_OUTPUT_LIMIT.max}
+      onInvalid={onInvalid}
+      onChange={(max_output_chars) =>
+        update("host", { bash: { ...groups.host?.bash, max_output_chars } })
+      }
+    />
+  );
   return (
     <>
       <Group title="Host execution policy">
@@ -270,6 +289,7 @@ export function ToolGroupControls({
         {fileLimit("max_read_chars")}
         {fileLimit("max_list_entries")}
         {fileLimit("max_matches")}
+        {bashOutputLimit}
         {seconds(
           "tools-bash-timeout",
           "Bash timeout seconds",

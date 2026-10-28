@@ -6,6 +6,8 @@ use chrono_tz::Tz;
 
 pub const DEFAULT_CRON_MISSED_RUN_POLICY: &str = "latest_only";
 
+/// Bounds missed-run search so malformed or rarely matching schedules cannot
+/// keep reconciliation scanning indefinitely.
 const MAX_CRON_LOOKAHEAD_MINUTES: i64 = 366 * 24 * 60 * 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

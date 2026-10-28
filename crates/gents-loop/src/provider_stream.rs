@@ -5,6 +5,7 @@ use rig::http_client::{self, StreamingResponse};
 
 use crate::provider_activity::ProviderActivity;
 
+/// Bounds buffering and parsing for one provider event on the streaming path.
 pub const MAX_EVENT_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug)]

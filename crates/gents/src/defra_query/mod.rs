@@ -6,6 +6,7 @@ use anyhow::anyhow;
 use defra_node::EmbeddedNode;
 use serde_json::json;
 
+/// Bounds an individual field value included in model-facing query results.
 pub(crate) const MAX_FIELD_STRING_BYTES: usize = 2_000;
 
 fn field_truncation_marker(shown_bytes: usize, original_bytes: usize) -> String {

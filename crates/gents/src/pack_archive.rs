@@ -14,10 +14,13 @@ pub use format::{
 
 pub const DEFAULT_NAMESPACE: &str = "gents";
 
+/// Caps compressed archive input before parsing it into retained assets.
 pub const MAX_PACK_BYTES: usize = 1024 * 1024 * 1024;
 
+/// Caps total expanded asset bytes to bound decompression work and storage.
 pub const MAX_DECOMPRESSED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
+/// Caps archive entry count to bound per-entry parsing and metadata overhead.
 pub const MAX_ENTRIES: usize = 4096;
 
 pub struct PackArchive {

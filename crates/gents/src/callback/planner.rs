@@ -15,11 +15,13 @@ use super::documents::CallbackModuleDoc;
 const WASM_PAGE_BYTES: u64 = 65536;
 const CALLBACK_MODULE_ID_DOMAIN: &[u8] = b"gents.callback.module.v1";
 
-/// Host ceilings independent of CallbackModule fields.
+/// Host ceilings independent of CallbackModule fields. They bound guest CPU,
+/// memory, and host-owned input/output so a module cannot exhaust the runtime.
 pub const MAX_FUEL: u64 = 100_000_000;
 pub const MAX_MEMORY_PAGES: u32 = 256;
 pub const MAX_INPUT_BYTES: usize = 1_048_576;
 pub const MAX_OUTPUT_BYTES: usize = 1_048_576;
+/// Callback artifacts are host-retained results; this cap bounds stored bytes.
 pub const MAX_ARTIFACT_BYTES: usize = 16 * 1024 * 1024;
 
 pub struct CallbackModuleLimits {

@@ -481,6 +481,8 @@ impl WorkspaceLineage {
     }
 }
 
+/// Bounds persisted event context before parsing and attaching it to a
+/// trigger request, keeping event delivery from creating unbounded requests.
 pub const MAX_TRIGGER_CONTEXT_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
