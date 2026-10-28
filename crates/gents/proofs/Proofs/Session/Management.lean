@@ -34,6 +34,7 @@ def steersInto (active candidate : QueueEntry) : Prop :=
   candidate.fresh = true ∧ candidate.delivery = .steer ∧ candidate.policy = .append ∧
   (candidate.source = .user ∨ candidate.source = .steering) ∧
   candidate.origin = .interactive ∧ candidate.requester = active.requester ∧
+  (candidate.steerTarget = none ∨ candidate.steerTarget = active.requestDocId) ∧
   candidate.turnContext = active.turnContext ∧
   candidate.goalAssignment = active.goalAssignment
 
@@ -131,6 +132,12 @@ theorem queue_delivery_is_barrier (active entry : QueueEntry) (rest : List Queue
     (admitted : List RequestId) (h : entry.delivery = .queue) :
     steeringRun active admitted (entry :: rest) = [] := by
   simp [steeringRun, steersInto, h]
+
+theorem stale_agent_steer_is_barrier (active entry : QueueEntry) (rest : List QueueEntry)
+    (admitted : List RequestId) (target : Nat)
+    (htarget : entry.steerTarget = some target) (hne : active.requestDocId ≠ some target) :
+    steeringRun active admitted (entry :: rest) = [] := by
+  simp [steeringRun, steersInto, htarget, Ne.symm hne]
 
 theorem agent_message_queue_and_interrupt_are_barriers
     (mode : AgentMessageMode) (allowed stop : Bool) (delivery : QueueDelivery)
