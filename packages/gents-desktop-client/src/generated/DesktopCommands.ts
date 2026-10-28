@@ -247,7 +247,7 @@ export type DesktopCommands = {
   desktop_provider_recovery_apply: { args: { request: ProviderRecoveryApply }; result: ProviderRecoveryResult };
   desktop_provider_recovery_plan: { args: { request: ProviderRecoveryRequest }; result: ProviderRecoveryPlan | null };
   desktop_provider_usage_read: { args: { request: ProviderUsageReadRequest }; result: Array<AccountUsageView> };
-  desktop_request_attachments: { args: { nodeDid: string; sessionId: string; requestId: string; messageKey?: string | null }; result: Array<RequestAttachment> };
+  desktop_request_attachments: { args: { nodeDid: string; sessionId: string; requestId: string; messageKey?: string | null; index?: number | null }; result: Array<RequestAttachment> };
   desktop_request_resend: { args: { requestId: string; nodeDid?: string | null }; result: RequestResendResultView };
   desktop_request_retry: { args: { requestId: string; nodeDid?: string | null }; result: ChatSendResult };
   desktop_request_timeline: { args: { nodeDid: string; requestId: string }; result: RequestTimelineView };

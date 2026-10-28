@@ -145,6 +145,7 @@ export type DesktopApiAdapter = {
     sessionId: string,
     requestId: string,
     messageKey?: string,
+    index?: number,
   ): Promise<RequestAttachment[]>;
   fetchSessionGoal: (
     nodeDid: string,

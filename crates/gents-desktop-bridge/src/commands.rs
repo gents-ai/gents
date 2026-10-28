@@ -2,6 +2,11 @@
 mod background;
 pub use background::background_tool;
 
+#[path = "commands/attachments.rs"]
+mod attachments;
+pub use attachments::request_attachments;
+pub(crate) use attachments::bounded_attachment_response;
+
 #[path = "commands/chat.rs"]
 mod chat;
 #[path = "commands/chat_resolve.rs"]
