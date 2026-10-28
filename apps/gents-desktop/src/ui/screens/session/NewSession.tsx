@@ -17,7 +17,6 @@ import { agentName } from "../behavior";
 import { SelectedChatFolder } from "../ChatFolderPicker";
 import { AccessSentence } from "../parts";
 import { ReplyingTo } from "../ReplyingTo";
-import { SlashMenu } from "../SlashMenu";
 import { useSlashMenu } from "../useSlashMenu";
 import { GoalChip, goalCommand, useGoalMode } from "./goalMode";
 import {
@@ -107,8 +106,6 @@ function NewSessionComposer() {
   const agent = agentOf(deployment, choice.agentId);
   const goalMode = useGoalMode({ draft, setDraft, onSet: setGoal });
   const slash = useSlashMenu(
-    draft,
-    setDraft,
     deployment?.skills ?? [],
     deployment?.contexts.find((c) => c.context_id === agent?.contextId),
     [goalCommand(null, false)],
@@ -121,15 +118,6 @@ function NewSessionComposer() {
       {...attachments.dropProps}
       className={cn("relative", attachments.over && "rounded-2xl ring-2 ring-ring")}
     >
-      {!goalMode.mode && (
-        <SlashMenu
-          open={slash.open}
-          query={slash.query}
-          items={slash.items}
-          active={slash.active}
-          onPick={slash.accept}
-        />
-      )}
       <input
         {...attachments.fileInputProps}
         className="hidden"
@@ -142,10 +130,17 @@ function NewSessionComposer() {
         className="text-foreground"
         value={draft}
         onChange={setDraft}
-        onSend={goalMode.mode ? (text) => void goalMode.submit(text) : send}
+        onSend={
+          goalMode.mode
+            ? (text) => void goalMode.submit(text)
+            : (text) => send(slash.prepare(text))
+        }
         models={[]}
         fieldRef={textarea}
         commands={slash.names}
+        commandsAt="word"
+        chipKinds={slash.chipKinds}
+        triggers={goalMode.mode ? undefined : [slash.trigger]}
         onAttach={attachments.pick}
         hasAttachments={attachments.hasAttachments}
         submitDisabled={attachments.pending}
@@ -172,7 +167,6 @@ function NewSessionComposer() {
         }
         onKeyDown={(event) => {
           goalMode.onKeyDown(event);
-          if (!event.defaultPrevented && !goalMode.mode) slash.onKeyDown(event);
         }}
         submitLabel={goalMode.mode ? "Set goal" : "Send"}
         leading={

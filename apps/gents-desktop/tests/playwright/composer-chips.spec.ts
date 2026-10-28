@@ -102,6 +102,61 @@ test.describe("paste chips in the composer", () => {
   });
 });
 
+test("a skill picked from the slash menu becomes a command chip", async ({ page }) => {
+  await gotoHarness(page);
+  await openChat(page);
+  await field(page).click();
+  await page.keyboard.type("/host");
+  await page.keyboard.press("Enter");
+  await expect(page.locator('[data-slot="command-chip"]')).toHaveText(
+    "/host-diagnostics",
+  );
+});
+
+test("the slash menu opens at the composer and offers the last pick first", async ({
+  page,
+}) => {
+  await gotoHarness(page);
+  await openChat(page);
+  await field(page).click();
+  await page.keyboard.type("/");
+  const menu = page.locator('[data-slot="composer-menu"]');
+  await expect(menu.getByRole("option").first()).toContainText("/goal");
+  await page.keyboard.type("host");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("ControlOrMeta+a");
+  await page.keyboard.press("Backspace");
+  await page.keyboard.type("/");
+  await expect(menu.getByRole("option").first()).toContainText("/host-diagnostics");
+  const box = await menu.boundingBox();
+  const frame = await page.locator('[data-slot="composer"]').last().boundingBox();
+  expect(Math.round(box!.width)).toBe(Math.round(frame!.width));
+  expect(box!.y + box!.height).toBeLessThanOrEqual(frame!.y);
+});
+
+test("a skill picked mid-sentence becomes a chip and is named on an opening line when sent", async ({
+  page,
+}) => {
+  await gotoHarness(page);
+  await openChat(page);
+  await field(page).click();
+  await page.keyboard.type("please /");
+  const menu = page.locator('[data-slot="composer-menu"]');
+  /* a command acts at once, so only the opening lines offer it */
+  await expect(menu.getByRole("option").first()).toContainText("/host-diagnostics");
+  await expect(menu.getByRole("option", { name: /\/goal/ })).toHaveCount(0);
+  await page.keyboard.type("host");
+  await page.keyboard.press("Enter");
+  await expect(page.locator('[data-slot="command-chip"]')).toHaveText(
+    "/host-diagnostics",
+  );
+  await page.keyboard.type("now");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("transcript-panel")).toContainText(
+    /\/host-diagnostics\s+please \/host-diagnostics now/,
+  );
+});
+
 test.describe("on a touch screen", () => {
   test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
 

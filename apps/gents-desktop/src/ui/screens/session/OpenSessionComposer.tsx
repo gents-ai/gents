@@ -22,7 +22,6 @@ import { LoadingStatus } from "../LoadingStatus";
 import { SelectedPendingTray, useSessionQueue } from "../PendingTray";
 import { ReplyingTo } from "../ReplyingTo";
 import { Goal } from "../SessionHeader";
-import { SlashMenu } from "../SlashMenu";
 import { useSlashMenu } from "../useSlashMenu";
 import {
   ComposerFooter,
@@ -83,8 +82,6 @@ export function OpenSessionComposer({
       : undefined,
   });
   const slash = useSlashMenu(
-    draft,
-    setDraft,
     deployment?.skills ?? [],
     deployment?.contexts.find((c) => c.context_id === agent?.contextId),
     [goalCommand(goal, inFlight)],
@@ -153,7 +150,6 @@ export function OpenSessionComposer({
         return;
       }
     }
-    slash.onKeyDown(event);
     if (
       !event.defaultPrevented &&
       turnRunning &&
@@ -217,15 +213,6 @@ export function OpenSessionComposer({
           attachments.over && "ring-2 ring-ring",
         )}
       >
-        {!editing && !goalMode.mode && (
-          <SlashMenu
-            open={slash.open}
-            query={slash.query}
-            items={slash.items}
-            active={slash.active}
-            onPick={slash.accept}
-          />
-        )}
         <input
           {...attachments.fileInputProps}
           className="hidden"
@@ -245,10 +232,12 @@ export function OpenSessionComposer({
             onSend={
               editing
                 ? (text) =>
-                    void (editing.reached ? edit.sendAsNew(text) : edit.save(text))
+                    void (editing.reached
+                      ? edit.sendAsNew(slash.prepare(text))
+                      : edit.save(slash.prepare(text)))
                 : goalMode.mode
                   ? (text) => void goalMode.submit(text)
-                  : (text) => send(text, undefined, followUp)
+                  : (text) => send(slash.prepare(text), undefined, followUp)
             }
             models={[]}
             onAttach={attachments.pick}
@@ -295,6 +284,9 @@ export function OpenSessionComposer({
             onKeyDown={onKeyDown}
             fieldRef={textarea}
             commands={slash.names}
+            commandsAt="word"
+            chipKinds={slash.chipKinds}
+            triggers={editing || goalMode.mode ? undefined : [slash.trigger]}
             clearable={!editing}
             submitLabel={
               editing
