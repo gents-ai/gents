@@ -36,6 +36,7 @@ export function useSessionChipKind(nodeDid: string | null): ChipKind {
   return useMemo(
     () =>
       referenceKind("session", {
+        icon: <MessageSquare />,
         preview: (chip) => {
           const session = Object.values(sessions).find(
             (s) => s.nodeDid === nodeDid && s.sessionId === chip.id,

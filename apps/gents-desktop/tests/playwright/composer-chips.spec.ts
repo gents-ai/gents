@@ -85,6 +85,88 @@ test.describe("paste chips in the composer", () => {
     await expect(field(page)).toContainText("line 1: some pasted text");
   });
 
+  test("Backspace takes a chip whole, and undo brings it back", async ({ page }) => {
+    await gotoHarness(page);
+    await openChat(page);
+    await field(page).click();
+    await page.keyboard.type("see ");
+    await paste(page);
+    await expect(chips(page)).toHaveCount(1);
+    await page.keyboard.press("Backspace");
+    await expect(chips(page)).toHaveCount(0);
+    await expect(field(page)).toHaveText("see ");
+    await page.keyboard.press("ControlOrMeta+z");
+    await expect(chips(page)).toHaveCount(1);
+  });
+
+  test("a click left of a chip that starts a line puts the caret before it", async ({
+    page,
+  }) => {
+    await gotoHarness(page);
+    await openChat(page);
+    await field(page).click();
+    await paste(page);
+    await page.keyboard.type(" after");
+    const box = (await chips(page).boundingBox())!;
+    await page.mouse.click(box.x - 3, box.y + box.height / 2);
+    await page.keyboard.type("before ");
+    await expect(field(page)).toContainText("before Pasted 8 lines after");
+    await expect(chips(page)).toHaveCount(1);
+  });
+
+  test("Shift+← takes a chip into the selection as one character", async ({ page }) => {
+    await gotoHarness(page);
+    await openChat(page);
+    await field(page).click();
+    await page.keyboard.type("see ");
+    await paste(page);
+    await page.keyboard.type(" x");
+    for (let i = 0; i < 3; i++) await page.keyboard.press("Shift+ArrowLeft");
+    await page.keyboard.type("Y");
+    await expect(chips(page)).toHaveCount(0);
+    await expect(field(page)).toHaveText("see Y");
+  });
+
+  test("Delete just before a chip takes it whole", async ({ page }) => {
+    await gotoHarness(page);
+    await openChat(page);
+    await field(page).click();
+    await page.keyboard.type("see ");
+    await paste(page);
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("Delete");
+    await expect(chips(page)).toHaveCount(0);
+    await expect(field(page)).toHaveText("see ");
+  });
+
+  test("Backspace at the start of the next line joins it to the chip's line", async ({
+    page,
+  }) => {
+    await gotoHarness(page);
+    await openChat(page);
+    await field(page).click();
+    await paste(page);
+    await page.keyboard.press("Shift+Enter");
+    await page.keyboard.type("next");
+    for (let i = 0; i < 4; i++) await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("Backspace");
+    await expect(chips(page)).toHaveCount(1);
+    await expect(field(page)).toHaveText("Pasted 8 linesnext");
+  });
+
+  test("typing over a selection that holds a chip replaces it", async ({ page }) => {
+    await gotoHarness(page);
+    await openChat(page);
+    await field(page).click();
+    await page.keyboard.type("see ");
+    await paste(page);
+    await page.keyboard.type(" after");
+    await page.keyboard.press("ControlOrMeta+a");
+    await page.keyboard.type("fresh");
+    await expect(chips(page)).toHaveCount(0);
+    await expect(field(page)).toHaveText("fresh");
+  });
+
   test("a draft keeps its chip when the person leaves and comes back", async ({
     page,
   }) => {
@@ -171,9 +253,15 @@ test("a session picked from the @ menu becomes a chip, sends a link and shows as
     "introduction-and-greetings",
   );
   await page.keyboard.press("Enter");
-  await expect(page.locator('[data-slot="session-chip"]')).toHaveText(
+  const picked = page.locator('[data-slot="session-chip"]');
+  await expect(picked).toHaveText("introduction-and-greetings");
+  /* its kind's icon says what it is, and hovering it opens the card */
+  await expect(picked.locator("svg")).toHaveCount(1);
+  await picked.locator("svg").hover();
+  await expect(page.locator('[data-slot="session-chip-preview"]')).toContainText(
     "introduction-and-greetings",
   );
+  await field(page).click();
   await page.keyboard.type("first");
   await page.keyboard.press("Enter");
   const transcript = page.getByTestId("transcript-panel");
