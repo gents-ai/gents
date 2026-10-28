@@ -1041,6 +1041,7 @@ pub(crate) enum TransactionOutcome<T> {
 enum TransactionMode {
     ConflictRetry,
     Idempotent(IdempotentTransactionRetry),
+    ObserveConflict,
 }
 
 impl TransactionMode {
@@ -1048,13 +1049,14 @@ impl TransactionMode {
         match self {
             Self::ConflictRetry => retry::TRANSACT_CONFLICT_MAX_RETRIES + 1,
             Self::Idempotent(policy) => policy.max_attempts(),
+            Self::ObserveConflict => 1,
         }
     }
 
     const fn retry_owner(self) -> RetryOwner {
         match self {
             Self::Idempotent(_) => RetryOwner::GentsIdempotentTransaction,
-            Self::ConflictRetry => RetryOwner::GentsTransaction,
+            Self::ConflictRetry | Self::ObserveConflict => RetryOwner::GentsTransaction,
         }
     }
 
@@ -1078,7 +1080,7 @@ impl TransactionMode {
     }
 
     const fn observes_conflicts(self) -> bool {
-        false
+        matches!(self, Self::ObserveConflict)
     }
 }
 
@@ -1695,7 +1697,7 @@ impl<'a> ConfigApplyTxn<'a> {
         doc_ids: &[String],
     ) -> Result<Vec<query::owners::DocumentOwnerObservation>> {
         let TxnBackend::Embedded { identity, .. } = &self.backend else {
-            anyhow::bail!("authenticated transaction owner observations require embedded access");
+            return Err(ConfigClientError::OwnerObservationRequiresEmbedded);
         };
         self.observe_document_owners(collection, doc_ids, identity.clone())
             .await

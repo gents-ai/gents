@@ -92,7 +92,6 @@ pub use schema_install::{
     SchemaInstallPlan,
 };
 pub use tools::write_tools_document;
-pub(crate) use txn::TransactionOutcome;
 pub(crate) use txn::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT;
 pub use txn::{
     ConfigApplyTxn, IdempotentTransactionRetry, LocalConfigAccess, NativeOperationAbandoned,
@@ -350,7 +349,7 @@ impl ConfigAccess {
                 let sdl = sdl.to_owned();
                 local
                     .run_owned(move |node| async move {
-                        node.add_schema(&sdl)
+                        node.add_collection(&sdl)
                             .await
                             .map_err(|error| ConfigClientError::AddSchema(Box::new(error)))
                     })

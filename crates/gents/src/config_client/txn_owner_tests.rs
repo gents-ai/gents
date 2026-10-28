@@ -1987,7 +1987,7 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
                         usize::from(authorized),
                         "step {step}",
                     );
-                    Ok(owners)
+                    Ok::<_, anyhow::Error>(owners)
                 })
             },
         )
@@ -2029,7 +2029,7 @@ async fn embedded_reader_owner_observations_do_not_inherit_the_node_identity() {
                         txn.document_owners("IndependentReadFact", &ids).await?,
                         source_before
                     );
-                    Ok(())
+                    Ok::<(), anyhow::Error>(())
                 })
             },
         )

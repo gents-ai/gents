@@ -199,7 +199,10 @@ async fn admit_on_client(node: &Arc<EmbeddedNode>, demand: &FileImageDemand) -> 
             ).await
         })
     }).await?;
-    crate::graphql::created_doc_id(&response, "FileImageHydrationRequest")
+    Ok(crate::graphql::created_doc_id(
+        &response,
+        "FileImageHydrationRequest",
+    )?)
 }
 
 async fn receipt_row(

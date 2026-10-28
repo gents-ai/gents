@@ -797,7 +797,7 @@ impl GraphqlHydrationStore {
                         )
                         .await?;
                         let exact_root = !sessions.is_empty() && !reads.is_empty();
-                        Ok((response, reads, exact_root))
+                        Ok::<_, anyhow::Error>((response, reads, exact_root))
                     })
                 },
             )

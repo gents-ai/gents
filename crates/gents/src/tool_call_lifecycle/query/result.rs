@@ -20,8 +20,8 @@ enum ReadSource<'a, 'txn> {
 impl ReadSource<'_, '_> {
     async fn collection_version(self, collection: &str) -> Result<Option<Value>> {
         match self {
-            Self::Access(access) => access.collection_version(collection).await,
-            Self::Txn(txn) => txn.collection_version(collection).await,
+            Self::Access(access) => Ok(access.collection_version(collection).await?),
+            Self::Txn(txn) => Ok(txn.collection_version(collection).await?),
         }
     }
 

@@ -60,7 +60,10 @@ impl<'txn, 'node> NativeReader<'txn, 'node> {
 
 #[async_trait::async_trait]
 impl ConfigRead for NativeReader<'_, '_> {
-    async fn execute_read(&self, query: &str) -> Result<serde_json::Value> {
+    async fn execute_read(
+        &self,
+        query: &str,
+    ) -> std::result::Result<serde_json::Value, crate::config_client::ConfigClientError> {
         let mut response = self.txn.execute(query).await?;
         if let Some((_, rest)) = query.split_once("cid: [") {
             let raw = rest.split_once(']').unwrap().0;
@@ -149,9 +152,11 @@ async fn native_goal_projection_matches_full_history_with_fewer_reconstructions(
             let projected_count = optimized.cids.lock().unwrap().len();
             assert_eq!(full_count, 67);
             assert_eq!(projected_count, 2);
-            Ok((serde_json::json!({"revisions":full.len(),"baseline_reconstructions":full_count,
-                "projected_reconstructions":projected_count,"baseline_us":baseline_us,"projected_us":projected_us}),
-                optimized.facts.into_inner().unwrap()))
+            Ok::<_, anyhow::Error>((
+                serde_json::json!({"revisions":full.len(),"baseline_reconstructions":full_count,
+                    "projected_reconstructions":projected_count,"baseline_us":baseline_us,"projected_us":projected_us}),
+                optimized.facts.into_inner().unwrap(),
+            ))
         })
     }).await.unwrap();
     node.shutdown().await;

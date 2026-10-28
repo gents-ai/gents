@@ -76,7 +76,7 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
                     .await?;
                 assert!(observed[0].visible);
                 assert!(observed[0].owner.is_none());
-                Ok(session)
+                Ok::<_, anyhow::Error>(session)
             })
         })
         .await
@@ -116,7 +116,7 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
                     )
                     .await?;
                 assert_eq!(rows.len(), 1);
-                Ok(rows[0].clone())
+                Ok::<_, anyhow::Error>(rows[0].clone())
             })
         },
     )
@@ -182,7 +182,7 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
                         .await?;
                     assert!(!observed[0].visible);
                     assert!(observed[0].owner.is_none());
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             },
         )

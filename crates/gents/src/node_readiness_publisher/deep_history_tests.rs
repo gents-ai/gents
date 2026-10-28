@@ -118,13 +118,13 @@ async fn readiness_history(node: &EmbeddedNode, doc_id: &str) -> Result<Vec<Comp
         "deep_readiness_history_depth",
     )
     .await?;
-    decode_composite_commits(
+    Ok(decode_composite_commits(
         response
             .data
             .as_ref()
             .and_then(|data| data["_commits"].as_array())
             .context("readiness commits")?,
-    )
+    )?)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

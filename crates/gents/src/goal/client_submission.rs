@@ -201,5 +201,8 @@ async fn publish(access: &ConfigAccess, command: &SessionGoalControl) -> Result<
             ),
         )
         .await?;
-    crate::graphql::created_doc_id(&response, "AgentSessionGoalControl")
+    Ok(crate::graphql::created_doc_id(
+        &response,
+        "AgentSessionGoalControl",
+    )?)
 }

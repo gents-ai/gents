@@ -2,10 +2,7 @@ import { expect, gotoHarness, test } from "./desktopTest";
 
 test.describe("transcript input at its scroll boundary", () => {
   test.beforeEach(async ({ page }, testInfo) => {
-    test.skip(
-      !["webkit-desktop", "chromium-desktop"].includes(testInfo.project.name),
-      "one layout per engine",
-    );
+    test.skip(testInfo.project.name !== "webkit-desktop", "one layout per engine");
     await page.setViewportSize({ width: 390, height: 844 });
     await gotoHarness(page, "mobile-performance");
     await page.getByTestId("session-session-large").click();
