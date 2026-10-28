@@ -60,7 +60,7 @@ export default defineConfig({
       /* matched against the whole path: anchored to the file name, so a
          checkout folder named transcript-… does not match every spec */
       testMatch:
-        /(?:^|[\\/])(?:transcript-[^\\/]*|turn-changes|editor-sheet-wheel|sessions-window|ux-sandbox|attachments|composer-chips)\.spec\.ts$/,
+        /(?:^|[\\/])(?:transcript-[^\\/]*|turn-changes|editor-sheet-wheel|sessions-window|ux-sandbox|attachments|composer-chips|mobile-interactions)\.spec\.ts$/,
       use: {
         ...devices["Desktop Safari"],
         viewport: { width: 1280, height: 900 },
