@@ -3357,6 +3357,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn route_failure_is_projected_and_cleared_on_recovery() {
+        use crate::client::paths::DesktopPaths;
+
+        let temp = tempfile::tempdir().unwrap();
+        let core = start_unsupervised_core(temp.path().join("desktop")).await;
+        let admin =
+            PrincipalIdentity::load_or_create(&DesktopPaths::from_root(temp.path().join("admin")))
+                .await
+                .unwrap();
+        let authority =
+            signed_enrollment_authority(&admin, core.node_identity(), core.local_peer_id());
+        commit_admin_pin(&core, &authority).await;
+        commit_enrollment_request(&core, &authority.request).await;
+        commit_decision(&core, &authority).await;
+        commit_revision(&core, &authority.revision).await;
+        commit_route_receipt(&core, &authority).await;
+
+        let principal = Arc::new(core.node_identity().clone());
+        let transport: Arc<dyn P2POps> = Arc::new(EnrollmentTransport {
+            peer: authority.offer.server_ticket.clone(),
+            resolved: Some(identity::Did::new(admin.did().to_string()).unwrap()),
+            connected: false.into(),
+            dials: 0.into(),
+            observations: 0.into(),
+        });
+        let empty_node = Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .data_path(temp.path().join("empty-route-store"))
+                .with_node_identity_did(core.node_identity().did())
+                .build()
+                .await
+                .unwrap(),
+        );
+        for (route_node, expected_error) in
+            [(empty_node.clone(), Some("route")), (core.node_arc(), None)]
+        {
+            let manager = Arc::new(ClientRouteManager::new(
+                route_node,
+                Arc::clone(&transport),
+                Arc::clone(&principal),
+                core.options().operator_identity_interaction,
+            ));
+            reconcile_status_enrollment_approvals(
+                &core.node_arc(),
+                &transport,
+                &principal,
+                core.local_peer_id(),
+                &core.sync_state,
+                &manager,
+            )
+            .await
+            .unwrap();
+            let errors = core.sync_state.snapshot().enrollment_activation_failures;
+            assert_eq!(
+                errors
+                    .get(&authority.request.request_id)
+                    .map(|failure| failure.stage.as_str()),
+                expected_error
+            );
+            let listed = core.active_status_enrollment_requests().await.unwrap();
+            if expected_error.is_some() {
+                let request = listed
+                    .iter()
+                    .find(|request| request.request_id == authority.request.request_id)
+                    .unwrap();
+                assert_eq!(request.state, "approved");
+                assert_eq!(request.activation_error.as_deref(), expected_error);
+            } else {
+                assert!(listed
+                    .iter()
+                    .all(|request| request.activation_error.is_none()));
+            }
+        }
+        empty_node.shutdown().await;
+        Arc::new(core).shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn revoked_enrollment_ends_the_active_request_listing() {
         use crate::client::paths::DesktopPaths;
 
