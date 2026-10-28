@@ -58,10 +58,15 @@ async fn retain_file_changes(
         ),
         "file changes lost their physical tool binding"
     );
-    let input = serde_json::json!({
+    let session_scope = crate::session_origin::SessionScope {
+        node_did: node_did.to_owned(),
+        session_id: session_id.to_owned(),
+        requester_did: requester_did.map(str::to_owned),
+    };
+    let key = serde_json::json!({
         "tool_call_doc_id": tool_call_doc_id, "request_doc_id": request_doc_id,
         "node_did": node_did, "session_id": session_id,
-        "requester_did": requester_did, "file_changes": changes,
+        "requester_did": requester_did,
     });
     let existing = txn.execute(&format!(
         r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID tool_call_doc_id request_doc_id node_did session_id requester_did file_changes }} }}"#,
@@ -72,13 +77,20 @@ async fn retain_file_changes(
         .context("file change lookup omitted observations")?;
     let observation_doc_id = if let [row] = rows.as_slice() {
         let mut observed = row.clone();
-        let id = observed
+        let fields = observed
             .as_object_mut()
-            .context("file observation is not an object")?
+            .context("file observation is not an object")?;
+        let id = fields
             .remove("_docID")
             .context("file observation omitted physical identity")?;
+        let stored = fields
+            .remove("file_changes")
+            .context("file observation omitted its changes")?;
+        let stored: gents_protocol::file_changes::StoredFileChanges =
+            serde_json::from_value(stored).context("file observation has unknown changes")?;
         anyhow::ensure!(
-            observed == input,
+            observed == key
+                && crate::toolset::file_contents::same_observation(&stored, changes.batch()),
             "file changes conflict with an existing observation"
         );
         id.as_str()
@@ -86,6 +98,10 @@ async fn retain_file_changes(
             .to_owned()
     } else {
         anyhow::ensure!(rows.is_empty(), "file changes have multiple observations");
+        let stored =
+            crate::toolset::file_contents::store(txn, &session_scope, changes.batch()).await?;
+        let mut input = key;
+        input["file_changes"] = serde_json::to_value(stored)?;
         let result = txn.execute_with_variables(
             "mutation($input: ToolFileChangeMutationInputArg!) { create_ToolFileChange(input: $input) { _docID } }",
             &serde_json::json!({"input": input}),
@@ -109,11 +125,7 @@ async fn retain_file_changes(
         },
         tool_call_doc_id,
         request_doc_id,
-        &crate::session_origin::SessionScope {
-            node_did: node_did.to_owned(),
-            session_id: session_id.to_owned(),
-            requester_did: requester_did.map(str::to_owned),
-        },
+        &session_scope,
     )
     .await?;
     Ok(())

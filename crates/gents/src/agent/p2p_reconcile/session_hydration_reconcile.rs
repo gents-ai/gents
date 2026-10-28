@@ -45,7 +45,8 @@ use selection::load_hydration_selection;
 #[derive(Clone, Copy)]
 enum DeliveryTarget<'a> {
     Transcript(&'a BTreeSet<HydrationDocument>),
-    FileImage(&'a str),
+    /// A selected observation and the file documents holding its versions.
+    FileImage(&'a str, &'a [String]),
     FileInventory(&'a str),
 }
 
@@ -54,7 +55,7 @@ impl DeliveryTarget<'_> {
     fn transcript(self) -> BTreeSet<HydrationDocument> {
         match self {
             Self::Transcript(documents) => documents.clone(),
-            Self::FileImage(_) | Self::FileInventory(_) => {
+            Self::FileImage(..) | Self::FileInventory(_) => {
                 panic!("transcript delivery received file images")
             }
         }
@@ -528,27 +529,49 @@ impl HydrationDelivery for EmbeddedHydrationDelivery {
                     doc_id: document.to_owned(),
                 }]
             }
-            DeliveryTarget::FileImage(document) => vec![defra_p2p_adapter::P2pDocumentRequest {
-                collection: gents_protocol::schemas::TOOL_FILE_CHANGE_NAME.to_owned(),
-                doc_id: document.to_owned(),
-            }],
+            DeliveryTarget::FileImage(document, contents) => {
+                std::iter::once(defra_p2p_adapter::P2pDocumentRequest {
+                    collection: gents_protocol::schemas::TOOL_FILE_CHANGE_NAME.to_owned(),
+                    doc_id: document.to_owned(),
+                })
+                .chain(
+                    contents
+                        .iter()
+                        .map(|content| defra_p2p_adapter::P2pDocumentRequest {
+                            collection: gents_protocol::schemas::TOOL_FILE_CONTENT_NAME.to_owned(),
+                            doc_id: content.clone(),
+                        }),
+                )
+                .collect()
+            }
         };
         super::embedded_impl::push_documents_to_peer(&self.node, peer_id, documents).await?;
-        let explicit = match target {
-            DeliveryTarget::FileImage(document) => {
-                Some((gents_protocol::schemas::TOOL_FILE_CHANGE_NAME, document))
+        let explicit: Vec<(&str, Vec<String>)> = match target {
+            DeliveryTarget::FileImage(document, contents) => {
+                let mut explicit = vec![(
+                    gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
+                    vec![document.to_owned()],
+                )];
+                if !contents.is_empty() {
+                    explicit.push((
+                        gents_protocol::schemas::TOOL_FILE_CONTENT_NAME,
+                        contents.to_vec(),
+                    ));
+                }
+                explicit
             }
-            DeliveryTarget::FileInventory(document) => {
-                Some((gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME, document))
-            }
-            DeliveryTarget::Transcript(_) => None,
+            DeliveryTarget::FileInventory(document) => vec![(
+                gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME,
+                vec![document.to_owned()],
+            )],
+            DeliveryTarget::Transcript(_) => Vec::new(),
         };
-        if let Some((collection, document)) = explicit {
+        for (collection, documents) in explicit {
             let acknowledged = super::embedded_impl::EmbeddedRemoteP2pAdmin::new(self.node.clone())
-                .document_heads_acknowledged(peer_id, collection, &[document.to_owned()])
+                .document_heads_acknowledged(peer_id, collection, &documents)
                 .await?;
             anyhow::ensure!(
-                acknowledged == [true],
+                acknowledged.len() == documents.len() && acknowledged.iter().all(|ack| *ack),
                 "selected file image has not been acknowledged by the peer"
             );
         }

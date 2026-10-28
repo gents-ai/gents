@@ -47,7 +47,38 @@ impl VerifiedFileImageReceipt {
 
     /// The creator remains the DefraDB owner on a replica. Install the receipt's
     /// reader grant only after that signed creator registration has committed.
+    /// The grant extends to the file documents the observation names, each of
+    /// which must also be owned by the receipt's signer.
     pub async fn grant_local_read(&self, node: Arc<EmbeddedNode>) -> Result<bool> {
+        if !self.grant_observation_read(node.clone()).await? {
+            return Ok(false);
+        }
+        let FileImageSelection::Selected { document } = &self.0.selection else {
+            return Ok(false);
+        };
+        let scope = &self.0.demand.admission;
+        let Some(contents) = observation_contents(&node, document).await? else {
+            return Ok(false);
+        };
+        for content in contents {
+            if !grant_source_file_read(
+                node.clone(),
+                gents_protocol::schemas::TOOL_FILE_CONTENT_NAME,
+                &scope.node_did,
+                &scope.requester_did,
+                &content,
+            )
+            .await?
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// The modeled per-document grant (`authorizesReadGrant`) for the signed
+    /// observation alone.
+    pub async fn grant_observation_read(&self, node: Arc<EmbeddedNode>) -> Result<bool> {
         let FileImageSelection::Selected { document } = &self.0.selection else {
             return Ok(false);
         };
@@ -63,6 +94,39 @@ impl VerifiedFileImageReceipt {
     }
 }
 
+/// `None` until the granted observation has materialized locally.
+async fn observation_contents(
+    node: &Arc<EmbeddedNode>,
+    document: &str,
+) -> Result<Option<Vec<String>>> {
+    let response = ConfigAccess::local(node.clone())
+        .execute(&format!(
+            r#"{{ {}(docID: "{}") {{ file_changes }} }}"#,
+            gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
+            crate::graphql::escape_graphql_string(document)
+        ))
+        .await?;
+    let rows = response["data"][gents_protocol::schemas::TOOL_FILE_CHANGE_NAME]
+        .as_array()
+        .context("file review observation lookup omitted documents")?;
+    let [row] = rows.as_slice() else {
+        return Ok(None);
+    };
+    let mut contents: Vec<String> = Vec::new();
+    for change in row["file_changes"]["changes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        if let Some(content) = change["content_doc_id"].as_str() {
+            if !contents.iter().any(|known| known == content) {
+                contents.push(content.to_owned());
+            }
+        }
+    }
+    Ok(Some(contents))
+}
+
 pub(crate) async fn grant_source_file_read(
     node: Arc<EmbeddedNode>,
     collection_name: &'static str,
@@ -74,6 +138,7 @@ pub(crate) async fn grant_source_file_read(
         matches!(
             collection_name,
             gents_protocol::schemas::TOOL_FILE_CHANGE_NAME
+                | gents_protocol::schemas::TOOL_FILE_CONTENT_NAME
                 | gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME
         ),
         "unsupported file-read collection"

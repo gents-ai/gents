@@ -1,8 +1,8 @@
 use super::*;
 use crate::agent::p2p_reconcile::file_image_hydration::{
     completed_image_selection, image_attempt_delivery_target, record_image_outcome,
-    select_file_images, FileImageDemand, FileImageObservation, FileImageScope, FileImageSelection,
-    FileImageTool,
+    select_file_images, FileImageContent, FileImageDemand, FileImageObservation, FileImageScope,
+    FileImageSelection, FileImageTool,
 };
 use crate::config_client::ConfigAccess;
 use crate::tool_call_lifecycle::{load_tool_file_change_observation, ToolFileChangeRead};
@@ -20,11 +20,12 @@ trait ImageRequestStore: Send + Sync {
     async fn pending_images(&self) -> Result<Vec<ImageDemandRow>>;
     async fn prior(&self, row: &ImageDemandRow) -> Result<Option<FileImageHydrationReceipt>>;
     async fn admission(&self, demand: &FileImageDemand) -> Result<LoadedHydrationAdmission>;
+    /// The selection and the file documents its observation references.
     async fn selection(
         &self,
         demand: &FileImageDemand,
         catalog: &HydrationCatalog,
-    ) -> Result<FileImageSelection>;
+    ) -> Result<(FileImageSelection, Vec<String>)>;
     async fn authorized(
         &self,
         demand: &FileImageDemand,
@@ -92,7 +93,7 @@ async fn serve_image(
     let fence = admission
         .authorization
         .context("image demand has no authenticated enrollment fence")?;
-    let selection = store.selection(demand, &admission.catalog).await?;
+    let (selection, contents) = store.selection(demand, &admission.catalog).await?;
     let before = store.authorized(demand, &fence).await?;
     let delivered = match image_attempt_delivery_target(
         prior.as_ref().map(|receipt| &receipt.selection),
@@ -103,7 +104,7 @@ async fn serve_image(
             deliver_with_bounded_retry(
                 delivery,
                 &demand.admission,
-                DeliveryTarget::FileImage(document),
+                DeliveryTarget::FileImage(document, &contents),
             )
             .await
         }
@@ -216,7 +217,7 @@ impl ImageRequestStore for GraphqlHydrationStore {
         &self,
         demand: &FileImageDemand,
         catalog: &HydrationCatalog,
-    ) -> Result<FileImageSelection> {
+    ) -> Result<(FileImageSelection, Vec<String>)> {
         let request = &demand.admission;
         let observed = load_tool_file_change_observation(
             &ConfigAccess::local(self.node.clone()),
@@ -238,17 +239,32 @@ impl ImageRequestStore for GraphqlHydrationStore {
                 anyhow::bail!("runtime file-image collection is unavailable")
             }
             ToolFileChangeRead::Missing => (true, Vec::new()),
-            ToolFileChangeRead::Retained { document_id, .. } => (
+            ToolFileChangeRead::Retained {
+                document_id,
+                contents,
+                ..
+            } => (
                 true,
                 vec![FileImageObservation {
                     doc_id: document_id,
                     tool_call_doc_id: demand.tool_call_doc_id.clone(),
                     request_doc_id: demand.request_doc_id.clone(),
                     scope: scope.clone(),
+                    contents: contents
+                        .into_iter()
+                        .map(|content| FileImageContent {
+                            doc_id: content.doc_id,
+                            scope: FileImageScope {
+                                requester_did: content.scope.requester_did.unwrap_or_default(),
+                                node_did: content.scope.node_did,
+                                session_id: content.scope.session_id,
+                            },
+                        })
+                        .collect(),
                 }],
             ),
         };
-        Ok(select_file_images(
+        let selection = select_file_images(
             demand,
             catalog,
             &[FileImageTool {
@@ -259,7 +275,15 @@ impl ImageRequestStore for GraphqlHydrationStore {
                 terminal,
             }],
             &images,
-        ))
+        );
+        let contents = match &selection {
+            FileImageSelection::Selected { .. } => images
+                .first()
+                .map(|image| image.delivery_documents().split_off(1))
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        Ok((selection, contents))
     }
 
     async fn authorized(

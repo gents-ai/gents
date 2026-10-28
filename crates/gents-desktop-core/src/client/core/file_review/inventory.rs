@@ -99,6 +99,7 @@ impl ClientCore {
                 ToolFileChangeRead::Retained {
                     document_id,
                     changes,
+                    ..
                 } => Some((document_id, changes)),
                 ToolFileChangeRead::Missing
                 | ToolFileChangeRead::Pending

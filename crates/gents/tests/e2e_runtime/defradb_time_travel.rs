@@ -196,3 +196,152 @@ fn first_composite_version_cid<'a>(data: &'a Value, collection: &str) -> &'a str
         .and_then(|version| version["cid"].as_str())
         .unwrap_or_else(|| panic!("missing {collection}._version.cid: {data}"))
 }
+
+const TEXT_PROBE_SCHEMA: &str = r#"
+type TextVersionProbe {
+    probe_id: String @index(unique: true)
+    text: String @crdt(type: text)
+}
+"#;
+
+#[tokio::test]
+async fn text_crdt_reads_each_revision_at_its_cid() {
+    let db = probe_db().await;
+    let node = db.node;
+    node.add_collection(TEXT_PROBE_SCHEMA)
+        .await
+        .expect("add text probe schema");
+
+    let revisions = [
+        "fn main() {}\n",
+        "fn main() {\n    println!(\"hi\");\n}\n",
+        "// header\nfn main() {\n    println!(\"hi\");\n}\n",
+        "// header\nfn main() {\n    tracing::info!(\"hi \u{e9}\u{1f600}\");\n}\n",
+        "",
+        "rewritten\n",
+    ];
+    let create = format!(
+        r#"mutation {{
+            row: create_TextVersionProbe(input: {{ probe_id: "file", text: "{}" }}) {{
+                _docID
+                _version {{ cid fieldName }}
+            }}
+        }}"#,
+        escape_graphql_string(revisions[0])
+    );
+    let created = node.execute(&create).await;
+    assert!(!created.has_errors(), "create failed: {:?}", created.errors);
+    let created = created.data.expect("create data");
+    let doc_id = first_str(&created, "row", "_docID").to_string();
+    let mut cids = vec![first_composite_version_cid(&created, "row").to_string()];
+
+    for revision in &revisions[1..] {
+        let update = format!(
+            r#"mutation {{
+                row: update_TextVersionProbe(docID: "{}", input: {{ text: "{}" }}) {{
+                    _version {{ cid fieldName }}
+                }}
+            }}"#,
+            escape_graphql_string(&doc_id),
+            escape_graphql_string(revision)
+        );
+        let updated = node.execute(&update).await;
+        assert!(!updated.has_errors(), "update failed: {:?}", updated.errors);
+        cids.push(
+            first_composite_version_cid(&updated.data.expect("update data"), "row").to_string(),
+        );
+    }
+
+    for (cid, expected) in cids.iter().zip(revisions) {
+        let read = node
+            .execute(&format!(
+                r#"query {{ TextVersionProbe(cid: ["{}"]) {{ text }} }}"#,
+                escape_graphql_string(cid)
+            ))
+            .await;
+        assert!(
+            !read.has_errors(),
+            "historical read failed: {:?}",
+            read.errors
+        );
+        assert_eq!(
+            first_str(
+                &read.data.expect("historical data"),
+                "TextVersionProbe",
+                "text"
+            ),
+            expected,
+            "revision at {cid}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn text_crdt_versions_written_in_one_transaction_stay_readable() {
+    use gents::config_client::{ConfigAccess, IdempotentTransactionRetry};
+
+    let db = probe_db().await;
+    let node = db.node;
+    node.add_collection(TEXT_PROBE_SCHEMA)
+        .await
+        .expect("add text probe schema");
+    let created = node
+        .execute(r#"mutation { row: create_TextVersionProbe(input: { probe_id: "txn", text: "one\n" }) { _docID } }"#)
+        .await;
+    assert!(!created.has_errors(), "create failed: {:?}", created.errors);
+    let doc_id = first_str(&created.data.expect("create data"), "row", "_docID").to_string();
+
+    let revisions = ["one\ntwo\n", "zero\none\ntwo\n"];
+    let cids = ConfigAccess::transact_local_idempotent(
+        &node,
+        None,
+        IdempotentTransactionRetry::Standard,
+        "test.text_versions_in_one_txn",
+        |txn| {
+            let doc_id = doc_id.clone();
+            Box::pin(async move {
+                let mut cids = Vec::new();
+                for revision in revisions {
+                    let updated = txn
+                        .execute(&format!(
+                            r#"mutation {{ row: update_TextVersionProbe(docID: "{}", input: {{ text: "{}" }}) {{ _version {{ cid fieldName }} }} }}"#,
+                            escape_graphql_string(&doc_id),
+                            escape_graphql_string(revision)
+                        ))
+                        .await?;
+                    cids.push(first_composite_version_cid(&updated["data"], "row").to_string());
+                }
+                Ok(cids)
+            })
+        },
+    )
+    .await
+    .expect("transaction");
+    assert_ne!(
+        cids[0], cids[1],
+        "each update in one transaction is its own version"
+    );
+
+    for (cid, expected) in cids.iter().zip(revisions) {
+        let read = node
+            .execute(&format!(
+                r#"query {{ TextVersionProbe(cid: ["{}"]) {{ text }} }}"#,
+                escape_graphql_string(cid)
+            ))
+            .await;
+        assert!(
+            !read.has_errors(),
+            "historical read failed: {:?}",
+            read.errors
+        );
+        assert_eq!(
+            first_str(
+                &read.data.expect("historical data"),
+                "TextVersionProbe",
+                "text"
+            ),
+            expected,
+            "revision at {cid}"
+        );
+    }
+}

@@ -170,6 +170,7 @@ impl ClientCore {
                                     ToolFileChangeRead::Retained {
                                         document_id,
                                         changes,
+                                        ..
                                     } => {
                                         anyhow::ensure!(
                                         &document_id == document,

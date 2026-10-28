@@ -84,7 +84,7 @@ async fn file_image_read_grant_matches_signed_receipt_contract() {
         let verified = VerifiedFileImageReceipt::verify(receipt, &demand, &client).await;
         let granted = match verified {
             Ok(receipt) => receipt
-                .grant_local_read(node.clone())
+                .grant_observation_read(node.clone())
                 .await
                 .unwrap_or(false),
             Err(_) => false,

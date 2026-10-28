@@ -10,7 +10,8 @@ private def admission : Request :=
 private def demand : Demand := ⟨admission, "request-document-1", "tool-document-1"⟩
 private def scope : Scope := scopeFor demand
 private def tool : Tool := ⟨demand.toolDocId, demand.requestDocId, scope, true, true⟩
-private def image : Image := ⟨"image-document-1", demand.toolDocId, demand.requestDocId, scope⟩
+private def content : Content := ⟨"file-document-1", scope⟩
+private def image : Image := ⟨"image-document-1", demand.toolDocId, demand.requestDocId, scope, [content]⟩
 structure AdmissionFacts where
   appliedPairingRoutes : List AppliedPairingRoute
   selectedNetwork : String
@@ -70,6 +71,17 @@ def cases : List Case :=
       expected := .selected image.docId}
   , {name := "foreign_image_is_not_a_selected_snapshot", images := [{image with toolDocId := "other-tool"}],
       expected := .missing}
+  , {name := "image_without_file_documents", images := [{image with contents := []}],
+      expected := .selected image.docId}
+  , {name := "file_document_wrong_session", images := [{image with contents :=
+      [{content with scope := {scope with session := "other-session"}}]}]}
+  , {name := "file_document_wrong_requester", images := [{image with contents :=
+      [{content with scope := {scope with requester := "other-requester"}}]}]}
+  , {name := "file_document_wrong_node", images := [{image with contents :=
+      [{content with scope := {scope with node := "other-node"}}]}]}
+  , {name := "file_document_empty_identity", images := [{image with contents := [{content with docId := ""}]}]}
+  , {name := "one_foreign_file_document_rejects_all", images := [{image with contents :=
+      [content, {content with docId := "file-document-2", scope := {scope with session := "other-session"}}]}]}
   , {name := "foreign_tool_does_not_expand_selection", tools := [tool, {tool with docId := "other-tool"}],
       expected := .selected image.docId}
   ]
@@ -98,7 +110,9 @@ private def imageJson (value : Image) :=
   "{\"doc_id\":" ++ jsonString value.docId ++
   ",\"tool_call_doc_id\":" ++ jsonString value.toolDocId ++
   ",\"request_doc_id\":" ++ jsonString value.requestDocId ++
-  ",\"scope\":" ++ scopeJson value.scope ++ "}"
+  ",\"scope\":" ++ scopeJson value.scope ++
+  ",\"contents\":" ++ jsonArray (value.contents.map fun content =>
+    "{\"doc_id\":" ++ jsonString content.docId ++ ",\"scope\":" ++ scopeJson content.scope ++ "}") ++ "}"
 private def catalogJson (value : AdmissionFacts) :=
   "{\"routes\":" ++ jsonArray (value.appliedPairingRoutes.map fun route =>
     "{\"peer_id\":" ++ jsonString route.peer ++ ",\"requester_did\":" ++ jsonString route.requester ++
@@ -115,6 +129,10 @@ private def selectionJson : Selection → String
   | .missing => "{\"kind\":\"missing\"}"
   | .selected document => "{\"kind\":\"selected\",\"document\":" ++ jsonString document ++ "}"
 private def caseJson (c : Case) :=
+  let selection := select c.demand c.catalog.toCatalog c.tools c.images
+  let delivered := match selection with
+    | .selected document => (c.images.find? (fun image : Image => image.docId == document)).map deliveryDocuments
+    | _ => none
   "{\"name\":" ++ jsonString c.name ++
   ",\"native_session\":" ++ toString c.demand.admission.nativeSession ++
   ",\"demand\":{\"admission\":" ++ requestJson c.demand.admission ++
@@ -123,7 +141,8 @@ private def caseJson (c : Case) :=
   ",\"catalog\":" ++ catalogJson c.catalog ++
   ",\"tools\":" ++ jsonArray (c.tools.map toolJson) ++
   ",\"images\":" ++ jsonArray (c.images.map imageJson) ++
-  ",\"expected\":" ++ selectionJson (select c.demand c.catalog.toCatalog c.tools c.images) ++ "}"
+  ",\"expected\":" ++ selectionJson selection ++
+  ",\"delivery_documents\":" ++ (delivered.map (jsonArray ∘ List.map jsonString)).getD "null" ++ "}"
 
 def casesJson := jsonArray (cases.map caseJson)
 

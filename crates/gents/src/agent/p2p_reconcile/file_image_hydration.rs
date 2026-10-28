@@ -18,6 +18,15 @@ pub struct FileImageTool {
     pub terminal: bool,
 }
 
+/// A file document whose versions hold an observation's retained bytes. It
+/// shares the session scope of every observation that references it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileImageContent {
+    pub doc_id: String,
+    pub scope: FileImageScope,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileImageObservation {
@@ -25,6 +34,16 @@ pub struct FileImageObservation {
     pub tool_call_doc_id: String,
     pub request_doc_id: String,
     pub scope: FileImageScope,
+    pub contents: Vec<FileImageContent>,
+}
+
+impl FileImageObservation {
+    /// Delivery and the read grant cover the observation and its file documents.
+    pub fn delivery_documents(&self) -> Vec<String> {
+        std::iter::once(self.doc_id.clone())
+            .chain(self.contents.iter().map(|content| content.doc_id.clone()))
+            .collect()
+    }
 }
 
 /// Admission retains the session hydration owner. Selected bytes still require
@@ -77,7 +96,10 @@ pub fn select_file_images(
         (Some(image), None)
             if !image.doc_id.is_empty()
                 && image.request_doc_id == demand.request_doc_id
-                && image.scope.matches(request) =>
+                && image.scope.matches(request)
+                && image.contents.iter().all(|content| {
+                    !content.doc_id.is_empty() && content.scope.matches(request)
+                }) =>
         {
             Selected {
                 document: image.doc_id.clone(),

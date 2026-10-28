@@ -33,8 +33,8 @@ impl ImageRequestStore for Store {
         &self,
         _: &FileImageDemand,
         _: &HydrationCatalog,
-    ) -> Result<FileImageSelection> {
-        Ok(self.selection.clone())
+    ) -> Result<(FileImageSelection, Vec<String>)> {
+        Ok((self.selection.clone(), Vec::new()))
     }
     async fn authorized(
         &self,
@@ -68,7 +68,7 @@ struct Delivery {
 #[async_trait]
 impl HydrationDelivery for Delivery {
     async fn push_documents_to_peer(&self, peer: &str, target: DeliveryTarget<'_>) -> Result<()> {
-        let DeliveryTarget::FileImage(document) = target else {
+        let DeliveryTarget::FileImage(document, _) = target else {
             panic!("unexpected transcript delivery")
         };
         self.attempts.fetch_add(1, Ordering::SeqCst);

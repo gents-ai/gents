@@ -140,6 +140,7 @@ pub(crate) use delivery::publish_background_receipt_in_txn;
 pub(crate) mod file_inventory;
 mod file_review_access;
 pub(crate) mod query;
+pub use crate::toolset::file_contents::ContentDocument;
 pub(crate) use file_review_access::grant_source_file_read;
 pub use file_review_access::VerifiedFileImageReceipt;
 pub use query::{

@@ -1,4 +1,5 @@
 pub(crate) mod change_capture;
+pub(crate) mod file_contents;
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};

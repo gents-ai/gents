@@ -113,6 +113,9 @@ pub enum ToolFileChangeRead {
     Retained {
         document_id: String,
         changes: gents_protocol::file_changes::ToolFileChanges,
+        /// File documents holding the retained versions; empty for rows that
+        /// still carry their images inline.
+        contents: Vec<crate::toolset::file_contents::ContentDocument>,
     },
 }
 
@@ -204,11 +207,29 @@ pub async fn load_tool_file_change_observation(
         .filter(|id| !id.is_empty())
         .context("file image observation has no physical identity")?
         .to_owned();
-    let changes =
-        crate::toolset::FileChanges::decode(tool_call_doc_id, row["file_changes"].clone())?;
+    let (value, contents) = match row["file_changes"]["version"].as_u64() {
+        Some(version)
+            if version == u64::from(gents_protocol::file_changes::STORED_FILE_CHANGES_VERSION) =>
+        {
+            let stored: gents_protocol::file_changes::StoredFileChanges =
+                serde_json::from_value(row["file_changes"].clone())
+                    .context("file image observation has malformed versions")?;
+            let scope = crate::session_origin::SessionScope {
+                node_did: node_did.to_owned(),
+                session_id: session_id.to_owned(),
+                requester_did: requester_did.map(str::to_owned),
+            };
+            let (changes, contents) =
+                crate::toolset::file_contents::resolve(access, &scope, stored).await?;
+            (serde_json::to_value(changes)?, contents)
+        }
+        _ => (row["file_changes"].clone(), Vec::new()),
+    };
+    let changes = crate::toolset::FileChanges::decode(tool_call_doc_id, value)?;
     Ok(ToolFileChangeRead::Retained {
         document_id,
         changes,
+        contents,
     })
 }
 

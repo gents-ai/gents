@@ -69,7 +69,7 @@ impl ImageRequestStore for ObservedStore {
         &self,
         demand: &FileImageDemand,
         catalog: &HydrationCatalog,
-    ) -> Result<FileImageSelection> {
+    ) -> Result<(FileImageSelection, Vec<String>)> {
         let selection = self.inner.selection(demand, catalog).await?;
         self.gate.pause(PauseAt::Selection).await;
         Ok(selection)
@@ -111,7 +111,7 @@ impl HydrationDelivery for ObservedDelivery {
         self.inner.push_documents_to_peer(peer, target).await?;
         self.gate.pause(PauseAt::Acknowledged).await;
         if self.gate.at == PauseAt::Delivered {
-            let DeliveryTarget::FileImage(image) = target else {
+            let DeliveryTarget::FileImage(image, _) = target else {
                 anyhow::bail!("file review delivered an unexpected collection")
             };
             self.wait_materialized(image).await?;
@@ -441,6 +441,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
     let ToolFileChangeRead::Retained {
         document_id: image,
         changes,
+        ..
     } = load_tool_file_change_observation(
         &access,
         &physical,
@@ -505,7 +506,13 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         calls: AtomicUsize::new(0),
         recipient: client_node.clone(),
         source_did: source.did().into(),
-        expected_changes: serde_json::to_value(&changes)?,
+        expected_changes: access
+            .execute(&format!(
+                r#"{{ ToolFileChange(docID: "{}") {{ file_changes }} }}"#,
+                escape_graphql_string(&image),
+            ))
+            .await?["data"]["ToolFileChange"][0]["file_changes"]
+            .clone(),
     };
     let sweep = reconcile_images(&store, &delivery);
     tokio::pin!(sweep);
@@ -708,8 +715,27 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
             && rows[0]["request_doc_id"] == retry.request_doc_id
             && rows[0]["node_did"] == source.did()
             && rows[0]["requester_did"] == client.did()
-            && rows[0]["session_id"] == session
-            && rows[0]["file_changes"] == serde_json::to_value(&changes)?,
+            && rows[0]["session_id"] == session,
+        "retry changed retained file images or their exact scope"
+    );
+    let ToolFileChangeRead::Retained {
+        document_id: delivered,
+        changes: delivered_changes,
+        ..
+    } = load_tool_file_change_observation(
+        &ConfigAccess::local(client_node.clone()),
+        &physical,
+        &retry.request_doc_id,
+        source.did(),
+        session,
+        Some(client.did()),
+    )
+    .await?
+    else {
+        anyhow::bail!("delivered file images are unreadable on the client");
+    };
+    anyhow::ensure!(
+        delivered == image && delivered_changes == changes,
         "retry changed retained file images or their exact scope"
     );
     anyhow::ensure!(
