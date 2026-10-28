@@ -216,14 +216,16 @@ async fn shared_reader_metadata_preserves_canonical_authorship_and_image_privacy
         |txn| {
             let request = &admission.request;
             Box::pin(async move {
-                Ok(crate::session::load_agent_session_owner_in_txn(
-                    txn,
-                    &request.node_did,
-                    &request.session_id,
+                Ok::<_, anyhow::Error>(
+                    crate::session::load_agent_session_owner_in_txn(
+                        txn,
+                        &request.node_did,
+                        &request.session_id,
+                    )
+                    .await?
+                    .unwrap()
+                    .doc_id,
                 )
-                .await?
-                .unwrap()
-                .doc_id)
             })
         },
     )
