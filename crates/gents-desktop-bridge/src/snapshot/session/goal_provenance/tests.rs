@@ -90,7 +90,7 @@ pub(crate) async fn assert_paged_native_forks(
                         }}),
                     ).await?;
                 }
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await
