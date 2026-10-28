@@ -248,7 +248,7 @@ mod tests {
                     .await?
                     .unwrap();
                     assert_eq!(context["system_prompt"], "literal {{ task }}");
-                    Ok(())
+                    Ok::<(), anyhow::Error>(())
                 })
             })
             .await?;
