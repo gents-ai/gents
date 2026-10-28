@@ -12,7 +12,7 @@ export function SetupScreen({
   onCancel,
   provider,
 }: {
-  onDone: (snapshot: DesktopClientSnapshot) => void;
+  onDone: (snapshot: DesktopClientSnapshot, nodeDid?: string) => void;
   initialStep?: "welcome" | "starting" | "inference";
   purpose?: "onboarding" | "add-backend";
   nodeDid?: string;

@@ -161,9 +161,11 @@ function AppBody() {
         <TooltipProvider>
           <SetupScreen
             initialStep={hasLocalNode ? "inference" : "welcome"}
-            onDone={(done) => {
+            onDone={(done, nodeDid) => {
               firstRun.finish();
-              const deployment = nodeSetUp(done);
+              const deployment = nodeDid
+                ? done.client?.deployments.find((node) => node.nodeDid === nodeDid)
+                : nodeSetUp(done);
               if (deployment) {
                 actions.selectNode(deployment.nodeDid);
                 const agent = defaultAgentOf(deployment) ?? deployment.agents[0];

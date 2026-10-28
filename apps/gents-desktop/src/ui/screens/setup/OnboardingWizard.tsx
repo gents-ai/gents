@@ -1,8 +1,10 @@
 import { useEffect, useReducer, useState } from "react";
+import { useStore } from "zustand";
 import { ArrowRight, Server, Wifi } from "lucide-react";
 import type {
   DesktopClientSnapshot,
   ManagedServerAuthorityInput,
+  EnrollmentRequestView,
 } from "@source-inc/gents-desktop-client";
 import { DEFAULT_NODE_NAME } from "@source-inc/gents-desktop-fleet";
 import { Button } from "@gents/ui/components/button";
@@ -22,7 +24,7 @@ import { setupErrorMessage } from "../../../lib/setupErrors";
 import { ManagedRuntimeAuthorityPicker } from "@/components/ManagedRuntimeAuthority";
 import { authoritiesEqual, authorityForSelection } from "@/lib/managedRuntimeAuthority";
 import { useApp } from "@/app/AppContext";
-import { useBootstrap, useStartup } from "@/hooks/useClient";
+import { useBootstrap, useEnrollmentRequests, useStartup } from "@/hooks/useClient";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
 import { shortPath } from "@/lib/paths";
 import { Field, Frame, Nav, Option, Title } from "./parts";
@@ -31,7 +33,7 @@ import { nodeSetUp } from "@/lib/firstRun";
 import type { NodeView } from "../../../hooks/fleetStore";
 import type { ProviderId } from "./inferenceSetupForm";
 
-type Step = "welcome" | "starting" | "inference";
+type Step = "welcome" | "starting" | "enrollment" | "inference";
 type FailedPhase = Exclude<DesktopStartupPhase, "ready">;
 type StartupDetail = "managedServer" | "configuration" | "client";
 
@@ -59,7 +61,8 @@ type RunEvent =
   | { type: "ended" }
   | { type: "retried" }
   | { type: "wentBack" }
-  | { type: "continued" };
+  | { type: "continued" }
+  | { type: "requested" };
 
 function runReducer(run: Run, event: RunEvent): Run {
   switch (event.type) {
@@ -99,6 +102,8 @@ function runReducer(run: Run, event: RunEvent): Run {
       return { ...run, step: "welcome", error: null };
     case "wentBack":
       return { ...run, step: "welcome" };
+    case "requested":
+      return { ...run, step: "enrollment", busy: false, error: null };
     case "continued":
       return { ...run, step: "inference", provisionedAt: null };
   }
@@ -131,7 +136,7 @@ export function OnboardingWizard({
   onCancel,
   provider,
 }: {
-  onDone: (snapshot: DesktopClientSnapshot) => void;
+  onDone: (snapshot: DesktopClientSnapshot, nodeDid?: string) => void;
   initialStep?: Step;
   nodeDid?: string;
   onCancel?: () => void;
@@ -168,6 +173,9 @@ export function OnboardingWizard({
     allowLocal ? "local" : "remote",
   );
   const [address, setAddress] = useState("");
+  const enrollmentRequests = useEnrollmentRequests();
+  const snapshot = useStore(stores.client, (state) => state.snapshot);
+  const [enrollment, setEnrollment] = useState<EnrollmentRequestView | null>(null);
   const existingHome = Boolean(
     bootstrap?.nodeHomeExists && bootstrap?.initNodeDid?.trim(),
   );
@@ -314,14 +322,81 @@ export function OnboardingWizard({
   const enrol = async () => {
     dispatch({ type: "begun", phase: "starting-client" });
     try {
-      await actions.requestStatusEnrollment(address.trim());
-      await finishProvisioning((snapshot) => snapshot.client?.deployments[0]);
+      const request = await actions.requestStatusEnrollment(address.trim());
+      setEnrollment(request);
+      dispatch({ type: "requested" });
     } catch (e) {
       dispatch({ type: "failed", phase: "client-error", error: setupErrorMessage(e) });
     } finally {
       dispatch({ type: "ended" });
     }
   };
+  if (step === "enrollment" && enrollment) {
+    const active = enrollmentRequests?.find(
+      (request) => request.requestId === enrollment.requestId,
+    );
+    const target = snapshot?.client?.deployments.find(
+      (deployment) => deployment.nodeDid === enrollment.ownerNode,
+    );
+    const ready = Boolean(target?.chatSafe);
+    const observed = enrollmentRequests != null;
+    const label = target?.label ?? enrollment.serverLabel ?? "your node";
+    return (
+      <Frame>
+        <Title
+          note={
+            ready
+              ? `Your secure connection to ${label} is ready.`
+              : active?.state === "approved"
+                ? "Approval received. Finishing your secure connection…"
+                : active || !observed
+                  ? "Approve this device on the node’s computer or ask its administrator to approve your request. You can leave this screen and return later."
+                  : "This request is no longer listed. If the connection does not become ready, request access again."
+          }
+        >
+          {ready
+            ? "Connected to your node"
+            : active?.state === "approved"
+              ? "Connecting to your node"
+              : "Waiting for access"}
+        </Title>
+        <div className="grid min-w-0 gap-3 text-sm">
+          <p className="break-words">{label}</p>
+          <details className="min-w-0 text-muted-foreground">
+            <summary className="cursor-pointer">Connection details</summary>
+            <dl className="mt-2 grid gap-2 break-all">
+              <div>
+                <dt>Node</dt>
+                <dd>{enrollment.ownerNode}</dd>
+              </div>
+              <div>
+                <dt>Request</dt>
+                <dd>{enrollment.requestId}</dd>
+              </div>
+            </dl>
+          </details>
+        </div>
+        <Nav
+          onBack={() => {
+            setEnrollment(null);
+            dispatch({ type: "wentBack" });
+          }}
+          next={() => {
+            const current = stores.client.getState().snapshot;
+            if (
+              current?.client?.deployments.some(
+                (deployment) =>
+                  deployment.nodeDid === enrollment.ownerNode && deployment.chatSafe,
+              )
+            )
+              onDone(current, enrollment.ownerNode);
+          }}
+          nextLabel="Continue"
+          disabled={!ready}
+        />
+      </Frame>
+    );
+  }
   if (step === "inference")
     return (
       <InferenceSetup
@@ -340,9 +415,51 @@ export function OnboardingWizard({
     return (
       <Frame>
         <Mark className="mb-6 h-5 w-7 text-ink" />
-        <Title note="Gents keeps a record of every step an agent takes, so you can see what it did and it can pick up where it left off. Start a node here, or connect to one that already runs.">
-          Let’s get set up
+        <Title
+          note={
+            allowLocal
+              ? "Start a node on this computer, or connect to a node that already runs."
+              : "Connect this phone to Gents running on your computer or server. Your agents and their history stay on that node."
+          }
+        >
+          {allowLocal ? "Let’s get set up" : "Connect to your node"}
         </Title>
+        {!allowLocal &&
+          snapshot?.client?.deployments
+            .filter((node) => node.chatSafe)
+            .map((node) => (
+              <Button
+                key={node.nodeDid}
+                className="mb-3 w-full"
+                variant="outline"
+                onClick={() => onDone(snapshot, node.nodeDid)}
+              >
+                <span className="truncate">Continue to {node.label}</span>
+              </Button>
+            ))}
+        {!allowLocal && enrollmentRequests && enrollmentRequests.length > 0 && (
+          <div className="mb-6 grid min-w-0 gap-2">
+            <p className="text-sm text-muted-foreground">
+              Saved access requests. If the administrator cannot find your request,
+              enter the node’s status address below to send it again.
+            </p>
+            {enrollmentRequests.map((request) => (
+              <Button
+                key={request.requestId}
+                className="min-w-0 w-full"
+                variant="outline"
+                onClick={() => {
+                  setEnrollment(request);
+                  dispatch({ type: "requested" });
+                }}
+              >
+                <span className="truncate">
+                  View request to {request.serverLabel ?? request.ownerNode}
+                </span>
+              </Button>
+            ))}
+          </div>
+        )}
         <div className="grid gap-3">
           {allowLocal && (
             <Option
@@ -436,7 +553,7 @@ export function OnboardingWizard({
             selected={where === "remote"}
             onSelect={() => setWhere("remote")}
             title="Remote connect"
-            hint="Join a Gents server someone else runs."
+            hint="Connect to an existing Gents node."
             icon={Wifi}
           >
             <Field label="Server address">
@@ -448,8 +565,8 @@ export function OnboardingWizard({
               />
             </Field>
             <p className="text-xs text-muted-foreground">
-              Use the server’s status address. Its administrator approves your access
-              request.
+              Enter the node’s status address, reachable from this device. The node’s
+              administrator must approve this device’s access request.
             </p>
           </Option>
         </div>
