@@ -132,7 +132,12 @@ export function SearchPalette() {
         initialFocus={searchInput}
         showCloseButton={false}
         aria-modal="true"
-        className="top-[12vh] flex max-h-[76dvh] translate-y-0 flex-col gap-0 overflow-hidden p-0 sm:max-w-xl"
+        className="flex flex-col gap-0 overflow-hidden p-0 sm:max-w-xl"
+        style={{
+          top: "calc(var(--viewport-top) + var(--viewport-height) * 0.12)",
+          maxHeight: "calc(var(--viewport-height) * 0.76)",
+          translate: "-50% 0",
+        }}
         data-testid="search-palette"
       >
         <DialogTitle className="sr-only">Search</DialogTitle>

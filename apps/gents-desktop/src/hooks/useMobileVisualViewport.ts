@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { scrollParent } from "@gents/ui/conversation";
 
 const HEIGHT = "--mobile-visual-viewport-height";
 const WIDTH = "--mobile-visual-viewport-width";
@@ -7,7 +8,6 @@ const LEFT = "--mobile-visual-viewport-left";
 const MIN_USEFUL_DIMENSION = 64;
 const FOCUSED_CONTROL_SELECTOR =
   'input:not([type="hidden"]):not([disabled]), textarea:not([disabled]), select:not([disabled]), [contenteditable="true"]';
-const SCROLL_OWNER_SELECTOR = "[data-scroll-owner]";
 const FOCUSED_CONTROL_MARGIN = 16;
 const KEYBOARD_SETTLE_DELAY_MS = 350;
 
@@ -23,7 +23,7 @@ function revealFocusedControl(viewport: VisualViewport) {
   if (!(control instanceof HTMLElement) || !control.matches(FOCUSED_CONTROL_SELECTOR)) {
     return;
   }
-  const owner = control.closest<HTMLElement>(SCROLL_OWNER_SELECTOR);
+  const owner = scrollParent(control);
   if (!owner) return;
 
   const rect = control.getBoundingClientRect();

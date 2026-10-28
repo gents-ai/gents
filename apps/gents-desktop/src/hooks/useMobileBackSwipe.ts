@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { scrollRoom } from "../ui/lib/scrollRoom";
 
 type SwipePoint = {
   x: number;
@@ -30,9 +31,20 @@ export function useMobileBackSwipe(enabled: boolean, onBack: () => void) {
     }
 
     let start: SwipePoint | null = null;
+    const dialogOpen = () =>
+      document.querySelector('[role="dialog"], [role="alertdialog"]') !== null;
 
     function onTouchStart(event: TouchEvent) {
-      if (window.innerWidth > MOBILE_BREAKPOINT || event.touches.length !== 1) {
+      const target = event.target instanceof Element ? event.target : null;
+      if (
+        window.innerWidth > MOBILE_BREAKPOINT ||
+        event.touches.length !== 1 ||
+        dialogOpen() ||
+        target?.closest(
+          'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="slider"]',
+        ) ||
+        scrollRoom(target).left
+      ) {
         start = null;
         return;
       }
@@ -47,6 +59,7 @@ export function useMobileBackSwipe(enabled: boolean, onBack: () => void) {
       if (
         origin &&
         touch &&
+        !dialogOpen() &&
         isMobileBackSwipe(origin, { x: touch.clientX, y: touch.clientY })
       ) {
         back.current();
