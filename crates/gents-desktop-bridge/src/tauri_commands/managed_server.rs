@@ -18,7 +18,9 @@ use tauri::{AppHandle, Emitter, Runtime, State};
 use gents_desktop_core::client::ClientCore;
 #[cfg(test)]
 use gents_desktop_core::client::EnrollmentRequestResult;
-use gents_desktop_core::local_runtime::{init_standard_local_runtime, DesktopInitOptions};
+use gents_desktop_core::local_runtime::{
+    init_standard_local_runtime, DesktopInitOptions, OperatorIdentityInteraction,
+};
 use gents_protocol::serve_lifecycle::{outdated_runtime_message, ObservedServeLifecycle};
 
 use crate::config::ManagedServerPolicy;
@@ -610,47 +612,49 @@ where
 
     let mut carried_wait = None;
     let mut replace_loaded_job = false;
-    let (ready, initial_enabled, _lifecycle) = match matching_external_server(&node_home).await? {
-        Some(external) => (Some(external), false, lifecycle),
-        None => {
-            ensure_launchable_here(app, state)?;
-            let outdated = match observe_port_readiness(&node_home).await? {
-                PortReadiness::Outdated { version } => Some(version),
-                _ => None,
-            };
-            let initial_native =
-                run_native(native_service(app, state)?, |service| service.status()).await?;
-            if let (Some(version), false) = (&outdated, initial_native.job_loaded) {
-                return Err(BridgeError::untyped(outdated_runtime_message(
-                    version.as_deref(),
-                )));
-            }
-            let enabled = initial_native.enabled;
-            replace_loaded_job = outdated.is_some()
-                || (initial_native.job_loaded
-                    && !initial_native.running
-                    && run_native(native_service(app, state)?, |service| {
-                        Ok(service.last_exit()?.is_some()
-                            || service.installed_executable_differs()?)
-                    })
-                    .await
-                    .unwrap_or(false));
-            if initial_native.is_active_or_transitioning()
-                && !initial_native.requires_approval
-                && !replace_loaded_job
-            {
-                match wait_for_booting_managed_server(app, state, &node_home, lifecycle).await? {
-                    BootOutcome::Ready(ready, lifecycle) => (Some(ready), enabled, lifecycle),
-                    BootOutcome::NeedsLaunch(lifecycle, wait) => {
-                        carried_wait = Some(wait);
-                        (None, enabled, lifecycle)
-                    }
+    let (ready, initial_enabled, _lifecycle) =
+        match matching_external_server(&node_home, OperatorIdentityInteraction::Allow).await? {
+            Some(external) => (Some(external), false, lifecycle),
+            None => {
+                ensure_launchable_here(app, state)?;
+                let outdated = match observe_port_readiness(&node_home).await? {
+                    PortReadiness::Outdated { version } => Some(version),
+                    _ => None,
+                };
+                let initial_native =
+                    run_native(native_service(app, state)?, |service| service.status()).await?;
+                if let (Some(version), false) = (&outdated, initial_native.job_loaded) {
+                    return Err(BridgeError::untyped(outdated_runtime_message(
+                        version.as_deref(),
+                    )));
                 }
-            } else {
-                (None, enabled, lifecycle)
+                let enabled = initial_native.enabled;
+                replace_loaded_job = outdated.is_some()
+                    || (initial_native.job_loaded
+                        && !initial_native.running
+                        && run_native(native_service(app, state)?, |service| {
+                            Ok(service.last_exit()?.is_some()
+                                || service.installed_executable_differs()?)
+                        })
+                        .await
+                        .unwrap_or(false));
+                if initial_native.is_active_or_transitioning()
+                    && !initial_native.requires_approval
+                    && !replace_loaded_job
+                {
+                    match wait_for_booting_managed_server(app, state, &node_home, lifecycle).await?
+                    {
+                        BootOutcome::Ready(ready, lifecycle) => (Some(ready), enabled, lifecycle),
+                        BootOutcome::NeedsLaunch(lifecycle, wait) => {
+                            carried_wait = Some(wait);
+                            (None, enabled, lifecycle)
+                        }
+                    }
+                } else {
+                    (None, enabled, lifecycle)
+                }
             }
-        }
-    };
+        };
     if let Some(external) = ready {
         let native = run_native(native_service(app, state)?, |service| service.status()).await?;
         let mut external = project_external_status(external, &native);
@@ -786,7 +790,9 @@ where
     }
     let stored = load_bound_preference(state).await?;
     let native = run_native(native_service(app, state)?, |service| service.status()).await?;
-    let mut status = if let Some(external) = matching_external_server(&node_home).await? {
+    let mut status = if let Some(external) =
+        matching_external_server(&node_home, OperatorIdentityInteraction::Allow).await?
+    {
         project_external_status(external, &native)
     } else {
         let managed = state.managed_server.lock().await;
@@ -1245,7 +1251,10 @@ fn launch_reset_helper_with_timeout(
 async fn ensure_home_not_served(home: &Path) -> Result<(), BridgeError> {
     let config = gents_server::server_host::ServerConfig::standard(home.to_path_buf());
     let managed_address = std::net::SocketAddr::new(config.http_addr, config.http_port);
-    if matching_external_server(home).await?.is_some() {
+    if matching_external_server(home, OperatorIdentityInteraction::Prevent)
+        .await?
+        .is_some()
+    {
         return Err(BridgeError::new(
             BridgeErrorCode::InvalidArgument,
             "A managed server is still listening. Stop it before resetting its store.",
@@ -1353,7 +1362,12 @@ where
     await_runtime_readiness(
         MANAGED_SERVER_READY_TIMEOUT,
         MANAGED_SERVER_POLL_INTERVAL,
-        || observe_port_readiness(node_home),
+        || {
+            observe_port_readiness_with_identity_interaction(
+                node_home,
+                OperatorIdentityInteraction::Allow,
+            )
+        },
         || observe_native_progress(app, state),
     )
     .await
@@ -1698,9 +1712,28 @@ fn occupied_port_message(port: u16) -> String {
     )
 }
 
-async fn observe_port_readiness(node_home: &std::path::Path) -> Result<PortReadiness, BridgeError> {
+async fn observe_port_readiness(node_home: &Path) -> Result<PortReadiness, BridgeError> {
+    observe_port_readiness_with_identity_interaction(
+        node_home,
+        OperatorIdentityInteraction::Prevent,
+    )
+    .await
+}
+
+async fn observe_port_readiness_with_identity_interaction(
+    node_home: &Path,
+    interaction: OperatorIdentityInteraction,
+) -> Result<PortReadiness, BridgeError> {
     let config = gents_server::server_host::ServerConfig::standard(node_home.to_path_buf());
-    let Some(payload) = default_port_payload(Some(node_home)).await? else {
+    observe_port_readiness_at(&config, interaction).await
+}
+
+async fn observe_port_readiness_at(
+    config: &gents_server::server_host::ServerConfig,
+    interaction: OperatorIdentityInteraction,
+) -> Result<PortReadiness, BridgeError> {
+    let node_home = &config.home;
+    let Some(payload) = default_port_payload(config).await? else {
         let address = std::net::SocketAddr::new(config.http_addr, config.http_port);
         let accepts = tokio::time::timeout(
             Duration::from_millis(250),
@@ -1719,11 +1752,30 @@ async fn observe_port_readiness(node_home: &std::path::Path) -> Result<PortReadi
     } else {
         None
     };
-    Ok(classify_port_payload(
-        config.http_port,
-        initialized_did.as_deref(),
-        payload,
-    ))
+    let classified = classify_port_payload(config.http_port, initialized_did.as_deref(), payload);
+    let PortReadiness::Ready(status) = classified else {
+        return Ok(classified);
+    };
+    let mut graphql = reqwest::Url::parse(&config.status_url())
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    graphql.set_path("/api/v0/graphql");
+    let mut record = gents_desktop_core::client::PeerRecord::local_standard(
+        "Local",
+        "",
+        initialized_did.as_deref().unwrap_or_default(),
+        graphql.as_str(),
+    );
+    record.local_node_home = Some(node_home.to_string_lossy().into_owned());
+    let private =
+        gents_desktop_core::local_runtime::fetch_hosted_runtime_status(&record, interaction)
+            .await
+            .map_err(native_error)?;
+    Ok(match private {
+        Some(payload) => {
+            classify_port_payload(config.http_port, initialized_did.as_deref(), payload)
+        }
+        None => PortReadiness::Ready(status),
+    })
 }
 
 fn classify_port_payload(
@@ -1985,17 +2037,18 @@ pub(super) async fn start_running_managed_pairing(state: &DesktopAppState, core:
         tracing::warn!("managed pairing requires a local node home");
         return;
     };
-    let target = match matching_external_server(&node_home).await {
-        Ok(status) => status.as_ref().and_then(pairing_target),
-        Err(error) => {
-            tracing::warn!(
-                target: "gents_desktop::managed_server",
-                error = %error,
-                "failed to inspect native managed runtime for background pairing"
-            );
-            None
-        }
-    };
+    let target =
+        match matching_external_server(&node_home, OperatorIdentityInteraction::Prevent).await {
+            Ok(status) => status.as_ref().and_then(pairing_target),
+            Err(error) => {
+                tracing::warn!(
+                    target: "gents_desktop::managed_server",
+                    error = %error,
+                    "failed to inspect native managed runtime for background pairing"
+                );
+                None
+            }
+        };
     let Some(target) = target else { return };
     if let Err(error) = core
         .refresh_local_standard_peer(&node_home, &target.node_name)
@@ -2125,15 +2178,18 @@ pub(super) async fn drain_managed_runtime_pairing(state: &DesktopAppState) {
 
 async fn matching_external_server(
     node_home: &std::path::Path,
+    interaction: OperatorIdentityInteraction,
 ) -> Result<Option<ManagedServerStatus>, BridgeError> {
-    Ok(match observe_port_readiness(node_home).await? {
-        PortReadiness::Ready(status) => Some(status),
-        PortReadiness::Foreign(_)
-        | PortReadiness::Booting
-        | PortReadiness::Outdated { .. }
-        | PortReadiness::Occupied(_)
-        | PortReadiness::NotListening => None,
-    })
+    Ok(
+        match observe_port_readiness_with_identity_interaction(node_home, interaction).await? {
+            PortReadiness::Ready(status) => Some(status),
+            PortReadiness::Foreign(_)
+            | PortReadiness::Booting
+            | PortReadiness::Outdated { .. }
+            | PortReadiness::Occupied(_)
+            | PortReadiness::NotListening => None,
+        },
+    )
 }
 
 fn managed_status_from_payload(payload: serde_json::Value, live_did: &str) -> ManagedServerStatus {
@@ -2203,12 +2259,8 @@ fn refused_runtime_store(
 }
 
 async fn default_port_payload(
-    node_home: Option<&Path>,
+    config: &gents_server::server_host::ServerConfig,
 ) -> Result<Option<serde_json::Value>, BridgeError> {
-    let Some(node_home) = node_home else {
-        return Ok(None);
-    };
-    let config = gents_server::server_host::ServerConfig::standard(node_home.to_path_buf());
     match gents_desktop_core::local_runtime::fetch_runtime_connection_payload(&config.status_url())
         .await
     {
@@ -2550,7 +2602,7 @@ where
         start_running_managed_pairing(&state, core).await;
     }
     let native = run_native(native_service(&app, &state)?, |service| service.status()).await?;
-    let mut status = matching_external_server(&node_home)
+    let mut status = matching_external_server(&node_home, OperatorIdentityInteraction::Allow)
         .await?
         .map(|external| project_external_status(external, &native))
         .ok_or_else(|| BridgeError::untyped("native service did not become ready"))?;
@@ -7235,5 +7287,120 @@ mod tests {
 
         server.task.abort();
         core.shutdown().await.expect("shutdown");
+    }
+    #[tokio::test]
+    async fn managed_readiness_authenticates_explicit_start_and_keeps_passive_reads_cold() {
+        use identity::Identity as _;
+        use wiremock::matchers::{header_regex, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("node");
+        let root = temp.path().join("workspace");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        let key_path = home.join("node.key");
+        let identity = gents::identity::load_or_create_file_identity(&key_path).unwrap();
+        let did = identity.did().unwrap().to_string();
+        assert!(!gents::identity::can_mint_defradb_bearer(&did));
+        let server = MockServer::start().await;
+        let endpoint = reqwest::Url::parse(&server.uri()).unwrap();
+        let config = gents_server::server_host::ServerConfig {
+            home: home.clone(),
+            http_addr: "127.0.0.1".parse().unwrap(),
+            http_port: endpoint.port().unwrap(),
+        };
+        let graphql = format!("{}/api/v0/graphql", server.uri());
+        std::fs::write(
+            home.join("init.json"),
+            serde_json::json!({
+                "node_name":"Local", "node_did":did, "key_path":key_path,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            home.join("runtime.json"),
+            serde_json::json!({
+                "node_name":"Local", "node_did":did, "graphql":graphql,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let public = serde_json::json!({
+            "service":"gents", "version":env!("CARGO_PKG_VERSION"),
+            "lifecycle":"ready", "node_did":did, "graphql":graphql,
+        });
+        Mock::given(method("GET"))
+            .and(path("/status"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(public.clone()))
+            .with_priority(2)
+            .mount(&server)
+            .await;
+        let mut private = public;
+        private["tool_ceiling"] = "readwrite".into();
+        private["tool_root"] = root.to_string_lossy().into_owned().into();
+        Mock::given(method("GET"))
+            .and(path("/status"))
+            .and(header_regex("authorization", "^Bearer .+"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(private))
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        let authority = EffectiveManagedAuthority {
+            tool_ceiling: ManagedServerToolCeiling::Readwrite,
+            tool_root: Some(root),
+        };
+        let passive = observe_port_readiness_at(&config, OperatorIdentityInteraction::Prevent)
+            .await
+            .unwrap();
+        let PortReadiness::Ready(passive) = passive else {
+            panic!("public status is ready")
+        };
+        assert!(validate_ready_runtime(&passive, &authority, &home).is_err());
+        assert!(!gents::identity::can_mint_defradb_bearer(&did));
+        let explicit = observe_port_readiness_at(&config, OperatorIdentityInteraction::Allow)
+            .await
+            .unwrap();
+        let PortReadiness::Ready(explicit) = explicit else {
+            panic!("authenticated runtime is ready")
+        };
+        validate_ready_runtime(&explicit, &authority, &home).unwrap();
+        let wrong_root = EffectiveManagedAuthority {
+            tool_root: Some(temp.path().join("elsewhere")),
+            ..authority.clone()
+        };
+        assert!(validate_ready_runtime(&explicit, &wrong_root, &home).is_err());
+        std::fs::remove_file(&key_path).unwrap();
+        let cached = observe_port_readiness_at(&config, OperatorIdentityInteraction::Prevent)
+            .await
+            .unwrap();
+        let PortReadiness::Ready(cached) = cached else {
+            panic!("cached authority remains available")
+        };
+        validate_ready_runtime(&cached, &authority, &home).unwrap();
+        let count = server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.headers.contains_key("authorization"))
+            .count();
+        std::fs::write(home.join("init.json"), r#"{"node_did":"did:key:foreign"}"#).unwrap();
+        assert!(matches!(
+            observe_port_readiness_at(&config, OperatorIdentityInteraction::Allow)
+                .await
+                .unwrap(),
+            PortReadiness::Foreign(_)
+        ));
+        assert_eq!(
+            server
+                .received_requests()
+                .await
+                .unwrap()
+                .iter()
+                .filter(|request| request.headers.contains_key("authorization"))
+                .count(),
+            count
+        );
     }
 }

@@ -505,3 +505,37 @@ fn operator_signer_is_the_hosted_runtimes_own_identity() {
     homeless.local_node_home = None;
     assert!(operator_signer(&homeless).is_err());
 }
+
+#[tokio::test]
+async fn managed_readiness_status_rejects_redirects_without_forwarding_authority() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let directory = tempfile::tempdir().unwrap();
+    let (home, did) = hosted_home(directory.path());
+    let server = MockServer::start().await;
+    let graphql = format!("{}/api/v0/graphql", server.uri());
+    seed_home(&home, &did, &graphql);
+    Mock::given(method("GET"))
+        .and(path("/status"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("Location", format!("{}/forwarded", server.uri()))
+                .set_body_json(json!({"node_did":did,"tool_root":"unreviewed"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/forwarded"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let error = super::fetch_hosted_runtime_status(
+        &hosted_record(&home, &did, &graphql),
+        super::OperatorIdentityInteraction::Prevent,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("302"), "{error:#}");
+}

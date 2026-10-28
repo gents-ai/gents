@@ -330,3 +330,52 @@ async fn foreign_host_is_refused_on_public_private_and_independently_authenticat
         assert_eq!(response.status(), StatusCode::MISDIRECTED_REQUEST, "{path}");
     }
 }
+
+#[tokio::test]
+async fn managed_readiness_status_uses_the_hosted_node_principal() {
+    use gents_desktop_core::local_runtime::{
+        fetch_hosted_runtime_status, OperatorIdentityInteraction,
+    };
+    let f = Fixture::start().await;
+    let home = f._temp.path().join("runtime-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let graphql = format!("{}/api/v0/graphql", f.endpoint);
+    std::fs::write(
+        home.join("runtime.json"),
+        serde_json::json!({
+            "node_name":"test-runtime", "node_did": f.owner.did(), "graphql":graphql,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut record = gents_desktop_core::client::PeerRecord::local_standard(
+        "Local",
+        "",
+        f.owner.did(),
+        &graphql,
+    );
+    record.local_node_home = Some(home.to_string_lossy().into_owned());
+    let public = gents_desktop_core::local_runtime::fetch_runtime_connection_payload(&format!(
+        "{}/status",
+        f.endpoint
+    ))
+    .await
+    .unwrap();
+    assert!(public.get("tool_root").is_none());
+    let private = fetch_hosted_runtime_status(&record, OperatorIdentityInteraction::Prevent)
+        .await
+        .unwrap()
+        .expect("cached hosted authority");
+    assert_eq!(private["node_did"], f.owner.did());
+    assert_eq!(private["tool_ceiling"], "readwrite");
+    assert_eq!(private["tool_root"], "/private/operator/workspace");
+    assert_eq!(private["desktop_graphql"], graphql);
+    record.graphql = Some("http://127.0.0.1:1/api/v0/graphql".into());
+    assert!(
+        fetch_hosted_runtime_status(&record, OperatorIdentityInteraction::Prevent)
+            .await
+            .unwrap()
+            .is_none(),
+        "authority never follows a repointed endpoint"
+    );
+}
