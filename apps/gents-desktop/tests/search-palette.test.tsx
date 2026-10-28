@@ -1,4 +1,11 @@
-import { act, fireEvent, screen, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { MailboxItemView, SessionSummary } from "@source-inc/gents-desktop-client";
 import {
@@ -7,6 +14,7 @@ import {
   SearchPalette,
 } from "../src/ui/screens/SearchPalette";
 import { node, renderIn, renderRouted, testApp } from "./app-fixture";
+import { useExclusivePopover } from "../src/ui/hooks/useExclusivePopover";
 
 const NODE = "did:key:z6MkAgent";
 
@@ -107,6 +115,30 @@ const options = (group: string) =>
     .map((o) => o.textContent);
 
 describe("the search palette", () => {
+  it("waits for the current overlay to acknowledge its exit before opening", async () => {
+    const previous = renderHook(() => useExclusivePopover());
+    act(() => previous.result.current.onOpenChange(true));
+    previous.result.current.popupRef.current = document.createElement("div");
+    renderIn(testApp({ deployments: [node()] }), <SearchPalette />);
+    act(() => openSearch());
+    expect(previous.result.current.open).toBe(false);
+    expect(screen.queryByRole("combobox", { name: "Search" })).toBeNull();
+    act(() => previous.result.current.onOpenChangeComplete(false));
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Search" })).toHaveFocus(),
+    );
+  });
+
+  it("clears the external open request when another popup replaces Search", async () => {
+    const next = renderHook(() => useExclusivePopover());
+    renderIn(testApp({ deployments: [node()] }), <SearchPalette />);
+    act(() => openSearch());
+    expect(screen.getByRole("combobox", { name: "Search" })).toBeVisible();
+    act(() => next.result.current.onOpenChange(true));
+    await waitFor(() => expect(next.result.current.open).toBe(true));
+    expect(screen.queryByRole("combobox", { name: "Search" })).toBeNull();
+  });
+
   it("opens on what needs attention, recent sessions and actions", () => {
     open();
     expect(groupNames()).toEqual(["Needs attention", "Recent sessions", "Actions"]);
@@ -142,7 +174,7 @@ describe("the search palette", () => {
     expect(screen.queryByRole("combobox", { name: "Search" })).toBeNull();
   });
 
-  it("opens from the title bar's Search button", () => {
+  it("opens from the title bar's Search button", async () => {
     renderIn(
       testApp({ deployments: [node()] }),
       <>
@@ -151,6 +183,8 @@ describe("the search palette", () => {
       </>,
     );
     fireEvent.click(screen.getByRole("button", { name: "Search" }));
-    expect(screen.getByRole("combobox", { name: "Search" })).toHaveFocus();
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Search" })).toHaveFocus(),
+    );
   });
 });
