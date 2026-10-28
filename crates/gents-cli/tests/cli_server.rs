@@ -1884,7 +1884,7 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
     )?;
     let node_did = node_did_from_init(&init)?;
     let default_agent_id = default_agent_id_for_node(&node_did);
-    let (mut serve, readiness) = spawn_server_with_ready_json(
+    let (mut serve, readiness) = p2p_bind::spawn_observed_server(
         &home_dir,
         port,
         &[
@@ -1897,12 +1897,11 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
             "--p2p-discovery",
             "disabled",
         ],
-        &[],
-    )?;
+        "127.0.0.1:0".parse()?,
+    )
+    .await?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &node_did, Duration::from_secs(30)).await?;
-
-    p2p_bind::assert_ipv4_bind_scope(serve.child.id(), &readiness, "127.0.0.1:0".parse()?).await?;
 
     assert_eq!(
         readiness.get("node_did").and_then(Value::as_str),
@@ -2019,14 +2018,14 @@ async fn server_listens_where_the_homes_network_settings_say() -> Result<()> {
         }))?,
     )?;
 
-    let (mut serve, readiness) = spawn_server_with_ready_json(&home_dir, port, &[], &[])?;
-    wait_for_port(port, &mut serve)?;
-    p2p_bind::assert_ipv4_bind_scope(
-        serve.child.id(),
-        &readiness,
+    let (mut serve, readiness) = p2p_bind::spawn_observed_server(
+        &home_dir,
+        port,
+        &[],
         std::net::SocketAddr::from(([127, 0, 0, 1], p2p_port)),
     )
     .await?;
+    wait_for_port(port, &mut serve)?;
     let listen = readiness
         .get("p2p_listen_addresses")
         .and_then(Value::as_array)
