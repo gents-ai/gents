@@ -629,6 +629,34 @@ pub(super) fn conservative_status(record: &PeerRecord) -> ClientPeerStatus {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn activation_failure_updates_notify_once_and_clear_on_recovery() {
+        let (_temp, owner) = super::ClientSyncStateOwner::for_test(vec![], vec![]).await;
+        let mut observed = owner.subscribe();
+        let failures = [(
+            "request".to_owned(),
+            super::super::EnrollmentActivationFailure {
+                request_digest: "digest".to_owned(),
+                authorization_sequence: 3,
+                stage: super::super::EnrollmentActivationStage::Route,
+            },
+        )]
+        .into();
+        owner.replace_enrollment_activation_failures(failures.clone());
+        assert!(observed.has_changed().unwrap());
+        assert_eq!(
+            observed.borrow_and_update().enrollment_activation_failures,
+            failures
+        );
+        owner.replace_enrollment_activation_failures(failures);
+        assert!(!observed.has_changed().unwrap());
+        owner.replace_enrollment_activation_failures(Default::default());
+        assert!(observed.has_changed().unwrap());
+        assert!(observed
+            .borrow_and_update()
+            .enrollment_activation_failures
+            .is_empty());
+    }
 
     #[test]
     fn configured_peer_mutation_callers_cannot_bypass_the_owner() {

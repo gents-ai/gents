@@ -115,7 +115,7 @@ export function AgentsScreen() {
                         : `Waiting for ${r.serverLabel ?? r.serverPeer} to accept`}
                   </p>
                   {enrollmentActivationMessage(r) && (
-                    <p className="text-sm text-muted-foreground">
+                    <p role="status" className="text-sm text-muted-foreground">
                       {enrollmentActivationMessage(r)}
                     </p>
                   )}
