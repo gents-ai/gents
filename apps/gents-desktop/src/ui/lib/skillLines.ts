@@ -1,32 +1,46 @@
-/* Gents takes a message's skills from its opening lines, each starting with
-   `/name` (crates/gents/src/skills.rs, prompt_slash_skill_selection), and
-   strips those lines from what the agent reads. A skill named later, such as
-   a chip in mid-sentence, would otherwise arrive as plain text, so it gets an
-   opening line of its own: it runs, and the text still reads as written. */
+import type { ComposerPart } from "@gents/ui/conversation";
 
-const OPENING = /^\s*\/([A-Za-z0-9_.-]+)(?![A-Za-z0-9_./-])/;
+/* Gents takes a message's skills from its opening lines and strips those
+   lines from what the agent reads (crates/gents/src/skills.rs,
+   prompt_slash_skill_selection). A plain `/name` line is refused for names
+   gents reserves for clients, such as review or plan, and a refused first
+   line ends the list, so a skill is named as `/skill <id>`, which gents
+   accepts for any id. Each skill chip in the message gets such a line: it
+   runs wherever the chip sits, and the text reads as written. */
 
-/** the skills the opening lines already name, as gents reads them */
-function openingSkills(text: string): string[] {
-  const named: string[] = [];
-  for (const line of text.split("\n")) {
-    if (!named.length && line.trim() === "") continue;
-    const match = OPENING.exec(line);
-    if (!match) break;
-    named.push(match[1]!);
-  }
-  return named;
+const SKILL_LINE = /^\/skill ([A-Za-z0-9_.-]+)$/;
+
+/** the skills the message's chips name, in order, once each */
+export function chipSkills(parts: readonly ComposerPart[], offered: readonly string[]) {
+  const ids: string[] = [];
+  for (const part of parts)
+    if (
+      part.type === "chip" &&
+      part.chip.kind === "command" &&
+      offered.includes(part.chip.id) &&
+      !ids.includes(part.chip.id)
+    )
+      ids.push(part.chip.id);
+  return ids;
 }
 
-/** `text` with an opening line for each of `skills` it names further on */
+/** `text` with an opening `/skill <id>` line for each of `skills` */
 export function withSkillLines(text: string, skills: readonly string[]): string {
-  const known = new Set(skills);
-  const opening = new Set(openingSkills(text));
-  const later: string[] = [];
-  for (const match of text.matchAll(/(^|\s)\/([^\s/]+)(?=\s|$)/g)) {
-    const name = match[2]!;
-    if (known.has(name) && !opening.has(name) && !later.includes(name))
-      later.push(name);
+  return skills.length
+    ? `${skills.map((id) => `/skill ${id}`).join("\n")}\n${text}`
+    : text;
+}
+
+/** what `withSkillLines` added, taken back off: the text and the skills, as
+    gents will store them, for showing a message before gents has */
+export function splitSkillLines(content: string): { text: string; skills: string[] } {
+  const lines = content.split("\n");
+  const skills: string[] = [];
+  while (lines.length > 1) {
+    const match = SKILL_LINE.exec(lines[0]!);
+    if (!match) break;
+    skills.push(match[1]!);
+    lines.shift();
   }
-  return later.length ? `${later.map((name) => `/${name}`).join("\n")}\n${text}` : text;
+  return { text: lines.join("\n"), skills };
 }

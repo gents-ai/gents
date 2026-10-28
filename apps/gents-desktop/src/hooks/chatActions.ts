@@ -1,4 +1,5 @@
 import { attachmentMetadata } from "./attachmentMetadata";
+import { splitSkillLines } from "@/lib/skillLines";
 import type {
   RequestAttachment,
   SessionSummary,
@@ -193,6 +194,7 @@ export function createChatActions({
         );
       selection.adoptSession(store, result.sessionId);
     }
+    const sent = splitSkillLines(request?.content ?? "");
     if (
       request &&
       !stores.chat
@@ -207,9 +209,11 @@ export function createChatActions({
         {
           sessionId: result.sessionId,
           requestId: result.requestId,
-          content: request.content,
+          /* as gents will store it: the opening /skill lines the composer
+             added are skills, not text */
+          content: sent.text,
           attachments: attachmentViews,
-          selectedSkillIds: [],
+          selectedSkillIds: sent.skills,
           lifecycleState: "pending",
           foldedIntoRequestId: null,
           origin: null,

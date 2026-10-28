@@ -153,7 +153,7 @@ test("a skill picked mid-sentence becomes a chip and is named on an opening line
   await page.keyboard.type("now");
   await page.keyboard.press("Enter");
   await expect(page.getByTestId("transcript-panel")).toContainText(
-    /\/host-diagnostics\s+please \/host-diagnostics now/,
+    /\/skill host-diagnostics\s+please \/host-diagnostics now/,
   );
   /* the draft clears though what went out has an added opening line */
   await expect(field(page)).toHaveText("");

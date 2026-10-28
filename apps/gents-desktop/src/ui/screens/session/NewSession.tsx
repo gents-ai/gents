@@ -138,6 +138,7 @@ function NewSessionComposer() {
         models={[]}
         fieldRef={textarea}
         commands={slash.names}
+        composerRef={slash.field}
         commandsAt="word"
         chipKinds={slash.chipKinds}
         triggers={goalMode.mode ? undefined : [slash.trigger]}

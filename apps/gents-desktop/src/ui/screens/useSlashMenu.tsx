@@ -1,10 +1,15 @@
-import { useMemo, type ReactNode } from "react";
+import { useMemo, useRef, type ReactNode } from "react";
 import { BookOpen, Target } from "lucide-react";
-import { ChipCard, type ChipKind, type ComposerTrigger } from "@gents/ui/conversation";
+import {
+  ChipCard,
+  type ChipKind,
+  type ComposerHandle,
+  type ComposerTrigger,
+} from "@gents/ui/conversation";
 import type { AgentContext, SkillView } from "@source-inc/gents-desktop-client";
 import { effectiveContextSkills } from "@source-inc/gents-desktop-chat";
 import { noteSlash, rankSlash, recentSlash } from "../lib/slashRecent";
-import { withSkillLines } from "../lib/skillLines";
+import { chipSkills, withSkillLines } from "../lib/skillLines";
 
 export type SlashCommand = { id: "goal"; description: string; disabled?: boolean };
 
@@ -118,12 +123,16 @@ export function useSlashMenu(
     }),
     [offered, available],
   );
-  const names = offered.map((skill) => skill.skillId);
+  const names = useMemo(() => offered.map((skill) => skill.skillId), [offered]);
+  const field = useRef<ComposerHandle>(null);
   return {
     trigger,
     chipKinds,
-    /** the text to send: a skill named anywhere runs, not only at the start */
-    prepare: (text: string) => withSkillLines(text, names),
+    /** the composer's field, whose chips say which skills run */
+    field,
+    /** the text to send: each skill chip runs, wherever it sits */
+    prepare: (text: string) =>
+      withSkillLines(text, chipSkills(field.current?.parts() ?? [], names)),
     /** the skills a slash can name, which the field draws as chips */
     names,
   };

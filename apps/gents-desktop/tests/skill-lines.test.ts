@@ -1,31 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { withSkillLines } from "../src/ui/lib/skillLines";
+import { chipSkills, splitSkillLines, withSkillLines } from "../src/ui/lib/skillLines";
 
-const skills = ["review", "summarize"];
+const chip = (id: string, kind = "command") =>
+  ({ type: "chip", chip: { kind, id, label: `/${id}` } }) as const;
 
-describe("skills named after the opening lines", () => {
-  it("get an opening line each, so they run, and the text stays as written", () => {
-    expect(withSkillLines("please /review this and /summarize", skills)).toBe(
-      "/review\n/summarize\nplease /review this and /summarize",
-    );
+describe("skills sent with a message", () => {
+  it("come from its skill chips, once each, wherever they sit", () => {
+    const parts = [
+      { type: "text", text: "please " } as const,
+      chip("review"),
+      { type: "text", text: " and " } as const,
+      chip("review"),
+      chip("lint"),
+      chip("session-1", "session"),
+      chip("not-offered"),
+    ];
+    expect(chipSkills(parts, ["review", "lint"])).toEqual(["review", "lint"]);
   });
 
-  it("are left alone when the opening lines already name them", () => {
-    expect(withSkillLines("/review this\nthen /review again", skills)).toBe(
-      "/review this\nthen /review again",
+  it("are named on opening /skill lines, which gents reads for any id, reserved or not", () => {
+    expect(withSkillLines("/lint fix\nthen /review", ["review", "lint"])).toBe(
+      "/skill review\n/skill lint\n/lint fix\nthen /review",
     );
-    expect(withSkillLines("\n/review\nbody", skills)).toBe("\n/review\nbody");
+    expect(withSkillLines("no skills here /etc", [])).toBe("no skills here /etc");
   });
 
-  it("ignore names that aren't the agent's skills, paths, and words with a slash inside", () => {
-    expect(withSkillLines("see /etc and a/review or /review/x", skills)).toBe(
-      "see /etc and a/review or /review/x",
-    );
-  });
-
-  it("add only what's missing when a later line names another skill", () => {
-    expect(withSkillLines("/review this\nand /summarize it", skills)).toBe(
-      "/summarize\n/review this\nand /summarize it",
-    );
+  it("come back off a message to show it as gents will store it", () => {
+    expect(splitSkillLines("/skill review\n/skill lint\nplease /review it")).toEqual({
+      text: "please /review it",
+      skills: ["review", "lint"],
+    });
+    expect(splitSkillLines("/skill review")).toEqual({
+      text: "/skill review",
+      skills: [],
+    });
+    expect(splitSkillLines("/review it")).toEqual({ text: "/review it", skills: [] });
   });
 });

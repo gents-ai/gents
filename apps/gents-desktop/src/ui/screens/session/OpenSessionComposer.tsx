@@ -232,9 +232,7 @@ export function OpenSessionComposer({
             onSend={
               editing
                 ? (text) =>
-                    void (editing.reached
-                      ? edit.sendAsNew(slash.prepare(text))
-                      : edit.save(slash.prepare(text)))
+                    void (editing.reached ? edit.sendAsNew(text) : edit.save(text))
                 : goalMode.mode
                   ? (text) => void goalMode.submit(text)
                   : (text) => send(text, undefined, followUp, slash.prepare(text))
@@ -283,7 +281,10 @@ export function OpenSessionComposer({
             }
             onKeyDown={onKeyDown}
             fieldRef={textarea}
-            commands={slash.names}
+            /* a queued message keeps the skills it was sent with, so an
+               edit can't add one: no skill chips while editing */
+            commands={editing ? undefined : slash.names}
+            composerRef={slash.field}
             commandsAt="word"
             chipKinds={slash.chipKinds}
             triggers={editing || goalMode.mode ? undefined : [slash.trigger]}
