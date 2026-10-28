@@ -37,7 +37,7 @@ export function FrameViewport({
       data-testid="ux-frame-viewport"
       data-surface={surface}
       data-fill={fill ? "" : undefined}
-      className={fill ? "min-h-0 w-full flex-1" : "h-full min-h-[70vh] w-full"}
+      className={fill ? "h-full min-h-0 w-full flex-1" : "h-full min-h-[70vh] w-full"}
     />
   );
 }
