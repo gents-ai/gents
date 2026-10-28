@@ -181,14 +181,14 @@ structure WriteCase where
 def writeCases : List WriteCase :=
   [ ⟨"idle_session_gets_a_request_past_its_caller", .request, 5, 1⟩
   , ⟨"idle_session_keeps_its_higher_hop", .request, 0, 1⟩
-  , ⟨"busy_session_is_steered_past_its_caller", .steering, 3, 1⟩
-  , ⟨"busy_session_steering_keeps_its_higher_hop", .steering, 0, 1⟩ ]
+  , ⟨"busy_session_is_queued_past_its_caller", .queued, 3, 1⟩
+  , ⟨"busy_session_queue_keeps_its_higher_hop", .queued, 0, 1⟩ ]
 
 def writeCaseJson (c : WriteCase) : String :=
   let write := DurableLineage.sessionMessageWrite c.delivery c.callerHop c.ownHop
   "{\"name\":" ++ jsonString c.name
     ++ ",\"delivery\":" ++ jsonString (match c.delivery with
-        | .request => "request" | .steering => "steering")
+        | .request => "request" | .queued => "queue")
     ++ ",\"caller_hop\":" ++ toString c.callerHop
     ++ ",\"own_hop\":" ++ toString c.ownHop
     ++ ",\"expected_hop\":" ++ toString write.lineage.requestHop

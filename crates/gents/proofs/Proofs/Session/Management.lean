@@ -2,10 +2,50 @@ import Proofs.Session.Properties.Coalescing
 
 namespace SessionQueue
 
+inductive AgentMessageMode where
+  | queue
+  | steer
+  | interrupt
+  deriving DecidableEq, Repr
+
+/-- An interrupt requires separate authority and is committed with
+the message's durable admission. The delivery marker alone does not grant a lease or
+allow input to pass an earlier queue entry. -/
+def agentMessageDelivery? (mode : AgentMessageMode) (mayInterrupt : Bool) :
+    Option (QueueDelivery × Bool) :=
+  match mode with
+  | .queue => some (.queue, false)
+  | .steer => some (.steer, false)
+  | .interrupt => if mayInterrupt then some (.queue, true) else none
+
+theorem agent_message_interrupt_requires_authority :
+    agentMessageDelivery? .interrupt false = none := by
+  rfl
+
+theorem agent_message_interrupt_is_queued :
+    agentMessageDelivery? .interrupt true = some (.queue, true) := by
+  rfl
+
+theorem agent_message_steer_does_not_interrupt (allowed : Bool) :
+    agentMessageDelivery? .steer allowed = some (.steer, false) := by
+  rfl
+
+/-- A remote interrupt accompanies message admission. It may address only the
+physical request observed before admission, even if the session advances. -/
+def remoteInterruptTarget (observed : Option String) (_current : Option String) : Option String :=
+  observed
+
+theorem remote_interrupt_never_retargets (before after : String) :
+    remoteInterruptTarget (some before) (some after) = some before := by rfl
+
+theorem remote_idle_does_not_interrupt_later_work (later : String) :
+    remoteInterruptTarget none (some later) = none := by rfl
+
 def steersInto (active candidate : QueueEntry) : Prop :=
   candidate.fresh = true ∧ candidate.delivery = .steer ∧ candidate.policy = .append ∧
   (candidate.source = .user ∨ candidate.source = .steering) ∧
   candidate.origin = .interactive ∧ candidate.requester = active.requester ∧
+  (candidate.steerTarget = none ∨ candidate.steerTarget = active.requestDocId) ∧
   candidate.turnContext = active.turnContext ∧
   candidate.goalAssignment = active.goalAssignment
 
@@ -104,10 +144,36 @@ theorem queue_delivery_is_barrier (active entry : QueueEntry) (rest : List Queue
     steeringRun active admitted (entry :: rest) = [] := by
   simp [steeringRun, steersInto, h]
 
+theorem stale_agent_steer_is_barrier (active entry : QueueEntry) (rest : List QueueEntry)
+    (admitted : List RequestId) (target : Nat)
+    (htarget : entry.steerTarget = some target) (hne : active.requestDocId ≠ some target) :
+    steeringRun active admitted (entry :: rest) = [] := by
+  simp [steeringRun, steersInto, htarget, Ne.symm hne]
+
+theorem agent_message_queue_and_interrupt_are_barriers
+    (mode : AgentMessageMode) (allowed stop : Bool) (delivery : QueueDelivery)
+    (active entry : QueueEntry) (rest : List QueueEntry) (admitted : List RequestId)
+    (hmode : mode = .queue ∨ mode = .interrupt)
+    (hdecision : agentMessageDelivery? mode allowed = some (delivery, stop))
+    (hentry : entry.delivery = delivery) :
+    steeringRun active admitted (entry :: rest) = [] := by
+  have hqueue : delivery = .queue := by
+    rcases hmode with rfl | rfl
+    · simp [agentMessageDelivery?] at hdecision
+      exact hdecision.1.symm
+    · cases allowed <;> simp [agentMessageDelivery?] at hdecision
+      exact hdecision.1.symm
+  exact queue_delivery_is_barrier active entry rest admitted (hentry.trans hqueue)
+
 theorem stale_input_is_barrier (active entry : QueueEntry) (rest : List QueueEntry)
     (admitted : List RequestId) (h : entry.fresh = false) :
     steeringRun active admitted (entry :: rest) = [] := by
   simp [steeringRun, steersInto, h]
+
+theorem unadmitted_input_is_barrier (active entry : QueueEntry) (rest : List QueueEntry)
+    (admitted : List RequestId) (h : entry.requestId ∉ admitted) :
+    steeringRun active admitted (entry :: rest) = [] := by
+  simp [steeringRun, h]
 
 theorem different_assignment_is_barrier (active entry : QueueEntry) (rest : List QueueEntry)
     (admitted : List RequestId) (different : entry.goalAssignment ≠ active.goalAssignment) :

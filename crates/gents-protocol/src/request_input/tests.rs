@@ -9,6 +9,34 @@ fn reference(value: &Value) -> Option<GoalAssignmentInput> {
 }
 
 #[test]
+fn physical_steer_target_is_signed_and_removed_from_fresh_sessions() {
+    use crate::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
+    let mut request = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        "request",
+        "node",
+        "node",
+        "agent",
+        "session",
+        "message",
+        "interactive",
+        "2026-10-29T00:00:00Z",
+        AgentRequestAdmissionRecord::local_self("node"),
+    );
+    let original = request.signing_payload();
+    request.input.steer_target_request_doc_id = Some("document-a".to_owned());
+    let signed = request.signing_payload();
+    assert_ne!(signed, original);
+    request.input.steer_target_request_doc_id = Some("document-b".to_owned());
+    assert_ne!(request.signing_payload(), signed);
+    request.input = request.input.for_fresh_session();
+    assert!(request.input.steer_target_request_doc_id.is_none());
+    assert_eq!(request.signing_payload(), original);
+}
+
+#[test]
 fn generated_fresh_session_resubmissions_drop_invocation_lineage() {
     let snapshot: Value = gents_lean_contract::load_contract_snapshot().unwrap();
     let cases = snapshot["goal_fresh_session_input_cases"]

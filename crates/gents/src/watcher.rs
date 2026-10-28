@@ -57,16 +57,16 @@ pub struct AgentRequest {
 
 impl AgentRequest {
     pub(crate) fn has_automated_trigger_lineage(&self) -> bool {
-        let has_trigger_id = self
-            .caused_by_trigger_id
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty());
-        has_trigger_id
-            && matches!(
-                self.caused_by_trigger_kind.as_deref().map(str::trim),
-                Some("event" | "schedule")
-            )
+        automated_trigger_lineage(
+            self.caused_by_trigger_kind.as_deref(),
+            self.caused_by_trigger_id.as_deref(),
+        )
     }
+}
+
+pub(crate) fn automated_trigger_lineage(kind: Option<&str>, id: Option<&str>) -> bool {
+    id.is_some_and(|value| !value.trim().is_empty())
+        && matches!(kind.map(str::trim), Some("event" | "schedule"))
 }
 
 impl TryFrom<gents_protocol::row::AgentRequestRow> for AgentRequest {

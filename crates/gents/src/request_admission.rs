@@ -307,6 +307,15 @@ pub(crate) struct AgentRequestAdmissionVerifier {
 }
 
 impl AgentRequestAdmissionVerifier {
+    #[cfg(test)]
+    pub(crate) fn with_peer_admission_for_test(
+        mut self,
+        peer: Arc<dyn PeerAdmissionAuthority>,
+    ) -> Self {
+        self.peer_admission = peer;
+        self
+    }
+
     pub(crate) fn new(
         node: Arc<EmbeddedNode>,
         identity: Arc<dyn NodeIdentity>,
@@ -638,6 +647,18 @@ async fn verify_request_input(
         .map_err(AgentRequestAdmissionError::denied)?;
     let runtime_control = admission.kind == AgentRequestAdmissionKind::RuntimeInternal
         && admission.runtime_source_kind == Some(RuntimeInternalSourceKind::LocalControl);
+    if let Some(target) = &input.steer_target_request_doc_id {
+        deny_if(
+            !target.trim().is_empty()
+                && row.caused_by_parent_request_doc_id.is_some()
+                && row.caused_by_parent_tool_call_doc_id.is_some()
+                && input.queue.as_ref().is_some_and(|queue| {
+                    queue.source == QueueSource::Steering
+                        && queue.delivery == gents_protocol::request_input::QueueDelivery::Steer
+                }),
+            "a physical steer target requires an agent-message steer",
+        )?;
+    }
     if let Some(queue) = &input.queue {
         let session_message_steering = queue.source == QueueSource::Steering
             && row.caused_by_parent_request_doc_id.is_some()

@@ -48,6 +48,16 @@ pub(crate) struct AgentMessageArgs {
     pub task: Option<TaskBody>,
     #[serde(default)]
     pub interrupt: bool,
+    #[serde(default)]
+    pub mode: Option<AgentMessageMode>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AgentMessageMode {
+    Queue,
+    Steer,
+    Interrupt,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -89,11 +99,27 @@ impl AgentMessageArgs {
     pub(crate) fn body(&self) -> Result<MessageBody<'_>, String> {
         message_body("message", self.message.as_ref(), self.task.as_ref())
     }
+
+    pub(crate) fn mode(&self) -> Result<AgentMessageMode, String> {
+        if self.interrupt
+            && self
+                .mode
+                .is_some_and(|mode| mode != AgentMessageMode::Interrupt)
+        {
+            return Err("interrupt conflicts with the requested message mode".to_owned());
+        }
+        Ok(self.mode.unwrap_or(if self.interrupt {
+            AgentMessageMode::Interrupt
+        } else {
+            AgentMessageMode::Queue
+        }))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Delivery {
     Request,
+    Queued,
     Steering,
 }
 
@@ -101,6 +127,7 @@ impl Delivery {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Request => "request",
+            Self::Queued => "queue",
             Self::Steering => "steering",
         }
     }
@@ -284,6 +311,8 @@ pub(crate) struct Plan {
     session_id: String,
     hop: u32,
     write: PlannedWrite,
+    interrupt_local: bool,
+    remote_interrupt_doc_id: Option<String>,
 }
 
 impl Plan {
@@ -303,6 +332,8 @@ impl Plan {
                 create,
                 delivery: Delivery::Request,
             },
+            interrupt_local: false,
+            remote_interrupt_doc_id: None,
         }
     }
 
@@ -310,6 +341,20 @@ impl Plan {
         match self.write {
             PlannedWrite::Request { delivery, .. } => delivery,
             PlannedWrite::Goal { .. } => Delivery::Request,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn remote_interrupt_doc_id(&self) -> Option<&str> {
+        self.remote_interrupt_doc_id.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn request_id(&self) -> &str {
+        match &self.write {
+            PlannedWrite::Request { create, .. } | PlannedWrite::Goal { create, .. } => {
+                &create.request_id
+            }
         }
     }
 }
@@ -388,6 +433,7 @@ async fn target_goal_assignment(
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn plan(
     node: &Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
@@ -396,6 +442,30 @@ pub(crate) async fn plan(
     title: Option<&str>,
     interrupt: bool,
 ) -> Result<Result<Plan, String>> {
+    plan_with_mode(
+        node,
+        cause,
+        target,
+        rendered,
+        title,
+        if interrupt {
+            AgentMessageMode::Interrupt
+        } else {
+            AgentMessageMode::Queue
+        },
+    )
+    .await
+}
+
+pub(crate) async fn plan_with_mode(
+    node: &Arc<EmbeddedNode>,
+    cause: &SessionMessageCause,
+    target: &SessionMessageTarget,
+    rendered: RenderedBody,
+    title: Option<&str>,
+    mode: AgentMessageMode,
+) -> Result<Result<Plan, String>> {
+    let interrupt = mode == AgentMessageMode::Interrupt;
     let request_id = uuid::Uuid::new_v4().to_string();
     let local = target.node_did == cause.caller_node_did;
     if crate::session::session_is_stopped(
@@ -410,7 +480,7 @@ pub(crate) async fn plan(
             "session is stopped; use agent_resume before sending another message".to_owned(),
         ));
     }
-    let active = if local {
+    let active = if local || mode != AgentMessageMode::Queue {
         match crate::interrupt::active_session_request(
             node,
             &target.session_id,
@@ -435,6 +505,12 @@ pub(crate) async fn plan(
     } else {
         None
     };
+    if !local && mode == AgentMessageMode::Steer && active.is_none() {
+        return Ok(Err(
+            "the remote active turn is not available; refresh the session before steering"
+                .to_owned(),
+        ));
+    }
     let own_hop = match &active {
         Some(active) => active.request_hop.max(
             crate::session::load_session_current_hop(node, &target.node_did, &target.session_id)
@@ -481,21 +557,38 @@ pub(crate) async fn plan(
             token_budget,
         }
     } else {
-        let steering = active.filter(|_| !interrupt);
-        let queue = steering
-            .as_ref()
-            .map(|active| gents_protocol::request_input::RequestQueue {
-                delivery: Default::default(),
-                position: None,
-                source: gents_protocol::request_input::QueueSource::Steering,
-                policy: gents_protocol::request_input::QueuePolicy::Append,
-                key: None,
-                queued_after_request_id: Some(active.request_id.clone()),
-                interrupted_request_id: None,
-                background_completion_wake_version: None,
-            });
+        let queued = active.as_ref().filter(|_| !interrupt);
+        let steer_head = queued.filter(|_| mode == AgentMessageMode::Steer);
+        if let Some(head) = steer_head {
+            let selected =
+                crate::skills::prompt_slash_skill_selection(&rendered.content).selected_skill_ids;
+            if !selected.is_empty() && selected != head.input.selected_skill_ids {
+                return Ok(Err(
+                    "steering cannot change the active turn's selected skills; queue a new message to select different skills".to_owned(),
+                ));
+            }
+        }
+        let goal_assignment = if steer_head.is_some() {
+            None
+        } else {
+            target_goal_assignment(node, cause, target).await?
+        };
+        let queue = queued.map(|active| gents_protocol::request_input::RequestQueue {
+            delivery: if mode == AgentMessageMode::Steer {
+                gents_protocol::request_input::QueueDelivery::Steer
+            } else {
+                Default::default()
+            },
+            position: None,
+            source: gents_protocol::request_input::QueueSource::Steering,
+            policy: gents_protocol::request_input::QueuePolicy::Append,
+            key: None,
+            queued_after_request_id: Some(active.request_id.clone()),
+            interrupted_request_id: None,
+            background_completion_wake_version: None,
+        });
         PlannedWrite::Request {
-            create: crate::lifecycle::materialize::build_session_message_request_with_input(
+            create: crate::lifecycle::materialize::build_session_message_request_for_steer(
                 cause,
                 target,
                 &rendered.content,
@@ -505,13 +598,16 @@ pub(crate) async fn plan(
                 hop,
                 gents_protocol::request_input::RequestInput {
                     queue,
-                    goal_assignment: target_goal_assignment(node, cause, target).await?,
+                    goal_assignment,
                     ..Default::default()
                 },
+                steer_head,
             )
             .await?,
-            delivery: if steering.is_some() {
+            delivery: if queued.is_some() && mode == AgentMessageMode::Steer {
                 Delivery::Steering
+            } else if queued.is_some() {
+                Delivery::Queued
             } else {
                 Delivery::Request
             },
@@ -521,6 +617,12 @@ pub(crate) async fn plan(
         session_id: target.session_id.clone(),
         hop,
         write,
+        interrupt_local: interrupt && local,
+        remote_interrupt_doc_id: if interrupt && !local {
+            active.as_ref().map(|request| request.doc_id.clone())
+        } else {
+            None
+        },
     }))
 }
 
@@ -635,10 +737,10 @@ async fn commit_once(
 /// transaction. It writes no tool row.
 pub(crate) async fn stage_planned_write_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    _cause: &SessionMessageCause,
+    cause: &SessionMessageCause,
     plan: &Plan,
 ) -> Result<crate::lifecycle::EnqueuedAgentRequest> {
-    match &plan.write {
+    let enqueued = match &plan.write {
         PlannedWrite::Request { create, .. } => {
             ensure_planned_hop_current(txn, create).await?;
             let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
@@ -666,7 +768,37 @@ pub(crate) async fn stage_planned_write_in_txn(
             )
             .await
         }
+    }?;
+    if plan.interrupt_local {
+        let active = crate::interrupt::interrupt_active_session_in_txn(
+            txn,
+            &plan.session_id,
+            &cause.caller_node_did,
+            Some(&cause.caller_node_did),
+        )
+        .await?;
+        if active.is_none() {
+            crate::goal::pause_goal_for_interrupt_in_txn(
+                txn,
+                &cause.caller_node_did,
+                &plan.session_id,
+            )
+            .await?;
+        }
     }
+    if let Some(doc_id) = &plan.remote_interrupt_doc_id {
+        let PlannedWrite::Request { create, .. } = &plan.write else {
+            anyhow::bail!("remote interrupt requires a request");
+        };
+        crate::interrupt::interrupt_if_active_in_txn(
+            txn,
+            doc_id,
+            &create.node_did,
+            Some(&cause.caller_node_did),
+        )
+        .await?;
+    }
+    Ok(enqueued)
 }
 
 async fn ensure_planned_hop_current(
@@ -789,7 +921,72 @@ pub fn agent_interrupt_allowed(
     target_session: &str,
     target_origin_cause: Option<&str>,
 ) -> bool {
-    target_session != caller_session && target_origin_cause == Some(caller_session)
+    agent_interrupt_allowed_for_task(
+        caller_session,
+        target_session,
+        target_origin_cause,
+        false,
+        false,
+        false,
+    )
+}
+
+pub fn agent_interrupt_allowed_for_task(
+    caller_session: &str,
+    target_session: &str,
+    target_origin_cause: Option<&str>,
+    same_node: bool,
+    task_triggered_at_creation: bool,
+    has_parent_doc: bool,
+) -> bool {
+    target_session != caller_session
+        && (target_origin_cause == Some(caller_session)
+            || (target_origin_cause.is_none()
+                && !has_parent_doc
+                && same_node
+                && task_triggered_at_creation))
+}
+
+fn task_trigger_creation_matches(
+    target: &SessionScope,
+    opening_doc_id: &str,
+    request: &gents_protocol::row::AgentRequestRow,
+) -> bool {
+    request.doc_id.as_deref() == Some(opening_doc_id)
+        && request.purpose == Some(gents_protocol::request_admission::RequestPurpose::PUBLIC)
+        && request.node_did.as_deref() == Some(target.node_did.as_str())
+        && request.session_id.as_deref() == Some(target.session_id.as_str())
+        && request.requester_did == target.requester_did
+        && crate::watcher::automated_trigger_lineage(
+            request.caused_by_trigger_kind.as_deref(),
+            request.caused_by_trigger_id.as_deref(),
+        )
+        && request
+            .caused_by_trigger_doc_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty())
+}
+
+async fn task_trigger_created_session(
+    access: &ConfigAccess,
+    target: &SessionScope,
+    opening_doc_id: &str,
+) -> Result<bool> {
+    let query = format!(
+        "{{AgentRequest(docIDs: {}) {{_docID request_id purpose node_did session_id requester_did caused_by_trigger_id caused_by_trigger_kind caused_by_trigger_doc_id}}}}",
+        crate::graphql::graphql_string_list_literal(std::iter::once(opening_doc_id))
+    );
+    let response = access.execute(&query).await?;
+    let rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(serde_json::Value::as_array)
+        .context("trigger creation query omitted request rows")?;
+    if rows.len() != 1 {
+        return Ok(false);
+    }
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(rows[0].clone()).context("decoding the trigger creation request")?;
+    Ok(task_trigger_creation_matches(target, opening_doc_id, &row))
 }
 
 pub async fn interrupt_refusal(
@@ -797,15 +994,33 @@ pub async fn interrupt_refusal(
     caller: &SessionScope,
     target: &SessionScope,
 ) -> Result<Option<String>> {
-    let started_by =
-        crate::session_origin::started_by(&ConfigAccess::local(node.clone()), target).await?;
-    let cause = started_by
+    let access = ConfigAccess::local(node.clone());
+    let origin = crate::session_origin::creation_origin(&access, target).await?;
+    let cause = origin
+        .as_ref()
+        .and_then(|origin| origin.started_by.as_ref())
         .filter(|link| link.scope == *caller)
-        .map(|link| link.scope.session_id);
-    Ok(
-        (!agent_interrupt_allowed(&caller.session_id, &target.session_id, cause.as_deref()))
-            .then(|| "only the session that started this session may interrupt it".to_owned()),
-    )
+        .map(|link| link.scope.session_id.as_str());
+    let has_parent = origin
+        .as_ref()
+        .is_some_and(|origin| origin.parent_doc_id.is_some());
+    let same_node = caller.node_did == target.node_did
+        && target.requester_did.as_deref() == Some(caller.node_did.as_str());
+    let task_triggered = if same_node && !has_parent && caller.session_id != target.session_id {
+        if let Some(opening) = origin
+            .as_ref()
+            .and_then(|origin| origin.opening_request_doc_id.as_deref())
+        {
+            task_trigger_created_session(&access, target, opening).await?
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    Ok((!agent_interrupt_allowed_for_task(
+        &caller.session_id, &target.session_id, cause, same_node, task_triggered, has_parent,
+    )).then(|| "Only the session that started this session or an agent on the same node as its Task trigger may interrupt it".to_owned()))
 }
 
 pub async fn interrupt_session(
@@ -1053,11 +1268,11 @@ mod hop_tests {
         let cases = &crate::lean_vocab_test::lean_contract_snapshot()
             .causal_hop_contract
             .write_cases;
-        assert!(cases.iter().any(|case| case.delivery == "steering"));
+        assert!(cases.iter().any(|case| case.delivery == "queue"));
         for case in cases {
             let name = case.name.as_str();
             assert_eq!(case.own_hop, caused.request_hop, "{name}");
-            let state = if case.delivery == "steering" {
+            let state = if case.delivery == "queue" {
                 "processing"
             } else {
                 "pending"
@@ -1293,6 +1508,199 @@ mod hop_tests {
 #[cfg(test)]
 mod agent_tools_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn remote_interrupt_plan_keeps_the_observed_physical_request() {
+        use crate::identity::NodeIdentity;
+        use crate::tool_call_lifecycle::admission_fixture::{
+            materialize_session_message, published_admission_with_owner, PublishedAdmissionOptions,
+        };
+        let (mut fixture, owner) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: "remote-interrupt-plan".into(),
+            real_identity: true,
+            await_mode: AwaitMode::Background,
+            tool_name: Some(crate::toolset::AGENT_NEW_TOOL_NAME.into()),
+            start_running: false,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let remote =
+            crate::identity::KeyIdentity::load_or_create(fixture.path.join("remote.key"), None)
+                .unwrap();
+        let receipt = materialize_session_message(
+            &fixture.node,
+            &owner,
+            &mut fixture.tool,
+            remote.did(),
+            "work",
+        )
+        .await
+        .unwrap();
+        set_state(&fixture.node, &receipt.request_doc_id, "processing").await;
+        let caller = owner.request();
+        let cause = SessionMessageCause {
+            caller_node_did: caller.node_did.clone(),
+            caller_agent_id: caller.agent_id.clone(),
+            caller_session_id: caller.session_id.clone(),
+            caller_request_id: caller.request_id.clone(),
+            caller_request_doc_id: caller.doc_id.clone(),
+            caller_hop: caller.request_hop,
+            tool_call_id: "followup".into(),
+            tool_call_doc_id: "followup-doc".into(),
+            correlation: None,
+        };
+        let target = SessionMessageTarget {
+            node_did: remote.did().into(),
+            agent_id: "general".into(),
+            session_id: receipt.session_id.clone(),
+        };
+        let plan = plan_with_mode(
+            &fixture.node,
+            &cause,
+            &target,
+            RenderedBody {
+                content: "interrupt".into(),
+                goal: None,
+            },
+            None,
+            AgentMessageMode::Interrupt,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            plan.remote_interrupt_doc_id(),
+            Some(receipt.request_doc_id.as_str())
+        );
+        set_state(&fixture.node, &receipt.request_doc_id, "completed").await;
+        let applied = crate::interrupt::interrupt_if_active_by_doc_id(
+            &fixture.node,
+            plan.remote_interrupt_doc_id().unwrap(),
+            remote.did(),
+            Some(&cause.caller_node_did),
+        )
+        .await
+        .unwrap();
+        assert!(!applied);
+        drop(owner);
+        fixture.node.shutdown().await;
+        std::fs::remove_dir_all(&fixture.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stale_physical_interrupt_does_not_pause_the_session_goal() {
+        let (message, _caller, caused) = started("stale-agent-message-interrupt").await;
+        let node = message.admission.node.clone();
+        crate::goal::set_goal(
+            &node,
+            &caused.node_did,
+            &caused.session_id,
+            Some("continue"),
+            Some(crate::goal::GoalStatus::Active),
+            None,
+        )
+        .await
+        .unwrap();
+        set_state(&node, &caused.doc_id, "completed").await;
+        let applied = crate::interrupt::interrupt_if_active_by_doc_id(
+            &node,
+            &caused.doc_id,
+            &caused.node_did,
+            caused.requester_did.as_deref(),
+        )
+        .await
+        .unwrap();
+        assert!(!applied);
+        let goal = crate::goal::load_canonical_goal(&node, &caused.node_did, &caused.session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(goal.parsed_status(), Some(crate::goal::GoalStatus::Active));
+        assert!(
+            crate::interrupt::fetch_interrupt_requested_at_by_doc_id(&node, &caused.doc_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        set_state(&node, &caused.doc_id, "processing").await;
+        let foreign = crate::interrupt::interrupt_if_active_by_doc_id(
+            &node,
+            &caused.doc_id,
+            &caused.node_did,
+            Some("did:foreign:requester"),
+        )
+        .await
+        .unwrap();
+        assert!(!foreign);
+        let applied = crate::interrupt::interrupt_if_active_by_doc_id(
+            &node,
+            &caused.doc_id,
+            &caused.node_did,
+            caused.requester_did.as_deref(),
+        )
+        .await
+        .unwrap();
+        assert!(applied);
+        assert!(
+            crate::interrupt::fetch_interrupt_requested_at_by_doc_id(&node, &caused.doc_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        let paused = crate::goal::load_canonical_goal(&node, &caused.node_did, &caused.session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            paused.parsed_status(),
+            Some(crate::goal::GoalStatus::Paused)
+        );
+        node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+
+    struct PeerAuthorization(bool);
+
+    #[async_trait::async_trait]
+    impl crate::agent::p2p_reconcile::PeerAdmissionAuthority for PeerAuthorization {
+        async fn fresh_member_authorized(&self, _: &str) -> anyhow::Result<bool> {
+            Ok(self.0)
+        }
+
+        async fn fresh_member_authorized_for_agent(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> anyhow::Result<bool> {
+            Ok(self.0)
+        }
+    }
+
+    #[test]
+    fn message_modes_preserve_legacy_interrupt_and_reject_conflicts() {
+        for (arguments, expected) in [
+            (
+                serde_json::json!({"session_id":"s", "message":"x"}),
+                Some(AgentMessageMode::Queue),
+            ),
+            (
+                serde_json::json!({"session_id":"s", "message":"x", "mode":"steer"}),
+                Some(AgentMessageMode::Steer),
+            ),
+            (
+                serde_json::json!({"session_id":"s", "message":"x", "interrupt":true}),
+                Some(AgentMessageMode::Interrupt),
+            ),
+            (
+                serde_json::json!({"session_id":"s", "message":"x", "interrupt":true, "mode":"steer"}),
+                None,
+            ),
+        ] {
+            let args: AgentMessageArgs = serde_json::from_value(arguments).unwrap();
+            assert_eq!(args.mode().ok(), expected);
+        }
+    }
     use crate::tool_call_lifecycle::admission_fixture::{
         published_session_message, PublishedAdmissionOptions, PublishedSessionMessage,
     };
@@ -1357,7 +1765,7 @@ mod agent_tools_tests {
                     &caused.agent_id,
                     caused.requester_did.as_deref(),
                     None,
-                    crate::lifecycle::materialize::created_session_provenance(&caused),
+                    crate::lifecycle::materialize::created_session_provenance(&caused, true),
                     &created_at,
                 )
                 .await
@@ -1399,6 +1807,290 @@ mod agent_tools_tests {
             .await
             .unwrap()
             .is_some());
+        node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn agent_steer_reaches_safe_step_for_the_signed_active_request() {
+        let (message, mut caller_owner) =
+            crate::tool_call_lifecycle::admission_fixture::published_session_message_with_owner(
+                PublishedAdmissionOptions {
+                    name: "agent-steer-safe-step".to_owned(),
+                    real_identity: true,
+                    await_mode: AwaitMode::Background,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let node = message.admission.node.clone();
+        let caller = caller_owner.request().clone();
+        let active = crate::request_binding::load_agent_request_by_doc_id(
+            &node,
+            &message.caused_request_doc_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        materialize_session(&node, &active).await;
+        set_state(&node, &active.doc_id, "processing").await;
+        crate::config_client::ConfigAccess::write_local(
+            &node,
+            "test.agent_steer.create_agent",
+            &format!(
+                r#"mutation {{ create_Agent(input: {{ agent_id: "{}", node_did: "{}", inference_profile_id: "inference", enabled: true }}) {{ _docID }} }}"#,
+                crate::graphql::escape_graphql_string(&active.agent_id),
+                crate::graphql::escape_graphql_string(&active.node_did),
+            ),
+        )
+        .await
+        .unwrap();
+        let mut tool = crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request(
+            node.clone(), &mut caller_owner, &caller.node_did, 1,
+            crate::toolset::AGENT_MESSAGE_TOOL_NAME, "steer-message",
+            serde_json::json!({"session_id":active.session_id, "message":"change direction", "mode":"steer"}),
+            AwaitMode::Background, false,
+        ).await.unwrap();
+        let cause = SessionMessageCause {
+            caller_node_did: caller.node_did.clone(),
+            caller_agent_id: caller.agent_id.clone(),
+            caller_session_id: caller.session_id.clone(),
+            caller_request_id: caller.request_id.clone(),
+            caller_request_doc_id: caller.doc_id.clone(),
+            caller_hop: caller.request_hop,
+            tool_call_id: tool.tool_call_id().to_owned(),
+            tool_call_doc_id: tool.doc_id().unwrap().to_owned(),
+            correlation: None,
+        };
+        let target = SessionMessageTarget {
+            node_did: active.node_did.clone(),
+            agent_id: active.agent_id.clone(),
+            session_id: active.session_id.clone(),
+        };
+        let plan = plan_with_mode(
+            &node,
+            &cause,
+            &target,
+            RenderedBody {
+                content: "change direction".to_owned(),
+                goal: None,
+            },
+            None,
+            AgentMessageMode::Steer,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let receipt = commit(&node, &cause, &mut tool, plan, true).await.unwrap();
+        assert_eq!(receipt.delivery.as_deref(), Some("steering"));
+        let identity = Arc::new(
+            crate::identity::RegisteredIdentity::from_registered_did(caller.node_did.clone(), None)
+                .unwrap(),
+        );
+        let (_owner, authority) = crate::agent::p2p_reconcile::enrollment_authority_channel();
+        let verifier = crate::request_admission::AgentRequestAdmissionVerifier::new(
+            node.clone(),
+            identity,
+            authority,
+        );
+        let steer =
+            crate::request_binding::load_agent_request_by_doc_id(&node, &receipt.request_doc_id)
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            steer.requester_did, active.requester_did,
+            "steering requester"
+        );
+        assert_eq!(
+            steer.workspace_id, active.workspace_id,
+            "steering workspace"
+        );
+        assert_eq!(steer.input.cwd, active.input.cwd, "steering cwd");
+        assert_eq!(
+            steer.input.selected_skill_ids, active.input.selected_skill_ids,
+            "steering skills"
+        );
+        verifier
+            .verify_fresh(&steer, &active.agent_id)
+            .await
+            .unwrap();
+        let snapshot = crate::lifecycle::queue::steering_snapshot(&node, &active, &verifier)
+            .await
+            .unwrap();
+        assert_eq!(snapshot.inputs.len(), 1);
+        assert!(format!("{:?}", snapshot.inputs[0].message).contains("change direction"));
+        let mut later = active.clone();
+        later.doc_id = "another-physical-request".to_owned();
+        let later_snapshot = crate::lifecycle::queue::steering_snapshot(&node, &later, &verifier)
+            .await
+            .unwrap();
+        assert!(later_snapshot.inputs.is_empty());
+        set_state(&node, &receipt.request_doc_id, "completed").await;
+        use crate::identity::NodeIdentity;
+        let peer_dir = tempfile::tempdir().unwrap();
+        let peer =
+            crate::identity::KeyIdentity::load_or_create(peer_dir.path().join("peer.key"), None)
+                .unwrap();
+        let mut peer_request = gents_protocol::request_admission::AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            "peer-steer",
+            &active.node_did,
+            peer.did(),
+            &active.agent_id,
+            &active.session_id,
+            "peer direction",
+            "interactive",
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::peer(peer.did()),
+        );
+        peer_request.caused_by_parent_request_id = Some("peer-parent".into());
+        peer_request.caused_by_parent_request_doc_id = Some("peer-parent-doc".into());
+        peer_request.caused_by_parent_tool_call_id = Some("peer-tool".into());
+        peer_request.caused_by_parent_tool_call_doc_id = Some("peer-tool-doc".into());
+        peer_request.request_hop = 1;
+        peer_request.input = steer.input.clone();
+        crate::sign_agent_request_create(&peer, &mut peer_request)
+            .await
+            .unwrap();
+        crate::config_client::ConfigAccess::write_local(
+            &node,
+            "test.peer_steer.create",
+            &peer_request.graphql_mutation().unwrap(),
+        )
+        .await
+        .unwrap();
+        let identity = Arc::new(
+            crate::identity::RegisteredIdentity::from_registered_did(caller.node_did.clone(), None)
+                .unwrap(),
+        );
+        let (_owner, authority) = crate::agent::p2p_reconcile::enrollment_authority_channel();
+        let peer_verifier = crate::request_admission::AgentRequestAdmissionVerifier::new(
+            node.clone(),
+            identity,
+            authority,
+        )
+        .with_peer_admission_for_test(Arc::new(PeerAuthorization(true)));
+        let foreign_snapshot =
+            crate::lifecycle::queue::steering_snapshot(&node, &active, &peer_verifier)
+                .await
+                .unwrap();
+        assert!(foreign_snapshot.inputs.is_empty());
+        let mut peer_head = active.clone();
+        peer_head.requester_did = Some(peer.did().to_owned());
+        let peer_snapshot =
+            crate::lifecycle::queue::steering_snapshot(&node, &peer_head, &peer_verifier)
+                .await
+                .unwrap();
+        assert_eq!(peer_snapshot.inputs.len(), 1);
+        assert!(format!("{:?}", peer_snapshot.inputs[0].message).contains("peer direction"));
+        let denied_verifier =
+            peer_verifier.with_peer_admission_for_test(Arc::new(PeerAuthorization(false)));
+        let denied_snapshot =
+            crate::lifecycle::queue::steering_snapshot(&node, &peer_head, &denied_verifier)
+                .await
+                .unwrap();
+        assert!(denied_snapshot.inputs.is_empty());
+        node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn interrupting_message_commits_with_the_active_request_latch() {
+        let (message, mut caller_owner) =
+            crate::tool_call_lifecycle::admission_fixture::published_session_message_with_owner(
+                PublishedAdmissionOptions {
+                    name: "agent-message-interrupt-commit".to_owned(),
+                    real_identity: true,
+                    await_mode: AwaitMode::Background,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let node = message.admission.node.clone();
+        let caller = caller_owner.request().clone();
+        let active = crate::request_binding::load_agent_request_by_doc_id(
+            &node,
+            &message.caused_request_doc_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        materialize_session(&node, &active).await;
+        set_state(&node, &active.doc_id, "processing").await;
+        let mut tool = crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request(
+            node.clone(), &mut caller_owner, &caller.node_did, 1,
+            crate::toolset::AGENT_MESSAGE_TOOL_NAME, "interrupt-message",
+            serde_json::json!({"session_id": active.session_id, "message": "new direction", "interrupt": true}),
+            AwaitMode::Background, false,
+        ).await.unwrap();
+        let cause = SessionMessageCause {
+            caller_node_did: caller.node_did.clone(),
+            caller_agent_id: caller.agent_id.clone(),
+            caller_session_id: caller.session_id.clone(),
+            caller_request_id: caller.request_id.clone(),
+            caller_request_doc_id: caller.doc_id.clone(),
+            caller_hop: caller.request_hop,
+            tool_call_id: tool.tool_call_id().to_owned(),
+            tool_call_doc_id: tool.doc_id().unwrap().to_owned(),
+            correlation: None,
+        };
+        let target = SessionMessageTarget {
+            node_did: active.node_did.clone(),
+            agent_id: active.agent_id.clone(),
+            session_id: active.session_id.clone(),
+        };
+        let plan = plan(
+            &node,
+            &cause,
+            &target,
+            RenderedBody {
+                content: "new direction".to_owned(),
+                goal: None,
+            },
+            None,
+            true,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let aborted: anyhow::Result<()> = ConfigAccess::transact_local_write(
+            &node,
+            None,
+            "test.abort_interrupting_message",
+            |txn| {
+                let cause = &cause;
+                let plan = &plan;
+                Box::pin(async move {
+                    stage_planned_write_in_txn(txn, cause, plan).await?;
+                    anyhow::bail!("abort after staging")
+                })
+            },
+        )
+        .await;
+        assert!(aborted.is_err());
+        assert!(
+            crate::interrupt::fetch_interrupt_requested_at_by_doc_id(&node, &active.doc_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let receipt = commit(&node, &cause, &mut tool, plan, true).await.unwrap();
+        assert!(
+            crate::interrupt::fetch_interrupt_requested_at_by_doc_id(&node, &active.doc_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(crate::interrupt::fetch_interrupt_requested_at_by_doc_id(
+            &node,
+            &receipt.request_doc_id
+        )
+        .await
+        .unwrap()
+        .is_none());
         node.shutdown().await;
         std::fs::remove_dir_all(&message.admission.path).unwrap();
     }
@@ -1454,7 +2146,44 @@ mod agent_tools_tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(steering.delivery(), Delivery::Steering);
+        assert_eq!(steering.delivery(), Delivery::Queued);
+        let live_steer = plan_with_mode(
+            &node,
+            &cause,
+            &target,
+            body(),
+            None,
+            AgentMessageMode::Steer,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(live_steer.delivery(), Delivery::Steering);
+        let conflict = plan_with_mode(
+            &node,
+            &cause,
+            &target,
+            RenderedBody {
+                content: "/skill different change course".to_owned(),
+                goal: None,
+            },
+            None,
+            AgentMessageMode::Steer,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(conflict, Err(message) if message.contains("queue a new message")));
+        let PlannedWrite::Request { create, .. } = live_steer.write else {
+            panic!("a steer must create a request");
+        };
+        assert_eq!(
+            create.input.steer_target_request_doc_id.as_deref(),
+            Some(caused.doc_id.as_str())
+        );
+        assert_eq!(
+            create.input.queue.as_ref().unwrap().delivery,
+            gents_protocol::request_input::QueueDelivery::Steer
+        );
         let steer = plan(&node, &cause, &target, body(), None, true)
             .await
             .unwrap()
@@ -1883,12 +2612,12 @@ mod agent_tools_tests {
         .await
         .unwrap()
         .unwrap();
-        assert_eq!(message_plan.delivery(), Delivery::Steering);
+        assert_eq!(message_plan.delivery(), Delivery::Queued);
         let delivered = commit(&node, &cause, &mut send_call, message_plan, true)
             .await
             .unwrap();
         assert_eq!(delivered.session_id, "correlated-worker");
-        assert_eq!(delivered.delivery.as_deref(), Some("steering"));
+        assert_eq!(delivered.delivery.as_deref(), Some("queue"));
         let writer = crate::streaming::DefraStreamWriter::new(
             node.clone(),
             &caller.node_did,
@@ -1945,13 +2674,239 @@ mod agent_tools_tests {
         let mut without_call = caused.clone();
         without_call.caused_by_parent_tool_call_doc_id = None;
         assert_eq!(
-            crate::lifecycle::materialize::created_session_provenance(&without_call)
+            crate::lifecycle::materialize::created_session_provenance(&without_call, true)
                 .unwrap()
                 .opening_request_doc_id,
             None
         );
         without_call.caused_by_parent_request_doc_id = None;
-        assert!(crate::lifecycle::materialize::created_session_provenance(&without_call).is_none());
+        assert!(
+            crate::lifecycle::materialize::created_session_provenance(&without_call, true)
+                .is_none()
+        );
+        node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn generated_task_creation_cases_drive_recorded_session_provenance() {
+        let output = tokio::task::spawn_blocking(|| {
+            gents_lean_contract::run_prepared_generator(
+                &gents_lean_contract::proofs_dir().unwrap(),
+                "Proofs.Conformance.TaskInterrupt:olean",
+                "Proofs/Conformance/TaskInterrupt.lean",
+            )
+            .unwrap()
+        })
+        .await
+        .unwrap();
+        let model: serde_json::Value = serde_json::from_str(&output).unwrap();
+        let decisions = model["decisions"].as_array().unwrap();
+        assert_eq!(decisions.len(), 48);
+        for case in decisions {
+            assert_eq!(
+                agent_interrupt_allowed_for_task(
+                    case["caller"].as_str().unwrap(),
+                    case["target"].as_str().unwrap(),
+                    case["origin"].as_str(),
+                    case["sameNode"].as_bool().unwrap(),
+                    case["taskTriggeredAtCreation"].as_bool().unwrap(),
+                    case["hasParentDoc"].as_bool().unwrap(),
+                ),
+                case["allowed"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+        let evidence = model["evidence"].as_array().unwrap();
+        assert_eq!(evidence.len(), 80);
+        let scope = SessionScope {
+            node_did: "node".into(),
+            session_id: "target".into(),
+            requester_did: Some("requester".into()),
+        };
+        for case in evidence {
+            let row = gents_protocol::row::AgentRequestRow {
+                doc_id: Some(
+                    if case["isCreationRequest"].as_bool().unwrap() {
+                        "opening"
+                    } else {
+                        "later"
+                    }
+                    .into(),
+                ),
+                request_id: "request".into(),
+                purpose: Some(gents_protocol::request_admission::RequestPurpose::PUBLIC),
+                node_did: Some(
+                    if case["exactScope"].as_bool().unwrap() {
+                        "node"
+                    } else {
+                        "foreign"
+                    }
+                    .into(),
+                ),
+                session_id: Some("target".into()),
+                requester_did: Some("requester".into()),
+                caused_by_trigger_id: case["hasTriggerId"]
+                    .as_bool()
+                    .unwrap()
+                    .then(|| "trigger".into()),
+                caused_by_trigger_doc_id: case["hasTriggerDoc"]
+                    .as_bool()
+                    .unwrap()
+                    .then(|| "trigger-doc".into()),
+                caused_by_trigger_kind: Some(case["kind"].as_str().unwrap().into()),
+                ..Default::default()
+            };
+            assert_eq!(
+                task_trigger_creation_matches(&scope, "opening", &row),
+                case["verified"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+        let cases = model["creation"].as_array().unwrap();
+        assert_eq!(cases.len(), 16);
+        let (message, _caller, caused) = started("task-opening-cases").await;
+        for case in cases {
+            let mut request = caused.clone();
+            request.doc_id = case["requestDoc"].as_u64().unwrap().to_string();
+            request.caused_by_parent_request_doc_id =
+                case["parentDoc"].as_u64().map(|id| id.to_string());
+            request.caused_by_parent_tool_call_doc_id = case["hasCallingTool"]
+                .as_bool()
+                .unwrap()
+                .then(|| "call".into());
+            let automated = case["automatedTrigger"].as_bool().unwrap();
+            request.caused_by_trigger_id = automated.then(|| "trigger".into());
+            request.caused_by_trigger_kind = automated.then(|| "schedule".into());
+            let actual = crate::lifecycle::materialize::created_session_provenance(
+                &request,
+                case["admitted"].as_bool().unwrap(),
+            );
+            assert_eq!(
+                actual.is_some(),
+                case["hasProvenance"].as_bool().unwrap(),
+                "{case}"
+            );
+            assert_eq!(
+                actual
+                    .as_ref()
+                    .and_then(|p| p.opening_request_doc_id.clone()),
+                case["openingRequestDoc"].as_u64().map(|id| id.to_string()),
+                "{case}"
+            );
+            assert_eq!(
+                actual
+                    .as_ref()
+                    .and_then(|p| p.parent_request_doc_id.clone()),
+                case["parentRequestDoc"].as_u64().map(|id| id.to_string()),
+                "{case}"
+            );
+        }
+        message.admission.node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn trigger_authority_uses_recorded_creation_not_later_requests() {
+        let (message, caller, caused) = started("task-interrupt-creation").await;
+        let node = message.admission.node.clone();
+        let caller_scope = SessionScope::of_request(&caller);
+        let owner = caller.node_did.clone();
+        let create_trigger = |session: String, request_id: String| {
+            let node = node.clone();
+            let owner = owner.clone();
+            async move {
+                let q = format!(
+                    r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{}", node_did: "{}", requester_did: "{}", agent_id: "general", session_id: "{}", content: "task", lifecycle_state: "pending", backend_id: "", execution_origin: "scheduled", created_at: "2026-10-01T00:00:00Z", retry_count: 0, max_retries: 3, caused_by_trigger_id: "trigger", caused_by_trigger_doc_id: "trigger-doc", caused_by_trigger_kind: "schedule" }}) {{ _docID }} }}"#,
+                    escape_graphql_string(&request_id),
+                    escape_graphql_string(&owner),
+                    escape_graphql_string(&owner),
+                    escape_graphql_string(&session)
+                );
+                let result = node.execute(&q).await;
+                assert!(!result.has_errors(), "{:?}", result.errors);
+                crate::graphql::single_mutation_document(&result, "create_AgentRequest")
+                    .unwrap()
+                    .unwrap()["_docID"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            }
+        };
+        let task_doc = create_trigger("task-root".into(), "task-root-request".into()).await;
+        let mut task = caused.clone();
+        task.node_did = owner.clone();
+        task.requester_did = Some(owner.clone());
+        task.session_id = "task-root".into();
+        task.doc_id = task_doc;
+        task.caused_by_parent_request_id = None;
+        task.caused_by_parent_request_doc_id = None;
+        task.caused_by_parent_tool_call_id = None;
+        task.caused_by_parent_tool_call_doc_id = None;
+        task.caused_by_trigger_id = Some("trigger".into());
+        task.caused_by_trigger_kind = Some("schedule".into());
+        materialize_session(&node, &task).await;
+        let task_scope = SessionScope::of_request(&task);
+        assert!(interrupt_refusal(&node, &caller_scope, &task_scope)
+            .await
+            .unwrap()
+            .is_none());
+
+        let mut human = task.clone();
+        human.session_id = "human-root".into();
+        human.caused_by_trigger_id = None;
+        human.caused_by_trigger_kind = None;
+        materialize_session(&node, &human).await;
+        let mut late = task.clone();
+        late.session_id = human.session_id.clone();
+        late.doc_id = create_trigger(human.session_id.clone(), "later-task-request".into()).await;
+        materialize_session(&node, &late).await;
+        assert!(
+            interrupt_refusal(&node, &caller_scope, &SessionScope::of_request(&human))
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        let mut child = task.clone();
+        child.session_id = "unknown-parent".into();
+        child.doc_id = create_trigger(child.session_id.clone(), "child-task-request".into()).await;
+        child.caused_by_parent_request_doc_id = Some("missing-parent-doc".into());
+        child.caused_by_parent_tool_call_doc_id = Some("tool-doc".into());
+        materialize_session(&node, &child).await;
+        assert!(
+            interrupt_refusal(&node, &caller_scope, &SessionScope::of_request(&child))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        let foreign = SessionScope {
+            node_did: "did:test:foreign".into(),
+            ..caller_scope.clone()
+        };
+        assert!(interrupt_refusal(&node, &foreign, &task_scope)
+            .await
+            .unwrap()
+            .is_some());
+        let tools = AgentToolConfig {
+            enabled: true,
+            targets: Vec::new(),
+        };
+        let listing = agent_session_list(&node, &caller, &tools, &AgentSessionListArgs::default())
+            .await
+            .unwrap();
+        let sessions = listing["sessions"].as_array().unwrap();
+        for (session, allowed) in [
+            ("task-root", true),
+            ("human-root", false),
+            ("unknown-parent", false),
+        ] {
+            let row = sessions
+                .iter()
+                .find(|row| row["session_id"] == session)
+                .unwrap();
+            assert_eq!(row["can_interrupt"], allowed, "{session}: {row}");
+        }
         node.shutdown().await;
         std::fs::remove_dir_all(&message.admission.path).unwrap();
     }

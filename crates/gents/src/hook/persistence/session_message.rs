@@ -1,7 +1,7 @@
 use super::*;
 use anyhow::Context;
 
-use crate::session_message::{AgentMessageArgs, AgentNewArgs};
+use crate::session_message::{AgentMessageArgs, AgentMessageMode, AgentNewArgs};
 
 impl DefraSessionHook {
     pub(super) async fn persist_session_message_tool_call(
@@ -61,7 +61,7 @@ impl DefraSessionHook {
         }
 
         let create = tool_name == AGENT_NEW_TOOL_NAME;
-        let (target, body, title, interrupt) = if create {
+        let (target, body, title, mode) = if create {
             let parsed = match serde_json::from_str::<AgentNewArgs>(args) {
                 Ok(parsed) => parsed,
                 Err(error) => refuse!(
@@ -110,7 +110,7 @@ impl DefraSessionHook {
                 },
                 (parsed.prompt, parsed.task),
                 parsed.title,
-                false,
+                AgentMessageMode::Queue,
             )
         } else {
             let parsed = match serde_json::from_str::<AgentMessageArgs>(args) {
@@ -154,7 +154,14 @@ impl DefraSessionHook {
                     )
                 );
             };
-            if parsed.interrupt {
+            let mode = match parsed.mode() {
+                Ok(mode) => mode,
+                Err(message) => refuse!(
+                    FailureClass::ArgumentInvalid,
+                    invalid_tool_arguments_payload(tool_name, "/mode", message)
+                ),
+            };
+            if mode == AgentMessageMode::Interrupt {
                 if let Some(reason) = crate::session_message::interrupt_refusal(
                     &self.node,
                     &crate::session_origin::SessionScope::of_request(&caller),
@@ -168,12 +175,7 @@ impl DefraSessionHook {
                     );
                 }
             }
-            (
-                target,
-                (parsed.message, parsed.task),
-                None,
-                parsed.interrupt,
-            )
+            (target, (parsed.message, parsed.task), None, mode)
         };
         let field = if create { "prompt" } else { "message" };
         let body =
@@ -217,20 +219,20 @@ impl DefraSessionHook {
             tool_call_doc_id,
             correlation: caller.caused_by_correlation.clone(),
         };
-        let plan = match crate::session_message::plan(
+        let plan = match crate::session_message::plan_with_mode(
             &self.node,
             &cause,
             &target,
             rendered,
             title.as_deref(),
-            interrupt,
+            mode,
         )
         .await
         {
             Ok(Ok(plan)) => plan,
             Ok(Err(message)) => refuse!(
                 FailureClass::ArgumentInvalid,
-                invalid_tool_arguments_payload(tool_name, "/task", message)
+                invalid_tool_arguments_payload(tool_name, "/", message)
             ),
             Err(error) => refuse!(
                 FailureClass::ServiceUnavailable,
@@ -280,20 +282,6 @@ impl DefraSessionHook {
                     );
                 }
             };
-        // Stop the target's turn only once the message is durably delivered,
-        // so a failed commit never interrupts without delivering. The new
-        // request waits behind the interrupted one.
-        if interrupt {
-            let scope = crate::session_message::target_scope(&caller.node_did, &target);
-            if let Err(error) = crate::session_message::interrupt_session(&self.node, &scope).await
-            {
-                tracing::warn!(
-                    target_session = %target.session_id,
-                    error = %format!("{error:#}"),
-                    "agent_message delivered, but interrupting the target's turn failed"
-                );
-            }
-        }
         Ok(self.skip_tool_result(tool_name, receipt))
     }
 }

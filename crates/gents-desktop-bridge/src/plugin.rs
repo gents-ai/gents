@@ -244,6 +244,7 @@ where
             tauri_commands::operations::desktop_session_provenance,
             tauri_commands::operations::desktop_interrupt_request,
             tauri_commands::operations::desktop_job_control,
+            tauri_commands::operations::desktop_process_stop,
             tauri_commands::operations::desktop_background_tool,
             tauri_commands::operations::desktop_list_backends_with_health,
             tauri_commands::operations::desktop_list_mcp_services_with_health,

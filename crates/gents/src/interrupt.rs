@@ -45,6 +45,45 @@ pub async fn interrupt_request_by_doc_id(
     .map(|_| ())
 }
 
+#[cfg(test)]
+pub(crate) async fn interrupt_if_active_by_doc_id(
+    node: &Arc<EmbeddedNode>,
+    request_doc_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> Result<bool> {
+    crate::config_client::ConfigAccess::transact_local_write(
+        node,
+        None,
+        "interrupt.active_request",
+        |txn| {
+            Box::pin(async move {
+                interrupt_if_active_in_txn(txn, request_doc_id, node_did, requester_did).await
+            })
+        },
+    )
+    .await
+}
+
+pub(crate) async fn interrupt_if_active_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    request_doc_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+) -> Result<bool> {
+    let filter = exact_request_filter(request_doc_id, node_did, requester_did)?;
+    let response = txn.execute(&format!(r#"{{ AgentRequest(filter: {{ {filter}, lifecycle_state: {{ _in: ["claimed", "processing"] }} }}, limit: 2) {{ _docID }} }}"#)).await?;
+    let rows = response["data"]["AgentRequest"]
+        .as_array()
+        .context("active interrupt query omitted rows")?;
+    anyhow::ensure!(rows.len() <= 1, "active interrupt request is ambiguous");
+    if rows.is_empty() {
+        return Ok(false);
+    }
+    interrupt_request_matching_in_txn(txn, &filter).await?;
+    Ok(true)
+}
+
 pub(crate) async fn interrupt_request_by_doc_id_returning_drained_wake_ids(
     node: &Arc<EmbeddedNode>,
     request_doc_id: &str,

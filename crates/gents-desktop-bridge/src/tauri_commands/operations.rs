@@ -274,6 +274,18 @@ pub async fn desktop_job_control(
 }
 
 #[tauri::command]
+pub async fn desktop_process_stop(
+    state: State<'_, DesktopAppState>,
+    request: crate::types::DesktopProcessStopRequest,
+) -> Result<(), BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop bridge core not initialized"))?;
+    crate::commands::process_stop(&core, &request)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))
+}
+
+#[tauri::command]
 pub async fn desktop_list_backends_with_health(
     state: State<'_, DesktopAppState>,
 ) -> Result<Vec<BackendHealthView>, BridgeError> {

@@ -6,6 +6,9 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+- Agents may interrupt sessions they started and same-node sessions whose
+  opening request is verified as Task-triggered. Sessions without retained
+  creation evidence and unrelated sessions remain protected.
 - A job plugin may declare `host_imports: ["run_script"]`. The host then
   links `gents::run_script` and `gents::read_result` into its artifact and,
   when the plugin asks, evaluates the call's own `script` in the embedded

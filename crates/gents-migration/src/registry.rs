@@ -611,6 +611,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreiaqwfpcxiyk5zjvejnd25kb2hml75oislo5xkyhxeae2d5xlvz33a"
     ),
     baseline_entry!(
+        gents_protocol::schemas::AGENT_SESSION_PROCESS_STOP_NAME,
+        gents_protocol::schemas::AGENT_SESSION_PROCESS_STOP,
+        "bafyreihaegtjt3ikfsw2xspgel4locegowsyi7jszj523cz62pp65s3tpy"
+    ),
+    baseline_entry!(
         gents_protocol::schemas::GOAL_OBSERVATION_NAME,
         gents_protocol::schemas::GOAL_OBSERVATION,
         "bafyreidurb7yltvd4xkvcna5gcljytu7yp42oqphjlpymtyscqchpdtzzq"
@@ -958,6 +963,7 @@ pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::FILE_INVENTORY_REQUEST_NAME,
     gents_protocol::schemas::AGENT_SESSION_INPUT_EDIT_NAME,
     gents_protocol::schemas::AGENT_SESSION_GOAL_CONTROL_NAME,
+    gents_protocol::schemas::AGENT_SESSION_PROCESS_STOP_NAME,
     gents_protocol::schemas::NODE_DIRECTORY_ENTRY_NAME,
     gents_protocol::schemas::MAILBOX_ITEM_NAME,
 ];

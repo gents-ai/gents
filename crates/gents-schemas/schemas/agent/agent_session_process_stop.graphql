@@ -1,0 +1,9 @@
+type AgentSessionProcessStop @branchable {
+    command_id: String @index(unique: true) @immutable
+    requester_did: String @index @immutable
+    requester_peer_id: String @immutable
+    node_did: String @index @immutable
+    session_id: String @immutable
+    intent_json: String @immutable
+    receipt_json: String
+}

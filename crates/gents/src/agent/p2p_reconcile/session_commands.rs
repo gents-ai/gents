@@ -31,14 +31,16 @@ pub(super) const FIELDS: &str = "_docID command_id requester_did requester_peer_
 pub(super) enum CommandKind {
     InputEdit,
     GoalControl,
+    ProcessStop,
 }
 
 impl CommandKind {
-    const ALL: [Self; 2] = [Self::InputEdit, Self::GoalControl];
+    const ALL: [Self; 3] = [Self::InputEdit, Self::GoalControl, Self::ProcessStop];
     fn collection(self) -> &'static str {
         match self {
             Self::InputEdit => "AgentSessionInputEdit",
             Self::GoalControl => "AgentSessionGoalControl",
+            Self::ProcessStop => "AgentSessionProcessStop",
         }
     }
 }
@@ -99,7 +101,15 @@ pub(super) async fn unanswered_commands(
             }
             continue;
         };
-        let answered = if kind == CommandKind::GoalControl {
+        let answered = if kind == CommandKind::ProcessStop {
+            super::session_process_stop::verified_receipt(
+                identity,
+                intent,
+                row.receipt_json.as_deref(),
+            )
+            .await?
+            .is_some_and(|receipt| !receipt.outcome.needs_execution())
+        } else if kind == CommandKind::GoalControl {
             super::session_goal_control::has_verified_receipt(
                 identity,
                 intent,
@@ -125,9 +135,25 @@ pub(super) async fn unanswered_commands(
     Ok(unanswered)
 }
 
+#[cfg(test)]
 pub async fn run_session_command_reconciler(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
+    cancel: CancellationToken,
+) -> Result<()> {
+    run_session_command_reconciler_with_registry(
+        node,
+        identity,
+        crate::hook::BackgroundExecutionRegistry::default(),
+        cancel,
+    )
+    .await
+}
+
+pub(crate) async fn run_session_command_reconciler_with_registry(
+    node: Arc<EmbeddedNode>,
+    identity: Arc<dyn NodeIdentity>,
+    executions: crate::hook::BackgroundExecutionRegistry,
     cancel: CancellationToken,
 ) -> Result<()> {
     let watched = CommandKind::ALL
@@ -145,12 +171,39 @@ pub async fn run_session_command_reconciler(
         Some(((), interval))
     });
     futures::pin_mut!(changes, ticks);
-    run_session_command_reconciler_observing(node, identity, cancel, changes, ticks).await
+    run_session_command_reconciler_observing_with_registry(
+        node, identity, executions, cancel, changes, ticks,
+    )
+    .await
 }
 
+#[cfg(test)]
 pub(crate) async fn run_session_command_reconciler_observing<S, T>(
     node: Arc<EmbeddedNode>,
     identity: Arc<dyn NodeIdentity>,
+    cancel: CancellationToken,
+    changes: S,
+    ticks: T,
+) -> Result<()>
+where
+    S: Stream<Item = events::DocumentChangeBatch> + Unpin,
+    T: Stream<Item = ()> + Unpin,
+{
+    run_session_command_reconciler_observing_with_registry(
+        node,
+        identity,
+        crate::hook::BackgroundExecutionRegistry::default(),
+        cancel,
+        changes,
+        ticks,
+    )
+    .await
+}
+
+async fn run_session_command_reconciler_observing_with_registry<S, T>(
+    node: Arc<EmbeddedNode>,
+    identity: Arc<dyn NodeIdentity>,
+    executions: crate::hook::BackgroundExecutionRegistry,
     cancel: CancellationToken,
     mut changes: S,
     mut ticks: T,
@@ -215,6 +268,10 @@ where
                 }
                 CommandKind::GoalControl => {
                     super::session_goal_control::process_command(&node, &identity, &id).await
+                }
+                CommandKind::ProcessStop => {
+                    super::session_process_stop::process_command(&node, &identity, &executions, &id)
+                        .await
                 }
             };
             match processed {

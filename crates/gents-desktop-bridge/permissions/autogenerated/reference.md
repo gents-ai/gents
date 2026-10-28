@@ -2390,6 +2390,32 @@ Denies the desktop_probe_mcp_service command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-process-stop`
+
+</td>
+<td>
+
+Enables the desktop_process_stop command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-process-stop`
+
+</td>
+<td>
+
+Denies the desktop_process_stop command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-provider-account-disconnect`
 
 </td>

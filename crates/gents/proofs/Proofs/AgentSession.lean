@@ -32,13 +32,35 @@ structure Provenance where
   task : Option Nat := none
   parentRequestDoc : Option Nat := none
   /-- The request whose claim or refusal created this session through a
-      calling tool call. It is written once, with `parentRequestDoc`, and
-      never rewritten (`advance`, `rename` and `setClosed` keep
-      `provenance`). `DurableLineage.openingRequest` opens the session at
-      it; a session created before it was recorded has none. -/
+      calling tool call or an automated Task trigger. It is written once and
+      never rewritten (`advance`, `rename` and `setClosed` keep provenance).
+      Sessions created before this reference was recorded have none. -/
   openingRequestDoc : Option Nat := none
   fork : Option ForkOrigin := none
   deriving DecidableEq, Repr
+
+/-- Only the request that actually creates a session supplies these facts.
+Existing sessions retain their own immutable provenance through `ensure?`. -/
+def requestCreationProvenance (requestDoc : Nat) (parentDoc : Option Nat)
+    (hasCallingTool admitted automatedTrigger : Bool) : Option Provenance :=
+  let opening := (parentDoc.isSome && hasCallingTool) ||
+    (parentDoc.isNone && admitted && automatedTrigger)
+  if parentDoc.isSome || opening then
+    some { parentRequestDoc := parentDoc,
+           openingRequestDoc := if opening then some requestDoc else none }
+  else none
+
+theorem automated_root_creation_records_request (requestDoc : Nat)
+    (hasCallingTool : Bool) :
+    (requestCreationProvenance requestDoc none hasCallingTool true true).map
+      Provenance.openingRequestDoc = some (some requestDoc) := by
+  cases hasCallingTool <;> rfl
+
+theorem refused_root_cannot_record_trigger_creation (requestDoc : Nat)
+    (hasCallingTool automatedTrigger : Bool) :
+    requestCreationProvenance requestDoc none hasCallingTool false automatedTrigger = none := by
+  cases hasCallingTool <;> cases automatedTrigger <;> rfl
+
 structure RequestObservation where
   docId : Nat
   requestId : RequestId

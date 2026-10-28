@@ -809,6 +809,10 @@ fn push_request_input(fields: &mut Vec<Vec<u8>>, input: &crate::request_input::R
             push_text(fields, &attachment.data);
         }
     }
+    if let Some(target) = &input.steer_target_request_doc_id {
+        push_text(fields, "agent-steer-target");
+        push_text(fields, target);
+    }
 }
 
 fn push_captured_context(

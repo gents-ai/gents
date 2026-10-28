@@ -159,11 +159,19 @@ pub async fn load_session(
     Ok(rows.pop())
 }
 
-pub async fn started_by(
+/// Creation facts are read from the exact session scope. A missing parent
+/// request does not erase the recorded parent document or grant root authority.
+pub(crate) struct SessionCreationOrigin {
+    pub parent_doc_id: Option<String>,
+    pub started_by: Option<SessionLink>,
+    pub opening_request_doc_id: Option<String>,
+}
+
+pub(crate) async fn creation_origin(
     access: &ConfigAccess,
     scope: &SessionScope,
-) -> Result<Option<SessionLink>> {
-    let own = sessions(
+) -> Result<Option<SessionCreationOrigin>> {
+    let mut own = sessions(
         access,
         &session_scope_filter(
             &scope.node_did,
@@ -172,17 +180,41 @@ pub async fn started_by(
         ),
     )
     .await?;
-    let Some(doc_id) = own.first().and_then(provenance_parent) else {
+    anyhow::ensure!(own.len() <= 1, "ambiguous session creation provenance");
+    let Some(session) = own.pop() else {
         return Ok(None);
     };
-    Ok(request_scopes(access, [doc_id])
+    let parent_doc_id = provenance_parent(&session).map(ToOwned::to_owned);
+    let started_by = if let Some(doc_id) = parent_doc_id.as_deref() {
+        request_scopes(access, [doc_id])
+            .await?
+            .into_iter()
+            .next()
+            .map(|(cause, scope)| SessionLink {
+                scope,
+                cause_request_doc_id: cause,
+            })
+    } else {
+        None
+    };
+    let opening_request_doc_id = session
+        .provenance
+        .as_ref()
+        .and_then(|provenance| provenance.opening_request_doc_id.clone());
+    Ok(Some(SessionCreationOrigin {
+        parent_doc_id,
+        started_by,
+        opening_request_doc_id,
+    }))
+}
+
+pub async fn started_by(
+    access: &ConfigAccess,
+    scope: &SessionScope,
+) -> Result<Option<SessionLink>> {
+    Ok(creation_origin(access, scope)
         .await?
-        .into_iter()
-        .next()
-        .map(|(cause, scope)| SessionLink {
-            scope,
-            cause_request_doc_id: cause,
-        }))
+        .and_then(|origin| origin.started_by))
 }
 
 /// The opening request `scope`'s session recorded in its provenance when it

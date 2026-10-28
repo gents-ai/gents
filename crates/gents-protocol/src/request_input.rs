@@ -56,6 +56,9 @@ pub struct RequestInput {
     /// Existing queue/steering/wake input, subject to request admission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue: Option<RequestQueue>,
+    /// Physical active request selected for an agent steer; never a session identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steer_target_request_doc_id: Option<String>,
     /// Original facts of an authenticated runtime-issued goal continuation.
     /// Goal/parent identities remain in the existing signed request lineage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -131,6 +134,7 @@ impl RequestInput {
         Self {
             question_reply: None,
             queue: None,
+            steer_target_request_doc_id: None,
             goal_continuation: None,
             goal_assignment: None,
             ..self.clone()

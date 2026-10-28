@@ -95,6 +95,10 @@ structure QueueEntry where
   policy : QueuePolicy
   queueKey : Option QueueKey
   queuedAfter : Option RequestId
+  /-- Physical identity is distinct from the request's logical identifier. -/
+  requestDocId : Option Nat := none
+  /-- A peer steer may name the physical request it was prepared for. -/
+  steerTarget : Option Nat := none
   origin : ExecutionOrigin := .interactive
   /-- The signed requester principal of the admitted request. -/
   requester : Option Nat := none
