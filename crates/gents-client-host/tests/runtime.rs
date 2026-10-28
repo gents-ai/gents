@@ -63,6 +63,8 @@ mod fake_llm;
 mod goal_delivery;
 #[path = "support/initialization.rs"]
 mod initialization;
+#[path = "support/passive_settings.rs"]
+mod passive_settings;
 #[allow(dead_code)]
 #[path = "../../gents-cli/tests/support/ports.rs"]
 mod ports;
@@ -81,6 +83,7 @@ use support::Attachment;
 #[derive(Clone, Copy)]
 enum Journey {
     Conversation,
+    PassiveSettings,
     RuntimeReplacement,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     Editor,
@@ -651,6 +654,12 @@ async fn retained_client_schema_upgrades_from_a_packaged_predecessor() -> Result
     retained_schema_upgrade::exercise().await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn enrolled_model_settings_refresh_without_the_runtime_key_file() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    exercise(root.path(), Journey::PassiveSettings).await
+}
+
 async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let history = matches!(journey, Journey::EditorHistory)
         .then(editor_history::Options::from_env)
@@ -948,7 +957,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     };
     let mut host_command = Command::new(&host_binary);
     host_command.args(["--serve", "--home"]).arg(paths.root());
-    if journey.editor_scenario().is_some() {
+    if journey.editor_scenario().is_some() || matches!(journey, Journey::PassiveSettings) {
         host_command.arg("--editor-store");
     }
     #[cfg(unix)]
@@ -1019,6 +1028,26 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     }
     let mut id = 2;
     let deployment = wait_chat_deployment(&mut client, &mut id, node_did, &access).await?;
+    if matches!(journey, Journey::PassiveSettings) {
+        client = passive_settings::exercise(
+            client,
+            &mut id,
+            &paths,
+            &host_binary,
+            Path::new(init["key_path"].as_str().context("runtime key path")?),
+            node_did,
+        )
+        .await?;
+        client.close().await;
+        stop(&mut runtime)
+            .await
+            .context("stopping the metadata fixture runtime")?;
+        stop(&mut host)
+            .await
+            .context("stopping the metadata fixture client")?;
+        return Ok(());
+    }
+
     let agent_id = deployment["agents"]
         .as_array()
         .and_then(|agents| agents.iter().find(|agent| agent["isDefault"] == true))
