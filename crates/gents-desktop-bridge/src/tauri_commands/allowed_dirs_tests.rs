@@ -1,4 +1,70 @@
 use super::*;
+
+#[test]
+fn folder_command_refuses_broad_and_runtime_aliases_before_persisting() {
+    let temporary = tempfile::tempdir().unwrap();
+    let home = temporary.path().join("node");
+    let work = temporary.path().join("work");
+    std::fs::create_dir_all(home.join("private")).unwrap();
+    std::fs::create_dir(&work).unwrap();
+    let config = BridgeConfig {
+        home: HomePolicy::FixedRoot(temporary.path().join("desktop")),
+        bootstrap: BootstrapPolicy::LocalRuntimeAllowed {
+            node_home: NodeHomePolicy::Fixed(home.clone()),
+        },
+        ..Default::default()
+    };
+    let app = tauri::test::mock_builder()
+        .manage(DesktopAppState::new(resolve_policy(&config, None).unwrap()))
+        .invoke_handler(tauri::generate_handler![desktop_allowed_dirs_add])
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let window = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    let mut refused = vec![
+        home.clone(),
+        home.join("private"),
+        temporary.path().to_owned(),
+    ];
+    if let Some(user_home) = allowed::user_home() {
+        refused.push(user_home);
+    }
+    if let Some(root) = home.ancestors().last() {
+        refused.push(root.to_owned());
+    }
+    #[cfg(unix)]
+    {
+        let alias = temporary.path().join("runtime-alias");
+        std::os::unix::fs::symlink(&home, &alias).unwrap();
+        refused.push(alias);
+    }
+    for path in refused {
+        assert!(
+            invoke(
+                &window,
+                "desktop_allowed_dirs_add",
+                json!({
+                    "path": path, "access": "read_write"
+                })
+            )
+            .is_err(),
+            "{}",
+            path.display()
+        );
+        assert!(allowed::list(&home).unwrap().is_empty());
+    }
+    invoke(
+        &window,
+        "desktop_allowed_dirs_add",
+        json!({"path": work, "access": "read"}),
+    )
+    .unwrap();
+    let entries = allowed::list(&home).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].path, work.canonicalize().unwrap());
+    assert_eq!(entries[0].access, gents::pack::BindAccess::Read);
+}
 use crate::config::{BootstrapPolicy, BridgeConfig, HomePolicy, NodeHomePolicy};
 use crate::state::resolve_policy;
 use serde_json::{json, Value};

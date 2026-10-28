@@ -1,6 +1,7 @@
 /* A read-only terminal for showing a command's output. xterm is loaded only
    when the first one opens. */
 import type { ITheme, Terminal } from "@xterm/xterm";
+import { isExternalUrl } from "../../lib/externalLinks";
 
 export type LogTerminal = {
   /* writes text already in xterm's line endings; reset clears first */
@@ -52,6 +53,11 @@ export async function openTerminal(
       import("@xterm/xterm/css/xterm.css"),
     ]);
   const term = new Terminal({
+    linkHandler: {
+      activate: (_event, uri) => {
+        if (isExternalUrl(uri)) onLink(uri);
+      },
+    },
     disableStdin: true,
     screenReaderMode: true,
     cursorBlink: false,
@@ -66,7 +72,11 @@ export async function openTerminal(
   const search = new SearchAddon();
   term.loadAddon(fit);
   term.loadAddon(search);
-  term.loadAddon(new WebLinksAddon((_event, uri) => onLink(uri)));
+  term.loadAddon(
+    new WebLinksAddon((_event, uri) => {
+      if (isExternalUrl(uri)) onLink(uri);
+    }),
+  );
   term.open(host);
   fit.fit();
   const sizes = new ResizeObserver(() => fit.fit());

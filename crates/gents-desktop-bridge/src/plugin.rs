@@ -91,6 +91,7 @@ where
             Ok(())
         })
         .on_webview_ready(register_window)
+        .on_navigation(crate::navigation::allow_navigation)
         .on_page_load(|webview, payload| {
             if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
                 webview

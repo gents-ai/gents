@@ -48,12 +48,47 @@ pub fn run() {
     prefer_host_tools();
     install_runtime();
 
+    let context = tauri::generate_context!();
+    #[cfg(all(feature = "native-e2e", debug_assertions, desktop))]
+    let context = native_local_e2e_context(context);
+    let mut context = context;
+    let initial_windows: Vec<_> = context
+        .config()
+        .app
+        .windows
+        .iter()
+        .filter(|window| window.create)
+        .cloned()
+        .collect();
+    // Automatic creation bypasses the native new-window handler. Keep every
+    // platform's configured initial windows, but build them through that owner.
+    for window in &mut context.config_mut().app.windows {
+        window.create = false;
+    }
+
     let builder = tauri::Builder::default();
     #[cfg(desktop)]
     let builder = builder.plugin(single_instance());
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(browser_store_lock());
     let builder = builder
+        .setup(move |app| {
+            for config in &initial_windows {
+                gents_desktop_bridge::navigation::restrict_window(
+                    tauri::WebviewWindowBuilder::from_config(app.handle(), config)?,
+                )
+                .build()?;
+            }
+            #[cfg(desktop)]
+            {
+                setup_tray(app)?;
+                #[cfg(target_os = "macos")]
+                windows::setup(app)?;
+                #[cfg(target_os = "macos")]
+                swipe::setup(app.handle().clone());
+            }
+            Ok(())
+        })
         .plugin(tauri_plugin_fs::init())
         .plugin(init(platform_bridge_config()))
         .plugin(tauri_plugin_dialog::init())
@@ -64,83 +99,71 @@ pub fn run() {
         swipe::swipe_scroll_edges
     ]);
     #[cfg(desktop)]
-    let builder = builder
-        .setup(|app| {
-            setup_tray(app)?;
-            #[cfg(target_os = "macos")]
-            windows::setup(app)?;
-            #[cfg(target_os = "macos")]
-            swipe::setup(app.handle().clone());
-            Ok(())
-        })
-        .on_window_event(|window, event| {
-            if matches!(event, tauri::WindowEvent::Focused(true))
-                && window.label() == "main"
-                && matches!(window.is_visible(), Ok(true))
-            {
-                if let Some(state) = window.app_handle().try_state::<TrayRuntimeState>() {
-                    state.main_hidden_by_close.store(false, Ordering::SeqCst);
-                }
+    let builder = builder.on_window_event(|window, event| {
+        if matches!(event, tauri::WindowEvent::Focused(true))
+            && window.label() == "main"
+            && matches!(window.is_visible(), Ok(true))
+        {
+            if let Some(state) = window.app_handle().try_state::<TrayRuntimeState>() {
+                state.main_hidden_by_close.store(false, Ordering::SeqCst);
             }
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let active = window
-                    .app_handle()
+        }
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            let active = window
+                .app_handle()
+                .try_state::<TrayRuntimeState>()
+                .is_some_and(|state| state.active.load(Ordering::SeqCst));
+            let app = window.app_handle();
+            let main = app.get_webview_window("main");
+            let other_views = app
+                .webview_windows()
+                .keys()
+                .any(|label| label != "main" && label != window.label());
+            let main_hidden = main
+                .as_ref()
+                .is_some_and(|view| matches!(view.is_visible(), Ok(false)))
+                && app
                     .try_state::<TrayRuntimeState>()
-                    .is_some_and(|state| state.active.load(Ordering::SeqCst));
-                let app = window.app_handle();
-                let main = app.get_webview_window("main");
-                let other_views = app
-                    .webview_windows()
-                    .keys()
-                    .any(|label| label != "main" && label != window.label());
-                let main_hidden = main
-                    .as_ref()
-                    .is_some_and(|view| matches!(view.is_visible(), Ok(false)))
-                    && app
-                        .try_state::<TrayRuntimeState>()
-                        .is_some_and(|state| state.main_hidden_by_close.load(Ordering::SeqCst));
-                let action = window_close::close_action(
-                    cfg!(target_os = "macos"),
-                    window.label() == "main",
-                    active,
-                    other_views,
-                    main_hidden,
-                );
-                tracing::debug!(
-                    label = window.label(),
-                    active,
-                    other_views,
-                    main_hidden,
-                    ?action,
-                    "desktop window close requested"
-                );
-                match action {
-                    window_close::CloseAction::Hide => {
-                        api.prevent_close();
-                        #[cfg(target_os = "macos")]
-                        if let Some(view) = window.app_handle().get_webview_window(window.label()) {
-                            let _ = windows::detach(&view);
-                        }
-                        if window.hide().is_ok() && window.label() == "main" {
-                            if let Some(state) = app.try_state::<TrayRuntimeState>() {
-                                state.main_hidden_by_close.store(true, Ordering::SeqCst);
-                            }
+                    .is_some_and(|state| state.main_hidden_by_close.load(Ordering::SeqCst));
+            let action = window_close::close_action(
+                cfg!(target_os = "macos"),
+                window.label() == "main",
+                active,
+                other_views,
+                main_hidden,
+            );
+            tracing::debug!(
+                label = window.label(),
+                active,
+                other_views,
+                main_hidden,
+                ?action,
+                "desktop window close requested"
+            );
+            match action {
+                window_close::CloseAction::Hide => {
+                    api.prevent_close();
+                    #[cfg(target_os = "macos")]
+                    if let Some(view) = window.app_handle().get_webview_window(window.label()) {
+                        let _ = windows::detach(&view);
+                    }
+                    if window.hide().is_ok() && window.label() == "main" {
+                        if let Some(state) = app.try_state::<TrayRuntimeState>() {
+                            state.main_hidden_by_close.store(true, Ordering::SeqCst);
                         }
                     }
-                    window_close::CloseAction::CloseWithHiddenMain => {
-                        if let Some(main) = main {
-                            if let Err(error) = main.destroy() {
-                                tracing::warn!(%error, "could not close hidden main view");
-                            }
-                        }
-                    }
-                    window_close::CloseAction::Close => {}
                 }
+                window_close::CloseAction::CloseWithHiddenMain => {
+                    if let Some(main) = main {
+                        if let Err(error) = main.destroy() {
+                            tracing::warn!(%error, "could not close hidden main view");
+                        }
+                    }
+                }
+                window_close::CloseAction::Close => {}
             }
-        });
-    let context = tauri::generate_context!();
-    #[cfg(all(feature = "native-e2e", debug_assertions, desktop))]
-    let context = native_local_e2e_context(context);
+        }
+    });
     builder
         .build(context)
         .expect("error while building tauri application")
