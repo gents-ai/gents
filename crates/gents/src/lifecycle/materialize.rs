@@ -994,23 +994,21 @@ async fn labeled_session_rows_in_txn(
     })
 }
 
-/// The provenance a request records on the session its claim or refusal
-/// creates: its calling request and, when it names a calling tool call, the
-/// request itself as the session's opening request (Lean
-/// `AgentSession.Provenance.openingRequestDoc`, read by
-/// `DurableLineage.openingRequest`). `ensure_session_in_txn` keeps an
-/// existing session's provenance, so only the request that creates the
-/// session writes it.
+/// Only a creating request can set provenance; `ensure_session_in_txn`
+/// preserves the existing document when a later request reaches the session.
 pub(crate) fn created_session_provenance(
     request: &AgentRequest,
+    admitted: bool,
 ) -> Option<gents_protocol::session::SessionProvenance> {
-    let parent = request.caused_by_parent_request_doc_id.clone()?;
+    let parent = request.caused_by_parent_request_doc_id.clone();
+    let opening = (parent.is_some() && request.caused_by_parent_tool_call_doc_id.is_some())
+        || (parent.is_none() && admitted && request.has_automated_trigger_lineage());
+    if parent.is_none() && !opening {
+        return None;
+    }
     Some(gents_protocol::session::SessionProvenance {
-        parent_request_doc_id: Some(parent),
-        opening_request_doc_id: request
-            .caused_by_parent_tool_call_doc_id
-            .as_ref()
-            .map(|_| request.doc_id.clone()),
+        parent_request_doc_id: parent,
+        opening_request_doc_id: opening.then(|| request.doc_id.clone()),
         ..Default::default()
     })
 }
@@ -1056,7 +1054,7 @@ pub(super) async fn apply_request_session_projection(
         &request.agent_id,
         request.requester_did.as_deref(),
         request.input.initial_title.clone(),
-        created_session_provenance(request),
+        created_session_provenance(request, true),
         now,
     )
     .await?;
@@ -1140,7 +1138,7 @@ async fn project_refused_request_onto_session_in_txn(
         &request.agent_id,
         request.requester_did.as_deref(),
         request.input.initial_title.clone(),
-        created_session_provenance(request),
+        created_session_provenance(request, false),
         now,
     )
     .await?;

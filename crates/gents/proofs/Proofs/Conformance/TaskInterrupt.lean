@@ -15,15 +15,17 @@ def main : IO Unit := do
   let decisions := ["caller", "other"].flatMap fun target =>
     [none, some "caller", some "other"].flatMap fun origin =>
       [false, true].flatMap fun sameNode =>
-        [false, true].map fun taskTriggeredAtCreation =>
+        [false, true].flatMap fun taskTriggeredAtCreation =>
+          [false, true].map fun hasParentDoc =>
           Json.mkObj [
             ("caller", toJson ("caller" : String)),
             ("target", toJson target),
             ("origin", toJson origin),
             ("sameNode", toJson sameNode),
             ("taskTriggeredAtCreation", toJson taskTriggeredAtCreation),
+            ("hasParentDoc", toJson hasParentDoc),
             ("allowed", toJson (interruptAllowed
-              "caller" target origin sameNode taskTriggeredAtCreation))]
+              "caller" target origin sameNode taskTriggeredAtCreation hasParentDoc))]
   let evidence := [false, true].flatMap fun exactScope =>
     [false, true].flatMap fun isCreationRequest =>
       [false, true].flatMap fun hasTriggerId =>
@@ -42,11 +44,13 @@ def main : IO Unit := do
                 (verifiedTaskTrigger e)))]
   let creation := [none, some (12 : Nat)].flatMap fun parent =>
     [false, true].flatMap fun hasCallingTool =>
-      [false, true].map fun automatedTrigger =>
-        let provenance := AgentSession.requestCreationProvenance 25 parent hasCallingTool automatedTrigger
+      [false, true].flatMap fun admitted =>
+       [false, true].map fun automatedTrigger =>
+        let provenance := AgentSession.requestCreationProvenance 25 parent hasCallingTool admitted automatedTrigger
         Json.mkObj [
           ("requestDoc", toJson (25 : Nat)), ("parentDoc", toJson parent),
-          ("hasCallingTool", toJson hasCallingTool), ("automatedTrigger", toJson automatedTrigger),
+          ("hasCallingTool", toJson hasCallingTool), ("admitted", toJson admitted),
+          ("automatedTrigger", toJson automatedTrigger),
           ("hasProvenance", toJson provenance.isSome),
           ("openingRequestDoc", toJson (provenance.bind fun p => p.openingRequestDoc)),
           ("parentRequestDoc", toJson (provenance.bind fun p => p.parentRequestDoc))]

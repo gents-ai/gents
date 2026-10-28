@@ -42,18 +42,24 @@ structure Provenance where
 /-- Only the request that actually creates a session supplies these facts.
 Existing sessions retain their own immutable provenance through `ensure?`. -/
 def requestCreationProvenance (requestDoc : Nat) (parentDoc : Option Nat)
-    (hasCallingTool automatedTrigger : Bool) : Option Provenance :=
-  let opening := (parentDoc.isSome && hasCallingTool) || automatedTrigger
+    (hasCallingTool admitted automatedTrigger : Bool) : Option Provenance :=
+  let opening := (parentDoc.isSome && hasCallingTool) ||
+    (parentDoc.isNone && admitted && automatedTrigger)
   if parentDoc.isSome || opening then
     some { parentRequestDoc := parentDoc,
            openingRequestDoc := if opening then some requestDoc else none }
   else none
 
-theorem automated_creation_records_request (requestDoc : Nat) (parent : Option Nat)
+theorem automated_root_creation_records_request (requestDoc : Nat)
     (hasCallingTool : Bool) :
-    (requestCreationProvenance requestDoc parent hasCallingTool true).map
+    (requestCreationProvenance requestDoc none hasCallingTool true true).map
       Provenance.openingRequestDoc = some (some requestDoc) := by
-  cases parent <;> cases hasCallingTool <;> rfl
+  cases hasCallingTool <;> rfl
+
+theorem refused_root_cannot_record_trigger_creation (requestDoc : Nat)
+    (hasCallingTool automatedTrigger : Bool) :
+    requestCreationProvenance requestDoc none hasCallingTool false automatedTrigger = none := by
+  cases hasCallingTool <;> cases automatedTrigger <;> rfl
 
 structure RequestObservation where
   docId : Nat
