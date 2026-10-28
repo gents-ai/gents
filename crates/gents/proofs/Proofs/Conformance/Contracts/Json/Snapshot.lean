@@ -1,3 +1,4 @@
+import Proofs.Conformance.Contracts.Json.TerminalSelection
 import Proofs.Conformance.WorkspaceCommandGrants
 import Proofs.Conformance.StorageFailure
 import Proofs.Conformance.RequestPatchPublicationCases
@@ -639,6 +640,7 @@ def snapshotJson : String :=
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","
+    ++ "\"request_terminal_selection_cases\":" ++ TerminalSelection.casesJson ++ ","
     ++ "\"canonical_output_projection_cases\":"
       ++ jsonArray
         (StreamingResponse.outputProjectionCases.map outputProjectionCaseJson) ++ ","

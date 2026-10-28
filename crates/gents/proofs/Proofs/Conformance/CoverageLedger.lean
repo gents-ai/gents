@@ -851,6 +851,11 @@ def caseCoverage : List CoverageEntry :=
       "backend_registry::tests::generated_catalog_refreshes_preserve_payload_commits_and_latest_freshness")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "request_terminal_selection_cases"
+      "RequestTerminalSelectionCases"
+      "agent::p2p_reconcile::session_hydration_reconcile::selection::tests::generated_terminal_selections_preserve_superseded_session_hydration")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "plugin_reference_cases"
       "PluginReferenceCases"
       "pack::installation::tests::generated_plugin_reference_cases_validate_prepared_pack_resources")

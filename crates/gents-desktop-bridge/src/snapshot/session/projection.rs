@@ -296,7 +296,7 @@ fn canonical_live_tool_output(
             },
         },
         request_terminal,
-        request.and_then(|row| row.terminal_output.clone()),
+        request.and_then(|row| row.observed_terminal_output().cloned()),
     );
     let streams = match view {
         LiveView::Live { streams } | LiveView::Settling { streams } => streams,
