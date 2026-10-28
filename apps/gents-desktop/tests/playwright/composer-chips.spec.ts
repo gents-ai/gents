@@ -159,6 +159,36 @@ test("a skill picked mid-sentence becomes a chip and is named on an opening line
   await expect(field(page)).toHaveText("");
 });
 
+test("a session picked from the @ menu becomes a chip and sends a link to it", async ({
+  page,
+}) => {
+  await gotoHarness(page);
+  await openChat(page);
+  await field(page).click();
+  await page.keyboard.type("see @intro");
+  const menu = page.locator('[data-slot="composer-menu"]');
+  await expect(menu.getByRole("option").first()).toContainText(
+    "introduction-and-greetings",
+  );
+  await page.keyboard.press("Enter");
+  await expect(page.locator('[data-slot="session-chip"]')).toHaveText(
+    "introduction-and-greetings",
+  );
+  await page.keyboard.type("first");
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("transcript-panel")).toContainText(
+    "see [introduction-and-greetings](gents:session/session-intro) first",
+  );
+});
+
+test("an @ inside a word opens no menu", async ({ page }) => {
+  await gotoHarness(page);
+  await openChat(page);
+  await field(page).click();
+  await page.keyboard.type("name@intro");
+  await expect(page.locator('[data-slot="composer-menu"]')).toHaveCount(0);
+});
+
 test.describe("on a touch screen", () => {
   test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
 
