@@ -12,7 +12,7 @@ pub use captured_context::*;
 #[cfg(test)]
 mod tests;
 
-pub const REQUEST_INPUT_CONTRACT_VERSION: u32 = 2;
+pub const REQUEST_INPUT_CONTRACT_VERSION: u32 = 3;
 pub const STATUS_INPUT_CONTRACT_FIELD: &str = "request_input_contract_version";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -64,8 +64,13 @@ impl RequestInput {
     /// The serving runtime must advertise support before a client publishes
     /// typed captures. This observation grants no request or workspace authority.
     pub fn captured_input_compatible(&self, runtime_version: Option<u64>) -> bool {
-        (self.attachments.is_empty() || runtime_version == Some(2))
-            && (self.captured_context.is_empty() || matches!(runtime_version, Some(1 | 2)))
+        (self.attachments.is_empty() || matches!(runtime_version, Some(2 | 3)))
+            && (self.captured_context.is_empty() || matches!(runtime_version, Some(1 | 2 | 3)))
+            && (self
+                .captured_context
+                .iter()
+                .all(|context| context.source != CapturedContextSource::Composer)
+                || runtime_version == Some(3))
     }
 
     pub fn goal_assignment_compatible(&self, runtime_version: Option<u64>) -> bool {

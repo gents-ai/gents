@@ -13,12 +13,13 @@ def CapturedContextKind.toWireName : CapturedContextKind → String
   | .terminal => "terminal"
 
 inductive CapturedContextSource where
-  | editor | clipboard
+  | editor | clipboard | composer
   deriving DecidableEq, Repr
 
 def CapturedContextSource.toWireName : CapturedContextSource → String
   | .editor => "editor"
   | .clipboard => "clipboard"
+  | .composer => "composer"
 
 /-- Editor positions are zero-based UTF-16 code-unit observations. They are not
 byte offsets into the captured UTF-8 text or authority to read a live file. -/

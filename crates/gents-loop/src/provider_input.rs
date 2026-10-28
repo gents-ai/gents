@@ -27,7 +27,7 @@ pub fn captured_context_for_provider(
     mut message: gents_protocol::message::Message,
 ) -> Result<gents_protocol::message::Message> {
     use gents_protocol::message::{Message, UserContent};
-    use gents_protocol::request_input::CapturedContext;
+    use gents_protocol::request_input::{CapturedContext, CapturedContextSource};
     let attached = gents_protocol::request_input::RequestAttachment::from_message(&message);
     let tagged = match &message {
         Message::User { content } => content
@@ -97,8 +97,13 @@ pub fn captured_context_for_provider(
 
             if let UserContent::Document(document) = part {
                 if let Some(context) = CapturedContext::from_document(document)? {
+                    let heading = if context.source == CapturedContextSource::Composer {
+                        "Composer context (captured text; URI identifies its source):"
+                    } else {
+                        "Editor context (captured text; URI identifies its editor location):"
+                    };
                     *part = UserContent::text(format!(
-                        "Editor context (captured text; URI identifies its editor location):\n{}",
+                        "{heading}\n{}",
                         serde_json::to_string(&context)?,
                     ));
                 }
