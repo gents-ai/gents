@@ -98,6 +98,7 @@ def capturedContextCases : List RequestInputCase :=
     ("captured-time-mutation", [{selection with capturedAt := "2026-10-20T00:00:01Z"}]),
     ("captured-range-mutation", [{selection with range := some ⟨⟨0, 1⟩, ⟨1, 0⟩⟩}]),
     ("captured-source-mutation", [{selection with source := .clipboard}]),
+    ("captured-composer-source-mutation", [{selection with source := .composer}]),
     ("captured-kind-mutation", [{selection with kind := .file}]),
     ("captured-terminal-name-mutation", [{selection with terminalName := some "shell"}]),
     ("captured-uri-absent", [{selection with uri := none}]),
@@ -136,10 +137,22 @@ def capturedPresentationCases : List RequestInputCase :=
   ]
 
 def capturedCompatibilityCases : List RequestInputCase :=
-  [ { name := "capture-requires-runtime-advertisement", input := {capturedContext := [capturedSelection]},
+  let composer := {capturedSelection with kind := .file, source := .composer, version := none, unsaved := false, range := none}
+  let composerCases := [none, some 1, some 2, some 3, some 4].map fun version =>
+    { name := "composer-runtime-" ++ toString version,
+      input := {capturedContext := [composer]},
+      contextSkillIds := [], runtimeInputVersion := version : RequestInputCase }
+  composerCases ++
+  [ { name := "composer-mixed-captures-and-image", input := {
+        capturedContext := [capturedSelection, composer],
+        attachments := [⟨"pixel.png", "image/png", "aGVsbG8="⟩] },
+      contextSkillIds := [], runtimeInputVersion := some 3 }
+  , { name := "editor-capture-new-runtime", input := {capturedContext := [capturedSelection]},
+      contextSkillIds := [], runtimeInputVersion := some 3 }
+  , { name := "capture-requires-runtime-advertisement", input := {capturedContext := [capturedSelection]},
       contextSkillIds := [], runtimeInputVersion := none }
   , { name := "capture-rejects-unknown-runtime-contract", input := {capturedContext := [capturedSelection]},
-      contextSkillIds := [], runtimeInputVersion := some 3 }
+      contextSkillIds := [], runtimeInputVersion := some 4 }
   , { name := "plain-input-keeps-unadvertised-runtime-support", input := {}, contextSkillIds := [],
       runtimeInputVersion := none }
   ]
@@ -262,7 +275,7 @@ theorem input_boundary_cases_pinned : requestInputCases.map RequestInputCase.acc
     [true, true, false, false, false, false, false, true, true, true, false,
      false, false, true, true, false, false, false, false, false, false, true,
      true, false, false, false, false, false, true, false, false, false, true, true, true, true, true] ++
-      List.replicate 16 true ++ [false, false, false, false] ++ List.replicate 24 true ++ List.replicate 4 false := by native_decide
+      List.replicate 17 true ++ [false, false, false, false] ++ List.replicate 31 true ++ List.replicate 4 false := by native_decide
 
 theorem title_creation_cases_pinned :
     (requestInputCases.drop 7 |>.take 3).map

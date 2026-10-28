@@ -27,6 +27,7 @@ impl CapturedContextKind {
 pub enum CapturedContextSource {
     Editor,
     Clipboard,
+    Composer,
 }
 
 impl CapturedContextSource {
@@ -34,6 +35,7 @@ impl CapturedContextSource {
         match self {
             Self::Editor => "editor",
             Self::Clipboard => "clipboard",
+            Self::Composer => "composer",
         }
     }
 }
