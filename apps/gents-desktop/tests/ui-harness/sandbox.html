@@ -6,7 +6,7 @@
          it proves under the shell's rules: a srcdoc frame inherits them -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' blob: 'sha256-H+jyB75S3mdsAK6IIN7RAq3sf7etiGofY6Sv6F04fcc='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-src 'self'; form-action 'none'"
+      content="default-src 'self'; script-src 'self' blob: 'wasm-unsafe-eval' 'sha256-H+jyB75S3mdsAK6IIN7RAq3sf7etiGofY6Sv6F04fcc='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-src 'self'; form-action 'none'"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>gents UX plugin sandbox harness</title>
