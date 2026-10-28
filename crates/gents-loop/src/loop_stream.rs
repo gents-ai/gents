@@ -49,6 +49,7 @@ mod provider_idle;
 mod repeated_tool_failure;
 mod request_assembly;
 mod schema_argument_repair;
+pub mod tool_batch;
 mod tool_dispatch;
 mod turn_threading;
 
