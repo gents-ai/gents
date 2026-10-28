@@ -30,6 +30,14 @@ describe("a sent message's skills", () => {
     expect(container.textContent).toBe("please /review this");
   });
 
+  it("are drawn where the text names them even before punctuation", () => {
+    const { container } = render(
+      <SentText content="use /review, then ship" skills={["review"]} />,
+    );
+    expect(chips()).toEqual(["/review"]);
+    expect(container.textContent).toBe("use /review, then ship");
+  });
+
   it("leave a message without selected skills as plain text, slash words and all", () => {
     render(<SentText content="see /review and /etc" skills={[]} />);
     expect(chips()).toEqual([]);

@@ -62,7 +62,7 @@ export function SentText({
     () => ({
       preview: (chip) => skillCard(chip, known ?? []),
       fromText: (text) =>
-        [...text.matchAll(/(^|\s)\/([^\s/]+)(?=\s|$)/g)]
+        [...text.matchAll(/(^|\s)\/([A-Za-z0-9_.-]+)(?=[\s.,;:!?)\]]|$)/g)]
           .filter((match) => selected.includes(match[2]!))
           .map((match) => ({
             index: match.index + match[1]!.length,

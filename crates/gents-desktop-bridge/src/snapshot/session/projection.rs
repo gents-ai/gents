@@ -1423,7 +1423,7 @@ mod tests {
                     superseded_by_request: Some("skilled".into()),
                     superseded_by_request_doc_id: Some("doc-skilled".into()),
                     failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
-                    ..request("steered", &["plan"], 1)
+                    ..request("steered", &["review"], 1)
                 },
                 request("plain", &[], 2),
             ],
@@ -1515,9 +1515,10 @@ mod tests {
             sent,
             [
                 (Some("fix it".to_owned()), Some(vec!["review".to_owned()])),
+                /* gents folds a message only into a turn with the same skills */
                 (
                     Some("and plan it".to_owned()),
-                    Some(vec!["plan".to_owned()])
+                    Some(vec!["review".to_owned()])
                 ),
                 (Some("thanks".to_owned()), None),
             ]
