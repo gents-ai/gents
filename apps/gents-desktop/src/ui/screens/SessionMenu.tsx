@@ -7,6 +7,7 @@ import {
   FileText,
   Fingerprint,
   Folder,
+  MailOpen,
   Pencil,
   Pin,
   PinOff,
@@ -27,9 +28,11 @@ import {
 } from "@gents/ui/components/dropdown-menu";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import { useApp } from "@/app/AppContext";
+import { seenMarks } from "@/app/sessionViews";
 import { copyLater } from "@/lib/clipboard";
 import { toastFailure } from "@/lib/failure";
 import { sessionMarkdown } from "@/lib/session-markdown";
+import { seenMarkOf, useIsNew } from "@/lib/seen";
 import { preferences, usePinnedSessions } from "@/preferences";
 import { folderOf } from "../../hooks/chatFolders";
 import { sessionKeyOf } from "../../hooks/fleetStore";
@@ -107,6 +110,7 @@ export function SessionItems({
   const pinned = pinnedKeys.includes(key);
   const folder = folderOf(stores.chat.getState().folders, session.sessionId);
   const title = session.title ?? "Untitled session";
+  const unread = useIsNew(session);
 
   const copyMarkdown = () => {
     copyLater(
@@ -117,6 +121,17 @@ export function SessionItems({
       () => toast("Copied as Markdown"),
       (e: unknown) => toastFailure("copy the session", e),
     );
+  };
+  /* what opening it would record, without opening it */
+  const markRead = () => {
+    const was = seenMarks.of(key);
+    seenMarks.set(key, seenMarkOf(session));
+    toast("Marked as read", {
+      action: {
+        label: "Undo",
+        onClick: () => (was ? seenMarks.set(key, was) : seenMarks.forget(key)),
+      },
+    });
   };
   const pin = (next: boolean) => {
     const at = pinnedKeys.indexOf(key);
@@ -144,6 +159,12 @@ export function SessionItems({
 
   return (
     <>
+      {unread && (
+        <Item onClick={markRead}>
+          <MailOpen />
+          Mark as read
+        </Item>
+      )}
       {onRename && (
         <Item onClick={onRename}>
           <Pencil />
