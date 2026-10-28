@@ -1703,6 +1703,22 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         )?;
     }
     let requests = provider.captured_chat_requests();
+    if matches!(journey, Journey::Goal) {
+        let expected = format!("data:image/png;base64,{}", goal_delivery::IMAGE_DATA);
+        let images: Vec<_> = requests
+            .iter()
+            .filter_map(|request| request["messages"].as_array())
+            .flatten()
+            .filter(|message| message["role"] == "user")
+            .filter_map(|message| message["content"].as_array())
+            .flatten()
+            .filter(|part| part["type"] == "image_url")
+            .collect();
+        ensure!(
+            images.len() == 1 && images[0]["image_url"]["url"] == expected,
+            "the recovered Goal must deliver its frozen image to the provider exactly once: {images:?}"
+        );
+    }
     let user_rounds = requests
         .iter()
         .filter(|request| {
