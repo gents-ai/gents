@@ -70,9 +70,8 @@ impl ToolDyn for CliTool {
     }
 }
 
-/// The argv-prefix rejection is the modeled tool-policy denial, so it must
-/// carry `PolicyDenied` explicitly; `classify_error_text` would otherwise
-/// class its text as `ToolReturnedError`.
+/// The argv-prefix rejection is the modeled tool-policy denial, so it carries
+/// `PolicyDenied` explicitly.
 fn admit_argv_policy(config: &CliToolConfig, argv: &[String]) -> Result<(), LocalToolError> {
     validate_argv_policy(config, argv).map_err(|error| {
         LocalToolError::reported_failure(
@@ -261,11 +260,12 @@ async fn render_cli_outcome(
                 captured_channel(&stdout_raw, &stdout),
                 captured_channel(&stderr_raw, &stderr),
             )
-            .await?;
+            .await
+            .map_err(anyhow::Error::from)?;
     }
-    if let Some(cause) = terminal_cause {
+    if terminal_cause.is_some() {
         return Err(LocalToolError::reported_failure(
-            gents_loop::tool_call_lifecycle::runtime::classify_error_text(&cause),
+            crate::tool_call_lifecycle::FailureClass::ToolReturnedError,
             rendered,
         ));
     }
@@ -401,7 +401,7 @@ mod tests {
             crate::tool_call_lifecycle::ToolOutcome::Failed {
                 class,
                 ..
-            } if class == gents_loop::tool_call_lifecycle::runtime::classify_error_text("timed out after 1s")
+            } if class == crate::tool_call_lifecycle::FailureClass::ToolReturnedError
         ));
     }
 

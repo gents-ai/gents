@@ -22,7 +22,6 @@ typescript = ["dep:ts-rs"]
 [dependencies]
 rapidhash = { workspace = true }
 ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "no-serde-warnings"] }
-anyhow = { workspace = true }
 async-stream = "0.3"
 async-trait = "0.1"
 base64 = { workspace = true }

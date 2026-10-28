@@ -2,6 +2,7 @@ use std::fmt;
 use std::future::Future;
 
 use bytes::Bytes;
+use gents_protocol::error_chain::ErrorChain;
 use rig::http_client::{
     self, HttpClientExt, LazyBody, MultipartForm, Request, Response, StreamingResponse,
 };
@@ -10,6 +11,33 @@ use sha2::{Digest, Sha256};
 
 use super::scope::{self, CaptureClaim, PendingCapture, RequestCaptureScope};
 use super::RenderedRequestSource;
+
+/// Why the capturing transport refused a provider send. Rig renders a
+/// transport failure by its `Display` alone, so each message carries its whole
+/// cause; the source keeps the capture failure typed for chain walkers.
+#[derive(Debug, thiserror::Error)]
+enum TransportError {
+    #[error(
+        "a completion request to {path} reached the provider transport for request \
+         {request_id} with no armed rendered-request capture; the completion loop that issued \
+         it does not install `LoopConfig::on_rendered_request`, so the call cannot be made \
+         durable and was not issued"
+    )]
+    UnexplainedSend { request_id: String, path: String },
+    #[error(
+        "rendered-request capture failed at stage {} for scope {capture_scope} turn \
+         {turn_index} attempt {attempt}; the provider call was not issued: {}",
+        .source.stage().as_str(),
+        ErrorChain(.source)
+    )]
+    CaptureFailed {
+        capture_scope: String,
+        turn_index: usize,
+        attempt: u32,
+        #[source]
+        source: scope::CaptureBodyError,
+    },
+}
 
 /// Persist the exact provider body before sending; a failed capture refuses
 /// the request (`capture_failure_blocks_send` in `Proofs/RenderedCapture.lean`).
@@ -144,9 +172,12 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
                 "refusing provider send: a completion body reached the transport with no armed \
                  rendered-request capture"
             );
-            return Err(http_client::Error::Instance(
-                anyhow::anyhow!(scope::unexplained_send_message(scope.context(), &path)).into(),
-            ));
+            return Err(http_client::Error::Instance(Box::new(
+                TransportError::UnexplainedSend {
+                    request_id: scope.context().request_id.clone(),
+                    path,
+                },
+            )));
         }
         CaptureDecision::Capture {
             scope,
@@ -204,7 +235,8 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
             scope.mark_claimed_durable(&claimed, body_fingerprint);
             Ok(())
         }
-        Err((stage, error)) => {
+        Err(error) => {
+            let stage = error.stage();
             // Never log the payload.
             tracing::error!(
                 capture_scope = %capture_scope,
@@ -213,19 +245,17 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
                 turn_index,
                 attempt,
                 stage = stage.as_str(),
-                error = %format!("{error:#}"),
+                error = %ErrorChain(&error),
                 "refusing provider send: rendered-request capture failed"
             );
-            Err(http_client::Error::Instance(
-                anyhow::anyhow!(scope::capture_failure_message(
-                    stage,
-                    &capture_scope,
+            Err(http_client::Error::Instance(Box::new(
+                TransportError::CaptureFailed {
+                    capture_scope,
                     turn_index,
                     attempt,
-                    &error,
-                ))
-                .into(),
-            ))
+                    source: error,
+                },
+            )))
         }
     }
 }
@@ -434,7 +464,7 @@ mod tests {
     use crate::rendered_request::scope::{arm, scope_request, test_scope, CaptureScopeKind};
     use crate::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, RenderedCompletionRequest, RenderedRequestCaptureSink,
-        RenderedRequestContext,
+        RenderedRequestContext, RenderedRequestError,
     };
 
     fn context() -> RenderedRequestContext {
@@ -468,7 +498,13 @@ mod tests {
     }
 
     fn failing_sink() -> RenderedRequestCaptureSink {
-        Arc::new(|_| Box::pin(async { anyhow::bail!("injected capture failure") }))
+        Arc::new(|_| {
+            Box::pin(async {
+                Err(RenderedRequestError::Sink(
+                    "injected capture failure".into(),
+                ))
+            })
+        })
     }
 
     fn trace() -> AssemblyTrace {
@@ -771,10 +807,15 @@ mod tests {
         .await;
 
         assert!(
-            error
-                .to_string()
-                .contains("no armed rendered-request capture"),
-            "the refusal must name its cause: {error}"
+            matches!(
+                &error,
+                http_client::Error::Instance(refusal)
+                    if matches!(
+                        refusal.downcast_ref::<TransportError>(),
+                        Some(TransportError::UnexplainedSend { .. })
+                    )
+            ),
+            "the refusal must name its cause: {error:?}"
         );
         assert_eq!(
             inner.sends.load(Ordering::SeqCst),

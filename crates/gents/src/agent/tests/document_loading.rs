@@ -216,12 +216,14 @@ where
             let owner = &owner;
             let id = &id;
             Box::pin(async move {
-                Ok(crate::config_client::read_desired_state_record_in_txn(
-                    txn, collection, owner, id,
+                Ok::<_, anyhow::Error>(
+                    crate::config_client::read_desired_state_record_in_txn(
+                        txn, collection, owner, id,
+                    )
+                    .await?
+                    .expect("installed document")
+                    .1,
                 )
-                .await?
-                .expect("installed document")
-                .1)
             })
         },
     )

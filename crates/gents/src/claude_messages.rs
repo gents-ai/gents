@@ -73,8 +73,8 @@ pub enum MessagesParseError {
     /// The model declined the request: Anthropic closes the turn with
     /// `message_delta.stop_reason == "refusal"` and no usable content block.
     /// Resending the identical body earns the identical refusal, so this is a
-    /// permanent, non-retryable failure (see `provider_message_is_model_refusal`
-    /// in gents-loop). Surfacing it here keeps the owned loop from mistaking a
+    /// permanent, non-retryable failure; Rig carries it to the loop only as this
+    /// display, which `gents_loop::error::ProviderReport` reads. Surfacing it here keeps the owned loop from mistaking a
     /// content-free refusal for a transient "no visible output" turn and
     /// resampling it until the transport budget is exhausted.
     #[error("the model declined to respond (stop_reason: refusal) (request-id {request_id})")]

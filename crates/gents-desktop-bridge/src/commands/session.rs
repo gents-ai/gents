@@ -369,10 +369,9 @@ pub async fn message_attachments(
         .map(|did| format!(", requester_did: {{ _eq: \"{}\" }}", escape(did)))
         .unwrap_or_default();
     let query = format!("{{ AgentMessage(filter: {{ session_id: {{ _eq: \"{}\" }}, node_did: {{ _eq: \"{}\" }}, message_key: {{ _eq: \"{}\" }}{requester} }}, limit: 2) {{ _docID }} }}", escape(session_id), escape(node_did), escape(message_key));
-    let rows = access
-        .execute(&query)
-        .await
-        .map_err(|e| BridgeError::untyped(format!("{e:#}")))?;
+    let rows = access.execute(&query).await.map_err(|e| {
+        BridgeError::untyped(gents_protocol::error_chain::ErrorChain(&e).to_string())
+    })?;
     let rows = rows["data"]["AgentMessage"]
         .as_array()
         .ok_or_else(|| BridgeError::untyped("Message attachments are unavailable"))?;

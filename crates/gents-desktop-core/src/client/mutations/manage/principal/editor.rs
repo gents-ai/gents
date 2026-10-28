@@ -222,7 +222,7 @@ mod tests {
                 let plan = &plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             })
             .await?;
@@ -272,7 +272,7 @@ mod tests {
                     .await?;
                     assert_eq!(value["name"], "Updated");
                     assert_eq!(value["auth"]["key"], "private-test-credential");
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             })
             .await?;

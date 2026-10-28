@@ -92,14 +92,32 @@ pub(crate) async fn submit_enrollment_decision(
         .json()
         .await
         .context("decoding enrollment decision response")?;
-    anyhow::ensure!(
-        status.is_success(),
-        "runtime rejected enrollment decision ({status}): {}",
-        body.get("error")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("unknown error")
-    );
+    if !status.is_success() {
+        return Err(EnrollmentDecisionRejected {
+            status,
+            message: body
+                .get("error")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown error")
+                .to_string(),
+            code: body
+                .get("code")
+                .cloned()
+                .and_then(|code| serde_json::from_value(code).ok()),
+        }
+        .into());
+    }
     Ok(body)
+}
+
+/// The runtime refused a signed enrollment decision; `code` says why when the
+/// projection refused it.
+#[derive(Debug, thiserror::Error)]
+#[error("runtime rejected enrollment decision ({status}): {message}")]
+pub struct EnrollmentDecisionRejected {
+    pub status: reqwest::StatusCode,
+    pub message: String,
+    pub code: Option<gents_protocol::enrollment::EnrollmentDecisionRefusalCode>,
 }
 
 pub(super) async fn pending_enrollments(args: P2pAccessArgs) -> Result<()> {

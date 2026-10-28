@@ -17,6 +17,7 @@ use crate::rig_compat;
 use crate::{HookAction, ToolCallHookAction};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
+use gents_protocol::error_chain::ErrorChain;
 use gents_protocol::message::{
     AssistantContent, Message, ToolCall, ToolResult, ToolResultContent, UserContent,
 };
@@ -33,7 +34,7 @@ use rig::streaming::StreamedAssistantContent;
 use crate::output_obligation::OutputObligationCheck;
 use crate::provider_audit::ClaudeAuditEvent;
 use crate::session_hook::SessionHook;
-use crate::stream_processor::AssistantTurnAccumulator;
+use crate::stream_processor::{AssistantTurnAccumulator, StreamProcessorError};
 use crate::tool_call_lifecycle::runtime::{
     current_tool_runtime_context, deadline_remaining, scope_request_tool_execution_with_session,
     ToolOutcome,
@@ -53,13 +54,14 @@ mod turn_threading;
 
 pub use contract::{
     AuthoredInput, EstimateSeedGuard, FinishOrIntake, FoldedPrompt, LoopConfig, LoopReplayInput,
-    LoopStreamItem, RenderedRequestSink, ReplayEstimateSeed, ReplayEvidenceResolver,
-    ReplayEvidenceRow, ReplayEvidenceViolation, SteeringSnapshot, StructuredOutputConfig,
-    TaggedMessage, TurnCompactionOutcome, TurnCompactionRequest,
+    LoopStreamItem, RenderedRequestSink, ReplayEstimateSeed, ReplayEvidenceResolveError,
+    ReplayEvidenceResolver, ReplayEvidenceRow, ReplayEvidenceViolation, SteeringSnapshot,
+    StructuredOutputConfig, TaggedMessage, TurnCompactionError, TurnCompactionOutcome,
+    TurnCompactionRequest,
 };
 pub use one_shot::{
-    run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotNoVisibleOutput,
-    OneShotProviderFailure,
+    run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotError,
+    OneShotNoVisibleOutput, OneShotProviderFailure,
 };
 pub use repeated_tool_failure::REPEATED_TOOL_FAILURE_PREFIX;
 pub use request_assembly::resolve_replay_evidence;
@@ -98,9 +100,10 @@ pub use aggregate_budget::{
 pub const NO_VISIBLE_OUTPUT_PREFIX: &str = "completion produced no visible output: ";
 
 pub fn is_no_visible_output_failure(error: &LoopStreamError) -> bool {
-    error
-        .provider_message()
-        .is_some_and(|reason| reason.starts_with(NO_VISIBLE_OUTPUT_PREFIX))
+    matches!(
+        error.loop_verdict(),
+        Some((crate::error::LoopVerdict::NoVisibleOutput, _))
+    )
 }
 
 pub fn run_loop_stream<M, H>(
@@ -116,7 +119,6 @@ where
     H: SessionHook + 'static,
 {
     owned_loop_stream(model, hook, prompt, history, tools, config)
-        .map(|item| item.map_err(rig_compat::loop_stream_error))
 }
 
 fn owned_loop_stream<M, H>(
@@ -126,7 +128,7 @@ fn owned_loop_stream<M, H>(
     history: Vec<TaggedMessage>,
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     config: LoopConfig,
-) -> impl Stream<Item = Result<LoopStreamItem, StreamingError>>
+) -> impl Stream<Item = Result<LoopStreamItem, LoopStreamError>>
 where
     M: CompletionModel + 'static,
     M::StreamingResponse: 'static,
@@ -321,7 +323,7 @@ where
                             .await
                             .map_err(|error| {
                                 StreamingError::Completion(CompletionError::ProviderError(format!(
-                                    "capturing rendered completion request failed: {error:#}"
+                                    "capturing rendered completion request failed: {}", ErrorChain(&error)
                                 )))
                             })?;
                     }
@@ -342,13 +344,15 @@ where
                     {
                         Ok(stream) => break (stream, activity, audit_receiver, advertised_tools),
                         Err(failure) => {
-                            let (classified, error_text) = failure.classify();
-                            match retry.on_pre_stream_failure(
-                                &classified,
-                                &error_text,
-                                Utc::now(),
-                                config.deadline,
-                            ) {
+                            let failure = failure.classify();
+                            let directive =
+                                retry.on_pre_stream_failure(&failure, Utc::now(), config.deadline);
+                            let crate::error::ClassifiedFailure {
+                                error: classified,
+                                text: error_text,
+                                ..
+                            } = failure;
+                            match directive {
                                 PreStreamDirective::RetryAfter { delay, kind } => {
                                     yield LoopStreamItem::AttemptFailed {
                                         turn: turn_index,
@@ -509,22 +513,25 @@ where
                         item
                     }
                     Err(failure) => {
-                        let (classified, error_text) = failure.classify();
+                        let failure = failure.classify();
                         drop(stream);
                         // A usage limit or a model refusal is permanent while
                         // streaming too: resampling after partial output earns
                         // the same result, so neither takes the mid-stream
                         // retract-and-resample lane.
-                        if !saw_stream_item
-                            || matches!(classified, InferenceError::UsageLimited(_))
-                            || crate::error::provider_message_is_model_refusal(&error_text)
-                        {
-                            match retry.on_pre_stream_failure(
-                                &classified,
-                                &error_text,
-                                Utc::now(),
-                                config.deadline,
-                            ) {
+                        let pre_stream = !saw_stream_item
+                            || matches!(failure.error, InferenceError::UsageLimited(_))
+                            || failure.report.refusal;
+                        let directive = pre_stream.then(|| {
+                            retry.on_pre_stream_failure(&failure, Utc::now(), config.deadline)
+                        });
+                        let crate::error::ClassifiedFailure {
+                            error: classified,
+                            text: error_text,
+                            ..
+                        } = failure;
+                        if let Some(directive) = directive {
+                            match directive {
                                 PreStreamDirective::RetryAfter { delay, kind } => {
                                     yield LoopStreamItem::AttemptFailed {
                                         turn: turn_index,
@@ -796,10 +803,13 @@ where
                     .as_deref()
                     .map(|error| format!("; terminal output did not satisfy the structured contract: {error}"))
                     .unwrap_or_default();
-                Err(StreamingError::Completion(CompletionError::ProviderError(format!(
-                    "{AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX}limit={}, used={} after provider call{}",
-                    ledger.limit, ledger.used, contract_detail,
-                ))))?;
+                Err(rig_compat::loop_verdict_error(
+                    crate::error::LoopVerdict::AggregateTokenBudgetExhausted,
+                    format!(
+                        "{AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX}limit={}, used={} after provider call{}",
+                        ledger.limit, ledger.used, contract_detail,
+                    ),
+                ))?;
                 unreachable!("Err(..)? above ends the stream");
             }
 
@@ -827,12 +837,13 @@ where
                         );
                     }
                     MidStreamDirective::Fail { reason } => {
-                        Err(StreamingError::Completion(
-                            CompletionError::ProviderError(format!(
+                        Err(rig_compat::loop_verdict_error(
+                            crate::error::LoopVerdict::NoVisibleOutput,
+                            format!(
                                 "{NO_VISIBLE_OUTPUT_PREFIX}{reason}; \
                                  raw_output_preview=\"\"; \
                                  finish_metadata=unavailable_at_rig_streaming_boundary"
-                            )),
+                            ),
                         ))?;
                         unreachable!("Err(..)? above ends the stream");
                     }
@@ -864,10 +875,9 @@ where
                         );
                     }
                     MidStreamDirective::Fail { reason } => {
-                        Err(StreamingError::Completion(
-                            CompletionError::ProviderError(format!(
-                                "structured-output validation failed: {error}; {reason}"
-                            )),
+                        Err(rig_compat::loop_verdict_error(
+                            crate::error::LoopVerdict::StructuredOutputInvalid,
+                            format!("structured-output validation failed: {error}; {reason}"),
                         ))?;
                         unreachable!("Err(..)? above ends the stream");
                     }
@@ -1167,7 +1177,7 @@ where
                 if let Some(gate) = config.output_obligation_gate.as_ref() {
                     let unmet = gate.unmet().await.map_err(|error| {
                         StreamingError::Completion(CompletionError::ProviderError(format!(
-                            "checking output obligations failed: {error:#}"
+                            "checking output obligations failed: {}", ErrorChain(&error)
                         )))
                     })?;
                     if !unmet.is_empty() {
@@ -1194,7 +1204,7 @@ where
                     let (reply, decision) = tokio::sync::oneshot::channel();
                     yield LoopStreamItem::FinishOrIntake { text: turn_text.clone(), reply };
                     match decision.await.map_err(|error| StreamingError::Completion(CompletionError::ProviderError(format!("finish acknowledgment dropped: {error}"))))?
-                        .map_err(|error| StreamingError::Completion(CompletionError::ProviderError(format!("finish or intake failed: {error:#}"))))? {
+                        .map_err(|error| StreamingError::Completion(CompletionError::ProviderError(format!("finish or intake failed: {}", ErrorChain(&error)))))? {
                         FinishOrIntake::Finished => {
                             yield LoopStreamItem::Final { text: turn_text.clone() };
                             break 'turns;
@@ -1229,7 +1239,7 @@ where
 }
 
 async fn receive_steering(
-    committed: tokio::sync::oneshot::Receiver<anyhow::Result<Vec<FoldedPrompt>>>,
+    committed: tokio::sync::oneshot::Receiver<Result<Vec<FoldedPrompt>, StreamProcessorError>>,
 ) -> Result<Vec<FoldedPrompt>, StreamingError> {
     committed
         .await
@@ -1240,7 +1250,8 @@ async fn receive_steering(
         })?
         .map_err(|error| {
             StreamingError::Completion(CompletionError::ProviderError(format!(
-                "steering publication failed: {error:#}"
+                "steering publication failed: {}",
+                ErrorChain(&error)
             )))
         })
 }

@@ -95,7 +95,7 @@ async fn transaction_payload_reads_cross_pages_and_reject_conflicting_segments()
                         &transcript_message_create_variables(&header)?,
                     )
                     .await?;
-                Ok((
+                Ok::<_, anyhow::Error>((
                     crate::graphql::created_doc_id(&response, "AgentMessage")?,
                     close_id,
                 ))
@@ -131,7 +131,7 @@ async fn transaction_payload_reads_cross_pages_and_reject_conflicting_segments()
             )
             .await?;
             assert_eq!(payload.text, "x".repeat(129));
-            Ok(())
+            Ok::<_, anyhow::Error>(())
         })
     })
     .await
@@ -146,6 +146,7 @@ async fn transaction_payload_reads_cross_pages_and_reject_conflicting_segments()
             )
             .await
             .map(|_| ())
+            .map_err(anyhow::Error::from)
         })
     })
     .await
@@ -166,7 +167,7 @@ async fn transaction_payload_reads_cross_pages_and_reject_conflicting_segments()
             )
             .await
             .is_err());
-            Ok(())
+            Ok::<_, anyhow::Error>(())
         })
     })
     .await

@@ -348,7 +348,7 @@ pub fn split_messages_for_summary_with_counter(
     messages: Vec<Message>,
     keep_recent_tokens: usize,
     counter: &crate::provider_input::ProviderInputCounter,
-) -> anyhow::Result<(Vec<Message>, Vec<Message>)> {
+) -> Result<(Vec<Message>, Vec<Message>), super::CompactionError> {
     split_messages_for_summary_with_counter_bounded(messages, keep_recent_tokens, counter, None)
 }
 
@@ -357,7 +357,7 @@ pub fn split_messages_for_summary_with_counter_bounded(
     keep_recent_tokens: usize,
     counter: &crate::provider_input::ProviderInputCounter,
     max_compacted_prefix_messages: Option<usize>,
-) -> anyhow::Result<(Vec<Message>, Vec<Message>)> {
+) -> Result<(Vec<Message>, Vec<Message>), super::CompactionError> {
     if messages.len() <= 1 {
         if max_compacted_prefix_messages.is_some() {
             return Err(super::ReductionError::CannotFit.into());

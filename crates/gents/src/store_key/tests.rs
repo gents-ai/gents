@@ -270,9 +270,7 @@ fn only_a_definitely_absent_keychain_item_is_a_missing_key() {
             incompatible_store(&unavailable, data).is_none(),
             "Keychain status {code} must not refuse the store"
         );
-        let typed = unavailable
-            .downcast_ref::<StoreKeyUnavailable>()
-            .expect("typed unavailable key");
+        let typed = unavailable.unavailable().expect("typed unavailable key");
         assert_eq!(typed.code, code);
         assert!(unavailable.to_string().contains("the store is unchanged"));
     }

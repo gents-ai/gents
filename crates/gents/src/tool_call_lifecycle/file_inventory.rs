@@ -104,7 +104,7 @@ pub(super) async fn retain_inventory(
         let mut failures = FAIL_NEXT.lock().unwrap();
         if let Some(index) = failures.iter().position(|id| id == tool_call_doc_id) {
             failures.remove(index);
-            return Err(crate::config_client::classified_conflict_for_test());
+            return Err(crate::config_client::classified_conflict_for_test().into());
         }
     }
     Ok(())

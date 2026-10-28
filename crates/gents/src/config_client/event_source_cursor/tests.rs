@@ -76,7 +76,7 @@ async fn create_source(access: &ConfigAccess, collection: &str, label: &str) -> 
                         escape_graphql_string(label)
                     ))
                     .await?;
-                crate::graphql::created_doc_id(&response, collection)
+                Ok::<_, anyhow::Error>(crate::graphql::created_doc_id(&response, collection)?)
             })
         })
         .await

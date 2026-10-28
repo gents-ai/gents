@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
-use gents_loop::loop_stream::{LoopReplayInput, TaggedMessage};
+use gents_loop::loop_stream::{
+    LoopReplayInput, ReplayEvidenceResolveError, ReplayEvidenceViolation, TaggedMessage,
+};
 
 pub(crate) fn owned_replay_input(
     node: Arc<EmbeddedNode>,
@@ -33,7 +35,10 @@ pub(crate) fn owned_replay_input(
                     &request.doc_id,
                     &request_commit_cid,
                 )
-                .await?;
+                .await
+                .map_err(|error| ReplayEvidenceResolveError::Storage {
+                    source: error.into(),
+                })?;
                 let boundary_elapsed_ms = started.elapsed().as_millis() as u64;
                 let resolved = crate::session::resolve_canonical_replay_tags(
                     &node,
@@ -49,7 +54,8 @@ pub(crate) fn owned_replay_input(
                     &boundary,
                     &tags,
                 )
-                .await?;
+                .await
+                .map_err(replay_resolution_error)?;
                 tracing::info!(
                     target: "gents::provider_input",
                     request_id = %request.request_id,
@@ -181,4 +187,31 @@ mod tests {
             .expect("canonical rows can be projected");
         assert_eq!(projected[1].source, Some(first));
     }
+}
+
+/// A violation anywhere under the resolver's context is a request error the
+/// loop refuses; every other failure is storage the loop reports.
+fn replay_resolution_error(error: anyhow::Error) -> ReplayEvidenceResolveError {
+    match error.downcast::<ReplayEvidenceViolation>() {
+        Ok(violation) => ReplayEvidenceResolveError::Violation(violation),
+        Err(error) => ReplayEvidenceResolveError::Storage {
+            source: error.into(),
+        },
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn replay_violation_is_classified_through_context() {
+    let error = anyhow::Error::new(ReplayEvidenceViolation("invalid canonical join".into()))
+        .context("resolving required replay");
+    assert!(matches!(
+        replay_resolution_error(error),
+        ReplayEvidenceResolveError::Violation(_)
+    ));
+    let error = anyhow::anyhow!("canonical replay tag belongs to another physical request");
+    assert!(matches!(
+        replay_resolution_error(error),
+        ReplayEvidenceResolveError::Storage { .. }
+    ));
 }

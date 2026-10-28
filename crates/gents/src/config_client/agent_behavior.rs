@@ -119,7 +119,7 @@ mod tests {
                             .await?
                             .unwrap();
                     assert_eq!(actual_foreign, *foreign);
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             })
             .await?;
@@ -136,7 +136,7 @@ mod tests {
                             .as_ref(),
                         Some(behavior)
                     );
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             })
             .await?;

@@ -198,7 +198,11 @@ impl EmbeddedRemoteP2pAdmin {
             },
         )
         .await
-        .map_err(|error| RemoteP2pAdminError::LocalError(format!("{error:#}")))?;
+        .map_err(|error| {
+            RemoteP2pAdminError::LocalError(
+                gents_protocol::error_chain::ErrorChain(&error).to_string(),
+            )
+        })?;
         Ok(response
             .pointer(&format!("/data/{collection}"))
             .and_then(serde_json::Value::as_array)

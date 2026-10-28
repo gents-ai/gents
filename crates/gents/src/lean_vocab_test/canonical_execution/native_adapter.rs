@@ -1758,9 +1758,10 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     .await;
                     match attempted {
                         Err(error)
-                            if error
-                                .downcast_ref::<crate::config_client::ReentrantEmbeddedWrite>()
-                                .is_some() =>
+                            if matches!(
+                                error.downcast_ref::<crate::config_client::ConfigClientError>(),
+                                Some(crate::config_client::ConfigClientError::Reentrant(_))
+                            ) =>
                         {
                             native.observe(false).await
                         }

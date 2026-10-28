@@ -569,7 +569,7 @@ async fn install_event_delivery_config(access: &gents::config_client::ConfigAcce
             let query = format!("{{ Trigger(filter: {{node_did: {{_eq: \"{}\"}}, trigger_id: {{_eq: \"{}\"}}}}) {{_docID}} }}",
                 escape_graphql_string(NODE_DID), escape_graphql_string(EVENT_SOURCE_TRIGGER_ID));
             let response = txn.execute(&query).await?;
-            Ok(response["data"]["Trigger"][0]["_docID"].as_str()
+            Ok::<_, anyhow::Error>(response["data"]["Trigger"][0]["_docID"].as_str()
                 .expect("persisted trigger physical identity").to_owned())
         })
     }).await.expect("persist event source configuration")

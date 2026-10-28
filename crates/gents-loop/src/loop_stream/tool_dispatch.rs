@@ -400,6 +400,8 @@ mod tests {
 
     #[async_trait::async_trait]
     impl SessionHook for EffectHook {
+        type Error = std::convert::Infallible;
+
         async fn admit_tool_effect(
             &self,
             _: &str,

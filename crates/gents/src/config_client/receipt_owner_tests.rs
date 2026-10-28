@@ -1,13 +1,26 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
 use axum::extract::State;
 use axum::routing::post;
 use axum::{Json, Router};
 use serde_json::{json, Value};
 
 use super::ConfigAccess;
+
+type TestResult<T = ()> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+#[derive(Debug, thiserror::Error)]
+enum ReceiptProbeError {
+    #[error("reading stable-id receipt")]
+    Read(#[source] reqwest::Error),
+    #[error("stable-id receipt status")]
+    Status(#[source] reqwest::Error),
+    #[error("decoding stable-id receipt")]
+    Decode(#[source] reqwest::Error),
+    #[error("stable-id receipt query")]
+    GraphqlErrors(#[source] gents_protocol::database_error::GraphqlFailure),
+}
 
 #[derive(Clone, Copy)]
 enum Scenario {
@@ -48,11 +61,9 @@ async fn scripted_graphql(
         match state.scenario {
             Scenario::CommitThenAmbiguous | Scenario::ReceiptTransientThenPresent => {
                 state.durable.store(true, Ordering::SeqCst);
-                Json(json!({"errors": [{"message": "transaction conflict. please retry"}]}))
+                Json(transaction_conflict())
             }
-            Scenario::AbsentThenCommit if attempt == 1 => {
-                Json(json!({"errors": [{"message": "transaction conflict. please retry"}]}))
-            }
+            Scenario::AbsentThenCommit if attempt == 1 => Json(transaction_conflict()),
             Scenario::AbsentThenCommit => {
                 state.durable.store(true, Ordering::SeqCst);
                 Json(json!({"data": {"create_ReceiptFact": [{"_docID": "stable-id"}]}}))
@@ -61,7 +72,7 @@ async fn scripted_graphql(
     } else {
         let attempt = state.receipt_count.fetch_add(1, Ordering::SeqCst) + 1;
         if matches!(state.scenario, Scenario::ReceiptTransientThenPresent) && attempt == 1 {
-            return Json(json!({"errors": [{"message": "transaction conflict. please retry"}]}));
+            return Json(transaction_conflict());
         }
         let rows = if state.durable.load(Ordering::SeqCst) {
             vec![json!({"stable_id": "stable-id"})]
@@ -72,7 +83,7 @@ async fn scripted_graphql(
     }
 }
 
-async fn start_server(state: ScriptedWrite) -> Result<(String, tokio::task::JoinHandle<()>)> {
+async fn start_server(state: ScriptedWrite) -> TestResult<(String, tokio::task::JoinHandle<()>)> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
     let router = Router::new()
@@ -84,20 +95,22 @@ async fn start_server(state: ScriptedWrite) -> Result<(String, tokio::task::Join
     Ok((format!("http://{address}/api/v0/graphql"), server))
 }
 
-async fn receipt_once(endpoint: &str) -> Result<bool> {
+async fn receipt_once(endpoint: &str) -> Result<bool, ReceiptProbeError> {
     let response = reqwest::Client::new()
         .post(endpoint)
         .json(&json!({"query": "{ ReceiptFact { stable_id } }"}))
         .send()
         .await
-        .context("reading stable-id receipt")?
+        .map_err(ReceiptProbeError::Read)?
         .error_for_status()
-        .context("stable-id receipt status")?
+        .map_err(ReceiptProbeError::Status)?
         .json::<Value>()
         .await
-        .context("decoding stable-id receipt")?;
+        .map_err(ReceiptProbeError::Decode)?;
     if let Some(errors) = response.get("errors") {
-        anyhow::bail!("graphql returned errors: {errors}");
+        return Err(ReceiptProbeError::GraphqlErrors(
+            gents_protocol::database_error::GraphqlFailure::new("receipt", errors.clone()),
+        ));
     }
     Ok(response
         .pointer("/data/ReceiptFact")
@@ -109,7 +122,7 @@ const MUTATION: &str =
     r#"mutation { create_ReceiptFact(input: {stable_id: "stable-id"}) { _docID } }"#;
 
 #[tokio::test]
-async fn confirmed_receipt_recovers_without_reposting() -> Result<()> {
+async fn confirmed_receipt_recovers_without_reposting() -> TestResult {
     let state = ScriptedWrite::new(Scenario::CommitThenAmbiguous);
     let (endpoint, server) = start_server(state.clone()).await?;
     let access = ConfigAccess::graphql(endpoint.clone());
@@ -127,7 +140,7 @@ async fn confirmed_receipt_recovers_without_reposting() -> Result<()> {
 }
 
 #[tokio::test]
-async fn successful_absent_receipt_allows_one_repost() -> Result<()> {
+async fn successful_absent_receipt_allows_one_repost() -> TestResult {
     let state = ScriptedWrite::new(Scenario::AbsentThenCommit);
     let (endpoint, server) = start_server(state.clone()).await?;
     let access = ConfigAccess::graphql(endpoint.clone());
@@ -143,7 +156,7 @@ async fn successful_absent_receipt_allows_one_repost() -> Result<()> {
 }
 
 #[tokio::test]
-async fn transient_receipt_read_retries_without_reposting() -> Result<()> {
+async fn transient_receipt_read_retries_without_reposting() -> TestResult {
     let state = ScriptedWrite::new(Scenario::ReceiptTransientThenPresent);
     let (endpoint, server) = start_server(state.clone()).await?;
     let access = ConfigAccess::graphql(endpoint.clone());
@@ -179,4 +192,12 @@ fn delegated_bearer_remains_caller_owned_and_is_redacted() {
             super::GraphqlEndpoint::with_delegated_authorization(endpoint.url(), invalid).is_err()
         );
     }
+}
+
+/// The conflict reply as the pinned DefraDB serializes it.
+fn transaction_conflict() -> Value {
+    serde_json::to_value(query::QueryResponse::transaction_conflict(
+        query::executor::TXN_CONFLICT_MESSAGE,
+    ))
+    .expect("serialize DefraDB conflict")
 }

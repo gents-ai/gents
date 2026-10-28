@@ -101,7 +101,7 @@ pub(crate) mod tests {
                                 .await?;
                             ids.push(crate::graphql::created_doc_id(&response, "RescanSource")?);
                         }
-                        Ok(ids)
+                        Ok::<_, anyhow::Error>(ids)
                     })
                 })
                 .await

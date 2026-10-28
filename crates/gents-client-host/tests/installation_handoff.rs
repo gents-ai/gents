@@ -167,7 +167,7 @@ async fn a_host_without_retirement_control_releases_history_through_its_idle_lif
                     drop(lock);
                     break;
                 }
-                Err(error) if error.is::<gents::home::StoreLockHeld>() => {
+                Err(error) if error.lock_held().is_some() => {
                     tokio::time::sleep(Duration::from_millis(20)).await
                 }
                 Err(error) => panic!("{error:#}"),

@@ -36,6 +36,7 @@ required-features = ["live-e2e"]
 rapidhash = { workspace = true }
 ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat"] }
 anyhow.workspace = true
+thiserror.workspace = true
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
 bs58 = "0.5"

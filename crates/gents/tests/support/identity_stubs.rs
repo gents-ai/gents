@@ -28,14 +28,19 @@ impl NodeIdentity for StubNodeIdentity {
         &self.did
     }
 
-    async fn sign(&self, _payload: &[u8]) -> anyhow::Result<Vec<u8>> {
+    async fn sign(&self, _payload: &[u8]) -> Result<Vec<u8>, gents::identity::IdentityError> {
         panic!(
             "StubNodeIdentity::sign called for {} — routing tests must not sign",
             self.did
         )
     }
 
-    async fn verify(&self, _did: &str, _payload: &[u8], _sig: &[u8]) -> anyhow::Result<bool> {
+    async fn verify(
+        &self,
+        _did: &str,
+        _payload: &[u8],
+        _sig: &[u8],
+    ) -> Result<bool, gents::identity::IdentityError> {
         panic!(
             "StubNodeIdentity::verify called for {} — routing tests must not verify",
             self.did
@@ -75,11 +80,16 @@ impl NodeIdentity for SigningStubNodeIdentity {
         &self.did
     }
 
-    async fn sign(&self, payload: &[u8]) -> anyhow::Result<Vec<u8>> {
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, gents::identity::IdentityError> {
         Ok(self.signature(payload))
     }
 
-    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> anyhow::Result<bool> {
+    async fn verify(
+        &self,
+        did: &str,
+        payload: &[u8],
+        signature: &[u8],
+    ) -> Result<bool, gents::identity::IdentityError> {
         Ok(did == self.did && signature == self.signature(payload))
     }
 

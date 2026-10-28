@@ -531,7 +531,7 @@ impl Session {
                 let (filter, text) = (&filter, &text);
                 Box::pin(async move {
                     crate::defra_query::validate_filter(txn, collection, filter).await?;
-                    txn.execute(text).await
+                    Ok::<_, anyhow::Error>(txn.execute(text).await?)
                 })
             },
         )

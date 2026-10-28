@@ -27,9 +27,9 @@ fn query(request: &ChatSendRequest) -> ChatSubmissionQuery {
 }
 
 async fn rows(core: &ClientCore) -> Result<Value> {
-    ConfigAccess::local(core.node_arc())
+    Ok(ConfigAccess::local(core.node_arc())
         .execute("{ AgentRequest { request_id session_id } }")
-        .await
+        .await?)
 }
 
 #[test]

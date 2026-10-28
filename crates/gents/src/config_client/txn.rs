@@ -8,7 +8,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
 use defra_node::{EmbeddedNode, QueryRequest};
 use futures::future::BoxFuture;
 use identity::Did;
@@ -22,8 +21,23 @@ use super::write_telemetry::{
     record_slow_native_phase, ConflictSource, ReceiptRecovery, RetryOwner, RollbackStatus,
     WriteAttemptEvent, WriteAttemptOrdinal, WriteBackend, WriteMode, WriteOperation, WriteOutcome,
 };
-use super::{graphql_api_base, ConfigAccess, GraphqlEndpoint};
+use super::{
+    graphql_api_base, ConfigAccess, ConfigClientError, GraphqlEndpoint, TransactionFailure,
+};
 use crate::drop_cleanup::DropCleanup;
+
+type Result<T, E = ConfigClientError> = std::result::Result<T, E>;
+
+/// Failure of a stable-id receipt write: the write itself, or the caller's
+/// receipt read after an ambiguous attempt.
+/// The receipt read is the caller's own query, so its failure stays opaque.
+#[derive(Debug, thiserror::Error)]
+pub enum ReceiptWriteError {
+    #[error(transparent)]
+    Write(#[from] ConfigClientError),
+    #[error("checking stable write receipt")]
+    Receipt(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
 
 enum TxnBackend<'a> {
     Http {
@@ -78,11 +92,12 @@ impl LocalConfigAccess {
         &self.node
     }
 
-    pub(crate) async fn run_owned<T, F, Fut>(&self, operation: F) -> Result<T>
+    pub(crate) async fn run_owned<T, E, F, Fut>(&self, operation: F) -> Result<T, E>
     where
         T: Send + 'static,
+        E: From<ConfigClientError> + Send + 'static,
         F: FnOnce(Arc<EmbeddedNode>) -> Fut + Send + 'static,
-        Fut: Future<Output = Result<T>> + Send + 'static,
+        Fut: Future<Output = Result<T, E>> + Send + 'static,
     {
         let node = Arc::clone(&self.node);
         let gate = Arc::clone(&self.gate);
@@ -115,7 +130,7 @@ impl LocalConfigAccess {
         );
         receive
             .await
-            .context("owned embedded operation ended without a result")?
+            .map_err(ConfigClientError::OwnedOperationEnded)?
     }
 }
 
@@ -223,10 +238,9 @@ impl MutationWriteGate {
             .store_claim
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        anyhow::ensure!(
-            claim.is_none(),
-            "embedded node already has a live store claim"
-        );
+        if claim.is_some() {
+            return Err(ConfigClientError::StoreClaimHeld);
+        }
         *claim = Some(Arc::new(StoreClaim { node, _lock: lock }));
         Ok(())
     }
@@ -300,92 +314,93 @@ impl MutationWriteGate {
                 std::task::Poll::Ready(permit)
             }
         });
-        let guard = match tokio::time::timeout(
-            EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-            acquire_future,
-        )
-        .await
-        {
-            Ok(Ok(permit)) => permit,
-            Ok(Err(error)) => {
-                return Err(anyhow::anyhow!("embedded write gate is closed: {error}"));
-            }
-            Err(_) => {
-                registration.take();
-                let (active_owner_count, owner) = {
-                    let owners = self
-                        .owners
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    (
-                        owners.len(),
-                        owners
-                            .values()
-                            .copied()
-                            .min_by_key(|owner| owner.acquired_at),
-                    )
-                };
-                let (owner_operation, owner_held_ms) = owner.map_or(("unknown", 0), |owner| {
-                    (
-                        owner.operation.as_str(),
-                        u64::try_from(owner.acquired_at.elapsed().as_millis()).unwrap_or(u64::MAX),
-                    )
-                });
-                let pending = self.oldest_pending_acquire();
-                let (
-                    pending_count,
-                    oldest_wait_operation,
-                    oldest_wait_age_ms,
-                    oldest_wait_last_poll_age_ms,
-                    oldest_wait_task_id,
-                    oldest_wait_span,
-                ) = pending
-                    .as_ref()
-                    .map_or((0, "none", 0, 0, None, None), |pending| {
+        let guard =
+            match tokio::time::timeout(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT, acquire_future)
+                .await
+            {
+                Ok(Ok(permit)) => permit,
+                Ok(Err(error)) => {
+                    return Err(ConfigClientError::WriteGateClosed { error });
+                }
+                Err(_) => {
+                    registration.take();
+                    let (active_owner_count, owner) = {
+                        let owners = self
+                            .owners
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
                         (
-                            pending.count,
-                            pending.operation.as_str(),
-                            u64::try_from(pending.wait_age.as_millis()).unwrap_or(u64::MAX),
-                            u64::try_from(pending.last_poll_age.as_millis()).unwrap_or(u64::MAX),
-                            pending.task_id.as_deref(),
-                            pending.span_name,
+                            owners.len(),
+                            owners
+                                .values()
+                                .copied()
+                                .min_by_key(|owner| owner.acquired_at),
+                        )
+                    };
+                    let (owner_operation, owner_held_ms) = owner.map_or(("unknown", 0), |owner| {
+                        (
+                            owner.operation.as_str(),
+                            u64::try_from(owner.acquired_at.elapsed().as_millis())
+                                .unwrap_or(u64::MAX),
                         )
                     });
-                let owner_status = if active_owner_count > 0 {
-                    "tracked_owners"
-                } else if pending_count > 0 {
-                    "no_tracked_owner; semaphore capacity may be reserved for a pending acquire"
-                } else {
-                    "no_tracked_owner_or_pending_acquire"
-                };
-                tracing::error!(
-                    phase = "write-gate acquisition",
-                    waiting_operation = operation.as_str(),
-                    owner_operation,
-                    owner_held_ms,
-                    active_owner_count,
-                    owner_status,
-                    pending_acquire_count = pending_count,
-                    oldest_wait_operation,
-                    oldest_wait_age_ms,
-                    oldest_wait_last_poll_age_ms,
-                    oldest_wait_task_id = oldest_wait_task_id.unwrap_or("unknown"),
-                    oldest_wait_span = oldest_wait_span.unwrap_or("unknown"),
-                    timeout_ms =
-                        u64::try_from(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT.as_millis())
-                            .unwrap_or(u64::MAX),
-                    "embedded DefraDB canonical write admission timed out"
-                );
-                return Err(retry::transaction_storage_failure(anyhow::anyhow!(
-                    "embedded transaction write admission for {} timed out after {:?}; {} active owners, longest-held owner {} held for {}ms",
-                    operation.as_str(),
-                    EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-                    active_owner_count,
-                    owner_operation,
-                    owner_held_ms,
-                )));
-            }
-        };
+                    let pending = self.oldest_pending_acquire();
+                    let (
+                        pending_count,
+                        oldest_wait_operation,
+                        oldest_wait_age_ms,
+                        oldest_wait_last_poll_age_ms,
+                        oldest_wait_task_id,
+                        oldest_wait_span,
+                    ) = pending
+                        .as_ref()
+                        .map_or((0, "none", 0, 0, None, None), |pending| {
+                            (
+                                pending.count,
+                                pending.operation.as_str(),
+                                u64::try_from(pending.wait_age.as_millis()).unwrap_or(u64::MAX),
+                                u64::try_from(pending.last_poll_age.as_millis())
+                                    .unwrap_or(u64::MAX),
+                                pending.task_id.as_deref(),
+                                pending.span_name,
+                            )
+                        });
+                    let owner_status = if active_owner_count > 0 {
+                        "tracked_owners"
+                    } else if pending_count > 0 {
+                        "no_tracked_owner; semaphore capacity may be reserved for a pending acquire"
+                    } else {
+                        "no_tracked_owner_or_pending_acquire"
+                    };
+                    tracing::error!(
+                        phase = "write-gate acquisition",
+                        waiting_operation = operation.as_str(),
+                        owner_operation,
+                        owner_held_ms,
+                        active_owner_count,
+                        owner_status,
+                        pending_acquire_count = pending_count,
+                        oldest_wait_operation,
+                        oldest_wait_age_ms,
+                        oldest_wait_last_poll_age_ms,
+                        oldest_wait_task_id = oldest_wait_task_id.unwrap_or("unknown"),
+                        oldest_wait_span = oldest_wait_span.unwrap_or("unknown"),
+                        timeout_ms =
+                            u64::try_from(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT.as_millis())
+                                .unwrap_or(u64::MAX),
+                        "embedded DefraDB canonical write admission timed out"
+                    );
+                    return Err(retry::transaction_storage_failure(
+                        ConfigClientError::WriteAdmissionTimeout {
+                            operation: operation.as_str(),
+                            timeout: EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+                            active_owner_count,
+                            owner_operation,
+                            owner_held_ms,
+                        },
+                    ));
+                }
+            };
         record_slow_native_phase(
             Some(operation.as_str()),
             "gate_wait",
@@ -434,7 +449,7 @@ impl NativeOperationTracker {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if state.abandoned {
             return Err(native_operation_abandoned(
-                "embedded transaction is poisoned by an abandoned native operation",
+                ConfigClientError::PoisonedByAbandonedOperation,
             ));
         }
         state.in_flight += 1;
@@ -501,18 +516,12 @@ struct CallerOperationGuard {
 
 #[derive(Debug, thiserror::Error)]
 #[error("native operation remains owned after caller abandonment")]
-struct NativeOperationAbandoned;
+pub struct NativeOperationAbandoned;
 
-fn native_operation_abandoned(message: impl Into<String>) -> anyhow::Error {
-    retry::transaction_storage_failure(
-        anyhow::Error::new(NativeOperationAbandoned).context(message.into()),
-    )
-}
-
-fn is_native_operation_abandoned(error: &anyhow::Error) -> bool {
-    error
-        .chain()
-        .any(|cause| cause.downcast_ref::<NativeOperationAbandoned>().is_some())
+fn native_operation_abandoned(
+    phase: fn(NativeOperationAbandoned) -> ConfigClientError,
+) -> ConfigClientError {
+    retry::transaction_storage_failure(phase(NativeOperationAbandoned))
 }
 
 impl CallerOperationGuard {
@@ -578,15 +587,8 @@ where
     );
     let result = tokio::time::timeout(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT, receive)
         .await
-        .map_err(|_| {
-            native_operation_abandoned(format!(
-                "embedded execute caller timed out after {:?}; native operation remains owned",
-                EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT
-            ))
-        })?
-        .map_err(|_| {
-            native_operation_abandoned("native signed execution task ended without a response")
-        })?;
+        .map_err(|_| native_operation_abandoned(ConfigClientError::ExecuteCallerTimeout))?
+        .map_err(|_| native_operation_abandoned(ConfigClientError::ExecutionTaskEnded))?;
     caller.complete();
     Ok(result)
 }
@@ -646,10 +648,9 @@ async fn after_successful_mutation_for_test() -> Result<()> {
         return Ok(());
     };
     let count = fault.count.fetch_add(1, Ordering::Relaxed) + 1;
-    anyhow::ensure!(
-        fault.fail_after != Some(count),
-        "injected failure after successful transaction mutation {count}"
-    );
+    if fault.fail_after == Some(count) {
+        return Err(ConfigClientError::InjectedMutationFailure { count });
+    }
     if let Some(pause) = fault.pause.as_ref() {
         if pause.after == count && !pause.fired.swap(true, Ordering::Relaxed) {
             pause.reached.notify_one();
@@ -704,7 +705,7 @@ fn post_commit_receipt_loss_for_test(operation: Option<&str>) -> bool {
 #[error(
     "embedded canonical write {waiting_operation} is nested inside transaction {owner_operation}; use the supplied transaction owner"
 )]
-pub(crate) struct ReentrantEmbeddedWrite {
+pub struct ReentrantEmbeddedWrite {
     waiting_operation: &'static str,
     owner_operation: &'static str,
 }
@@ -731,15 +732,13 @@ pub(crate) const EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT: Duration = Duration:
 const EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT: Duration = Duration::from_secs(15);
 
-fn embedded_phase_timeout(phase: &str, timeout: Duration) -> anyhow::Error {
+fn embedded_phase_timeout(phase: &'static str, timeout: Duration) -> ConfigClientError {
     tracing::error!(
         phase,
         timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
         "embedded DefraDB canonical write phase timed out"
     );
-    retry::transaction_storage_failure(anyhow::anyhow!(
-        "embedded transaction {phase} timed out after {timeout:?}"
-    ))
+    retry::transaction_storage_failure(ConfigClientError::PhaseTimeout { phase, timeout })
 }
 
 async fn cleanup_while_holding_write_gate<G, F, T>(
@@ -892,7 +891,7 @@ impl Drop for RollbackOnDrop {
                             pause.release.notified().await;
                         }
                         drop(node);
-                        Ok::<(), anyhow::Error>(())
+                        Ok::<(), ConfigClientError>(())
                     };
                     match cleanup_while_holding_write_gate(
                         write_guard,
@@ -945,7 +944,9 @@ where
             .begin_transaction_guard(read_only)
             .await
             .map_err(|error| {
-                retry::transaction_storage_failure(anyhow::Error::new(error).context("begin_txn"))
+                retry::transaction_storage_failure(ConfigClientError::BeginTransaction {
+                    source: error,
+                })
             })?;
         let _ = registered.send(transaction.handle().clone());
         std::future::pending::<()>().await;
@@ -957,9 +958,9 @@ where
         tokio::select! {
             result = &mut native_owner => {
                 result?;
-                anyhow::bail!("native transaction owner ended before registration")
+                Err(ConfigClientError::OwnerEndedBeforeRegistration)
             }
-            result = registration => result.context("native transaction registration"),
+            result = registration => result.map_err(ConfigClientError::Registration),
         }
     })
     .await;
@@ -1009,7 +1010,7 @@ enum CommitCleanup {
 }
 
 struct CommitFailure {
-    error: anyhow::Error,
+    error: ConfigClientError,
     cleanup: CommitCleanup,
 }
 
@@ -1061,13 +1062,18 @@ impl TransactionMode {
         matches!(self, Self::Idempotent(_))
     }
 
-    fn retries_callback_error(self, error: &anyhow::Error) -> bool {
+    fn retries_callback_error<E>(self, error: &E) -> bool
+    where
+        E: TransactionFailure + ?Sized,
+    {
         matches!(self, Self::Idempotent(_))
-            && !crate::graphql::is_storage_full(error)
+            && !error
+                .config_client_error()
+                .is_some_and(|error| crate::graphql::is_storage_full(error))
             && retry::is_transaction_storage_failure(error)
     }
 
-    fn retries_begin_error(self, error: &anyhow::Error) -> bool {
+    fn retries_begin_error(self, error: &ConfigClientError) -> bool {
         self.retries_callback_error(error)
     }
 
@@ -1252,7 +1258,8 @@ impl<'a> ConfigApplyTxn<'a> {
                     assert!(
                         detail.contains(&format!(
                             "injected failure after successful transaction mutation {index}"
-                        )),
+                        )) || detail
+                            .contains(&format!("InjectedMutationFailure {{ count: {index} }}")),
                         "unexpected failure at mutation {index}: {detail}"
                     );
                     assert_eq!(observed, index, "injection must fire exactly once");
@@ -1588,7 +1595,7 @@ impl<'a> ConfigApplyTxn<'a> {
             read_only,
         ))
         .await
-        .context("begin HTTP transaction task")??;
+        .map_err(ConfigClientError::BeginTask)??;
         let txn = Self {
             backend: TxnBackend::Http {
                 endpoint,
@@ -1612,7 +1619,9 @@ impl<'a> ConfigApplyTxn<'a> {
     /// arbitrary keys and nested empty arrays; ordinary nillable list fields
     /// remain the caller's responsibility.
     pub async fn execute_with_variables(&self, document: &str, variables: &Value) -> Result<Value> {
-        anyhow::ensure!(variables.is_object(), "GraphQL variables must be an object");
+        if !variables.is_object() {
+            return Err(ConfigClientError::VariablesNotObject);
+        }
         #[cfg(test)]
         if !document.trim_start().starts_with("mutation")
             && SUCCESSFUL_MUTATION_FAULT
@@ -1623,9 +1632,9 @@ impl<'a> ConfigApplyTxn<'a> {
                 })
                 .unwrap_or(false)
         {
-            return Err(retry::transaction_storage_failure(anyhow::anyhow!(
-                "injected transaction read storage failure"
-            )));
+            return Err(retry::transaction_storage_failure(
+                ConfigClientError::InjectedReadStorageFailure,
+            ));
         }
         let response = match &self.backend {
             TxnBackend::Http {
@@ -1659,10 +1668,11 @@ impl<'a> ConfigApplyTxn<'a> {
                     return Err(retry::transaction_conflict(ConflictSource::StructuredCode));
                 }
                 if response.has_errors() {
-                    return Err(retry::transaction_storage_failure(anyhow::anyhow!(
-                        "graphql returned errors: {:?}",
-                        response.errors
-                    )));
+                    return Err(retry::transaction_storage_failure(
+                        ConfigClientError::EmbeddedGraphqlErrors {
+                            errors: response.errors,
+                        },
+                    ));
                 }
                 crate::graphql::into_data_envelope(response.data)
             }
@@ -1720,7 +1730,7 @@ impl<'a> ConfigApplyTxn<'a> {
             ..
         } = &self.backend
         else {
-            anyhow::bail!("authenticated transaction owner observations require embedded access");
+            return Err(ConfigClientError::OwnerObservationRequiresEmbedded);
         };
         let node = Arc::clone(node);
         let handle = handle.clone();
@@ -1750,7 +1760,7 @@ impl<'a> ConfigApplyTxn<'a> {
                 .get_collection(collection)?
                 .map(serde_json::to_value)
                 .transpose()
-                .context("serializing active collection version"),
+                .map_err(ConfigClientError::SerializeCollectionVersion),
             TxnBackend::Http {
                 endpoint, client, ..
             } => {
@@ -1792,7 +1802,7 @@ impl<'a> ConfigApplyTxn<'a> {
             native_operations,
         } = &self.backend
         else {
-            anyhow::bail!("native transaction responses require embedded access");
+            return Err(ConfigClientError::EmbeddedAccessRequired);
         };
         let started = Instant::now();
         let node = Arc::clone(node);
@@ -1810,10 +1820,11 @@ impl<'a> ConfigApplyTxn<'a> {
             return Err(retry::transaction_conflict(ConflictSource::StructuredCode));
         }
         if response.has_errors() {
-            return Err(retry::transaction_storage_failure(anyhow::anyhow!(
-                "graphql returned errors: {:?}",
-                response.errors
-            )));
+            return Err(retry::transaction_storage_failure(
+                ConfigClientError::EmbeddedGraphqlErrors {
+                    errors: response.errors,
+                },
+            ));
         }
         if document.trim_start().starts_with("mutation") {
             self.affected_documents.fetch_add(
@@ -1848,7 +1859,7 @@ impl<'a> ConfigApplyTxn<'a> {
                 if self.embedded_poisoned() {
                     return Err(CommitFailure {
                         error: native_operation_abandoned(
-                            "commit rejected after an abandoned native transaction operation",
+                            ConfigClientError::CommitAfterAbandonedOperation,
                         ),
                         cleanup: CommitCleanup::Required,
                     });
@@ -1897,9 +1908,9 @@ impl<'a> ConfigApplyTxn<'a> {
                         #[cfg(test)]
                         if post_commit_receipt_loss_for_test(self.operation) {
                             return Err(CommitFailure {
-                                error: retry::transaction_storage_failure(anyhow::anyhow!(
-                                    "injected receipt loss after committed transaction"
-                                )),
+                                error: retry::transaction_storage_failure(
+                                    ConfigClientError::InjectedReceiptLoss,
+                                ),
                                 cleanup: CommitCleanup::NotNeeded,
                             });
                         }
@@ -1914,7 +1925,7 @@ impl<'a> ConfigApplyTxn<'a> {
                             })
                         } else {
                             Err(CommitFailure {
-                                error: anyhow::Error::new(error).context("commit_txn"),
+                                error: ConfigClientError::CommitTransaction { source: error },
                                 cleanup: CommitCleanup::NotNeeded,
                             })
                         }
@@ -1927,7 +1938,7 @@ impl<'a> ConfigApplyTxn<'a> {
     async fn rollback_inner(&mut self) -> Result<()> {
         if self.embedded_poisoned() {
             return Err(native_operation_abandoned(
-                "rollback deferred until abandoned native transaction operations return",
+                ConfigClientError::RollbackDeferred,
             ));
         }
         if let TxnBackend::Embedded {
@@ -1938,7 +1949,7 @@ impl<'a> ConfigApplyTxn<'a> {
         }
         #[cfg(test)]
         if fail_rollback_for_test() {
-            return Err(anyhow::anyhow!("injected rollback failure"));
+            return Err(ConfigClientError::InjectedRollbackFailure);
         }
         let result = match &self.backend {
             TxnBackend::Http {
@@ -1957,9 +1968,8 @@ impl<'a> ConfigApplyTxn<'a> {
                 })
                 .await
                 {
-                    Ok(result) => {
-                        result.map_err(|error| anyhow::Error::new(error).context("rollback_txn"))
-                    }
+                    Ok(result) => result
+                        .map_err(|error| ConfigClientError::RollbackTransaction { source: error }),
                     Err(_) => {
                         let error = embedded_phase_timeout(
                             "rollback",
@@ -2061,7 +2071,7 @@ fn finish_auto_commit<T>(
     let pending_native = result
         .as_ref()
         .err()
-        .is_some_and(is_native_operation_abandoned);
+        .is_some_and(ConfigClientError::native_operation_abandoned);
     let affected_documents = if pending_native {
         None
     } else {
@@ -2083,16 +2093,19 @@ fn finish_auto_commit<T>(
     result
 }
 
-async fn receipt_with_retry<F, Fut>(receipt: &F) -> Result<bool>
+async fn receipt_with_retry<F, Fut, E>(
+    receipt: &F,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>>
 where
     F: Fn() -> Fut + Send + Sync,
-    Fut: Future<Output = Result<bool>> + Send,
+    Fut: Future<Output = Result<bool, E>> + Send,
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
     for retry_index in 0..=retry::RECEIPT_WRITE_MAX_RETRIES {
-        match receipt().await {
+        match receipt().await.map_err(Into::into) {
             Ok(present) => return Ok(present),
             Err(error)
-                if retry::is_retryable_ambiguous_write(&error)
+                if retry::is_retryable_ambiguous_write(error.as_ref())
                     && retry_index < retry::RECEIPT_WRITE_MAX_RETRIES =>
             {
                 tokio::time::sleep(retry::receipt_write_backoff(retry_index)).await;
@@ -2256,8 +2269,9 @@ impl Drop for AttemptTelemetry {
     }
 }
 
-struct TransactionAttemptFailure {
-    error: anyhow::Error,
+struct TransactionAttemptFailure<E> {
+    error: E,
+    conflict_source: Option<ConflictSource>,
     rollback: RollbackStatus,
     retry_generic: bool,
 }
@@ -2284,27 +2298,29 @@ fn failure_disposition(
     }
 }
 
-fn transact_owned<'a, T, F, B>(
+fn transact_owned<'a, T, E, F, B>(
     operation: &'static str,
     backend: WriteBackend,
     mode: TransactionMode,
     mut begin: B,
     callback: F,
-) -> BoxFuture<'a, Result<TransactionOutcome<T>>>
+) -> BoxFuture<'a, Result<TransactionOutcome<T>, E>>
 where
     T: Send + 'a,
-    F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
+    E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+    F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
     B: FnMut(WriteOperation, Arc<AtomicBool>) -> BoxFuture<'a, Result<ConfigApplyTxn<'a>>>
         + Send
         + 'a,
 {
     Box::pin(async move {
-        let operation = WriteOperation::new(operation)?;
+        let operation = WriteOperation::new(operation).map_err(ConfigClientError::from)?;
         let mut max_attempts = mode.max_attempts();
         let mut attempt = 0;
         while attempt < max_attempts {
             attempt += 1;
-            let ordinal = WriteAttemptOrdinal::new(attempt, max_attempts)?;
+            let ordinal =
+                WriteAttemptOrdinal::new(attempt, max_attempts).map_err(ConfigClientError::from)?;
             let cancellation_rollback_scheduled = Arc::new(AtomicBool::new(false));
             let mut telemetry = AttemptTelemetry {
                 operation,
@@ -2340,7 +2356,7 @@ where
                         affected_documents: Some(0),
                         rollback: RollbackStatus::NotNeeded,
                     });
-                    return Err(error);
+                    return Err(error.into());
                 }
             };
             telemetry.cancelled_rollback = match backend {
@@ -2355,12 +2371,15 @@ where
                     )
                     .await
                     .map_err(|_| {
-                        embedded_phase_timeout("callback", EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT)
+                        E::from(embedded_phase_timeout(
+                            "callback",
+                            EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT,
+                        ))
                     })
                     .and_then(|result| result),
                 WriteBackend::Http => callback(&txn).await,
             };
-            let attempt_result: Result<(), TransactionAttemptFailure> = match callback_result {
+            let attempt_result: Result<(), TransactionAttemptFailure<E>> = match callback_result {
                 Ok(value) => {
                     let affected_documents = txn.affected_documents();
                     match txn.commit_inner().await {
@@ -2389,7 +2408,8 @@ where
                             Err(TransactionAttemptFailure {
                                 retry_generic: mode.retries_generic_errors()
                                     && !crate::graphql::is_storage_full(&error),
-                                error,
+                                conflict_source: retry::classified_transaction_conflict(&error),
+                                error: E::from(error),
                                 rollback,
                             })
                         }
@@ -2403,6 +2423,7 @@ where
                         RollbackStatus::Scheduled
                     };
                     Err(TransactionAttemptFailure {
+                        conflict_source: retry::classified_transaction_conflict(&error),
                         error,
                         rollback,
                         retry_generic,
@@ -2415,6 +2436,7 @@ where
             };
             let TransactionAttemptFailure {
                 error,
+                conflict_source,
                 rollback,
                 retry_generic,
             } = failure;
@@ -2428,7 +2450,6 @@ where
                 });
                 return Err(error);
             }
-            let conflict_source = retry::classified_transaction_conflict(&error);
             let source = conflict_source.unwrap_or(ConflictSource::None);
             let sibling_contention = conflict_source.is_some()
                 && txn.contends_with_request_siblings.load(Ordering::Relaxed);
@@ -2619,22 +2640,23 @@ impl ConfigAccess {
     /// failure is ambiguous, so the owner checks the caller's stable receipt
     /// before it may repost, and replays only after a successful receipt read
     /// confirms absence. Embedded access uses [`Self::write`].
-    pub async fn write_with_receipt<F, Fut>(
+    pub async fn write_with_receipt<F, Fut, E>(
         &self,
         operation: &'static str,
         mutation: &str,
         receipt: F,
-    ) -> Result<()>
+    ) -> Result<(), ReceiptWriteError>
     where
         F: Fn() -> Fut + Send + Sync,
-        Fut: Future<Output = Result<bool>> + Send,
+        Fut: Future<Output = Result<bool, E>> + Send,
+        E: Into<Box<dyn std::error::Error + Send + Sync>>,
     {
         graphql::ensure_mutation_document(mutation)?;
         let Self::Graphql(endpoint) = self else {
             self.write(operation, mutation).await?;
             return Ok(());
         };
-        let operation = WriteOperation::new(operation)?;
+        let operation = WriteOperation::new(operation).map_err(ConfigClientError::from)?;
         let max_attempts = retry::RECEIPT_WRITE_MAX_RETRIES + 1;
 
         for attempt in 1..=max_attempts {
@@ -2643,7 +2665,8 @@ impl ConfigAccess {
                 backend: WriteBackend::Http,
                 mode: WriteMode::AutoCommit,
                 retry_owner: RetryOwner::GentsReceipt,
-                ordinal: WriteAttemptOrdinal::new(attempt, max_attempts)?,
+                ordinal: WriteAttemptOrdinal::new(attempt, max_attempts)
+                    .map_err(ConfigClientError::from)?,
                 started: Instant::now(),
                 state: StdMutex::new(AttemptTelemetryState::default()),
                 cancelled_rollback: RollbackStatus::NotNeeded,
@@ -2670,7 +2693,7 @@ impl ConfigAccess {
                         affected_documents: Some(0),
                         rollback: RollbackStatus::NotNeeded,
                     });
-                    return Err(error);
+                    return Err(error.into());
                 }
             };
 
@@ -2714,7 +2737,7 @@ impl ConfigAccess {
                         },
                         ReceiptRecovery::StableIdAbsent,
                     );
-                    return Err(error);
+                    return Err(error.into());
                 }
                 Err(receipt_error) => {
                     telemetry.record_with_receipt(
@@ -2727,7 +2750,7 @@ impl ConfigAccess {
                         },
                         ReceiptRecovery::StableIdReadFailed,
                     );
-                    return Err(receipt_error).context("checking stable write receipt");
+                    return Err(ReceiptWriteError::Receipt(receipt_error));
                 }
             }
         }
@@ -2825,8 +2848,9 @@ impl ConfigAccess {
                     rollback: RollbackStatus::NotNeeded,
                 });
                 native_completion.completed = true;
-                let result =
-                    crate::graphql::ensure_no_errors(&result, operation.as_str()).map(|()| result);
+                let result = crate::graphql::ensure_no_errors(&result, operation.as_str())
+                    .map(|()| result)
+                    .map_err(ConfigClientError::from);
                 drop(write_guard);
                 let _ = send.send(result);
             }
@@ -2835,26 +2859,20 @@ impl ConfigAccess {
         );
         let result = tokio::time::timeout(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT, receive)
             .await
-            .map_err(|_| {
-                native_operation_abandoned(format!(
-                    "embedded auto-commit caller timed out after {:?}; native operation and write gate remain owned",
-                    EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT
-                ))
-            })?;
+            .map_err(|_| native_operation_abandoned(ConfigClientError::AutoCommitCallerTimeout))?;
         caller_observation.complete();
-        result.map_err(|_| {
-            native_operation_abandoned("native auto-commit task ended without a response")
-        })?
+        result.map_err(|_| native_operation_abandoned(ConfigClientError::AutoCommitTaskEnded))?
     }
 
-    pub async fn transact_write<'a, T, F>(
+    pub async fn transact_write<'a, T, E, F>(
         &'a self,
         operation: &'static str,
         callback: F,
-    ) -> Result<T>
+    ) -> Result<T, E>
     where
         T: Send + 'a,
-        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
+        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
     {
         transact_owned(
             operation,
@@ -2871,14 +2889,15 @@ impl ConfigAccess {
 
     /// Query-only transaction; DefraDB enforces read-only mode on both transports
     /// and embedded access avoids the mutation gate.
-    pub async fn transact_readonly<'a, T, F>(
+    pub async fn transact_readonly<'a, T, E, F>(
         &'a self,
         operation: &'static str,
         callback: F,
-    ) -> Result<T>
+    ) -> Result<T, E>
     where
         T: Send + 'a,
-        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
+        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
     {
         match self {
             Self::Local(local) => {
@@ -2905,15 +2924,16 @@ impl ConfigAccess {
     /// Callers must make the callback idempotent across an ambiguous commit:
     /// creates need stable unique identities and retries must reconcile an
     /// already-durable winner before attempting another create.
-    pub async fn transact_idempotent<'a, T, F>(
+    pub async fn transact_idempotent<'a, T, E, F>(
         &'a self,
         retry_policy: IdempotentTransactionRetry,
         operation: &'static str,
         callback: F,
-    ) -> Result<T>
+    ) -> Result<T, E>
     where
         T: Send + 'a,
-        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
+        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
     {
         transact_owned(
             operation,
@@ -2928,15 +2948,38 @@ impl ConfigAccess {
         .map(expect_committed)
     }
 
-    pub async fn transact_local_write<'a, T, F>(
+    pub(crate) async fn transact_observing_conflict<'a, T, E, F>(
+        &'a self,
+        operation: &'static str,
+        callback: F,
+    ) -> Result<TransactionOutcome<T>, E>
+    where
+        T: Send + 'a,
+        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
+    {
+        transact_owned(
+            operation,
+            backend_for_access(self),
+            TransactionMode::ObserveConflict,
+            move |operation, rollback| {
+                Box::pin(async move { self.begin_apply_txn(operation, rollback).await })
+            },
+            callback,
+        )
+        .await
+    }
+
+    pub async fn transact_local_write<'a, T, E, F>(
         node: &'a Arc<EmbeddedNode>,
         identity: Option<Did>,
         operation: &'static str,
         callback: F,
-    ) -> Result<T>
+    ) -> Result<T, E>
     where
         T: Send + 'a,
-        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
+        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
     {
         transact_owned(
             operation,
@@ -2962,15 +3005,16 @@ impl ConfigAccess {
     }
 
     /// Native snapshot reads retain the supplied ACP DID without taking the mutation gate.
-    pub async fn transact_local_readonly<'a, T, F>(
+    pub async fn transact_local_readonly<'a, T, E, F>(
         node: &'a Arc<EmbeddedNode>,
         identity: Option<Did>,
         operation: &'static str,
         callback: F,
-    ) -> Result<T>
+    ) -> Result<T, E>
     where
         T: Send + 'a,
-        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
+        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
     {
         transact_owned(
             operation,
@@ -2999,13 +3043,15 @@ impl ConfigAccess {
     /// ordinary writes under the mutation gate. Authorization is re-checked
     /// before commit admission; native commit does not atomically check wall
     /// clock, so this is not a durable-commit-before-expiry guarantee.
-    pub(crate) async fn renew_execution_lease(
-        node: &Arc<EmbeddedNode>,
-        request_doc_id: &str,
-        generation: &str,
-        expected_deadline: Option<chrono::DateTime<chrono::Utc>>,
-        fixture_now: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Result<crate::lifecycle::RenewalAttemptOutcome> {
+    pub(crate) async fn renew_execution_lease<'a, T, E, F>(
+        node: &'a Arc<EmbeddedNode>,
+        renew: F,
+    ) -> Result<T, E>
+    where
+        T: Send + 'a,
+        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
+    {
         let native_operations = Arc::new(NativeOperationTracker::default());
         let operations_for_attempt = Arc::clone(&native_operations);
         let result = transact_owned(
@@ -3023,15 +3069,7 @@ impl ConfigAccess {
                     )),
                 ))
             },
-            move |txn| {
-                Box::pin(crate::lifecycle::renew_in_transaction(
-                    txn,
-                    request_doc_id,
-                    generation,
-                    expected_deadline,
-                    fixture_now,
-                ))
-            },
+            renew,
         )
         .await;
         if native_operations.is_abandoned() {
@@ -3040,16 +3078,17 @@ impl ConfigAccess {
         result.map(expect_committed)
     }
 
-    pub async fn transact_local_idempotent<'a, T, F>(
+    pub async fn transact_local_idempotent<'a, T, E, F>(
         node: &'a Arc<EmbeddedNode>,
         identity: Option<Did>,
         retry_policy: IdempotentTransactionRetry,
         operation: &'static str,
         callback: F,
-    ) -> Result<T>
+    ) -> Result<T, E>
     where
         T: Send + 'a,
-        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
+        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
     {
         transact_owned(
             operation,
@@ -3072,6 +3111,38 @@ impl ConfigAccess {
         )
         .await
         .map(expect_committed)
+    }
+    pub(crate) async fn transact_local_observing_conflict<'a, T, E, F>(
+        node: &'a Arc<EmbeddedNode>,
+        identity: Option<Did>,
+        operation: &'static str,
+        callback: F,
+    ) -> Result<TransactionOutcome<T>, E>
+    where
+        T: Send + 'a,
+        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
+    {
+        transact_owned(
+            operation,
+            WriteBackend::Embedded,
+            TransactionMode::ObserveConflict,
+            move |operation, rollback| {
+                let identity = identity.clone();
+                Box::pin(async move {
+                    ConfigApplyTxn::begin_local_owned(
+                        node,
+                        identity,
+                        operation,
+                        rollback,
+                        EmbeddedTransactionPurpose::Mutation,
+                    )
+                    .await
+                })
+            },
+            callback,
+        )
+        .await
     }
 }
 
@@ -3147,9 +3218,9 @@ mod variable_tests {
             inserted.data.unwrap()["MutationVariableProbe"],
             json!([{"label":"inserted","payload":{"empty":[]}}])
         );
-        let aborted: Result<()> = ConfigAccess::transact_local_write(&node, None, "variable_probe_rollback", |txn| Box::pin(async move {
+        let aborted: Result<(), ConfigClientError> = ConfigAccess::transact_local_write(&node, None, "variable_probe_rollback", |txn| Box::pin(async move {
             txn.execute_with_variables("mutation($input: MutationVariableProbeMutationInputArg!) { update_MutationVariableProbe(filter:{key:{_eq:\"one\"}},input:$input) {_docID} }", &json!({"input":{"label":"must rollback","payload":{"lost":[]}}})).await?;
-            anyhow::bail!("intentional rollback")
+            Err(ConfigClientError::InjectedRollbackFailure)
         })).await;
         assert!(aborted.is_err());
         let read = node

@@ -35,15 +35,17 @@ pub(super) async fn backend_set(args: BackendSetArgs) -> Result<()> {
             let plan = &plan;
             Box::pin(async move {
                 apply_desired_state_plan(txn, plan).await?;
-                Ok(read_desired_state_record_in_txn(
-                    txn,
-                    Collection::InferenceBackend,
-                    &backend.node_did,
-                    &backend.backend_id,
+                Ok::<_, anyhow::Error>(
+                    read_desired_state_record_in_txn(
+                        txn,
+                        Collection::InferenceBackend,
+                        &backend.node_did,
+                        &backend.backend_id,
+                    )
+                    .await?
+                    .context("replaced backend missing")?
+                    .0,
                 )
-                .await?
-                .context("replaced backend missing")?
-                .0)
             })
         })
         .await?;
@@ -246,7 +248,7 @@ async fn resolve_backend_discovery_target(
                     )
                     .await?
                     .context("backend absent in selected owner")?;
-                    Ok(serde_json::from_value::<InferenceBackend>(value)?)
+                    Ok::<_, anyhow::Error>(serde_json::from_value::<InferenceBackend>(value)?)
                 })
             })
             .await?;

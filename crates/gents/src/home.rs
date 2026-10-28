@@ -1,11 +1,209 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
+
+#[derive(Debug, thiserror::Error)]
+pub enum HomeError {
+    #[error("unable to resolve the user's home directory; set GENTS_HOME")]
+    HomeDirUnresolved,
+    #[error(transparent)]
+    LockHeld(#[from] StoreLockHeld),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("resolving data directory {}", path.display())]
+    ResolveDataDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("data directory {} cannot be the filesystem root", path.display())]
+    DataDirRoot { path: PathBuf },
+    #[error("resolving {}", path.display())]
+    ResolveParent {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("inspecting data directory {}", path.display())]
+    InspectDataDir {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("opening runtime lock {}", path.display())]
+    OpenLock {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("inspecting runtime lock {}", path.display())]
+    InspectLock {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("runtime lock {} is not a regular file", path.display())]
+    LockNotRegular { path: PathBuf },
+    #[error("runtime startup waiter stopped before completing")]
+    StartupWaiterStopped(#[source] tokio::sync::oneshot::error::RecvError),
+    #[error("starting runtime startup waiter")]
+    StartStartupWaiter(#[source] std::io::Error),
+    #[error("resolving runtime home {}", path.display())]
+    ResolveRuntimeHome {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("reserving runtime startup")]
+    ReserveStartup(#[source] std::io::Error),
+    #[error("store release waiter stopped before completing")]
+    ReleaseWaiterStopped(#[source] tokio::sync::oneshot::error::RecvError),
+    #[error("starting store release waiter")]
+    StartReleaseWaiter(#[source] std::io::Error),
+    #[error("waiting for store lock {}", path.display())]
+    WaitForLock {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("locking {}", path.display())]
+    Lock {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("creating home directory {}", path.display())]
+    CreateHome {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("encoding local init config JSON")]
+    EncodeInitConfig(#[source] serde_json::Error),
+    #[error("staging init config {}", path.display())]
+    StageInitConfig {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("writing init config {}", path.display())]
+    WriteInitConfig {
+        path: PathBuf,
+        #[source]
+        source: Box<tempfile::PersistError>,
+    },
+    #[error("reading init config {}", path.display())]
+    ReadInitConfig {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("decoding init config {}", path.display())]
+    DecodeInitConfig {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error(
+        "home {} uses the {SECURE_ENCLAVE_IDENTITY_BACKEND} identity backend, whose key cannot own the served node's access control; re-initialize the home with a file or macos-keychain identity (`gents init --home {} --dangerously-overwrite --identity-backend file`) to serve it",
+        home.display(),
+        home.display()
+    )]
+    SecureEnclaveHome { home: PathBuf },
+    #[error("listing home {}", home.display())]
+    ListHome {
+        home: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("backup {} has no parent directory", backup.display())]
+    BackupWithoutParent { backup: PathBuf },
+    #[error("inspecting {}", path.display())]
+    Inspect {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{} is on a different filesystem than the backup location {}; nothing was changed", entry.display(), parent.display())]
+    CrossFilesystem { entry: PathBuf, parent: PathBuf },
+    #[error("creating backup {}", path.display())]
+    CreateBackup {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("creating {}", path.display())]
+    CreateDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("{} has no file name to archive", path.display())]
+    NoFileName { path: PathBuf },
+    #[error("moving {} to {}", from.display(), to.display())]
+    Move {
+        from: PathBuf,
+        to: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("archiving was rolled back; nothing was moved")]
+    ArchiveRolledBack {
+        #[source]
+        source: Box<HomeError>,
+    },
+    #[error("archiving failed and these entries could not be moved back: {entries}")]
+    ArchiveUnrestored {
+        entries: String,
+        #[source]
+        source: Box<HomeError>,
+    },
+    #[error("deleting stopped after deleting [{removed}]")]
+    DeleteStopped {
+        removed: String,
+        #[source]
+        source: Box<HomeError>,
+    },
+    #[error("deleting {} failed after deleting [{removed}]", path.display())]
+    DeleteFailed {
+        path: PathBuf,
+        removed: String,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+impl HomeError {
+    pub fn lock_held(&self) -> Option<&StoreLockHeld> {
+        match self {
+            Self::LockHeld(held) => Some(held),
+            _ => None,
+        }
+    }
+}
+
+/// The store lock contention anywhere in an application error's chain,
+/// including through the owners that wrap [`HomeError`] transparently.
+pub fn store_lock_held<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a StoreLockHeld> {
+    gents_protocol::error_chain::find_map_source(error, |cause| {
+        cause
+            .downcast_ref::<StoreLockHeld>()
+            .or_else(|| cause.downcast_ref::<HomeError>()?.lock_held())
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::store_key::StoreKeyError>()?
+                    .lock_held()
+            })
+    })
+}
+
+type Result<T, E = HomeError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound(deserialize = "ToolPackage: Deserialize<'de>, ToolCeiling: Deserialize<'de>"))]
@@ -33,7 +231,7 @@ pub fn default_home_dir() -> Result<PathBuf> {
         return Ok(PathBuf::from(home));
     }
     Ok(dirs::home_dir()
-        .context("unable to resolve the user's home directory; set GENTS_HOME")?
+        .ok_or(HomeError::HomeDirUnresolved)?
         .join(".gents"))
 }
 
@@ -126,9 +324,7 @@ pub fn lock_store(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
 pub async fn wait_for_store_release(home_dir: &Path, data_dir: &Path) -> Result<()> {
     let (receive, worker) = start_store_release_waiter(home_dir, data_dir)?;
     drop(worker);
-    receive
-        .await
-        .context("store release waiter stopped before completing")?
+    receive.await.map_err(HomeError::ReleaseWaiterStopped)?
 }
 
 fn start_store_release_waiter(
@@ -147,18 +343,17 @@ fn start_store_release_waiter(
             let result = lock_store_with_wait(&home_dir, &data_dir, true).map(drop);
             let _ = send.send(result);
         })
-        .context("starting store release waiter")?;
+        .map_err(HomeError::StartReleaseWaiter)?;
     Ok((receive, worker))
 }
 
 fn lock_store_with_wait(home_dir: &Path, data_dir: &Path, wait: bool) -> Result<StoreLock> {
-    let canonical = fs::canonicalize(data_dir)
-        .with_context(|| format!("resolving data directory {}", data_dir.display()))?;
+    let canonical = fs::canonicalize(data_dir).map_err(|source| HomeError::ResolveDataDir {
+        path: data_dir.to_path_buf(),
+        source,
+    })?;
     let (Some(parent), Some(name)) = (canonical.parent(), canonical.file_name()) else {
-        anyhow::bail!(
-            "data directory {} cannot be the filesystem root",
-            canonical.display()
-        );
+        return Err(HomeError::DataDirRoot { path: canonical });
     };
     lock_path_with_wait(
         home_dir,
@@ -176,21 +371,23 @@ pub fn lock_store_at(home_dir: &Path, data_dir: &Path) -> Result<StoreLock> {
         Ok(_) => lock_store(home_dir, data_dir),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             let (Some(parent), Some(name)) = (data_dir.parent(), data_dir.file_name()) else {
-                anyhow::bail!(
-                    "data directory {} cannot be the filesystem root",
-                    data_dir.display()
-                );
+                return Err(HomeError::DataDirRoot {
+                    path: data_dir.to_path_buf(),
+                });
             };
-            let lock_dir = fs::canonicalize(parent)
-                .with_context(|| format!("resolving {}", parent.display()))?;
+            let lock_dir = fs::canonicalize(parent).map_err(|source| HomeError::ResolveParent {
+                path: parent.to_path_buf(),
+                source,
+            })?;
             lock_path(
                 home_dir,
                 lock_dir.join(format!("{}.lock", name.to_string_lossy())),
             )
         }
-        Err(error) => {
-            Err(error).with_context(|| format!("inspecting data directory {}", data_dir.display()))
-        }
+        Err(source) => Err(HomeError::InspectDataDir {
+            path: data_dir.to_path_buf(),
+            source,
+        }),
     }
 }
 
@@ -225,21 +422,22 @@ fn lock_path_with_wait(home_dir: &Path, path: PathBuf, wait: bool) -> Result<Sto
 
     let mut file = open_runtime_lock(&path)?;
     if wait {
-        file.lock()
-            .with_context(|| format!("waiting for store lock {}", path.display()))?;
+        if let Err(source) = file.lock() {
+            return Err(HomeError::WaitForLock { path, source });
+        }
     } else {
         match file.try_lock() {
             Ok(()) => {}
             Err(fs::TryLockError::WouldBlock) => {
                 let mut holder = String::new();
                 let _ = (&mut file).take(32).read_to_string(&mut holder);
-                return Err(anyhow::Error::new(StoreLockHeld {
+                return Err(HomeError::LockHeld(StoreLockHeld {
                     home: home_dir.to_path_buf(),
                     holder_pid: holder.trim().parse::<u32>().ok(),
                 }));
             }
-            Err(fs::TryLockError::Error(error)) => {
-                return Err(error).with_context(|| format!("locking {}", path.display()))
+            Err(fs::TryLockError::Error(source)) => {
+                return Err(HomeError::Lock { path, source });
             }
         }
     }
@@ -262,15 +460,18 @@ fn open_runtime_lock(path: &Path) -> Result<fs::File> {
         use std::os::unix::fs::OpenOptionsExt as _;
         options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
-    let file = options
-        .open(path)
-        .with_context(|| format!("opening runtime lock {}", path.display()))?;
-    if !file
-        .metadata()
-        .with_context(|| format!("inspecting runtime lock {}", path.display()))?
-        .is_file()
-    {
-        anyhow::bail!("runtime lock {} is not a regular file", path.display());
+    let file = options.open(path).map_err(|source| HomeError::OpenLock {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let metadata = file.metadata().map_err(|source| HomeError::InspectLock {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if !metadata.is_file() {
+        return Err(HomeError::LockNotRegular {
+            path: path.to_path_buf(),
+        });
     }
     Ok(file)
 }
@@ -291,9 +492,7 @@ pub struct RuntimeStartupReservation {
 pub async fn reserve_runtime_startup(home_dir: &Path) -> Result<RuntimeStartupReservation> {
     let (receive, worker) = start_runtime_startup_waiter(home_dir)?;
     drop(worker);
-    receive
-        .await
-        .context("runtime startup waiter stopped before completing")?
+    receive.await.map_err(HomeError::StartupWaiterStopped)?
 }
 
 fn start_runtime_startup_waiter(
@@ -308,16 +507,20 @@ fn start_runtime_startup_waiter(
         .name("gents-runtime-startup-wait".into())
         .spawn(move || {
             let result = (|| {
-                let home = fs::canonicalize(&home_dir)
-                    .with_context(|| format!("resolving runtime home {}", home_dir.display()))?;
+                let home = fs::canonicalize(&home_dir).map_err(|source| {
+                    HomeError::ResolveRuntimeHome {
+                        path: home_dir.clone(),
+                        source,
+                    }
+                })?;
                 let file = open_runtime_lock(&home.join(RUNTIME_STARTUP_LOCK_FILE_NAME))?;
                 crate::file_lock::FileLock::exclusive(file)
                     .map(|lock| RuntimeStartupReservation { _lock: lock })
-                    .context("reserving runtime startup")
+                    .map_err(HomeError::ReserveStartup)
             })();
             let _ = send.send(result);
         })
-        .context("starting runtime startup waiter")?;
+        .map_err(HomeError::StartStartupWaiter)?;
     Ok((receive, worker))
 }
 
@@ -342,18 +545,26 @@ where
     ToolPackage: Serialize,
     ToolCeiling: Serialize,
 {
-    fs::create_dir_all(home_dir)
-        .with_context(|| format!("creating home directory {}", home_dir.display()))?;
+    fs::create_dir_all(home_dir).map_err(|source| HomeError::CreateHome {
+        path: home_dir.to_path_buf(),
+        source,
+    })?;
     let path = init_config_path(home_dir);
-    let contents = serde_json::to_vec_pretty(state).context("encoding local init config JSON")?;
-    let staged = tempfile::NamedTempFile::new_in(home_dir)
-        .with_context(|| format!("staging init config {}", path.display()))?;
+    let contents = serde_json::to_vec_pretty(state).map_err(HomeError::EncodeInitConfig)?;
+    let staged =
+        tempfile::NamedTempFile::new_in(home_dir).map_err(|source| HomeError::StageInitConfig {
+            path: path.clone(),
+            source,
+        })?;
     use std::io::Write as _;
     staged.as_file().write_all(&contents)?;
     staged.as_file().sync_all()?;
     staged
         .persist(&path)
-        .with_context(|| format!("writing init config {}", path.display()))?;
+        .map_err(|error| HomeError::WriteInitConfig {
+            path: path.clone(),
+            source: Box::new(error),
+        })?;
     #[cfg(unix)]
     fs::File::open(home_dir)?.sync_all()?;
     Ok(())
@@ -370,10 +581,12 @@ where
     if !path.exists() {
         return Ok(None);
     }
-    let bytes =
-        fs::read(&path).with_context(|| format!("reading init config {}", path.display()))?;
+    let bytes = fs::read(&path).map_err(|source| HomeError::ReadInitConfig {
+        path: path.clone(),
+        source,
+    })?;
     let state = serde_json::from_slice(&bytes)
-        .with_context(|| format!("decoding init config {}", path.display()))?;
+        .map_err(|source| HomeError::DecodeInitConfig { path, source })?;
     Ok(Some(state))
 }
 
@@ -388,11 +601,9 @@ pub fn ensure_home_identity_can_serve(home_dir: &Path) -> Result<()> {
         return Ok(());
     };
     if config.identity_backend.as_deref().map(str::trim) == Some(SECURE_ENCLAVE_IDENTITY_BACKEND) {
-        anyhow::bail!(
-            "home {} uses the {SECURE_ENCLAVE_IDENTITY_BACKEND} identity backend, whose key cannot own the served node's access control; re-initialize the home with a file or macos-keychain identity (`gents init --home {} --dangerously-overwrite --identity-backend file`) to serve it",
-            home_dir.display(),
-            home_dir.display()
-        );
+        return Err(HomeError::SecureEnclaveHome {
+            home: home_dir.to_path_buf(),
+        });
     }
     Ok(())
 }
@@ -408,13 +619,19 @@ pub fn home_entries(home_dir: &Path, exclude: &[PathBuf]) -> Result<HomeEntries>
     let listing = match fs::read_dir(home_dir) {
         Ok(listing) => listing,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(entries),
-        Err(error) => {
-            return Err(error).with_context(|| format!("listing home {}", home_dir.display()))
+        Err(source) => {
+            return Err(HomeError::ListHome {
+                home: home_dir.to_path_buf(),
+                source,
+            })
         }
     };
     let mut candidates = Vec::new();
     for entry in listing {
-        let entry = entry.with_context(|| format!("listing home {}", home_dir.display()))?;
+        let entry = entry.map_err(|source| HomeError::ListHome {
+            home: home_dir.to_path_buf(),
+            source,
+        })?;
         let path = entry.path();
         let owned_name = entry
             .file_name()
@@ -500,19 +717,28 @@ fn archive_preflight_with(
 ) -> Result<()> {
     let parent = backup
         .parent()
-        .with_context(|| format!("backup {} has no parent directory", backup.display()))?;
-    let target = device(parent).with_context(|| format!("inspecting {}", parent.display()))?;
+        .ok_or_else(|| HomeError::BackupWithoutParent {
+            backup: backup.to_path_buf(),
+        })?;
+    let target = device(parent).map_err(|source| HomeError::Inspect {
+        path: parent.to_path_buf(),
+        source,
+    })?;
     for entry in groups.iter().flat_map(|group| group.entries.iter()) {
         match device(entry) {
             Ok(source) if source == target => {}
-            Ok(_) => anyhow::bail!(
-                "{} is on a different filesystem than the backup location {}; nothing was changed",
-                entry.display(),
-                parent.display()
-            ),
+            Ok(_) => {
+                return Err(HomeError::CrossFilesystem {
+                    entry: entry.clone(),
+                    parent: parent.to_path_buf(),
+                })
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).with_context(|| format!("inspecting {}", entry.display()))
+            Err(source) => {
+                return Err(HomeError::Inspect {
+                    path: entry.clone(),
+                    source,
+                })
             }
         }
     }
@@ -551,32 +777,42 @@ fn retire_entries_with(
         match inspect(entry) {
             Ok(is_dir) => Ok(Some(is_dir)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error).with_context(|| format!("inspecting {}", entry.display())),
+            Err(source) => Err(HomeError::Inspect {
+                path: entry.to_path_buf(),
+                source,
+            }),
         }
     };
     match disposition {
         RetireDisposition::Archive { backup } => {
-            private_dir(backup).with_context(|| format!("creating backup {}", backup.display()))?;
+            private_dir(backup).map_err(|source| HomeError::CreateBackup {
+                path: backup.to_path_buf(),
+                source,
+            })?;
             let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
             let result = (|| -> Result<()> {
                 let mut created: Vec<&str> = Vec::new();
                 for group in groups {
                     let target_dir = backup.join(group.name);
                     if !created.contains(&group.name) {
-                        private_dir(&target_dir)
-                            .with_context(|| format!("creating {}", target_dir.display()))?;
+                        private_dir(&target_dir).map_err(|source| HomeError::CreateDirectory {
+                            path: target_dir.clone(),
+                            source,
+                        })?;
                         created.push(group.name);
                     }
                     for entry in group.entries {
                         if present(entry)?.is_none() {
                             continue;
                         }
-                        let name = entry.file_name().with_context(|| {
-                            format!("{} has no file name to archive", entry.display())
+                        let name = entry.file_name().ok_or_else(|| HomeError::NoFileName {
+                            path: entry.clone(),
                         })?;
                         let target = target_dir.join(name);
-                        fs::rename(entry, &target).with_context(|| {
-                            format!("moving {} to {}", entry.display(), target.display())
+                        fs::rename(entry, &target).map_err(|source| HomeError::Move {
+                            from: entry.clone(),
+                            to: target.clone(),
+                            source,
                         })?;
                         moved.push((entry.clone(), target));
                     }
@@ -597,12 +833,14 @@ fn retire_entries_with(
                             let _ = fs::remove_dir(backup.join(group.name));
                         }
                         let _ = fs::remove_dir(backup);
-                        Err(error.context("archiving was rolled back; nothing was moved"))
+                        Err(HomeError::ArchiveRolledBack {
+                            source: Box::new(error),
+                        })
                     } else {
-                        Err(error.context(format!(
-                            "archiving failed and these entries could not be moved back: {}",
-                            unrestored.join(", ")
-                        )))
+                        Err(HomeError::ArchiveUnrestored {
+                            entries: unrestored.join(", "),
+                            source: Box::new(error),
+                        })
                     }
                 }
             }
@@ -621,10 +859,10 @@ fn retire_entries_with(
                     Ok(Some(is_dir)) => is_dir,
                     Ok(None) => continue,
                     Err(error) => {
-                        return Err(error.context(format!(
-                            "deleting stopped after deleting [{}]",
-                            done(&removed)
-                        )))
+                        return Err(HomeError::DeleteStopped {
+                            removed: done(&removed),
+                            source: Box::new(error),
+                        })
                     }
                 };
                 let outcome = if is_dir {
@@ -632,12 +870,12 @@ fn retire_entries_with(
                 } else {
                     fs::remove_file(entry)
                 };
-                if let Err(error) = outcome {
-                    return Err(anyhow::Error::new(error).context(format!(
-                        "deleting {} failed after deleting [{}]",
-                        entry.display(),
-                        done(&removed)
-                    )));
+                if let Err(source) = outcome {
+                    return Err(HomeError::DeleteFailed {
+                        path: entry.clone(),
+                        removed: done(&removed),
+                        source,
+                    });
                 }
                 removed.push(entry.clone());
             }
@@ -648,6 +886,26 @@ fn retire_entries_with(
 
 #[cfg(test)]
 mod tests {
+    use gents_protocol::error_chain::ErrorChain;
+
+    #[test]
+    fn store_lock_contention_classifies_through_every_owner_wrapper() {
+        let held = || super::StoreLockHeld {
+            home: "/h".into(),
+            holder_pid: Some(7),
+        };
+        let held_by = |error: anyhow::Error| {
+            super::store_lock_held(error.context("opening the store").as_ref())
+                .and_then(|held| held.holder_pid)
+        };
+        assert_eq!(held_by(anyhow::anyhow!(held())), Some(7));
+        assert_eq!(held_by(super::HomeError::LockHeld(held()).into()), Some(7));
+        let key = crate::store_key::StoreKeyError::Home(super::HomeError::LockHeld(held()));
+        assert_eq!(key.lock_held().and_then(|held| held.holder_pid), Some(7));
+        assert_eq!(held_by(key.into()), Some(7));
+        assert_eq!(held_by(super::HomeError::HomeDirUnresolved.into()), None);
+    }
+
     #[test]
     fn secure_enclave_homes_are_refused_before_serving() {
         let home = tempfile::tempdir().unwrap();
@@ -1180,7 +1438,11 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(format!("{error:#}").contains("rolled back"), "{error:#}");
+        assert!(
+            ErrorChain(&error).to_string().contains("rolled back"),
+            "{}",
+            ErrorChain(&error)
+        );
         assert_eq!(
             fs::read_to_string(home.join("data/MANIFEST")).unwrap(),
             "store"
@@ -1215,12 +1477,16 @@ mod tests {
             inspect,
         )
         .unwrap_err();
-        assert!(format!("{error:#}").contains("rolled back"), "{error:#}");
+        assert!(
+            ErrorChain(&error).to_string().contains("rolled back"),
+            "{}",
+            ErrorChain(&error)
+        );
         assert!(home.join("data/MANIFEST").is_file());
         assert!(!backup.exists());
 
         let error = retire_entries_with(&groups, RetireDisposition::Delete, inspect).unwrap_err();
-        let message = format!("{error:#}");
+        let message = ErrorChain(&error).to_string();
         assert!(message.contains("after deleting ["), "{message}");
         assert!(
             message.contains(&home.join("data").display().to_string()),

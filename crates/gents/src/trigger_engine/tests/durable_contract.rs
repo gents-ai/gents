@@ -260,7 +260,7 @@ async fn generated_latest_delivery_admission_preserves_rejected_and_replayed_wor
                                 "caused_by_trigger_kind": "schedule", "created_at": fire.created_at
                             }}),
                         ).await?;
-                        Ok(())
+                        Ok::<_, anyhow::Error>(())
                     })
                 },
             ).await.unwrap();
@@ -679,14 +679,16 @@ async fn saved_arrival_cursor(access: &crate::config_client::ConfigAccess) -> St
     access
         .transact_write("test.read_arrival_cursor", |txn| {
             Box::pin(async move {
-                Ok(crate::config_client::event_source_cursor::load_or_seed(
-                    txn,
-                    "owner-a",
-                    &handoff_consumer(),
+                Ok::<_, anyhow::Error>(
+                    crate::config_client::event_source_cursor::load_or_seed(
+                        txn,
+                        "owner-a",
+                        &handoff_consumer(),
+                    )
+                    .await?
+                    .cursor
+                    .after,
                 )
-                .await?
-                .cursor
-                .after)
             })
         })
         .await
@@ -736,7 +738,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                     "task_id":"contract-task","source":{"kind":"event","event_source_id":"source"},
                     "enabled":case["enabled"], "concurrency":case["mode"]}}),
             ).await?;
-            Ok(())
+            Ok::<_, anyhow::Error>(())
         })).await.unwrap();
         assert_eq!(
             saved_arrival_cursor(&access).await,
@@ -795,7 +797,7 @@ async fn generated_arrival_checkpoints_preserve_committed_delivery_across_crashe
                     let mutation = &mutation;
                     Box::pin(async move {
                         durable::stage_fire_request(txn, receipt, mutation).await?;
-                        Ok(())
+                        Ok::<_, anyhow::Error>(())
                     })
                 })
                 .await
@@ -992,7 +994,7 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                     "event_source_id":"source","callback_id":"callback","enabled":binding_enabled}}),
             ).await?;
             event_source_cursor::load_or_seed(txn, "owner-a", &handoff_binding()).await?;
-            Ok(())
+            Ok::<_, anyhow::Error>(())
         })).await.unwrap();
         let saved = || {
             let access = access.clone();
@@ -1000,14 +1002,16 @@ async fn generated_callback_arrival_checkpoints_use_invocation_receipts() {
                 access
                     .transact_write("test.read_callback_cursor", |txn| {
                         Box::pin(async move {
-                            Ok(event_source_cursor::load_or_seed(
-                                txn,
-                                "owner-a",
-                                &handoff_binding(),
+                            Ok::<_, anyhow::Error>(
+                                event_source_cursor::load_or_seed(
+                                    txn,
+                                    "owner-a",
+                                    &handoff_binding(),
+                                )
+                                .await?
+                                .cursor
+                                .after,
                             )
-                            .await?
-                            .cursor
-                            .after)
                         })
                     })
                     .await

@@ -498,7 +498,10 @@ pub async fn upsert_oauth_credential(
     let response =
         crate::config_client::ConfigAccess::write_local(node, "oauth_credential.upsert", &mutation)
             .await?;
-    gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")
+    Ok(gents_protocol::graphql::extract_mutation_doc_id(
+        &response,
+        "OAuthCredential",
+    )?)
 }
 
 pub async fn upsert_oauth_credential_on(
@@ -507,7 +510,10 @@ pub async fn upsert_oauth_credential_on(
 ) -> Result<String> {
     let mutation = oauth_credential_upsert_mutation(credential);
     let response = access.write("oauth_credential.upsert", &mutation).await?;
-    gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")
+    Ok(gents_protocol::graphql::extract_mutation_doc_id(
+        &response,
+        "OAuthCredential",
+    )?)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -1531,6 +1537,12 @@ pub(crate) fn account_failure(product: &OAuthProduct, label: &str, state: &str) 
     format!("{} account \"{label}\" is {state}.", product.name)
 }
 
+/// The account state an `account_unusable_message` rendering reports.
+///
+/// External premise: a blocked turn is read back from the persisted
+/// AgentToolCall `failure_reason`, the only durable record of the failure;
+/// the schema carries no account-state field, so the state is recovered from
+/// that rendering.
 pub fn account_failure_state(text: &str) -> Option<&'static str> {
     const STATES: [&str; 5] = [
         "signed out (expired or revoked)",
@@ -1730,7 +1742,9 @@ impl DbCredentialBearer {
                 }
             }
         }
-        Err(last_error.expect("persist_with_retry ran at least one failing attempt"))
+        Err(last_error
+            .expect("persist_with_retry ran at least one failing attempt")
+            .into())
     }
 
     fn auth_error(

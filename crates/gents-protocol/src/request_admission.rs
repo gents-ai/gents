@@ -1,10 +1,25 @@
 use crate::canonical::{
     parse_utc_seconds, require_enum, require_identifier, require_optional_identifier,
+    CanonicalError,
 };
 use crate::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 
 const REQUEST_SIGNATURE_DOMAIN: &str = "gents-agent-request-admission-v1";
+
+#[derive(Debug, thiserror::Error)]
+pub enum RequestAdmissionError {
+    #[error(transparent)]
+    Canonical(#[from] CanonicalError),
+    #[error(transparent)]
+    Attachment(#[from] crate::request_input::AttachmentError),
+    #[error("execution_origin is required")]
+    ExecutionOriginRequired,
+    #[error("workspace reference requires id, owner node and authority together")]
+    WorkspaceReferenceIncomplete,
+}
+
+type Result<T, E = RequestAdmissionError> = std::result::Result<T, E>;
 
 /// Signed admission purpose. Missing or unknown values must not acquire normal
 /// request authority; auxiliary work owns an independent request lease.
@@ -259,7 +274,7 @@ pub struct AgentRequestSigningFields<'a> {
     pub workspace_seal_hash: Option<&'a str>,
 }
 
-pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> anyhow::Result<()> {
+pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> Result<()> {
     request.input.validate_attachments()?;
     for (name, value) in [
         ("request_id", request.request_id),
@@ -304,7 +319,7 @@ pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> anyho
     }
     let origin = request
         .execution_origin
-        .ok_or_else(|| anyhow::anyhow!("execution_origin is required"))?;
+        .ok_or(RequestAdmissionError::ExecutionOriginRequired)?;
     require_enum("execution_origin", origin, &["interactive", "scheduled"])?;
     if let Some(kind) = request.caused_by_trigger_kind {
         require_enum(
@@ -531,7 +546,7 @@ impl AgentRequestAdmissionRecord {
         }
     }
 
-    pub fn validate_canonical_fields(&self) -> anyhow::Result<()> {
+    pub fn validate_canonical_fields(&self) -> Result<()> {
         require_identifier("admission signer DID", &self.signer_did)?;
         for (name, value) in [
             (
@@ -620,19 +635,20 @@ pub fn validate_workspace_reference(
     owner_node_did: Option<&str>,
     authority: Option<&str>,
     seal_hash: Option<&str>,
-) -> anyhow::Result<()> {
+) -> Result<()> {
     require_optional_identifier("workspace_id", workspace_id)?;
     require_optional_identifier("workspace_owner_node_did", owner_node_did)?;
     match (workspace_id, owner_node_did, authority) {
         (None, None, None) if seal_hash.is_none() => Ok(()),
-        (Some(_), Some(_), Some(authority)) => require_enum(
-            "workspace_authority",
-            authority,
-            &["readOnly", "readWrite", "integrate"],
-        ),
-        _ => {
-            anyhow::bail!("workspace reference requires id, owner node and authority together")
+        (Some(_), Some(_), Some(authority)) => {
+            require_enum(
+                "workspace_authority",
+                authority,
+                &["readOnly", "readWrite", "integrate"],
+            )?;
+            Ok(())
         }
+        _ => Err(RequestAdmissionError::WorkspaceReferenceIncomplete),
     }
 }
 

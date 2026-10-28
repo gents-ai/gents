@@ -355,7 +355,7 @@ pub(crate) async fn poll_request(
 ) -> Result<Option<RequestPollRow>> {
     let response =
         graphql_with_transaction_retry(node, &poll_query(request_id), "await terminal").await?;
-    first_row(&response, "AgentRequest")
+    Ok(first_row(&response, "AgentRequest")?)
 }
 
 fn poll_query(request_id: &str) -> String {

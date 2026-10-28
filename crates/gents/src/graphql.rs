@@ -1,15 +1,91 @@
 //! Raw GraphQL fragments require validation; string escaping and identifier validation do not cover them.
 
-use anyhow::{Context, Result};
 use defra_node::{EmbeddedNode, QueryResponse};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::config_client::ConfigClientError;
+
 pub use gents_protocol::graphql::{
     escape_graphql_string, validate_collection_identifier, validate_graphql_filter_fragment,
     validate_graphql_name,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub enum GraphqlResponseError {
+    /// Error list returned by DefraDB; its source exposes storage exhaustion.
+    #[error(transparent)]
+    Database(#[from] gents_protocol::database_error::GraphqlFailure),
+    #[error(transparent)]
+    EncodeErrors(#[from] serde_json::Error),
+    #[error("decode {field} rows")]
+    DecodeRows {
+        field: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("decode {field} rows")]
+    RowsNotArray { field: String },
+    #[error(
+        "mutation response returned both {field} and {normalized}; expected one normalized field"
+    )]
+    AmbiguousMutationField { field: String, normalized: String },
+    #[error("{field} returned an unexpected mutation response shape")]
+    MutationShape { field: String },
+    #[error("{field} returned GraphQL errors")]
+    MutationErrors { field: String },
+    #[error("{field} omitted response data")]
+    MissingData { field: String },
+    #[error("{field} returned {count} documents; expected at most one")]
+    TooManyDocuments { field: String, count: usize },
+    #[error("create {collection} omitted its physical identity")]
+    MissingCreatedIdentity { collection: String },
+    #[error("decode composite commit rows")]
+    DecodeCompositeCommits(#[source] serde_json::Error),
+    #[error("{operation} returned no _version array")]
+    MissingVersionArray { operation: String },
+    #[error(
+        "{operation} returned multiple composite commits at newest height {height}; document version is ambiguous"
+    )]
+    AmbiguousVersion { operation: String, height: i64 },
+    #[error("query omitted required {field} rows")]
+    MissingRequiredRows { field: String },
+    #[error("decode required {field} rows")]
+    DecodeRequiredRows {
+        field: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("cursor query omitted {field}")]
+    CursorOmitted { field: &'static str },
+    #[error("decode {collection} cursor page")]
+    DecodeCursorPage {
+        collection: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("cursor query returned an empty page with hasNext")]
+    EmptyCursorPage,
+    #[error("cursor page exceeded its native row bound")]
+    CursorPageOverflow,
+    #[error("cursor row omitted physical identity")]
+    CursorRowIdentityMissing,
+    #[error("cursor repeated a physical document")]
+    CursorRepeatedDocument,
+    #[error("cursor did not advance")]
+    CursorStalled,
+    #[error(transparent)]
+    Access(Box<ConfigClientError>),
+}
+
+impl From<ConfigClientError> for GraphqlResponseError {
+    fn from(error: ConfigClientError) -> Self {
+        Self::Access(Box::new(error))
+    }
+}
+
+type Result<T, E = GraphqlResponseError> = std::result::Result<T, E>;
 
 /// Render a GraphQL string-list literal, emitting `null` for an empty list
 /// (never `[]`, which types as `JsonArray` and corrupts nillable array columns).
@@ -30,7 +106,7 @@ pub fn graphql_string_list_literal<'a>(values: impl IntoIterator<Item = &'a str>
 pub async fn fence_arrivals(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     collection: &str,
-) -> Result<()> {
+) -> Result<(), ConfigClientError> {
     txn.execute(&format!(
         r#"{{ _documentArrivals(collection: "{}", limit: 1) {{ head }} }}"#,
         escape_graphql_string(collection)
@@ -43,7 +119,7 @@ pub async fn graphql_response_with_transaction_retry(
     node: &EmbeddedNode,
     graphql: &str,
     operation: &str,
-) -> Result<QueryResponse> {
+) -> Result<QueryResponse, ConfigClientError> {
     crate::config_client::ConfigAccess::read_local_response(node, graphql, operation).await
 }
 
@@ -51,7 +127,7 @@ pub async fn graphql_with_transaction_retry(
     node: &EmbeddedNode,
     graphql: &str,
     operation: &str,
-) -> Result<QueryResponse> {
+) -> Result<QueryResponse, ConfigClientError> {
     let response = graphql_response_with_transaction_retry(node, graphql, operation).await?;
     ensure_no_errors(&response, operation)?;
     Ok(response)
@@ -117,7 +193,10 @@ where
     let Some(value) = response.data.as_ref().and_then(|data| data.get(field)) else {
         return Ok(Vec::new());
     };
-    Vec::<T>::deserialize(value).with_context(|| format!("decode {field} rows"))
+    Vec::<T>::deserialize(value).map_err(|source| GraphqlResponseError::DecodeRows {
+        field: field.to_owned(),
+        source,
+    })
 }
 
 /// DefraDB can return successful `data: {}` for a node-read denial. An absent
@@ -131,8 +210,13 @@ where
         .data
         .as_ref()
         .and_then(|data| data.get(field))
-        .with_context(|| format!("query omitted required {field} rows"))?;
-    Vec::<T>::deserialize(value).with_context(|| format!("decode required {field} rows"))
+        .ok_or_else(|| GraphqlResponseError::MissingRequiredRows {
+            field: field.to_owned(),
+        })?;
+    Vec::<T>::deserialize(value).map_err(|source| GraphqlResponseError::DecodeRequiredRows {
+        field: field.to_owned(),
+        source,
+    })
 }
 
 pub(crate) fn cursor_after_arg(after: Option<&str>) -> String {
@@ -174,31 +258,35 @@ pub(crate) fn cursor_page_data<T>(
 where
     T: serde::de::DeserializeOwned,
 {
+    let omitted = |field: &'static str| GraphqlResponseError::CursorOmitted { field };
     let cursor = data
         .and_then(|data| data.get("_cursor"))
-        .context("cursor query omitted _cursor")?;
+        .ok_or_else(|| omitted("_cursor"))?;
     let rows = cursor
         .get(collection)
-        .context("cursor query omitted collection rows")?;
-    let page: Vec<T> = serde_json::from_value(rows.clone())
-        .with_context(|| format!("decode {collection} cursor page"))?;
+        .ok_or_else(|| omitted("collection rows"))?;
+    let page: Vec<T> = serde_json::from_value(rows.clone()).map_err(|source| {
+        GraphqlResponseError::DecodeCursorPage {
+            collection: collection.to_owned(),
+            source,
+        }
+    })?;
     let page_info = cursor
         .get("_pageInfo")
-        .context("cursor query omitted _pageInfo")?;
+        .ok_or_else(|| omitted("_pageInfo"))?;
     let has_next = page_info
         .get("hasNext")
         .and_then(serde_json::Value::as_bool)
-        .context("cursor query omitted hasNext")?;
+        .ok_or_else(|| omitted("hasNext"))?;
     let next = if has_next {
-        anyhow::ensure!(
-            !page.is_empty(),
-            "cursor query returned an empty page with hasNext"
-        );
+        if page.is_empty() {
+            return Err(GraphqlResponseError::EmptyCursorPage);
+        }
         Some(
             page_info
                 .get("endCursor")
                 .and_then(serde_json::Value::as_str)
-                .context("cursor query omitted endCursor")?
+                .ok_or_else(|| omitted("endCursor"))?
                 .to_owned(),
         )
     } else {
@@ -234,17 +322,21 @@ fn mutation_documents_in_data<'a>(
         .as_deref()
         .and_then(|field| data.get(field));
     let value = match (direct, normalized) {
-        (Some(_), Some(_)) => anyhow::bail!(
-            "mutation response returned both {field} and {}; expected one normalized field",
-            normalized_field.expect("normalized field exists")
-        ),
+        (Some(_), Some(_)) => {
+            return Err(GraphqlResponseError::AmbiguousMutationField {
+                field: field.to_owned(),
+                normalized: normalized_field.expect("normalized field exists"),
+            })
+        }
         (Some(value), None) | (None, Some(value)) => value,
         (None, None) => return Ok(None),
     };
     match value {
         Value::Object(_) => Ok(Some(std::slice::from_ref(value))),
         Value::Array(rows) => Ok(Some(rows.as_slice())),
-        _ => anyhow::bail!("{field} returned an unexpected mutation response shape"),
+        _ => Err(GraphqlResponseError::MutationShape {
+            field: field.to_owned(),
+        }),
     }
 }
 
@@ -254,15 +346,19 @@ fn mutation_documents_in_data<'a>(
 /// a `create_` request under its normalized `add_` response field. Centralize
 /// that compatibility handling so callers only interpret returned documents.
 pub fn mutation_documents<'a>(response: &'a Value, field: &str) -> Result<Option<&'a [Value]>> {
-    anyhow::ensure!(
-        response.get("errors").is_none_or(|errors| {
-            errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)
-        }),
-        "{field} returned GraphQL errors"
-    );
+    if !response
+        .get("errors")
+        .is_none_or(|errors| errors.is_null() || errors.as_array().is_some_and(Vec::is_empty))
+    {
+        return Err(GraphqlResponseError::MutationErrors {
+            field: field.to_owned(),
+        });
+    }
     let data = response
         .get("data")
-        .with_context(|| format!("{field} omitted response data"))?;
+        .ok_or_else(|| GraphqlResponseError::MissingData {
+            field: field.to_owned(),
+        })?;
     mutation_documents_in_data(Some(data), field)
 }
 
@@ -286,7 +382,10 @@ fn single_mutation_document_in_data<'a>(
     match documents.len() {
         0 => Ok(None),
         1 => Ok(documents.first()),
-        count => anyhow::bail!("{field} returned {count} documents; expected at most one"),
+        count => Err(GraphqlResponseError::TooManyDocuments {
+            field: field.to_owned(),
+            count,
+        }),
     }
 }
 
@@ -294,11 +393,12 @@ pub fn created_doc_id(response: &Value, collection: &str) -> Result<String> {
     let field = format!("create_{collection}");
     let documents = mutation_documents(response, &field)?;
     if let Some(documents) = documents.as_ref() {
-        anyhow::ensure!(
-            documents.len() <= 1,
-            "{field} returned {} documents; expected at most one",
-            documents.len()
-        );
+        if documents.len() > 1 {
+            return Err(GraphqlResponseError::TooManyDocuments {
+                field,
+                count: documents.len(),
+            });
+        }
     }
     documents
         .and_then(|rows| rows.first())
@@ -306,7 +406,9 @@ pub fn created_doc_id(response: &Value, collection: &str) -> Result<String> {
         .and_then(Value::as_str)
         .filter(|id| !id.trim().is_empty())
         .map(str::to_owned)
-        .with_context(|| format!("create {collection} omitted its physical identity"))
+        .ok_or_else(|| GraphqlResponseError::MissingCreatedIdentity {
+            collection: collection.to_owned(),
+        })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -336,7 +438,7 @@ pub(crate) fn decode_composite_commits(rows: &[Value]) -> Result<Vec<CompositeCo
         .cloned()
         .map(serde_json::from_value::<CompositeCommit>)
         .collect::<std::result::Result<Vec<_>, _>>()
-        .context("decode composite commit rows")?
+        .map_err(GraphqlResponseError::DecodeCompositeCommits)?
         .into_iter()
         .filter(|commit| commit.field_name == "_C")
         .collect::<Vec<_>>();
@@ -365,7 +467,9 @@ fn composite_commits_at(value: Option<&Value>, field: &str) -> Result<Vec<Compos
     };
     let rows = value
         .as_array()
-        .with_context(|| format!("decode {field} rows"))?;
+        .ok_or_else(|| GraphqlResponseError::RowsNotArray {
+            field: field.to_owned(),
+        })?;
     decode_composite_commits(rows)
 }
 
@@ -389,7 +493,9 @@ pub fn document_composite_version(
     let versions = document
         .get("_version")
         .and_then(Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!("{operation} returned no _version array"))?;
+        .ok_or_else(|| GraphqlResponseError::MissingVersionArray {
+            operation: operation.to_owned(),
+        })?;
     let commits = decode_composite_commits(versions)?;
     unique_newest_composite_commit(commits, operation)
 }
@@ -411,10 +517,10 @@ fn unique_newest_composite_commit(
         .get(1)
         .is_some_and(|candidate| candidate.height == newest.height)
     {
-        anyhow::bail!(
-            "{operation} returned multiple composite commits at newest height {}; document version is ambiguous",
-            newest.height
-        );
+        return Err(GraphqlResponseError::AmbiguousVersion {
+            operation: operation.to_owned(),
+            height: newest.height,
+        });
     }
     Ok(commits.into_iter().next())
 }
@@ -493,9 +599,9 @@ pub fn response_has_documents(value: &serde_json::Value) -> bool {
 
 /// Storage exhaustion retains its native or structured wire cause through
 /// context wrappers. It never grants automatic mutation replay authority.
-pub fn is_storage_full(error: &anyhow::Error) -> bool {
+pub fn is_storage_full(error: &(dyn std::error::Error + 'static)) -> bool {
     gents_protocol::database_error::is_storage_full(error)
-        || error.chain().any(|cause| {
+        || std::iter::successors(Some(error), |cause| cause.source()).any(|cause| {
             cause
                 .downcast_ref::<storage::corekv::Error>()
                 .is_some_and(storage::corekv::Error::is_storage_full)

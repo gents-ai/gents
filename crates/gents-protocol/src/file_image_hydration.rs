@@ -1,4 +1,3 @@
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -22,6 +21,34 @@ impl FileImageScope {
             && self.session_id == request.session_id
     }
 }
+
+#[derive(Debug, thiserror::Error)]
+pub enum FileImageHydrationError {
+    #[error("file image demand has an empty reference")]
+    EmptyReference,
+    #[error(transparent)]
+    Inventory(#[from] crate::file_inventory::FileInventoryError),
+    #[error("file image selection crossed its metadata reader, root or snapshot")]
+    InvalidInventorySelection,
+    #[error(transparent)]
+    Serialize(#[from] serde_json::Error),
+    #[error(transparent)]
+    ProcessedAt(#[from] chrono::ParseError),
+    #[error("unsupported file image receipt version")]
+    UnsupportedVersion,
+    #[error("file image receipt signer does not own the target node")]
+    SignerNotNodeOwner,
+    #[error("invalid file image receipt signature length")]
+    InvalidSignatureLength,
+    #[error("invalid selected file image receipt")]
+    InvalidSelected,
+    #[error("missing file images cannot carry a rejection")]
+    MissingWithRejection,
+    #[error("file image rejection requires a reason")]
+    RejectionWithoutReason,
+}
+
+type Result<T, E = FileImageHydrationError> = std::result::Result<T, E>;
 
 pub const FILE_IMAGE_RECEIPT_VERSION: u8 = 2;
 pub const FILE_INVENTORY_IMAGE_RECEIPT_VERSION: u8 = 3;
@@ -121,29 +148,22 @@ impl FileImageDemand {
     }
 
     pub fn validate_reference(&self) -> Result<()> {
-        anyhow::ensure!(
-            self.reference_fields()
-                .iter()
-                .all(|(_, value)| !value.is_empty()),
-            "file image demand has an empty reference"
-        );
+        if self.reference_fields().iter().any(|(_, value)| value.is_empty()) {
+            return Err(FileImageHydrationError::EmptyReference);
+        }
         if let Some(reference) = &self.inventory_reference {
             reference.page.validate_reference()?;
             let root = &reference.page.admission.request;
-            anyhow::ensure!(
-                !reference.snapshot_digest.is_empty()
-                    && usize::from(reference.entry_index) < FILE_INVENTORY_PAGE_LIMIT
-                    && root.peer_id == self.admission.peer_id
-                    && root.requester_did == self.admission.requester_did
-                    && root.node_did == self.admission.node_did
-                    && root.session_id == self.admission.session_id
-                    && reference
-                        .page
-                        .cursor
-                        .as_ref()
-                        .is_none_or(|cursor| cursor.binding.digest == reference.snapshot_digest),
-                "file image selection crossed its metadata reader, root or snapshot"
-            );
+            if reference.snapshot_digest.is_empty()
+                || usize::from(reference.entry_index) >= FILE_INVENTORY_PAGE_LIMIT
+                || root.peer_id != self.admission.peer_id
+                || root.requester_did != self.admission.requester_did
+                || root.node_did != self.admission.node_did
+                || root.session_id != self.admission.session_id
+                || reference.page.cursor.as_ref().is_some_and(|cursor| cursor.binding.digest != reference.snapshot_digest)
+            {
+                return Err(FileImageHydrationError::InvalidInventorySelection);
+            }
         }
         Ok(())
     }
@@ -215,32 +235,32 @@ impl FileImageHydrationReceipt {
         if !matches!(self.selection, FileImageSelection::Rejected) {
             self.demand.validate_reference()?;
         }
-        anyhow::ensure!(
-            self.version == self.demand.receipt_version(),
-            "unsupported file image receipt version"
-        );
-        anyhow::ensure!(
-            self.signer_did == self.demand.admission.node_did,
-            "file image receipt signer does not own the target node"
-        );
-        anyhow::ensure!(
-            self.signature.len() == 64,
-            "invalid file image receipt signature length"
-        );
+        if self.version != self.demand.receipt_version() {
+            return Err(FileImageHydrationError::UnsupportedVersion);
+        }
+        if self.signer_did != self.demand.admission.node_did {
+            return Err(FileImageHydrationError::SignerNotNodeOwner);
+        }
+        if self.signature.len() != 64 {
+            return Err(FileImageHydrationError::InvalidSignatureLength);
+        }
         chrono::DateTime::parse_from_rfc3339(&self.processed_at)?;
         match &self.selection {
-            FileImageSelection::Selected { document } => anyhow::ensure!(
-                !document.is_empty() && self.detail.is_empty(),
-                "invalid selected file image receipt"
-            ),
-            FileImageSelection::Missing => anyhow::ensure!(
-                self.detail.is_empty(),
-                "missing file images cannot carry a rejection"
-            ),
-            FileImageSelection::Rejected => anyhow::ensure!(
-                !self.detail.is_empty(),
-                "file image rejection requires a reason"
-            ),
+            FileImageSelection::Selected { document } => {
+                if document.is_empty() || !self.detail.is_empty() {
+                    return Err(FileImageHydrationError::InvalidSelected);
+                }
+            }
+            FileImageSelection::Missing => {
+                if !self.detail.is_empty() {
+                    return Err(FileImageHydrationError::MissingWithRejection);
+                }
+            }
+            FileImageSelection::Rejected => {
+                if self.detail.is_empty() {
+                    return Err(FileImageHydrationError::RejectionWithoutReason);
+                }
+            }
         }
         Ok(())
     }

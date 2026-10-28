@@ -1122,6 +1122,19 @@ impl DefraSessionHook {
     }
 }
 
+impl DefraSessionHook {
+    async fn ensure_steering_before_deadline(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            crate::lifecycle::RequestLifecycle::input_publication_before_deadline(
+                Utc::now(),
+                self.state.lock().await.request_deadline_at,
+            ),
+            "request deadline expired before steering intake"
+        );
+        Ok(())
+    }
+}
+
 #[async_trait::async_trait]
 impl gents_loop::session_hook::CanonicalSessionHook<crate::streaming::AcceptedToolCall>
     for DefraSessionHook
@@ -1129,13 +1142,15 @@ impl gents_loop::session_hook::CanonicalSessionHook<crate::streaming::AcceptedTo
     async fn adopt_accepted_tool_calls(
         &self,
         calls: Vec<(String, crate::streaming::AcceptedToolCall)>,
-    ) -> anyhow::Result<()> {
-        DefraSessionHook::adopt_accepted_tool_calls(self, calls).await
+    ) -> Result<(), Self::Error> {
+        Ok(DefraSessionHook::adopt_accepted_tool_calls(self, calls).await?)
     }
 }
 
 #[async_trait::async_trait]
 impl gents_loop::session_hook::SessionHook for DefraSessionHook {
+    type Error = crate::agent::stream_processor::RuntimeSeamError;
+
     async fn run_foreground_tool(
         &self,
         name: &str,
@@ -1272,24 +1287,20 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
 
     async fn pending_steering_inputs(
         &self,
-    ) -> anyhow::Result<Vec<gents_loop::loop_stream::FoldedPrompt>> {
+    ) -> Result<Vec<gents_loop::loop_stream::FoldedPrompt>, Self::Error> {
         let Some(source) = self.steering_input_source.as_ref() else {
             return Ok(Vec::new());
         };
-        anyhow::ensure!(
-            crate::lifecycle::RequestLifecycle::input_publication_before_deadline(
-                Utc::now(),
-                self.state.lock().await.request_deadline_at,
-            ),
-            "request deadline expired before steering intake"
-        );
-        crate::lifecycle::queue::steering_inputs(&self.node, &source.request, &source.verifier)
-            .await
+        self.ensure_steering_before_deadline().await?;
+        Ok(
+            crate::lifecycle::queue::steering_inputs(&self.node, &source.request, &source.verifier)
+                .await?,
+        )
     }
 
     async fn finish_steering_snapshot(
         &self,
-    ) -> anyhow::Result<Option<gents_loop::loop_stream::SteeringSnapshot>> {
+    ) -> Result<Option<gents_loop::loop_stream::SteeringSnapshot>, Self::Error> {
         let Some(source) = self
             .steering_input_source
             .as_ref()
@@ -1297,13 +1308,7 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         else {
             return Ok(None);
         };
-        anyhow::ensure!(
-            crate::lifecycle::RequestLifecycle::input_publication_before_deadline(
-                Utc::now(),
-                self.state.lock().await.request_deadline_at,
-            ),
-            "request deadline expired before steering intake"
-        );
+        self.ensure_steering_before_deadline().await?;
         Ok(Some(
             crate::lifecycle::queue::steering_snapshot(
                 &self.node,

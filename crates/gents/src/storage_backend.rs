@@ -1,7 +1,28 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use gents_protocol::error_chain::{find_map_source, find_source};
+
+#[derive(Debug, thiserror::Error)]
+pub enum StorageBackendError {
+    #[error(transparent)]
+    Incompatible(#[from] IncompatibleStore),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error("{} has no existing database", path.display())]
+    NoExistingDatabase { path: PathBuf },
+}
+
+impl StorageBackendError {
+    pub fn incompatible(&self) -> Option<&IncompatibleStore> {
+        match self {
+            Self::Incompatible(store) => Some(store),
+            Self::Io(_) | Self::NoExistingDatabase { .. } => None,
+        }
+    }
+}
+
+type Result<T, E = StorageBackendError> = std::result::Result<T, E>;
 
 /// In-process hosts keep the server's value/key limits, isolation and
 /// durability; the upstream embedded profile restricts document sizes and
@@ -112,11 +133,10 @@ pub fn incompatible_store_kind(data_path: &Path) -> Result<Option<IncompatibleSt
 /// fail before opening the directory.
 pub fn reject_legacy_store(data_path: &Path) -> Result<()> {
     match incompatible_store_kind(data_path)? {
-        Some(kind) => Err(IncompatibleStore {
+        Some(kind) => Err(StorageBackendError::Incompatible(IncompatibleStore {
             kind,
             data_path: data_path.to_path_buf(),
-        }
-        .into()),
+        })),
         None => Ok(()),
     }
 }
@@ -125,52 +145,36 @@ pub fn reject_legacy_store(data_path: &Path) -> Result<()> {
 /// data. The backend otherwise creates an empty database in a key-only home.
 pub(crate) fn require_existing_store(data_path: &Path) -> Result<()> {
     reject_legacy_store(data_path)?;
-    anyhow::ensure!(
-        data_path.join("MANIFEST").is_file(),
-        "{} has no existing database",
-        data_path.display()
-    );
+    if !data_path.join("MANIFEST").is_file() {
+        return Err(StorageBackendError::NoExistingDatabase {
+            path: data_path.to_path_buf(),
+        });
+    }
     Ok(())
 }
 
-pub fn incompatible_store(error: &anyhow::Error, data_path: &Path) -> Option<IncompatibleStore> {
-    if let Some(store) = error.downcast_ref::<IncompatibleStore>() {
+pub fn incompatible_store(
+    error: &(dyn std::error::Error + 'static),
+    data_path: &Path,
+) -> Option<IncompatibleStore> {
+    if let Some(store) = find_incompatible(error) {
         return Some(store.clone());
     }
-    let insecure_key = error
-        .downcast_ref::<crate::identity::InsecureKeyPermissions>()
-        .cloned()
-        .or_else(|| {
-            error.chain().find_map(|cause| {
-                cause
-                    .downcast_ref::<crate::identity::InsecureKeyPermissions>()
-                    .cloned()
-            })
-        });
-    if let Some(key) = insecure_key {
+    if let Some(key) = find_insecure_key(error) {
         return Some(IncompatibleStore {
             kind: IncompatibleStoreKind::InsecureKey,
-            data_path: key.path,
+            data_path: key.path.clone(),
         });
     }
-    let kind = |cause: &gents_migration::Error| {
-        if cause.is_unknown_lineage() {
-            Some(IncompatibleStoreKind::UnknownLineage)
-        } else if cause.is_foreign_version() {
-            Some(IncompatibleStoreKind::ForeignVersion)
-        } else {
-            None
-        }
-    };
-    error
-        .downcast_ref::<gents_migration::Error>()
-        .and_then(kind)
-        .or_else(|| {
-            error.chain().find_map(|cause| {
-                cause
-                    .downcast_ref::<gents_migration::Error>()
-                    .and_then(kind)
-            })
+    find_source::<gents_migration::Error>(error)
+        .and_then(|cause| {
+            if cause.is_unknown_lineage() {
+                Some(IncompatibleStoreKind::UnknownLineage)
+            } else if cause.is_foreign_version() {
+                Some(IncompatibleStoreKind::ForeignVersion)
+            } else {
+                None
+            }
         })
         .map(|kind| IncompatibleStore {
             kind,
@@ -178,13 +182,80 @@ pub fn incompatible_store(error: &anyhow::Error, data_path: &Path) -> Option<Inc
         })
 }
 
-pub fn classify_store_error(error: anyhow::Error, data_path: &Path) -> anyhow::Error {
-    if error.downcast_ref::<IncompatibleStore>().is_some() {
-        return error;
+/// Each owner is asked by its own type too, since transparent wrappers
+/// forward `source()` past the sentinel they carry.
+fn find_incompatible<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a IncompatibleStore> {
+    find_map_source(error, |cause| {
+        cause
+            .downcast_ref::<IncompatibleStore>()
+            .or_else(|| cause.downcast_ref::<StorageBackendError>()?.incompatible())
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::store_key::StoreKeyError>()?
+                    .incompatible()
+            })
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::store_key::upgrade::UpgradeError>()?
+                    .incompatible()
+            })
+    })
+}
+
+fn find_insecure_key<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a crate::identity::InsecureKeyPermissions> {
+    find_map_source(error, |cause| {
+        cause
+            .downcast_ref::<crate::identity::InsecureKeyPermissions>()
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::identity::IdentityError>()?
+                    .insecure_key()
+            })
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::store_key::StoreKeyError>()?
+                    .insecure_key()
+            })
+            .or_else(|| {
+                cause
+                    .downcast_ref::<crate::config_client::ConfigClientError>()?
+                    .insecure_key()
+            })
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ClassifiedStoreError<E>
+where
+    E: std::error::Error + 'static,
+{
+    #[error("{store}")]
+    Refused {
+        store: IncompatibleStore,
+        #[source]
+        source: E,
+    },
+    #[error(transparent)]
+    Unclassified(E),
+}
+
+pub fn classify_store_error<E>(error: E, data_path: &Path) -> ClassifiedStoreError<E>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    if find_incompatible(&error).is_some() {
+        return ClassifiedStoreError::Unclassified(error);
     }
     match incompatible_store(&error, data_path) {
-        Some(store) => error.context(store),
-        None => error,
+        Some(store) => ClassifiedStoreError::Refused {
+            store,
+            source: error,
+        },
+        None => ClassifiedStoreError::Unclassified(error),
     }
 }
 
@@ -216,6 +287,70 @@ mod tests {
     use super::*;
 
     #[test]
+    fn store_refusals_classify_through_every_owner_wrapper() {
+        use crate::identity::{IdentityError, InsecureKeyPermissions};
+        use crate::store_key::upgrade::UpgradeError;
+        use crate::store_key::StoreKeyError;
+        let store = || IncompatibleStore {
+            kind: IncompatibleStoreKind::LegacyLark,
+            data_path: "/data".into(),
+        };
+        let kind = |error: anyhow::Error| {
+            incompatible_store(error.context("opening").as_ref(), Path::new("/other"))
+                .map(|store| (store.kind, store.data_path))
+        };
+        let refused = Some((IncompatibleStoreKind::LegacyLark, PathBuf::from("/data")));
+        for error in [
+            anyhow::Error::new(store()),
+            StorageBackendError::from(store()).into(),
+            StoreKeyError::from(store()).into(),
+            StoreKeyError::Storage(store().into()).into(),
+            StoreKeyError::Upgrade(UpgradeError::StorageBackend(store().into())).into(),
+            UpgradeError::StorageBackend(store().into()).into(),
+        ] {
+            assert_eq!(kind(error), refused);
+        }
+        let key = || InsecureKeyPermissions {
+            path: "/key".into(),
+            mode: 0o644,
+        };
+        let insecure = Some((IncompatibleStoreKind::InsecureKey, PathBuf::from("/key")));
+        for error in [
+            anyhow::Error::new(key()),
+            IdentityError::from(key()).into(),
+            StoreKeyError::Identity(key().into()).into(),
+            crate::config_client::ConfigClientError::from(IdentityError::from(key())).into(),
+        ] {
+            assert_eq!(kind(error), insecure);
+        }
+        assert_eq!(
+            kind(StorageBackendError::NoExistingDatabase { path: "/d".into() }.into()),
+            None
+        );
+    }
+
+    #[test]
+    fn unavailable_store_keys_classify_through_their_owner() {
+        use crate::store_key::{store_key_unavailable, StoreKeyError, StoreKeyUnavailable};
+        let unavailable = || StoreKeyUnavailable {
+            data_path: "/data".into(),
+            code: -25293,
+        };
+        for error in [
+            anyhow::Error::new(unavailable()),
+            StoreKeyError::from(unavailable()).into(),
+        ] {
+            let error = error.context("opening");
+            assert_eq!(
+                store_key_unavailable(error.as_ref()).map(|key| key.code),
+                Some(-25293)
+            );
+        }
+        let other: anyhow::Error = StoreKeyError::KeychainUnsupported.into();
+        assert!(store_key_unavailable(other.as_ref()).is_none());
+    }
+
+    #[test]
     fn in_process_budget_preserves_server_acceptance_and_commit_settings() {
         let server = storage::RegolithStoreOptions::default();
         let local = regolith_options();
@@ -241,8 +376,6 @@ mod tests {
             server.engine.get_max_background_compactions()
         );
     }
-    use anyhow::Context as _;
-
     #[test]
     fn rejects_rocksdb_current_marker() {
         let tempdir = tempfile::tempdir().unwrap();
@@ -354,7 +487,6 @@ mod tests {
 
         let error = crate::identity::KeyIdentity::load_existing(&key, None)
             .map(|_| ())
-            .context("loading node identity key")
             .unwrap_err();
         let store = incompatible_store(&error, &temp.path().join("data")).expect("typed");
         assert_eq!(store.kind, IncompatibleStoreKind::InsecureKey);
@@ -369,36 +501,39 @@ mod tests {
     }
 
     #[test]
-    fn classifies_lineage_refusals_by_type_through_context() {
+    fn classifies_lineage_refusals_by_type() {
         let path = Path::new("/tmp/gents-home/data");
-        let refused = anyhow::Error::new(gents_migration::Error::UnknownLineage {
+        let refused = gents_migration::Error::UnknownLineage {
             collection: "AgentRequest".into(),
             versions: "bafy-old".into(),
-        })
-        .context("ensure_migrations");
+        };
         let classified = classify_store_error(refused, path);
         let store = incompatible_store(&classified, path).expect("typed refusal");
         assert_eq!(store.kind, IncompatibleStoreKind::UnknownLineage);
         assert_eq!(store.data_path, path);
-        assert!(classified
-            .downcast_ref::<IncompatibleStore>()
-            .is_some_and(|store| store.to_string().contains("older Gents version")));
+        assert!(matches!(
+            &classified,
+            ClassifiedStoreError::Refused { store, .. } if store.to_string().contains("older Gents version")
+        ));
 
-        let foreign = anyhow::Error::new(gents_migration::Error::ForeignVersion {
+        let foreign = gents_migration::Error::ForeignVersion {
             collection: "AgentRequest".into(),
             version_id: "bafy-foreign".into(),
-        });
+        };
         let foreign = incompatible_store(&foreign, path).expect("typed refusal");
         assert_eq!(foreign.kind, IncompatibleStoreKind::ForeignVersion);
         assert!(!foreign.kind.is_older());
         assert!(foreign.to_string().contains("different Gents version"));
         assert!(!foreign.to_string().contains("older"));
 
-        let unrelated = anyhow::Error::new(gents_migration::Error::CollectionMissing {
+        let unrelated = gents_migration::Error::CollectionMissing {
             collection: "AgentRequest".into(),
-        });
+        };
         assert!(incompatible_store(&unrelated, path).is_none());
         let unrelated = classify_store_error(unrelated, path);
-        assert!(unrelated.downcast_ref::<gents_migration::Error>().is_some());
+        assert!(matches!(
+            unrelated,
+            ClassifiedStoreError::Unclassified(gents_migration::Error::CollectionMissing { .. })
+        ));
     }
 }

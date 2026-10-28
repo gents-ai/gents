@@ -373,7 +373,13 @@ async fn enrollment_decision_handler(
             .into_response(),
         Err(error) => (
             StatusCode::BAD_REQUEST,
-            axum::Json(json!({"error": error.to_string()})),
+            axum::Json(json!({
+                "error": error.to_string(),
+                "code": gents_protocol::error_chain::find_source::<
+                    gents::agent::p2p_reconcile::EnrollmentDecisionRefusal,
+                >(error.as_ref())
+                .map(gents::agent::p2p_reconcile::EnrollmentDecisionRefusal::code),
+            })),
         )
             .into_response(),
     }
@@ -1065,7 +1071,7 @@ mod tests {
                             "auth": {"kind": "unauthenticated"}, "enabled": true, "probe_status": "healthy"},
                     }),
                 ).await?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         }).await.unwrap();
         let runtime = gents::Gents::builder()

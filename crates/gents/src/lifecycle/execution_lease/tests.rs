@@ -49,11 +49,16 @@ impl crate::identity::NodeIdentity for LeaseTestIdentity {
     fn did(&self) -> &str {
         "did:test:execution-lease"
     }
-    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, crate::identity::IdentityError> {
         use sha2::Digest;
         Ok(sha2::Sha512::digest(payload).to_vec())
     }
-    async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> Result<bool> {
+    async fn verify(
+        &self,
+        did: &str,
+        payload: &[u8],
+        signature: &[u8],
+    ) -> Result<bool, crate::identity::IdentityError> {
         Ok(did == self.did() && self.sign(payload).await? == signature)
     }
     fn service_account(&self) -> Option<&crate::identity::ServiceAccount> {

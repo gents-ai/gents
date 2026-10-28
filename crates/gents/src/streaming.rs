@@ -590,8 +590,8 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
         lifecycle: &crate::lifecycle::RequestLifecycle,
         key: &str,
         message: &gents_protocol::message::Message,
-    ) -> Result<String> {
-        DefraStreamWriter::publish_authored_message(self, lifecycle, key, message).await
+    ) -> Result<String, Self::Error> {
+        Ok(DefraStreamWriter::publish_authored_message(self, lifecycle, key, message).await?)
     }
 
     async fn try_publish_steering_message(
@@ -599,11 +599,11 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
         lifecycle: &crate::lifecycle::RequestLifecycle,
         key: &str,
         message: &gents_protocol::message::Message,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<String>, Self::Error> {
         match DefraStreamWriter::publish_authored_message(self, lifecycle, key, message).await {
             Ok(id) => Ok(Some(id)),
             Err(error) if error.is::<crate::lifecycle::queue::PendingInputChanged>() => Ok(None),
-            Err(error) => Err(error),
+            Err(error) => Err(error.into()),
         }
     }
 
@@ -612,10 +612,10 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
         lifecycle: &mut crate::lifecycle::RequestLifecycle,
         message_doc_id: &str,
         pending_request_doc_ids: &[String],
-    ) -> Result<bool> {
-        lifecycle
+    ) -> Result<bool, Self::Error> {
+        Ok(lifecycle
             .finish_natural_turn(message_doc_id, pending_request_doc_ids)
-            .await
+            .await?)
     }
 
     async fn start_provider_attempt(
@@ -639,8 +639,8 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
         &self,
         lifecycle: &crate::lifecycle::RequestLifecycle,
         message: &gents_protocol::message::Message,
-    ) -> Result<bool> {
-        DefraStreamWriter::flush_native_partial(self, lifecycle, message).await
+    ) -> Result<bool, Self::Error> {
+        Ok(DefraStreamWriter::flush_native_partial(self, lifecycle, message).await?)
     }
 
     async fn close_provider_attempt(
@@ -649,7 +649,7 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
         turn: usize,
         attempt: u32,
         close: gents_loop::stream_writer::ProviderAttemptClose,
-    ) -> Result<()> {
+    ) -> Result<(), Self::Error> {
         let close = match close {
             gents_loop::stream_writer::ProviderAttemptClose::Retracted => {
                 canonical::ProviderAttemptClose::Retracted
@@ -658,7 +658,10 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
                 canonical::ProviderAttemptClose::Partial
             }
         };
-        DefraStreamWriter::close_provider_attempt(self, lifecycle, turn, attempt, close).await
+        Ok(
+            DefraStreamWriter::close_provider_attempt(self, lifecycle, turn, attempt, close)
+                .await?,
+        )
     }
 
     async fn publish_native_turn(
@@ -667,7 +670,8 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
         turn: usize,
         attempt: u32,
         message: &gents_protocol::message::Message,
-    ) -> Result<gents_loop::stream_writer::CanonicalPublishedTurn<AcceptedToolCall>> {
+    ) -> Result<gents_loop::stream_writer::CanonicalPublishedTurn<AcceptedToolCall>, Self::Error>
+    {
         let published =
             DefraStreamWriter::publish_native_turn(self, lifecycle, turn, attempt, message).await?;
         Ok(gents_loop::stream_writer::CanonicalPublishedTurn {
@@ -678,7 +682,13 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
 }
 
 impl StreamWriter for DefraStreamWriter {
-    async fn mark_pending_output(&self, doc_id: &str, output: PendingOutput) -> Result<bool> {
+    type Error = crate::agent::stream_processor::RuntimeSeamError;
+
+    async fn mark_pending_output(
+        &self,
+        doc_id: &str,
+        output: PendingOutput,
+    ) -> Result<bool, Self::Error> {
         self.buffers
             .lock()
             .await
@@ -689,27 +699,27 @@ impl StreamWriter for DefraStreamWriter {
         let Some(snapshot) = self.pending_snapshot(doc_id, false).await? else {
             return Ok(false);
         };
-        self.flush_snapshot(doc_id, &snapshot).await
+        Ok(self.flush_snapshot(doc_id, &snapshot).await?)
     }
 
-    async fn write_tokens(&self, doc_id: &str, tokens: &str) -> Result<bool> {
-        DefraStreamWriter::write_tokens(self, doc_id, tokens).await
+    async fn write_tokens(&self, doc_id: &str, tokens: &str) -> Result<bool, Self::Error> {
+        Ok(DefraStreamWriter::write_tokens(self, doc_id, tokens).await?)
     }
 
-    async fn write_reasoning(&self, doc_id: &str, reasoning: &str) -> Result<bool> {
-        DefraStreamWriter::write_reasoning(self, doc_id, reasoning).await
+    async fn write_reasoning(&self, doc_id: &str, reasoning: &str) -> Result<bool, Self::Error> {
+        Ok(DefraStreamWriter::write_reasoning(self, doc_id, reasoning).await?)
     }
 
-    async fn flush_pending(&self, doc_id: &str) -> Result<bool> {
-        DefraStreamWriter::flush_pending(self, doc_id).await
+    async fn flush_pending(&self, doc_id: &str) -> Result<bool, Self::Error> {
+        Ok(DefraStreamWriter::flush_pending(self, doc_id).await?)
     }
 
     async fn next_flush_deadline(&self, doc_id: &str) -> Option<tokio::time::Instant> {
         DefraStreamWriter::next_flush_deadline(self, doc_id).await
     }
 
-    async fn reset_tail(&self, doc_id: &str) -> Result<()> {
-        DefraStreamWriter::reset_tail(self, doc_id).await
+    async fn reset_tail(&self, doc_id: &str) -> Result<(), Self::Error> {
+        Ok(DefraStreamWriter::reset_tail(self, doc_id).await?)
     }
 }
 

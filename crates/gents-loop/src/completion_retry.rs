@@ -3,7 +3,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use rand::Rng;
 
-use crate::error::InferenceError;
+use crate::error::{ClassifiedFailure, InferenceError};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CompletionRetryProfileFields {
@@ -22,18 +22,12 @@ pub enum FailureClass {
     Permanent,
 }
 
-pub fn failure_class(error: &InferenceError, error_text: &str) -> FailureClass {
-    let is_parse_failure = |text: &str| {
-        crate::error::provider_message_is_tool_call_json_parse_failure(text)
-            || crate::error::provider_message_is_fail_closed_tool_use(text)
-    };
-    if is_parse_failure(error_text) || is_parse_failure(&error.to_string()) {
+pub fn failure_class(failure: &ClassifiedFailure) -> FailureClass {
+    let ClassifiedFailure { error, report, .. } = failure;
+    if report.malformed_tool_call || report.fail_closed_tool_use {
         return FailureClass::ParseBadRequest;
     }
-    if !matches!(error, InferenceError::UsageLimited(_))
-        && (crate::error::provider_message_is_reasoning_rejection(error_text)
-            || crate::error::provider_message_is_reasoning_rejection(&error.to_string()))
-    {
+    if report.reasoning_rejected && !matches!(error, InferenceError::UsageLimited(_)) {
         return FailureClass::ReasoningRejected;
     }
 
@@ -226,12 +220,12 @@ impl CompletionRetryState {
 
     pub fn on_pre_stream_failure(
         &mut self,
-        error: &InferenceError,
-        error_text: &str,
+        failure: &ClassifiedFailure,
         now: DateTime<Utc>,
         deadline: Option<DateTime<Utc>>,
     ) -> PreStreamDirective {
-        match failure_class(error, error_text) {
+        let (error, error_text) = (&failure.error, failure.text.as_str());
+        match failure_class(failure) {
             FailureClass::Permanent => PreStreamDirective::Fail {
                 reason: match error {
                     InferenceError::UsageLimited(limit) => limit.to_string(),

@@ -256,9 +256,20 @@ impl gents_loop::live_output::CanonicalOutputAppender for ToolOutputBinding {
         &'a self,
         text: &'a str,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<std::ops::Range<u64>>> + Send + 'a>,
+        Box<
+            dyn std::future::Future<
+                    Output = Result<std::ops::Range<u64>, gents_loop::live_output::LiveOutputError>,
+                > + Send
+                + 'a,
+        >,
     > {
-        Box::pin(async move { append_tool_output(self, text).await })
+        Box::pin(async move {
+            append_tool_output(self, text).await.map_err(|error| {
+                gents_loop::live_output::LiveOutputError::Appender {
+                    source: error.into(),
+                }
+            })
+        })
     }
 }
 
@@ -479,7 +490,7 @@ impl ToolCallLifecycle {
                     }}, input: {{ lifecycle_state: "running", started_at: "{}" }}) {{ _docID }} }}"#,
                         escape_graphql_string(&tool_call_id), escape_graphql_string(&tool_name),
                         escape_graphql_string(&now.to_rfc3339_opts(SecondsFormat::Nanos, true)))).await?;
-                    Ok(mutation["data"]["update_AgentToolCall"].as_array()
+                    Ok::<_, anyhow::Error>(mutation["data"]["update_AgentToolCall"].as_array()
                         .is_some_and(|rows| !rows.is_empty()).then_some(now))
                 })
             }
@@ -690,7 +701,7 @@ impl ToolCallLifecycle {
                         escape_graphql_string(&stable_key), escape_graphql_string(request_id),
                         crate::session::requester_did_create_field(requester_did.as_deref()),
                         escape_graphql_string(&tool_name), escape_graphql_string(&stable_id))).await?;
-                    created_doc_id(&created, "AgentToolCall")
+                    Ok(created_doc_id(&created, "AgentToolCall")?)
                 })
             }
         ).await?;
@@ -973,7 +984,7 @@ impl ToolCallLifecycle {
         .await?;
         #[cfg(test)]
         if take_terminal_failure_for_test(doc_id) {
-            return Err(crate::config_client::classified_conflict_for_test());
+            return Err(crate::config_client::classified_conflict_for_test().into());
         }
         if let (true, Some(progress)) = (published, job_progress) {
             write_terminal_progress(txn, doc_id, progress).await?;
@@ -1188,7 +1199,7 @@ impl ToolCallLifecycle {
                     .await?;
                     #[cfg(test)]
                     if take_terminal_failure_for_test(&doc_id) {
-                        return Err(crate::config_client::classified_conflict_for_test());
+                        return Err(crate::config_client::classified_conflict_for_test().into());
                     }
                     // Applied after the terminal compare so a lost compare
                     // writes nothing; a failure rolls the terminal back too.
@@ -2322,7 +2333,7 @@ mod plugin_writes_failed_tests {
     #[test]
     fn plugin_writes_failure_keeps_a_typed_conflict_replayable() {
         let conflict = crate::config_client::classified_conflict_for_test();
-        let wrapped = plugin_writes_failed(conflict);
+        let wrapped = plugin_writes_failed(conflict.into());
         assert!(crate::config_client::is_classified_transaction_conflict(
             &wrapped
         ));

@@ -485,7 +485,7 @@ impl SchemaTool {
                 let recovery = if error.is::<SchemaDigestMismatch>() {
                     json!({"tool":"schema","args":preview_call(args)})
                 } else if let Some(mismatch) =
-                    error.downcast_ref::<crate::config_client::SchemaInstallMismatch>()
+                    crate::config_client::schema_install_mismatch(error.as_ref())
                 {
                     json!({"tool":"schema","args":{"argv":["collection","get"],"target_id":mismatch.collection}})
                 } else if error.is::<SchemaSdlFailure>() {
@@ -562,6 +562,11 @@ fn help_call(args: &SchemaParams) -> Value {
     json!({"tool":"schema","args":{"argv":argv}})
 }
 
+/// The help page that explains an SDL rejection.
+///
+/// External premise: DefraDB's SDL parser and schema validators report what
+/// they rejected only as message text (`no type found`, `relation`,
+/// directive names), so the page is chosen from that text.
 fn sdl_help_call(args: &SchemaParams, error: &str) -> Value {
     let error = error.to_ascii_lowercase();
     let path = if error.contains("no type found")

@@ -75,7 +75,7 @@ pub async fn admit_demand(
                     "created_at": chrono::Utc::now().to_rfc3339(),
                 }}),
             ).await?;
-            crate::graphql::created_doc_id(&result, "FileInventoryRequest")
+            Ok(crate::graphql::created_doc_id(&result, "FileInventoryRequest")?)
         })
     }).await
 }

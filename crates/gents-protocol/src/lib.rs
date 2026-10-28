@@ -5,6 +5,7 @@ pub mod client_media;
 pub mod client_protocol;
 pub mod database_error;
 pub mod enrollment;
+pub mod error_chain;
 pub mod event_delivery;
 pub mod file_changes;
 pub mod file_image_hydration;

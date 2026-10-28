@@ -10,6 +10,20 @@ fn transient(reason: &str) -> InferenceError {
     }
 }
 
+/// A failure as the loop classifies it: the report reads the attempt text and
+/// the error's own rendering, as the provider text reaches both.
+fn classified(error: &InferenceError, text: &str) -> crate::error::ClassifiedFailure {
+    crate::error::ClassifiedFailure {
+        error: error.clone(),
+        report: crate::error::ProviderReport::classify_failure_text(&format!("{text}\n{error}")),
+        text: text.to_string(),
+    }
+}
+
+fn class_of(error: &InferenceError, text: &str) -> FailureClass {
+    failure_class(&classified(error, text))
+}
+
 fn parse_400_text(tag: &str) -> String {
     format!("BadRequestError: Expecting ',' delimiter [{tag}]: line 1 column 5 (char 4)")
 }
@@ -26,7 +40,7 @@ fn assert_in_range(delay: Duration, low_ms: u64, high_ms: u64) {
 fn failure_class_parse_signature_overrides_variant() {
     let text = parse_400_text("override");
     assert_eq!(
-        failure_class(&transient(&text), &text),
+        class_of(&transient(&text), &text),
         FailureClass::ParseBadRequest
     );
 }
@@ -38,7 +52,7 @@ fn failure_class_parse_signature_can_come_from_classified_reason() {
         format!("ProviderError: Invalid status code 400 Bad Request with message: {body}");
 
     assert_eq!(
-        failure_class(&transient(&classified_reason), "completion request failed"),
+        class_of(&transient(&classified_reason), "completion request failed"),
         FailureClass::ParseBadRequest
     );
 }
@@ -47,7 +61,7 @@ fn failure_class_parse_signature_can_come_from_classified_reason() {
 fn failure_class_fail_closed_tool_use_is_parse_bad_request() {
     let text = "ProviderError: fail-closed: tool_use observed (bash_unrestricked)";
     assert_eq!(
-        failure_class(&transient(text), text),
+        class_of(&transient(text), text),
         FailureClass::ParseBadRequest
     );
 }
@@ -58,7 +72,7 @@ fn transport_ladder_progresses_then_fails() {
     let now = Utc::now();
     let error = transient("connection reset");
 
-    let d1 = state.on_pre_stream_failure(&error, "connection reset", now, None);
+    let d1 = state.on_pre_stream_failure(&classified(&error, "connection reset"), now, None);
     match d1 {
         PreStreamDirective::RetryAfter { delay, kind } => {
             assert_eq!(kind, RetryKind::Transport);
@@ -68,7 +82,7 @@ fn transport_ladder_progresses_then_fails() {
     }
     assert_eq!(state.retry_count(), 1);
 
-    let d2 = state.on_pre_stream_failure(&error, "connection reset", now, None);
+    let d2 = state.on_pre_stream_failure(&classified(&error, "connection reset"), now, None);
     match d2 {
         PreStreamDirective::RetryAfter { delay, kind } => {
             assert_eq!(kind, RetryKind::Transport);
@@ -77,7 +91,7 @@ fn transport_ladder_progresses_then_fails() {
         other => panic!("expected RetryAfter, got {other:?}"),
     }
 
-    let d3 = state.on_pre_stream_failure(&error, "connection reset", now, None);
+    let d3 = state.on_pre_stream_failure(&classified(&error, "connection reset"), now, None);
     match d3 {
         PreStreamDirective::RetryAfter { delay, kind } => {
             assert_eq!(kind, RetryKind::Transport);
@@ -87,7 +101,7 @@ fn transport_ladder_progresses_then_fails() {
     }
     assert_eq!(state.retry_count(), 3);
 
-    let d4 = state.on_pre_stream_failure(&error, "connection reset", now, None);
+    let d4 = state.on_pre_stream_failure(&classified(&error, "connection reset"), now, None);
     match d4 {
         PreStreamDirective::Fail { reason } => {
             assert!(reason.contains("exhausted"), "reason: {reason}");
@@ -103,7 +117,7 @@ fn rate_limited_uses_provider_hint_when_larger_than_ladder() {
     let error = InferenceError::RateLimited {
         retry_after: Some(Duration::from_secs(90)),
     };
-    match state.on_pre_stream_failure(&error, "rate limited", now, None) {
+    match state.on_pre_stream_failure(&classified(&error, "rate limited"), now, None) {
         PreStreamDirective::RetryAfter { delay, kind } => {
             assert_eq!(kind, RetryKind::Transport);
             assert_in_range(delay, 67_500, 112_500);
@@ -119,7 +133,8 @@ fn tight_interactive_deadline_rejects_first_retry_without_consuming_budget() {
     let error = transient("HTTP status 503 before tight deadline");
     let deadline = now + chrono::Duration::seconds(1);
 
-    match state.on_pre_stream_failure(&error, &error.to_string(), now, Some(deadline)) {
+    match state.on_pre_stream_failure(&classified(&error, &error.to_string()), now, Some(deadline))
+    {
         PreStreamDirective::Fail { reason } => assert!(reason.contains("request deadline")),
         other => panic!("expected deadline rejection before retry, got {other:?}"),
     }
@@ -132,11 +147,12 @@ fn deadline_fail_fast_when_next_delay_overshoots() {
     let now = Utc::now();
     let error = transient("connection reset");
 
-    let first = state.on_pre_stream_failure(&error, "connection reset", now, None);
+    let first = state.on_pre_stream_failure(&classified(&error, "connection reset"), now, None);
     assert!(matches!(first, PreStreamDirective::RetryAfter { .. }));
 
     let deadline = now + chrono::Duration::seconds(10);
-    match state.on_pre_stream_failure(&error, "connection reset", now, Some(deadline)) {
+    match state.on_pre_stream_failure(&classified(&error, "connection reset"), now, Some(deadline))
+    {
         PreStreamDirective::Fail { reason } => {
             assert!(
                 reason.to_lowercase().contains("deadline"),
@@ -159,14 +175,14 @@ fn deterministic_parse_400_skips_remaining_resample_budget_and_repairs() {
     let error = transient("parse trouble");
     let text = parse_400_text("same-error");
 
-    let first = state.on_pre_stream_failure(&error, &text, now, None);
+    let first = state.on_pre_stream_failure(&classified(&error, &text), now, None);
     match first {
         PreStreamDirective::RetryAfter { kind, .. } => assert_eq!(kind, RetryKind::Resample),
         other => panic!("expected RetryAfter(Resample), got {other:?}"),
     }
     assert_eq!(state.retry_count(), 1);
 
-    let second = state.on_pre_stream_failure(&error, &text, now, None);
+    let second = state.on_pre_stream_failure(&classified(&error, &text), now, None);
     assert_eq!(second, PreStreamDirective::Repair);
 }
 
@@ -183,12 +199,12 @@ fn repair_is_available_only_once() {
     let text = parse_400_text("repeat");
 
     assert_eq!(
-        state.on_pre_stream_failure(&error, &text, now, None),
+        state.on_pre_stream_failure(&classified(&error, &text), now, None),
         PreStreamDirective::Repair
     );
     state.mark_repair_used();
 
-    match state.on_pre_stream_failure(&error, &text, now, None) {
+    match state.on_pre_stream_failure(&classified(&error, &text), now, None) {
         PreStreamDirective::Fail { .. } => {}
         other => panic!("expected Fail after repair used, got {other:?}"),
     }
@@ -207,7 +223,7 @@ fn fresh_parse_400_deadline_overshoot_fails_immediately_not_repair() {
     let text = parse_400_text("fresh-but-late");
     let deadline = now + chrono::Duration::seconds(5);
 
-    match state.on_pre_stream_failure(&error, &text, now, Some(deadline)) {
+    match state.on_pre_stream_failure(&classified(&error, &text), now, Some(deadline)) {
         PreStreamDirective::Fail { reason } => {
             assert!(reason.to_lowercase().contains("deadline"), "{reason}");
         }
@@ -253,7 +269,7 @@ fn interactive_default_parse_400_goes_straight_to_repair() {
     let text = parse_400_text("interactive");
 
     assert_eq!(
-        state.on_pre_stream_failure(&error, &text, now, None),
+        state.on_pre_stream_failure(&classified(&error, &text), now, None),
         PreStreamDirective::Repair
     );
 }
@@ -282,11 +298,8 @@ fn usage_limit_fails_immediately_with_its_reset_time() {
         detail: "seat capped".into(),
     };
     let error = InferenceError::UsageLimited(limit);
-    assert_eq!(
-        failure_class(&error, "seat capped"),
-        FailureClass::Permanent
-    );
-    match state.on_pre_stream_failure(&error, "seat capped", Utc::now(), None) {
+    assert_eq!(class_of(&error, "seat capped"), FailureClass::Permanent);
+    match state.on_pre_stream_failure(&classified(&error, "seat capped"), Utc::now(), None) {
         PreStreamDirective::Fail { reason } => assert_eq!(
             reason,
             "provider usage limit reached (resets at 2026-09-25T18:40:00Z): seat capped"
@@ -306,7 +319,7 @@ fn failure_class_reasoning_rejections_are_their_own_class() {
         "400 invalid_request_error: messages.1.content.0.type: Expected `thinking` or `redacted_thinking`, but found `tool_use`. When `thinking` is enabled, a final `assistant` message must start with a thinking block",
     ] {
         assert_eq!(
-            failure_class(
+            class_of(
                 &InferenceError::PermanentFailure {
                     reason: text.to_string()
                 },
@@ -318,7 +331,7 @@ fn failure_class_reasoning_rejections_are_their_own_class() {
     }
     let unrelated = "400 invalid_request_error: max_tokens is too large";
     assert_eq!(
-        failure_class(
+        class_of(
             &InferenceError::PermanentFailure {
                 reason: unrelated.to_string()
             },
@@ -340,12 +353,12 @@ fn reasoning_rejection_repairs_once_then_fails() {
     };
     let text = error.to_string();
     assert!(matches!(
-        state.on_pre_stream_failure(&error, &text, Utc::now(), None),
+        state.on_pre_stream_failure(&classified(&error, &text), Utc::now(), None),
         PreStreamDirective::Repair
     ));
     state.mark_repair_used();
     assert!(matches!(
-        state.on_pre_stream_failure(&error, &text, Utc::now(), None),
+        state.on_pre_stream_failure(&classified(&error, &text), Utc::now(), None),
         PreStreamDirective::Fail { .. }
     ));
 }

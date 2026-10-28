@@ -95,7 +95,7 @@ impl ClientCore {
                 Ok(access) => access,
                 Err(error) => {
                     node.shutdown().await;
-                    return Err(error);
+                    return Err(error.into());
                 }
             };
 
@@ -545,7 +545,7 @@ async fn open_or_create_client_store_key(
                         .create(&record, paths.store_key_path(), paths.node_data_dir())
                         .await
                 }
-                None => record.initialize(paths.store_key_path(), paths.node_data_dir()),
+                None => Ok(record.initialize(paths.store_key_path(), paths.node_data_dir())?),
             };
         }
     };
@@ -567,7 +567,7 @@ async fn client_store_key(
     if let Some(provider) = &options.store_key_provider {
         provider.load(record, key_file, data_path).await
     } else {
-        record.initialize(key_file, data_path)
+        Ok(record.initialize(key_file, data_path)?)
     }
 }
 
@@ -608,7 +608,7 @@ mod tests {
         ) -> Result<gents::store_key::StoreKey> {
             self.created
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            record.initialize(key_file, data_path)
+            Ok(record.initialize(key_file, data_path)?)
         }
         async fn load(
             &self,
@@ -618,7 +618,7 @@ mod tests {
         ) -> Result<gents::store_key::StoreKey> {
             self.loaded
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            record.initialize(key_file, data_path)
+            Ok(record.initialize(key_file, data_path)?)
         }
     }
 
@@ -868,7 +868,7 @@ mod tests {
             Err(error) => error,
         };
         assert!(
-            error.downcast_ref::<gents::home::StoreLockHeld>().is_some(),
+            gents::home::store_lock_held(error.as_ref()).is_some(),
             "{error:#}"
         );
         assert_eq!(std::fs::read(paths.store_key_path()).unwrap(), key);

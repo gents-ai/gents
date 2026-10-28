@@ -68,7 +68,7 @@ async fn shared_owner_hot_counter_has_no_lost_updates_at_c64() -> Result<()> {
                         let value = row["data"]["WriterCounter"][0]["value"].as_i64().context("counter absent")?;
                         tokio::task::yield_now().await;
                         txn.execute(&format!(r#"mutation {{ update_WriterCounter(filter: {{key: {{_eq: "hot"}}}}, input: {{value: {}}}) {{_docID}} create_WriterReceipt(input: {{writer: {writer}, iteration: {iteration}}}) {{_docID}} }}"#, value + 1)).await?;
-                        Ok(())
+                        Ok::<_, anyhow::Error>(())
                     })).await;
                     let accepted = match result {
                         Ok(()) => true,

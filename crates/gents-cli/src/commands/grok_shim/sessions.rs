@@ -483,7 +483,7 @@ mod tests {
                 for statement in statements {
                     txn.execute(statement).await?;
                 }
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await

@@ -607,8 +607,9 @@ where
         stored.as_ref(),
     )?;
     refuse_renaming_home(&node_home, node_name).await?;
-    gents::home::ensure_home_identity_can_serve(&node_home)
-        .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
+    gents::home::ensure_home_identity_can_serve(&node_home).map_err(|error| {
+        BridgeError::untyped(gents_protocol::error_chain::ErrorChain(&error).to_string())
+    })?;
 
     let mut carried_wait = None;
     let mut replace_loaded_job = false;
@@ -2007,13 +2008,16 @@ where
 }
 
 fn native_error(error: anyhow::Error) -> BridgeError {
-    let message = format!("{error:#}");
-    let code = if message.contains("supported only on macOS and Linux") {
+    let code = if gents_protocol::error_chain::find_source::<
+        gents_server::native_service::UnsupportedNativeServicePlatform,
+    >(error.as_ref())
+    .is_some()
+    {
         BridgeErrorCode::Unsupported
     } else {
         BridgeErrorCode::Backend
     };
-    BridgeError::new(code, message)
+    BridgeError::new(code, format!("{error:#}"))
 }
 
 async fn run_native<T, F>(
@@ -4886,12 +4890,27 @@ mod tests {
 
     #[test]
     fn request_visibility_race_is_retriable() {
-        assert!(enrollment_request_is_not_visible_yet(
-            "runtime rejected enrollment decision (400 Bad Request): no fresh pending enrollment request enroll-1"
-        ));
-        assert!(!enrollment_request_is_not_visible_yet(
-            "runtime rejected enrollment decision (403 Forbidden): invalid operator signature"
-        ));
+        use gents_protocol::enrollment::EnrollmentDecisionRefusalCode;
+        let rejected = |status, code| {
+            anyhow::Error::new(gents_server::server_host::EnrollmentDecisionRejected {
+                status,
+                message: "refused".into(),
+                code,
+            })
+            .context("approving desktop enrollment on managed runtime")
+        };
+        assert!(enrollment_request_is_not_visible_yet(&rejected(
+            reqwest::StatusCode::BAD_REQUEST,
+            Some(EnrollmentDecisionRefusalCode::NotPending),
+        )));
+        assert!(!enrollment_request_is_not_visible_yet(&rejected(
+            reqwest::StatusCode::BAD_REQUEST,
+            Some(EnrollmentDecisionRefusalCode::Conflicted),
+        )));
+        assert!(!enrollment_request_is_not_visible_yet(&rejected(
+            reqwest::StatusCode::FORBIDDEN,
+            None,
+        )));
     }
 
     #[test]

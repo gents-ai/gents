@@ -1596,7 +1596,7 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
                         .map_err(|error| format!("{error:#}"));
                     assert_eq!(single, bulk, "single/bulk mismatch for {case}");
                     assert_eq!(single.is_err(), case == "key", "{case}");
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             },
         )

@@ -559,13 +559,10 @@ async fn execute_write(
     )
     .await;
     let receipt = receipt.map_err(|error| {
-        let message = error.to_string();
-        let class = if super::submit::is_gas_or_fee_cap_error(&message) {
-            FailureClass::PolicyDenied
-        } else {
-            FailureClass::External
-        };
-        reported(class, message)
+        let class = error
+            .downcast_ref::<super::EthRefusal>()
+            .map_or(FailureClass::External, super::EthRefusal::failure_class);
+        reported(class, error.to_string())
     })?;
     if receipt.status == SubmitStatus::ConfirmedReverted {
         return Err(reported(
@@ -660,7 +657,7 @@ async fn load_signing_key_with_store(
                     )
                     .await?
                     .ok_or_else(|| anyhow!("chain key binding {binding_id:?} does not exist"))?;
-                    Ok((
+                    Ok::<_, anyhow::Error>((
                         serde_json::from_value(tool)?,
                         serde_json::from_value(binding)?,
                     ))

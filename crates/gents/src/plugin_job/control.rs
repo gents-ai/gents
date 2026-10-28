@@ -761,7 +761,7 @@ mod tests {
                     &format!("mutation($pin: JSON) {{ update_AgentToolCall(docID: \"{}\", input: {{ job_pin: $pin }}) {{ _docID }} }}", escape_graphql_string(&doc_id)),
                     &json!({"pin": pin}),
                 ).await?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         }).await.unwrap();
         super::super::driver::store_running_progress(&admission).await;
@@ -805,7 +805,7 @@ mod tests {
                         &json!({ "input": value }),
                     )
                     .await?;
-                gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentRequest")
+                Ok::<_, anyhow::Error>(gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentRequest")?)
             })
         })
         .await

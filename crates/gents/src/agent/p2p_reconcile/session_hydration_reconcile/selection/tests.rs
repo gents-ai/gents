@@ -41,7 +41,7 @@ async fn canonical_selection_reuses_the_callers_read_snapshot() {
                 after.documents, before.documents,
                 "a concurrent commit must not change the selected read snapshot"
             );
-            Ok(())
+            Ok::<_, anyhow::Error>(())
         })
     })
     .await
@@ -113,7 +113,7 @@ async fn canonical_selection_enumerates_multiple_native_cursor_pages() {
                         expected.insert(row["_docID"].as_str().unwrap().to_owned());
                     }
                 }
-                Ok(expected)
+                Ok::<_, anyhow::Error>(expected)
             })
         },
     )
@@ -156,7 +156,7 @@ async fn canonical_selection_enumerates_multiple_native_cursor_pages() {
                     .collect::<BTreeSet<_>>();
                 assert_eq!(&actual, expected);
                 assert_eq!(actual.len(), 129);
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         },
     )

@@ -10,6 +10,28 @@ pub const MAX_ATTACHMENT_ENCODED_BYTES: usize = 5_592_408;
 pub const MAX_TOTAL_ATTACHMENT_ENCODED_BYTES: usize = 11_184_816;
 pub const MAX_ATTACHMENTS: usize = 4;
 
+#[derive(Debug, thiserror::Error)]
+pub enum AttachmentError {
+    #[error("The attachment needs a file name")]
+    MissingName,
+    #[error("The attachment file name exceeds 1024 UTF-8 bytes")]
+    NameTooLong,
+    #[error("The file is empty")]
+    Empty,
+    #[error("Attachment exceeds 4 MiB")]
+    TooLarge,
+    #[error("Unsupported file. Choose PNG, JPEG, GIF, WebP, PDF or UTF-8 text")]
+    Unsupported,
+    #[error("Invalid attachment encoding")]
+    InvalidEncoding,
+    #[error("Attachment encoding must be canonical base64")]
+    NonCanonicalEncoding,
+    #[error("Text attachments must be UTF-8")]
+    TextNotUtf8,
+    #[error("Attach up to 4 files, at most 4 MiB each and 8 MiB total")]
+    LimitsExceeded,
+}
+
 /// Frozen bytes are carried by the signed request and its existing ACP. The
 /// name is display metadata, never a path to reopen on the executing node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,34 +70,30 @@ impl RequestAttachment {
             && self.data.len() <= MAX_ATTACHMENT_ENCODED_BYTES
     }
 
-    pub fn validate(&self) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            !self.name.trim().is_empty(),
-            "The attachment needs a file name"
-        );
-        anyhow::ensure!(
-            self.name.len() <= 1024,
-            "The attachment file name exceeds 1024 UTF-8 bytes"
-        );
-        anyhow::ensure!(!self.data.is_empty(), "The file is empty");
-        anyhow::ensure!(
-            self.data.len() <= MAX_ATTACHMENT_ENCODED_BYTES,
-            "Attachment exceeds 4 MiB"
-        );
-        anyhow::ensure!(
-            self.is_well_formed(),
-            "Unsupported file. Choose PNG, JPEG, GIF, WebP, PDF or UTF-8 text"
-        );
+    pub fn validate(&self) -> Result<(), AttachmentError> {
+        if self.name.trim().is_empty() {
+            return Err(AttachmentError::MissingName);
+        }
+        if self.name.len() > 1024 {
+            return Err(AttachmentError::NameTooLong);
+        }
+        if self.data.is_empty() {
+            return Err(AttachmentError::Empty);
+        }
+        if self.data.len() > MAX_ATTACHMENT_ENCODED_BYTES {
+            return Err(AttachmentError::TooLarge);
+        }
+        if !self.is_well_formed() {
+            return Err(AttachmentError::Unsupported);
+        }
         let bytes = STANDARD
             .decode(&self.data)
-            .map_err(|_| anyhow::anyhow!("Invalid attachment encoding"))?;
-        anyhow::ensure!(
-            STANDARD.encode(&bytes) == self.data,
-            "Attachment encoding must be canonical base64"
-        );
+            .map_err(|_| AttachmentError::InvalidEncoding)?;
+        if STANDARD.encode(&bytes) != self.data {
+            return Err(AttachmentError::NonCanonicalEncoding);
+        }
         if self.media_type == "text/plain" {
-            std::str::from_utf8(&bytes)
-                .map_err(|_| anyhow::anyhow!("Text attachments must be UTF-8"))?;
+            std::str::from_utf8(&bytes).map_err(|_| AttachmentError::TextNotUtf8)?;
         }
         Ok(())
     }
@@ -166,11 +184,10 @@ impl super::RequestInput {
             && self.attachments.iter().map(|a| a.data.len()).sum::<usize>()
                 <= MAX_TOTAL_ATTACHMENT_ENCODED_BYTES
     }
-    pub fn validate_attachments(&self) -> anyhow::Result<()> {
-        anyhow::ensure!(
-            self.attachments_well_formed(),
-            "Attach up to 4 files, at most 4 MiB each and 8 MiB total"
-        );
+    pub fn validate_attachments(&self) -> Result<(), AttachmentError> {
+        if !self.attachments_well_formed() {
+            return Err(AttachmentError::LimitsExceeded);
+        }
         for attachment in &self.attachments {
             attachment.validate()?;
         }

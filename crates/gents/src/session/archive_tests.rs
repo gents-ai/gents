@@ -77,7 +77,7 @@ async fn create_session(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> R
                     latest_request: {request_doc_id: "physical", request_id: "running",
                         lifecycle_state: "processing"}}
             }) {_docID} }"#).await?;
-            crate::graphql::created_doc_id(&result, "AgentSession")
+            Ok::<_, anyhow::Error>(crate::graphql::created_doc_id(&result, "AgentSession")?)
         }),
     ).await
 }
@@ -98,7 +98,7 @@ async fn create_work(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) {
                 input: {{observation: {{last_activity_at: "2026-01-02T00:00:00Z", preview: "working",
                     latest_request: {{request_doc_id: "{}", request_id: "running", lifecycle_state: "processing"}}}}}}
             ) {{_docID}} }}"#, escape_graphql_string(&physical))).await?;
-            Ok(physical)
+            Ok::<_, anyhow::Error>(physical)
         }),
     ).await.unwrap();
     crate::session::import_history_observation(
@@ -130,7 +130,7 @@ async fn work_rows(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> serde_
                         crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS
                     ))
                     .await?;
-                Ok(value["data"].clone())
+                Ok::<_, anyhow::Error>(value["data"].clone())
             })
         },
     )

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use futures::{SinkExt, StreamExt};
-use gents::store_key::{StoreEncryption, StoreKey, StoreKeyCustody, StoreKeyUnavailable};
+use gents::store_key::{StoreEncryption, StoreKey, StoreKeyCustody};
 use gents_desktop_bridge::{BridgeError, BridgeErrorCode};
 use gents_desktop_core::client::{ClientStoreKeyProvider, DesktopPaths};
 use serde::{Deserialize, Serialize};
@@ -117,14 +117,14 @@ where
 
     pub async fn failed(&self, error: &anyhow::Error) -> Result<()> {
         let (code, message) = if error.downcast_ref::<HistoryUnlockRequired>().is_some()
-            || error.downcast_ref::<StoreKeyUnavailable>().is_some()
+            || gents::store_key::store_key_unavailable(error.as_ref()).is_some()
         {
             (
                     BridgeErrorCode::LocalHistoryLocked,
                     "Unlock local history to cache its encryption key in VS Code. Your chats are unchanged.",
                 )
         } else if gents::storage_backend::incompatible_store(
-            error,
+            error.as_ref(),
             DesktopPaths::from_root(&self.home).node_data_dir(),
         )
         .is_some()
@@ -165,7 +165,7 @@ where
             "unsupported editor store encryption version"
         );
         if matches!(record.custody, StoreKeyCustody::File) {
-            return record.initialize(key_file, data_path);
+            return Ok(record.initialize(key_file, data_path)?);
         }
         let created = if fresh {
             Some(native_key(record, key_file, data_path, true).await?)
@@ -193,7 +193,7 @@ where
                     );
                     return Ok(key);
                 }
-                return StoreKey::from_host(&bytes);
+                return Ok(StoreKey::from_host(&bytes)?);
             }
             Reply::Use { bytes: None } => {}
             Reply::Stored => bail!("editor acknowledged a key before receiving it"),
@@ -232,9 +232,9 @@ async fn native_key(
     let data_path = data_path.to_owned();
     tokio::task::spawn_blocking(move || {
         if prevent_prompts {
-            gents_server::without_keychain_prompts(|| record.initialize(&key_file, &data_path))
+            gents_server::without_keychain_prompts(|| Ok(record.initialize(&key_file, &data_path)?))
         } else {
-            record.initialize(&key_file, &data_path)
+            Ok(record.initialize(&key_file, &data_path)?)
         }
     })
     .await

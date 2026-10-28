@@ -1178,15 +1178,17 @@ impl ConfigCommandTool {
                         let owner = owner.clone();
                         let target_id = target_id.clone();
                         Box::pin(async move {
-                            Ok(ops::read_owned_doc(
-                                txn,
-                                SelfConfigTarget::AgentTarget,
-                                &owner,
-                                &target_id,
+                            Ok::<_, anyhow::Error>(
+                                ops::read_owned_doc(
+                                    txn,
+                                    SelfConfigTarget::AgentTarget,
+                                    &owner,
+                                    &target_id,
+                                )
+                                .await?
+                                .and_then(|(_, doc)| doc.get("target_node_did").cloned())
+                                    == Some(json!(owner)),
                             )
-                            .await?
-                            .and_then(|(_, doc)| doc.get("target_node_did").cloned())
-                                == Some(json!(owner)))
                         })
                     },
                 )
@@ -1663,7 +1665,7 @@ impl ConfigCommandTool {
                             .await?
                             .is_some()
                         {
-                            return Ok(Ok(candidate));
+                            return Ok::<_, anyhow::Error>(Ok(candidate));
                         }
                     }
                     Ok(Err(txn.execute(&listing).await?))
@@ -1786,7 +1788,7 @@ impl ConfigCommandTool {
             .map(|(field, _)| field.clone());
         let collection = request.target.collection_name();
         self.patch_outcome(core, verb, request).await.map_err(|error| {
-            match stringified.filter(|_| format!("{error:#}").contains("invalid type: string")) {
+            match stringified.filter(|_| serde_found_string(&error)) {
                 Some(field) => anyhow!(
                     "{collection} field {field:?} holds a JSON string; send a native JSON object or array in set, not a string. ({error:#})"
                 ),
@@ -1979,7 +1981,7 @@ impl ConfigCommandTool {
             "self_config.account_inventory",
             |txn| {
                 Box::pin(async move {
-                    Ok((
+                    Ok::<_, anyhow::Error>((
                         crate::config_client::list_inference_backends_in_txn(txn, node_did).await?,
                         crate::config_client::list_inference_profiles_in_txn(txn, node_did).await?,
                     ))
@@ -2915,4 +2917,10 @@ pub(super) fn agent_params(
         enable_lsp: None,
         network_mode: None,
     })
+}
+
+/// External premise: serde reports a JSON string decoded where a map or
+/// sequence was expected only in its `invalid type: string` message.
+fn serde_found_string(error: &anyhow::Error) -> bool {
+    format!("{error:#}").contains("invalid type: string")
 }

@@ -809,6 +809,9 @@ fn parse_updated_at(value: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
+/// External premise: an MCP health probe fails with transport and OS errors
+/// (rmcp, reqwest, std::io) recorded as text in the health row; their kind
+/// survives only in that wording.
 fn classify_last_error(error: &str) -> &'static str {
     let lower = error.to_lowercase();
     if lower.contains("timed out") || lower.contains("timeout") {

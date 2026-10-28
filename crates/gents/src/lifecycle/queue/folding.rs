@@ -25,7 +25,7 @@ pub(crate) struct FoldedInput {
 
 impl FoldedInput {
     pub(crate) fn message(&self) -> Result<gents_protocol::message::Message> {
-        self.input.authored_message(&self.content)
+        Ok(self.input.authored_message(&self.content)?)
     }
 
     pub(crate) fn key(&self) -> String {

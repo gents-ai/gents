@@ -646,7 +646,7 @@ pub(crate) async fn persistent_node_builder(
 ) -> Result<NodeBuilder> {
     gents::storage_backend::reject_legacy_store(data_dir)?;
     let key = gents::store_key::open_home_store_key(home_dir, data_dir).await?;
-    gents::store_key::persistent_builder(data_dir, &key)
+    Ok(gents::store_key::persistent_builder(data_dir, &key)?)
 }
 
 pub(crate) async fn persistent_node_builder_with_stored_identity(
@@ -886,8 +886,9 @@ mod tests {
         let error = gents::home::lock_store(&home, &default_data_dir(&home))
             .expect_err("an opened store excludes another runtime");
         assert!(
-            error.downcast_ref::<gents::home::StoreLockHeld>().is_some(),
-            "{error:#}"
+            error.lock_held().is_some(),
+            "{}",
+            gents_protocol::error_chain::ErrorChain(&error)
         );
 
         access.local_node().unwrap().shutdown().await;
@@ -912,7 +913,7 @@ mod tests {
         };
 
         assert!(
-            error.downcast_ref::<gents::home::StoreLockHeld>().is_some(),
+            gents::home::store_lock_held(error.as_ref()).is_some(),
             "{error:#}"
         );
     }

@@ -18,6 +18,29 @@ pub use methods::{
 };
 pub(crate) use query::{EthQueryTool, ResolvedEthQuery};
 pub use rpc::{HttpEthRpc, ETH_USER_AGENT};
+
+/// A call the eth tools refuse by their own policy or because the node no
+/// longer holds the history it needs; every other failure is the wire's.
+#[derive(Debug, thiserror::Error)]
+pub enum EthRefusal {
+    #[error("{0}")]
+    Policy(String),
+    /// The call's arguments can never succeed as written.
+    #[error("{0}")]
+    InvalidArgument(String),
+    #[error("eth pruned-history error (not retried): {0}")]
+    PrunedHistory(String),
+}
+
+impl EthRefusal {
+    pub(crate) fn failure_class(&self) -> crate::tool_call_lifecycle::FailureClass {
+        match self {
+            Self::Policy(_) => crate::tool_call_lifecycle::FailureClass::PolicyDenied,
+            Self::InvalidArgument(_) => crate::tool_call_lifecycle::FailureClass::ArgumentInvalid,
+            Self::PrunedHistory(_) => crate::tool_call_lifecycle::FailureClass::External,
+        }
+    }
+}
 pub fn validate_eth_call_declarations(
     calls: &[String],
     key_binding_id: Option<&str>,
