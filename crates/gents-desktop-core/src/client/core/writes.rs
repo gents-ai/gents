@@ -367,6 +367,46 @@ fn peer_record_owning_node_at(
         .cloned()
 }
 
+fn normalize_pending_edit_skills(edit: &mut gents::lifecycle::PendingQueueEdit) {
+    for message in &mut edit.messages {
+        if let Some(authored) = &mut message.authored_input {
+            let selection = gents::skills::prompt_slash_skill_selection(&message.content);
+            if !selection.selected_skill_ids.is_empty() {
+                authored.selected_skill_ids = selection.selected_skill_ids;
+                message.content = selection.prompt;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod pending_authored_skill_tests {
+    use super::normalize_pending_edit_skills;
+
+    #[test]
+    fn authored_edit_uses_the_send_skill_parser() {
+        let mut edit = gents::lifecycle::PendingQueueEdit {
+            expected_request_doc_ids: vec!["request".into()],
+            selected_request_doc_ids: vec!["request".into()],
+            messages: vec![gents::lifecycle::PendingMessageEdit {
+                request_doc_id: "request".into(),
+                content: "/skill review\nPlease review".into(),
+                authored_input: Some(Default::default()),
+            }],
+        };
+        normalize_pending_edit_skills(&mut edit);
+        assert_eq!(edit.messages[0].content, "Please review");
+        assert_eq!(
+            edit.messages[0]
+                .authored_input
+                .as_ref()
+                .unwrap()
+                .selected_skill_ids,
+            ["review"]
+        );
+    }
+}
+
 impl ClientCore {
     pub async fn refresh_local_standard_peer(
         &self,
@@ -613,8 +653,9 @@ impl ClientCore {
         &self,
         node_did: &str,
         session_id: &str,
-        edit: gents::lifecycle::PendingQueueEdit,
+        mut edit: gents::lifecycle::PendingQueueEdit,
     ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
+        normalize_pending_edit_skills(&mut edit);
         self.apply_pending_queue_edit(node_did, session_id, edit, None, None)
             .await
     }
@@ -649,6 +690,13 @@ impl ClientCore {
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
         ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
+        if edit
+            .messages
+            .iter()
+            .any(|message| message.authored_input.is_some())
+        {
+            crate::local_runtime::ensure_authored_queue_edit_supported(peer.as_ref()).await?;
+        }
         let (signer, admission, _) = self.request_authority(node_did, peer.as_ref()).await?;
         let selected_doc_ids = edit.selected_request_doc_ids.clone();
         let access = self.session_queue_access(node_did);

@@ -711,6 +711,10 @@ async fn append_status_contracts(state: &RuntimeHttpState, body: &mut Value) {
             json!(gents_protocol::request_input::REQUEST_INPUT_CONTRACT_VERSION),
         );
         map.insert(
+            gents_protocol::session_input_edit::STATUS_AUTHORED_QUEUE_EDIT_FIELD.to_owned(),
+            json!(gents_protocol::session_input_edit::AUTHORED_QUEUE_EDIT_VERSION),
+        );
+        map.insert(
             gents_protocol::mailbox_question::STATUS_QUESTION_CONTRACT_FIELD.to_owned(),
             json!(gents_protocol::mailbox_question::MAILBOX_QUESTION_VERSION),
         );

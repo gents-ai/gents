@@ -5,7 +5,9 @@ mod request_input;
 mod workspace_permissions;
 
 pub(crate) use goal_control::ensure_goal_stop_supported;
-pub(crate) use request_input::ensure_request_input_supported;
+pub(crate) use request_input::{
+    ensure_authored_queue_edit_supported, ensure_request_input_supported,
+};
 pub use workspace_permissions::workspace_permission_support;
 
 #[cfg(test)]

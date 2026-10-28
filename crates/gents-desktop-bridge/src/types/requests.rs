@@ -607,6 +607,9 @@ impl ConfigComponentPatch {
 pub struct PendingMessageEditRequest {
     pub request_doc_id: String,
     pub content: String,
+    #[serde(default)]
+    #[ts(optional = nullable)]
+    pub authored_input: Option<gents_protocol::request_input::AuthoredRequestInput>,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]

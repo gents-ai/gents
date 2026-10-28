@@ -36,6 +36,15 @@ pub const REQUEST_INPUT_CONTRACT_VERSION: u32 = 3;
 pub const STATUS_INPUT_CONTRACT_FIELD: &str = "request_input_contract_version";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[serde(deny_unknown_fields)]
+pub struct AuthoredRequestInput {
+    pub selected_skill_ids: Vec<String>,
+    pub captured_context: Vec<CapturedContext>,
+    pub attachments: Vec<RequestAttachment>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RequestInput {
     /// Explicit activation within AgentContext.skill_ids, not an extra skill grant.
@@ -124,6 +133,22 @@ impl RequestInput {
                 .as_ref()
                 .map(|reference| reference.continuation(source_doc_id)),
             ..self.clone()
+        }
+    }
+
+    pub fn edited(
+        &self,
+        authored: &AuthoredRequestInput,
+        source_doc_id: &str,
+        queue: RequestQueue,
+    ) -> Self {
+        Self {
+            selected_skill_ids: authored.selected_skill_ids.clone(),
+            captured_context: authored.captured_context.clone(),
+            attachments: authored.attachments.clone(),
+            initial_title: None,
+            queue: Some(queue),
+            ..self.reissued(source_doc_id)
         }
     }
 

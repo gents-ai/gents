@@ -308,6 +308,8 @@ pub async fn build_session_snapshot_for_node_with_transcript(
                                 request_doc_id: entry.request_doc_id,
                                 request_id: entry.request_id.clone(),
                                 content: entry.content,
+                                selected_skill_ids: (!entry.selected_skill_ids.is_empty())
+                                    .then_some(entry.selected_skill_ids),
                                 captured_context: (!entry.captured_context.is_empty())
                                     .then_some(entry.captured_context),
                                 attachments: (!entry.attachments.is_empty())

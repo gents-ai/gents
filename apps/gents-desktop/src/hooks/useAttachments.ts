@@ -71,9 +71,11 @@ export function useAttachmentDraft(
   root: RefObject<HTMLDivElement | null>,
   disabled: boolean,
   textarea?: RefObject<HTMLElement | null>,
+  draftKeyOverride?: string,
 ) {
   const { drafts, api } = useApp();
-  const key = useView((view) => view.draftKey);
+  const currentKey = useView((view) => view.draftKey);
+  const key = draftKeyOverride ?? currentKey;
   const items = useStore(drafts, (state) => state.attachments[key] ?? EMPTY);
   const [over, setOver] = useState(false);
   const input = useRef<HTMLInputElement>(null);

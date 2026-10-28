@@ -354,6 +354,9 @@ pub struct PendingQueueEntryView {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
+    pub selected_skill_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
     pub captured_context: Option<Vec<gents_protocol::request_input::CapturedContext>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]

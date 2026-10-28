@@ -8,6 +8,25 @@ use crate::client::PeerRecord;
 
 use super::{http::peer_status, serving_runtime};
 
+pub(crate) async fn ensure_authored_queue_edit_supported(
+    record: Option<&PeerRecord>,
+) -> Result<()> {
+    let Some(record) = record else {
+        return Ok(());
+    };
+    let status = peer_status(record).await?.context(
+        "Cannot verify queued edit support. Reconnect this runtime through its HTTP address.",
+    )?;
+    anyhow::ensure!(
+        matches!(serving_runtime(&status, &record.node_did)?, ObservedServeLifecycle::Ready)
+            && status.get(gents_protocol::session_input_edit::STATUS_AUTHORED_QUEUE_EDIT_FIELD)
+                .and_then(Value::as_u64)
+                == Some(gents_protocol::session_input_edit::AUTHORED_QUEUE_EDIT_VERSION),
+        "This runtime does not support editing attachments or skills in queued messages. Update it and reconnect."
+    );
+    Ok(())
+}
+
 pub(crate) async fn ensure_request_input_supported(
     record: Option<&PeerRecord>,
     input: &RequestInput,
@@ -71,6 +90,32 @@ mod tests {
         matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
     };
+
+    #[tokio::test]
+    async fn authored_edits_require_the_selected_runtime_capability() {
+        let server = MockServer::start().await;
+        let mut record = PeerRecord::new("Remote", "iroh://peer", "did:key:selected");
+        record.graphql = Some(format!("{}/api/v0/graphql", server.uri()));
+        for version in [None, Some(1), Some(2)] {
+            server.reset().await;
+            Mock::given(method("GET"))
+                .and(path("/status"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "node_did": "did:key:selected", "lifecycle": "ready",
+                    (gents_protocol::session_input_edit::STATUS_AUTHORED_QUEUE_EDIT_FIELD): version
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            assert_eq!(
+                ensure_authored_queue_edit_supported(Some(&record))
+                    .await
+                    .is_ok(),
+                version == Some(1)
+            );
+            server.verify().await;
+        }
+    }
 
     #[tokio::test]
     async fn question_evidence_requires_the_selected_runtime_support() {

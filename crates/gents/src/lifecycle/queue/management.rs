@@ -27,6 +27,8 @@ pub struct PendingQueueEntry {
     pub request_id: String,
     pub content: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected_skill_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub captured_context: Vec<gents_protocol::request_input::CapturedContext>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<gents_protocol::request_input::AttachmentView>,
@@ -98,6 +100,16 @@ pub async fn pending_user_queue_projection(
                                 row.content.unwrap_or_default()
                             } else {
                                 String::new()
+                            },
+                            selected_skill_ids: if row.requester_did.as_deref()
+                                == Some(requester_did)
+                            {
+                                row.input
+                                    .as_ref()
+                                    .map(|input| input.selected_skill_ids.clone())
+                                    .unwrap_or_default()
+                            } else {
+                                Vec::new()
                             },
                             captured_context: if row.requester_did.as_deref() == Some(requester_did)
                             {
@@ -225,11 +237,16 @@ fn selected_group<'a>(
             "Replacement messages must name each selected message once."
         );
         anyhow::ensure!(
-            selected
-                .iter()
-                .find(|row| row.doc_id.as_deref() == Some(message.request_doc_id.as_str()))
-                .and_then(|row| row.input.as_ref())
-                .is_some_and(|input| input.has_authored_input(&message.content)),
+            message.authored_input.as_ref().map_or_else(
+                || selected
+                    .iter()
+                    .find(|row| row.doc_id.as_deref() == Some(message.request_doc_id.as_str()))
+                    .and_then(|row| row.input.as_ref())
+                    .is_some_and(|input| input.has_authored_input(&message.content)),
+                |input| !message.content.trim().is_empty()
+                    || !input.captured_context.is_empty()
+                    || !input.attachments.is_empty(),
+            ),
             "A message cannot be empty. Remove it instead."
         );
     }
@@ -301,6 +318,19 @@ fn replacement_spec(
             .unwrap_or_else(|| slot_id.clone()),
         replaces_request_doc_id: slot_id,
     });
+    if let Some(authored) = &message.authored_input {
+        input = input.edited(
+            authored,
+            source
+                .doc_id
+                .as_deref()
+                .context("selected message has no physical identity")?,
+            input
+                .queue
+                .clone()
+                .context("selected message has no queue input")?,
+        );
+    }
     let mut spec = RequestSpec::new(
         RequestPurpose::Normal,
         RequestIdentity {
@@ -424,6 +454,56 @@ pub(crate) struct ValidatedPendingEdit {
 mod input_reissuance_tests {
     use super::*;
 
+    #[test]
+    fn generated_edit_inputs_replace_authored_fields() {
+        for case in &crate::lean_vocab_test::lean_contract_snapshot().request_input_cases {
+            let source: RequestInput = serde_json::from_value(case["input"].clone()).unwrap();
+            let input: RequestInput =
+                serde_json::from_value(case["edit_authored_input"].clone()).unwrap();
+            let authored = gents_protocol::request_input::AuthoredRequestInput {
+                selected_skill_ids: input.selected_skill_ids,
+                captured_context: input.captured_context,
+                attachments: input.attachments,
+            };
+            let queue: RequestQueue = serde_json::from_value(case["edit_queue"].clone()).unwrap();
+            let expected: RequestInput =
+                serde_json::from_value(case["expected_edited_input"].clone()).unwrap();
+            assert_eq!(
+                super::super::position::same_execution_directory(&source, &expected),
+                case["expected_edit_directory_same"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+            let mut changed_directory = source.clone();
+            changed_directory.cwd = Some("/gents-edit-different".into());
+            assert_eq!(
+                super::super::position::same_execution_directory(&source, &changed_directory),
+                case["expected_edit_directory_changed"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+            assert_eq!(
+                source.edited(&authored, "physical:parent", queue.clone()),
+                expected,
+                "{}",
+                case["name"]
+            );
+            let authored = gents_protocol::request_input::AuthoredRequestInput {
+                selected_skill_ids: source.selected_skill_ids,
+                captured_context: source.captured_context,
+                attachments: source.attachments,
+            };
+            let expected: RequestInput =
+                serde_json::from_value(case["expected_edited_from_empty"].clone()).unwrap();
+            assert_eq!(
+                RequestInput::default().edited(&authored, "physical:parent", queue),
+                expected,
+                "{}",
+                case["name"]
+            );
+        }
+    }
+
     #[tokio::test]
     async fn generated_reissued_inputs_keep_reordered_messages_goal_and_captures() {
         let temp = tempfile::tempdir().unwrap();
@@ -464,6 +544,7 @@ mod input_reissuance_tests {
                 &selected,
                 &slot,
                 &PendingMessageEdit {
+                    authored_input: None,
                     request_doc_id: source.doc_id.clone().unwrap(),
                     content: "Edited text in the other slot".into(),
                 },
@@ -577,6 +658,39 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
         Ok(validated) => validated,
         Err(error) => return Ok(Err(error.to_string())),
     };
+    for (message, create) in edit.messages.iter().zip(creates) {
+        if message.authored_input.is_none() {
+            continue;
+        }
+        if let Err(error) = crate::request_admission::validate_authored_content(&create.input) {
+            return Ok(Err(error.to_string()));
+        }
+        let (context, _, _) = match crate::request_admission::load_request_context_in_txn(
+            txn,
+            node_did,
+            &create.agent_id,
+        )
+        .await
+        {
+            Ok(context) => context,
+            Err(error) => {
+                let error = crate::request_admission::classify_context_error(error);
+                if error.is_denied() {
+                    return Ok(Err(error.to_string()));
+                }
+                return Err(error.into());
+            }
+        };
+        let skills = context
+            .as_ref()
+            .map(|context| context.skill_ids.as_slice())
+            .unwrap_or_default();
+        if let Err(error) =
+            crate::request_admission::validate_authored_skills(&create.input, skills)
+        {
+            return Ok(Err(error.to_string()));
+        }
+    }
     if persisted_replacements_in_txn(txn, node_did, creates).await? != PersistedReplacements::None {
         return Ok(Err("Replacement request identity already exists.".into()));
     }
@@ -758,6 +872,7 @@ pub fn pending_steer_edit(
             .collect(),
         messages: reordered
             .map(|entry| PendingMessageEdit {
+                authored_input: None,
                 request_doc_id: entry.request_doc_id.clone(),
                 content: entry.content.clone(),
             })

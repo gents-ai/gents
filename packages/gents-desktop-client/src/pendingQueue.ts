@@ -4,6 +4,7 @@ import type {
   PendingQueueEntryView,
   PendingTurnView,
 } from "./types.js";
+import type { AuthoredRequestInput } from "./generated/AuthoredRequestInput.js";
 
 export type QueueEdit = Omit<PendingQueueEditRequest, "nodeDid" | "sessionId">;
 
@@ -93,11 +94,18 @@ export function rewriteEdit(
   queue: readonly PendingQueueEntryView[],
   entry: PendingQueueEntryView,
   content: string,
+  authoredInput?: AuthoredRequestInput,
 ): QueueEdit {
   return {
     expectedRequestDocIds: fence(queue),
     selectedRequestDocIds: [entry.requestDocId],
-    messages: [{ requestDocId: entry.requestDocId, content }],
+    messages: [
+      {
+        requestDocId: entry.requestDocId,
+        content,
+        ...(authoredInput ? { authoredInput } : {}),
+      },
+    ],
   };
 }
 

@@ -340,6 +340,7 @@ pub async fn edit_pending_queue(
                     .messages
                     .into_iter()
                     .map(|message| gents::lifecycle::PendingMessageEdit {
+                        authored_input: message.authored_input,
                         request_doc_id: message.request_doc_id,
                         content: message.content,
                     })

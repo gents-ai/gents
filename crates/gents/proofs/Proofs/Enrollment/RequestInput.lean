@@ -130,6 +130,36 @@ theorem reissued_input_preserves_attachments (source : RequestInput) (sourceDocI
 theorem reissued_input_preserves_captures (source : RequestInput) (sourceDocId : String) :
     (reissuedInput source sourceDocId).capturedContext = source.capturedContext := rfl
 
+/-- An edit replaces authored input. The queue owner supplies the replacement
+position and delivery, and the original request retains its execution directory
+and goal lineage. A replacement does not repeat the original title intent. -/
+def editedInput (source authored : RequestInput) (sourceDocId : String)
+    (queue : RequestQueue) : RequestInput :=
+  { reissuedInput source sourceDocId with
+    selectedSkillIds := authored.selectedSkillIds
+    capturedContext := authored.capturedContext
+    attachments := authored.attachments
+    initialTitle := none
+    queue := some queue }
+
+def editDirectoryCompatible (source replacement : RequestInput) : Bool :=
+  source.cwd == replacement.cwd
+
+theorem edited_input_uses_authored_fields (source authored : RequestInput) (sourceDocId : String)
+    (queue : RequestQueue) :
+    (editedInput source authored sourceDocId queue).selectedSkillIds = authored.selectedSkillIds ∧
+    (editedInput source authored sourceDocId queue).capturedContext = authored.capturedContext ∧
+    (editedInput source authored sourceDocId queue).attachments = authored.attachments := ⟨rfl, rfl, rfl⟩
+
+theorem edited_input_preserves_execution_and_lineage (source authored : RequestInput)
+    (sourceDocId : String) (queue : RequestQueue) :
+    (editedInput source authored sourceDocId queue).cwd = source.cwd ∧
+    (editedInput source authored sourceDocId queue).initialTitle = none ∧
+    (editedInput source authored sourceDocId queue).queue = some queue ∧
+    (editedInput source authored sourceDocId queue).goalContinuation = source.goalContinuation ∧
+    (editedInput source authored sourceDocId queue).goalAssignment =
+      (reissuedInput source sourceDocId).goalAssignment := ⟨rfl, rfl, rfl, rfl, rfl⟩
+
 theorem reissued_input_preserves_known_root (source : RequestInput) (sourceDocId root : String)
     (reference : GoalAssignmentInput) (hasReference : source.goalAssignment = some reference)
     (hasRoot : reference.rootRequestDocId = some root) :

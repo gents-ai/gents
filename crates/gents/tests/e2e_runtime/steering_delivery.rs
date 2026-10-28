@@ -187,6 +187,7 @@ async fn steering_case(hold_tool: bool, promote: bool) {
             expected_request_doc_ids: ids,
             selected_request_doc_ids: vec![old.clone()],
             messages: vec![PendingMessageEdit {
+                authored_input: None,
                 request_doc_id: old.clone(),
                 content: correction.clone(),
             }],

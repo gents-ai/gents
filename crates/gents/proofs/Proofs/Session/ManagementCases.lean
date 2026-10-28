@@ -44,6 +44,14 @@ def managementCase (name : String) (entries : List QueueEntry) (expected : List 
   let before := initial entries
   ⟨name, before, .replace caller expected offset count fresh⟩
 
+theorem edited_skills_keep_slot_but_directory_change_is_refused :
+    let before := initial [pending 2]
+    let changedSkills := { replacement 4 2 with turnContext := 7, executionDirectory := some 0 }
+    let changedDirectory := { replacement 4 2 with executionDirectory := some 7 }
+    (replacePendingGroup? queue.scope before (some 1) [2] 0 1 [changedSkills]).isSome = true ∧
+    (replacePendingGroup? queue.scope before (some 1) [2] 0 1 [changedDirectory]).isNone = true := by
+  native_decide
+
 def cases : List Case :=
   [ intakeCase "steer_contiguous_admitted" [pending 2, pending 3] [2,3]
   , intakeCase "queue_is_barrier" [pending 2 .queue, pending 3] [2,3]

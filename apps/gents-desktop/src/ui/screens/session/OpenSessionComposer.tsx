@@ -14,7 +14,7 @@ import { RichComposer } from "@gents/ui/conversation";
 import { cn } from "@gents/ui/lib/utils";
 import { useApp, useView } from "@/app/AppContext";
 import { useInterruptVisible, useSelectedNode } from "@/hooks/useClient";
-import { focusDraft, useDraftField } from "../../../hooks/draftStore";
+import { focusDraft, useDraftField, writeAttachments } from "../../../hooks/draftStore";
 import { agentOf } from "@/lib/agents";
 import { placeholderFor } from "@/lib/send-status";
 import { SelectedChatFolder } from "../ChatFolderPicker";
@@ -35,6 +35,7 @@ import { useFollowUp } from "@/preferences";
 import { GoalDeliveryFeedback } from "./GoalDeliveryFeedback";
 import { ChatDeliveryFeedback } from "./ChatDeliveryFeedback";
 import { ActiveNodeLabel } from "@/app/ActiveNodeLabel";
+import { chipSkills, withSkillLines } from "@/lib/skillLines";
 
 export function OpenSessionComposer({
   roomRef,
@@ -90,6 +91,12 @@ export function OpenSessionComposer({
         ? goalMode.edit(goal.objective ?? "")
         : goalMode.create(),
   );
+  const editSlash = useSlashMenu(
+    deployment?.skills ?? [],
+    deployment?.contexts.find((c) => c.context_id === agent?.contextId),
+    [],
+    () => {},
+  );
 
   /* a session that never takes this app's messages says so before anything is typed */
   const readOnly =
@@ -117,6 +124,27 @@ export function OpenSessionComposer({
     blocked || readOnly !== null || !!editing,
     textarea,
   );
+  const editAttachmentKey = `${draftKey}:queued-edit:${editing?.docId ?? "none"}`;
+  const editAttachments = useAttachmentDraft(
+    attachmentRoot,
+    !editing || edit.saving || blocked || readOnly !== null,
+    textarea,
+    editAttachmentKey,
+  );
+  useEffect(() => {
+    if (!editing) return;
+    return () => writeAttachments(drafts, editAttachmentKey, () => []);
+  }, [drafts, editAttachmentKey, !!editing]);
+  const activeAttachments = editing ? editAttachments : attachments;
+  const editAttachmentLimit =
+    editing &&
+    (editing.attachments?.length ?? 0) -
+      editing.removedAttachments.length +
+      editAttachments.items.filter((item) => !item.error).length >
+      4;
+  const addedAttachments = () =>
+    editAttachments.items.flatMap((item) => (item.content ? [item.content] : []));
+  const cancelEdit = () => void edit.cancel(addedAttachments());
 
   const status = presentedComposerSendStatus(
     draft,
@@ -129,7 +157,7 @@ export function OpenSessionComposer({
     if (editing) {
       if (event.key === "Escape") {
         event.preventDefault();
-        edit.cancel();
+        cancelEdit();
       }
       if (
         editing.reached &&
@@ -207,14 +235,14 @@ export function OpenSessionComposer({
       <div
         data-testid="composer"
         ref={attachmentRoot}
-        {...attachments.dropProps}
+        {...activeAttachments.dropProps}
         className={cn(
           "relative grid rounded-2xl",
-          attachments.over && "ring-2 ring-ring",
+          activeAttachments.over && "ring-2 ring-ring",
         )}
       >
         <input
-          {...attachments.fileInputProps}
+          {...activeAttachments.fileInputProps}
           className="hidden"
           aria-label="Choose attachments"
         />
@@ -231,29 +259,87 @@ export function OpenSessionComposer({
             onChange={editing ? edit.setText : setDraft}
             onSend={
               editing
-                ? (text) =>
-                    void (editing.reached ? edit.sendAsNew(text) : edit.save(text))
+                ? (text) => {
+                    const prepared = withSkillLines(text, [
+                      ...new Set([
+                        ...editing.skills,
+                        ...chipSkills(
+                          editSlash.field.current?.parts() ?? [],
+                          editSlash.names,
+                        ),
+                      ]),
+                    ]);
+                    void (editing.reached
+                      ? edit.sendAsNew(text, addedAttachments(), prepared)
+                      : edit.save(text, addedAttachments(), prepared));
+                  }
                 : goalMode.mode
                   ? (text) => void goalMode.submit(text)
                   : (text) => send(text, undefined, followUp, slash.prepare(text))
             }
             models={[]}
-            onAttach={attachments.pick}
-            attachDisabled={blocked || readOnly !== null || !!editing}
-            hasAttachments={
-              editing ? !!editing.attachments?.length : attachments.hasAttachments
+            onAttach={activeAttachments.pick}
+            attachDisabled={
+              blocked || readOnly !== null || (editing && edit.saving) || false
             }
-            submitDisabled={!editing && attachments.pending}
-            onPaste={attachments.onPaste}
+            hasAttachments={
+              editing
+                ? (editing.attachments?.length ?? 0) >
+                    editing.removedAttachments.length ||
+                  editing.capturedContext.length > 0 ||
+                  editAttachments.hasAttachments
+                : attachments.hasAttachments
+            }
+            submitDisabled={activeAttachments.pending || !!editAttachmentLimit}
+            onPaste={activeAttachments.onPaste}
             disabled={!editing && blocked}
             above={
               editing ? (
                 <>
-                  <EditingChip reached={editing.reached} onCancel={edit.cancel} />
+                  <EditingChip reached={editing.reached} onCancel={cancelEdit} />
                   <SentAttachments
                     items={editing.attachments}
                     requestId={editing.requestId}
+                    removed={editing.removedAttachments}
+                    onRemove={edit.removeAttachment}
                   />
+                  <AttachmentTray
+                    items={editAttachments.items}
+                    remove={editAttachments.remove}
+                    error={
+                      editAttachmentLimit
+                        ? "Attach up to 4 files"
+                        : editAttachments.error
+                    }
+                  />
+                  <div className="flex flex-wrap gap-2 px-3 pt-2">
+                    {editing.skills.map((skill) => (
+                      <Button
+                        key={skill}
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => edit.removeSkill(skill)}
+                        aria-label={`Remove skill ${skill}`}
+                      >
+                        /{skill}
+                        <X />
+                      </Button>
+                    ))}
+                    {editing.capturedContext.map((capture, index) => (
+                      <Button
+                        key={`${index}:${capture.uri ?? capture.kind}`}
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => edit.removeCapture(index)}
+                        aria-label={`Remove context ${capture.uri ?? capture.terminalName ?? capture.kind}`}
+                      >
+                        {capture.uri ?? capture.terminalName ?? capture.kind}
+                        <X />
+                      </Button>
+                    ))}
+                  </div>
                 </>
               ) : goalMode.mode ? (
                 <GoalChip
@@ -281,13 +367,13 @@ export function OpenSessionComposer({
             }
             onKeyDown={onKeyDown}
             fieldRef={textarea}
-            /* a queued message keeps the skills it was sent with, so an
-               edit can't add one: no skill chips while editing */
-            commands={editing ? undefined : slash.names}
-            composerRef={slash.field}
+            commands={editing ? editSlash.names : slash.names}
+            composerRef={editing ? editSlash.field : slash.field}
             commandsAt="word"
-            chipKinds={slash.chipKinds}
-            triggers={editing || goalMode.mode ? undefined : [slash.trigger]}
+            chipKinds={editing ? editSlash.chipKinds : slash.chipKinds}
+            triggers={
+              goalMode.mode ? undefined : [editing ? editSlash.trigger : slash.trigger]
+            }
             clearable={!editing}
             submitLabel={
               editing

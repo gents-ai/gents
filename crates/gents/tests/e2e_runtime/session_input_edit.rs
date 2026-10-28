@@ -500,6 +500,7 @@ impl RemoteEdit<'_> {
                 .iter()
                 .zip(&selected)
                 .map(|(replacement, id)| PendingMessageEdit {
+                    authored_input: None,
                     request_doc_id: doc_ids[id].clone(),
                     content: format!("message {}", replacement["request_id"]),
                 })
@@ -700,6 +701,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         expected_request_doc_ids: vec![original_doc.clone()],
         selected_request_doc_ids: vec![original_doc.clone()],
         messages: vec![PendingMessageEdit {
+            authored_input: None,
             request_doc_id: original_doc.clone(),
             content: "replacement durable message".into(),
         }],
@@ -807,6 +809,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
             expected_request_doc_ids: receipt.request_doc_ids.clone(),
             selected_request_doc_ids: receipt.request_doc_ids.clone(),
             messages: vec![PendingMessageEdit {
+                authored_input: None,
                 request_doc_id: receipt.request_doc_ids[0].clone(),
                 content: "stale replacement".into(),
             }],
@@ -927,6 +930,7 @@ async fn local_edit_command_as(
         expected_request_doc_ids: vec![original_id.clone()],
         selected_request_doc_ids: vec![original_id.clone()],
         messages: vec![PendingMessageEdit {
+            authored_input: None,
             request_doc_id: original_id.clone(),
             content: format!("edited {suffix}"),
         }],

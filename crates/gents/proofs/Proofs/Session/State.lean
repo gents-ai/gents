@@ -101,6 +101,9 @@ structure QueueEntry where
   /-- Abstract identity of the request-scoped execution settings the admission
   carries besides its content; equal values run under the same configuration. -/
   turnContext : Nat := 0
+  /-- Separate directory identity when authored skills distinguish turn contexts.
+  Older cases use the turn context as the directory identity. -/
+  executionDirectory : Option Nat := none
   /-- The signed Goal ID and resolved physical opening request, observed through
   the canonical input owner. Absence remains distinct from an assigned turn. -/
   goalAssignment : Option (String × String) := none
