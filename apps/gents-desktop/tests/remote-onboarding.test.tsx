@@ -57,8 +57,10 @@ describe("remote onboarding", () => {
     const onDone = vi.fn();
     renderIn(app, <SetupScreen onDone={onDone} />);
     expect(screen.queryByText("Local node")).not.toBeInTheDocument();
-    await userEvent.type(screen.getByRole("textbox"), "https://my-node.example:8787");
-    await userEvent.click(screen.getByRole("button", { name: "Request access" }));
+    await userEvent.type(
+      screen.getByRole("textbox"),
+      "https://my-node.example:8787{enter}",
+    );
     expect(enroll).toHaveBeenCalledWith("https://my-node.example:8787");
     expect(
       await screen.findByRole("heading", { name: "Waiting for access" }),
@@ -131,6 +133,47 @@ describe("remote onboarding", () => {
     expect(screen.getByText("My computer", { exact: true })).toBeVisible();
   });
 
+  it("shows the request expiry and distinguishes unreadable approval state", async () => {
+    const app = testApp({
+      snapshot: snapshot([request]),
+      supportsManagedServer: false,
+    });
+    renderIn(app, <SetupScreen onDone={vi.fn()} />);
+    await userEvent.click(
+      screen.getByRole("button", { name: "View request to My computer" }),
+    );
+    expect(screen.getByText(/Request expires:/).querySelector("time")).toHaveAttribute(
+      "datetime",
+      request.expiresAt,
+    );
+    expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
+    act(() => publishSnapshot(app, snapshot(null)));
+    expect(screen.getByRole("heading", { name: "Checking access" })).toBeVisible();
+    expect(
+      screen.getByText("Approval status is unavailable. Refresh to check again."),
+    ).toBeVisible();
+    expect(screen.getByRole("button", { name: "Refresh status" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+  });
+
+  it("keeps a pending send on the address form without claiming the server is connected", async () => {
+    const app = testApp({ snapshot: snapshot([]), supportsManagedServer: false });
+    let finish!: (value: EnrollmentRequestView) => void;
+    vi.spyOn(app.actions, "requestStatusEnrollment").mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    renderIn(app, <SetupScreen onDone={vi.fn()} />);
+    await userEvent.type(screen.getByRole("textbox"), "https://my-node.example:8787");
+    await userEvent.click(screen.getByRole("button", { name: "Request access" }));
+    expect(screen.getByRole("heading", { name: "Connect to your node" })).toBeVisible();
+    expect(screen.getByTestId("setup-next")).toBeDisabled();
+    expect(screen.queryByText("Connect to server")).not.toBeInTheDocument();
+    await act(async () => finish(request));
+    expect(screen.getByRole("heading", { name: "Waiting for access" })).toBeVisible();
+  });
+
   it("keeps enrollment errors retryable without configuring another node", async () => {
     const app = testApp({ snapshot: snapshot([]), supportsManagedServer: false });
     vi.spyOn(app.actions, "requestStatusEnrollment").mockImplementation(async () => {
@@ -141,8 +184,7 @@ describe("remote onboarding", () => {
     renderIn(app, <SetupScreen onDone={onDone} />);
     await userEvent.type(screen.getByRole("textbox"), "https://my-node.example:8787");
     await userEvent.click(screen.getByRole("button", { name: "Request access" }));
-    expect(await screen.findByText("Address unavailable")).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Address unavailable");
     expect(screen.getByRole("button", { name: "Request access" })).toBeEnabled();
     expect(
       screen.getByRole("button", { name: "View request to My computer" }),

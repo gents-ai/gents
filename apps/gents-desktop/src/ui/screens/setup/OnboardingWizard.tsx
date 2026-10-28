@@ -62,7 +62,8 @@ type RunEvent =
   | { type: "retried" }
   | { type: "wentBack" }
   | { type: "continued" }
-  | { type: "requested" };
+  | { type: "requested" }
+  | { type: "requesting" };
 
 function runReducer(run: Run, event: RunEvent): Run {
   switch (event.type) {
@@ -102,6 +103,8 @@ function runReducer(run: Run, event: RunEvent): Run {
       return { ...run, step: "welcome", error: null };
     case "wentBack":
       return { ...run, step: "welcome" };
+    case "requesting":
+      return { ...run, busy: true, error: null };
     case "requested":
       return { ...run, step: "enrollment", busy: false, error: null };
     case "continued":
@@ -320,7 +323,7 @@ export function OnboardingWizard({
     }
   };
   const enrol = async () => {
-    dispatch({ type: "begun", phase: "starting-client" });
+    dispatch({ type: "requesting" });
     try {
       const request = await actions.requestStatusEnrollment(address.trim());
       setEnrollment(request);
@@ -343,25 +346,44 @@ export function OnboardingWizard({
     const label = target?.label ?? enrollment.serverLabel ?? "your node";
     return (
       <Frame>
-        <Title
-          note={
-            ready
-              ? `Your secure connection to ${label} is ready.`
-              : active?.state === "approved"
-                ? "Approval received. Finishing your secure connection…"
-                : active || !observed
-                  ? "Approve this device on the node’s computer or ask its administrator to approve your request. You can leave this screen and return later."
-                  : "This request is no longer listed. If the connection does not become ready, request access again."
-          }
-        >
-          {ready
-            ? "Connected to your node"
-            : active?.state === "approved"
-              ? "Connecting to your node"
-              : "Waiting for access"}
-        </Title>
+        <div role="status" aria-live="polite">
+          <Title
+            note={
+              ready
+                ? `Your secure connection to ${label} is ready.`
+                : active?.state === "approved"
+                  ? "Approval received. Finishing your secure connection…"
+                  : !observed
+                    ? "Approval status is unavailable. Refresh to check again."
+                    : active
+                      ? "Ask the node’s administrator to approve this device before the request expires. You can return to this request while it is active."
+                      : "This request is no longer listed. If the connection does not become ready, request access again."
+            }
+          >
+            {ready
+              ? "Connected to your node"
+              : !observed
+                ? "Checking access"
+                : active?.state === "approved"
+                  ? "Connecting to your node"
+                  : "Waiting for access"}
+          </Title>
+        </div>
+        {!observed && (
+          <Button variant="outline" onClick={() => void refreshSnapshot()}>
+            Refresh status
+          </Button>
+        )}
         <div className="grid min-w-0 gap-3 text-sm">
           <p className="break-words">{label}</p>
+          {!ready && (
+            <p className="text-muted-foreground">
+              Request expires:{" "}
+              <time dateTime={enrollment.expiresAt}>
+                {new Date(enrollment.expiresAt).toLocaleString()}
+              </time>
+            </p>
+          )}
           <details className="min-w-0 text-muted-foreground">
             <summary className="cursor-pointer">Connection details</summary>
             <dl className="mt-2 grid gap-2 break-all">
@@ -556,18 +578,29 @@ export function OnboardingWizard({
             hint="Connect to an existing Gents node."
             icon={Wifi}
           >
-            <Field label="Server address">
-              <Input
-                type="url"
-                value={address}
-                onChange={(event) => setAddress(event.target.value)}
-                placeholder="https://gents.example.net:8787"
-              />
-            </Field>
-            <p className="text-xs text-muted-foreground">
-              Enter the node’s status address, reachable from this device. The node’s
-              administrator must approve this device’s access request.
-            </p>
+            <form
+              className="grid min-w-0 gap-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!busy && address.trim()) void enrol();
+              }}
+            >
+              <Field label="Server address">
+                <Input
+                  type="url"
+                  enterKeyHint="go"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  value={address}
+                  onChange={(event) => setAddress(event.target.value)}
+                  placeholder="https://gents.example.net:8787"
+                />
+              </Field>
+              <p className="text-xs text-muted-foreground">
+                Enter the node’s status address, reachable from this device. The node’s
+                administrator must approve this device’s access request.
+              </p>
+            </form>
           </Option>
         </div>
         {error ? (
