@@ -265,7 +265,8 @@ test("a session picked from the @ menu becomes a chip, sends a link and shows as
   await expect(page.locator('[data-slot="session-chip-preview"]')).toContainText(
     "introduction-and-greetings",
   );
-  await field(page).click();
+  /* away from the chip, so the card closes and the caret stays put */
+  await page.mouse.move(0, 0);
   await page.keyboard.type("first");
   await page.keyboard.press("Enter");
   const transcript = page.getByTestId("transcript-panel");
