@@ -341,6 +341,7 @@ async fn full_access_cannot_widen_read_only_workspace_authority() {
         None,
         tokio_util::sync::CancellationToken::new(),
         ToolWorkspaceScope {
+            runtime_home: None,
             workspace_cwd: Some(fixture.key.path.clone()),
             workspace_root: Some(fixture.root.path().canonicalize().unwrap()),
             workspace_authority: Some(WorkspaceAuthority::ReadOnly),

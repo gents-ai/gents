@@ -19,6 +19,7 @@ import { NavPanel } from "./RailFlyout";
 import { SyncHealth } from "./SyncHealth";
 import type { ShellLayout } from "./useShellLayout";
 import { WindowControls } from "./WindowControls";
+import { ActiveNodeLabel } from "./ActiveNodeLabel";
 
 function HistoryNav({ history }: { history: History }) {
   return (
@@ -141,6 +142,7 @@ export function WindowBar({
         <NavSheet route={route} settings={settings} />
         <MarkLink className="md:hidden" />
         {history && <HistoryNav history={history} />}
+        <ActiveNodeLabel />
         <div
           ref={onPaneBar}
           className="flex h-full min-w-0 flex-1 items-center gap-2"

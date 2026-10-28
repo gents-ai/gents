@@ -20,6 +20,7 @@ import { passes } from "../lib/session-filter";
 import { folderOf, recentFolders } from "../../hooks/chatFolders";
 import { useIncompatibleHome } from "../../hooks/useIncompatibleHome";
 import { useApp, useView } from "../app/AppContext";
+import { isLocalNode } from "../lib/firstRun";
 import { isWorkingNode, workingNode } from "../lib/nodes";
 import {
   defaultScope,
@@ -52,6 +53,13 @@ export function useSelectedNodeDid(): string | null {
 export function useSelectedNode(): NodeView | null {
   const nodeDid = useApp().stores.selection.use.nodeDid();
   return useFleet((state) => nodeOrFirst(state, nodeDid));
+}
+
+export function useNodeConfigReadOnly(node: NodeView): string | null {
+  const homeDid = useHomeDid();
+  return !isLocalNode(node, homeDid) && !node.graphql
+    ? "Remote configuration is read-only. This enrolled connection has no operator endpoint; configure this node on its host."
+    : null;
 }
 
 export function useSelectedNodeMailboxItem(

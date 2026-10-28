@@ -27,6 +27,17 @@ import {
 export const SESSION_TIMELINE_PAGE_SIZE = 40;
 /* the bridge's largest rows page */
 const TRANSCRIPT_READ_SIZE = 80;
+/** how long a session's reads must find nothing new before they slow down */
+const QUIET_AFTER_MS = 60_000;
+/** the wait between reads of a session that has gone quiet */
+const QUIET_READ_GAP_MS = 8_000;
+
+/* a session's content apart from the store-wide revision, which moves when
+   any document in the store changes */
+const sessionSignature = (snapshot: DesktopSessionSnapshot) =>
+  JSON.stringify(snapshot, (key, value) =>
+    key === "projectionRevision" ? undefined : value,
+  );
 
 type SessionReadParams = {
   api: DesktopApiAdapter;
@@ -49,7 +60,27 @@ export function createSessionReads({
   let refreshSeq = 0;
   let liveSeq = 0;
   let runEpoch = 0;
-  let reconciledAt = 0;
+  let readAt = 0;
+  let readCost = 0;
+  let changedAt = 0;
+  let lastOutcome: string | null = null;
+  const noteRead = (sessionId: string, outcome: string, started: number) => {
+    readAt = performance.now();
+    readCost = readAt - started;
+    const keyed = `${sessionId}\0${outcome}`;
+    if (keyed !== lastOutcome) changedAt = readAt;
+    lastOutcome = keyed;
+  };
+  const quiet = () => readAt - changedAt >= QUIET_AFTER_MS;
+  /* A full read of a long session can take over a second, and nothing tells
+     the app which session a store change touched. So the next read waits at
+     least as long as the last one took, and longer once reads have found the
+     session unchanged for a minute. */
+  const sessionReadGapMs = () => {
+    const base = timingConfig().activeSessionPollMs;
+    if (base === null) return null;
+    return Math.max(readCost, quiet() ? QUIET_READ_GAP_MS : base);
+  };
   const setSession = (next: Parameters<typeof writeSession>[1]) =>
     writeSession(sessionStore, next);
   const setSessionLoad = (load: SessionLoadState) =>
@@ -78,6 +109,7 @@ export function createSessionReads({
       found: null,
       error: sameSelection ? previous.error : null,
     });
+    const started = performance.now();
     try {
       const next = await api.fetchSessionSnapshot(
         nextSessionId,
@@ -92,7 +124,7 @@ export function createSessionReads({
         (!next || next.sessionId === nextSessionId);
       if (!stillCurrent) return null;
       setSession((current) => (next ? mergeSessionTipSnapshot(current, next) : null));
-      reconciledAt = performance.now();
+      noteRead(nextSessionId, next ? sessionSignature(next) : "missing", started);
       setSessionLoad({
         phase: "loaded",
         sessionId: nextSessionId,
@@ -104,11 +136,11 @@ export function createSessionReads({
     } catch (error) {
       if (refreshSeq === currentRefresh) {
         const message = String(error);
+        const pending =
+          error instanceof BridgeInvokeError && error.code === "projectionPending";
+        noteRead(nextSessionId, pending ? "pending" : `failed ${message}`, started);
         setSessionLoad({
-          phase:
-            error instanceof BridgeInvokeError && error.code === "projectionPending"
-              ? "pending"
-              : "failed",
+          phase: pending ? "pending" : "failed",
           sessionId: nextSessionId,
           nodeDid,
           found: null,
@@ -146,15 +178,21 @@ export function createSessionReads({
     }
   }
 
+  /** false when the session is due a full read. A live read stands in for
+      one until the next periodic read; otherwise an update reads at once,
+      though not back to back, unless the session has gone quiet. */
   async function refreshSessionLiveDelta(): Promise<boolean> {
+    const gap = sessionReadGapMs();
+    const since = performance.now() - readAt;
+    if (gap !== null && since >= gap) return false;
     const current = readSession(sessionStore);
     const requestId = trackedRequestId();
-    if (!current || !requestId || !api.fetchSessionLiveDelta) return false;
-    const reconcileMs = timingConfig().activeSessionPollMs;
-    if (reconcileMs !== null && performance.now() - reconciledAt >= reconcileMs)
-      return false;
-    const request = sessionLiveDeltaRequest(current, requestId);
-    if (!request) return false;
+    const request =
+      current && requestId && api.fetchSessionLiveDelta
+        ? sessionLiveDeltaRequest(current, requestId)
+        : null;
+    if (!current || !requestId || !request || !api.fetchSessionLiveDelta)
+      return gap !== null && (quiet() || since < readCost);
     const capturedRefresh = refreshSeq;
     const capturedLive = ++liveSeq;
     const capturedNodeDid = store.getState().nodeDid;
@@ -246,6 +284,7 @@ export function createSessionReads({
     refreshSession,
     retrySessionHydration,
     refreshSessionLiveDelta,
+    sessionReadGapMs,
     loadSessionRows,
   };
 }

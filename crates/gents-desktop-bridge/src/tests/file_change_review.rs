@@ -243,6 +243,53 @@ async fn seed_review(
 }
 
 #[tokio::test]
+async fn concurrent_file_reviews_preserve_each_retained_image() {
+    let (core, _directory) = boot_review_core().await;
+    let node = core.node_identity().did().to_owned();
+    let session = "concurrent-file-review";
+    let call = "concurrent-file-call";
+    create_session(&core, &node, session, None).await;
+    let (physical, expected) =
+        seed_review(&core, session, call, FileImage::Missing, FileImage::Missing).await;
+    let request = format!("req-{call}");
+    let results = futures::future::join_all((0..5).map(|_| {
+        crate::commands::tool_file_changes(
+            &core,
+            node.clone(),
+            session.into(),
+            request.clone(),
+            physical.clone(),
+            None,
+        )
+    }))
+    .await;
+    for result in results {
+        assert_eq!(result.unwrap(), Some(expected.clone()));
+    }
+    core.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn unavailable_file_review_scope_is_retryable_not_missing_versions() {
+    let (core, _directory) = boot_review_core().await;
+    let node = core.node_identity().did().to_owned();
+    let error = crate::commands::tool_file_changes(
+        &core,
+        node,
+        "not-received-session".into(),
+        "not-received-request".into(),
+        "physical-tool".into(),
+        None,
+    )
+    .await
+    .unwrap_err();
+    let classified = error.downcast_ref::<crate::BridgeError>().unwrap();
+    assert_eq!(classified.code, crate::BridgeErrorCode::ProjectionPending);
+    assert!(classified.retryable);
+    core.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn maximum_file_images_cross_the_editor_host_frames_without_truncation() {
     use crate::host::{protocol, ClientHost};
     use bytes::Bytes;

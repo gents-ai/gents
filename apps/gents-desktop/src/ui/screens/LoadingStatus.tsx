@@ -22,7 +22,7 @@ export function LoadingStatus({ overlay = false }: { overlay?: boolean }) {
   const status = useView((view) => view.loadingStatus);
   const {
     stores,
-    actions: { refreshSnapshot, retrySessionHydration },
+    actions: { refreshSession, refreshSnapshot, retrySessionHydration },
   } = useApp();
   const nodeDid = useSelectedNodeDid();
   const selectedSessionId = stores.selection.use.sessionId();
@@ -40,7 +40,7 @@ export function LoadingStatus({ overlay = false }: { overlay?: boolean }) {
     setBusy(true);
     try {
       if (action === "retryHydration") await retrySessionHydration(selectedSessionId);
-      else await refreshSnapshot();
+      else await Promise.all([refreshSnapshot(), refreshSession(selectedSessionId)]);
     } catch (e) {
       toastFailure("load the session", e);
     } finally {

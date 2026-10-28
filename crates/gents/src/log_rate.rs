@@ -54,13 +54,17 @@ where
     }
 
     pub fn check(&mut self, key: K, now: Instant) -> Decision {
+        self.check_with_config(key, now, self.config)
+    }
+
+    fn check_with_config(&mut self, key: K, now: Instant, config: RateLimitConfig) -> Decision {
         let state = self.states.entry(key).or_insert(CallsiteState {
             window_start: now,
             admitted_in_window: 0,
             suppressed: 0,
         });
 
-        if now.saturating_duration_since(state.window_start) >= self.config.window {
+        if now.saturating_duration_since(state.window_start) >= config.window {
             let suppressed = state.suppressed;
             state.window_start = now;
             state.admitted_in_window = 1;
@@ -72,7 +76,7 @@ where
             };
         }
 
-        if state.admitted_in_window < self.config.max_per_window {
+        if state.admitted_in_window < config.max_per_window {
             state.admitted_in_window += 1;
             Decision::Allow
         } else {
@@ -91,6 +95,8 @@ pub struct RateLimitFilter {
 struct SuppressionSummary {
     suppressed: u64,
     original_target: String,
+    original_file: Option<String>,
+    original_line: Option<u32>,
 }
 
 impl RateLimitFilter {
@@ -108,6 +114,8 @@ impl RateLimitFilter {
                         target: SUMMARY_TARGET,
                         suppressed = summary.suppressed,
                         original_target = %summary.original_target,
+                        original_file = summary.original_file.as_deref(),
+                        original_line = summary.original_line,
                         "rate limiter suppressed repeated log events from one callsite"
                     );
                 }
@@ -121,10 +129,19 @@ impl RateLimitFilter {
     }
 
     fn check(&self, meta: &tracing::Metadata<'_>) -> Decision {
-        self.limiter
+        let mut limiter = self
+            .limiter
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .check(meta.callsite(), (self.now)())
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let config = if is_worker_poll_report(meta) {
+            RateLimitConfig {
+                max_per_window: 1,
+                window: Duration::from_secs(60),
+            }
+        } else {
+            limiter.config
+        };
+        limiter.check_with_config(meta.callsite(), (self.now)(), config)
     }
 }
 
@@ -143,10 +160,22 @@ where
                 let _ = self.summaries.send(SuppressionSummary {
                     suppressed,
                     original_target: meta.target().to_string(),
+                    original_file: meta.file().map(str::to_owned),
+                    original_line: meta.line(),
                 });
                 true
             }
             Decision::Suppress => false,
         }
     }
+}
+
+/// The pinned workers owner reports slow polls at this target with these fields.
+/// Its panic diagnostics share the target and must retain the ordinary ceiling.
+fn is_worker_poll_report(meta: &tracing::Metadata<'_>) -> bool {
+    meta.target() == "workers::worker"
+        && *meta.level() == tracing::Level::WARN
+        && ["task", "worker", "elapsed_ms", "limit_ms"]
+            .iter()
+            .all(|field| meta.fields().field(field).is_some())
 }

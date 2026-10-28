@@ -1496,57 +1496,65 @@ pub(crate) fn push_backend_metrics(
     measured: &RapidHashMap<String, gents::BackendHealthSnapshot>,
 ) {
     for backend in backends {
+        let observation = measured
+            .get(&backend.backend_id)
+            .map(|entry| (entry.state, entry.last_probe_at.timestamp()));
+        push_backend_metric(lines, backend, observation);
+    }
+}
+
+fn push_backend_metric(
+    lines: &mut Vec<String>,
+    backend: &MetricsBackendRow,
+    measured: Option<(gents::BackendHealthState, i64)>,
+) {
+    push_metric_sample(
+        lines,
+        "gents_backend_enabled",
+        &[("backend_id", backend.backend_id.clone())],
+        i64::from(backend.enabled),
+    );
+    push_metric_sample(
+        lines,
+        "gents_backend_max_concurrent",
+        &[("backend_id", backend.backend_id.clone())],
+        backend
+            .max_concurrent
+            .unwrap_or(gents::backend_registry::DEFAULT_MAX_CONCURRENT),
+    );
+    push_metric_sample(
+        lines,
+        "gents_backend_max_queue_depth",
+        &[("backend_id", backend.backend_id.clone())],
+        backend
+            .max_queue_depth
+            .unwrap_or(gents::backend_registry::DEFAULT_MAX_QUEUE_DEPTH),
+    );
+    let status = measured
+        .map(|(state, _)| state.as_str().to_string())
+        .unwrap_or_else(|| backend.probe_status.clone());
+    push_metric_sample(
+        lines,
+        "gents_backend_probe_status",
+        &[
+            ("backend_id", backend.backend_id.clone()),
+            ("status", status.clone()),
+        ],
+        i64::from(status == "healthy"),
+    );
+    let last_probe_seconds = measured.map(|(_, timestamp)| timestamp).or_else(|| {
+        backend
+            .last_probe
+            .as_deref()
+            .and_then(rfc3339_timestamp_seconds)
+    });
+    if let Some(timestamp) = last_probe_seconds {
         push_metric_sample(
             lines,
-            "gents_backend_enabled",
+            "gents_backend_last_probe_seconds",
             &[("backend_id", backend.backend_id.clone())],
-            i64::from(backend.enabled),
+            timestamp,
         );
-        push_metric_sample(
-            lines,
-            "gents_backend_max_concurrent",
-            &[("backend_id", backend.backend_id.clone())],
-            backend
-                .max_concurrent
-                .unwrap_or(gents::backend_registry::DEFAULT_MAX_CONCURRENT),
-        );
-        push_metric_sample(
-            lines,
-            "gents_backend_max_queue_depth",
-            &[("backend_id", backend.backend_id.clone())],
-            backend
-                .max_queue_depth
-                .unwrap_or(gents::backend_registry::DEFAULT_MAX_QUEUE_DEPTH),
-        );
-        let measured_entry = measured.get(&backend.backend_id);
-        let status = measured_entry
-            .map(|entry| entry.state.as_str().to_string())
-            .unwrap_or_else(|| backend.probe_status.clone());
-        push_metric_sample(
-            lines,
-            "gents_backend_probe_status",
-            &[
-                ("backend_id", backend.backend_id.clone()),
-                ("status", status.clone()),
-            ],
-            i64::from(status == "healthy"),
-        );
-        let last_probe_seconds = measured_entry
-            .map(|entry| entry.last_probe_at.timestamp())
-            .or_else(|| {
-                backend
-                    .last_probe
-                    .as_deref()
-                    .and_then(rfc3339_timestamp_seconds)
-            });
-        if let Some(timestamp) = last_probe_seconds {
-            push_metric_sample(
-                lines,
-                "gents_backend_last_probe_seconds",
-                &[("backend_id", backend.backend_id.clone())],
-                timestamp,
-            );
-        }
     }
 }
 
@@ -1821,20 +1829,15 @@ mod tests {
             }
         }
         fn measured_entry(
-            backend_id: &str,
             state: gents::BackendHealthState,
-            failure_count: u32,
             last_probe_at: &str,
-        ) -> gents::BackendHealthSnapshot {
-            gents::BackendHealthSnapshot {
-                backend_id: backend_id.to_string(),
+        ) -> (gents::BackendHealthState, i64) {
+            (
                 state,
-                failure_count,
-                last_probe_at: chrono::DateTime::parse_from_rfc3339(last_probe_at)
+                chrono::DateTime::parse_from_rfc3339(last_probe_at)
                     .unwrap()
-                    .with_timezone(&Utc),
-                last_error: (failure_count > 0).then(|| "connection refused".to_string()),
-            }
+                    .timestamp(),
+            )
         }
 
         let backends = vec![
@@ -1847,35 +1850,26 @@ mod tests {
         let measured = RapidHashMap::from_iter([
             (
                 "sparks-cluster".to_string(),
-                measured_entry(
-                    "sparks-cluster",
-                    gents::BackendHealthState::Unhealthy,
-                    3,
-                    "2026-07-07T12:00:00Z",
-                ),
+                measured_entry(gents::BackendHealthState::Unhealthy, "2026-07-07T12:00:00Z"),
             ),
             (
                 "workstation-1".to_string(),
-                measured_entry(
-                    "workstation-1",
-                    gents::BackendHealthState::Healthy,
-                    0,
-                    "2026-07-07T12:00:00Z",
-                ),
+                measured_entry(gents::BackendHealthState::Healthy, "2026-07-07T12:00:00Z"),
             ),
             (
                 "spark-2".to_string(),
-                measured_entry(
-                    "spark-2",
-                    gents::BackendHealthState::Degraded,
-                    1,
-                    "2026-07-07T12:00:00Z",
-                ),
+                measured_entry(gents::BackendHealthState::Degraded, "2026-07-07T12:00:00Z"),
             ),
         ]);
 
         let mut lines = Vec::new();
-        push_backend_metrics(&mut lines, &backends, &measured);
+        for backend in &backends {
+            push_backend_metric(
+                &mut lines,
+                backend,
+                measured.get(&backend.backend_id).copied(),
+            );
+        }
         let rendered = lines.join("\n");
 
         let measured_last_probe = chrono::DateTime::parse_from_rfc3339("2026-07-07T12:00:00Z")

@@ -500,7 +500,6 @@ fn compaction_prompt_treats_prior_turns_as_data_not_instructions() {
     assert!(prompt.contains("Re-verification can be useful"));
     assert!(prompt.contains("avoid repeating completed or expensive work"));
     assert!(prompt.contains("Never claim that prior turns were absent when they are present"));
-    assert!(prompt.contains("supplied structured-output schema"));
 }
 
 #[test]

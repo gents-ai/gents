@@ -4,6 +4,7 @@ import { useStore } from "zustand";
 import { Button } from "@gents/ui/components/button";
 import { useApp } from "@/app/AppContext";
 import { workspace } from "@/app/workspace";
+import { StorageFullRecovery } from "./StorageFullRecovery";
 import { navigate } from "@/lib/router";
 import {
   chatDraftRequest,
@@ -203,6 +204,12 @@ function SavedMessage({
           )
         )}
       </div>
+      {draft.result?.outcome === "deliveryUnknown" && (
+        <StorageFullRecovery
+          nodeDid={draft.nodeDid}
+          error={draft.result?.deliveryError}
+        />
+      )}
       <details className="mt-1 text-muted-foreground">
         <summary>Saved {noun}</summary>
         <p className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words">

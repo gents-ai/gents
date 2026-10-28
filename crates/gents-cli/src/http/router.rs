@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use axum::{
     extract::{Query, State},
     http::{header, StatusCode},
+    middleware,
     response::{IntoResponse, Response},
     routing::{get, post},
     Router,
@@ -34,7 +35,7 @@ const STATUS_PROBE_BUDGET: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 pub(crate) struct RuntimeHttpState {
-    /// Anonymous; the unauthenticated HTTP handlers read through it.
+    /// Address-only endpoint for public connection metadata.
     pub(crate) graphql: GraphqlEndpoint,
     /// Served principal; the node's P2P access control admits only it.
     pub(crate) p2p_graphql: GraphqlEndpoint,
@@ -136,6 +137,8 @@ pub(crate) fn runtime_contract_router(
     replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
     serve_lifecycle: ServeLifecycleHandle,
 ) -> Router {
+    let authority = super::access::HttpAuthority::for_endpoint(&graphql);
+    let operator_did = node_did.clone();
     let graphql_for_mcp = graphql.clone();
     let state = RuntimeHttpState {
         p2p_graphql: GraphqlEndpoint::as_principal(graphql.clone(), node_did.clone()),
@@ -161,11 +164,26 @@ pub(crate) fn runtime_contract_router(
         serve_lifecycle,
     };
 
-    let mut router = Router::new()
+    let operator_routes = Router::new()
         .route("/metrics", get(metrics_handler))
-        .route("/version", get(version_handler))
         .route("/healthz", get(healthz_handler))
-        .route("/status", get(status_handler))
+        .route("/activation", get(activation_handler))
+        .route("/self", get(self_handler))
+        .route("/sessions", get(sessions_handler))
+        .route("/fleet", get(fleet_handler))
+        .route("/fleet/slots", get(fleet_slots_handler))
+        .route("/mcp/pool", get(mcp_pool_handler))
+        .route(
+            "/identity/decide",
+            post(crate::http::identity_decide::identity_decide_handler),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            operator_did,
+            super::access::require_operator,
+        ));
+    let mut router = Router::new()
+        .route("/version", get(version_handler))
+        .route("/status", get(status_route))
         .route(
             gents_protocol::serve_lifecycle::control::RUNTIME_CONTROL_PATH,
             post(crate::http::runtime_control::runtime_control_handler),
@@ -174,7 +192,6 @@ pub(crate) fn runtime_contract_router(
             gents_protocol::job::JOB_CONTROL_PATH,
             post(crate::http::job_control::job_control_handler),
         )
-        .route("/activation", get(activation_handler))
         .route("/enrollment/decisions", post(enrollment_decision_handler))
         .route("/enrollment/pending", post(enrollment_pending_handler))
         .route("/accounts/usage/read", post(account_usage_read_handler))
@@ -186,15 +203,7 @@ pub(crate) fn runtime_contract_router(
             gents_protocol::file_inventory::FILE_INVENTORY_OPERATOR_PATH,
             post(crate::http::file_inventory::operator_inventory_handler),
         )
-        .route("/self", get(self_handler))
-        .route("/sessions", get(sessions_handler))
-        .route("/fleet", get(fleet_handler))
-        .route("/fleet/slots", get(fleet_slots_handler))
-        .route("/mcp/pool", get(mcp_pool_handler))
-        .route(
-            "/identity/decide",
-            post(crate::http::identity_decide::identity_decide_handler),
-        );
+        .merge(operator_routes);
 
     if let Some(options) = mcp {
         router = router.nest_service(
@@ -203,7 +212,12 @@ pub(crate) fn runtime_contract_router(
         );
     }
 
-    router.with_state(state)
+    router
+        .layer(middleware::from_fn_with_state(
+            authority,
+            super::access::require_authority,
+        ))
+        .with_state(state)
 }
 
 async fn activation_handler(State(state): State<RuntimeHttpState>) -> Response {
@@ -639,6 +653,41 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
     }
 
     if let Some(map) = body.as_object_mut() {
+        crate::commands::p2p::flatten_p2p_fields(map, &p2p);
+    }
+    append_status_contracts(&state, &mut body).await;
+    (StatusCode::OK, axum::Json(body)).into_response()
+}
+
+async fn status_route(
+    State(state): State<RuntimeHttpState>,
+    identity: defra_http::ExtractIdentity,
+) -> Response {
+    let mut response = if identity
+        .did()
+        .is_some_and(|actor| actor.as_ref() == state.node_did)
+    {
+        status_handler(State(state)).await
+    } else {
+        let mut body = json!({
+            "service": "gents",
+            "version": version_response().version,
+            "node_name": state.node_name,
+            "node_did": state.node_did,
+            "graphql": state.graphql,
+        });
+        append_status_contracts(&state, &mut body).await;
+        axum::Json(body).into_response()
+    };
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
+async fn append_status_contracts(state: &RuntimeHttpState, body: &mut Value) {
+    if let Some(map) = body.as_object_mut() {
         let enrollment = match state.enrollment_offer_issuer.read().await.clone() {
             Some(issuer) => match issuer.mint().await {
                 Ok(offer) => crate::http::enrollment::EnrollmentStatus::Available {
@@ -681,10 +730,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             gents_protocol::serve_lifecycle::STATUS_LIFECYCLE_FIELD.to_string(),
             json!(state.serve_lifecycle.current()),
         );
-        crate::commands::p2p::flatten_p2p_fields(map, &p2p);
     }
-
-    (StatusCode::OK, axum::Json(body)).into_response()
 }
 
 fn replicated_schema_status(

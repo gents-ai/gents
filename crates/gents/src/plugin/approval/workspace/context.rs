@@ -53,11 +53,7 @@ pub(crate) fn for_request(
     let (Some(home), Some(requester), Some(workspace)) = (home, requester_did, workspace) else {
         return Ok(None);
     };
-    let home = match home.canonicalize() {
-        Ok(home) => home,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).context("resolving the approval home"),
-    };
+    let home = home.canonicalize().context("resolving the approval home")?;
     Ok(Some(Context {
         home,
         workspace: WorkspaceKey::canonical(node_did, requester, agent_id, workspace)?,
@@ -159,7 +155,7 @@ where
     scope(context, future)
 }
 
-pub(super) fn current_home() -> Option<PathBuf> {
+pub(crate) fn current_home() -> Option<PathBuf> {
     CURRENT
         .try_with(|context| context.as_ref().map(|context| context.home.clone()))
         .ok()
@@ -254,8 +250,8 @@ mod tests {
             Some("requester"),
             "agent",
             Some(first.path()),
-        )?
-        .is_none());
+        )
+        .is_err());
         Ok(())
     }
 

@@ -73,15 +73,11 @@ impl NetworkSettings {
         Ok(true)
     }
 
-    /// The HTTP surface authenticates callers by DID-signed bearer under node
-    /// access control, but `/status`, `/version`, `/healthz` and `/metrics`
-    /// answer anyone who can connect. Like the Codex shim, a persisted bind
-    /// names loopback or one interface rather than every interface.
+    /// The public identity/enrollment surface also binds one interface rather
+    /// than every interface; operator views require the owning DID bearer.
     pub(crate) fn validate(&self) -> Result<()> {
-        if let Some(addr) = self.http_addr.filter(IpAddr::is_unspecified) {
-            bail!(
-                "refusing to bind the service HTTP listener on unspecified address {addr}; bind loopback or a specific interface, such as this host's tailnet address, instead"
-            );
+        if let Some(addr) = self.http_addr {
+            validate_http_bind(addr)?;
         }
         if self.http_port == Some(0) {
             bail!("HTTP port 0 is not supported; choose an explicit non-zero port");
@@ -160,13 +156,17 @@ pub(crate) fn install_service<R>(
     manager: &NativeServiceManager<R>,
     home: &Path,
     network: &ServiceNetworkArgs,
+    environment: Option<&std::collections::BTreeMap<String, String>>,
 ) -> Result<NetworkSettings>
 where
     R: CommandRunner,
 {
     let settings = NetworkSettings::read(home)?.apply(network);
     settings.validate()?;
-    manager.install()?;
+    match environment {
+        Some(environment) => manager.install_with_environment(environment)?,
+        None => manager.install()?,
+    }
     if settings.persist(home)? && manager.status()?.running {
         tracing::warn!(
             home = %home.display(),
@@ -175,6 +175,14 @@ where
         );
     }
     Ok(settings)
+}
+
+/// Persisted settings and explicit server flags have the same listener boundary.
+pub(crate) fn validate_http_bind(addr: IpAddr) -> Result<()> {
+    if addr.is_unspecified() {
+        bail!("refusing to bind the service HTTP listener on unspecified address {addr}; bind loopback or a specific interface, such as this host's tailnet address, instead");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -250,7 +258,7 @@ mod tests {
             .command
         {
             Command::Service { command } => match command.into_parts().2 {
-                ServiceAction::Install { network } => network,
+                ServiceAction::Install { network, .. } => network,
                 _ => panic!("expected install"),
             },
             _ => panic!("expected service"),
@@ -407,7 +415,7 @@ mod tests {
             platform,
             StoppedSupervisor::default(),
         );
-        install_service(&manager, &config.home, &install_network(argv)).unwrap();
+        install_service(&manager, &config.home, &install_network(argv), None).unwrap();
         let definition = fs::read_to_string(config.definition_path(platform)).unwrap();
         (temp, config, definition)
     }
@@ -442,7 +450,7 @@ mod tests {
             install_on(NativeServicePlatform::Linux, TAILNET);
         let exec_start = |config: &NativeServiceConfig| {
             format!(
-                "ExecStart=\"{}\" \"server\" \"--home\" \"{}\"\n",
+                "ExecStart=\"/usr/bin/env\" -- \"GENTS_SYSTEM_LOG=1\" \"{}\" \"server\" \"--home\" \"{}\"\n",
                 config.executable.display(),
                 config.home.display()
             )
@@ -473,6 +481,7 @@ mod tests {
             &manager,
             &config.home,
             &install_network(&["--http-addr", "0.0.0.0"]),
+            None,
         )
         .unwrap_err();
         assert!(error.to_string().contains("unspecified address"));
@@ -481,5 +490,30 @@ mod tests {
             .exists());
         assert!(!network_settings_path(&config.home).exists());
         assert!(runner.calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn install_accepts_an_explicit_environment_file() {
+        let cli = Cli::try_parse_from([
+            "gents",
+            "service",
+            "install",
+            "--environment-file",
+            "operator.json",
+        ])
+        .unwrap();
+        let Command::Service { command } = cli.command else {
+            panic!("service command");
+        };
+        let ServiceAction::Install {
+            environment_file, ..
+        } = command.into_parts().2
+        else {
+            panic!("service install");
+        };
+        assert_eq!(
+            environment_file.as_deref(),
+            Some(Path::new("operator.json"))
+        );
     }
 }

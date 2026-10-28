@@ -98,7 +98,9 @@ test.describe("kit shell", () => {
     await gotoHarness(page);
     await page.getByRole("link", { name: /configuration/i }).focus();
     await page.keyboard.press("Tab");
-    await expect(page.getByRole("link", { name: /Configure/ })).toBeVisible();
+    await expect(
+      page.locator('[aria-hidden="false"] [data-testid="working-node"]'),
+    ).toBeVisible();
   });
   test("rail pointer focus does not cover a link before mouseup", async ({ page }) => {
     test.skip(test.info().project.name === "chromium-narrow", "No desktop rail");
@@ -359,7 +361,8 @@ test.describe("kit shell", () => {
       .getByRole("link", { name: /introduction-and-greetings/ })
       .click();
     const transcript = page.getByTestId("transcript-panel");
-    const removed = transcript.locator("[data-diff=removed]");
+    const line = (type: string) =>
+      transcript.locator(`diffs-container [data-line][data-line-type=${type}]`);
     const fileEdit = transcript
       .locator("[data-slot=collapsible]")
       .filter({ hasText: "src/parser.rs" });
@@ -368,13 +371,13 @@ test.describe("kit shell", () => {
     });
     await group.locator(":scope > button[aria-expanded=false]").click();
     await fileEdit.getByRole("button", { name: "Show detail" }).click();
-    await expect(removed).toHaveText(/fn parse\(\) -> Ast \{ todo!\(\) \}/);
-    await expect(transcript.locator("[data-diff=added]")).toHaveText(
+    await expect(line("change-deletion")).toHaveText(
+      /fn parse\(\) -> Ast \{ todo!\(\) \}/,
+    );
+    await expect(line("change-addition")).toHaveText(
       /fn parse\(\) -> Ast \{ Ast::default\(\) \}/,
     );
-    await expect(transcript.locator("[data-diff=context]")).toHaveText(
-      /impl Parser \{/,
-    );
+    await expect(line("context")).toHaveText([/impl Parser \{/, /\}/]);
   });
 
   test("condensed session agent details are keyboard accessible", async ({ page }) => {

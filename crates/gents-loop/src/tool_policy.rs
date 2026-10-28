@@ -54,6 +54,10 @@ impl CommandExecutionMode {
             _ => Self::ReadOnly,
         }
     }
+
+    pub fn protects_credentials(self) -> bool {
+        matches!(self, Self::WorkspaceWrite | Self::ArtifactWrite)
+    }
 }
 
 /// Request `workspace_authority`. ReadWrite meets command mode to WorkspaceWrite,
@@ -165,6 +169,17 @@ impl CommandNetworkMode {
 
     pub fn allows_network(self) -> bool {
         !matches!(self, Self::Disabled)
+    }
+
+    /// Bounded commands inherit an offline sandbox, not the host network.
+    pub fn for_execution(self, mode: CommandExecutionMode) -> Self {
+        match (mode, self) {
+            (
+                CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite,
+                Self::Inherit,
+            ) => Self::Disabled,
+            (_, network) => network,
+        }
     }
 
     pub fn meet(self, other: Self) -> Self {

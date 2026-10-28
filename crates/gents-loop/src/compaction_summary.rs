@@ -1,9 +1,11 @@
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::history::floor_char_boundary;
 
 const ERROR_DIAGNOSTIC_MAX_BYTES: usize = 256;
+#[path = "compaction_checkpoint_json.rs"]
+mod checkpoint_json;
 
 pub fn bounded_error_diagnostic(raw: &str) -> String {
     if raw.len() <= ERROR_DIAGNOSTIC_MAX_BYTES {
@@ -29,7 +31,7 @@ from certainty. Put mutable, ambiguous, or correctness-critical facts in uncerta
 successor can re-check them rather than guess. Re-verification can be useful; avoid repeating \
 completed or expensive work without a concrete reason. Never claim that prior turns were absent \
 when they are present. \
-Your only action is to return a response matching the supplied structured-output schema. \
+Return the continuation checkpoint as a JSON object. \
 Keep each list under roughly eight short items. \
 Do not enumerate file paths or create file inventories; file activity is recorded separately. \
 Mention a specific path only when it is essential to the current action, an error, or a decision. \
@@ -41,22 +43,24 @@ pub fn compaction_request_prompt() -> &'static str {
     "Produce the required structured continuation checkpoint now."
 }
 
-pub fn compaction_json_fallback_prompt() -> &'static str {
-    "Guided structured decoding was unavailable. Return exactly one JSON object and no Markdown. \
-Use these keys: goal (string), constraints_and_preferences, completed_work, in_progress, \
-blockers, current_work, key_decisions, errors_and_fixes, verification, uncertainties, \
-next_actions, and critical_context (arrays of strings). Include every key. Preserve unfinished \
-work in next_actions in execution order; the first item must be the immediate continuation."
+pub fn compaction_json_fallback_prompt() -> String {
+    format!(
+        "Guided structured decoding was unavailable. Return exactly one JSON object and no Markdown. \
+Follow this JSON schema and include every property: {}\n\
+The goal is a string. Every other property is an array of strings, including current_work and \
+next_actions; use [] when there are no items. Preserve unfinished work in next_actions in \
+execution order; the first item must be the immediate continuation.",
+        schemars::schema_for!(ContinuationCheckpoint).as_value(),
+    )
 }
 
 pub fn parse_fallback_checkpoint(raw: &str) -> Result<ContinuationCheckpoint, String> {
-    let checkpoint: ContinuationCheckpoint = serde_json::from_str(strip_markdown_fence(raw))
-        .map_err(|error| {
-            format!(
-                "strict JSON validation failed: {error}; raw_output_preview={}",
-                bounded_raw_output_preview(raw)
-            )
-        })?;
+    let checkpoint = checkpoint_json::decode(strip_markdown_fence(raw)).map_err(|error| {
+        format!(
+            "strict JSON validation failed: {error}; raw_output_preview={}",
+            bounded_raw_output_preview(raw)
+        )
+    })?;
     if checkpoint.goal.trim().is_empty() {
         return Err(format!(
             "checkpoint goal is empty; raw_output_preview={}",
@@ -249,7 +253,7 @@ pub fn dedupe_paths(paths: &mut Vec<String>) {
     paths.dedup();
 }
 
-#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[derive(Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ContinuationCheckpoint {
     /// The current user outcome, not a chronology of the conversation.
@@ -288,3 +292,7 @@ pub struct ContinuationCheckpoint {
     #[serde(default)]
     pub critical_context: Vec<String>,
 }
+
+#[cfg(test)]
+#[path = "compaction_summary_tests.rs"]
+mod tests;

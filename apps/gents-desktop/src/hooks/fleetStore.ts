@@ -42,7 +42,7 @@ export const firstNode = (fleet: FleetState) => {
 };
 
 export const nodeOrFirst = (fleet: FleetState, nodeDid: string | null | undefined) =>
-  nodeOf(fleet, nodeDid) ?? firstNode(fleet);
+  nodeDid ? nodeOf(fleet, nodeDid) : firstNode(fleet);
 
 export function listedSession(
   fleet: FleetState,

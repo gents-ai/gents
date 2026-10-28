@@ -263,28 +263,42 @@ async fn automatic_review_reuses_remembered_invocations_until_revocation() {
                     1024,
                 )
             };
+            let (operator, observation) =
+                crate::plugin::approval::testing::Operator::answer_with_observation(
+                &home,
+                Answer::AlwaysInvocation,
+            )
+            .await
+            .unwrap();
             let mut first = Box::pin(run());
-            assert!(futures::poll!(first.as_mut()).is_pending());
-            let questions = pending(&home).unwrap();
-            assert_eq!(questions.len(), 1);
-            assert!(questions[0].allows_answer(Answer::AlwaysInvocation));
-            decide(&home, &questions[0].id, Answer::AlwaysInvocation).unwrap();
+            let prompt = tokio::select! {
+                result = first.as_mut() => panic!("command settled before approval: {result:?}"),
+                observed = operator => observed.unwrap(),
+            };
+            assert!(!observation.id().unwrap().is_empty());
+            assert!(!prompt.is_empty());
             assert!(first.await.unwrap().contains("remembered-invocation"));
             assert!(run().await.unwrap().contains("remembered-invocation"));
             assert!(pending_requests(&home).unwrap().is_empty());
             let current = workspace::get(&home, &key).unwrap().unwrap();
             workspace::revoke_commands(&home, &key, current.selection.revision).unwrap();
+            let operator = crate::plugin::approval::testing::Operator::answer(&home, Answer::Once)
+                .await
+                .unwrap();
             let mut again = Box::pin(run());
-            assert!(futures::poll!(again.as_mut()).is_pending());
-            let questions = pending(&home).unwrap();
-            assert_eq!(questions.len(), 1);
-            decide(&home, &questions[0].id, Answer::Once).unwrap();
+            let _observed = tokio::select! {
+                result = again.as_mut() => panic!("command settled before approval: {result:?}"),
+                observed = operator => observed.unwrap(),
+            };
             assert!(again.await.unwrap().contains("remembered-invocation"));
+            let operator = crate::plugin::approval::testing::Operator::answer(&home, Answer::Deny)
+                .await
+                .unwrap();
             let mut once_more = Box::pin(run());
-            assert!(futures::poll!(once_more.as_mut()).is_pending());
-            let questions = pending(&home).unwrap();
-            assert_eq!(questions.len(), 1);
-            decide(&home, &questions[0].id, Answer::Deny).unwrap();
+            let _observed = tokio::select! {
+                result = once_more.as_mut() => panic!("command settled before approval: {result:?}"),
+                observed = operator => observed.unwrap(),
+            };
             assert!(once_more.await.is_err());
         }),
     )
@@ -337,12 +351,20 @@ async fn one_time_workspace_approval_creates_a_profile_only_inside_its_write_roo
                     4096,
                 )
             };
+            let (operator, observation) =
+                crate::plugin::approval::testing::Operator::answer_with_observation(
+                    &home,
+                    Answer::Once,
+                )
+                .await
+                .unwrap();
             let mut first = Box::pin(run());
-            assert!(futures::poll!(first.as_mut()).is_pending());
-            let questions = pending(&home).unwrap();
-            assert_eq!(questions.len(), 1);
-            let original = questions[0].id.clone();
-            decide(&home, &original, Answer::Once).unwrap();
+            let prompt = tokio::select! {
+                result = first.as_mut() => panic!("command settled before approval: {result:?}"),
+                observed = operator => observed.unwrap(),
+            };
+            assert!(!prompt.is_empty());
+            let original = observation.id().unwrap();
             let result = first.await.unwrap();
             let temporary = project.join(".gents-tmp");
             let profiles: Vec<_> = std::fs::read_dir(&temporary)
@@ -360,12 +382,22 @@ async fn one_time_workspace_approval_creates_a_profile_only_inside_its_write_roo
                 "{result}"
             );
             assert!(pending_requests(&home).unwrap().is_empty());
+            let (operator, next_observation) =
+                crate::plugin::approval::testing::Operator::answer_with_observation(
+                    &home,
+                    Answer::Deny,
+                )
+                .await
+                .unwrap();
             let mut again = Box::pin(run());
-            assert!(futures::poll!(again.as_mut()).is_pending());
-            let questions = pending(&home).unwrap();
-            assert_eq!(questions.len(), 1);
-            assert_ne!(questions[0].id, original);
-            decide(&home, &questions[0].id, Answer::Deny).unwrap();
+            let observed = tokio::select! {
+                result = again.as_mut() => panic!("command settled before approval: {result:?}"),
+                observed = operator => observed.unwrap(),
+            };
+            assert!(!observed.is_empty());
+            // A one-time answer is deliberately not remembered; a later
+            // invocation must publish a distinct approval identity.
+            assert_ne!(next_observation.id().unwrap(), original);
             assert!(again.await.is_err());
             assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 1);
             assert!(pending_requests(&home).unwrap().is_empty());

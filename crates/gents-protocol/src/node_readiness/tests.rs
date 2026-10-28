@@ -209,12 +209,13 @@ fn agent_unavailable_rejections_are_exactly_routing_messages() {
         Reason::BackendDisabled => 3,
         Reason::BackendTemporarilyUnavailable => 4,
         Reason::CredentialsRequired => 5,
-        Reason::InferenceProfileInvalid => 6,
-        Reason::ToolConfigurationInvalid => 7,
-        Reason::ToolSurfaceUnavailable => 8,
-        Reason::ExecutorStartFailed => 9,
+        Reason::SubscriptionNotEntitled => 6,
+        Reason::InferenceProfileInvalid => 7,
+        Reason::ToolConfigurationInvalid => 8,
+        Reason::ToolSurfaceUnavailable => 9,
+        Reason::ExecutorStartFailed => 10,
     };
-    assert_eq!(Reason::ALL.map(ordinal), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    assert_eq!(Reason::ALL.map(ordinal), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     for reason in Reason::ALL {
         assert!(is_behavior_unavailable_rejection(reason.public_message()));
     }

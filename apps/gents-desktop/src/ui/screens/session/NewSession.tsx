@@ -1,31 +1,16 @@
 import { cn } from "@gents/ui/lib/utils";
 import { AttachmentTray, useAttachmentDraft } from "./attachments";
-import { Fragment, useRef } from "react";
-import { ChevronDown } from "lucide-react";
-import { useShallow } from "zustand/react/shallow";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@gents/ui/components/dropdown-menu";
+import { useRef } from "react";
 import { Composer } from "@gents/ui/conversation";
 import { useApp, useView } from "@/app/AppContext";
 import {
-  useHomeDid,
   useMailboxCause,
-  useNodeCount,
   useSelectedNode,
   useSelectedNodeDid,
 } from "@/hooks/useClient";
 import { href } from "@/lib/router";
 import { placeholderFor } from "@/lib/send-status";
-import { isWorkingNode } from "@/lib/nodes";
-import { fleetNodes } from "@/lib/scope";
 import { agentOf } from "@/lib/agents";
-import { useFleet } from "../../hooks/useFleet";
 import { NodeAvatar } from "../AgentAvatar";
 import { AgentPicker } from "../BehaviorPicker";
 import { agentName } from "../behavior";
@@ -45,8 +30,6 @@ import { GoalDeliveryFeedback } from "./GoalDeliveryFeedback";
 import { ChatDeliveryFeedback } from "./ChatDeliveryFeedback";
 
 export function NewSession() {
-  const { selectNode } = useApp().actions;
-  const nodeCount = useNodeCount();
   const mailboxCause = useMailboxCause();
   const selectedNodeDid = useSelectedNodeDid();
   const deployment = useSelectedNode();
@@ -64,16 +47,7 @@ export function NewSession() {
         <NodeAvatar name={nodeName} className="size-8" />
         <div>
           <h1 className="font-heading text-lg font-medium text-heading">
-            Start a new chat with{" "}
-            {nodeCount > 1 ? (
-              <NodeChoice
-                name={nodeName}
-                selectedNodeDid={selectedNodeDid}
-                onSelect={selectNode}
-              />
-            ) : (
-              nodeName
-            )}
+            Start a new chat with {nodeName}
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             {mailboxCause
@@ -227,59 +201,5 @@ function NewSessionComposer() {
         status={<SessionSubmissionStatus activityStatus={activityStatus} />}
       />
     </div>
-  );
-}
-
-function NodeChoice({
-  name,
-  selectedNodeDid,
-  onSelect,
-}: {
-  name: string;
-  selectedNodeDid: string | null;
-  onSelect: (nodeDid: string) => void;
-}) {
-  const nodes = useFleet(useShallow(fleetNodes));
-  const homeDid = useHomeDid();
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          <button
-            type="button"
-            title="Choose a node"
-            className="inline-flex items-center gap-1 underline decoration-border underline-offset-4 hover:decoration-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
-          />
-        }
-      >
-        {name}
-        <ChevronDown className="size-4 opacity-50" />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-56">
-        <DropdownMenuRadioGroup value={selectedNodeDid ?? ""} onValueChange={onSelect}>
-          {nodes.map((n, i, all) => (
-            <Fragment key={n.nodeDid}>
-              {i > 0 &&
-                isWorkingNode(all[i - 1]!, homeDid) &&
-                !isWorkingNode(n, homeDid) && (
-                  <DropdownMenuSeparator className="opacity-60" />
-                )}
-              <DropdownMenuRadioItem value={n.nodeDid} disabled={!n.dialSucceeded}>
-                <NodeAvatar
-                  name={n.node.displayName ?? n.label}
-                  className="size-5 text-[9px]"
-                />
-                <span className="min-w-0 flex-1 truncate">
-                  {n.node.displayName ?? n.label}
-                </span>
-                {isWorkingNode(n, homeDid) && (
-                  <span className="text-xs text-muted-foreground">local</span>
-                )}
-              </DropdownMenuRadioItem>
-            </Fragment>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }

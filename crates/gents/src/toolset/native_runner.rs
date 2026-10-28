@@ -425,6 +425,7 @@ mod tests {
         let context = ToolContext::new(source.clone(), false).unwrap();
         let runner = NativeFsRunner::new(&context);
         let scope = crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+            runtime_home: None,
             workspace_cwd: Some(source.clone()),
             workspace_root: Some(source.clone()),
             workspace_authority: Some(crate::toolset::WorkspaceAuthority::ReadOnly),

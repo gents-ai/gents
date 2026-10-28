@@ -7,6 +7,10 @@ import { isProviderId, PROVIDER_VISUALS } from "../setup/InferenceSetup";
 import type { ProviderId } from "../setup/inferenceSetupForm";
 import { toast } from "sonner";
 import type { InferenceBackendView } from "@source-inc/gents-desktop-client";
+import {
+  projectAgentOperationalStatus,
+  selectedNodeReadinessDecision,
+} from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import { ListDetail, type ListRow } from "./ListDetail";
 import { RowMenu } from "./RowMenu";
@@ -77,6 +81,13 @@ export function InferencePanel({
     providerUsage.usage.find((u) => u.backendIds.includes(backendId));
   const catalog = useSetupCatalog();
   const providers = catalog.providers;
+  const readiness = selectedNodeReadinessDecision(deployment, null);
+  const accountRecovery =
+    readiness.kind === "unavailable" &&
+    (readiness.reason === "credentials_required" ||
+      readiness.reason === "subscription_not_entitled")
+      ? projectAgentOperationalStatus(readiness, false)
+      : null;
   const adding = addingFrom(item);
   const setAdding = (provider: ProviderId) =>
     navigate({ ...base, item: addItem(provider) });
@@ -127,6 +138,20 @@ export function InferencePanel({
   };
   return (
     <>
+      {accountRecovery && (
+        <div
+          role="status"
+          data-testid="inference-account-recovery"
+          className="mb-3 rounded-xl border border-border/60 bg-raised px-4 py-3"
+        >
+          <p className="text-sm font-medium">{accountRecovery.label}</p>
+          <p className="text-xs text-muted-foreground">
+            {accountRecovery.reason === "credentials_required"
+              ? "Open the selected agent’s provider below and reconnect, or choose another configured account."
+              : accountRecovery.detail}
+          </p>
+        </div>
+      )}
       {catalog.error && !item && (
         <div
           role="alert"

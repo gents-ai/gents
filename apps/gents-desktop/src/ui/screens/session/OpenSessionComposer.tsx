@@ -35,6 +35,7 @@ import { useComposerSend } from "./useComposerSend";
 import { useFollowUp } from "@/preferences";
 import { GoalDeliveryFeedback } from "./GoalDeliveryFeedback";
 import { ChatDeliveryFeedback } from "./ChatDeliveryFeedback";
+import { ActiveNodeLabel } from "@/app/ActiveNodeLabel";
 
 export function OpenSessionComposer({
   roomRef,
@@ -330,7 +331,12 @@ export function OpenSessionComposer({
         </p>
       )}
       <ComposerFooter
-        folder={<SelectedChatFolder />}
+        folder={
+          <>
+            <ActiveNodeLabel composer />
+            <SelectedChatFolder />
+          </>
+        }
         status={
           <SessionSubmissionStatus
             activityStatus={activityStatus}

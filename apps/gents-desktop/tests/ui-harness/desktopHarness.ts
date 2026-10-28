@@ -1,6 +1,7 @@
 import type {
   ChatSendRequest,
   ChatSendResult,
+  FileImage,
   RequestAttachment,
 } from "@source-inc/gents-desktop-client";
 import type { BackendHealth } from "@source-inc/gents-desktop-client";
@@ -91,6 +92,37 @@ function harnessRequestOutcome(
   };
 }
 
+/* a conversation that runs from yesterday into today */
+function dayItems(): RenderedTimelineItem[] {
+  const at = (daysAgo: number, hour: number) => {
+    const date = new Date();
+    date.setDate(date.getDate() - daysAgo);
+    date.setHours(hour, 15, 0, 0);
+    return date.toISOString();
+  };
+  const user = (sequence: number, content: string, timestamp: string) => ({
+    kind: "userMessage" as const,
+    itemKey: `day-user-${sequence}`,
+    requestId: `day-request-${sequence}`,
+    ownsTurn: true,
+    sequence,
+    content,
+    timestamp,
+    reconstruction: HARNESS_READY_RECONSTRUCTION,
+  });
+  return [
+    user(2, "Can you look at why the parser drops trailing comments?", at(1, 16)),
+    harnessAssistantItem({
+      itemKey: "day-assistant-3",
+      sequence: 3,
+      content: "It stops at the last token, so a comment after it is never read.",
+      reasoning: null,
+      timestamp: at(1, 16),
+    }),
+    user(4, "Good morning. Let's fix it and add a test.", at(0, 9)),
+  ];
+}
+
 function harnessAssistantItem(
   item: Omit<
     Extract<RenderedTimelineItem, { kind: "assistantMessage" }>,
@@ -106,6 +138,7 @@ function harnessAssistantItem(
 
 export type DesktopUiHarnessScenario =
   | "default"
+  | "active-nodes"
   | "empty-fleet"
   | "loading"
   | "bridge-unavailable"
@@ -120,7 +153,9 @@ export type DesktopUiHarnessScenario =
   | "mobile-performance"
   | "session-hydration"
   | "sync-offline"
-  | "sync-failed";
+  | "storage-recovery"
+  | "sync-failed"
+  | "days";
 
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
@@ -233,6 +268,40 @@ function harnessSequenceOf(item: RenderedTimelineItem): number | null {
         item.kind === "automatedInput"
       ? (item.sequence ?? null)
       : null;
+}
+
+const HARNESS_EDIT_CALL = "call-intro-edit";
+const PARSER_BEFORE =
+  "pub struct Parser;\n\nimpl Parser {\n    fn parse() -> Ast { todo!() }\n}\n";
+const HARNESS_LEXER_CALL = "call-intro-edit-lexer";
+const LEXER_BEFORE = "pub fn tokens(source: &str) -> Vec<Token> {\n    Vec::new()\n}\n";
+const LEXER_AFTER =
+  "pub fn tokens(source: &str) -> Vec<Token> {\n    source.split_whitespace().map(Token::from).collect()\n}\n";
+
+const HARNESS_FILE_CHANGES_UNREACHABLE = "harness.fileChangesUnreachable";
+
+function harnessFileChangesUnreachable() {
+  try {
+    return localStorage.getItem(HARNESS_FILE_CHANGES_UNREACHABLE) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** A file version as core records it: base64 bytes and their SHA-256. */
+async function recordedImage(text: string): Promise<FileImage> {
+  const bytes = new TextEncoder().encode(text);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return {
+    kind: "file",
+    content_hash: `sha256:${[...digest].map((b) => b.toString(16).padStart(2, "0")).join("")}`,
+    data: btoa(String.fromCharCode(...bytes)),
+    permissions: { mode: 0o644 } as unknown as Extract<
+      FileImage,
+      { kind: "file" }
+    >["permissions"],
+    links: 1,
+  };
 }
 
 export function createDesktopUiHarness(
@@ -390,6 +459,17 @@ export function createDesktopUiHarness(
     runtimeBooting: false,
     error: null,
   };
+  if (scenario === "storage-recovery") {
+    managedServer = {
+      ...managedServer,
+      state: "running",
+      nodeName: deployment.label,
+      nodeDid: NODE_DID,
+      effectiveToolCeiling: "readonly",
+      effectiveToolRoot: "/tmp/gents-bombadil/workspace",
+      pairingReady: true,
+    };
+  }
   let p2pStatus: "healthy" | "degraded" | "wedged" =
     scenario === "sync-offline" ? "wedged" : "healthy";
   let syncHealth: SyncHealthView = initialSyncHealth(scenario);
@@ -485,6 +565,7 @@ export function createDesktopUiHarness(
             },
           ]
         : []),
+      ...(scenario === "days" ? dayItems() : []),
       ...(scenario === "coding"
         ? [
             {
@@ -496,22 +577,56 @@ export function createDesktopUiHarness(
                   itemKey: "intro-edit-file",
                   toolName: "edit_file",
                   statusKind: "success",
+                  requestId: "request-intro",
+                  toolCallDocId: HARNESS_EDIT_CALL,
                   reconstruction: HARNESS_READY_RECONSTRUCTION,
                   presentation: {
                     kind: "fileEdit" as const,
                     operation: "edit_file",
                     path: "src/parser.rs",
+                    applied: true,
                     created: false,
                     replacementsApplied: 1,
                     diff: [
-                      { kind: "context" as const, text: "impl Parser {" },
+                      {
+                        kind: "context" as const,
+                        text: "impl Parser {",
+                        lineNumber: 3,
+                      },
                       {
                         kind: "removed" as const,
-                        text: "fn parse() -> Ast { todo!() }",
+                        text: "    fn parse() -> Ast { todo!() }",
+                        lineNumber: 4,
                       },
                       {
                         kind: "added" as const,
-                        text: "fn parse() -> Ast { Ast::default() }",
+                        text: "    fn parse() -> Ast { Ast::default() }",
+                        lineNumber: 4,
+                      },
+                      { kind: "context" as const, text: "}", lineNumber: 5 },
+                    ],
+                    fallbackOutput: null,
+                  },
+                },
+                {
+                  itemKey: "intro-edit-lexer",
+                  toolName: "edit_file",
+                  statusKind: "success",
+                  requestId: "request-intro",
+                  toolCallDocId: HARNESS_LEXER_CALL,
+                  reconstruction: HARNESS_READY_RECONSTRUCTION,
+                  presentation: {
+                    kind: "fileEdit" as const,
+                    operation: "edit_file",
+                    path: "src/lexer.rs",
+                    applied: true,
+                    created: false,
+                    replacementsApplied: 1,
+                    diff: [
+                      { kind: "removed" as const, text: "Vec::new()" },
+                      {
+                        kind: "added" as const,
+                        text: "source.split_whitespace().map(Token::from).collect()",
                       },
                     ],
                     fallbackOutput: null,
@@ -582,6 +697,13 @@ export function createDesktopUiHarness(
                 },
               ],
             },
+            harnessAssistantItem({
+              itemKey: "intro-code-reply",
+              sequence: 2,
+              content: "The parser now returns an empty tree instead of panicking.",
+              reasoning: null,
+              timestamp: "2026-06-03T14:06:00Z",
+            }),
           ]
         : []),
     ],
@@ -728,6 +850,50 @@ export function createDesktopUiHarness(
       chatSafe: p2pStatus === "healthy",
     };
     const deployments = !provisioned || removed ? [] : [visibleDeployment];
+    if (scenario === "active-nodes" && deployments.length) {
+      const remoteDid = "did:key:harness-remote";
+      deployments.push({
+        ...visibleDeployment,
+        nodeDid: remoteDid,
+        peerId: "peer-harness-remote",
+        source: "enrollment",
+        label: "studio-1",
+        graphql: null,
+        node: {
+          ...visibleDeployment.node,
+          nodeDid: remoteDid,
+          displayName: "Amy",
+          defaultAgentId: "remote-agent",
+        },
+        nodeConfig: {
+          ...visibleDeployment.nodeConfig,
+          node_did: remoteDid,
+          display_name: "Amy",
+          default_agent_id: "remote-agent",
+        },
+        nodeReadiness: {
+          ...visibleDeployment.nodeReadiness,
+          agents: [{ state: "ready", agentId: "remote-agent" }],
+        },
+        agents: [
+          {
+            ...visibleDeployment.agents[0]!,
+            nodeDid: remoteDid,
+            agentId: "remote-agent",
+            displayName: "Remote worker",
+          },
+        ],
+        agentEnvironments: [
+          {
+            ...visibleDeployment.agentEnvironments[0]!,
+            agentId: "remote-agent",
+            displayName: "Remote worker",
+          },
+        ],
+        sessions: [],
+        mailboxItems: [],
+      });
+    }
     const health = {
       status: p2pStatus,
       connectedPeerCount: p2pStatus === "healthy" ? 1 : 0,
@@ -906,6 +1072,37 @@ export function createDesktopUiHarness(
     },
     requestAttachments: async (_node, _session, requestId) =>
       attachmentPayloads.get(requestId) ?? [],
+    async fetchToolFileChanges({ toolCallDocId }) {
+      /* a test can make the node holding the copies unreachable; it gives up
+         after a while, as the bridge does */
+      if (harnessFileChangesUnreachable()) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        throw new Error("Reconnect this runtime to load new file versions.");
+      }
+      const [path, before, after] =
+        toolCallDocId === HARNESS_EDIT_CALL
+          ? [
+              "src/parser.rs",
+              PARSER_BEFORE,
+              PARSER_BEFORE.replace("todo!()", "Ast::default()"),
+            ]
+          : toolCallDocId === HARNESS_LEXER_CALL
+            ? ["src/lexer.rs", LEXER_BEFORE, LEXER_AFTER]
+            : [];
+      if (!path) return null;
+      return {
+        version: 1,
+        tool_call_doc_id: toolCallDocId,
+        changes: [
+          {
+            root: "/work",
+            path,
+            before: await recordedImage(before!),
+            after: await recordedImage(after!),
+          },
+        ],
+      };
+    },
     async fetchSessionGoal() {
       return null;
     },
@@ -1067,7 +1264,7 @@ export function createDesktopUiHarness(
     async listUxDataSurfaces() {
       return { surfaces: [] };
     },
-    ...(scenario === "empty-fleet"
+    ...(scenario === "empty-fleet" || scenario === "storage-recovery"
       ? ({
           async managedServerStatus() {
             if (managedServer.state === "running" && !managedServer.pairingReady) {
@@ -3672,6 +3869,7 @@ function clone<T>(value: T): T {
 
 function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
   switch (value) {
+    case "active-nodes":
     case "empty-fleet":
     case "loading":
     case "bridge-unavailable":
@@ -3686,7 +3884,9 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "mobile-performance":
     case "session-hydration":
     case "sync-offline":
+    case "storage-recovery":
     case "sync-failed":
+    case "days":
       return value;
     default:
       return "default";

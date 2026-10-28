@@ -26,6 +26,7 @@ import {
 } from "./lib/shellPlatform";
 import { AppProvider, useApp } from "./ui/app/AppContext";
 import { AppShell } from "./ui/app/AppShell";
+import { NodeNavigationGuard } from "./ui/app/NodeNavigationGuard";
 import { usePlatformSetup, useWindowTitle } from "./ui/app/platform";
 import { useFirstRun } from "./ui/app/useFirstRun";
 import { WindowControls } from "./ui/app/WindowControls";
@@ -117,7 +118,7 @@ function AppReactions({ app, bridge }: { app: DesktopApp; bridge: DesktopBridge 
   useManagedServerTrayControls(app);
   /* the UX plugin host and its doors: reads the stores, re-renders nothing */
   useUxHost(app, bridge.listenToUpdates);
-  return null;
+  return <NodeNavigationGuard />;
 }
 
 function AppBody() {
@@ -215,7 +216,7 @@ function AppBody() {
 function RouteScreen({ route }: { route: Route }) {
   switch (route.name) {
     case "sessions":
-      return <SessionsScreen nodeDid={route.nodeDid} entry={route} />;
+      return <SessionsScreen entry={route} />;
     case "sessionsUnder":
       return <SessionsScreen under={route.session} entry={route} />;
     case "sessionsArchived":
@@ -223,7 +224,7 @@ function RouteScreen({ route }: { route: Route }) {
     case "session":
       return <SessionScreen />;
     case "mailbox":
-      return <MailboxScreen nodeDid={route.nodeDid} />;
+      return <MailboxScreen />;
     case "agents":
     case "nodes":
       return <AgentsScreen />;

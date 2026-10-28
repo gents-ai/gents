@@ -5,23 +5,14 @@ import { Input } from "@gents/ui/components/input";
 import { Kbd } from "@gents/ui/components/kbd";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
-import { href, navigate } from "@/lib/router";
-import { useEffect, useLayoutEffect, useState } from "react";
-import { useShallow } from "zustand/react/shallow";
-import {
-  defaultScope,
-  fleetNodes,
-  knownNodeIds,
-  mailboxInScope,
-  type Scope,
-} from "@/lib/scope";
-import { useHomeDid, useInScope } from "@/hooks/useClient";
+import { href } from "@/lib/router";
+import { useEffect, useState } from "react";
+import { defaultScope, mailboxInScope, type Scope } from "@/lib/scope";
+import { useInScope, useSelectedNodeDid } from "@/hooks/useClient";
 import { listViews, useListViews } from "@/app/listViews";
-import { NodeAxis } from "./NodeAxis";
 import { groupItems, KIND_ORDER, matches } from "./mailbox-triage";
 import { Axis, type Option } from "./SessionFilters";
 import { useApp } from "@/app/AppContext";
-import { useFleet } from "@/hooks/useFleet";
 import { Item, KEY, KIND, openable, openItem, Primary } from "./MailboxItem";
 
 const KINDS: Option<string>[] = KIND_ORDER.map((value) => ({
@@ -31,36 +22,27 @@ const KINDS: Option<string>[] = KIND_ORDER.map((value) => ({
   tint: KIND[value]!.tone,
 }));
 
-export function MailboxScreen({ nodeDid }: { nodeDid?: string }) {
-  const nodes = useFleet(useShallow(fleetNodes));
-  const homeDid = useHomeDid();
-  const { dismissMailboxItem, openMailboxItem } = useApp().actions;
-  const nodeIds = knownNodeIds(
-    useListViews((v) => v.mailboxNodes),
-    { nodes },
-  );
-  useLayoutEffect(() => {
-    if (nodeDid) listViews.setMailboxNodes([nodeDid]);
-  }, [nodeDid]);
-  const scope: Scope = {
-    nodes: nodeIds.length ? nodeIds : defaultScope("mailbox").nodes,
-    agents: [],
-  };
+export function MailboxScreen() {
+  const selectedNodeDid = useSelectedNodeDid();
+  const {
+    stores,
+    actions: {
+      dismissMailboxItem,
+      openMailboxItem,
+      captureComposeIntent,
+      acceptsComposeIntent,
+    },
+  } = useApp();
+  const scope: Scope = defaultScope("mailbox");
   const items = useInScope((ctx) => mailboxInScope(scope, ctx));
-  const nodeCounts = useFleet(
-    useShallow((s) =>
-      Object.fromEntries(
-        s.nodeKeys.map((key) => [
-          key,
-          (s.mailboxOf[key] ?? []).filter((m) => m.status === "open").length,
-        ]),
-      ),
-    ),
-  );
   const [now] = useState(() => Date.now());
   const [query, setQuery] = useState<string | null>(null);
   const kinds = useListViews((v) => v.mailboxKinds);
-  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
+  const [picked, setPicked] = useState<{
+    nodeDid: string | null;
+    ids: ReadonlySet<string>;
+  }>(() => ({ nodeDid: selectedNodeDid, ids: new Set() }));
+  const selected = picked.nodeDid === selectedNodeDid ? picked.ids : new Set<string>();
   const [dismissing, setDismissing] = useState(false);
 
   const searched = items.filter((m) => matches(m, query ?? ""));
@@ -77,24 +59,31 @@ export function MailboxScreen({ nodeDid }: { nodeDid?: string }) {
       : null;
 
   const select = (ids: string[], next: boolean) =>
-    setSelected((current) => {
-      const out = new Set(current);
+    setPicked((current) => {
+      const out = new Set(current.nodeDid === selectedNodeDid ? current.ids : []);
       for (const id of ids)
         if (next) out.add(id);
         else out.delete(id);
-      return out;
+      return { nodeDid: selectedNodeDid, ids: out };
     });
   const dismissChosen = async () => {
     setDismissing(true);
+    const intent = captureComposeIntent();
     try {
       /* The contract dismisses one item per call. If one fails, keep the rest
          selected rather than losing them. */
       for (const id of chosen) {
+        if (
+          !acceptsComposeIntent(intent) ||
+          stores.selection.getState().nodeDid !== selectedNodeDid
+        )
+          break;
         await dismissMailboxItem(id);
-        setSelected((current) => {
-          const out = new Set(current);
+        setPicked((current) => {
+          if (current.nodeDid !== selectedNodeDid) return current;
+          const out = new Set(current.ids);
           out.delete(id);
-          return out;
+          return { ...current, ids: out };
         });
       }
     } catch {
@@ -128,7 +117,7 @@ export function MailboxScreen({ nodeDid }: { nodeDid?: string }) {
   return (
     <ScrollArea className="h-full" data-testid="mailbox-screen">
       <div className="mx-auto max-w-page px-6 py-6">
-        {(items.length > 0 || nodeIds.length > 0) && (
+        {(items.length > 0 || selectedNodeDid !== null) && (
           <>
             <div className="flex h-10 items-center gap-2">
               <h1 className="font-heading text-lg font-medium text-heading">
@@ -138,16 +127,6 @@ export function MailboxScreen({ nodeDid }: { nodeDid?: string }) {
                 aria-label="Mailbox filters"
                 className="ml-auto flex min-w-0 items-center gap-0.5 text-muted-foreground"
               >
-                <NodeAxis
-                  nodes={nodes}
-                  homeDid={homeDid}
-                  counts={nodeCounts}
-                  value={nodeIds}
-                  onChange={(next) => {
-                    listViews.setMailboxNodes(next);
-                    if (nodeDid) navigate({ name: "mailbox" });
-                  }}
-                />
                 <Axis
                   label="Kind"
                   icon={ListFilter}
@@ -156,15 +135,13 @@ export function MailboxScreen({ nodeDid }: { nodeDid?: string }) {
                   value={kinds}
                   onChange={listViews.setMailboxKinds}
                 />
-                {(kinds.length > 0 || nodeIds.length > 0) && (
+                {kinds.length > 0 && (
                   <Button
                     variant="ghost"
                     size="icon-sm"
                     aria-label="Clear filters"
                     onClick={() => {
                       listViews.setMailboxKinds([]);
-                      listViews.setMailboxNodes([]);
-                      if (nodeDid) navigate({ name: "mailbox" });
                     }}
                   >
                     <X />
@@ -322,7 +299,9 @@ export function MailboxScreen({ nodeDid }: { nodeDid?: string }) {
                 <Button
                   size="sm"
                   variant="quiet"
-                  onClick={() => setSelected(new Set())}
+                  onClick={() =>
+                    setPicked({ nodeDid: selectedNodeDid, ids: new Set() })
+                  }
                 >
                   <X className="size-3" /> Clear
                 </Button>

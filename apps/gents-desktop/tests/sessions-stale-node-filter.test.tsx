@@ -1,7 +1,7 @@
-import { cleanup, fireEvent, screen } from "@testing-library/react";
+import { act, cleanup, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
-import { listViews } from "../src/ui/app/listViews";
+import { resetListViews } from "../src/ui/app/listViews";
 import { SessionsScreen } from "../src/ui/screens/SessionsScreen";
 import { node, renderIn, testApp } from "./app-fixture";
 
@@ -42,59 +42,51 @@ const app = (deployments: ReturnType<typeof nodeWith>[]) =>
       client: { deployments },
     },
   });
-const storedNodes = (dids: string[]) => listViews.setSessionNodes(dids);
 
 afterEach(() => {
   cleanup();
-  listViews.setSessionNodes(null);
+  resetListViews();
 });
 
-describe("a stored node pick", () => {
-  it("naming only a node that is gone shows every node's sessions", () => {
-    storedNodes(["did:key:previous-home"]);
-    renderIn(app([nodeWith("did:key:home", [session({})])]), <SessionsScreen />);
+describe("the active node's sessions", () => {
+  const deployments = () => [
+    nodeWith("did:key:home", [session({})]),
+    nodeWith("did:key:peer", [
+      session({
+        sessionId: "peer-session",
+        nodeDid: "did:key:peer",
+        title: "Remote work",
+      }),
+    ]),
+    nodeWith("did:key:quiet", []),
+  ];
+
+  it("switches the list with the window selection without a separate node filter", () => {
+    const client = app(deployments());
+    renderIn(client, <SessionsScreen />);
     expect(screen.getByText("Greeting")).toBeInTheDocument();
-    expect(screen.queryByText("No sessions yet")).toBeNull();
-  });
-
-  it("of every node is where the list starts, so it does not read as narrowed", () => {
-    storedNodes([]);
-    renderIn(
-      app([nodeWith("did:key:home", [session({})]), nodeWith("did:key:peer", [])]),
-      <SessionsScreen />,
-    );
-    expect(screen.getByText("Greeting")).toBeInTheDocument();
-    expect(screen.queryByTestId("sessions-narrowed")).toBeNull();
-  });
-
-  it("cleared, shows every node as All nodes, not each node picked", async () => {
-    storedNodes(["did:key:peer"]);
-    renderIn(
-      app([nodeWith("did:key:home", [session({})]), nodeWith("did:key:peer", [])]),
-      <SessionsScreen />,
-    );
-    expect(screen.getByRole("button", { name: "Node" })).not.toHaveTextContent(
-      "All nodes",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
-    expect(screen.getByRole("button", { name: "Node" })).toHaveTextContent("All nodes");
-    expect(screen.queryByTestId("sessions-narrowed")).toBeNull();
-  });
-
-  it("that hides every session says nothing matches, not that there are none", () => {
-    storedNodes(["did:key:peer"]);
-    renderIn(
-      app([nodeWith("did:key:home", [session({})]), nodeWith("did:key:peer", [])]),
-      <SessionsScreen />,
-    );
+    expect(screen.queryByText("Remote work")).toBeNull();
+    act(() => client.actions.selectNode("did:key:peer"));
     expect(screen.queryByText("Greeting")).toBeNull();
-    expect(screen.getByText("No sessions match.")).toBeInTheDocument();
-    expect(screen.queryByText("No sessions yet")).toBeNull();
+    expect(screen.getByText("Remote work")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Node" })).toBeNull();
+    expect(screen.queryByTestId("sessions-narrowed")).toBeNull();
   });
 
-  it("leaves a fresh client with no sessions anywhere saying there are none yet", () => {
-    storedNodes([]);
-    renderIn(app([nodeWith("did:key:home", [])]), <SessionsScreen />);
+  it("does not substitute local sessions when the active node is missing", () => {
+    const client = app(deployments());
+    client.actions.selectNode("did:key:missing");
+    renderIn(client, <SessionsScreen />);
+    expect(screen.queryByText("Greeting")).toBeNull();
+    expect(screen.queryByText("Remote work")).toBeNull();
+  });
+
+  it("shows an empty active node without leaking another node's sessions", () => {
+    const client = app(deployments());
+    client.actions.selectNode("did:key:quiet");
+    renderIn(client, <SessionsScreen />);
     expect(screen.getByText("No sessions yet")).toBeInTheDocument();
+    expect(screen.queryByText("Greeting")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Clear filters" })).toBeNull();
   });
 });

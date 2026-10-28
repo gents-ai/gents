@@ -232,6 +232,7 @@ pub(crate) struct LeanBackendHealthCase {
     pub(crate) next_state: String,
     pub(crate) next_count: usize,
     pub(crate) blocks_routing: bool,
+    pub(crate) readiness_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

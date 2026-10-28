@@ -18,6 +18,9 @@ pub use gents_loop::tool_policy::{
 };
 
 use gents_loop::live_output::COMMAND_OUTPUT_META_PREFIX as OUTPUT_META_PREFIX;
+#[cfg(target_os = "macos")]
+#[path = "command_credentials.rs"]
+mod command_credentials;
 #[path = "command_temp.rs"]
 mod command_temp;
 
@@ -170,7 +173,7 @@ impl CommandExecutionPolicy {
     }
 
     pub fn network_enforcement_disclosure(&self) -> &'static str {
-        if self.network_mode != CommandNetworkMode::Disabled {
+        if self.effective_network_mode() != CommandNetworkMode::Disabled {
             return "network is not disabled by this agent policy";
         }
         match self.mode {
@@ -184,6 +187,10 @@ impl CommandExecutionPolicy {
                 "validated_at_execution: known network commands are denied"
             }
         }
+    }
+
+    pub fn effective_network_mode(&self) -> CommandNetworkMode {
+        self.network_mode.for_execution(self.mode)
     }
 }
 
@@ -378,6 +385,7 @@ pub(crate) struct PreparedManagedCommand {
     pub(crate) environment: RapidHashMap<String, String>,
     pub(crate) sandbox: &'static str,
     pub(crate) operator_guard_home: Option<PathBuf>,
+    pub(crate) credential_snapshot: Option<Vec<PathBuf>>,
 }
 
 impl std::fmt::Debug for PreparedManagedCommand {
@@ -415,9 +423,7 @@ pub(crate) async fn prepare_managed_command(
     )?;
     let launch =
         prepare_command_launch(root, &admitted.to_string_lossy(), args, &spawn_policy).await?;
-    if let Some(protection) = &launch.protection {
-        protection.revalidate().map_err(command_guard_error)?;
-    }
+    launch.revalidate().await.map_err(command_guard_error)?;
     Ok(PreparedManagedCommand {
         program: PathBuf::from(launch.program),
         args: launch.args,
@@ -427,7 +433,33 @@ pub(crate) async fn prepare_managed_command(
             .protection
             .as_ref()
             .map(|guard| guard.home().to_owned()),
+        #[cfg(target_os = "macos")]
+        credential_snapshot: launch
+            .credentials
+            .as_ref()
+            .map(command_credentials::CredentialProtection::snapshot),
+        #[cfg(not(target_os = "macos"))]
+        credential_snapshot: None,
     })
+}
+
+pub(crate) async fn current_managed_command_credential_snapshot(
+    protects_credentials: bool,
+) -> std::result::Result<Option<Vec<PathBuf>>, String> {
+    if !protects_credentials {
+        return Ok(None);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        command_credentials::capture()
+            .await
+            .map(|protection| Some(protection.snapshot()))
+            .map_err(|error| format!("{error:#}"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(None)
+    }
 }
 
 #[expect(
@@ -465,9 +497,7 @@ pub(crate) async fn run_command(
     .map_err(|error| {
         ToolError::reported_failure(FailureClass::PolicyDenied, format!("{error:#}"))
     })?;
-    if let Some(protection) = &launch.protection {
-        protection.revalidate().map_err(command_guard_error)?;
-    }
+    launch.revalidate().await.map_err(command_guard_error)?;
     let bounds = tool_execution_bounds(timeout);
     let live_output = bounds.live_output.clone();
     let request_deadline = bounds.request_deadline_at;
@@ -561,7 +591,7 @@ pub(crate) async fn run_command(
         duration_ms,
         timeout_ms: millis(timeout),
         execution_mode: policy.mode,
-        network_mode: policy.network_mode,
+        network_mode: policy.effective_network_mode(),
         sandbox: launch.sandbox,
         stdout_capture_incomplete,
         stderr_capture_incomplete,
@@ -944,6 +974,21 @@ struct CommandLaunch {
     sandbox: &'static str,
     writable_root: Option<PathBuf>,
     protection: Option<crate::plugin::allowed::CommandProtection>,
+    #[cfg(target_os = "macos")]
+    credentials: Option<command_credentials::CredentialProtection>,
+}
+
+impl CommandLaunch {
+    async fn revalidate(&self) -> Result<()> {
+        if let Some(protection) = &self.protection {
+            protection.revalidate()?;
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(credentials) = &self.credentials {
+            credentials.revalidate().await?;
+        }
+        Ok(())
+    }
 }
 
 async fn prepare_command_launch(
@@ -1022,6 +1067,19 @@ async fn prepare_command_launch(
         }
         None => sandboxed_command_for_policy(writable_root, command, args, policy)?,
     };
+    #[cfg(target_os = "macos")]
+    let (argv, credentials) = if policy.mode.protects_credentials() {
+        let credentials = command_credentials::capture()
+            .await
+            .map_err(command_guard_error)?;
+        let mut argv = argv;
+        credentials
+            .protect_launch(&mut argv)
+            .map_err(command_guard_error)?;
+        (argv, Some(credentials))
+    } else {
+        (argv, None)
+    };
     Ok(CommandLaunch {
         program,
         args: argv,
@@ -1030,6 +1088,8 @@ async fn prepare_command_launch(
         writable_root: (policy.mode == CommandExecutionMode::WorkspaceWrite)
             .then(|| writable_root.to_owned()),
         protection,
+        #[cfg(target_os = "macos")]
+        credentials,
     })
 }
 
@@ -1096,7 +1156,7 @@ fn protected_command_for_policy(
         CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite
     );
     let mut profile = if bounded {
-        macos_workspace_write_policy(policy.network_mode)
+        macos_workspace_write_policy(policy.effective_network_mode())
     } else {
         "(version 1)\n(allow default)\n".to_owned()
     };
@@ -1172,7 +1232,7 @@ fn sandboxed_command_for_policy(
                 root,
                 command_name,
                 args,
-                policy.network_mode,
+                policy.effective_network_mode(),
                 sandbox,
                 policy.mode == CommandExecutionMode::ArtifactWrite,
             )
@@ -1818,6 +1878,30 @@ fn shell_quote(arg: &str) -> String {
 #[cfg(test)]
 mod network_enforcement_disclosure_tests {
     use super::*;
+
+    #[test]
+    fn generated_command_isolation_matches_native_policy() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().command_isolation_cases;
+        assert_eq!(cases.len(), 12);
+        for value in cases {
+            let mode: CommandExecutionMode = serde_json::from_value(value["mode"].clone()).unwrap();
+            let network: CommandNetworkMode =
+                serde_json::from_value(value["network"].clone()).unwrap();
+            let effective: CommandNetworkMode =
+                serde_json::from_value(value["effectiveNetwork"].clone()).unwrap();
+            let protects_credentials = value["protectsCredentials"].as_bool().unwrap();
+            let policy = CommandExecutionPolicy::write_capable()
+                .with_mode(mode)
+                .with_network_mode(network);
+            assert_eq!(policy.effective_network_mode(), effective, "{value}");
+            assert_eq!(mode.protects_credentials(), protects_credentials, "{value}");
+            if protects_credentials && effective == CommandNetworkMode::Disabled {
+                assert!(policy
+                    .network_enforcement_disclosure()
+                    .starts_with("required_at_execution:"));
+            }
+        }
+    }
 
     #[test]
     fn disclosure_tracks_the_execution_time_network_validator() {

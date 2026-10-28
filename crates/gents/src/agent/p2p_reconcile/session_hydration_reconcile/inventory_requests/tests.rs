@@ -71,7 +71,11 @@ async fn enrolled_inventory_retries_keep_preparation_and_refusal_after_revocatio
 
 async fn exercise_inventory_delivery(recovery: bool) -> Result<()> {
     let subscriber = tracing_subscriber::fmt()
-        .with_env_filter("gents::agent::p2p_reconcile::session_hydration_reconcile=debug")
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                "gents::agent::p2p_reconcile::session_hydration_reconcile=debug".into()
+            }),
+        )
         .without_time()
         .with_test_writer()
         .finish();
@@ -143,6 +147,7 @@ async fn exercise_inventory_delivery_inner(recovery: bool) -> Result<()> {
             "NetworkEnrollmentRequest",
             "NetworkEnrollmentDecision",
             "NetworkAuthorizationRevision",
+            "PeerPairingDesired",
             "PeerPairingApplied",
             "AgentSession",
         ],
@@ -686,6 +691,7 @@ async fn exercise_recovery(context: RecoveryContext<'_>) -> Result<()> {
             "NetworkEnrollmentRequest",
             "NetworkEnrollmentDecision",
             "NetworkAuthorizationRevision",
+            "PeerPairingDesired",
             "PeerPairingApplied",
         ],
     )?;

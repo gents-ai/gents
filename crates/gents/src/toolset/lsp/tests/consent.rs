@@ -54,6 +54,7 @@ impl Fixture {
         let lease = pool
             .get_or_start(
                 PoolKey {
+                    runtime_home: None,
                     session_id: "consent".into(),
                     agent_id: "agent".into(),
                     workspace_root: root.clone(),

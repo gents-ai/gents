@@ -528,7 +528,15 @@ fn projected_accounting(
         .context("provider document projection reduced the provider message estimate")?;
     let messages = documentless_messages;
     let tool_schemas = field_estimate(&body, &["tools", "tool_choice"])?;
-    let output_schema = field_estimate(&body, &["response_format", "text"])?;
+    let claude_schema = body
+        .get("output_config")
+        .and_then(|config| config.get("format"))
+        .map(estimate_json)
+        .transpose()?
+        .unwrap_or(0);
+    let output_schema = field_estimate(&body, &["response_format", "text"])?
+        .checked_add(claude_schema)
+        .context("provider output schema estimate overflow")?;
     let estimated_input_tokens = estimate_input_body(body)?;
     let classified = messages
         .checked_add(documents)

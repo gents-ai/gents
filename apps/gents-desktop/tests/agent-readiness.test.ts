@@ -62,6 +62,7 @@ describe("selectedNodeReadinessDecision", () => {
     "backend_disabled",
     "backend_temporarily_unavailable",
     "credentials_required",
+    "subscription_not_entitled",
     "inference_profile_invalid",
   ] satisfies AgentUnavailableReasonView[])(
     "offers inference configuration for %s",
@@ -93,6 +94,30 @@ describe("selectedNodeReadinessDecision", () => {
     ).toBeNull();
   });
 
+  it("offers account recovery without calling rejected sign-in a temporary outage", () => {
+    const signedOut = projectDeploymentOperationalState({
+      ...unavailable("credentials_required"),
+      source: "local-standard",
+    }).agent;
+    expect(signedOut.label).toBe("Sign in to continue");
+    expect(signedOut.detail).toContain("sign in or select another account");
+    expect(signedOut.action).toBe("configureInference");
+    const ineligible = projectDeploymentOperationalState({
+      ...unavailable("subscription_not_entitled"),
+      source: "local-standard",
+    }).agent;
+    expect(ineligible.label).toBe("Subscription access unavailable");
+    expect(ineligible.detail).toContain("configure an API key");
+    expect(ineligible.detail).toContain(
+      "signing in again will not change account eligibility",
+    );
+    expect(ineligible.action).toBe("configureInference");
+    expect(
+      projectDeploymentOperationalState(unavailable("backend_temporarily_unavailable"))
+        .agent.detail,
+    ).toContain("temporarily unavailable");
+  });
+
   it("uses runtime readiness as the sole agent authority", () => {
     const remote = deployment({ state: "ready", agentId: "default" });
     expect(remote.inferenceBackends).toEqual([]);
@@ -111,6 +136,7 @@ describe("selectedNodeReadinessDecision", () => {
     "backend_disabled",
     "backend_temporarily_unavailable",
     "credentials_required",
+    "subscription_not_entitled",
     "inference_profile_invalid",
     "tool_configuration_invalid",
     "tool_surface_unavailable",

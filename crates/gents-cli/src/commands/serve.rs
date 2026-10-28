@@ -614,6 +614,7 @@ async fn serve_foreground(
     let http_ip = args
         .http_addr
         .unwrap_or(crate::network_settings::DEFAULT_HTTP_ADDR);
+    crate::network_settings::validate_http_bind(http_ip)?;
     let http_port = args.http_port.unwrap_or(crate::DEFAULT_HTTP_PORT);
     if args.http_port.is_none() && !crate::home_state::is_default_home(&home_dir) {
         tracing::warn!(
@@ -760,11 +761,14 @@ async fn serve_foreground(
         replicated_schema.clone(),
         serve_lifecycle.clone(),
     )
-    .merge(embedded_http_probe_router(
-        &bind_probe_path,
-        bind_probe_token.clone(),
-    ))
-    .merge(crate::http::explorer::explorer_router());
+    .merge(
+        embedded_http_probe_router(&bind_probe_path, bind_probe_token.clone())
+            .merge(crate::http::explorer::explorer_router())
+            .layer(axum::middleware::from_fn_with_state(
+                crate::http::access::HttpAuthority::for_endpoint(&graphql_url),
+                crate::http::access::require_authority,
+            )),
+    );
     if let Some(node_identity_did) = server_identity.node_identity_did.as_deref() {
         anyhow::ensure!(
             gents::identity::can_mint_defradb_bearer(node_identity_did),

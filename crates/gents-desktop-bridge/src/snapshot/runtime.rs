@@ -557,6 +557,9 @@ impl From<AgentReadinessUnavailableReason> for AgentUnavailableReasonView {
                 Self::BackendTemporarilyUnavailable
             }
             AgentReadinessUnavailableReason::CredentialsRequired => Self::CredentialsRequired,
+            AgentReadinessUnavailableReason::SubscriptionNotEntitled => {
+                Self::SubscriptionNotEntitled
+            }
             AgentReadinessUnavailableReason::InferenceProfileInvalid => {
                 Self::InferenceProfileInvalid
             }
