@@ -1399,7 +1399,7 @@ mod tests {
     }
 
     #[test]
-    fn a_published_message_names_the_skills_its_request_selected() {
+    fn a_published_message_names_the_skills_its_request_selected_even_when_folded() {
         let request = |id: &str, skills: &[&str], second: u32| AgentRequestRow {
             purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
             doc_id: Some(format!("doc-{id}")),
@@ -1416,7 +1416,17 @@ mod tests {
             ..Default::default()
         };
         let mut rows = ClientStoreRows {
-            requests: vec![request("skilled", &["review"], 0), request("plain", &[], 1)],
+            requests: vec![
+                request("skilled", &["review"], 0),
+                AgentRequestRow {
+                    lifecycle_state: Some(RequestLifecycleState::Superseded),
+                    superseded_by_request: Some("skilled".into()),
+                    superseded_by_request_doc_id: Some("doc-skilled".into()),
+                    failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+                    ..request("steered", &["plan"], 1)
+                },
+                request("plain", &[], 2),
+            ],
             ..Default::default()
         };
         for (key, doc, sequence, role, text) in [
@@ -1428,16 +1438,23 @@ mod tests {
                 "fix it",
             ),
             (
-                "answer-skilled",
+                "authored:doc-skilled:folded:doc-steered",
                 "doc-skilled",
                 2,
+                MessageRole::User,
+                "and plan it",
+            ),
+            (
+                "answer-skilled",
+                "doc-skilled",
+                3,
                 MessageRole::Assistant,
                 "done",
             ),
             (
                 "authored:doc-plain:prompt",
                 "doc-plain",
-                3,
+                4,
                 MessageRole::User,
                 "thanks",
             ),
@@ -1454,7 +1471,7 @@ mod tests {
         }
         let store = ClientStore::from_rows(rows);
         let mut ownership = gents_desktop_core::client::RequestPromptOwnership::default();
-        for (doc, first_sequence) in [("doc-skilled", 1), ("doc-plain", 3)] {
+        for (doc, first_sequence) in [("doc-skilled", 1), ("doc-steered", 2), ("doc-plain", 4)] {
             ownership.by_request_doc_id.insert(
                 doc.into(),
                 gents_desktop_core::client::RequestPromptFact {
@@ -1498,6 +1515,10 @@ mod tests {
             sent,
             [
                 (Some("fix it".to_owned()), Some(vec!["review".to_owned()])),
+                (
+                    Some("and plan it".to_owned()),
+                    Some(vec!["plan".to_owned()])
+                ),
                 (Some("thanks".to_owned()), None),
             ]
         );
@@ -1923,14 +1944,9 @@ pub(super) fn project_transcript_rows(
                     .map(gents_protocol::request_input::RequestAttachment::from_message)
                     .map(|v| v.iter().map(|a| a.view()).collect())
                     .filter(|v: &Vec<_>| !v.is_empty()),
-                /* only the message a request's own author wrote carries the
-                skills that request selected */
-                selected_skill_ids: row
-                    .message
-                    .request_doc_id
-                    .as_deref()
-                    .filter(|doc_id| row.message.message_key == authored_prompt_message_key(doc_id))
-                    .and_then(|doc_id| requests_by_doc_id.get(doc_id))
+                /* the skills of the request that wrote this message: its own
+                prompt, or a message folded into another request's turn */
+                selected_skill_ids: input_request_for_message(row)
                     .and_then(|request| request.input.as_ref())
                     .map(|input| input.selected_skill_ids.clone())
                     .filter(|ids| !ids.is_empty()),
