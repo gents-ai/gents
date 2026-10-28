@@ -1,5 +1,12 @@
-import { lazy, memo, Suspense } from "react";
-import { ChevronRight, Copy, EllipsisVertical, FolderOpen } from "lucide-react";
+import { lazy, memo, Suspense, useState } from "react";
+import {
+  ChevronRight,
+  Copy,
+  EllipsisVertical,
+  FoldVertical,
+  FolderOpen,
+  UnfoldVertical,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -49,6 +56,10 @@ export const ChangedFileSection = memo(function ChangedFileSection({
   /** where the panel finds each file's section to scroll to and watch */
   sections: Map<string, HTMLElement>;
 }) {
+  const [whole, setWhole] = useState(false);
+  /* hiding draws the diff anew, so lines opened from its own separators
+     fold back too */
+  const [draws, setDraws] = useState(0);
   return (
     <section
       ref={(el) => {
@@ -79,12 +90,27 @@ export const ChangedFileSection = memo(function ChangedFileSection({
           </span>
           <Counts added={file.added} removed={file.removed} />
         </button>
+        {open && (
+          <Button
+            variant="quiet"
+            size="icon-sm"
+            aria-label={`${whole ? "Hide unchanged lines in" : "Show all lines of"} ${fileName(file.path)}`}
+            title={whole ? "Hide unchanged lines" : "Show all lines"}
+            className="shrink-0"
+            onClick={() => {
+              if (whole) setDraws((count) => count + 1);
+              setWhole(!whole);
+            }}
+          >
+            {whole ? <FoldVertical /> : <UnfoldVertical />}
+          </Button>
+        )}
         <FileMenu scope={scope} file={file} within={within} remote={remote} />
       </div>
       {open &&
         (near ? (
           <Suspense fallback={<Loading remote={remote} file={file} />}>
-            <RecordedDiffView scope={scope} file={file} />
+            <RecordedDiffView key={draws} scope={scope} file={file} whole={whole} />
           </Suspense>
         ) : (
           <Loading remote={remote} file={file} />

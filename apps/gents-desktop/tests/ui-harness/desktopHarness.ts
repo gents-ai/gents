@@ -274,9 +274,12 @@ const HARNESS_EDIT_CALL = "call-intro-edit";
 const PARSER_BEFORE =
   "pub struct Parser;\n\nimpl Parser {\n    fn parse() -> Ast { todo!() }\n}\n";
 const HARNESS_LEXER_CALL = "call-intro-edit-lexer";
-const LEXER_BEFORE = "pub fn tokens(source: &str) -> Vec<Token> {\n    Vec::new()\n}\n";
-const LEXER_AFTER =
-  "pub fn tokens(source: &str) -> Vec<Token> {\n    source.split_whitespace().map(Token::from).collect()\n}\n";
+/* unchanged lines after the edit, which the diff folds away */
+const LEXER_TAIL = Array.from({ length: 24 }, (_, i) => `\nfn rule_${i + 1}() {}`).join(
+  "",
+);
+const LEXER_BEFORE = `pub fn tokens(source: &str) -> Vec<Token> {\n    Vec::new()\n}\n${LEXER_TAIL}\n`;
+const LEXER_AFTER = `pub fn tokens(source: &str) -> Vec<Token> {\n    source.split_whitespace().map(Token::from).collect()\n}\n${LEXER_TAIL}\n`;
 
 const HARNESS_FILE_CHANGES_UNREACHABLE = "harness.fileChangesUnreachable";
 

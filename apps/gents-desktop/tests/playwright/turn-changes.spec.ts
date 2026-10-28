@@ -138,3 +138,29 @@ test("choosing a collapsed file opens it again", async ({ page }) => {
   await page.getByRole("menuitem", { name: /parser\.rs/ }).click();
   await expect(header).toHaveAttribute("aria-expanded", "true");
 });
+
+test("a file shows all its lines from its header, and hides the unchanged ones again", async ({
+  page,
+}) => {
+  await gotoHarness(page, "coding");
+  await page
+    .getByTestId("sessions-screen")
+    .getByRole("link", { name: /introduction-and-greetings/ })
+    .click();
+  await page
+    .getByTestId("turn-changes")
+    .getByRole("button", { name: /lexer\.rs/ })
+    .click();
+  const section = page.locator("section[data-path='src/lexer.rs']");
+  const tail = section.getByText("fn rule_24", { exact: false });
+  await expect(section.getByText("split_whitespace", { exact: false })).toBeVisible();
+  await expect(tail).toHaveCount(0);
+
+  await section.getByRole("button", { name: "Show all lines of lexer.rs" }).click();
+  await expect(tail).toBeVisible();
+  await section
+    .getByRole("button", { name: "Hide unchanged lines in lexer.rs" })
+    .click();
+  await expect(tail).toHaveCount(0);
+  await expect(section.getByText("split_whitespace", { exact: false })).toBeVisible();
+});

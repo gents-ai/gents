@@ -52,11 +52,12 @@ const HIGHLIGHTER = "shiki-js";
    shows uncoloured rather than tie the workers up. */
 const HIGHLIGHTED_LINES = 30000;
 
-type Variant = "file" | "excerpt" | "unnumbered";
+type Variant = "file" | "whole-file" | "excerpt" | "unnumbered";
 
 /* One options object per theme and variant, so a render with nothing new
-   keeps the highlighted view as it is. An excerpt has no file around it, so
-   its separators cannot expand into unchanged lines. */
+   keeps the highlighted view as it is. A whole file shows its unchanged
+   lines too. An excerpt has no file around it, so its separators cannot
+   expand into unchanged lines. */
 const OPTIONS = new Map<string, FileDiffOptions<undefined, undefined>>();
 export function optionsFor(theme: ReturnType<typeof useTheme>, variant: Variant) {
   const key = `${theme}\0${variant}`;
@@ -73,7 +74,10 @@ export function optionsFor(theme: ReturnType<typeof useTheme>, variant: Variant)
         diffIndicators: "classic",
         unsafeCSS: LINE_TINTS,
         tokenizeMaxLength: HIGHLIGHTED_LINES,
-        ...(variant !== "file" && { hunkSeparators: "simple" as const }),
+        ...(variant === "whole-file" && { expandUnchanged: true }),
+        ...((variant === "excerpt" || variant === "unnumbered") && {
+          hunkSeparators: "simple" as const,
+        }),
         ...(variant === "unnumbered" && { disableLineNumbers: true }),
       }),
     );
