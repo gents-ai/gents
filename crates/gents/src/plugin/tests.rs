@@ -1130,12 +1130,74 @@ fn bound_guest_can_read_inside_but_cannot_write_or_follow_a_symlink_out() {
 
 #[tokio::test]
 async fn generated_plugin_call_access_cases_drive_bind_admission() {
+    const CHILD_ENV: &str = "GENTS_PLUGIN_CALL_ACCESS_FIXTURE";
+    const TEST: &str = "plugin::tests::generated_plugin_call_access_cases_drive_bind_admission";
+    let Some(marker) = std::env::var_os(CHILD_ENV) else {
+        // Permission fixtures mutate a process-wide protected-path registry. The
+        // modeled cases require a stable filesystem, independent of those tests.
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("verified");
+        let cases = tokio::task::spawn_blocking(|| {
+            crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases["call_access"]
+                .clone()
+        })
+        .await
+        .unwrap();
+        tokio::fs::write(
+            directory.path().join("cases.json"),
+            serde_json::to_vec(&cases).unwrap(),
+        )
+        .await
+        .unwrap();
+        let output_path = directory.path().join("output");
+        let output = tokio::fs::File::create(&output_path)
+            .await
+            .unwrap()
+            .into_std()
+            .await;
+        let error = output.try_clone().unwrap();
+        let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
+            .env(CHILD_ENV, &marker)
+            .stdin(std::process::Stdio::null())
+            .stdout(output)
+            .stderr(error)
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let status = tokio::time::timeout(std::time::Duration::from_secs(180), child.wait()).await;
+        if status.is_err() {
+            child.kill().await.unwrap();
+            child.wait().await.unwrap();
+        }
+        let mut output = tokio::fs::File::open(output_path).await.unwrap();
+        let mut diagnostics = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(
+            &mut tokio::io::AsyncReadExt::take(&mut output, 65_536),
+            &mut diagnostics,
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(status, Ok(Ok(status)) if status.success()),
+            "isolated admission cases failed: {status:?}\n{}",
+            String::from_utf8_lossy(&diagnostics)
+        );
+        assert_eq!(tokio::fs::read(marker).await.unwrap(), b"24 cases verified");
+        return;
+    };
     use crate::pack::BindAccess;
-    let cases = &crate::lean_vocab_test::lean_contract_snapshot().plugin_resource_cases;
+    let marker = std::path::PathBuf::from(marker);
+    let cases: serde_json::Value = serde_json::from_slice(
+        &tokio::fs::read(marker.parent().unwrap().join("cases.json"))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
     let access = |value: &serde_json::Value| -> Option<BindAccess> {
         value.as_str().map(|text| text.parse().unwrap())
     };
-    let cases = cases["call_access"].as_array().unwrap();
+    let cases = cases.as_array().unwrap();
     assert_eq!(cases.len(), 24);
     for case in cases {
         let declared = access(&case["declared"]).unwrap();
@@ -1189,4 +1251,7 @@ async fn generated_plugin_call_access_cases_drive_bind_admission() {
             }
         }
     }
+    tokio::fs::write(marker, b"24 cases verified")
+        .await
+        .unwrap();
 }
