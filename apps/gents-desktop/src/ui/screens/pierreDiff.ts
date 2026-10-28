@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { canUseWASM, type HighlighterTypes } from "@pierre/diffs";
 import type { FileDiffOptions } from "@pierre/diffs/react";
 import type { useTheme } from "@/preferences";
 
@@ -45,8 +46,11 @@ pre {
 /* Highlights, the highlighter built for Diffs, is compiled to WebAssembly
    and colours a long file in milliseconds where the regular-expression
    engines take seconds; the webview's CSP admits WebAssembly for it. A
-   language it does not know shows as plain text. */
-const HIGHLIGHTER = "highlights";
+   language it does not know shows as plain text. Where WebAssembly can't
+   compile, the regular-expression engine colours instead: a highlighter
+   that can't load draws nothing at all, not even plain text. The workers
+   take the same engine, since they run under the page's policy. */
+export const HIGHLIGHTER: HighlighterTypes = canUseWASM() ? "highlights" : "shiki-js";
 
 /* Colouring runs in workers, so a long file no longer holds the view; a
    file past this many lines, beyond what a 1 MB copy usually holds, still

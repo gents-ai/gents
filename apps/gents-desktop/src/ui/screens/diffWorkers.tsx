@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { DEFAULT_THEMES } from "@pierre/diffs";
 import { WorkerPoolContextProvider } from "@pierre/diffs/react";
 import WorkerUrl from "@pierre/diffs/worker/worker.js?worker&url";
+import { HIGHLIGHTER } from "./pierreDiff";
 
 /* All colouring runs in worker threads. On the page's own thread a long
    file held the view for seconds, and the first file in a language held it
@@ -16,7 +17,7 @@ const POOL = {
 const HIGHLIGHTING = {
   theme: { light: DEFAULT_THEMES.light, dark: DEFAULT_THEMES.dark },
   langs: [],
-  preferredHighlighter: "highlights" as const,
+  preferredHighlighter: HIGHLIGHTER,
 };
 
 export function DiffWorkers({ children }: { children: ReactNode }) {
