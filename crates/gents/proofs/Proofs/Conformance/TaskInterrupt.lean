@@ -1,4 +1,5 @@
 import Proofs.DurableLineage
+import Proofs.AgentSession
 import Lean
 
 open Lean DurableLineage
@@ -39,4 +40,15 @@ def main : IO Unit := do
               ("verified", toJson (verifiedTaskTrigger e)),
               ("allowed", toJson (interruptAllowed "caller" "other" none true
                 (verifiedTaskTrigger e)))]
-  IO.println (Json.mkObj [("decisions", toJson decisions), ("evidence", toJson evidence)]).compress
+  let creation := [none, some (12 : Nat)].flatMap fun parent =>
+    [false, true].flatMap fun hasCallingTool =>
+      [false, true].map fun automatedTrigger =>
+        let provenance := AgentSession.requestCreationProvenance 25 parent hasCallingTool automatedTrigger
+        Json.mkObj [
+          ("requestDoc", toJson (25 : Nat)), ("parentDoc", toJson parent),
+          ("hasCallingTool", toJson hasCallingTool), ("automatedTrigger", toJson automatedTrigger),
+          ("hasProvenance", toJson provenance.isSome),
+          ("openingRequestDoc", toJson (provenance.bind fun p => p.openingRequestDoc)),
+          ("parentRequestDoc", toJson (provenance.bind fun p => p.parentRequestDoc))]
+  IO.println (Json.mkObj [("decisions", toJson decisions), ("evidence", toJson evidence),
+    ("creation", toJson creation)]).compress
