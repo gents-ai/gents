@@ -846,6 +846,11 @@ def caseCoverage : List CoverageEntry :=
       "The status consumer observes publication/router-generation writeback. Generated request acceptance, lifetime tracking and generation retirement need router/reconciler owner consumers; fixture-only arithmetic is not implementation coverage.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "catalog_refresh_cases"
+      "CatalogRefreshCases"
+      "backend_registry::tests::generated_catalog_refreshes_preserve_payload_commits_and_latest_freshness")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "plugin_reference_cases"
       "PluginReferenceCases"
       "pack::installation::tests::generated_plugin_reference_cases_validate_prepared_pack_resources")

@@ -2088,7 +2088,7 @@ impl ConfigCommandTool {
             SelfConfigTarget::InferenceBackend => (
                 "InferenceBackend",
                 "backend_id",
-                "backend_id name provider_kind openai_wire_api endpoint connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled catalogs probe_status last_probe",
+                "backend_id name provider_kind openai_wire_api endpoint connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled catalogs catalog_freshness probe_status last_probe",
             ),
             _ => (
                 target.collection_name(),
@@ -2155,7 +2155,8 @@ impl ConfigCommandTool {
         if target == SelfConfigTarget::InferenceBackend {
             for row in &mut rows {
                 let observation: crate::document_config::InferenceBackendObservation =
-                    serde_json::from_value(row.clone()).context("decoding backend observation")?;
+                    crate::backend_registry::decode_backend_observation(row.clone())
+                        .context("decoding backend observation")?;
                 let provider_kind = serde_json::from_value(
                     row.get("provider_kind")
                         .cloned()
@@ -2171,6 +2172,7 @@ impl ConfigCommandTool {
                     .as_object_mut()
                     .context("backend row must be an object")?;
                 object.remove("catalogs");
+                object.remove("catalog_freshness");
                 object.insert("catalog".into(), view["catalog"].clone());
             }
         }

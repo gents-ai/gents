@@ -83,15 +83,8 @@ pub(super) fn snapshot_rows_with_requests(
         SCHEDULE_OBSERVATION_FIELDS,
         Some("node_did"),
     )?;
-    let (backend_observations, backend_observation_source_node_dids): (
-        Vec<InferenceBackendObservation>,
-        Vec<Option<String>>,
-    ) = parse_observation_query_rows_with_source(
-        data,
-        "inference_backends",
-        INFERENCE_BACKEND_OBSERVATION_FIELDS,
-        Some("node_did"),
-    )?;
+    let (backend_observations, backend_observation_source_node_dids) =
+        parse_backend_observation_rows(data, "inference_backends")?;
     let triggers: Vec<Trigger> = parse_projected_query_rows(
         data,
         "triggers",
@@ -534,6 +527,33 @@ where
     parse_rows_with_source(data, root, fields, sibling_fields, source_field, false)
 }
 
+pub(super) fn parse_backend_observation_rows(
+    data: &Value,
+    root: &str,
+) -> Result<(Vec<InferenceBackendObservation>, Vec<Option<String>>)> {
+    let (rows, sources): (Vec<Value>, _) = parse_observation_query_rows_with_source(
+        data,
+        root,
+        INFERENCE_BACKEND_OBSERVATION_FIELDS,
+        Some("node_did"),
+    )?;
+    let mut observations = Vec::with_capacity(rows.len());
+    let mut observation_sources = Vec::with_capacity(rows.len());
+    for (row, source) in rows.into_iter().zip(sources) {
+        match gents::backend_registry::decode_backend_observation(row) {
+            Ok(observation) => {
+                observations.push(observation);
+                observation_sources.push(source);
+            }
+            Err(error) => {
+                tracing::warn!(target: "gents_desktop_core::query", root, error = %error,
+                    "backend catalog observation unavailable");
+            }
+        }
+    }
+    Ok((observations, observation_sources))
+}
+
 pub(crate) fn parse_observation_query_rows_with_source<T>(
     data: &Value,
     root: &str,
@@ -800,12 +820,7 @@ fn operator_config_store_from_data_with_requests(
         INFERENCE_BACKEND_OBSERVATION_FIELDS,
     )?;
     let (backend_observations, backend_observation_source_node_dids) =
-        parse_observation_query_rows_with_source(
-            data,
-            "inference_backends",
-            INFERENCE_BACKEND_OBSERVATION_FIELDS,
-            Some("node_did"),
-        )?;
+        parse_backend_observation_rows(data, "inference_backends")?;
     let mut common = ClientStoreRows {
         nodes,
         agents,
