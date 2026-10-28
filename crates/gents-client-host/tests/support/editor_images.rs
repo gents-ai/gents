@@ -57,8 +57,24 @@ pub async fn verify(
             && edited_session != session,
         "editing must create a separate conversation"
     );
+    let workspace_session = ui["workspaceSessionId"]
+        .as_str()
+        .context("workspace image session")?;
+    let workspace_image: RequestAttachment = serde_json::from_value(ui["workspaceImage"].clone())?;
+    ensure!(
+        workspace_image.data == images[0].data
+            && workspace_image.media_type == images[0].media_type,
+        "workspace capture must preserve the generated image"
+    );
     let cases = [
         (session, ""),
+        (
+            workspace_session,
+            ui["workspacePrompt"]
+                .as_str()
+                .context("workspace prompt")?
+                .trim(),
+        ),
         (
             original_session,
             ui["originalPrompt"].as_str().context("original prompt")?,
@@ -105,7 +121,13 @@ pub async fn verify(
         let input = row.input.as_ref().context("typed image input")?;
         input.validate_attachments()?;
         ensure!(
-            input.attachments == images && input.captured_context.is_empty(),
+            input.attachments
+                == if session == workspace_session {
+                    vec![workspace_image.clone()]
+                } else {
+                    images.clone()
+                }
+                && input.captured_context.is_empty(),
             "native image input changed the frozen captures"
         );
         request_ids.push(row.request_id.clone());
@@ -125,7 +147,15 @@ pub async fn verify(
         delivered == 3,
         "provider must receive the exact frozen images for the original and edited submissions"
     );
+    ensure!(
+        requests
+            .iter()
+            .filter(|request| image_urls(request) == [expected[0].as_str()])
+            .count()
+            == 1,
+        "provider must receive the captured workspace image once after the source changes"
+    );
     Ok(
-        json!({"sessionId":session,"requestIds":request_ids,"originalSessionId":original_session,"editedSessionId":edited_session,"formats":images.iter().map(|image| &image.media_type).collect::<Vec<_>>(),"verifiedSignatures":3,"providerInputOccurrences":delivered,"draftReload":true,"reopenedImages":4}),
+        json!({"sessionId":session,"requestIds":request_ids,"originalSessionId":original_session,"editedSessionId":edited_session,"formats":images.iter().map(|image| &image.media_type).collect::<Vec<_>>(),"verifiedSignatures":4,"workspaceSessionId":workspace_session,"remoteWorkspace":ui["remoteWorkspace"],"providerInputOccurrences":delivered,"draftReload":true,"reopenedImages":4}),
     )
 }
