@@ -245,17 +245,24 @@ pub(crate) async fn resolve(
     stored: StoredFileChanges,
 ) -> Result<(ToolFileChanges, Vec<ContentDocument>)> {
     let mut documents: Vec<ContentDocument> = Vec::new();
+    let mut heads: Vec<Content> = Vec::new();
     let mut changes = Vec::with_capacity(stored.changes.len());
     for change in stored.changes {
-        if let Some(doc_id) = &change.content_doc_id {
-            if !documents.iter().any(|document| &document.doc_id == doc_id) {
-                documents.push(content_scope(access, doc_id, &change.root, &change.path).await?);
+        let head = match &change.content_doc_id {
+            Some(doc_id) => {
+                if !heads.iter().any(|head| &head.doc_id == doc_id) {
+                    let (document, head) =
+                        content_head(access, doc_id, &change.root, &change.path).await?;
+                    documents.push(document);
+                    heads.push(head);
+                }
+                heads.iter().find(|head| &head.doc_id == doc_id)
             }
-        }
-        let doc_id = change.content_doc_id.as_deref();
+            None => None,
+        };
         changes.push(FileChangeImages {
-            before: resolve_image(access, doc_id, change.before).await?,
-            after: resolve_image(access, doc_id, change.after).await?,
+            before: resolve_image(access, head, change.before).await?,
+            after: resolve_image(access, head, change.after).await?,
             root: change.root,
             path: change.path,
         });
@@ -274,15 +281,18 @@ pub(crate) async fn resolve(
     ))
 }
 
-async fn content_scope(
+/// Reads a file document's scope and its stored value. The value stands for a
+/// version only while that version is the document's single composite head;
+/// concurrent heads store their merge, which matches neither.
+async fn content_head(
     access: &ConfigAccess,
     doc_id: &str,
     root: &str,
     path: &str,
-) -> Result<ContentDocument> {
+) -> Result<(ContentDocument, Content)> {
     let response = access
         .execute(&format!(
-            r#"{{ {TOOL_FILE_CONTENT_NAME}(docID: "{}") {{ _docID node_did session_id requester_did root path }} }}"#,
+            r#"{{ {TOOL_FILE_CONTENT_NAME}(docID: "{}") {{ _docID node_did session_id requester_did root path text blob _version {{ cid fieldName }} }} }}"#,
             escape_graphql_string(doc_id)
         ))
         .await?;
@@ -298,19 +308,37 @@ async fn content_scope(
             && row["path"].as_str() == Some(path),
         "file content document names another file"
     );
-    Ok(ContentDocument {
-        doc_id: doc_id.to_owned(),
-        scope: SessionScope {
-            node_did: row["node_did"].as_str().unwrap_or_default().to_owned(),
-            session_id: row["session_id"].as_str().unwrap_or_default().to_owned(),
-            requester_did: row["requester_did"].as_str().map(str::to_owned),
+    let composite: Vec<&str> = row["_version"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|commit| commit["fieldName"].as_str() == Some("_C"))
+        .filter_map(|commit| commit["cid"].as_str())
+        .collect();
+    Ok((
+        ContentDocument {
+            doc_id: doc_id.to_owned(),
+            scope: SessionScope {
+                node_did: row["node_did"].as_str().unwrap_or_default().to_owned(),
+                session_id: row["session_id"].as_str().unwrap_or_default().to_owned(),
+                requester_did: row["requester_did"].as_str().map(str::to_owned),
+            },
         },
-    })
+        Content {
+            doc_id: doc_id.to_owned(),
+            text: row["text"].as_str().map(str::to_owned),
+            blob: row["blob"].as_str().map(str::to_owned),
+            version: match composite.as_slice() {
+                [cid] => Some((*cid).to_owned()),
+                _ => None,
+            },
+        },
+    ))
 }
 
 async fn resolve_image(
     access: &ConfigAccess,
-    doc_id: Option<&str>,
+    head: Option<&Content>,
     image: StoredFileImage,
 ) -> Result<FileImage> {
     let (hash, version, encoding, permissions, links) = match image {
@@ -324,26 +352,34 @@ async fn resolve_image(
             links,
         } => (content_hash, version, encoding, permissions, links),
     };
-    let doc_id = doc_id.context("stored file image has no content document")?;
-    let response = access
-        .execute(&format!(
-            r#"{{ {TOOL_FILE_CONTENT_NAME}(cid: ["{}"]) {{ _docID text blob }} }}"#,
-            escape_graphql_string(&version)
-        ))
-        .await?;
-    let rows = response["data"][TOOL_FILE_CONTENT_NAME]
-        .as_array()
-        .context("file content version lookup omitted documents")?;
-    let [row] = rows.as_slice() else {
-        anyhow::bail!("file content version is unavailable");
+    let head = head.context("stored file image has no content document")?;
+    let (text, blob) = if head.version.as_deref() == Some(version.as_str()) {
+        (head.text.clone(), head.blob.clone())
+    } else {
+        let response = access
+            .execute(&format!(
+                r#"{{ {TOOL_FILE_CONTENT_NAME}(cid: ["{}"]) {{ _docID text blob }} }}"#,
+                escape_graphql_string(&version)
+            ))
+            .await?;
+        let rows = response["data"][TOOL_FILE_CONTENT_NAME]
+            .as_array()
+            .context("file content version lookup omitted documents")?;
+        let [row] = rows.as_slice() else {
+            anyhow::bail!("file content version is unavailable");
+        };
+        anyhow::ensure!(
+            row["_docID"].as_str() == Some(head.doc_id.as_str()),
+            "file content version belongs to another document"
+        );
+        (
+            row["text"].as_str().map(str::to_owned),
+            row["blob"].as_str().map(str::to_owned),
+        )
     };
-    anyhow::ensure!(
-        row["_docID"].as_str() == Some(doc_id),
-        "file content version belongs to another document"
-    );
     let bytes = match encoding {
-        FileEncoding::Text => row["text"].as_str().unwrap_or_default().as_bytes().to_vec(),
-        FileEncoding::Blob => decode_hex(row["blob"].as_str().unwrap_or_default())?,
+        FileEncoding::Text => text.unwrap_or_default().into_bytes(),
+        FileEncoding::Blob => decode_hex(&blob.unwrap_or_default())?,
     };
     anyhow::ensure!(
         content_hash(&bytes) == hash,
