@@ -5,11 +5,13 @@
    else binds them. */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { act, fireEvent, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { useEffect, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createUxContext } from "@/contrib/plugin";
+import { FrameViewport } from "@/contrib/react/frame-viewport";
+import type { SandboxHost } from "@/contrib/sandbox-host";
 import { KNOWN_AREAS, PLUGIN_PAGE_AREA } from "@/contrib/types";
 import { PluginPageScreen } from "@/screens/PluginPageScreen";
 import { node, publish, renderIn, testApp } from "./app-fixture";
@@ -42,6 +44,40 @@ describe("the plugin page route", () => {
 
     view.rerender(<PluginPageScreen pluginId="nobody" />);
     expect(screen.getByTestId("plugin-page-missing")).toHaveTextContent("nobody");
+  });
+
+  it("fills the main pane instead of the reading column, and a sandboxed page's frame fills it too", () => {
+    const board = createUxContext("board", { onDispose: (d) => disposers.push(d) });
+    board.register({
+      id: "page",
+      area: PLUGIN_PAGE_AREA,
+      render: () => <p>the board</p>,
+    });
+    renderIn(testApp(), <PluginPageScreen pluginId="board" />);
+    const pane = screen.getByTestId("plugin-page");
+    expect(pane.className).toMatch(/\bh-full\b/);
+    expect(pane.className).toMatch(/\bflex-col\b/);
+    expect(pane.className).not.toMatch(/max-w-page|mx-auto/);
+
+    /* the frame's anchor: a page grows into the pane, a section keeps its floor */
+    const host = {
+      show: vi.fn(),
+      attach: vi.fn(),
+      hide: vi.fn(),
+    } as unknown as SandboxHost;
+    const view = render(
+      <>
+        <FrameViewport host={host} surface="board:page" props={{}} fill />
+        <FrameViewport host={host} surface="board:section" props={{}} />
+      </>,
+    );
+    const [page, section] = view.getAllByTestId("ux-frame-viewport");
+    expect(page!.className).toMatch(/\bflex-1\b/);
+    expect(page!.className).not.toMatch(/70vh/);
+    expect(page!).toHaveAttribute("data-fill");
+    expect(section!.className).toMatch(/min-h-\[70vh\]/);
+    expect(section!).not.toHaveAttribute("data-fill");
+    view.unmount();
   });
 
   it("keeps the page mounted while the shell re-renders, and contains a throw", () => {
