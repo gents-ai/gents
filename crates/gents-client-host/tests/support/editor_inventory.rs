@@ -232,7 +232,7 @@ pub async fn verify(
         serde_json::from_value(result["data"]["AgentRequest"].clone())?;
     let mut tools = RapidHashMap::new();
     let mut verified_read = false;
-    let mut verified_unchanged = false;
+    let mut unchanged_tool = None;
     let mut unobserved = RapidHashSet::new();
     for (prompt, expected) in [
         (PROMPT, COUNT),
@@ -276,15 +276,10 @@ pub async fn verify(
                 "inventory mutation did not complete"
             );
             let logical = field(call, "tool_call_id")?;
-            if logical == READ_CALL || logical == UNCHANGED_CALL {
+            if logical == READ_CALL {
                 ensure!(
-                    prompt == REPEAT_PROMPT
-                        && if logical == READ_CALL {
-                            !verified_read
-                        } else {
-                            !verified_unchanged
-                        },
-                    "unchanged witness scope or identity changed"
+                    prompt == REPEAT_PROMPT && !verified_read,
+                    "read witness scope or identity changed"
                 );
                 let physical = escape_graphql_string(field(call, "_docID")?);
                 let rows = access.execute(&format!(
@@ -302,14 +297,17 @@ pub async fn verify(
                         && rows["data"]["ToolFileChange"]
                             .as_array()
                             .is_some_and(Vec::is_empty),
-                    "a verified unchanged operation must retain one byte-free witness without an image"
+                    "a read must retain one byte-free witness without an image"
                 );
-                if logical == READ_CALL {
-                    verified_read = true;
-                } else {
-                    verified_unchanged = true;
-                }
+                verified_read = true;
                 continue;
+            }
+            if logical == UNCHANGED_CALL {
+                ensure!(
+                    prompt == REPEAT_PROMPT && unchanged_tool.is_none(),
+                    "unchanged write scope or identity changed"
+                );
+                unchanged_tool = Some(field(call, "_docID")?.to_owned());
             }
             if logical == FOLLOW_CALL || logical == PARTIAL_UNKNOWN_CALL {
                 ensure!(
@@ -335,7 +333,7 @@ pub async fn verify(
                 );
                 continue;
             }
-            let index: usize = if REPEAT_CALLS.contains(&logical) {
+            let index: usize = if REPEAT_CALLS.contains(&logical) || logical == UNCHANGED_CALL {
                 COUNT + 1
             } else if logical == PARTIAL_WRITE_CALL {
                 COUNT + 2
@@ -354,11 +352,11 @@ pub async fn verify(
         }
     }
     ensure!(
-        verified_read && verified_unchanged && unobserved.len() == 2,
+        verified_read && unchanged_tool.is_some() && unobserved.len() == 2,
         "the mixed requests omitted an unchanged or unobserved operation"
     );
     ensure!(
-        tools.len() == COUNT + 4,
+        tools.len() == COUNT + 5,
         "new activity lost an earlier mutation"
     );
     let mut received = RapidHashSet::new();
@@ -379,11 +377,21 @@ pub async fn verify(
             .await;
         *id += 1;
         let observation: FileInventoryObservation = serde_json::from_value(value)?;
-        ensure!(
-            observation.refusal.is_none(),
-            "inventory metadata was refused"
-        );
-        let expected_entries = u64::try_from(COUNT + 4)?;
+        // The refusal belongs to the active attempt; a separately validated
+        // completed previous snapshot remains readable through its own cursor.
+        let expected_entries = u64::try_from(COUNT + 5)?;
+        let retained = [&observation.current, &observation.previous]
+            .into_iter()
+            .flatten()
+            .map(|snapshot| {
+                (
+                    snapshot.complete,
+                    snapshot.received_entries,
+                    snapshot.known_inventory,
+                    snapshot.binding.coverage.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
         let snapshot = observation
             .current
             .into_iter()
@@ -398,7 +406,7 @@ pub async fn verify(
                             && snapshot.offset == cursor.offset
                     })
             })
-            .context("the installed client did not retain the complete updated inventory")?;
+            .with_context(|| format!("the installed client did not retain the complete updated inventory (active refusal: {:?}, retained: {:?})", observation.refusal, retained))?;
         ensure!(
             snapshot.binding.coverage.pending == 0 && snapshot.binding.coverage.unknown == 2,
             "the complete snapshot must retain both unobserved shell actions as unknown coverage"
@@ -419,6 +427,12 @@ pub async fn verify(
                     == tokio::fs::canonicalize(root.join(file(index))).await?,
                 "inventory path differs from its mutation"
             );
+            if unchanged_tool.as_deref() == Some(entry.tool_call_doc_id.as_str()) {
+                ensure!(
+                    entry.change.before == entry.change.after,
+                    "the identical-byte write changed its retained image"
+                );
+            }
             ensure!(
                 received.insert(entry.tool_call_doc_id),
                 "inventory page duplicated a physical mutation"
@@ -428,16 +442,16 @@ pub async fn verify(
                     entry
                         .request_coverage
                         .as_ref()
-                        .is_some_and(|coverage| coverage.entries == 2
+                        .is_some_and(|coverage| coverage.entries == 3
                             && coverage.pending == 0
                             && coverage.unknown == 0),
-                    "mixed request coverage must include only its two edits, with no unknown read"
+                    "mixed request coverage must include all three captures, with no unknown read"
                 );
                 let order = entry
                     .order
                     .context("repeated edit omitted canonical chronology")?;
                 ensure!(
-                    order.entries == 2 && repeated_positions.insert(order.index),
+                    order.entries == 3 && repeated_positions.insert(order.index),
                     "repeated edits have inconsistent or duplicate chronology"
                 );
             }
@@ -452,12 +466,12 @@ pub async fn verify(
         }
     }
     ensure!(
-        pages == 2 && received.len() == COUNT + 4,
+        pages == 2 && received.len() == COUNT + 5,
         "inventory did not cross its native page boundary"
     );
     ensure!(
-        repeated_positions.contains(&0) && repeated_positions.contains(&1),
-        "both sequential edit positions must survive paging and reload"
+        (0..3).all(|position| repeated_positions.contains(&position)),
+        "all sequential capture positions must survive paging and reload"
     );
     let receipts = access.execute(&format!(r#"{{ FileImageHydrationRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, requester_did: {{_eq: "{}"}}}}) {{
         request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id status status_detail
@@ -467,7 +481,7 @@ pub async fn verify(
         .as_array()
         .context("image demands")?;
     ensure!(
-        receipts.len() == 4,
+        receipts.len() == 5,
         "metadata browsing or reload created extra image demands: {}",
         receipts.len()
     );
@@ -510,11 +524,11 @@ pub async fn verify(
         );
     }
     Ok(
-        json!({"sessionId":session, "initialCaptures":COUNT, "newCaptures":4, "receivedEntries":received.len(),
+        json!({"sessionId":session, "initialCaptures":COUNT, "newCaptures":5, "receivedEntries":received.len(),
         "nativePages":pages, "imageDemands":receipts.len(), "selectedIndex":selected,
         "onlySelectedImagesRequested":true, "signedImageReceiptsVerified":true, "workingCopiesPreserved":true,
         "canonicalRepeatedPositions":repeated_positions.len(), "exactlyOnceInputs":5, "verifiedUnchangedRead":verified_read,
-        "verifiedUnchangedMutation":verified_unchanged, "unobservedActions":unobserved.len(), "selectedRequestCoverageVerified":true}),
+        "verifiedIdenticalWrite":unchanged_tool.is_some(), "unobservedActions":unobserved.len(), "selectedRequestCoverageVerified":true}),
     )
 }
 
