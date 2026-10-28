@@ -208,15 +208,17 @@ describe("recorded diff", () => {
     });
   });
 
-  it("reads again when the bridge first answers without a record", async () => {
-    const recorded = recorder({ c1: [await image("one"), await image("two")] });
+  it("takes an answer without a record as an edit that recorded none, in one read", async () => {
     let calls = 0;
-    const fetch: typeof recorded = async (args) =>
-      ++calls === 1 ? (null as never) : recorded(args);
-    expect(await recordedDiff(fetch, SCOPE, fileOf("c1"))).toMatchObject({
-      before: "one",
-      after: "two",
+    const fetch: Parameters<typeof recordedDiff>[0] = async () => {
+      calls += 1;
+      return null as never;
+    };
+    expect(await recordedDiff(fetch, SCOPE, fileOf("c1"))).toEqual({
+      kind: "unavailable",
+      reason: "This edit recorded no file versions.",
     });
+    expect(calls).toBe(1);
   });
 
   it("treats a missing side as a created file", async () => {
