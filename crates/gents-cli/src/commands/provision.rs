@@ -278,7 +278,7 @@ mod tests {
             Ok(_) => panic!("bootstrap must hold the exclusive store lock"),
             Err(error) => error,
         };
-        assert!(error.downcast_ref::<gents::home::StoreLockHeld>().is_some());
+        assert!(gents::home::store_lock_held(error.as_ref()).is_some());
         assert!(!gents::home::init_config_path(&new_home).exists());
     }
 }

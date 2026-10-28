@@ -25,11 +25,11 @@ pub use gents_protocol::schemas::{
 
 pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
     if let Some(access) = crate::config_client::ConfigAccess::claimed_for_node(node) {
-        return access
+        return Ok(access
             .run_local_owned(|node| async move {
                 crate::migration::ensure_migrations_borrowed(node.as_ref()).await
             })
-            .await;
+            .await?);
     }
-    crate::migration::ensure_migrations_borrowed(node).await
+    Ok(crate::migration::ensure_migrations_borrowed(node).await?)
 }

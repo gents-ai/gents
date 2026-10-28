@@ -25,12 +25,109 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
 use k256::elliptic_curve::rand_core::{OsRng, RngCore};
 use k256::elliptic_curve::zeroize::Zeroizing;
 use serde::{Deserialize, Serialize};
 
-use crate::storage_backend::{IncompatibleStore, IncompatibleStoreKind};
+use crate::storage_backend::{IncompatibleStore, IncompatibleStoreKind, StorageBackendError};
+
+#[derive(Debug, thiserror::Error)]
+pub enum StoreKeyError {
+    #[error("store key in {origin} is not {STORE_KEY_LEN} bytes")]
+    WrongLength { origin: String },
+    #[error(transparent)]
+    Incompatible(#[from] IncompatibleStore),
+    #[error(transparent)]
+    Unavailable(#[from] StoreKeyUnavailable),
+    #[error(transparent)]
+    Identity(#[from] crate::identity::IdentityError),
+    #[error(transparent)]
+    Storage(#[from] StorageBackendError),
+    #[error("unrecorded file at {}; refusing to replace it with a store key", path.display())]
+    UnrecordedKeyFile { path: PathBuf },
+    #[error("inspecting store key {}", path.display())]
+    InspectKeyFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("removing store key {}", path.display())]
+    RemoveKeyFile {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("storing store key {label} in the macOS keychain")]
+    KeychainStore {
+        label: String,
+        #[source]
+        source: Box<crate::identity::IdentityError>,
+    },
+    #[error("removing store key {label} from the macOS keychain")]
+    KeychainDelete {
+        label: String,
+        #[source]
+        source: Box<crate::identity::IdentityError>,
+    },
+    #[error("Keychain store keys are only available on macOS; use file custody")]
+    KeychainUnsupported,
+    #[error("store key {label} is in a macOS Keychain, which is only available on macOS")]
+    KeychainUnavailable { label: String },
+    #[error("gents home {} is not initialized; run `gents init --home {}` first", home.display(), home.display())]
+    HomeNotInitialized { home: PathBuf },
+    #[error("store upgrade custody does not match init.json")]
+    UpgradeCustodyMismatch,
+    #[error(transparent)]
+    Home(#[from] crate::home::HomeError),
+    #[error(transparent)]
+    Upgrade(#[from] upgrade::UpgradeError),
+}
+
+impl StoreKeyError {
+    pub fn incompatible(&self) -> Option<&IncompatibleStore> {
+        match self {
+            Self::Incompatible(store) => Some(store),
+            Self::Storage(error) => error.incompatible(),
+            Self::Upgrade(error) => error.incompatible(),
+            _ => None,
+        }
+    }
+
+    pub fn insecure_key(&self) -> Option<&crate::identity::InsecureKeyPermissions> {
+        match self {
+            Self::Identity(error) => error.insecure_key(),
+            _ => None,
+        }
+    }
+
+    pub fn unavailable(&self) -> Option<&StoreKeyUnavailable> {
+        match self {
+            Self::Unavailable(unavailable) => Some(unavailable),
+            _ => None,
+        }
+    }
+
+    pub fn lock_held(&self) -> Option<&crate::home::StoreLockHeld> {
+        match self {
+            Self::Home(error) => error.lock_held(),
+            _ => None,
+        }
+    }
+}
+
+/// The unavailable store key anywhere in an application error's chain,
+/// including through [`StoreKeyError`], which wraps it transparently.
+pub fn store_key_unavailable<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a StoreKeyUnavailable> {
+    gents_protocol::error_chain::find_map_source(error, |cause| {
+        cause
+            .downcast_ref::<StoreKeyUnavailable>()
+            .or_else(|| cause.downcast_ref::<StoreKeyError>()?.unavailable())
+    })
+}
+
+type Result<T, E = StoreKeyError> = std::result::Result<T, E>;
 
 pub mod upgrade;
 
@@ -84,10 +181,11 @@ impl StoreKey {
         Self(bytes)
     }
 
-    fn from_slice(bytes: &[u8], source: &str) -> Result<Self> {
-        let bytes: [u8; STORE_KEY_LEN] = bytes
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("store key in {source} is not {STORE_KEY_LEN} bytes"))?;
+    fn from_slice(bytes: &[u8], origin: &str) -> Result<Self> {
+        let bytes: [u8; STORE_KEY_LEN] =
+            bytes.try_into().map_err(|_| StoreKeyError::WrongLength {
+                origin: origin.to_owned(),
+            })?;
         Ok(Self(Zeroizing::new(bytes)))
     }
 
@@ -147,13 +245,11 @@ impl StoreEncryption {
     pub fn initialize(&self, key_file: &Path, data_path: &Path) -> Result<StoreKey> {
         match self.load(key_file, data_path) {
             Ok(key) => return Ok(key),
-            Err(error)
-                if error
-                    .downcast_ref::<IncompatibleStore>()
-                    .is_some_and(|store| store.kind == IncompatibleStoreKind::MissingStoreKey) =>
+            Err(StoreKeyError::Incompatible(store))
+                if store.kind == IncompatibleStoreKind::MissingStoreKey =>
             {
                 if data_path.join("MANIFEST").exists() {
-                    return Err(error);
+                    return Err(StoreKeyError::Incompatible(store));
                 }
             }
             Err(error) => return Err(error),
@@ -174,11 +270,10 @@ impl StoreEncryption {
 
     pub fn load(&self, key_file: &Path, data_path: &Path) -> Result<StoreKey> {
         if self.version != STORE_ENCRYPTION_VERSION {
-            return Err(IncompatibleStore {
+            return Err(StoreKeyError::Incompatible(IncompatibleStore {
                 kind: IncompatibleStoreKind::ForeignVersion,
                 data_path: data_path.to_path_buf(),
-            }
-            .into());
+            }));
         }
         match &self.custody {
             StoreKeyCustody::MacosKeychain { keychain_label } => {
@@ -204,7 +299,10 @@ impl StoreEncryption {
             StoreKeyCustody::MacosKeychain { keychain_label } => keychain::delete(keychain_label),
             StoreKeyCustody::File => match std::fs::remove_file(key_file) {
                 Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                    Err(error).with_context(|| format!("removing store key {}", key_file.display()))
+                    Err(StoreKeyError::RemoveKeyFile {
+                        path: key_file.to_path_buf(),
+                        source: error,
+                    })
                 }
                 _ => Ok(()),
             },
@@ -221,17 +319,15 @@ pub fn reject_unrecorded_store(data_path: &Path) -> Result<()> {
 
 fn require_unoccupied_key_file(key_file: &Path) -> Result<()> {
     match std::fs::symlink_metadata(key_file) {
-        Ok(_) => bail!(
-            "unrecorded file at {}; refusing to replace it with a store key",
-            key_file.display()
-        ),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("inspecting store key {}", key_file.display()));
-        }
+        Ok(_) => Err(StoreKeyError::UnrecordedKeyFile {
+            path: key_file.to_path_buf(),
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(StoreKeyError::InspectKeyFile {
+            path: key_file.to_path_buf(),
+            source,
+        }),
     }
-    Ok(())
 }
 
 /// A gents home's store key file. Node identity names always end in `.key`,
@@ -255,21 +351,16 @@ pub async fn open_home_store_key_with_custody(
 ) -> Result<StoreKey> {
     let mut config =
         crate::home::read_init_config::<serde_json::Value, serde_json::Value>(home_dir)?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "gents home {} is not initialized; run `gents init --home {}` first",
-                    home_dir.display(),
-                    home_dir.display()
-                )
+            .ok_or_else(|| StoreKeyError::HomeNotInitialized {
+                home: home_dir.to_path_buf(),
             })?;
     let key_file = home_key_file(home_dir);
     let pending = upgrade::pending_record(data_path)?;
     if let Some(record) = config.store_encryption.as_ref() {
         if let Some(pending) = pending.as_ref() {
-            anyhow::ensure!(
-                pending == record,
-                "store upgrade custody does not match init.json"
-            );
+            if pending != record {
+                return Err(StoreKeyError::UpgradeCustodyMismatch);
+            }
         }
         let key = record.initialize(&key_file, data_path)?;
         return Ok(key);
@@ -306,31 +397,28 @@ pub fn persistent_builder(data_path: &Path, key: &StoreKey) -> Result<defra_node
     ))
 }
 
-fn unencrypted(data_path: &Path) -> anyhow::Error {
-    IncompatibleStore {
+fn unencrypted(data_path: &Path) -> StoreKeyError {
+    StoreKeyError::Incompatible(IncompatibleStore {
         kind: IncompatibleStoreKind::UnencryptedStore,
         data_path: data_path.to_path_buf(),
-    }
-    .into()
+    })
 }
 
-fn missing_key(data_path: &Path) -> anyhow::Error {
-    IncompatibleStore {
+fn missing_key(data_path: &Path) -> StoreKeyError {
+    StoreKeyError::Incompatible(IncompatibleStore {
         kind: IncompatibleStoreKind::MissingStoreKey,
         data_path: data_path.to_path_buf(),
-    }
-    .into()
+    })
 }
 
-fn keychain_failure(code: i32, data_path: &Path) -> anyhow::Error {
+fn keychain_failure(code: i32, data_path: &Path) -> StoreKeyError {
     if code == crate::identity::ERR_SEC_ITEM_NOT_FOUND {
         missing_key(data_path)
     } else {
-        StoreKeyUnavailable {
+        StoreKeyError::Unavailable(StoreKeyUnavailable {
             data_path: data_path.to_path_buf(),
             code,
-        }
-        .into()
+        })
     }
 }
 
@@ -347,9 +435,7 @@ fn new_keychain_label() -> String {
 /// Store keys share the `macos-keychain` identity's login-keychain helpers
 /// under their own service.
 mod keychain {
-    #[cfg(not(target_os = "macos"))]
-    use anyhow::bail;
-    use anyhow::Result;
+    use super::{Result, StoreKeyError};
     use k256::elliptic_curve::zeroize::Zeroizing;
 
     #[cfg(target_os = "macos")]
@@ -357,36 +443,46 @@ mod keychain {
 
     #[cfg(target_os = "macos")]
     pub(super) fn store(label: &str, bytes: &[u8]) -> Result<()> {
-        use anyhow::Context as _;
-        crate::identity::macos_keychain_set(SERVICE, label, bytes)
-            .with_context(|| format!("storing store key {label} in the macOS keychain"))
+        crate::identity::macos_keychain_set(SERVICE, label, bytes).map_err(|source| {
+            StoreKeyError::KeychainStore {
+                label: label.to_owned(),
+                source: Box::new(source),
+            }
+        })
     }
 
     #[cfg(target_os = "macos")]
     pub(super) fn load(label: &str) -> Result<std::result::Result<Zeroizing<Vec<u8>>, i32>> {
-        crate::identity::macos_keychain_find(SERVICE, label)
+        Ok(crate::identity::macos_keychain_find(SERVICE, label)?)
     }
 
     #[cfg(target_os = "macos")]
     pub(super) fn delete(label: &str) -> Result<()> {
-        use anyhow::Context as _;
-        crate::identity::macos_keychain_delete(SERVICE, label)
-            .with_context(|| format!("removing store key {label} from the macOS keychain"))
+        crate::identity::macos_keychain_delete(SERVICE, label).map_err(|source| {
+            StoreKeyError::KeychainDelete {
+                label: label.to_owned(),
+                source: Box::new(source),
+            }
+        })
     }
 
     #[cfg(not(target_os = "macos"))]
     pub(super) fn store(_label: &str, _bytes: &[u8]) -> Result<()> {
-        bail!("Keychain store keys are only available on macOS; use file custody")
+        Err(StoreKeyError::KeychainUnsupported)
     }
 
     #[cfg(not(target_os = "macos"))]
     pub(super) fn load(label: &str) -> Result<std::result::Result<Zeroizing<Vec<u8>>, i32>> {
-        bail!("store key {label} is in a macOS Keychain, which is only available on macOS")
+        Err(StoreKeyError::KeychainUnavailable {
+            label: label.to_owned(),
+        })
     }
 
     #[cfg(not(target_os = "macos"))]
     pub(super) fn delete(label: &str) -> Result<()> {
-        bail!("store key {label} is in a macOS Keychain, which is only available on macOS")
+        Err(StoreKeyError::KeychainUnavailable {
+            label: label.to_owned(),
+        })
     }
 }
 

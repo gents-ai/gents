@@ -56,9 +56,14 @@ async fn runtime_http_client() -> Result<&'static reqwest::Client> {
     static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
     CLIENT
         .get_or_try_init(|| async {
-            tokio::task::spawn_blocking(|| reqwest::Client::builder().timeout(HTTP_TIMEOUT).build())
-                .await?
-                .map_err(anyhow::Error::from)
+            tokio::task::spawn_blocking(|| {
+                reqwest::Client::builder()
+                    .timeout(HTTP_TIMEOUT)
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+            })
+            .await?
+            .map_err(anyhow::Error::from)
         })
         .await
 }
@@ -284,7 +289,7 @@ struct GraphqlResponse {
 }
 
 pub fn default_node_home() -> Result<PathBuf> {
-    gents::home::default_home_dir()
+    Ok(gents::home::default_home_dir()?)
 }
 
 pub fn runtime_status_url(server_address: &str) -> Result<String> {
@@ -374,6 +379,39 @@ pub fn augment_peer_status_payload_for_desktop(mut payload: Value, status_url: &
             .or_insert_with(|| Value::String(desktop_graphql));
     }
     payload
+}
+
+/// Private status uses only the existing co-hosted endpoint authority. Passive
+/// observation may use an unlocked signer but must not load a cold identity.
+pub async fn fetch_hosted_runtime_status(
+    record: &crate::client::PeerRecord,
+    interaction: OperatorIdentityInteraction,
+) -> Result<Option<Value>> {
+    let record = record.clone();
+    let endpoint = tokio::task::spawn_blocking(move || interaction.endpoint(&record)).await?;
+    let Some(endpoint) = endpoint.filter(|endpoint| !endpoint.is_anonymous()) else {
+        return Ok(None);
+    };
+    let status_url = runtime_status_url(endpoint.url())?;
+    let client = runtime_http_client().await?;
+    let response = endpoint
+        .authorize(client.get(&status_url))?
+        .send()
+        .await?
+        .error_for_status()?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "runtime status returned HTTP {}",
+        response.status(),
+    );
+    let payload = response
+        .json()
+        .await
+        .context("decoding authenticated runtime status")?;
+    Ok(Some(augment_peer_status_payload_for_desktop(
+        payload,
+        &status_url,
+    )))
 }
 
 pub async fn fetch_runtime_connection_payload(endpoint: &str) -> Result<Value> {

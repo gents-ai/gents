@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { ArrowLeft, ArrowRight, Menu, Search } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -20,6 +20,7 @@ import { SyncHealth } from "./SyncHealth";
 import type { ShellLayout } from "./useShellLayout";
 import { WindowControls } from "./WindowControls";
 import { ActiveNodeLabel } from "./ActiveNodeLabel";
+import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 
 function HistoryNav({ history }: { history: History }) {
   return (
@@ -54,9 +55,13 @@ function HistoryNav({ history }: { history: History }) {
 }
 
 function NavSheet({ route, settings }: { route: Route; settings: ReactNode }) {
-  const [open, setOpen] = useState(false);
+  const sheet = useExclusivePopover();
   return (
-    <Sheet open={open} onOpenChange={setOpen}>
+    <Sheet
+      open={sheet.open}
+      onOpenChange={sheet.onOpenChange}
+      onOpenChangeComplete={sheet.onOpenChangeComplete}
+    >
       <SheetTrigger
         render={
           <Button
@@ -70,17 +75,18 @@ function NavSheet({ route, settings }: { route: Route; settings: ReactNode }) {
         <Menu />
       </SheetTrigger>
       <SheetContent
+        ref={sheet.popupRef}
         side="left"
         className="flex w-72 flex-col gap-2 border-border/60 bg-raised pt-4 pb-2"
         onClickCapture={(e) => {
-          if ((e.target as HTMLElement).closest("a[href]")) setOpen(false);
+          if ((e.target as HTMLElement).closest("a[href]")) sheet.onOpenChange(false);
         }}
       >
         <SheetTitle className="sr-only">Navigation</SheetTitle>
         <button
           type="button"
           onClick={() => {
-            setOpen(false);
+            sheet.onOpenChange(false);
             openSearch();
           }}
           className="mx-3 flex h-8 items-center gap-2 rounded-lg px-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"

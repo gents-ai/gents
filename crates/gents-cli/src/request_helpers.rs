@@ -533,9 +533,11 @@ pub(crate) async fn submit_prepared_agent_request_committed(
         .map_err(anyhow::Error::msg)?;
     access
         .write_with_receipt("cli.request.submit", &mutation, || async {
-            Ok(matching_prepared_receipt(graphql, &prepared.create)
-                .await?
-                .is_some())
+            Ok::<_, anyhow::Error>(
+                matching_prepared_receipt(graphql, &prepared.create)
+                    .await?
+                    .is_some(),
+            )
         })
         .await
         .with_context(|| {
@@ -1345,8 +1347,11 @@ mod tests {
             }
             // The mutation committed, but its response was lost/replaced by a
             // transient error at the transport boundary.
-            return Json(json!({"errors": [{"message": "transaction conflict. please retry"}]}))
-                .into_response();
+            return Json(json!({"errors": [{
+                "message": "transaction conflict. Please retry",
+                "extensions": {"code": gents_protocol::database_error::TXN_CONFLICT_CODE}
+            }]}))
+            .into_response();
         }
         let rows: Vec<Value> = state
             .durable_ids

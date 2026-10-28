@@ -215,7 +215,7 @@ async fn schema(paths: &DesktopPaths, did: &str) -> Result<defra_node::Collectio
     let key = tokio::task::spawn_blocking(move || -> Result<_> {
         let record: StoreEncryption =
             serde_json::from_slice(&std::fs::read(prepare.store_encryption_path())?)?;
-        record.load(prepare.store_key_path(), prepare.node_data_dir())
+        Ok(record.load(prepare.store_key_path(), prepare.node_data_dir())?)
     })
     .await??;
     let identity = PrincipalIdentity::load_or_create(paths).await?;

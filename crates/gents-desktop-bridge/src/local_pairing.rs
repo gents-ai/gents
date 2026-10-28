@@ -29,6 +29,11 @@ pub(crate) const PERMANENT_PAIRING_ERRORS: &[&str] =
     &["incompatible", "does not match", "predates this app"];
 
 impl PairingFailure {
+    /// Not yet typed: the pairing closures flatten desktop-core, runtime
+    /// status and server-host failures to strings before this reads them, so
+    /// a permanent refusal (runtime schema skew, outdated runtime, offer or
+    /// identity mismatch) is recognized by its wording. Each origin should
+    /// return a typed refusal the pairing flow matches instead.
     pub(crate) fn classify(message: String) -> Self {
         if PERMANENT_PAIRING_ERRORS
             .iter()
@@ -279,7 +284,7 @@ pub(crate) async fn ensure_managed_runtime_pairing(
                 Ok(()) => Ok(PairingApproval::Committed),
                 Err(error) => {
                     let message = format!("{error:#}");
-                    if enrollment_request_is_not_visible_yet(&message) {
+                    if enrollment_request_is_not_visible_yet(&error) {
                         tracing::debug!(
                             request_id = %request_id,
                             "managed enrollment request is not yet visible to operator approval"
@@ -373,6 +378,11 @@ where
     }
 }
 
-pub(crate) fn enrollment_request_is_not_visible_yet(message: &str) -> bool {
-    message.contains("no fresh pending enrollment request")
+pub(crate) fn enrollment_request_is_not_visible_yet(error: &anyhow::Error) -> bool {
+    gents_protocol::error_chain::find_source::<
+        gents_server::server_host::EnrollmentDecisionRejected,
+    >(error.as_ref())
+    .is_some_and(|rejected| {
+        rejected.code == Some(gents_protocol::enrollment::EnrollmentDecisionRefusalCode::NotPending)
+    })
 }

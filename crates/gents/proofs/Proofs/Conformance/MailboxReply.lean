@@ -80,4 +80,58 @@ def casesJson : String := jsonArray <|
       variants.map fun (name, envelope, reply) =>
         caseJson (baselineItem status receipt) name envelope reply
 
+private def savedAnswer : AnswerCacheBinding :=
+  { client := "client", node := "node", agent := "agent", session := "session",
+    item := "question", sourceItem := "question", confirmed := true }
+
+private def closedQuestion : AnswerCacheObservation :=
+  { requester := "client", node := "node", agent := "agent", session := "session",
+    item := "question", kind := .ask, handling := .startRequest, status := .acted }
+
+private def answerCacheCases : List
+    (String × AnswerCacheBinding × Option AnswerCacheObservation × String × Bool) :=
+  [ ("acted", savedAnswer, some closedQuestion, "client", true)
+  , ("dismissed", savedAnswer, some { closedQuestion with status := .dismissed }, "client", true)
+  , ("expired", savedAnswer, some { closedQuestion with status := .expired }, "client", true)
+  , ("open", savedAnswer, some { closedQuestion with status := .open }, "client", true)
+  , ("missing", savedAnswer, none, "client", true)
+  , ("uncertain-delivery", { savedAnswer with confirmed := false }, some closedQuestion, "client", true)
+  , ("acknowledgement-lost", savedAnswer, some closedQuestion, "client", false)
+  , ("client-switched", savedAnswer, some closedQuestion, "other", true)
+  , ("foreign-reader", savedAnswer, some { closedQuestion with requester := "other" }, "client", true)
+  , ("wrong-node", savedAnswer, some { closedQuestion with node := "other" }, "client", true)
+  , ("wrong-agent", savedAnswer, some { closedQuestion with agent := "other" }, "client", true)
+  , ("wrong-session", savedAnswer, some { closedQuestion with session := "other" }, "client", true)
+  , ("wrong-question", savedAnswer, some { closedQuestion with item := "other" }, "client", true)
+  , ("wrong-kind", savedAnswer, some { closedQuestion with kind := .gate }, "client", true)
+  , ("wrong-action", savedAnswer, some { closedQuestion with handling := .ack }, "client", true)
+  , ("empty-binding", { savedAnswer with item := "", sourceItem := "" }, some closedQuestion, "client", true)
+  , ("mismatched-authored-source", { savedAnswer with sourceItem := "other" }, some closedQuestion, "client", true)
+  ]
+
+def answerCacheCasesJson : String := jsonArray <| answerCacheCases.map fun
+    (name, binding, observed, current, ack) =>
+  let observation := observed.map fun value =>
+    "{\"item\":{\"itemId\":" ++ jsonString value.item ++
+    ",\"requesterDid\":" ++ jsonString value.requester ++
+    ",\"targetNodeDid\":" ++ jsonString value.node ++
+    ",\"targetAgentId\":" ++ jsonString value.agent ++
+    ",\"sessionId\":" ++ jsonString value.session ++
+    ",\"kind\":" ++ jsonString value.kind.toDefraDB ++
+    ",\"action\":" ++ jsonString value.handling.toDefraDB ++
+    ",\"status\":" ++ jsonString value.status.toDefraDB ++
+    "},\"terminal\":" ++ boolJson value.status.terminal ++ "}"
+  "{\"name\":" ++ jsonString name ++
+  ",\"binding\":{\"clientDid\":" ++ jsonString binding.client ++
+  ",\"nodeDid\":" ++ jsonString binding.node ++
+  ",\"agentId\":" ++ jsonString binding.agent ++
+  ",\"sessionId\":" ++ jsonString binding.session ++
+  ",\"itemId\":" ++ jsonString binding.item ++
+  ",\"sourceItemId\":" ++ jsonString binding.sourceItem ++
+  ",\"confirmed\":" ++ boolJson binding.confirmed ++ "}" ++
+  ",\"observation\":" ++ observation.getD "null" ++
+  ",\"currentClient\":" ++ jsonString current ++
+  ",\"acknowledged\":" ++ boolJson ack ++
+  ",\"retire\":" ++ boolJson (mayRetireAnswerCache binding observed current ack) ++ "}"
+
 end Conformance.MailboxReplyContracts

@@ -397,7 +397,7 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
                 Box::pin(async move {
                     entered.notify_one();
                     release.notified().await;
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             },
         )

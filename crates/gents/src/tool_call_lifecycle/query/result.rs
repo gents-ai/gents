@@ -18,10 +18,17 @@ enum ReadSource<'a, 'txn> {
 }
 
 impl ReadSource<'_, '_> {
+    async fn collection_version(self, collection: &str) -> Result<Option<Value>> {
+        match self {
+            Self::Access(access) => Ok(access.collection_version(collection).await?),
+            Self::Txn(txn) => Ok(txn.collection_version(collection).await?),
+        }
+    }
+
     async fn execute(self, query: &str) -> Result<Value> {
         match self {
-            Self::Access(access) => access.execute(query).await,
-            Self::Txn(txn) => txn.execute(query).await,
+            Self::Access(access) => Ok(access.execute(query).await?),
+            Self::Txn(txn) => Ok(txn.execute(query).await?),
         }
     }
 
@@ -156,8 +163,46 @@ pub async fn load_tool_file_change_observation(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<ToolFileChangeRead> {
-    let (call, _, _, _) = load_accepted_tool_call(
+    load_tool_file_change_observation_source(
         ReadSource::Access(access),
+        tool_call_doc_id,
+        request_doc_id,
+        node_did,
+        session_id,
+        requester_did,
+    )
+    .await
+}
+
+pub(crate) async fn load_tool_file_change_observation_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    tool_call_doc_id: &str,
+    request_doc_id: &str,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<ToolFileChangeRead> {
+    load_tool_file_change_observation_source(
+        ReadSource::Txn(txn),
+        tool_call_doc_id,
+        request_doc_id,
+        node_did,
+        session_id,
+        requester_did,
+    )
+    .await
+}
+
+async fn load_tool_file_change_observation_source(
+    source: ReadSource<'_, '_>,
+    tool_call_doc_id: &str,
+    request_doc_id: &str,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<ToolFileChangeRead> {
+    let (call, _, _, _) = load_accepted_tool_call(
+        source,
         tool_call_doc_id,
         node_did,
         session_id,
@@ -173,14 +218,14 @@ pub async fn load_tool_file_change_observation(
     if !state.is_terminal() {
         return Ok(ToolFileChangeRead::Pending);
     }
-    if access
+    if source
         .collection_version(gents_protocol::schemas::TOOL_FILE_CHANGE_NAME)
         .await?
         .is_none()
     {
         return Ok(ToolFileChangeRead::Unsupported);
     }
-    let response = access.execute(&format!(
+    let response = source.execute(&format!(
         r#"{{ ToolFileChange(filter: {{ tool_call_doc_id: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id node_did session_id requester_did file_changes }} }}"#,
         escape_graphql_string(tool_call_doc_id),
     )).await?;
@@ -1190,7 +1235,7 @@ mod tests {
                 txn.execute_with_variables(&format!(
                     r#"mutation($output: JSON) {{ update_AgentToolCall(docID: "{doc}", input: {{ terminal_output: $output }}) {{ _docID }} }}"#
                 ), &serde_json::json!({"output": foreign})).await?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         }).await.unwrap();
         assert!(
@@ -1369,7 +1414,7 @@ mod tests {
                     .await
                     .unwrap_err();
                 assert!(error.to_string().contains("ambiguous invocation reply"));
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await
@@ -1413,7 +1458,7 @@ mod tests {
                     .await
                     .unwrap_err();
                 assert!(error.to_string().contains("carries no native tool-result"));
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await

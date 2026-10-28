@@ -8,6 +8,17 @@ async fn fixture() -> (
     ImageDemandRow,
     String,
 ) {
+    fixture_with_reference(false).await
+}
+
+async fn fixture_with_reference(
+    bound: bool,
+) -> (
+    tempfile::TempDir,
+    GraphqlHydrationStore,
+    ImageDemandRow,
+    String,
+) {
     let directory = tempfile::tempdir().unwrap();
     let identity: Arc<dyn NodeIdentity> =
         Arc::new(KeyIdentity::load_or_create(directory.path().join("source.key"), None).unwrap());
@@ -25,23 +36,43 @@ async fn fixture() -> (
     let mut demand = spec.demand.demand;
     demand.admission.node_did = identity.did().into();
     demand.admission.requester_did = requester.did().into();
-    let fields = demand
+    if bound {
+        demand.inventory_reference = Some(FileImageInventoryReference {
+            page: gents_protocol::file_inventory::FileInventoryPageDemand {
+                admission: gents_protocol::file_inventory::FileInventoryAdmission {
+                    request: demand.admission.clone(),
+                    session_doc_id: "physical-root".into(),
+                },
+                attempt_id: "metadata-attempt".into(),
+                cursor: None,
+            },
+            snapshot_digest: "metadata-digest".into(),
+            entry_index: 0,
+        });
+    }
+    let mut input: serde_json::Map<String, Value> = demand
         .reference_fields()
         .into_iter()
-        .map(|(key, value)| format!("{key}: \"{}\"", escape_graphql_string(value)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let response = ConfigAccess::write_local(
-        &node,
-        "test.file_image_storage.admit",
-        &format!(
-            r#"mutation {{ create_FileImageHydrationRequest(input: {{
-            {fields}, created_at: "2026-10-20T00:00:00Z", status: "pending"
-        }}) {{ _docID }} }}"#
-        ),
-    )
-    .await
-    .unwrap();
+        .map(|(field, value)| (field.to_owned(), Value::String(value.to_owned())))
+        .collect();
+    if let Some(reference) = &demand.inventory_reference {
+        input.insert(
+            "inventory_reference".into(),
+            serde_json::to_value(reference).unwrap(),
+        );
+    }
+    input.insert("created_at".into(), Value::String(Utc::now().to_rfc3339()));
+    input.insert("status".into(), Value::String("pending".into()));
+    let collection = demand.collection_name();
+    let response = ConfigAccess::transact_local_write(&node, None, "test.file_review.admit", |txn| {
+        let input = &input;
+        Box::pin(async move {
+            txn.execute_with_variables(
+                &format!("mutation($input: {0}MutationInputArg!) {{ create_FileImageHydrationRequest: create_{0}(input: $input) {{ _docID }} }}", collection),
+                &json!({"input": input}),
+            ).await
+        })
+    }).await.unwrap();
     let document_id =
         crate::graphql::created_doc_id(&response, "FileImageHydrationRequest").unwrap();
     let store = GraphqlHydrationStore {
@@ -158,5 +189,71 @@ async fn the_requester_cannot_read_or_delete_the_source_receipt() {
             .is_err()
     );
     assert_eq!(journal(&store).await, before);
+    store.node.shutdown().await;
+}
+
+#[tokio::test]
+async fn inventory_bound_receipt_roundtrips_and_refuses_a_changed_snapshot() {
+    let (_directory, store, row, _) = fixture_with_reference(true).await;
+    store
+        .commit(&row, &FileImageSelection::Rejected, "no image access")
+        .await
+        .unwrap();
+    let receipt = store.prior(&row).await.unwrap().unwrap();
+    assert_eq!(
+        receipt.version,
+        gents_protocol::file_image_hydration::FILE_INVENTORY_IMAGE_RECEIPT_VERSION
+    );
+    assert_eq!(receipt.demand, row.demand);
+    let mut wrong = row.clone();
+    wrong
+        .demand
+        .inventory_reference
+        .as_mut()
+        .unwrap()
+        .snapshot_digest = "other-snapshot".into();
+    assert!(store.prior(&wrong).await.is_err());
+    assert!(store
+        .commit(&wrong, &FileImageSelection::Rejected, "different snapshot")
+        .await
+        .is_err());
+    assert_eq!(store.prior(&row).await.unwrap().unwrap(), receipt);
+    let identity = store.identity.clone();
+    let path = _directory.path().join("store");
+    store.node.shutdown().await;
+    drop(store);
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .data_path(path)
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let store = GraphqlHydrationStore {
+        node,
+        enrollment: crate::agent::p2p_reconcile::enrollment_authority_channel().1,
+        identity,
+    };
+    assert_eq!(store.prior(&row).await.unwrap().unwrap(), receipt);
+    store.node.shutdown().await;
+}
+
+#[tokio::test]
+async fn malformed_inventory_reference_does_not_block_another_pending_image() {
+    let (_directory, store, row, _) = fixture_with_reference(true).await;
+    let input = json!({"request_key":"malformed-image", "node_did":store.identity.did(),
+        "inventory_reference":"malformed", "created_at":"2026-10-28T00:00:00Z", "status":"pending"});
+    ConfigAccess::transact_local_write(&store.node, None, "test.file_image.bad_reference", |txn| {
+        let input = &input;
+        Box::pin(async move {
+            txn.execute_with_variables(
+                "mutation($input: FileInventoryImageRequestMutationInputArg!) { create_FileInventoryImageRequest(input: $input) {_docID}}",
+                &json!({"input":input}),
+            ).await
+        })
+    }).await.unwrap();
+    assert_eq!(store.pending_images().await.unwrap(), vec![row]);
     store.node.shutdown().await;
 }

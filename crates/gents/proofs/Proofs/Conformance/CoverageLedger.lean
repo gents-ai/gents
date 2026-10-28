@@ -846,6 +846,16 @@ def caseCoverage : List CoverageEntry :=
       "The status consumer observes publication/router-generation writeback. Generated request acceptance, lifetime tracking and generation retirement need router/reconciler owner consumers; fixture-only arithmetic is not implementation coverage.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "catalog_refresh_cases"
+      "CatalogRefreshCases"
+      "backend_registry::tests::generated_catalog_refreshes_preserve_payload_commits_and_latest_freshness")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "request_terminal_selection_cases"
+      "RequestTerminalSelectionCases"
+      "agent::p2p_reconcile::session_hydration_reconcile::selection::tests::generated_terminal_selections_preserve_superseded_session_hydration")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "plugin_reference_cases"
       "PluginReferenceCases"
       "pack::installation::tests::generated_plugin_reference_cases_validate_prepared_pack_resources")
@@ -1502,6 +1512,18 @@ def caseCoverage : List CoverageEntry :=
       "Uses the native fork owner and source snapshot reader to preserve selected physical origins while excluding later parent work. Signed inventory transport and installed acceptance remain separate obligations.")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "file_inventory_reader_cases"
+      "FileInventoryReaderCases"
+      "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::readers::shared_reader_metadata_preserves_canonical_authorship_and_image_privacy"
+      "Refines public-root visibility, exact physical binding, explicit projection read permission, revocation and reauthorization in one native source snapshot. Two enrolled identities, signed delivery and selected-image transport remain separate obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "file_inventory_selected_image_cases"
+      "FileInventorySelectedImageCases"
+      "agent::p2p_reconcile::file_image_hydration::tests::inventory::generated_inventory_images_keep_reader_root_snapshot_and_source_distinct"
+      "Executes snapshot-bound selection over native page, root, canonical tool and independent metadata/image-read observations. Source cryptographic/ACP interleavings, two enrolled identities and installed delivery remain separate obligations.")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "file_inventory_source_projection_cases"
       "FileInventorySourceProjectionCases"
       "agent::p2p_reconcile::session_hydration_reconcile::inventory::tests::generated_projection_cases_use_native_owners_and_scopes"
@@ -1674,6 +1696,11 @@ def caseCoverage : List CoverageEntry :=
       "plugin_resource_cases"
       "PluginScratchCases"
       "conformance::tool_policy::generated_plugin_job_resource_cases_drive_scratch")
+      "plugin-jobs" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "plugin_resource_cases"
+      "PluginHostImportCases"
+      "conformance::tool_policy::generated_plugin_host_import_cases_drive_the_grant")
       "plugin-jobs" [Surface.agentFacing]
   , tagged (consumerCoverage
       "plugin_calls_route_cases"

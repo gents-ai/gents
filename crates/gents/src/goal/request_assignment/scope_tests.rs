@@ -1,6 +1,5 @@
 use super::*;
 use crate::identity::{KeyIdentity, NodeIdentity};
-use anyhow::Result;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -12,7 +11,10 @@ struct ReadScope {
 
 #[async_trait::async_trait]
 impl crate::config_client::ConfigRead for ReadScope {
-    async fn execute_read(&self, query: &str) -> Result<Value> {
+    async fn execute_read(
+        &self,
+        query: &str,
+    ) -> Result<Value, crate::config_client::ConfigClientError> {
         if query.contains("AgentRequest(") {
             let rows = self
                 .rows
@@ -26,7 +28,15 @@ impl crate::config_client::ConfigRead for ReadScope {
             return Ok(json!({"data":{"AgentRequest":rows}}));
         }
         self.history_reads.fetch_add(1, Ordering::Relaxed);
-        anyhow::ensure!(!self.refuse_history, "retained Goal history is unavailable");
+        if self.refuse_history {
+            return Err(crate::graphql::GraphqlResponseError::from(
+                gents_protocol::database_error::GraphqlFailure::new(
+                    "Goal",
+                    json!([{"message": "retained Goal history is unavailable"}]),
+                ),
+            )
+            .into());
+        }
         Ok(json!({"data":{"Goal":[]}}))
     }
 }

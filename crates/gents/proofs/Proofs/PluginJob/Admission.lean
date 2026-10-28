@@ -38,6 +38,11 @@ structure StepContext where
   liveBackground : Nat
   /-- The host's cross-session ancestry walk; read on step 0. -/
   startedByJob : Bool
+  /-- The sha256 (hex) of the call's non-empty `script`, computed by the host;
+  `none` when the call carries none. A step-0 pin of such a call must name it
+  (`pinMismatch`): the rule covers every job plugin whose call carries a
+  `script`, not only the one that asks the host to run it. Read on step 0. -/
+  scriptDigest : Option String := none
   /-- The facts the host writes into the pin it adopts from a step-0 guest pin
   with no `resume`. The guest supplies only the `GuestPin` fields; the origin
   and every other field are host facts, so step-0 effects are admitted under
@@ -70,6 +75,7 @@ def effectiveTargets (ctx : StepContext) (pin : Pin) : EndpointScope Target Unit
 inductive Refusal
   | terminal | notAvailable | engineChanged | policyDenied | stalled | depthExceeded | timedOut
   | stepFailed | backgroundBudgetExceeded | dynamicCodeDisabled | resumeUnknown | resumeNotHead
+  | pinMismatch
   deriving DecidableEq, Repr
 
 /-- The host terminal codes; `.terminal` is a no-op and has none. -/
@@ -85,6 +91,7 @@ def Refusal.code : Refusal → Option String
   | .backgroundBudgetExceeded => some "background_tool_budget_exceeded"
   | .resumeUnknown => some "plugin_job_resume_unknown"
   | .resumeNotHead => some "plugin_job_resume_not_head"
+  | .pinMismatch => some "plugin_job_pin_mismatch"
 
 def StepOutput.pin : StepOutput → Option GuestPin
   | .result _ _ p _ => p
@@ -430,6 +437,43 @@ def settleStep (ctx : StepContext) (job : Job) (out : StepOutput)
   | .error .terminal => (job, [])
   | .error _ => ((terminalizeRow job .failed).1, (Control.kill job .stop obs).2)
 
+/-- A step-0 pin of a call carrying `script` must name that script: `scriptId`
+its sha256 (`ctx.scriptDigest`) and `sourceDigest` `"sha256:" ++ scriptId`. A
+later step (the row is pinned), a call without a script, an output without a
+pin and an ended row are not subject to the rule. The rule covers every job
+plugin whose call carries a `script`, not only the one that asks the host to
+run it. -/
+def pinMismatch (ctx : StepContext) (job : Job) (out : StepOutput) : Bool :=
+  job.state = .running && job.pin.isNone &&
+    match ctx.scriptDigest, out.pin with
+    | some d, some g => !(g.scriptId == d && g.sourceDigest == "sha256:" ++ d)
+    | _, _ => false
+
+/-- `admitStep` behind the pin rule: a mismatched step-0 pin is refused
+`.pinMismatch` before any other admission reading; a row that already ended
+is still `.terminal` (`admitStep` says so first). -/
+def admitStepGuarded (ctx : StepContext) (job : Job) (out : StepOutput) : Except Refusal Job :=
+  if pinMismatch ctx job out then .error .pinMismatch else admitStep ctx job out
+
+/-- `settleStep` over `admitStepGuarded`: the mismatch fails the row closed
+like every other refusal. -/
+def settleStepGuarded (ctx : StepContext) (job : Job) (out : StepOutput)
+    (obs : SpawnKey → Recovery.KillObservation) : Job × List (SpawnKey × Recovery.KillAction) :=
+  match admitStepGuarded ctx job out with
+  | .ok j => (j, [])
+  | .error .terminal => (job, [])
+  | .error _ => ((terminalizeRow job .failed).1, (Control.kill job .stop obs).2)
+
+/-- Without a mismatch the guard is transparent. -/
+theorem admitStepGuarded_of_names (ctx : StepContext) (job : Job) (out : StepOutput)
+    (h : pinMismatch ctx job out = false) : admitStepGuarded ctx job out = admitStep ctx job out := by
+  simp [admitStepGuarded, h]
+
+/-- A pinned row is never refused by the guard. -/
+theorem pinMismatch_pinned (ctx : StepContext) (job : Job) (out : StepOutput) (p : Pin)
+    (h : job.pin = some p) : pinMismatch ctx job out = false := by
+  simp [pinMismatch, h]
+
 /-- A resume naming no row is `resumeUnknown`; one naming a row the caller may
 manage that a later resume continued is `resumeNotHead`. -/
 theorem resume_refusal_names_cause (ctx : StepContext) (out : StepOutput) (r : Resume)
@@ -445,12 +489,13 @@ theorem resume_refusal_names_cause (ctx : StepContext) (out : StepOutput) (r : R
 theorem refusal_code_spellings :
     Refusal.code .terminal = none ∧
       [Refusal.stalled, .policyDenied, .notAvailable, .engineChanged, .timedOut, .depthExceeded,
-          .stepFailed, .backgroundBudgetExceeded, .resumeUnknown, .resumeNotHead].map Refusal.code =
+          .stepFailed, .backgroundBudgetExceeded, .resumeUnknown, .resumeNotHead,
+          .pinMismatch].map Refusal.code =
         [some "plugin_job_stalled", some "plugin_job_policy_denied", some "plugin_job_not_available",
           some "plugin_job_engine_changed", some "plugin_job_timed_out",
           some "plugin_job_depth_exceeded", some "plugin_job_step_failed",
           some "background_tool_budget_exceeded", some "plugin_job_resume_unknown",
-          some "plugin_job_resume_not_head"] ∧
+          some "plugin_job_resume_not_head", some "plugin_job_pin_mismatch"] ∧
       ∀ r : Refusal, r.code = none ↔ r = .terminal := by
   refine ⟨rfl, rfl, ?_⟩
   intro r

@@ -1,4 +1,3 @@
-use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -7,6 +6,60 @@ use crate::{
 };
 
 pub const SESSION_GOAL_CONTROL_VERSION: u8 = 1;
+
+#[derive(Debug, thiserror::Error)]
+pub enum GoalControlError {
+    #[error("unsupported goal observation version")]
+    ObservationUnsupportedVersion,
+    #[error("goal observation scope differs from its session")]
+    ObservationScopeDiffers,
+    #[error("invalid goal observation signature length")]
+    ObservationInvalidSignatureLength,
+    #[error("observed goal belongs to another session")]
+    ObservedGoalForeignSession,
+    #[error("observed goal has no document revision")]
+    ObservedGoalNoRevision,
+    #[error("unsupported goal control version")]
+    UnsupportedVersion,
+    #[error("empty goal control identity")]
+    EmptyIdentity,
+    #[error("empty goal control peer identity")]
+    EmptyRequesterPeer,
+    #[error(transparent)]
+    Timestamp(#[from] chrono::ParseError),
+    #[error("goal control expiry must follow issuance")]
+    ExpiryNotAfterIssue,
+    #[error("invalid goal control signature length")]
+    InvalidSignatureLength,
+    #[error("goal creation requires its signed first request")]
+    CreateWithoutInitialRequest,
+    #[error("empty goal control session document")]
+    EmptySessionDocument,
+    #[error("goal control lacks its session document")]
+    MissingSessionDocument,
+    #[error("goal control lacks its observed revision")]
+    MissingObservedRevision,
+    #[error("empty goal control revision")]
+    EmptyRevision,
+    #[error(transparent)]
+    Serialize(#[from] serde_json::Error),
+    #[error("unsupported goal control receipt version")]
+    ReceiptUnsupportedVersion,
+    #[error("goal control receipt differs from its command")]
+    ReceiptDiffers,
+    #[error("invalid goal control receipt signature length")]
+    ReceiptInvalidSignatureLength,
+    #[error("goal control receipt has no goal identity")]
+    ReceiptNoGoal,
+    #[error("empty resumed request identity")]
+    ReceiptEmptyRequest,
+    #[error("goal control receipt publishes an unexpected request")]
+    ReceiptUnexpectedRequest,
+    #[error("goal control receipt names another initial request")]
+    ReceiptAnotherInitialRequest,
+}
+
+type Result<T, E = GoalControlError> = std::result::Result<T, E>;
 
 /// Clients must observe this capability on the selected serving runtime before
 /// removing a goal or replacing a terminal assignment with a fresh signed start.
@@ -62,31 +115,27 @@ impl SessionGoalObservation {
         session_doc_id: &str,
         requester_did: Option<&str>,
     ) -> Result<()> {
-        ensure!(
-            self.version == SESSION_GOAL_CONTROL_VERSION,
-            "unsupported goal observation version"
-        );
-        ensure!(
-            self.node_did == node_did
-                && self.session_id == session_id
-                && self.session_doc_id == session_doc_id
-                && self.requester_did.as_deref() == requester_did,
-            "goal observation scope differs from its session"
-        );
+        if self.version != SESSION_GOAL_CONTROL_VERSION {
+            return Err(GoalControlError::ObservationUnsupportedVersion);
+        }
+        if !(self.node_did == node_did
+            && self.session_id == session_id
+            && self.session_doc_id == session_doc_id
+            && self.requester_did.as_deref() == requester_did)
+        {
+            return Err(GoalControlError::ObservationScopeDiffers);
+        }
         chrono::DateTime::parse_from_rfc3339(&self.observed_at)?;
-        ensure!(
-            self.signature.len() == 64,
-            "invalid goal observation signature length"
-        );
+        if self.signature.len() != 64 {
+            return Err(GoalControlError::ObservationInvalidSignatureLength);
+        }
         if let Some(goal) = &self.goal {
-            ensure!(
-                goal.snapshot.node_did == node_did && goal.snapshot.session_id == session_id,
-                "observed goal belongs to another session"
-            );
-            ensure!(
-                !goal.revision.document.is_empty() && !goal.revision.composite.is_empty(),
-                "observed goal has no document revision"
-            );
+            if goal.snapshot.node_did != node_did || goal.snapshot.session_id != session_id {
+                return Err(GoalControlError::ObservedGoalForeignSession);
+            }
+            if goal.revision.document.is_empty() || goal.revision.composite.is_empty() {
+                return Err(GoalControlError::ObservedGoalNoRevision);
+            }
         }
         Ok(())
     }
@@ -143,55 +192,56 @@ impl SessionGoalControl {
     }
 
     pub fn validate_shape(&self) -> Result<()> {
-        ensure!(
-            self.version == SESSION_GOAL_CONTROL_VERSION,
-            "unsupported goal control version"
-        );
+        if self.version != SESSION_GOAL_CONTROL_VERSION {
+            return Err(GoalControlError::UnsupportedVersion);
+        }
         for value in [
             &self.command_id,
             &self.requester_did,
             &self.node_did,
             &self.session_id,
         ] {
-            ensure!(!value.trim().is_empty(), "empty goal control identity");
+            if value.trim().is_empty() {
+                return Err(GoalControlError::EmptyIdentity);
+            }
         }
-        ensure!(
-            self.requester_peer_id
-                .as_ref()
-                .is_none_or(|peer| !peer.trim().is_empty()),
-            "empty goal control peer identity"
-        );
+        if self
+            .requester_peer_id
+            .as_ref()
+            .is_some_and(|peer| peer.trim().is_empty())
+        {
+            return Err(GoalControlError::EmptyRequesterPeer);
+        }
         let issued = chrono::DateTime::parse_from_rfc3339(&self.issued_at)?;
         let expires = chrono::DateTime::parse_from_rfc3339(&self.expires_at)?;
-        ensure!(expires > issued, "goal control expiry must follow issuance");
-        ensure!(
-            self.signature.len() == 64,
-            "invalid goal control signature length"
-        );
-        ensure!(
-            matches!(self.operation, GoalOperation::Create { .. })
-                == self.initial_request.is_some(),
-            "goal creation requires its signed first request"
-        );
-        ensure!(
-            self.session_doc_id
-                .as_ref()
-                .is_none_or(|id| !id.trim().is_empty()),
-            "empty goal control session document"
-        );
+        if expires <= issued {
+            return Err(GoalControlError::ExpiryNotAfterIssue);
+        }
+        if self.signature.len() != 64 {
+            return Err(GoalControlError::InvalidSignatureLength);
+        }
+        if matches!(self.operation, GoalOperation::Create { .. }) != self.initial_request.is_some()
+        {
+            return Err(GoalControlError::CreateWithoutInitialRequest);
+        }
+        if self
+            .session_doc_id
+            .as_ref()
+            .is_some_and(|id| id.trim().is_empty())
+        {
+            return Err(GoalControlError::EmptySessionDocument);
+        }
         if !matches!(self.operation, GoalOperation::Create { .. }) || self.expected.is_some() {
-            ensure!(
-                self.session_doc_id.is_some(),
-                "goal control lacks its session document"
-            );
+            if self.session_doc_id.is_none() {
+                return Err(GoalControlError::MissingSessionDocument);
+            }
             let revision = self
                 .expected
                 .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("goal control lacks its observed revision"))?;
-            ensure!(
-                !revision.document.trim().is_empty() && !revision.composite.trim().is_empty(),
-                "empty goal control revision"
-            );
+                .ok_or(GoalControlError::MissingObservedRevision)?;
+            if revision.document.trim().is_empty() || revision.composite.trim().is_empty() {
+                return Err(GoalControlError::EmptyRevision);
+            }
         }
         Ok(())
     }
@@ -234,49 +284,44 @@ impl SessionGoalControlReceipt {
     }
 
     pub fn validate_for(&self, command: &SessionGoalControl) -> Result<()> {
-        ensure!(
-            self.version == SESSION_GOAL_CONTROL_VERSION,
-            "unsupported goal control receipt version"
-        );
-        ensure!(
-            self.command_id == command.command_id
-                && self.command_digest == command.computed_digest()?
-                && self.requester_did == command.requester_did
-                && self.node_did == command.node_did
-                && self.session_id == command.session_id,
-            "goal control receipt differs from its command"
-        );
+        if self.version != SESSION_GOAL_CONTROL_VERSION {
+            return Err(GoalControlError::ReceiptUnsupportedVersion);
+        }
+        if !(self.command_id == command.command_id
+            && self.command_digest == command.computed_digest()?
+            && self.requester_did == command.requester_did
+            && self.node_did == command.node_did
+            && self.session_id == command.session_id)
+        {
+            return Err(GoalControlError::ReceiptDiffers);
+        }
         chrono::DateTime::parse_from_rfc3339(&self.processed_at)?;
-        ensure!(
-            self.signature.len() == 64,
-            "invalid goal control receipt signature length"
-        );
+        if self.signature.len() != 64 {
+            return Err(GoalControlError::ReceiptInvalidSignatureLength);
+        }
         if let GoalControlOutcome::Applied {
             goal_id,
             request_id,
         } = &self.outcome
         {
-            ensure!(
-                !goal_id.trim().is_empty(),
-                "goal control receipt has no goal identity"
-            );
-            ensure!(
-                request_id.as_ref().is_none_or(|id| !id.trim().is_empty()),
-                "empty resumed request identity"
-            );
-            ensure!(
-                request_id.is_none()
-                    || matches!(
-                        command.operation,
-                        GoalOperation::Create { .. } | GoalOperation::Resume {}
-                    ),
-                "goal control receipt publishes an unexpected request"
-            );
+            if goal_id.trim().is_empty() {
+                return Err(GoalControlError::ReceiptNoGoal);
+            }
+            if request_id.as_ref().is_some_and(|id| id.trim().is_empty()) {
+                return Err(GoalControlError::ReceiptEmptyRequest);
+            }
+            if request_id.is_some()
+                && !matches!(
+                    command.operation,
+                    GoalOperation::Create { .. } | GoalOperation::Resume {}
+                )
+            {
+                return Err(GoalControlError::ReceiptUnexpectedRequest);
+            }
             if let Some(initial) = command.initial_request.as_deref() {
-                ensure!(
-                    request_id.as_deref() == Some(initial.request_id.as_str()),
-                    "goal control receipt names another initial request"
-                );
+                if request_id.as_deref() != Some(initial.request_id.as_str()) {
+                    return Err(GoalControlError::ReceiptAnotherInitialRequest);
+                }
             }
         }
         Ok(())

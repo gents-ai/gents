@@ -152,6 +152,12 @@ export const seenMarks = {
     const others = state.seen.filter((entry) => entry.session !== session);
     store.setState({ seen: [{ session, mark }, ...others].slice(0, SEEN_KEPT) });
   },
+  /** drops a session's mark, as if it was never on screen here */
+  forget(session: SessionKey) {
+    const state = store.getState();
+    if (!seenOf(state, session)) return;
+    store.setState({ seen: state.seen.filter((entry) => entry.session !== session) });
+  },
   /** the first call on a device sets when it started keeping marks */
   start(now: string) {
     if (!store.getState().since) store.setState({ since: now });

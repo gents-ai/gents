@@ -1,5 +1,6 @@
 import Proofs.SessionHydration.FileInventoryCases
 import Proofs.SessionHydration.FileInventoryOrderCases
+import Proofs.SessionHydration.ReaderCases
 import Proofs.Conformance.Contracts.Json.SessionHydration
 import Proofs.Conformance.Contracts.Json.NativeExecution
 
@@ -87,25 +88,41 @@ private def closureJson (value : ClosureInput) : String := object
       [("root_close_id", toString row.rootCloseId), ("denied_doc_id", toString row.deniedDocId)])),
    ("effects", jsonArray (value.effects.map hydrationEffectJson))]
 
+private def sessionOwnerJson (row : SessionOwner) : String := object
+  [("session", jsonString row.session), ("native_session", toString row.nativeSession),
+   ("requester", jsonString row.requester), ("node", jsonString row.node)]
+
+private def sessionReadJson (value : SessionReadObservation) : String := object
+  [("scope", object [("peer", jsonString value.scope.peer),
+      ("requester", jsonString value.scope.requester), ("node", jsonString value.scope.node),
+      ("session", jsonString value.scope.session),
+      ("native_session", toString value.scope.nativeSession)]),
+   ("source", sessionOwnerJson value.source), ("visible", boolString value.visible)]
+
 private def catalogJson (value : CatalogInput) : String := object
   [("applied_pairing_routes", jsonArray (value.appliedPairingRoutes.map fun row => object
       [("peer", jsonString row.peer), ("requester", jsonString row.requester), ("node", jsonString row.node)])),
    ("selected_network", jsonString value.selectedNetwork),
    ("verified_active_memberships", jsonArray (value.verifiedActiveMemberships.map fun row => object
       [("network", jsonString row.network), ("member", jsonString row.member)])),
-   ("sessions", jsonArray (value.sessions.map fun row => object
-      [("session", jsonString row.session), ("native_session", toString row.nativeSession),
-       ("requester", jsonString row.requester), ("node", jsonString row.node)])),
+   ("sessions", jsonArray (value.sessions.map sessionOwnerJson)),
+   ("session_reads", jsonArray (value.sessionReads.map sessionReadJson)),
    ("closure_inputs", jsonArray (value.closureInputs.map closureJson))]
 
 private def boundaryName : ReadBoundary → String
   | .atomicExhaustive => "atomic_exhaustive"
+  | .readerBound _ => "reader_bound"
   | .incomplete => "incomplete"
   | .nonAtomic => "non_atomic"
 
 private def sourceJson (value : SourceInput) : String := object
   [("catalog", catalogJson value.catalog), ("tools", jsonArray (value.tools.map toolJson)),
    ("projections", jsonArray (value.projections.map projectionJson)),
+   ("read_scope", match value.boundary with
+    | .readerBound scope => object [("peer", jsonString scope.peer),
+        ("requester", jsonString scope.requester), ("node", jsonString scope.node),
+        ("session", jsonString scope.session), ("native_session", toString scope.nativeSession)]
+    | _ => "null"),
    ("boundary", jsonString (boundaryName value.boundary))]
 
 private def captureJson : Capture → String
@@ -199,6 +216,16 @@ private def sourceProjectionCaseJson (value : SelectionCase) : String :=
       | .error error => refusalReasonJson error.refusal
       | .ok _ => "null"),
     ("pages", jsonArray pages)]
+
+def readerCasesJson : String := jsonArray ((SessionHydration.ReaderExamples.cases.filter fun value =>
+  ["shared_native_root_read", "shared_authorized_empty_root",
+   "shared_root_physical_identity_changed", "shared_missing_capture_is_not_empty_complete",
+   "shared_unreadable_projection_owner_is_not_trusted"].contains value.name).map fun value =>
+  object [("name", jsonString value.name), ("source", sourceJson value.source),
+    ("expected", selectionJson value.source admission),
+    ("coverage", match snapshot value.source.model admission with
+      | .error _ => "null"
+      | .ok current => coverageJson current.coverage)])
 
 /-- Native projection checks refine this subset of the executable source cases.
 Canonical admission, fork selection and transport remain separate consumers. -/
@@ -317,6 +344,34 @@ private def demandJson (value : PageDemand) : String := object
    ("cursor", optional pageCursorJson value.cursor)]
 
 private def initialDemand : PageDemand := ⟨admission, "attempt-1", none⟩
+
+def selectedImageCasesJson : String := jsonArray (SessionHydration.ReaderExamples.imageCases.map fun value =>
+  object [("name", jsonString value.name), ("catalog", catalogJson value.catalog),
+    ("admission", hydrationRequestJson value.demand.image.admission),
+    ("request_doc_id", jsonString value.demand.image.requestDocId),
+    ("tool_doc_id", jsonString value.demand.image.toolDocId),
+    ("metadata", demandJson value.demand.metadata),
+    ("digest", jsonString value.demand.digest), ("entry_index", toString value.demand.entryIndex),
+    ("page", envelopeJson value.page), ("nonce_matches", boolString value.nonceMatches),
+    ("page_owner", jsonString value.pageOwner),
+    ("read", object [("scope", object [("peer", jsonString value.read.scope.peer),
+        ("requester", jsonString value.read.scope.requester), ("node", jsonString value.read.scope.node),
+        ("session", jsonString value.read.scope.session), ("native_session", toString value.read.scope.nativeSession)]),
+      ("projection", toString value.read.projection), ("observation", toString value.read.observation),
+      ("projection_visible", boolString value.read.projectionVisible),
+      ("image_visible", boolString value.read.imageVisible),
+      ("projection_owner", jsonString value.read.projectionOwner),
+      ("image_owner", jsonString value.read.imageOwner)]),
+    ("tools", jsonArray (value.tools.map fun tool => object
+      [("doc_id", jsonString tool.docId), ("request_doc_id", jsonString tool.requestDocId),
+       ("scope", scopeJson tool.scope), ("accepted", boolString tool.accepted), ("terminal", boolString tool.terminal)])),
+    ("images", jsonArray (value.images.map fun image => object
+      [("doc_id", jsonString image.docId), ("tool_call_doc_id", jsonString image.toolDocId),
+       ("request_doc_id", jsonString image.requestDocId), ("scope", scopeJson image.scope)])),
+    ("expected", match value.result with
+      | .rejected => tagged "rejected"
+      | .missing => tagged "missing"
+      | .selected document => tagged "selected" [("document", jsonString document)])])
 private def continuingDemand : PageDemand := ⟨admission, "attempt-1", some ⟨firstEnvelope.page.binding, 64⟩⟩
 
 def demandCasesJson : String :=
@@ -626,7 +681,7 @@ executable inputs/outputs, not a production wire-format proposal. -/
 def publicationCasesJson : String := jsonArray (publicationCases.map publicationCaseJson)
 
 def casesJson : String := object
-  [("selection", jsonArray (selectionCases.map selectionCaseJson)),
+  [("selection", jsonArray ((selectionCases ++ SessionHydration.ReaderExamples.cases).map selectionCaseJson)),
    ("publication", publicationCasesJson),
    ("fork", object [("source", sourceJson forkSource), ("admission", hydrationRequestJson forkRequest),
       ("expected", selectionJson forkSource forkRequest)]),

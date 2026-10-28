@@ -17,7 +17,9 @@ async fn rendered_request_sink_runs_before_provider_stream() {
                     .lock()
                     .await
                     .push((turn_index, attempt, request.chat_history.len()));
-                Err(anyhow::anyhow!("capture failed"))
+                Err(gents_loop::rendered_request::RenderedRequestError::Sink(
+                    "capture failed".into(),
+                ))
             })
         }));
 
@@ -65,8 +67,8 @@ async fn generated_rendered_capture_cases_fence_persist_before_send() {
                 Box::pin(async move {
                     outcomes.lock().await.push(outcome.clone());
                     if outcome == "rejected" {
-                        Err(anyhow::anyhow!(
-                            "capture key already names a different canonical request"
+                        Err(gents_loop::rendered_request::RenderedRequestError::Sink(
+                            "capture key already names a different canonical request".into(),
                         ))
                     } else {
                         Ok(())

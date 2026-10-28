@@ -8,6 +8,42 @@ use gents::agent::completion_retry::{
 use gents::error::InferenceError;
 use gents::llm::rig_compat::classify_completion_error;
 
+/// A synthetic attempt failure as the loop classifies one: the provider
+/// report reads the attempt text and the error's rendering.
+fn classified(error: &InferenceError, text: &str) -> gents::error::ClassifiedFailure {
+    gents::error::ClassifiedFailure {
+        error: error.clone(),
+        report: gents::error::ProviderReport::classify_failure_text(&format!("{text}\n{error}")),
+        text: text.to_string(),
+    }
+}
+
+fn class_of(error: &InferenceError, text: &str) -> FailureClass {
+    failure_class(&classified(error, text))
+}
+
+trait PreStream {
+    fn pre_stream(
+        &mut self,
+        error: &InferenceError,
+        text: &str,
+        now: chrono::DateTime<chrono::Utc>,
+        deadline: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> PreStreamDirective;
+}
+
+impl PreStream for CompletionRetryState {
+    fn pre_stream(
+        &mut self,
+        error: &InferenceError,
+        text: &str,
+        now: chrono::DateTime<chrono::Utc>,
+        deadline: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> PreStreamDirective {
+        self.on_pre_stream_failure(&classified(error, text), now, deadline)
+    }
+}
+
 use crate::lean_vocab_test::{
     assert_lean_contract_vocabulary_matches, lean_completion_retry_cases, LeanCompletionRetryCase,
     LeanContractVocabulary,
@@ -147,7 +183,7 @@ fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
         other => panic!("unknown modeled failure origin {other}"),
     };
     let classified = classify_completion_error(&error);
-    let class = failure_class(&classified, &error.to_string());
+    let class = failure_class(&classified);
     assert_eq!(
         class_name(class),
         case.classified_failure
@@ -157,7 +193,7 @@ fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
         case.name
     );
     let mut state = CompletionRetryState::new(scheduled_like_policy());
-    let directive = state.on_pre_stream_failure(&classified, &error.to_string(), now(), None);
+    let directive = state.on_pre_stream_failure(&classified, now(), None);
     match case.expected_phase.as_deref() {
         Some("failed_permanent") => {
             assert!(
@@ -176,7 +212,7 @@ fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
             state.mark_repair_used();
             assert!(
                 matches!(
-                    state.on_pre_stream_failure(&classified, &error.to_string(), now(), None),
+                    state.on_pre_stream_failure(&classified, now(), None),
                     PreStreamDirective::Fail { .. }
                 ),
                 "{}: a second rejection after the repair fails",
@@ -232,15 +268,15 @@ fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
 fn assert_failure_class_bridge_matches_vocabulary() {
     let parse_text = parse_400_text("bridge");
     let observed = [
-        class_name(failure_class(&transient("temporary"), "temporary")),
-        class_name(failure_class(&transient(&parse_text), &parse_text)),
-        class_name(failure_class(
+        class_name(class_of(&transient("temporary"), "temporary")),
+        class_name(class_of(&transient(&parse_text), &parse_text)),
+        class_name(class_of(
             &InferenceError::PermanentFailure {
                 reason: "Invalid `signature` in `thinking` block".to_string(),
             },
             "Invalid `signature` in `thinking` block",
         )),
-        class_name(failure_class(
+        class_name(class_of(
             &InferenceError::PermanentFailure {
                 reason: "bad request".to_string(),
             },
@@ -265,7 +301,7 @@ fn assert_failure_class_bridge_matches_vocabulary() {
 
 fn assert_transport_ladder_progresses(case: &LeanCompletionRetryCase) {
     let mut state = CompletionRetryState::new(scheduled_like_policy());
-    match state.on_pre_stream_failure(
+    match state.pre_stream(
         &transient("connection reset"),
         "connection reset",
         now(),
@@ -284,7 +320,7 @@ fn assert_transport_exhausts_after_budget(case: &LeanCompletionRetryCase) {
     let mut state = CompletionRetryState::new(scheduled_like_policy());
     for _ in 0..3 {
         assert!(matches!(
-            state.on_pre_stream_failure(
+            state.pre_stream(
                 &transient("connection reset"),
                 "connection reset",
                 now(),
@@ -296,7 +332,7 @@ fn assert_transport_exhausts_after_budget(case: &LeanCompletionRetryCase) {
             }
         ));
     }
-    match state.on_pre_stream_failure(
+    match state.pre_stream(
         &transient("connection reset"),
         "connection reset",
         now(),
@@ -316,7 +352,7 @@ fn assert_selected_delay_past_deadline_fails_fast(case: &LeanCompletionRetryCase
     });
     let now = now();
     let deadline = now + chrono::Duration::seconds(10);
-    match state.on_pre_stream_failure(
+    match state.pre_stream(
         &transient("connection reset"),
         "connection reset",
         now,
@@ -335,7 +371,7 @@ fn assert_deadline_behind_clock_fails_fast(case: &LeanCompletionRetryCase) {
         allow_repair: true,
     });
     let now = now();
-    match state.on_pre_stream_failure(
+    match state.pre_stream(
         &transient("connection reset"),
         "connection reset",
         now,
@@ -358,14 +394,14 @@ fn assert_deterministic_400_repairs(_case: &LeanCompletionRetryCase) {
     });
     let text = parse_400_text("json-parse");
     assert!(matches!(
-        state.on_pre_stream_failure(&transient("parse"), &text, now(), None),
+        state.pre_stream(&transient("parse"), &text, now(), None),
         PreStreamDirective::RetryAfter {
             kind: RetryKind::Resample,
             ..
         }
     ));
     assert_eq!(
-        state.on_pre_stream_failure(&transient("parse"), &text, now(), None),
+        state.pre_stream(&transient("parse"), &text, now(), None),
         PreStreamDirective::Repair
     );
     assert_eq!(state.retry_count(), 1);
@@ -380,7 +416,7 @@ fn assert_resample_budget_outlives_ladder(_case: &LeanCompletionRetryCase) {
 
     for attempt in 0..3 {
         let text = parse_400_text(&format!("json-parse-{attempt}"));
-        match state.on_pre_stream_failure(&transient("parse"), &text, now(), None) {
+        match state.pre_stream(&transient("parse"), &text, now(), None) {
             PreStreamDirective::RetryAfter {
                 kind: RetryKind::Resample,
                 delay,
@@ -410,7 +446,7 @@ fn assert_resample_exhausts_on_its_own_budget(_case: &LeanCompletionRetryCase) {
         let text = parse_400_text(&format!("json-parse-{attempt}"));
         assert!(
             matches!(
-                state.on_pre_stream_failure(&transient("parse"), &text, now(), None),
+                state.pre_stream(&transient("parse"), &text, now(), None),
                 PreStreamDirective::RetryAfter {
                     kind: RetryKind::Resample,
                     ..
@@ -422,7 +458,7 @@ fn assert_resample_exhausts_on_its_own_budget(_case: &LeanCompletionRetryCase) {
 
     let text = parse_400_text("json-parse-final");
     assert_eq!(
-        state.on_pre_stream_failure(&transient("parse"), &text, now(), None),
+        state.pre_stream(&transient("parse"), &text, now(), None),
         PreStreamDirective::Repair,
         "a spent resample budget must fall through to repair, never hard-fail"
     );
@@ -436,7 +472,7 @@ fn assert_repair_second_time_illegal(case: &LeanCompletionRetryCase) {
     });
     state.mark_repair_used();
     let text = parse_400_text("used");
-    match state.on_pre_stream_failure(&transient("parse"), &text, now(), None) {
+    match state.pre_stream(&transient("parse"), &text, now(), None) {
         PreStreamDirective::Fail { .. } => {}
         other => panic!("expected no second Repair for {}, got {other:?}", case.name),
     }
@@ -464,7 +500,7 @@ fn assert_close_turn_with_effects_legal(case: &LeanCompletionRetryCase) {
 
 fn assert_permanent_class_cannot_backoff(case: &LeanCompletionRetryCase) {
     let mut state = CompletionRetryState::new(scheduled_like_policy());
-    match state.on_pre_stream_failure(
+    match state.pre_stream(
         &InferenceError::PermanentFailure {
             reason: "invalid request".to_string(),
         },

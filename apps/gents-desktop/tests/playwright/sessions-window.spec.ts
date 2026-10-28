@@ -102,6 +102,6 @@ test("configuration returns to a responsive new session", async ({ page }) => {
     await expect(page.getByTestId("session-screen")).toBeVisible();
     await composer(page).click();
     await composer(page).fill(`Navigation ${pass}`);
-    await expect(composer(page)).toHaveValue(`Navigation ${pass}`);
+    await expect(composer(page)).toHaveText(`Navigation ${pass}`);
   }
 });

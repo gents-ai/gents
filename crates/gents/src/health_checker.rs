@@ -303,7 +303,7 @@ pub fn spawn_health_checker(
             node: &node,
             node_did: node_did.as_str(),
         };
-        if let Err(error) = run_health_check(
+        if let Err(error) = run_health_check_with_cancel(
             node.as_ref(),
             &mcp_pool,
             &health_map,
@@ -311,6 +311,7 @@ pub fn spawn_health_checker(
             local_subnet.as_deref(),
             &options,
             Some(persistence),
+            Some(&cancel),
         )
         .await
         {
@@ -332,7 +333,7 @@ pub fn spawn_health_checker(
                         node: &node,
                         node_did: node_did.as_str(),
                     };
-                    if let Err(error) = run_health_check(
+                    if let Err(error) = run_health_check_with_cancel(
                         node.as_ref(),
                         &mcp_pool,
                         &health_map,
@@ -340,6 +341,7 @@ pub fn spawn_health_checker(
                         local_subnet.as_deref(),
                         &options,
                         Some(persistence),
+                        Some(&cancel),
                     ).await {
                         tracing::warn!(error = %error, "health check cycle failed");
                     }
@@ -349,6 +351,7 @@ pub fn spawn_health_checker(
     })
 }
 
+#[cfg(test)]
 async fn run_health_check(
     node: &EmbeddedNode,
     mcp_pool: &McpPool,
@@ -358,6 +361,36 @@ async fn run_health_check(
     options: &HealthCheckerOptions,
     persistence: Option<HealthPersistenceContext<'_>>,
 ) -> Result<()> {
+    run_health_check_with_cancel(
+        node,
+        mcp_pool,
+        health_map,
+        local_hostname,
+        local_subnet,
+        options,
+        persistence,
+        None,
+    )
+    .await
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "registry health inputs and explicit shutdown scope"
+)]
+async fn run_health_check_with_cancel(
+    node: &EmbeddedNode,
+    mcp_pool: &McpPool,
+    health_map: &ServiceHealthMap,
+    local_hostname: &str,
+    local_subnet: Option<&str>,
+    options: &HealthCheckerOptions,
+    persistence: Option<HealthPersistenceContext<'_>>,
+    cancel: Option<&CancellationToken>,
+) -> Result<()> {
+    if cancel.is_some_and(CancellationToken::is_cancelled) {
+        return Ok(());
+    }
     let owner = persistence
         .as_ref()
         .map(|context| context.node_did)
@@ -379,7 +412,7 @@ async fn run_health_check(
         .collect();
     let mcp_pool = mcp_pool.for_agent(owner);
 
-    run_health_check_cycle(
+    run_health_check_cycle_with_cancel(
         services,
         Utc::now(),
         &mcp_pool,
@@ -388,6 +421,7 @@ async fn run_health_check(
         local_subnet,
         options,
         persistence,
+        cancel,
     )
     .await
 }
@@ -406,9 +440,43 @@ pub async fn run_health_check_cycle(
     options: &HealthCheckerOptions,
     persistence: Option<HealthPersistenceContext<'_>>,
 ) -> Result<()> {
+    run_health_check_cycle_with_cancel(
+        services,
+        now,
+        mcp_pool,
+        health_map,
+        local_hostname,
+        local_subnet,
+        options,
+        persistence,
+        None,
+    )
+    .await
+}
+
+/// Cancelling a remote observation is not evidence of a failed service. Persisted
+/// observations already being written drain through their existing owner.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "scoped health-cycle inputs and shutdown signal"
+)]
+async fn run_health_check_cycle_with_cancel(
+    services: Vec<McpHealthCheckService>,
+    now: DateTime<Utc>,
+    mcp_pool: &McpPool,
+    health_map: &ServiceHealthMap,
+    local_hostname: &str,
+    local_subnet: Option<&str>,
+    options: &HealthCheckerOptions,
+    persistence: Option<HealthPersistenceContext<'_>>,
+    cancel: Option<&CancellationToken>,
+) -> Result<()> {
     let mut online_service_ids = RapidHashSet::new();
 
     for service in services {
+        if cancel.is_some_and(CancellationToken::is_cancelled) {
+            return Ok(());
+        }
         let service_id = service.service_id.clone();
         online_service_ids.insert(service_id.clone());
 
@@ -485,19 +553,27 @@ pub async fn run_health_check_cycle(
             .map(|age| age > options.staleness_threshold)
             .unwrap_or(false);
 
-        match tokio::time::timeout(
-            options.probe_timeout,
-            mcp_pool.list_tools_with_node_did(
-                &service_id,
-                &endpoint,
-                persistence
-                    .as_ref()
-                    .filter(|_| service.send_node_did)
-                    .map(|p| p.node_did),
-            ),
-        )
-        .await
-        {
+        let cancellation = cancel.cloned().unwrap_or_default();
+        let Some(probe_result) = cancellation
+            .run_until_cancelled(tokio::time::timeout(
+                options.probe_timeout,
+                mcp_pool.list_tools_with_node_did(
+                    &service_id,
+                    &endpoint,
+                    persistence
+                        .as_ref()
+                        .filter(|_| service.send_node_did)
+                        .map(|p| p.node_did),
+                ),
+            ))
+            .await
+        else {
+            return Ok(());
+        };
+        if cancellation.is_cancelled() {
+            return Ok(());
+        }
+        match probe_result {
             Ok(Ok(tools)) => {
                 let next_model = step_service(
                     previous_model,
@@ -569,11 +645,17 @@ pub async fn run_health_check_cycle(
         }
     }
 
+    if cancel.is_some_and(CancellationToken::is_cancelled) {
+        return Ok(());
+    }
     health_map.retain_services(&online_service_ids).await;
 
     if let Some(persistence) = persistence {
         let snapshot = health_map.snapshot_full(options.failure_threshold_k).await;
         persist_health_snapshot(&persistence, health_map, &snapshot, now).await;
+        if cancel.is_some_and(CancellationToken::is_cancelled) {
+            return Ok(());
+        }
         match load_persisted_service_ids(&persistence).await {
             Ok(persisted_ids) => {
                 for service_id in persisted_ids
@@ -581,6 +663,9 @@ pub async fn run_health_check_cycle(
                     .cloned()
                     .collect::<Vec<_>>()
                 {
+                    if cancel.is_some_and(CancellationToken::is_cancelled) {
+                        break;
+                    }
                     delete_persisted_health_state(&persistence, &service_id).await;
                 }
             }
@@ -724,6 +809,9 @@ fn parse_updated_at(value: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
+/// External premise: an MCP health probe fails with transport and OS errors
+/// (rmcp, reqwest, std::io) recorded as text in the health row; their kind
+/// survives only in that wording.
 fn classify_last_error(error: &str) -> &'static str {
     let lower = error.to_lowercase();
     if lower.contains("timed out") || lower.contains("timeout") {
@@ -1617,5 +1705,135 @@ mod tests {
         assert!(after.iter().all(|row| row["status"] == "stale"));
         assert_eq!(map.persisted.lock().await.len(), 2);
         node.shutdown().await;
+    }
+    #[tokio::test]
+    async fn probe_shutdown_cancels_pending_mcp_without_pruning_or_failure() {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let seen = started.clone();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let pool = McpPool::new_with_list_tools_handler(move |_, _| {
+            let seen = seen.clone();
+            let counted = counted.clone();
+            async move {
+                counted.fetch_add(1, Ordering::SeqCst);
+                seen.notify_one();
+                std::future::pending::<anyhow::Result<ListToolsResult>>().await
+            }
+        });
+        let health = ServiceHealthMap::new();
+        let now = chrono::Utc::now();
+        for id in ["pending", "unobserved"] {
+            health
+                .set_entry(
+                    id.into(),
+                    super::ServiceHealthEntry::from_public(ServiceHealth {
+                        status: super::HealthStatus::Healthy,
+                        last_seen: now,
+                        last_error: None,
+                    }),
+                )
+                .await;
+        }
+        let options = HealthCheckerOptions {
+            probe_timeout: std::time::Duration::from_secs(60),
+            ..Default::default()
+        };
+        let before = health.snapshot_full(options.failure_threshold_k).await;
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let run_cancel = cancel.clone();
+        let run_health = health.clone();
+        let handle = tokio::spawn(async move {
+            super::run_health_check_cycle_with_cancel(
+                vec![registry_entry("pending", now), registry_entry("later", now)],
+                now,
+                &pool,
+                &run_health,
+                "local-host",
+                None,
+                &options,
+                None,
+                Some(&run_cancel),
+            )
+            .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        cancel.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(1), handle)
+            .await
+            .expect("pending MCP observation must stop on shutdown")
+            .unwrap()
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(health.snapshot_full(3).await, before);
+    }
+
+    #[tokio::test]
+    async fn probe_shutdown_prevents_new_mcp_probes_and_failure_events() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let pool = McpPool::new_with_list_tools_handler(move |_, _| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            async { anyhow::bail!("must not probe after shutdown") }
+        });
+        let cancel = tokio_util::sync::CancellationToken::new();
+        cancel.cancel();
+        let node = crate::oauth_credential::test_support::test_node().await;
+        let health = ServiceHealthMap::new();
+        health
+            .set_entry(
+                "unobserved".into(),
+                super::ServiceHealthEntry::from_public(ServiceHealth {
+                    status: super::HealthStatus::Healthy,
+                    last_seen: chrono::Utc::now(),
+                    last_error: None,
+                }),
+            )
+            .await;
+        let before = health.snapshot_full(3).await;
+        let handle = super::spawn_health_checker(
+            node.clone(),
+            pool,
+            health.clone(),
+            "local-host".into(),
+            None,
+            cancel,
+            HealthCheckerOptions::default(),
+            "did:key:owner".into(),
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(1), handle)
+            .await
+            .expect("an already-cancelled health worker must not start a cycle")
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert_eq!(health.snapshot_full(3).await, before);
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn probe_shutdown_wins_a_ready_mcp_failure_without_a_false_outage() {
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let from_probe = cancel.clone();
+        let pool = McpPool::new_with_list_tools_handler(move |_, _| {
+            from_probe.cancel();
+            async { anyhow::bail!("transport ended during shutdown") }
+        });
+        let health = ServiceHealthMap::new();
+        super::run_health_check_cycle_with_cancel(
+            vec![registry_entry("pending", chrono::Utc::now())],
+            chrono::Utc::now(),
+            &pool,
+            &health,
+            "local-host",
+            None,
+            &HealthCheckerOptions::default(),
+            None,
+            Some(&cancel),
+        )
+        .await
+        .unwrap();
+        assert!(health.snapshot().await.is_empty());
     }
 }

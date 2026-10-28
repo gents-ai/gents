@@ -29,13 +29,13 @@ theorem selected_has_exact_request_input (cat : Catalog) (r : Request)
       input.request = r ∧ buildDocuments input = .ok documents :=
   selected_documents_have_exact_input cat r documents hselected
 
-theorem session_ownership_required (cat : Catalog) (st : State) (r : Request)
+theorem session_authorization_required (cat : Catalog) (st : State) (r : Request)
     (delivery : DeliveryResult) (terminalWrite : TerminalWriteResult)
-    (howner : ownedSession r ∉ cat.sessions) :
+    (hsource : ¬ authorizedSourceSession cat r) :
     (applyStep cat st r delivery terminalWrite).confirmedDelivered = st.confirmedDelivered := by
   apply hydration_request_grants_nothing cat st r delivery terminalWrite
   intro hadmits
-  exact howner hadmits.2.2
+  exact hsource hadmits.2.2
 
 theorem selected_network_membership_required (cat : Catalog) (st : State) (r : Request)
     (delivery : DeliveryResult) (terminalWrite : TerminalWriteResult)

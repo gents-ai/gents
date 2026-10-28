@@ -59,3 +59,25 @@ if (!HTMLElement.prototype.scrollTo) {
     }
   };
 }
+/* the composer's rich editor measures the caret's range to keep it in view */
+if (typeof Range.prototype.getBoundingClientRect !== "function") {
+  Range.prototype.getBoundingClientRect = () => new DOMRect(0, 0, 0, 0);
+}
+if (typeof Range.prototype.getClientRects !== "function") {
+  Range.prototype.getClientRects = () =>
+    ({
+      length: 0,
+      item: () => null,
+      [Symbol.iterator]: [][Symbol.iterator],
+    }) as unknown as DOMRectList;
+}
+/* the composer's rich editor names ClipboardEvent when it handles a paste */
+if (typeof globalThis.ClipboardEvent !== "function") {
+  globalThis.ClipboardEvent = class extends Event {
+    readonly clipboardData: DataTransfer | null;
+    constructor(type: string, init: ClipboardEventInit = {}) {
+      super(type, init);
+      this.clipboardData = init.clipboardData ?? null;
+    }
+  } as unknown as typeof ClipboardEvent;
+}

@@ -6,8 +6,14 @@ use crate::agent::p2p_reconcile::file_image_hydration::{
 };
 use crate::config_client::ConfigAccess;
 use crate::tool_call_lifecycle::{load_tool_file_change_observation, ToolFileChangeRead};
-use gents_protocol::file_image_hydration::{FileImageHydrationReceipt, FILE_IMAGE_RECEIPT_VERSION};
-use gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST_NAME;
+use gents_protocol::file_image_hydration::{
+    FileImageHydrationReceipt, FileImageInventoryReference,
+};
+use gents_protocol::schemas::{
+    FILE_IMAGE_HYDRATION_REQUEST_NAME, FILE_INVENTORY_IMAGE_REQUEST_NAME,
+};
+
+mod inventory;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ImageDemandRow {
@@ -73,12 +79,14 @@ async fn serve_image(
         return store.commit(row, &receipt.selection, &receipt.detail).await;
     }
     let admission = store.admission(demand).await?;
-    if demand.validate_reference().is_err()
-        || matches!(
-            decide_hydration(&demand.admission, &admission.catalog),
-            HydrationVerdict::Reject(_)
-        )
-    {
+    let verdict = match &demand.inventory_reference {
+        Some(reference) => super::super::session_hydration::decide_inventory_hydration(
+            &reference.page.admission,
+            &admission.catalog,
+        ),
+        None => decide_hydration(&demand.admission, &admission.catalog),
+    };
+    if demand.validate_reference().is_err() || matches!(verdict, HydrationVerdict::Reject(_)) {
         return commit_image_result(
             store,
             row,
@@ -158,6 +166,7 @@ struct PendingImageRow {
     session_id: Option<String>,
     request_doc_id: Option<String>,
     tool_call_doc_id: Option<String>,
+    inventory_reference: Option<serde_json::Value>,
 }
 
 #[async_trait]
@@ -170,46 +179,81 @@ impl ImageRequestStore for GraphqlHydrationStore {
     }
 
     async fn pending_images(&self) -> Result<Vec<ImageDemandRow>> {
-        let query = format!(
-            r#"{{ FileImageHydrationRequest(filter: {{
-            status: {{ _eq: "pending" }}, node_did: {{ _eq: "{}" }}
-        }}) {{ _docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id }} }}"#,
-            escape_graphql_string(self.identity.did())
-        );
-        let response = graphql_with_transaction_retry(
-            &self.node,
-            &query,
-            "query pending file-image hydration demands",
-        )
-        .await?;
-        rows::<PendingImageRow>(&response, FILE_IMAGE_HYDRATION_REQUEST_NAME)?
-            .into_iter()
-            .map(|row| {
+        let mut pending = Vec::new();
+        for collection in [
+            FILE_IMAGE_HYDRATION_REQUEST_NAME,
+            FILE_INVENTORY_IMAGE_REQUEST_NAME,
+        ] {
+            let reference_field = if collection == FILE_INVENTORY_IMAGE_REQUEST_NAME {
+                "inventory_reference"
+            } else {
+                ""
+            };
+            let query = format!(
+                r#"{{ FileImageHydrationRequest: {collection}(filter: {{
+                    status: {{ _eq: "pending" }}, node_did: {{ _eq: "{}" }}
+                }}) {{ _docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id {reference_field} }} }}"#,
+                escape_graphql_string(self.identity.did()),
+            );
+            let response = graphql_with_transaction_retry(
+                &self.node,
+                &query,
+                "query pending file-image hydration demands",
+            )
+            .await?;
+            for row in rows::<PendingImageRow>(&response, FILE_IMAGE_HYDRATION_REQUEST_NAME)? {
                 anyhow::ensure!(
                     !row.document_id.is_empty(),
                     "file-image demand omitted physical identity"
                 );
-                Ok(ImageDemandRow {
-                    document_id: row.document_id,
-                    demand: FileImageDemand {
-                        admission: HydrationRequest {
-                            request_key: row.request_key.unwrap_or_default(),
-                            peer_id: row.peer_id.unwrap_or_default(),
-                            requester_did: row.requester_did.unwrap_or_default(),
-                            node_did: row.node_did,
-                            session_id: row.session_id.unwrap_or_default(),
-                        },
-                        request_doc_id: row.request_doc_id.unwrap_or_default(),
-                        tool_call_doc_id: row.tool_call_doc_id.unwrap_or_default(),
+                let reference = match row
+                    .inventory_reference
+                    .map(serde_json::from_value::<FileImageInventoryReference>)
+                    .transpose()
+                {
+                    Ok(reference) => reference,
+                    Err(error) => {
+                        tracing::warn!(document = %row.document_id, collection, %error,
+                            "file image demand has an invalid inventory reference");
+                        continue;
+                    }
+                };
+                let demand = FileImageDemand {
+                    inventory_reference: reference,
+                    admission: HydrationRequest {
+                        request_key: row.request_key.unwrap_or_default(),
+                        peer_id: row.peer_id.unwrap_or_default(),
+                        requester_did: row.requester_did.unwrap_or_default(),
+                        node_did: row.node_did,
+                        session_id: row.session_id.unwrap_or_default(),
                     },
-                })
-            })
-            .collect()
+                    request_doc_id: row.request_doc_id.unwrap_or_default(),
+                    tool_call_doc_id: row.tool_call_doc_id.unwrap_or_default(),
+                };
+                if demand.collection_name() != collection {
+                    tracing::warn!(document = %row.document_id, collection,
+                        "file image demand omitted its purpose binding");
+                    continue;
+                }
+                pending.push(ImageDemandRow {
+                    document_id: row.document_id,
+                    demand,
+                });
+            }
+        }
+        Ok(pending)
     }
 
     async fn admission(&self, demand: &FileImageDemand) -> Result<LoadedHydrationAdmission> {
-        self.load_admission_for_collection(&demand.admission, FILE_IMAGE_HYDRATION_REQUEST_NAME)
-            .await
+        self.load_source_admission(
+            &demand.admission,
+            demand.collection_name(),
+            demand
+                .inventory_reference
+                .as_ref()
+                .map(|reference| reference.page.admission.session_doc_id.as_str()),
+        )
+        .await
     }
 
     async fn selection(
@@ -217,6 +261,9 @@ impl ImageRequestStore for GraphqlHydrationStore {
         demand: &FileImageDemand,
         catalog: &HydrationCatalog,
     ) -> Result<FileImageSelection> {
+        if demand.inventory_reference.is_some() {
+            return self.inventory_image_selection(demand, catalog).await;
+        }
         let request = &demand.admission;
         let observed = load_tool_file_change_observation(
             &ConfigAccess::local(self.node.clone()),
@@ -267,8 +314,22 @@ impl ImageRequestStore for GraphqlHydrationStore {
         demand: &FileImageDemand,
         fence: &EnrollmentAuthorizationFence,
     ) -> Result<bool> {
-        self.authorization_is_current(&demand.admission, fence)
-            .await
+        if !self
+            .authorization_is_current(&demand.admission, fence)
+            .await?
+        {
+            return Ok(false);
+        }
+        if demand.inventory_reference.is_some() {
+            let current = self.admission(demand).await?;
+            if current.authorization.as_ref() != Some(fence) {
+                return Ok(false);
+            }
+            return self
+                .inventory_image_authorized(demand, &current.catalog)
+                .await;
+        }
+        Ok(true)
     }
 
     async fn commit(
@@ -278,7 +339,7 @@ impl ImageRequestStore for GraphqlHydrationStore {
         detail: &str,
     ) -> Result<()> {
         let mut receipt = FileImageHydrationReceipt {
-            version: FILE_IMAGE_RECEIPT_VERSION,
+            version: row.demand.receipt_version(),
             demand: row.demand.clone(),
             selection: selection.clone(),
             detail: detail.to_owned(),
@@ -323,7 +384,11 @@ impl ImageRequestStore for GraphqlHydrationStore {
                             }}),
                         ).await?;
                     }
-                    let response = txn.execute(&terminal_image_mutation(&row, &receipt)?).await?;
+                    let variables = match &receipt.demand.inventory_reference {
+                        Some(reference) => serde_json::json!({"inventoryReference": reference}),
+                        None => serde_json::json!({}),
+                    };
+                    let response = txn.execute_with_variables(&terminal_image_mutation(&row, &receipt)?, &variables).await?;
                     anyhow::ensure!(
                         response["data"]["update_FileImageHydrationRequest"].as_array().is_some_and(|rows| rows.len() == 1),
                         "file-image receipt lost its pending-row compare-and-set"
@@ -395,6 +460,15 @@ fn terminal_image_mutation(
             escape_graphql_string(value)
         ));
     }
+    if demand.inventory_reference.is_some() {
+        filters.push("inventory_reference: { _eq: $inventoryReference }".into());
+    }
+    let collection = demand.collection_name();
+    let operation = if demand.inventory_reference.is_some() {
+        "mutation($inventoryReference: JSON)"
+    } else {
+        "mutation"
+    };
     filters.push("status: { _eq: \"pending\" }".into());
     let (status, observation) = match &receipt.selection {
         FileImageSelection::Rejected => ("rejected", "null".into()),
@@ -404,7 +478,7 @@ fn terminal_image_mutation(
         }
     };
     Ok(format!(
-        r#"mutation {{ update_FileImageHydrationRequest(filter: {{ {} }}, input: {{
+        r#"{operation} {{ update_FileImageHydrationRequest: update_{collection}(filter: {{ {} }}, input: {{
         status: "{status}", status_detail: "{}", observation_doc_id: {observation},
         processed_at: "{}", outcome_signer_did: "{}", outcome_signature: "{}"
     }}) {{ _docID }} }}"#,

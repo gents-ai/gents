@@ -3,6 +3,9 @@ use std::fmt;
 use serde_json::Value;
 
 pub const STORAGE_FULL_CODE: &str = "STORAGE_FULL";
+/// DefraDB's `extensions.code` for a store conflict the caller may replay;
+/// the final, engine-exhausted case carries `TXN_RETRY_EXHAUSTED` instead.
+pub const TXN_CONFLICT_CODE: &str = "TXN_CONFLICT";
 
 /// Full storage does not establish whether a mutation committed. A latched
 /// store must be reopened by its existing owner after space is available.
@@ -32,21 +35,31 @@ pub struct GraphqlFailure {
     operation: String,
     errors: Value,
     storage_full: Option<StorageFull>,
+    retryable_conflict: bool,
 }
 
 impl GraphqlFailure {
     pub fn new(operation: impl Into<String>, errors: Value) -> Self {
-        let full = errors.as_array().is_some_and(|errors| {
-            errors.iter().any(|error| {
-                StorageFull::from_code(error.pointer("/extensions/code").and_then(Value::as_str))
-                    .is_some()
-            })
-        });
+        let codes = || {
+            errors
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|error| error.pointer("/extensions/code").and_then(Value::as_str))
+        };
+        let full = codes().any(|code| StorageFull::from_code(Some(code)).is_some());
+        let retryable_conflict = codes().any(|code| code == TXN_CONFLICT_CODE);
         Self {
             operation: operation.into(),
             errors,
             storage_full: full.then_some(StorageFull),
+            retryable_conflict,
         }
+    }
+
+    /// Whether DefraDB reported a store conflict the caller may retry.
+    pub fn is_retryable_conflict(&self) -> bool {
+        self.retryable_conflict
     }
 }
 
@@ -68,13 +81,17 @@ impl std::error::Error for GraphqlFailure {
     }
 }
 
-pub fn is_storage_full(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| cause.is::<StorageFull>())
+pub fn is_storage_full(error: &(dyn std::error::Error + 'static)) -> bool {
+    crate::error_chain::find_source::<StorageFull>(error).is_some()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("outer operation")]
+    struct Outer(#[source] GraphqlFailure);
 
     #[test]
     fn generated_storage_failures_preserve_recovery_evidence() {
@@ -82,13 +99,12 @@ mod tests {
         let cases = contract["storage_failure_cases"].as_array().unwrap();
         assert!(!cases.is_empty());
         for case in cases {
-            let error = anyhow::Error::new(GraphqlFailure::new(
+            let error = Outer(GraphqlFailure::new(
                 "test",
                 serde_json::json!([{
                     "message": case["message"], "extensions": { "code": case["code"] }
                 }]),
-            ))
-            .context("outer operation");
+            ));
             assert_eq!(is_storage_full(&error), case["full"].as_bool().unwrap());
             #[cfg(feature = "native")]
             if is_storage_full(&error) {

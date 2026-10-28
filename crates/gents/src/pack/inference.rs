@@ -114,7 +114,7 @@ pub async fn inference_profile_options(
                         Ok(serde_json::from_value::<InferenceBackend>(value.clone())?)
                     })
                     .collect::<Result<Vec<_>>>()?;
-                Ok((node_enabled, profiles, backends))
+                Ok::<_, anyhow::Error>((node_enabled, profiles, backends))
             })
         })
         .await?;

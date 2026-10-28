@@ -1278,9 +1278,13 @@ async fn force_request_state_for_test(
                 ) {{ _docID }}
             }}"#
     );
-    gents::config_client::ConfigAccess::write_local(node, "force_request_state_for_test", &mutation)
-        .await
-        .map(|_| ())
+    Ok(gents::config_client::ConfigAccess::write_local(
+        node,
+        "force_request_state_for_test",
+        &mutation,
+    )
+    .await
+    .map(|_| ())?)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1624,13 +1628,13 @@ async fn force_retry_parent_eligible_for_test(
                 ) {{ _docID }}
             }}"#
     );
-    gents::config_client::ConfigAccess::write_local(
+    Ok(gents::config_client::ConfigAccess::write_local(
         node,
         "force_retry_parent_eligible_for_test",
         &mutation,
     )
     .await
-    .map(|_| ())
+    .map(|_| ())?)
 }
 
 async fn seed_duplicate_request_id_for_test(
@@ -1660,13 +1664,13 @@ async fn seed_duplicate_request_id_for_test(
         "",
     );
     let mutation = format!("mutation {{\n{request_field}\n}}");
-    gents::config_client::ConfigAccess::write_local(
+    Ok(gents::config_client::ConfigAccess::write_local(
         node,
         "seed_duplicate_request_id_for_test",
         &mutation,
     )
     .await
-    .map(|_| ())
+    .map(|_| ())?)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

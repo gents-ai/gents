@@ -302,7 +302,7 @@ mod tests {
             let plan = &plan;
             Box::pin(async move {
                 apply_desired_state_plan(txn, plan).await?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await?;
@@ -327,7 +327,7 @@ mod tests {
                 assert_eq!(saved.created_by.as_deref(), Some("did:test:creator"));
                 assert_eq!(saved.tags, vec!["team"]);
                 assert!(saved.default_agent_id.is_none());
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await?;
@@ -352,7 +352,7 @@ mod tests {
             let plan = &plan;
             Box::pin(async move {
                 apply_desired_state_plan(txn, plan).await?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await?;
@@ -389,7 +389,7 @@ mod tests {
                 .await?
                 .unwrap();
                 assert_eq!(second["enabled"], true);
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await?;
@@ -413,7 +413,7 @@ mod tests {
             let plan = &plan;
             Box::pin(async move {
                 apply_desired_state_plan(txn, plan).await?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await?;
@@ -500,7 +500,7 @@ mod tests {
                     context["system_prompt"],
                     "literal ${NOT_AN_ENV} {{ not_a_template }}"
                 );
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await?;
@@ -524,7 +524,7 @@ mod tests {
                 let plan = &plan;
                 Box::pin(async move {
                     apply_desired_state_plan(txn, plan).await?;
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             })
             .await?;
@@ -577,7 +577,7 @@ mod tests {
                     )
                     .await?
                     .unwrap();
-                    Ok((backend, profile))
+                    Ok::<_, anyhow::Error>((backend, profile))
                 })
             })
         };
@@ -657,7 +657,7 @@ mod tests {
                 .unwrap();
                 assert_eq!(other["auth"]["key"], "secret-retained");
                 assert_eq!(other["name"], "Backend");
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await?;

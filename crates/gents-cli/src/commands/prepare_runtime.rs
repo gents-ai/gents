@@ -53,12 +53,8 @@ fn refusal(reason: RuntimePreparationRefusal, message: impl Into<String>) -> any
 }
 
 fn refusal_reason(error: &anyhow::Error) -> RuntimePreparationRefusal {
-    if error
-        .downcast_ref::<gents::store_key::StoreKeyUnavailable>()
-        .is_some()
-        || error
-            .downcast_ref::<gents::identity::IdentityKeyUnavailable>()
-            .is_some()
+    if gents::store_key::store_key_unavailable(error.as_ref()).is_some()
+        || gents::identity::identity_key_unavailable(error.as_ref()).is_some()
     {
         RuntimePreparationRefusal::KeyAccess
     } else {
@@ -234,13 +230,13 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
     })
     .await?
     .map_err(|error| {
-        if error.downcast_ref::<gents::home::StoreLockHeld>().is_some() {
+        if error.lock_held().is_some() {
             refusal(
                 RuntimePreparationRefusal::StoreBusy,
                 "Another runtime still owns this store. Its retirement has not been confirmed.",
             )
         } else {
-            error
+            error.into()
         }
     })?;
     let (address, port) = if let Some(endpoint) = recorded_endpoint {

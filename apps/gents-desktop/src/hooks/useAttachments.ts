@@ -70,7 +70,7 @@ async function fromFile(file: globalThis.File): Promise<RequestAttachment> {
 export function useAttachmentDraft(
   root: RefObject<HTMLDivElement | null>,
   disabled: boolean,
-  textarea?: RefObject<HTMLTextAreaElement | null>,
+  textarea?: RefObject<HTMLElement | null>,
 ) {
   const { drafts, api } = useApp();
   const key = useView((view) => view.draftKey);
@@ -152,7 +152,7 @@ export function useAttachmentDraft(
     }
     requestAnimationFrame(() => textarea?.current?.focus());
   };
-  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+  const onPaste = (event: ClipboardEvent<HTMLElement>) => {
     if (
       disabled ||
       (event.nativeEvent as globalThis.ClipboardEvent & { isComposing?: boolean })

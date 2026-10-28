@@ -307,8 +307,12 @@ fn own_home_key(home: &Path, keys: &Path) -> Option<PathBuf> {
 }
 
 pub fn lock_home_for_retirement(home: &Path) -> Result<gents::home::StoreLock, BridgeError> {
-    gents::home::lock_home_store(home)
-        .map_err(|error| BridgeError::new(BridgeErrorCode::InvalidArgument, format!("{error:#}")))
+    gents::home::lock_home_store(home).map_err(|error| {
+        BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            gents_protocol::error_chain::ErrorChain(&error).to_string(),
+        )
+    })
 }
 
 fn is_store_lock(path: &Path) -> bool {
@@ -533,7 +537,11 @@ fn plan_reset(
             .map_err(|error| {
                 BridgeError::new(
                     BridgeErrorCode::Backend,
-                    format!("Listing {}: {error:#}", home.display()),
+                    format!(
+                        "Listing {}: {}",
+                        home.display(),
+                        gents_protocol::error_chain::ErrorChain(&error)
+                    ),
                 )
             })?,
         None => gents::home::HomeEntries::default(),
@@ -991,8 +999,14 @@ impl HomeResetPlan {
     }
 
     pub fn preflight(&self, backup: &Path) -> Result<(), BridgeError> {
-        gents::home::archive_preflight(&self.groups(HomeResetDisposition::Archive), backup)
-            .map_err(|error| BridgeError::new(BridgeErrorCode::Backend, format!("{error:#}")))
+        gents::home::archive_preflight(&self.groups(HomeResetDisposition::Archive), backup).map_err(
+            |error| {
+                BridgeError::new(
+                    BridgeErrorCode::Backend,
+                    gents_protocol::error_chain::ErrorChain(&error).to_string(),
+                )
+            },
+        )
     }
 
     pub fn retire(
@@ -1001,7 +1015,7 @@ impl HomeResetPlan {
         backup: Option<&Path>,
     ) -> Result<ManagedServerResetResult, BridgeError> {
         self.retire_with_key_cleanup(disposition, backup, |record, key_file| {
-            record.delete_key(key_file)
+            Ok(record.delete_key(key_file)?)
         })
     }
 
@@ -1099,8 +1113,12 @@ impl HomeResetPlan {
             .iter()
             .map(|(name, entries)| gents::home::RetireGroup { name, entries })
             .collect();
-        let mut retired = gents::home::retire_entries(&groups, retire_as)
-            .map_err(|error| BridgeError::new(BridgeErrorCode::Backend, format!("{error:#}")))?;
+        let mut retired = gents::home::retire_entries(&groups, retire_as).map_err(|error| {
+            BridgeError::new(
+                BridgeErrorCode::Backend,
+                gents_protocol::error_chain::ErrorChain(&error).to_string(),
+            )
+        })?;
         for key in keychain_keys {
             delete_key(&key.record, &key.key_file).map_err(|error| {
                 BridgeError::new(
@@ -1117,7 +1135,10 @@ impl HomeResetPlan {
                     gents::home::RetireDisposition::Delete,
                 )
                 .map_err(|error| {
-                    BridgeError::new(BridgeErrorCode::Backend, format!("{error:#}"))
+                    BridgeError::new(
+                        BridgeErrorCode::Backend,
+                        gents_protocol::error_chain::ErrorChain(&error).to_string(),
+                    )
                 })?,
             );
         }

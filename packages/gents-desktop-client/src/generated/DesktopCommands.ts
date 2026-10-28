@@ -61,6 +61,8 @@ import type { InterruptRequestResult } from "./InterruptRequestResult.js";
 import type { JobControlOutcome } from "./JobControlOutcome.js";
 import type { JsonValue } from "./serde_json/JsonValue.js";
 import type { MCPServiceHealthView } from "./MCPServiceHealthView.js";
+import type { MailboxItemObservation } from "./MailboxItemObservation.js";
+import type { MailboxItemObservationRequest } from "./MailboxItemObservationRequest.js";
 import type { MailboxItemRequest } from "./MailboxItemRequest.js";
 import type { MailboxItemView } from "./MailboxItemView.js";
 import type { ManagedServerResetRequest } from "./ManagedServerResetRequest.js";
@@ -195,6 +197,7 @@ export type DesktopCommands = {
   desktop_list_mcp_services_with_health: { args: Record<string, never>; result: Array<MCPServiceHealthView> };
   desktop_mailbox_dismiss: { args: { request: MailboxItemRequest }; result: void };
   desktop_mailbox_list: { args: Record<string, never>; result: Array<MailboxItemView> };
+  desktop_mailbox_observe: { args: { request: MailboxItemObservationRequest }; result: MailboxItemObservation | null };
   desktop_mailbox_start_request: { args: { request: MailboxItemRequest }; result: MailboxItemView };
   desktop_managed_server_open_login_items: { args: Record<string, never>; result: void };
   desktop_managed_server_reset: { args: { request: ManagedServerResetRequest }; result: ManagedServerResetResult };
@@ -247,7 +250,7 @@ export type DesktopCommands = {
   desktop_provider_recovery_apply: { args: { request: ProviderRecoveryApply }; result: ProviderRecoveryResult };
   desktop_provider_recovery_plan: { args: { request: ProviderRecoveryRequest }; result: ProviderRecoveryPlan | null };
   desktop_provider_usage_read: { args: { request: ProviderUsageReadRequest }; result: Array<AccountUsageView> };
-  desktop_request_attachments: { args: { nodeDid: string; sessionId: string; requestId: string; messageKey?: string | null }; result: Array<RequestAttachment> };
+  desktop_request_attachments: { args: { nodeDid: string; sessionId: string; requestId: string; messageKey?: string | null; index?: number | null }; result: Array<RequestAttachment> };
   desktop_request_resend: { args: { requestId: string; nodeDid?: string | null }; result: RequestResendResultView };
   desktop_request_retry: { args: { requestId: string; nodeDid?: string | null }; result: ChatSendResult };
   desktop_request_timeline: { args: { nodeDid: string; requestId: string }; result: RequestTimelineView };

@@ -17,6 +17,7 @@ mod execution_renewal;
 pub(crate) use execution_renewal::renew_once_at as renew_execution_lease_once_at;
 #[cfg(test)]
 pub(crate) use execution_renewal::renew_with_recheck_at;
+#[cfg(test)]
 pub(crate) use execution_renewal::{renew_in_transaction, RenewalAttemptOutcome};
 mod terminal_binding;
 pub(crate) use terminal_binding::is_exact_invocation_reply;
@@ -441,11 +442,13 @@ impl WorkspaceLineage {
     }
 
     pub fn require_authority_if_workspace_id(&self) -> Result<()> {
-        gents_protocol::request_admission::validate_workspace_reference(
-            self.workspace_id.as_deref(),
-            self.workspace_owner_node_did.as_deref(),
-            self.workspace_authority.as_deref(),
-            self.workspace_seal_hash.as_deref(),
+        Ok(
+            gents_protocol::request_admission::validate_workspace_reference(
+                self.workspace_id.as_deref(),
+                self.workspace_owner_node_did.as_deref(),
+                self.workspace_authority.as_deref(),
+                self.workspace_seal_hash.as_deref(),
+            )?,
         )
     }
 
@@ -650,8 +653,10 @@ impl TerminalRedriveReport {
 
 #[async_trait::async_trait]
 impl gents_loop::request_lifecycle::RequestLifecycleControl for RequestLifecycle {
-    async fn validate_owned_execution(&self) -> anyhow::Result<()> {
-        RequestLifecycle::validate_owned_execution(self).await
+    type Error = crate::agent::stream_processor::RuntimeSeamError;
+
+    async fn validate_owned_execution(&self) -> Result<(), Self::Error> {
+        Ok(RequestLifecycle::validate_owned_execution(self).await?)
     }
 }
 
@@ -672,11 +677,16 @@ mod tests {
             "did:test:test"
         }
 
-        async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>> {
+        async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, crate::identity::IdentityError> {
             Ok(Sha512::digest(payload).to_vec())
         }
 
-        async fn verify(&self, did: &str, payload: &[u8], signature: &[u8]) -> Result<bool> {
+        async fn verify(
+            &self,
+            did: &str,
+            payload: &[u8],
+            signature: &[u8],
+        ) -> Result<bool, crate::identity::IdentityError> {
             Ok(did == self.did() && signature == Sha512::digest(payload).as_slice())
         }
 

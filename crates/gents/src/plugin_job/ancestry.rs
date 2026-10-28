@@ -124,7 +124,7 @@ mod tests {
                 let response = txn
                     .execute_with_variables(&query, &json!({ "input": value }))
                     .await?;
-                gents_protocol::graphql::extract_mutation_doc_id(&response, collection)
+                Ok::<_, anyhow::Error>(gents_protocol::graphql::extract_mutation_doc_id(&response, collection)?)
             })
         })
         .await

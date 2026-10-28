@@ -72,6 +72,17 @@ export function announceWindowSetupComplete() {
 
 export const canPickDirectory = inNativeShell;
 
+export async function confirmPluginMessage(content: string): Promise<boolean> {
+  const message = `Send this message to the selected chat?\n\n${content}`;
+  if (!inNativeShell()) return window.confirm(message);
+  const { confirm } = await import("@tauri-apps/plugin-dialog");
+  return confirm(message, {
+    title: "Plugin message",
+    okLabel: "Send message",
+    cancelLabel: "Cancel",
+  });
+}
+
 export async function pickDirectory(options: {
   defaultPath?: string | null;
   title?: string;

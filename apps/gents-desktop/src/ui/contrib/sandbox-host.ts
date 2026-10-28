@@ -469,7 +469,12 @@ export class SandboxHost {
         return {
           ...base,
           render: () =>
-            createElement(FrameViewport, { host: this, surface, props: {} }),
+            createElement(FrameViewport, {
+              host: this,
+              surface,
+              props: {},
+              fill: true,
+            }),
         };
       case AGENT_SECTIONS_AREA:
         return {

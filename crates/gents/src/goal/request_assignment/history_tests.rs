@@ -10,7 +10,10 @@ use rapidhash::{HashMapExt, RapidHashMap};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-fn versions(values: &Value, identities: &[KeyIdentity]) -> Vec<super::super::GoalVersion> {
+fn versions(
+    values: &Value,
+    identities: &[KeyIdentity],
+) -> Vec<super::super::GoalAssignmentVersion> {
     values
         .as_array()
         .unwrap()
@@ -19,17 +22,17 @@ fn versions(values: &Value, identities: &[KeyIdentity]) -> Vec<super::super::Goa
             let mut goal = goal(&value["assignment"], identities);
             goal.doc_id = format!("goal-document-{}", value["document"]);
             goal.status = value["status"].as_str().unwrap().into();
-            super::super::GoalVersion {
+            super::super::GoalAssignmentVersion::from_snapshot(
                 goal,
-                commit_cid: format!("commit-{}", value["commit"]),
-                height: value["height"].as_i64().unwrap(),
-                parent_commit_cids: value["parents"]
+                format!("commit-{}", value["commit"]),
+                value["height"].as_i64().unwrap(),
+                value["parents"]
                     .as_array()
                     .unwrap()
                     .iter()
                     .map(|id| format!("commit-{id}"))
                     .collect(),
-            }
+            )
         })
         .collect()
 }

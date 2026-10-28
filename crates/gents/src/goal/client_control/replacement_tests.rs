@@ -86,7 +86,7 @@ pub(super) async fn run(case: &Value) {
                 ).await?;
                 let id = crate::graphql::created_doc_id(&created, "Goal")?;
                 txn.execute(&format!(r#"mutation {{delete_Goal(docID: "{}") {{_docID}}}}"#, escape_graphql_string(&id))).await?;
-                Ok(id)
+                Ok::<_, anyhow::Error>(id)
             })
         }).await.unwrap();
         historical_doc = Some(response);

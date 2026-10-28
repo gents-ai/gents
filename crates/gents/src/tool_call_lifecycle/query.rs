@@ -7,6 +7,7 @@ pub use result::{
 };
 pub(crate) use result::{
     load_tool_call_arguments_in_txn, load_tool_call_read, load_tool_call_read_in_txn,
+    load_tool_file_change_observation_in_txn,
 };
 
 use std::sync::Arc;
@@ -488,7 +489,7 @@ mod tests {
                 assert_eq!(after.accepted_header_doc_id, before.accepted_header_doc_id);
                 assert_eq!(after.execution_generation, before.execution_generation);
                 assert_eq!(after.arguments, before.arguments);
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await

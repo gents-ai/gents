@@ -4,6 +4,7 @@ use crate::claude_messages_body::{
     ResolvedReplayEvidence, TaggedAssistantRow,
 };
 use crate::provider_input::ProviderInputProfile;
+use gents_protocol::error_chain::ErrorChain;
 
 pub(super) fn message_values(rows: &[TaggedMessage]) -> Vec<Message> {
     rows.iter().map(|row| row.message.clone()).collect()
@@ -37,14 +38,17 @@ fn replay_input_error(message: impl Into<String>) -> StreamingError {
     )))
 }
 
-pub(super) fn replay_resolution_error(error: anyhow::Error) -> StreamingError {
-    match error.downcast::<ReplayEvidenceViolation>() {
-        Ok(violation) => {
+pub(super) fn replay_resolution_error(error: ReplayEvidenceResolveError) -> StreamingError {
+    match error {
+        ReplayEvidenceResolveError::Violation(violation) => {
             StreamingError::Completion(CompletionError::RequestError(Box::new(violation)))
         }
-        Err(error) => StreamingError::Completion(CompletionError::ProviderError(format!(
-            "loading canonical Claude replay evidence failed: {error:#}",
-        ))),
+        ReplayEvidenceResolveError::Storage { source } => {
+            StreamingError::Completion(CompletionError::ProviderError(format!(
+                "loading canonical Claude replay evidence failed: {}",
+                ErrorChain(source.as_ref()),
+            )))
+        }
     }
 }
 
@@ -870,9 +874,10 @@ mod replay_error_tests {
     }
 
     #[test]
-    fn canonical_violation_retains_its_type_through_context() {
-        let error = anyhow::Error::new(ReplayEvidenceViolation("invalid canonical join".into()))
-            .context("resolving required replay");
+    fn canonical_violation_retains_its_type() {
+        let error = ReplayEvidenceResolveError::Violation(ReplayEvidenceViolation(
+            "invalid canonical join".into(),
+        ));
         let StreamingError::Completion(CompletionError::RequestError(error)) =
             replay_resolution_error(error)
         else {
@@ -883,7 +888,9 @@ mod replay_error_tests {
 
     #[test]
     fn storage_error_is_not_reclassified_by_message_text() {
-        let error = anyhow::anyhow!("canonical replay tag belongs to another physical request");
+        let error = ReplayEvidenceResolveError::Storage {
+            source: "canonical replay tag belongs to another physical request".into(),
+        };
         assert!(matches!(
             replay_resolution_error(error),
             StreamingError::Completion(CompletionError::ProviderError(_))
@@ -1032,12 +1039,11 @@ pub fn association_reduction(
     profile: ProviderInputProfile,
     rows: &[TaggedMessage],
     exact: crate::compaction::ExactReduction<'_>,
-) -> anyhow::Result<crate::compaction::AssociationReduction> {
+) -> Result<crate::compaction::AssociationReduction, crate::compaction::CompactionError> {
     let split = exact.compacted_prefix.len();
-    anyhow::ensure!(
-        split <= rows.len(),
-        "exact reduction split exceeds its association rows"
-    );
+    if split > rows.len() {
+        return Err(crate::compaction::CompactionError::SplitExceedsRows);
+    }
     let (prefix, suffix) = rows.split_at(split);
     exact.over_association_view(profile, message_values(prefix), message_values(suffix))
 }
@@ -1249,7 +1255,7 @@ pub fn completion_request_input_components(
         StreamingError::Completion(CompletionError::RequestError(Box::new(
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("provider_input_projection_failed: {error:#}"),
+                format!("provider_input_projection_failed: {}", ErrorChain(&error)),
             ),
         )))
     })
@@ -1263,7 +1269,7 @@ fn completion_request_input_tokens(
         StreamingError::Completion(CompletionError::RequestError(Box::new(
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("provider_input_projection_failed: {error:#}"),
+                format!("provider_input_projection_failed: {}", ErrorChain(&error)),
             ),
         )))
     })
@@ -1289,7 +1295,7 @@ pub(super) fn prepare_dispatch_attempt(
     assembled_request: &CompletionRequest,
     config: &LoopConfig,
     aggregate_token_budget: Option<&AggregateTokenBudget>,
-) -> Result<PreparedDispatch, StreamingError> {
+) -> Result<PreparedDispatch, crate::error::LoopStreamError> {
     let mut request = assembled_request.clone();
     let input_tokens =
         completion_request_input_tokens(&request, config.provider_input_counter.as_ref())?;
@@ -1477,9 +1483,19 @@ where
     let body = config
         .provider_input_counter
         .project_body(&core)
-        .map_err(|error| replay_input_error(format!("provider replay projection: {error:#}")))?;
-    let stage_body = crate::provider_input::replay_frontier::flatten(&body, wire)
-        .map_err(|error| replay_input_error(format!("provider replay projection: {error:#}")))?;
+        .map_err(|error| {
+            replay_input_error(format!(
+                "provider replay projection: {}",
+                ErrorChain(&error)
+            ))
+        })?;
+    let stage_body =
+        crate::provider_input::replay_frontier::flatten(&body, wire).map_err(|error| {
+            replay_input_error(format!(
+                "provider replay projection: {}",
+                ErrorChain(&error)
+            ))
+        })?;
     apply_assistant_rows(
         &mut joined,
         &indices,
@@ -1501,7 +1517,7 @@ pub(super) async fn build_budgeted_request<M>(
     turn_index: usize,
     reduction_chain_keys: &mut Vec<String>,
     active_reduction_keys: &mut Vec<String>,
-) -> Result<(CompletionRequest, TurnContextDecision), StreamingError>
+) -> Result<(CompletionRequest, TurnContextDecision), crate::error::LoopStreamError>
 where
     M: CompletionModel,
 {
@@ -1548,22 +1564,31 @@ where
     .await
     .map_err(|error| {
         if matches!(
-            error.downcast_ref::<crate::compaction::ReductionError>(),
-            Some(crate::compaction::ReductionError::CannotFit)
-        ) || error.is::<ReplayCheckpointError>()
-            || error.is::<ReplayEvidenceViolation>()
-        {
-            return StreamingError::Completion(CompletionError::RequestError(
-                error.into_boxed_dyn_error(),
-            ));
+            error,
+            super::TurnCompactionError::Compaction(
+                crate::compaction::CompactionError::Reduction(
+                    crate::compaction::ReductionError::CannotFit
+                ) | crate::compaction::CompactionError::ReplayCheckpoint(_)
+                    | crate::compaction::CompactionError::ReplayEvidence(_)
+            )
+        ) {
+            return StreamingError::Completion(CompletionError::RequestError(Box::new(error)))
+                .into();
         }
-        aggregate_token_budget_exhaustion_message(&error).map_or_else(
+        error.aggregate_token_budget_exhaustion().map_or_else(
             || {
                 StreamingError::Completion(CompletionError::ProviderError(format!(
-                    "per-turn provider-input compaction failed: {error:#}"
+                    "per-turn provider-input compaction failed: {}",
+                    ErrorChain(&error)
                 )))
+                .into()
             },
-            |reason| StreamingError::Completion(CompletionError::ProviderError(reason)),
+            |reason| {
+                crate::rig_compat::loop_verdict_error(
+                    crate::error::LoopVerdict::AggregateTokenBudgetExhausted,
+                    reason,
+                )
+            },
         )
     })?;
     let (mut compacted, reduction_key, reason) = match outcome {
@@ -1581,9 +1606,12 @@ where
             ContextCompactionReason::Compacted,
         ),
         TurnCompactionOutcome::CannotFit => {
-            return Err(StreamingError::Completion(CompletionError::RequestError(
-                Box::new(crate::compaction::ReductionError::CannotFit),
-            )));
+            return Err(
+                StreamingError::Completion(CompletionError::RequestError(Box::new(
+                    crate::compaction::ReductionError::CannotFit,
+                )))
+                .into(),
+            );
         }
     };
     let compacted_prompt = compacted.pop().ok_or_else(|| {
@@ -1640,9 +1668,12 @@ where
             effective_input_budget,
             "provider input remains over threshold after reduction"
         );
-        return Err(StreamingError::Completion(CompletionError::RequestError(
-            Box::new(crate::compaction::ReductionError::CannotFit),
-        )));
+        return Err(
+            StreamingError::Completion(CompletionError::RequestError(Box::new(
+                crate::compaction::ReductionError::CannotFit,
+            )))
+            .into(),
+        );
     }
 
     Ok((

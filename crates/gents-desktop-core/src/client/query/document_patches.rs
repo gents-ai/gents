@@ -211,12 +211,8 @@ pub async fn fetch_doc_patch(
                 INFERENCE_BACKEND_OBSERVATION_FIELDS,
                 Some("node_did"),
             )?;
-            (rows.backend_observations, rows.backend_observation_source_node_dids) = parse_observation_query_rows_with_source(
-                &data,
-                INFERENCE_BACKEND_NAME,
-                INFERENCE_BACKEND_OBSERVATION_FIELDS,
-                Some("node_did"),
-            )?;
+            (rows.backend_observations, rows.backend_observation_source_node_dids) =
+                parse_backend_observation_rows(&data, INFERENCE_BACKEND_NAME)?;
         }
         "AgentContext" => rows.contexts = load_rows(node, "AgentContext", &format!("query {{ AgentContext(docIDs: [{in_clause}]) {{ {AGENT_CONTEXT_FIELDS} }} }}")).await?,
         "CompactionConfig" => rows.compactions = load_rows(node, "CompactionConfig", &format!("query {{ CompactionConfig(docIDs: [{in_clause}]) {{ {COMPACTION_CONFIG_FIELDS} }} }}")).await?,

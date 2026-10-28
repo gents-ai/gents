@@ -99,7 +99,7 @@ pub(crate) async fn load_document_runtime_view(
                     event_sources,
                     tool_services,
                 );
-                Ok(view)
+                Ok::<_, anyhow::Error>(view)
             })
         },
     )

@@ -197,6 +197,21 @@ pub enum ClientCommand {
         #[serde(rename = "requestId")]
         request_id: String,
     },
+    #[serde(rename = "desktop_request_attachments")]
+    RequestAttachments {
+        #[serde(rename = "nodeDid")]
+        node_did: String,
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "messageKey", default)]
+        #[ts(optional)]
+        message_key: Option<String>,
+        #[serde(default)]
+        #[ts(optional)]
+        index: Option<u32>,
+    },
     #[serde(rename = "client_speech_services")]
     SpeechServices {
         #[serde(rename = "nodeDid")]
@@ -355,6 +370,7 @@ impl ClientCommand {
         "client_start_task",
         "client_run_schedule",
         "desktop_request_output",
+        "desktop_request_attachments",
         "desktop_tool_file_changes",
         "desktop_inventory_file_change",
         "desktop_session_file_inventory",
@@ -411,6 +427,7 @@ impl ClientCommand {
                 | Self::ConfigRead { .. }
                 | Self::ActionCatalog { .. }
                 | Self::RequestOutput { .. }
+                | Self::RequestAttachments { .. }
                 | Self::ToolFileChanges { .. }
                 | Self::SessionFileInventory { .. }
                 | Self::InventoryFileChange { .. }
@@ -481,6 +498,9 @@ pub enum HostMessage {
     Hello {
         version: u32,
         commands: Vec<String>,
+        /// Older helpers lack this field and must not receive image-bearing Goals.
+        #[serde(rename = "goalInputAttachments")]
+        goal_input_attachments: bool,
         #[serde(rename = "maxFrameBytes")]
         max_frame_bytes: usize,
         #[serde(rename = "installationBuild")]

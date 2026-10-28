@@ -1,6 +1,5 @@
 use std::io::Cursor;
 
-use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -21,6 +20,208 @@ const OPERATOR_QUERY_COMMAND_SIGNATURE_DOMAIN: &str = "gents-enrollment-operator
 const MAX_OFFER_TOKEN_BYTES: usize = 32 * 1024;
 const MAX_ENROLLMENT_FIELD_BYTES: usize = 16 * 1024;
 const ENROLLMENT_SCHEMA_DOMAIN: &str = "gents-enrollment-schema-v1";
+
+#[derive(Debug, thiserror::Error)]
+pub enum EnrollmentError {
+    #[error("unsupported enrollment request version {version}")]
+    UnsupportedRequestVersion { version: u8 },
+    #[error("request offer_id mismatch")]
+    RequestOfferIdMismatch,
+    #[error("request challenge mismatch")]
+    RequestChallengeMismatch,
+    #[error("request network_id mismatch")]
+    RequestNetworkIdMismatch,
+    #[error("request admin_did mismatch")]
+    RequestAdminDidMismatch,
+    #[error("request server_peer mismatch")]
+    RequestServerPeerMismatch,
+    #[error("request owner_agent mismatch")]
+    RequestOwnerAgentMismatch,
+    #[error("request profile mismatch")]
+    RequestProfileMismatch,
+    #[error("request cannot extend the signed offer lifetime")]
+    RequestExtendsOffer,
+    #[error("request digest mismatch")]
+    RequestDigestMismatch,
+    #[error("request_id mismatch")]
+    RequestIdMismatch,
+    #[error("enrollment offer {name} is empty")]
+    OfferFieldEmpty { name: &'static str },
+    #[error("enrollment offer {name} has whitespace")]
+    OfferFieldWhitespace { name: &'static str },
+    #[error("enrollment offer {name} exceeds the size limit")]
+    OfferFieldTooLarge { name: &'static str },
+    #[error("invalid enrollment request signature length")]
+    RequestSignatureLength,
+    #[error("request issuance is outside the signed offer window")]
+    RequestOutsideOfferWindow,
+    #[error("unsupported operator decision command version {version}")]
+    UnsupportedOperatorDecisionVersion { version: u8 },
+    #[error("operator decision command {name} contains control characters")]
+    OperatorDecisionControlCharacters { name: &'static str },
+    #[error("invalid operator decision command signature length")]
+    OperatorDecisionSignatureLength,
+    #[error("approval lease_seconds is outside the supported range")]
+    ApprovalLeaseOutOfRange,
+    #[error("deny/revoke command cannot allocate a lease")]
+    DenyOrRevokeWithLease,
+    #[error("operator decision command is issued in the future")]
+    OperatorDecisionFromFuture,
+    #[error("operator decision command expired")]
+    OperatorDecisionExpired,
+    #[error("{name} must use canonical UTC form")]
+    TimestampNotUtc { name: &'static str },
+    #[error("{name} must use canonical UTC seconds form")]
+    TimestampNotCanonical { name: &'static str },
+    #[error("parsing {name}")]
+    TimestampParse {
+        name: &'static str,
+        #[source]
+        source: chrono::ParseError,
+    },
+    #[error("unsupported operator query command version {version}")]
+    UnsupportedOperatorQueryVersion { version: u8 },
+    #[error("operator query command {name} contains control characters")]
+    OperatorQueryControlCharacters { name: &'static str },
+    #[error("invalid operator query command signature length")]
+    OperatorQuerySignatureLength,
+    #[error("operator query command is issued in the future")]
+    OperatorQueryFromFuture,
+    #[error("operator query command expired")]
+    OperatorQueryExpired,
+    #[error("unsupported enrollment decision version {version}")]
+    UnsupportedDecisionVersion { version: u8 },
+    #[error("decision request_id mismatch")]
+    DecisionRequestIdMismatch,
+    #[error("decision request_digest mismatch")]
+    DecisionRequestDigestMismatch,
+    #[error("decision network_id mismatch")]
+    DecisionNetworkIdMismatch,
+    #[error("decision admin_did mismatch")]
+    DecisionAdminDidMismatch,
+    #[error("decision candidate_did mismatch")]
+    DecisionCandidateDidMismatch,
+    #[error("decision candidate_peer mismatch")]
+    DecisionCandidatePeerMismatch,
+    #[error("decision owner_agent mismatch")]
+    DecisionOwnerAgentMismatch,
+    #[error("decision signer mismatch")]
+    DecisionSignerMismatch,
+    #[error("decision_id mismatch")]
+    DecisionIdMismatch,
+    #[error("approved decision requires a positive authorization sequence")]
+    ApprovedWithoutSequence,
+    #[error("approval lease must expire after its decision")]
+    ApprovalLeaseNotAfterDecision,
+    #[error("approval lease exceeds the supported maximum")]
+    ApprovalLeaseTooLong,
+    #[error("denied decision cannot allocate an authorization sequence")]
+    DeniedWithSequence,
+    #[error("denied decision must use its decision time as its non-leased boundary")]
+    DeniedLeaseNotDecision,
+    #[error("decision authorization sequence exceeds the DefraDB Int range")]
+    DecisionSequenceOverflow,
+    #[error("invalid decision signature length")]
+    DecisionSignatureLength,
+    #[error("decision is outside the signed request window")]
+    DecisionOutsideRequestWindow,
+    #[error("unsupported authorization revision version {version}")]
+    UnsupportedRevisionVersion { version: u8 },
+    #[error("authorization revision requires an approved decision")]
+    RevisionNotApproved,
+    #[error("revision request_id mismatch")]
+    RevisionRequestIdMismatch,
+    #[error("revision request_digest mismatch")]
+    RevisionRequestDigestMismatch,
+    #[error("revision network_id mismatch")]
+    RevisionNetworkIdMismatch,
+    #[error("revision admin_did mismatch")]
+    RevisionAdminDidMismatch,
+    #[error("revision member_did mismatch")]
+    RevisionMemberDidMismatch,
+    #[error("revision member_peer mismatch")]
+    RevisionMemberPeerMismatch,
+    #[error("revision owner_agent mismatch")]
+    RevisionOwnerAgentMismatch,
+    #[error("revision signer mismatch")]
+    RevisionSignerMismatch,
+    #[error("authorization revision sequence must be positive")]
+    RevisionSequenceNotPositive,
+    #[error("authorization revision sequence exceeds the DefraDB Int range")]
+    RevisionSequenceOverflow,
+    #[error("revision authorization lease mismatch")]
+    RevisionLeaseMismatch,
+    #[error("revision_id mismatch")]
+    RevisionIdMismatch,
+    #[error("active revision sequence must equal its approval")]
+    ActiveSequenceMismatch,
+    #[error("active revision timestamp must equal its approval")]
+    ActiveTimestampMismatch,
+    #[error("revocation must dominate its approval")]
+    RevocationNotDominant,
+    #[error("revocation cannot predate its approval")]
+    RevocationBeforeApproval,
+    #[error("invalid revision signature length")]
+    RevisionSignatureLength,
+    #[error("unsupported enrollment route receipt version {version}")]
+    UnsupportedRouteReceiptVersion { version: u8 },
+    #[error("route receipt requires an approved decision")]
+    RouteReceiptNotApproved,
+    #[error("receipt request_id mismatch")]
+    ReceiptRequestIdMismatch,
+    #[error("receipt request_digest mismatch")]
+    ReceiptRequestDigestMismatch,
+    #[error("receipt network_id mismatch")]
+    ReceiptNetworkIdMismatch,
+    #[error("receipt admin_did mismatch")]
+    ReceiptAdminDidMismatch,
+    #[error("receipt member_did mismatch")]
+    ReceiptMemberDidMismatch,
+    #[error("receipt member_peer mismatch")]
+    ReceiptMemberPeerMismatch,
+    #[error("receipt server_peer mismatch")]
+    ReceiptServerPeerMismatch,
+    #[error("receipt owner_agent mismatch")]
+    ReceiptOwnerAgentMismatch,
+    #[error("receipt authorization sequence mismatch")]
+    ReceiptSequenceMismatch,
+    #[error("receipt authorization lease mismatch")]
+    ReceiptLeaseMismatch,
+    #[error("receipt signer mismatch")]
+    ReceiptSignerMismatch,
+    #[error("receipt_id mismatch")]
+    ReceiptIdMismatch,
+    #[error("route receipt cannot predate approval")]
+    RouteReceiptBeforeApproval,
+    #[error("route receipt cannot be issued after lease expiry")]
+    RouteReceiptAfterLease,
+    #[error("invalid route receipt signature length")]
+    RouteReceiptSignatureLength,
+    #[error("encoding enrollment offer")]
+    EncodeOffer(#[source] ciborium::ser::Error<std::io::Error>),
+    #[error("decoding enrollment offer")]
+    DecodeOfferBase58(#[source] bs58::decode::Error),
+    #[error("parsing enrollment offer")]
+    ParseOffer(#[source] ciborium::de::Error<std::io::Error>),
+    #[error("enrollment offer is empty")]
+    OfferEmpty,
+    #[error("enrollment offer has whitespace")]
+    OfferWhitespace,
+    #[error("enrollment offer exceeds the size limit")]
+    OfferTooLarge,
+    #[error("decoded enrollment offer exceeds the size limit")]
+    DecodedOfferTooLarge,
+    #[error("enrollment offer contains trailing data")]
+    OfferTrailingData,
+    #[error("unsupported enrollment offer version {version}")]
+    UnsupportedOfferVersion { version: u8 },
+    #[error("unsupported enrollment profile")]
+    UnsupportedOfferProfile,
+    #[error("invalid enrollment offer signature length")]
+    OfferSignatureLength,
+}
+
+type Result<T, E = EnrollmentError> = std::result::Result<T, E>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EnrollmentOfferRecord {
@@ -85,41 +286,38 @@ impl EnrollmentRequestRecord {
     }
 
     pub fn validate_against_offer(&self, offer: &EnrollmentOfferRecord) -> Result<()> {
-        anyhow::ensure!(
-            self.protocol_version == ENROLLMENT_PROTOCOL_VERSION,
-            "unsupported enrollment request version {}",
-            self.protocol_version
-        );
-        anyhow::ensure!(self.offer_id == offer.offer_id, "request offer_id mismatch");
-        anyhow::ensure!(
-            self.challenge == offer.challenge,
-            "request challenge mismatch"
-        );
-        anyhow::ensure!(
-            self.network_id == offer.network_id,
-            "request network_id mismatch"
-        );
-        anyhow::ensure!(
-            self.admin_did == offer.admin_did,
-            "request admin_did mismatch"
-        );
-        anyhow::ensure!(
-            self.server_peer == offer.server_peer,
-            "request server_peer mismatch"
-        );
-        anyhow::ensure!(
-            self.owner_agent == offer.owner_agent,
-            "request owner_agent mismatch"
-        );
-        anyhow::ensure!(self.profile == offer.profile, "request profile mismatch");
-        anyhow::ensure!(
-            self.expires_at == offer.expires_at,
-            "request cannot extend the signed offer lifetime"
-        );
-        anyhow::ensure!(
-            self.request_digest == self.computed_digest(),
-            "request digest mismatch"
-        );
+        if self.protocol_version != ENROLLMENT_PROTOCOL_VERSION {
+            return Err(EnrollmentError::UnsupportedRequestVersion {
+                version: self.protocol_version,
+            });
+        }
+        if self.offer_id != offer.offer_id {
+            return Err(EnrollmentError::RequestOfferIdMismatch);
+        }
+        if self.challenge != offer.challenge {
+            return Err(EnrollmentError::RequestChallengeMismatch);
+        }
+        if self.network_id != offer.network_id {
+            return Err(EnrollmentError::RequestNetworkIdMismatch);
+        }
+        if self.admin_did != offer.admin_did {
+            return Err(EnrollmentError::RequestAdminDidMismatch);
+        }
+        if self.server_peer != offer.server_peer {
+            return Err(EnrollmentError::RequestServerPeerMismatch);
+        }
+        if self.owner_agent != offer.owner_agent {
+            return Err(EnrollmentError::RequestOwnerAgentMismatch);
+        }
+        if self.profile != offer.profile {
+            return Err(EnrollmentError::RequestProfileMismatch);
+        }
+        if self.expires_at != offer.expires_at {
+            return Err(EnrollmentError::RequestExtendsOffer);
+        }
+        if self.request_digest != self.computed_digest() {
+            return Err(EnrollmentError::RequestDigestMismatch);
+        }
         let expected_id = format!(
             "enroll-{}",
             derive_enrollment_id(
@@ -132,7 +330,9 @@ impl EnrollmentRequestRecord {
                 ],
             )
         );
-        anyhow::ensure!(self.request_id == expected_id, "request_id mismatch");
+        if self.request_id != expected_id {
+            return Err(EnrollmentError::RequestIdMismatch);
+        }
         for (name, value) in [
             ("request_id", self.request_id.as_str()),
             ("request_digest", self.request_digest.as_str()),
@@ -153,17 +353,15 @@ impl EnrollmentRequestRecord {
         ] {
             validate_exact_field(name, value)?;
         }
-        anyhow::ensure!(
-            self.candidate_sig.len() == 64,
-            "invalid enrollment request signature length"
-        );
+        if self.candidate_sig.len() != 64 {
+            return Err(EnrollmentError::RequestSignatureLength);
+        }
         let offer_issued = parse_canonical_timestamp("offer issued_at", &offer.issued_at)?;
         let request_issued = parse_canonical_timestamp("request issued_at", &self.issued_at)?;
         let offer_expires = parse_canonical_timestamp("offer expires_at", &offer.expires_at)?;
-        anyhow::ensure!(
-            offer_issued <= request_issued && request_issued <= offer_expires,
-            "request issuance is outside the signed offer window"
-        );
+        if !(offer_issued <= request_issued && request_issued <= offer_expires) {
+            return Err(EnrollmentError::RequestOutsideOfferWindow);
+        }
         Ok(())
     }
 }
@@ -173,6 +371,19 @@ impl EnrollmentRequestRecord {
 pub enum EnrollmentDecisionKind {
     Approved,
     Denied,
+}
+
+/// Why the runtime refused an operator's enrollment decision, as the
+/// decision endpoint reports it beside the error text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnrollmentDecisionRefusalCode {
+    /// The request is not (yet) a fresh pending request in this projection.
+    NotPending,
+    /// Two requests used one offer's challenge; both are refused.
+    ChallengeReused,
+    /// The request conflicts with other enrollment rows.
+    Conflicted,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -251,11 +462,11 @@ impl EnrollmentOperatorDecisionCommand {
     }
 
     pub fn validate_at(&self, now: DateTime<Utc>) -> Result<()> {
-        anyhow::ensure!(
-            self.protocol_version == ENROLLMENT_PROTOCOL_VERSION,
-            "unsupported operator decision command version {}",
-            self.protocol_version
-        );
+        if self.protocol_version != ENROLLMENT_PROTOCOL_VERSION {
+            return Err(EnrollmentError::UnsupportedOperatorDecisionVersion {
+                version: self.protocol_version,
+            });
+        }
         for (name, value) in [
             ("request_id", self.request_id.as_str()),
             ("admin_did", self.admin_did.as_str()),
@@ -263,35 +474,33 @@ impl EnrollmentOperatorDecisionCommand {
             ("nonce", self.nonce.as_str()),
         ] {
             validate_exact_field(name, value)?;
-            anyhow::ensure!(
-                value.chars().all(|character| !character.is_control()),
-                "operator decision command {name} contains control characters"
-            );
+            if value.chars().any(char::is_control) {
+                return Err(EnrollmentError::OperatorDecisionControlCharacters { name });
+            }
         }
-        anyhow::ensure!(
-            self.admin_sig.len() == 64,
-            "invalid operator decision command signature length"
-        );
+        if self.admin_sig.len() != 64 {
+            return Err(EnrollmentError::OperatorDecisionSignatureLength);
+        }
         match self.action {
-            EnrollmentOperatorAction::Approve => anyhow::ensure!(
-                (1..=MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS).contains(&self.lease_seconds),
-                "approval lease_seconds is outside the supported range"
-            ),
-            EnrollmentOperatorAction::Deny | EnrollmentOperatorAction::Revoke => anyhow::ensure!(
-                self.lease_seconds == 0,
-                "deny/revoke command cannot allocate a lease"
-            ),
+            EnrollmentOperatorAction::Approve => {
+                if !(1..=MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS).contains(&self.lease_seconds) {
+                    return Err(EnrollmentError::ApprovalLeaseOutOfRange);
+                }
+            }
+            EnrollmentOperatorAction::Deny | EnrollmentOperatorAction::Revoke => {
+                if self.lease_seconds != 0 {
+                    return Err(EnrollmentError::DenyOrRevokeWithLease);
+                }
+            }
         }
         let issued = parse_canonical_timestamp("operator command issued_at", &self.issued_at)?
             .with_timezone(&Utc);
-        anyhow::ensure!(
-            issued <= now + chrono::Duration::seconds(5),
-            "operator decision command is issued in the future"
-        );
-        anyhow::ensure!(
-            now - issued <= chrono::Duration::seconds(60),
-            "operator decision command expired"
-        );
+        if issued > now + chrono::Duration::seconds(5) {
+            return Err(EnrollmentError::OperatorDecisionFromFuture);
+        }
+        if now - issued > chrono::Duration::seconds(60) {
+            return Err(EnrollmentError::OperatorDecisionExpired);
+        }
         Ok(())
     }
 }
@@ -324,36 +533,32 @@ impl EnrollmentOperatorQueryCommand {
     }
 
     pub fn validate_at(&self, now: DateTime<Utc>) -> Result<()> {
-        anyhow::ensure!(
-            self.protocol_version == ENROLLMENT_PROTOCOL_VERSION,
-            "unsupported operator query command version {}",
-            self.protocol_version
-        );
+        if self.protocol_version != ENROLLMENT_PROTOCOL_VERSION {
+            return Err(EnrollmentError::UnsupportedOperatorQueryVersion {
+                version: self.protocol_version,
+            });
+        }
         for (name, value) in [
             ("admin_did", self.admin_did.as_str()),
             ("issued_at", self.issued_at.as_str()),
             ("nonce", self.nonce.as_str()),
         ] {
             validate_exact_field(name, value)?;
-            anyhow::ensure!(
-                value.chars().all(|character| !character.is_control()),
-                "operator query command {name} contains control characters"
-            );
+            if value.chars().any(char::is_control) {
+                return Err(EnrollmentError::OperatorQueryControlCharacters { name });
+            }
         }
-        anyhow::ensure!(
-            self.admin_sig.len() == 64,
-            "invalid operator query command signature length"
-        );
+        if self.admin_sig.len() != 64 {
+            return Err(EnrollmentError::OperatorQuerySignatureLength);
+        }
         let issued = parse_canonical_timestamp("operator query issued_at", &self.issued_at)?
             .with_timezone(&Utc);
-        anyhow::ensure!(
-            issued <= now + chrono::Duration::seconds(5),
-            "operator query command is issued in the future"
-        );
-        anyhow::ensure!(
-            now - issued <= chrono::Duration::seconds(60),
-            "operator query command expired"
-        );
+        if issued > now + chrono::Duration::seconds(5) {
+            return Err(EnrollmentError::OperatorQueryFromFuture);
+        }
+        if now - issued > chrono::Duration::seconds(60) {
+            return Err(EnrollmentError::OperatorQueryExpired);
+        }
         Ok(())
     }
 }
@@ -523,100 +728,82 @@ impl EnrollmentDecisionRecord {
     }
 
     pub fn validate_against_request(&self, request: &EnrollmentRequestRecord) -> Result<()> {
-        anyhow::ensure!(
-            self.protocol_version == ENROLLMENT_PROTOCOL_VERSION,
-            "unsupported enrollment decision version {}",
-            self.protocol_version
-        );
-        anyhow::ensure!(
-            self.request_id == request.request_id,
-            "decision request_id mismatch"
-        );
-        anyhow::ensure!(
-            self.request_digest == request.request_digest,
-            "decision request_digest mismatch"
-        );
-        anyhow::ensure!(
-            self.network_id == request.network_id,
-            "decision network_id mismatch"
-        );
-        anyhow::ensure!(
-            self.admin_did == request.admin_did,
-            "decision admin_did mismatch"
-        );
-        anyhow::ensure!(
-            self.candidate_did == request.candidate_did,
-            "decision candidate_did mismatch"
-        );
-        anyhow::ensure!(
-            self.candidate_peer == request.candidate_peer,
-            "decision candidate_peer mismatch"
-        );
-        anyhow::ensure!(
-            self.owner_agent == request.owner_agent,
-            "decision owner_agent mismatch"
-        );
-        anyhow::ensure!(
-            self.signer_did == request.admin_did,
-            "decision signer mismatch"
-        );
-        anyhow::ensure!(
-            self.decision_id == derive_decision_id(&request.request_id, &request.request_digest),
-            "decision_id mismatch"
-        );
+        if self.protocol_version != ENROLLMENT_PROTOCOL_VERSION {
+            return Err(EnrollmentError::UnsupportedDecisionVersion {
+                version: self.protocol_version,
+            });
+        }
+        if self.request_id != request.request_id {
+            return Err(EnrollmentError::DecisionRequestIdMismatch);
+        }
+        if self.request_digest != request.request_digest {
+            return Err(EnrollmentError::DecisionRequestDigestMismatch);
+        }
+        if self.network_id != request.network_id {
+            return Err(EnrollmentError::DecisionNetworkIdMismatch);
+        }
+        if self.admin_did != request.admin_did {
+            return Err(EnrollmentError::DecisionAdminDidMismatch);
+        }
+        if self.candidate_did != request.candidate_did {
+            return Err(EnrollmentError::DecisionCandidateDidMismatch);
+        }
+        if self.candidate_peer != request.candidate_peer {
+            return Err(EnrollmentError::DecisionCandidatePeerMismatch);
+        }
+        if self.owner_agent != request.owner_agent {
+            return Err(EnrollmentError::DecisionOwnerAgentMismatch);
+        }
+        if self.signer_did != request.admin_did {
+            return Err(EnrollmentError::DecisionSignerMismatch);
+        }
+        if self.decision_id != derive_decision_id(&request.request_id, &request.request_digest) {
+            return Err(EnrollmentError::DecisionIdMismatch);
+        }
         match self.decision {
             EnrollmentDecisionKind::Approved => {
-                anyhow::ensure!(
-                    self.authorization_sequence > 0,
-                    "approved decision requires a positive authorization sequence"
-                );
+                if self.authorization_sequence == 0 {
+                    return Err(EnrollmentError::ApprovedWithoutSequence);
+                }
                 let expires = parse_canonical_timestamp(
                     "decision authorization_expires_at",
                     &self.authorization_expires_at,
                 )?;
                 let decided = parse_canonical_timestamp("decision decided_at", &self.decided_at)?;
-                anyhow::ensure!(
-                    expires > decided,
-                    "approval lease must expire after its decision"
-                );
-                anyhow::ensure!(
-                    expires - decided
-                        <= chrono::Duration::seconds(
-                            MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS as i64
-                        ),
-                    "approval lease exceeds the supported maximum"
-                );
+                if expires <= decided {
+                    return Err(EnrollmentError::ApprovalLeaseNotAfterDecision);
+                }
+                if expires - decided
+                    > chrono::Duration::seconds(MAX_ENROLLMENT_AUTHORIZATION_LEASE_SECONDS as i64)
+                {
+                    return Err(EnrollmentError::ApprovalLeaseTooLong);
+                }
             }
             EnrollmentDecisionKind::Denied => {
-                anyhow::ensure!(
-                    self.authorization_sequence == 0,
-                    "denied decision cannot allocate an authorization sequence"
-                );
-                anyhow::ensure!(
-                    self.authorization_expires_at == self.decided_at,
-                    "denied decision must use its decision time as its non-leased boundary"
-                );
+                if self.authorization_sequence != 0 {
+                    return Err(EnrollmentError::DeniedWithSequence);
+                }
+                if self.authorization_expires_at != self.decided_at {
+                    return Err(EnrollmentError::DeniedLeaseNotDecision);
+                }
                 parse_canonical_timestamp(
                     "denied decision authorization_expires_at",
                     &self.authorization_expires_at,
                 )?;
             }
         }
-        anyhow::ensure!(
-            self.authorization_sequence <= i64::MAX as u64,
-            "decision authorization sequence exceeds the DefraDB Int range"
-        );
-        anyhow::ensure!(
-            self.admin_sig.len() == 64,
-            "invalid decision signature length"
-        );
+        if self.authorization_sequence > i64::MAX as u64 {
+            return Err(EnrollmentError::DecisionSequenceOverflow);
+        }
+        if self.admin_sig.len() != 64 {
+            return Err(EnrollmentError::DecisionSignatureLength);
+        }
         let request_issued = parse_canonical_timestamp("request issued_at", &request.issued_at)?;
         let request_expires = parse_canonical_timestamp("request expires_at", &request.expires_at)?;
         let decided = parse_canonical_timestamp("decision decided_at", &self.decided_at)?;
-        anyhow::ensure!(
-            request_issued <= decided && decided <= request_expires,
-            "decision is outside the signed request window"
-        );
+        if !(request_issued <= decided && decided <= request_expires) {
+            return Err(EnrollmentError::DecisionOutsideRequestWindow);
+        }
         Ok(())
     }
 }
@@ -651,100 +838,83 @@ impl AuthorizationRevisionRecord {
         request: &EnrollmentRequestRecord,
         decision: &EnrollmentDecisionRecord,
     ) -> Result<()> {
-        anyhow::ensure!(
-            self.protocol_version == ENROLLMENT_PROTOCOL_VERSION,
-            "unsupported authorization revision version {}",
-            self.protocol_version
-        );
-        anyhow::ensure!(
-            decision.decision == EnrollmentDecisionKind::Approved,
-            "authorization revision requires an approved decision"
-        );
-        anyhow::ensure!(
-            self.request_id == request.request_id,
-            "revision request_id mismatch"
-        );
-        anyhow::ensure!(
-            self.request_digest == request.request_digest,
-            "revision request_digest mismatch"
-        );
-        anyhow::ensure!(
-            self.network_id == request.network_id,
-            "revision network_id mismatch"
-        );
-        anyhow::ensure!(
-            self.admin_did == request.admin_did,
-            "revision admin_did mismatch"
-        );
-        anyhow::ensure!(
-            self.member_did == request.candidate_did,
-            "revision member_did mismatch"
-        );
-        anyhow::ensure!(
-            self.member_peer == request.candidate_peer,
-            "revision member_peer mismatch"
-        );
-        anyhow::ensure!(
-            self.owner_agent == request.owner_agent,
-            "revision owner_agent mismatch"
-        );
-        anyhow::ensure!(
-            self.signer_did == request.admin_did,
-            "revision signer mismatch"
-        );
-        anyhow::ensure!(
-            self.sequence > 0,
-            "authorization revision sequence must be positive"
-        );
-        anyhow::ensure!(
-            self.sequence <= i64::MAX as u64,
-            "authorization revision sequence exceeds the DefraDB Int range"
-        );
-        anyhow::ensure!(
-            self.authorization_expires_at == decision.authorization_expires_at,
-            "revision authorization lease mismatch"
-        );
-        anyhow::ensure!(
-            self.revision_id
-                == derive_revision_id(
-                    &self.network_id,
-                    &self.member_did,
-                    self.sequence,
-                    &self.kind,
-                    &self.request_digest,
-                ),
-            "revision_id mismatch"
-        );
+        if self.protocol_version != ENROLLMENT_PROTOCOL_VERSION {
+            return Err(EnrollmentError::UnsupportedRevisionVersion {
+                version: self.protocol_version,
+            });
+        }
+        if decision.decision != EnrollmentDecisionKind::Approved {
+            return Err(EnrollmentError::RevisionNotApproved);
+        }
+        if self.request_id != request.request_id {
+            return Err(EnrollmentError::RevisionRequestIdMismatch);
+        }
+        if self.request_digest != request.request_digest {
+            return Err(EnrollmentError::RevisionRequestDigestMismatch);
+        }
+        if self.network_id != request.network_id {
+            return Err(EnrollmentError::RevisionNetworkIdMismatch);
+        }
+        if self.admin_did != request.admin_did {
+            return Err(EnrollmentError::RevisionAdminDidMismatch);
+        }
+        if self.member_did != request.candidate_did {
+            return Err(EnrollmentError::RevisionMemberDidMismatch);
+        }
+        if self.member_peer != request.candidate_peer {
+            return Err(EnrollmentError::RevisionMemberPeerMismatch);
+        }
+        if self.owner_agent != request.owner_agent {
+            return Err(EnrollmentError::RevisionOwnerAgentMismatch);
+        }
+        if self.signer_did != request.admin_did {
+            return Err(EnrollmentError::RevisionSignerMismatch);
+        }
+        if self.sequence == 0 {
+            return Err(EnrollmentError::RevisionSequenceNotPositive);
+        }
+        if self.sequence > i64::MAX as u64 {
+            return Err(EnrollmentError::RevisionSequenceOverflow);
+        }
+        if self.authorization_expires_at != decision.authorization_expires_at {
+            return Err(EnrollmentError::RevisionLeaseMismatch);
+        }
+        if self.revision_id
+            != derive_revision_id(
+                &self.network_id,
+                &self.member_did,
+                self.sequence,
+                &self.kind,
+                &self.request_digest,
+            )
+        {
+            return Err(EnrollmentError::RevisionIdMismatch);
+        }
         match self.kind {
             AuthorizationRevisionKind::Active => {
-                anyhow::ensure!(
-                    self.sequence == decision.authorization_sequence,
-                    "active revision sequence must equal its approval"
-                );
-                anyhow::ensure!(
-                    self.issued_at == decision.decided_at,
-                    "active revision timestamp must equal its approval"
-                );
+                if self.sequence != decision.authorization_sequence {
+                    return Err(EnrollmentError::ActiveSequenceMismatch);
+                }
+                if self.issued_at != decision.decided_at {
+                    return Err(EnrollmentError::ActiveTimestampMismatch);
+                }
             }
             AuthorizationRevisionKind::Revoked => {
-                anyhow::ensure!(
-                    self.sequence > decision.authorization_sequence,
-                    "revocation must dominate its approval"
-                );
+                if self.sequence <= decision.authorization_sequence {
+                    return Err(EnrollmentError::RevocationNotDominant);
+                }
                 let decision_time =
                     parse_canonical_timestamp("decision decided_at", &decision.decided_at)?;
                 let revision_time =
                     parse_canonical_timestamp("revision issued_at", &self.issued_at)?;
-                anyhow::ensure!(
-                    revision_time >= decision_time,
-                    "revocation cannot predate its approval"
-                );
+                if revision_time < decision_time {
+                    return Err(EnrollmentError::RevocationBeforeApproval);
+                }
             }
         }
-        anyhow::ensure!(
-            self.admin_sig.len() == 64,
-            "invalid revision signature length"
-        );
+        if self.admin_sig.len() != 64 {
+            return Err(EnrollmentError::RevisionSignatureLength);
+        }
         parse_canonical_timestamp("revision issued_at", &self.issued_at)?;
         Ok(())
     }
@@ -781,85 +951,73 @@ impl EnrollmentRouteReceiptRecord {
         request: &EnrollmentRequestRecord,
         decision: &EnrollmentDecisionRecord,
     ) -> Result<()> {
-        anyhow::ensure!(
-            self.protocol_version == ENROLLMENT_PROTOCOL_VERSION,
-            "unsupported enrollment route receipt version {}",
-            self.protocol_version
-        );
+        if self.protocol_version != ENROLLMENT_PROTOCOL_VERSION {
+            return Err(EnrollmentError::UnsupportedRouteReceiptVersion {
+                version: self.protocol_version,
+            });
+        }
         decision.validate_against_request(request)?;
-        anyhow::ensure!(
-            decision.decision == EnrollmentDecisionKind::Approved,
-            "route receipt requires an approved decision"
-        );
-        anyhow::ensure!(
-            self.request_id == request.request_id,
-            "receipt request_id mismatch"
-        );
-        anyhow::ensure!(
-            self.request_digest == request.request_digest,
-            "receipt request_digest mismatch"
-        );
-        anyhow::ensure!(
-            self.network_id == request.network_id,
-            "receipt network_id mismatch"
-        );
-        anyhow::ensure!(
-            self.admin_did == request.admin_did,
-            "receipt admin_did mismatch"
-        );
-        anyhow::ensure!(
-            self.member_did == request.candidate_did,
-            "receipt member_did mismatch"
-        );
-        anyhow::ensure!(
-            self.member_peer == request.candidate_peer,
-            "receipt member_peer mismatch"
-        );
-        anyhow::ensure!(
-            self.server_peer == request.server_peer,
-            "receipt server_peer mismatch"
-        );
-        anyhow::ensure!(
-            self.owner_agent == request.owner_agent,
-            "receipt owner_agent mismatch"
-        );
-        anyhow::ensure!(
-            self.authorization_sequence == decision.authorization_sequence,
-            "receipt authorization sequence mismatch"
-        );
-        anyhow::ensure!(
-            self.authorization_expires_at == decision.authorization_expires_at,
-            "receipt authorization lease mismatch"
-        );
-        anyhow::ensure!(
-            self.signer_did == request.admin_did,
-            "receipt signer mismatch"
-        );
-        anyhow::ensure!(
-            self.receipt_id
-                == derive_route_receipt_id(
-                    &self.request_id,
-                    &self.request_digest,
-                    self.authorization_sequence,
-                    &self.direction,
-                ),
-            "receipt_id mismatch"
-        );
+        if decision.decision != EnrollmentDecisionKind::Approved {
+            return Err(EnrollmentError::RouteReceiptNotApproved);
+        }
+        if self.request_id != request.request_id {
+            return Err(EnrollmentError::ReceiptRequestIdMismatch);
+        }
+        if self.request_digest != request.request_digest {
+            return Err(EnrollmentError::ReceiptRequestDigestMismatch);
+        }
+        if self.network_id != request.network_id {
+            return Err(EnrollmentError::ReceiptNetworkIdMismatch);
+        }
+        if self.admin_did != request.admin_did {
+            return Err(EnrollmentError::ReceiptAdminDidMismatch);
+        }
+        if self.member_did != request.candidate_did {
+            return Err(EnrollmentError::ReceiptMemberDidMismatch);
+        }
+        if self.member_peer != request.candidate_peer {
+            return Err(EnrollmentError::ReceiptMemberPeerMismatch);
+        }
+        if self.server_peer != request.server_peer {
+            return Err(EnrollmentError::ReceiptServerPeerMismatch);
+        }
+        if self.owner_agent != request.owner_agent {
+            return Err(EnrollmentError::ReceiptOwnerAgentMismatch);
+        }
+        if self.authorization_sequence != decision.authorization_sequence {
+            return Err(EnrollmentError::ReceiptSequenceMismatch);
+        }
+        if self.authorization_expires_at != decision.authorization_expires_at {
+            return Err(EnrollmentError::ReceiptLeaseMismatch);
+        }
+        if self.signer_did != request.admin_did {
+            return Err(EnrollmentError::ReceiptSignerMismatch);
+        }
+        if self.receipt_id
+            != derive_route_receipt_id(
+                &self.request_id,
+                &self.request_digest,
+                self.authorization_sequence,
+                &self.direction,
+            )
+        {
+            return Err(EnrollmentError::ReceiptIdMismatch);
+        }
         let decided = parse_canonical_timestamp("decision decided_at", &decision.decided_at)?;
         let applied = parse_canonical_timestamp("receipt applied_at", &self.applied_at)?;
-        anyhow::ensure!(applied >= decided, "route receipt cannot predate approval");
+        if applied < decided {
+            return Err(EnrollmentError::RouteReceiptBeforeApproval);
+        }
         let expires = parse_canonical_timestamp(
             "receipt authorization_expires_at",
             &self.authorization_expires_at,
         )?;
-        anyhow::ensure!(
-            applied < expires,
-            "route receipt cannot be issued after lease expiry"
-        );
-        anyhow::ensure!(
-            self.admin_sig.len() == 64,
-            "invalid route receipt signature length"
-        );
+        if applied >= expires {
+            return Err(EnrollmentError::RouteReceiptAfterLease);
+        }
+        if self.admin_sig.len() != 64 {
+            return Err(EnrollmentError::RouteReceiptSignatureLength);
+        }
         Ok(())
     }
 }
@@ -981,36 +1139,37 @@ pub fn enrollment_schema_fingerprint() -> String {
 
 pub fn encode_offer(offer: &EnrollmentOfferRecord) -> Result<String> {
     let mut bytes = Vec::new();
-    ciborium::ser::into_writer(offer, &mut bytes).context("encoding enrollment offer")?;
+    ciborium::ser::into_writer(offer, &mut bytes).map_err(EnrollmentError::EncodeOffer)?;
     Ok(bs58::encode(bytes).into_string())
 }
 
 pub fn decode_offer(encoded: &str) -> Result<EnrollmentOfferRecord> {
-    anyhow::ensure!(!encoded.is_empty(), "enrollment offer is empty");
-    anyhow::ensure!(encoded == encoded.trim(), "enrollment offer has whitespace");
-    anyhow::ensure!(
-        encoded.len() <= MAX_OFFER_TOKEN_BYTES,
-        "enrollment offer exceeds the size limit"
-    );
+    if encoded.is_empty() {
+        return Err(EnrollmentError::OfferEmpty);
+    }
+    if encoded != encoded.trim() {
+        return Err(EnrollmentError::OfferWhitespace);
+    }
+    if encoded.len() > MAX_OFFER_TOKEN_BYTES {
+        return Err(EnrollmentError::OfferTooLarge);
+    }
     let bytes = bs58::decode(encoded)
         .into_vec()
-        .context("decoding enrollment offer")?;
-    anyhow::ensure!(
-        bytes.len() <= MAX_OFFER_TOKEN_BYTES,
-        "decoded enrollment offer exceeds the size limit"
-    );
+        .map_err(EnrollmentError::DecodeOfferBase58)?;
+    if bytes.len() > MAX_OFFER_TOKEN_BYTES {
+        return Err(EnrollmentError::DecodedOfferTooLarge);
+    }
     let mut cursor = Cursor::new(bytes.as_slice());
     let offer: EnrollmentOfferRecord =
-        ciborium::de::from_reader(&mut cursor).context("parsing enrollment offer")?;
-    anyhow::ensure!(
-        cursor.position() == bytes.len() as u64,
-        "enrollment offer contains trailing data"
-    );
-    anyhow::ensure!(
-        offer.version == ENROLLMENT_PROTOCOL_VERSION,
-        "unsupported enrollment offer version {}",
-        offer.version
-    );
+        ciborium::de::from_reader(&mut cursor).map_err(EnrollmentError::ParseOffer)?;
+    if cursor.position() != bytes.len() as u64 {
+        return Err(EnrollmentError::OfferTrailingData);
+    }
+    if offer.version != ENROLLMENT_PROTOCOL_VERSION {
+        return Err(EnrollmentError::UnsupportedOfferVersion {
+            version: offer.version,
+        });
+    }
     for (name, value) in [
         ("offer_id", offer.offer_id.as_str()),
         ("challenge", offer.challenge.as_str()),
@@ -1026,34 +1185,37 @@ pub fn decode_offer(encoded: &str) -> Result<EnrollmentOfferRecord> {
     ] {
         validate_exact_field(name, value)?;
     }
-    anyhow::ensure!(offer.profile == "client", "unsupported enrollment profile");
-    anyhow::ensure!(
-        offer.admin_sig.len() == 64,
-        "invalid enrollment offer signature length"
-    );
+    if offer.profile != "client" {
+        return Err(EnrollmentError::UnsupportedOfferProfile);
+    }
+    if offer.admin_sig.len() != 64 {
+        return Err(EnrollmentError::OfferSignatureLength);
+    }
     Ok(offer)
 }
 
-fn validate_exact_field(name: &str, value: &str) -> Result<()> {
-    anyhow::ensure!(!value.is_empty(), "enrollment offer {name} is empty");
-    anyhow::ensure!(
-        value == value.trim(),
-        "enrollment offer {name} has whitespace"
-    );
-    anyhow::ensure!(
-        value.len() <= MAX_ENROLLMENT_FIELD_BYTES,
-        "enrollment offer {name} exceeds the size limit"
-    );
+fn validate_exact_field(name: &'static str, value: &str) -> Result<()> {
+    if value.is_empty() {
+        return Err(EnrollmentError::OfferFieldEmpty { name });
+    }
+    if value != value.trim() {
+        return Err(EnrollmentError::OfferFieldWhitespace { name });
+    }
+    if value.len() > MAX_ENROLLMENT_FIELD_BYTES {
+        return Err(EnrollmentError::OfferFieldTooLarge { name });
+    }
     Ok(())
 }
 
-fn parse_canonical_timestamp(name: &str, value: &str) -> Result<DateTime<FixedOffset>> {
-    anyhow::ensure!(value.ends_with('Z'), "{name} must use canonical UTC form");
-    let parsed = DateTime::parse_from_rfc3339(value).with_context(|| format!("parsing {name}"))?;
-    anyhow::ensure!(
-        parsed.to_rfc3339_opts(SecondsFormat::Secs, true) == value,
-        "{name} must use canonical UTC seconds form"
-    );
+fn parse_canonical_timestamp(name: &'static str, value: &str) -> Result<DateTime<FixedOffset>> {
+    if !value.ends_with('Z') {
+        return Err(EnrollmentError::TimestampNotUtc { name });
+    }
+    let parsed = DateTime::parse_from_rfc3339(value)
+        .map_err(|source| EnrollmentError::TimestampParse { name, source })?;
+    if parsed.to_rfc3339_opts(SecondsFormat::Secs, true) != value {
+        return Err(EnrollmentError::TimestampNotCanonical { name });
+    }
     Ok(parsed)
 }
 

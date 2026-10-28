@@ -120,7 +120,7 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
                 )
                 .await?
                 .unwrap();
-                Ok(gents_protocol::file_inventory::FileInventoryAdmission {
+                Ok::<_, anyhow::Error>(gents_protocol::file_inventory::FileInventoryAdmission {
                     session_doc_id: session.doc_id,
                     request: gents_protocol::session_hydration::HydrationRequest {
                         request_key: "plugin-inventory".into(),

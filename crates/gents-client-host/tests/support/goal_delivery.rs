@@ -1,6 +1,9 @@
 use super::*;
 use gents_protocol::goal_control::{SessionGoalControl, SessionGoalControlReceipt};
 
+pub(super) const IMAGE_DATA: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
+
 pub(super) const CAPTURED_CONTENT: &str = "saved before the lost Goal reply\n";
 
 pub(super) async fn exercise(
@@ -18,6 +21,7 @@ pub(super) async fn exercise(
         "clientDid":client_did,"commandId":command,"nodeDid":node,"sessionId":session,
         "sessionDocId":null,"expected":null,"agentId":agent,"cwd":null,
         "action":{"kind":"create","objective":"Return the fixture response.","tokenBudget":"1000"},
+        "attachments":[{"name":"goal.png","mediaType":"image/png","data":IMAGE_DATA}],
         "capturedContext":[{"kind":"file","source":"editor","capturedAt":chrono::Utc::now().to_rfc3339(),
             "uri":"file:///fixture/retained.rs","workspaceUri":"file:///fixture","terminalName":null,
             "version":7,"unsaved":true,"range":null,"content":CAPTURED_CONTENT}],
@@ -74,6 +78,10 @@ pub(super) async fn exercise(
         .initial_request
         .as_ref()
         .context("retained first request")?;
+    ensure!(first.input.attachments.len() == 1);
+    ensure!(first.input.attachments[0].name == "goal.png");
+    ensure!(first.input.attachments[0].media_type == "image/png");
+    ensure!(first.input.attachments[0].data == IMAGE_DATA);
     ensure!(first.input.captured_context[0].unsaved);
     ensure!(first.input.captured_context[0].content == CAPTURED_CONTENT);
     let requests = admitted["data"]["AgentRequest"]

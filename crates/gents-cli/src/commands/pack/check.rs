@@ -124,8 +124,10 @@ async fn check_filters(
         );
         if let Err(error) = access.execute(&query).await {
             problems.push(format!(
-                "event source {} filter is not valid on {}: {error:#}",
-                source.event_source_id, source.source_collection
+                "event source {} filter is not valid on {}: {}",
+                source.event_source_id,
+                source.source_collection,
+                gents_protocol::error_chain::ErrorChain(&error)
             ));
         }
     }

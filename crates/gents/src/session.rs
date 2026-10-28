@@ -41,7 +41,9 @@ pub use compaction_entries::{compaction_key, load_compaction_entries};
 pub(crate) use compaction_entries::{
     save_compaction_entry, save_compaction_entry_with_requester_did,
 };
-pub(crate) use compaction_entries::{save_exact_compaction_entry, NewExactSessionCompaction};
+pub(crate) use compaction_entries::{
+    save_exact_compaction_entry, NewExactSessionCompaction, StaleCompactionGeneration,
+};
 pub use control::{resume_session, stop_session, SessionStopReceipt};
 pub use fork::{
     fork, fork_edit_on, fork_on, fork_via_http, is_user_turn, ForkBoundary, ForkError, ForkOutcome,

@@ -500,7 +500,7 @@ theorem enrollment_ready_refines_directional_hydration_admission
   have hrequest : r ∈ s.acceptedRequests := hcurrent.1
   cases direction with
   | clientToServer =>
-      refine ⟨?_, ?_, howner⟩
+      refine ⟨?_, ?_, Or.inl howner⟩
       · unfold projectedHydrationCatalogFor SessionHydration.appliedPairingRoute
           hydrationRequestForDirection
         simp only [Finset.mem_image, Finset.mem_filter]
@@ -514,7 +514,7 @@ theorem enrollment_ready_refines_directional_hydration_admission
           ⟨hmembership, rfl, rfl, rfl, rfl,
             ⟨r, hrequest, d, hd, hcurrent, rfl⟩⟩, rfl⟩
   | serverToClient =>
-      refine ⟨?_, ?_, howner⟩
+      refine ⟨?_, ?_, Or.inl howner⟩
       · unfold projectedHydrationCatalogFor SessionHydration.appliedPairingRoute
           hydrationRequestForDirection
         simp only [Finset.mem_image, Finset.mem_filter]

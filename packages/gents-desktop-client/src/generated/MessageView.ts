@@ -5,7 +5,13 @@ import type { ReconstructionState } from "./ReconstructionState.js";
 import type { RequestOriginView } from "./RequestOriginView.js";
 import type { RequestTurnView } from "./RequestTurnView.js";
 
-export type MessageView = { startedGoalId?: string | null, requestTurn?: RequestTurnView | null, messageKey: string, requestId: string | null, ownsTurn: boolean, sequence: number | null, role: string | null, displayRole: string | null, displayContent: string | null, capturedContext?: Array<CapturedContext> | null, attachments?: Array<AttachmentView> | null, reasoning: string | null, hasToolCalls: boolean, hasToolResults: boolean,
+export type MessageView = { startedGoalId?: string | null, requestTurn?: RequestTurnView | null, messageKey: string, requestId: string | null, ownsTurn: boolean, sequence: number | null, role: string | null, displayRole: string | null, displayContent: string | null, capturedContext?: Array<CapturedContext> | null, attachments?: Array<AttachmentView> | null,
+/**
+ * The skills its request selected, which gents takes from the opening
+ * `/name` lines and strips from the text; shown so a sent message still
+ * says which skills shaped the reply.
+ */
+selectedSkillIds?: Array<string> | null, reasoning: string | null, hasToolCalls: boolean, hasToolResults: boolean,
 /**
  * Durable even while an immutable dependency is still replicating.
  */

@@ -84,7 +84,7 @@ pub(super) async fn reconcile_coalesced_pending_request_for(
                                 )
                                 .await?
                         {
-                            return Ok(());
+                            return Ok::<_, anyhow::Error>(());
                         }
                     }
                     let response = txn.execute_local_response(mutation).await?;

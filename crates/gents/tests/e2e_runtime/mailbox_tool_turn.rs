@@ -165,7 +165,7 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
                     Some("parent complete")
                 );
                 assert_eq!(observation.latest_request.unwrap().request_id, request_id);
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         },
     )

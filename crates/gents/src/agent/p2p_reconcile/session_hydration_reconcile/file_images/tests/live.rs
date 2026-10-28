@@ -1,7 +1,8 @@
 use super::super::*;
 use crate::agent::p2p_reconcile::embedded_impl::push_documents_to_peer;
 use crate::agent::p2p_reconcile::embedded_impl::tests::{
-    authorize_enrollment_peer, runtime_http_test_node, wait_for_active_peer, wait_for_peer_info,
+    authorize_enrollment_peer, runtime_http_test_node, runtime_http_test_node_with_schema,
+    wait_for_active_peer, wait_for_peer_info,
 };
 use crate::agent::p2p_reconcile::{
     enrollment_authority_channel, run_enrollment_reconciler, run_pairing_reconciler,
@@ -176,24 +177,32 @@ impl ObservedDelivery {
 }
 
 async fn admit_on_client(node: &Arc<EmbeddedNode>, demand: &FileImageDemand) -> Result<String> {
-    let fields = demand
+    let mut input: serde_json::Map<String, Value> = demand
         .reference_fields()
         .into_iter()
-        .map(|(name, value)| format!("{name}: \"{}\"", escape_graphql_string(value)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let now = escape_graphql_string(&Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true));
-    let response = ConfigAccess::write_local(
-        node,
-        "test.file_review.admit",
-        &format!(
-            r#"mutation {{ create_FileImageHydrationRequest(input: {{
-                {fields}, status: "pending", created_at: "{now}"
-            }}) {{ _docID }} }}"#
-        ),
-    )
-    .await?;
-    crate::graphql::created_doc_id(&response, "FileImageHydrationRequest")
+        .map(|(field, value)| (field.to_owned(), Value::String(value.to_owned())))
+        .collect();
+    if let Some(reference) = &demand.inventory_reference {
+        input.insert(
+            "inventory_reference".into(),
+            serde_json::to_value(reference)?,
+        );
+    }
+    input.insert("created_at".into(), Value::String(Utc::now().to_rfc3339()));
+    input.insert("status".into(), Value::String("pending".into()));
+    let response = ConfigAccess::transact_local_write(node, None, "test.file_review.admit", |txn| {
+        let input = &input;
+        Box::pin(async move {
+            txn.execute_with_variables(
+                &format!("mutation($input: {0}MutationInputArg!) {{ create_FileImageHydrationRequest: create_{0}(input: $input) {{ _docID }} }}", demand.collection_name()),
+                &json!({"input": input}),
+            ).await
+        })
+    }).await?;
+    Ok(crate::graphql::created_doc_id(
+        &response,
+        "FileImageHydrationRequest",
+    )?)
 }
 
 async fn receipt_row(
@@ -202,11 +211,17 @@ async fn receipt_row(
     status: &str,
 ) -> Result<Value> {
     let query = format!(
-        r#"{{ FileImageHydrationRequest(filter: {{ request_key: {{ _eq: "{}" }} }}) {{
-            _docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id
+        r#"{{ FileImageHydrationRequest: {}(filter: {{ request_key: {{ _eq: "{}" }} }}) {{
+            _docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id {}
             status status_detail observation_doc_id processed_at outcome_signer_did outcome_signature
         }} }}"#,
+        demand.collection_name(),
         escape_graphql_string(&demand.admission.request_key),
+        if demand.inventory_reference.is_some() {
+            "inventory_reference"
+        } else {
+            ""
+        },
     );
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
@@ -236,6 +251,12 @@ async fn verified(
             "receipt changed {name}"
         );
     }
+    anyhow::ensure!(
+        serde_json::from_value::<Option<FileImageInventoryReference>>(
+            row["inventory_reference"].clone()
+        )? == demand.inventory_reference,
+        "receipt changed its signed inventory reference"
+    );
     let selection = match row["status"].as_str() {
         Some("rejected") => {
             anyhow::ensure!(
@@ -261,7 +282,7 @@ async fn verified(
     };
     VerifiedFileImageReceipt::verify(
         FileImageHydrationReceipt {
-            version: FILE_IMAGE_RECEIPT_VERSION,
+            version: demand.receipt_version(),
             demand: demand.clone(),
             selection,
             detail: text("status_detail")?,
@@ -279,10 +300,16 @@ async fn wait_admitted(store: &GraphqlHydrationStore, demand: &FileImageDemand) 
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             let facts = store.admission(demand).await?;
-            if !matches!(
-                decide_hydration(&demand.admission, &facts.catalog),
-                HydrationVerdict::Reject(_)
-            ) {
+            let verdict = match &demand.inventory_reference {
+                Some(reference) => {
+                    crate::agent::p2p_reconcile::session_hydration::decide_inventory_hydration(
+                        &reference.page.admission,
+                        &facts.catalog,
+                    )
+                }
+                None => decide_hydration(&demand.admission, &facts.catalog),
+            };
+            if !matches!(verdict, HydrationVerdict::Reject(_)) {
                 return Ok(());
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -292,7 +319,7 @@ async fn wait_admitted(store: &GraphqlHydrationStore, demand: &FileImageDemand) 
     .context("native enrollment and pairing did not admit file review")?
 }
 
-async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
+async fn exercise_revocation(at: PauseAt, reset_refusal: bool, shared: bool) -> Result<()> {
     let directory = tempfile::tempdir()?;
     let source: Arc<dyn NodeIdentity> = Arc::new(KeyIdentity::load_or_create(
         directory.path().join("source.key"),
@@ -302,7 +329,16 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         directory.path().join("client.key"),
         None,
     )?);
-    let (source_test, _) = runtime_http_test_node(source.as_ref()).await;
+    let retained_schema = gents_protocol::schemas::FILE_IMAGE_HYDRATION_REQUEST
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("inventory_reference:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (source_test, _) = runtime_http_test_node_with_schema(
+        source.as_ref(),
+        shared.then_some(retained_schema.as_str()),
+    )
+    .await;
     let (client_test, _) = runtime_http_test_node(client.as_ref()).await;
     let source_node = source_test.node.clone();
     let client_node = client_test.node.clone();
@@ -327,6 +363,41 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         &client_addresses[0],
     )
     .await;
+    let author: Arc<dyn NodeIdentity> = if shared {
+        let key = directory.path().join("author.key");
+        Arc::new(
+            tokio::task::spawn_blocking(move || KeyIdentity::load_or_create(key, None)).await??,
+        )
+    } else {
+        client.clone()
+    };
+    let author_test = if shared {
+        Some(runtime_http_test_node(author.as_ref()).await.0)
+    } else {
+        None
+    };
+    let author_enrollment = if let Some(author_test) = &author_test {
+        let author_admin = EmbeddedRemoteP2pAdmin::new(author_test.node.clone());
+        let addresses = wait_for_peer_info(&author_admin).await;
+        source_admin.connect(&addresses).await?;
+        wait_for_active_peer(&author_admin).await;
+        let peer = author_test
+            .node
+            .p2p()
+            .context("author P2P")?
+            .local_peer_id()
+            .await?;
+        authorize_enrollment_peer(
+            source_node.clone(),
+            source.clone(),
+            author.clone(),
+            &peer,
+            &addresses[0],
+        )
+        .await
+    } else {
+        enrollment.clone()
+    };
     let (owner, authority) = enrollment_authority_channel();
     let cancel = CancellationToken::new();
     let _cancel_on_drop = cancel.clone().drop_guard();
@@ -343,7 +414,10 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
     client_admin
         .add_replicator(
             &source_addresses,
-            &["FileImageHydrationRequest".into()],
+            &[
+                "FileImageHydrationRequest".into(),
+                "FileInventoryImageRequest".into(),
+            ],
             &PairingFilters::default(),
         )
         .await?;
@@ -353,7 +427,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
     let active = projection
         .active
         .iter()
-        .find(|entry| entry.request.request_id == enrollment)
+        .find(|entry| entry.request.request_id == author_enrollment)
         .context("active enrollment")?;
     let session = "recorded-image-fence";
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
@@ -361,7 +435,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         &source_node,
         session,
         source.did(),
-        Some(client.did()),
+        Some(author.did()),
         &now,
     )
     .await;
@@ -369,14 +443,14 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         RequestPurpose::Normal,
         "recorded-image-fence-request",
         source.did(),
-        client.did(),
+        author.did(),
         "general",
         session,
         "Update the recorded file",
         "interactive",
         now,
         AgentRequestAdmissionRecord::enrollment(
-            client.did(),
+            author.did(),
             &active.request.request_id,
             &active.request.request_digest,
             &active.request.admin_did,
@@ -384,7 +458,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
             &active.revision.authorization_expires_at,
         ),
     );
-    crate::sign_agent_request_create(client.as_ref(), &mut create).await?;
+    crate::sign_agent_request_create(author.as_ref(), &mut create).await?;
     let response = ConfigAccess::write_local(
         &source_node,
         "test.file_review.request",
@@ -447,13 +521,14 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         &request_doc,
         source.did(),
         session,
-        Some(client.did()),
+        Some(author.did()),
     )
     .await?
     else {
         anyhow::bail!("native mutator did not retain its file images")
     };
     let mut demand = FileImageDemand {
+        inventory_reference: None,
         admission: HydrationRequest {
             request_key: String::new(),
             peer_id: client_peer.clone(),
@@ -464,6 +539,214 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         request_doc_id: request_doc,
         tool_call_doc_id: physical.clone(),
     };
+    let mut received_entry = None;
+    if shared {
+        let metadata = access.execute(&format!(
+            r#"{{ ToolFileInventory(filter: {{tool_call_doc_id: {{_eq: "{}"}}}}) {{_docID}} }}"#,
+            escape_graphql_string(&physical),
+        )).await?;
+        let projections = metadata["data"]["ToolFileInventory"]
+            .as_array()
+            .context("metadata rows")?;
+        anyhow::ensure!(projections.len() == 1, "ambiguous metadata");
+        source_node
+            .add_dac_actor_relationship(
+                source.did(),
+                "ToolFileInventory",
+                projections[0]["_docID"].as_str().context("metadata ID")?,
+                "reader",
+                client.did(),
+            )
+            .await?;
+        let root = ConfigAccess::transact_local_readonly(
+            &source_node,
+            None,
+            "test.shared_image.root",
+            |txn| {
+                Box::pin(crate::session::load_agent_session_owner_in_txn(
+                    txn,
+                    source.did(),
+                    session,
+                ))
+            },
+        )
+        .await?
+        .context("shared root")?;
+        push_documents_to_peer(
+            &source_node,
+            &client_peer,
+            vec![defra_p2p_adapter::P2pDocumentRequest {
+                collection: "AgentSession".into(),
+                doc_id: root.doc_id.clone(),
+            }],
+        )
+        .await?;
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let received = ConfigAccess::transact_local_readonly(
+                    &client_node,
+                    None,
+                    "test.shared_image.received_session",
+                    |txn| {
+                        Box::pin(crate::session::load_agent_session_owner_in_txn(
+                            txn,
+                            source.did(),
+                            session,
+                        ))
+                    },
+                )
+                .await?;
+                if let Some(received) = received {
+                    anyhow::ensure!(
+                        received.doc_id == root.doc_id
+                            && received.session.requester_did.as_deref() == Some(author.did()),
+                        "received session changed its physical root or author"
+                    );
+                    return Ok::<_, anyhow::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await??;
+        let mut root_request = demand.admission.clone();
+        root_request.request_key = "shared-metadata".into();
+        let page_demand = gents_protocol::file_inventory::FileInventoryPageDemand {
+            admission: gents_protocol::file_inventory::FileInventoryAdmission {
+                request: root_request,
+                session_doc_id: root.doc_id,
+            },
+            attempt_id: "shared-metadata-attempt".into(),
+            cursor: None,
+        };
+        let source_store = GraphqlHydrationStore {
+            node: source_node.clone(),
+            enrollment: authority.clone(),
+            identity: source.clone(),
+        };
+        let metadata_admission = source_store.inventory_admission(&page_demand).await?;
+        let metadata_fence = metadata_admission
+            .authorization
+            .context("shared metadata enrollment")?;
+        let snapshot = FileInventorySnapshot::load(&source_node, &page_demand.admission).await?;
+        let page = crate::file_inventory::sign_current_page(
+            source.as_ref(),
+            &page_demand.derive_request_key()?,
+            snapshot.page(None)?,
+            || source_store.inventory_current(&page_demand, &metadata_fence),
+        )
+        .await?;
+        let prepared = crate::file_inventory::delivery::prepare_page(
+            &source_node,
+            &page_demand,
+            &page,
+            source.as_ref(),
+        )
+        .await?;
+        let grant = crate::file_inventory::delivery::sign_page_grant(
+            source.as_ref(),
+            &page_demand,
+            &prepared,
+        )
+        .await?;
+        let verified_page = crate::file_inventory::VerifiedInventoryResponse::verify(
+            gents_protocol::file_inventory::FileInventoryResponse::Page(grant),
+            &page_demand,
+            client.as_ref(),
+        )
+        .await?;
+        EmbeddedHydrationDelivery {
+            node: source_node.clone(),
+        }
+        .push_documents_to_peer(
+            &client_peer,
+            DeliveryTarget::FileInventory(&prepared.document_id),
+        )
+        .await?;
+        let received = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                if let Some(page) = verified_page
+                    .read_page(client_node.clone(), client.as_ref())
+                    .await?
+                {
+                    return Ok::<_, anyhow::Error>(page);
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await??;
+        anyhow::ensure!(
+            received == page,
+            "received metadata changed its signed snapshot"
+        );
+        received_entry = Some(received.page.entries[0].clone());
+        demand.inventory_reference = Some(FileImageInventoryReference {
+            page: page_demand,
+            snapshot_digest: page.page.binding.digest,
+            entry_index: 0,
+        });
+        demand.admission.request_key = demand.derive_request_key();
+        let facts = source_store.admission(&demand).await?;
+        anyhow::ensure!(
+            source_store.selection(&demand, &facts.catalog).await? == FileImageSelection::Rejected,
+            "metadata access granted image bytes"
+        );
+        source_node
+            .add_dac_actor_relationship(
+                source.did(),
+                "ToolFileChange",
+                &image,
+                "reader",
+                client.did(),
+            )
+            .await?;
+        source_node
+            .delete_dac_actor_relationship(
+                source.did(),
+                "ToolFileChange",
+                &image,
+                "reader",
+                client.did(),
+            )
+            .await?;
+        anyhow::ensure!(
+            source_store.selection(&demand, &facts.catalog).await? == FileImageSelection::Rejected,
+            "revocation between metadata and image selection retained read authority"
+        );
+
+        let mut forged = demand.clone();
+        forged.admission.requester_did = author.did().into();
+        forged
+            .inventory_reference
+            .as_mut()
+            .unwrap()
+            .page
+            .admission
+            .request
+            .requester_did = author.did().into();
+        forged.admission.request_key = forged.derive_request_key();
+        let forged_admission = source_store.admission(&forged).await?;
+        anyhow::ensure!(
+            forged_admission.authorization.is_none(),
+            "another enrolled author was authenticated on the reader's peer"
+        );
+        anyhow::ensure!(
+            source_store
+                .selection(&forged, &forged_admission.catalog)
+                .await?
+                == FileImageSelection::Rejected,
+            "a forged requester borrowed the reader's signed metadata"
+        );
+
+        source_node
+            .add_dac_actor_relationship(
+                source.did(),
+                "ToolFileChange",
+                &image,
+                "reader",
+                client.did(),
+            )
+            .await?;
+    }
     demand.admission.request_key = demand.derive_request_key();
     let gate = Arc::new(Gate {
         at,
@@ -491,7 +774,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         &client_node,
         &source_peer,
         vec![defra_p2p_adapter::P2pDocumentRequest {
-            collection: "FileImageHydrationRequest".into(),
+            collection: demand.collection_name().into(),
             doc_id: demand_doc.clone(),
         }],
     )
@@ -514,7 +797,19 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         _ = gate.reached.notified() => {},
         _ = tokio::time::sleep(Duration::from_secs(20)) => anyhow::bail!("image sweep did not reach its fence"),
     }
-    enrollment_store.revoke_request(&enrollment).await?;
+    if shared {
+        source_node
+            .delete_dac_actor_relationship(
+                source.did(),
+                "ToolFileChange",
+                &image,
+                "reader",
+                client.did(),
+            )
+            .await?;
+    } else {
+        enrollment_store.revoke_request(&enrollment).await?;
+    }
     gate.resume.notify_one();
     tokio::time::timeout(Duration::from_secs(20), sweep).await??;
     let checks = store.checks.lock().unwrap().clone();
@@ -596,18 +891,30 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         "client read an image without a served receipt"
     );
 
-    let restored = authorize_enrollment_peer(
-        source_node.clone(),
-        source.clone(),
-        client.clone(),
-        &client_peer,
-        &client_addresses[0],
-    )
-    .await;
-    anyhow::ensure!(
-        restored != enrollment,
-        "reenrollment reused the revoked request"
-    );
+    if shared {
+        source_node
+            .add_dac_actor_relationship(
+                source.did(),
+                "ToolFileChange",
+                &image,
+                "reader",
+                client.did(),
+            )
+            .await?;
+    } else {
+        let restored = authorize_enrollment_peer(
+            source_node.clone(),
+            source.clone(),
+            client.clone(),
+            &client_peer,
+            &client_addresses[0],
+        )
+        .await;
+        anyhow::ensure!(
+            restored != enrollment,
+            "reenrollment reused the revoked request"
+        );
+    }
     if reset_refusal {
         wait_admitted(&store.inner, &demand).await?;
         let client_refusal = receipt_row(&client_node, &demand, "rejected").await?;
@@ -619,10 +926,11 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
             &client_node,
             "test.file_review.reset_refusal",
             &format!(
-                r#"mutation {{ update_FileImageHydrationRequest(docID: "{}", input: {{
+                r#"mutation {{ update_FileImageHydrationRequest: update_{}(docID: "{}", input: {{
                     status: "pending", status_detail: null, observation_doc_id: null,
                     processed_at: null, outcome_signer_did: null, outcome_signature: null
                 }}) {{ _docID }} }}"#,
+                demand.collection_name(),
                 escape_graphql_string(&demand_doc),
             ),
         )
@@ -631,7 +939,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
             &client_node,
             &source_peer,
             vec![defra_p2p_adapter::P2pDocumentRequest {
-                collection: "FileImageHydrationRequest".into(),
+                collection: demand.collection_name().into(),
                 doc_id: demand_doc.clone(),
             }],
         )
@@ -647,11 +955,12 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         );
         let result = ConfigAccess::local(source_node.clone())
             .execute(&format!(
-                r#"{{ FileImageHydrationRequest(docID: "{}") {{
-                    _docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id
+                r#"{{ FileImageHydrationRequest: {}(docID: "{}") {{
+                    _docID request_key peer_id requester_did node_did session_id request_doc_id tool_call_doc_id {}
                     status status_detail observation_doc_id processed_at outcome_signer_did outcome_signature
                 }} }}"#,
-                escape_graphql_string(&demand_doc),
+                demand.collection_name(), escape_graphql_string(&demand_doc),
+                if demand.inventory_reference.is_some() {"inventory_reference"} else {""},
             ))
             .await?;
         anyhow::ensure!(
@@ -668,7 +977,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
         &client_node,
         &source_peer,
         vec![defra_p2p_adapter::P2pDocumentRequest {
-            collection: "FileImageHydrationRequest".into(),
+            collection: demand.collection_name().into(),
             doc_id: retry_doc,
         }],
     )
@@ -694,6 +1003,16 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
     })
     .await
     .context("served retry image did not become readable")??;
+    if let Some(entry) = received_entry {
+        let received = receipt
+            .read_inventory_image(client_node.clone(), &entry)
+            .await?
+            .context("shared image is not readable after a served receipt")?;
+        anyhow::ensure!(
+            received == changes,
+            "shared reader changed canonical captured bytes"
+        );
+    }
     let retained = ConfigAccess::local(client_node.clone()).execute(&format!(
         r#"{{ ToolFileChange(docID: "{}") {{ _docID tool_call_doc_id request_doc_id node_did session_id requester_did file_changes }} }}"#,
         escape_graphql_string(&image),
@@ -707,7 +1026,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
             && rows[0]["tool_call_doc_id"] == physical
             && rows[0]["request_doc_id"] == retry.request_doc_id
             && rows[0]["node_did"] == source.did()
-            && rows[0]["requester_did"] == client.did()
+            && rows[0]["requester_did"] == author.did()
             && rows[0]["session_id"] == session
             && rows[0]["file_changes"] == serde_json::to_value(&changes)?,
         "retry changed retained file images or their exact scope"
@@ -729,6 +1048,9 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
     enrollment_task.await??;
     pairing_task.await??;
     client_node.shutdown().await;
+    if let Some(author_test) = author_test {
+        author_test.node.shutdown().await;
+    }
     source_node.shutdown().await;
     Ok(())
 }
@@ -737,7 +1059,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool) -> Result<()> {
 async fn revocation_after_selection_prevents_unseen_image_delivery() -> Result<()> {
     tokio::time::timeout(
         Duration::from_secs(120),
-        exercise_revocation(PauseAt::Selection, false),
+        exercise_revocation(PauseAt::Selection, false, false),
     )
     .await?
 }
@@ -747,7 +1069,7 @@ async fn revocation_after_delivery_preserves_refusal_until_a_fresh_authorized_re
 {
     tokio::time::timeout(
         Duration::from_secs(120),
-        exercise_revocation(PauseAt::Delivered, false),
+        exercise_revocation(PauseAt::Delivered, false, false),
     )
     .await?
 }
@@ -756,7 +1078,7 @@ async fn revocation_after_delivery_preserves_refusal_until_a_fresh_authorized_re
 async fn resetting_a_client_demand_cannot_replace_a_signed_refusal() -> Result<()> {
     tokio::time::timeout(
         Duration::from_secs(120),
-        exercise_revocation(PauseAt::Selection, true),
+        exercise_revocation(PauseAt::Selection, true, false),
     )
     .await?
 }
@@ -765,7 +1087,17 @@ async fn resetting_a_client_demand_cannot_replace_a_signed_refusal() -> Result<(
 async fn revocation_after_acknowledgment_preserves_refusal_until_a_fresh_retry() -> Result<()> {
     tokio::time::timeout(
         Duration::from_secs(120),
-        exercise_revocation(PauseAt::Acknowledged, false),
+        exercise_revocation(PauseAt::Acknowledged, false, false),
+    )
+    .await?
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn independent_enrolled_reader_preserves_author_and_revoked_image_refusal_until_retry(
+) -> Result<()> {
+    tokio::time::timeout(
+        Duration::from_secs(120),
+        exercise_revocation(PauseAt::Selection, true, true),
     )
     .await?
 }

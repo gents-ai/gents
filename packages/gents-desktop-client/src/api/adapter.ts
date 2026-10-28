@@ -19,12 +19,13 @@ export function createDesktopApiAdapter(
   return {
     readAttachment: (path) =>
       invokeDesktop("desktop_attachment_read", { path }),
-    requestAttachments: (nodeDid, sessionId, requestId, messageKey) =>
+    requestAttachments: (nodeDid, sessionId, requestId, messageKey, index) =>
       invokeDesktop("desktop_request_attachments", {
         nodeDid,
         sessionId,
         requestId,
         messageKey,
+        index,
       }),
     fetchSessionGoal: (nodeDid, sessionId) =>
       invokeDesktop("desktop_session_goal", { nodeDid, sessionId }),
@@ -127,6 +128,8 @@ export function createDesktopApiAdapter(
         request,
       }),
     listMailbox: () => invokeDesktop("desktop_mailbox_list"),
+    observeMailboxItem: (request) =>
+      invokeDesktop("desktop_mailbox_observe", { request }),
     startMailboxRequest: (itemId) =>
       invokeDesktop("desktop_mailbox_start_request", {
         request: { itemId },

@@ -156,6 +156,8 @@ impl RecordingHook {
 
 #[async_trait]
 impl SessionHook for RecordingHook {
+    type Error = std::convert::Infallible;
+
     async fn on_completion_call_with_context(
         &self,
         prompt: &Message,
@@ -711,7 +713,9 @@ async fn failed_input_publication_prevents_provider_dispatch() {
         panic!("input publication must precede provider dispatch");
     };
     reply
-        .send(Err(anyhow::anyhow!("publication rejected")))
+        .send(Err(crate::stream_processor::StreamProcessorError::Writer(
+            "publication rejected".into(),
+        )))
         .unwrap();
     let error = stream.next().await.unwrap().unwrap_err();
     assert!(error.to_string().contains("publication rejected"));

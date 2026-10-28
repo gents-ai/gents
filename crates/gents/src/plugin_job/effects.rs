@@ -572,7 +572,7 @@ mod tests {
                 let response = txn
                     .execute_with_variables(&query, &json!({ "input": value }))
                     .await?;
-                gents_protocol::graphql::extract_mutation_doc_id(&response, collection)
+                Ok::<_, anyhow::Error>(gents_protocol::graphql::extract_mutation_doc_id(&response, collection)?)
             })
         })
         .await
@@ -789,6 +789,7 @@ mod tests {
             started_by_job: false,
             cwd_allowed: Vec::new(),
             within: Vec::new(),
+            script_digest: None,
             adoption_facts: facts(),
             caller_scope: ProcessControlScope {
                 request_id: "request".to_owned(),

@@ -69,6 +69,7 @@ fn classify_http(error: http_client::Error) -> InferenceError {
     classify_completion_error(&rig::agent::StreamingError::Completion(
         rig::completion::CompletionError::HttpError(error),
     ))
+    .error
 }
 
 fn post(url: &str) -> Request<Bytes> {
@@ -178,7 +179,7 @@ async fn codex_usage_limit_survives_rig_responses_stream() {
             .expect("stream item")
             .expect_err("usage-limit error"),
     };
-    match classify_completion_error(&rig::agent::StreamingError::Completion(error)) {
+    match classify_completion_error(&rig::agent::StreamingError::Completion(error)).error {
         InferenceError::UsageLimited(limit) => {
             assert_eq!(
                 limit.resets_at.map(|at| at.timestamp()),
@@ -247,7 +248,7 @@ async fn openrouter_credits_402_is_a_usage_limit() {
     )
     .await;
     let error = openrouter_stream_error(&url).await;
-    match classify_completion_error(&rig::agent::StreamingError::Completion(error)) {
+    match classify_completion_error(&rig::agent::StreamingError::Completion(error)).error {
         InferenceError::UsageLimited(limit) => assert!(
             limit.to_string().starts_with(
                 "provider usage limit reached (reset time not reported): Insufficient credits"
@@ -267,7 +268,7 @@ async fn openrouter_in_flight_402_waits_for_retry_after() {
     )
     .await;
     let error = openrouter_stream_error(&url).await;
-    match classify_completion_error(&rig::agent::StreamingError::Completion(error)) {
+    match classify_completion_error(&rig::agent::StreamingError::Completion(error)).error {
         InferenceError::RateLimited {
             retry_after: Some(wait),
         } => assert!(

@@ -3,6 +3,9 @@ use crate::tool_call_lifecycle::admission_fixture::{
     ensure_fixture_session, published_admission_with_owner, PublishedAdmissionOptions,
 };
 
+mod readers;
+mod turn_chronology;
+
 #[tokio::test]
 async fn uncaptured_terminal_is_unknown_and_an_empty_closure_is_known() {
     let (fixture, _request) = published_admission_with_owner(PublishedAdmissionOptions {
@@ -439,7 +442,7 @@ async fn retain_fork_fixture_capture(
             txn.execute_with_variables(
                 "mutation($input: ToolFileInventoryMutationInputArg!) { create_ToolFileInventory(input: $input) { _docID } }",
                 &json!({"input": input})).await?;
-            Ok(())
+            Ok::<_, anyhow::Error>(())
         })
     }).await.unwrap();
 }

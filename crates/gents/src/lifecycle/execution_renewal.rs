@@ -159,13 +159,15 @@ async fn renew_once_with_time(
     expected_deadline: Option<DateTime<Utc>>,
     fixture_now: Option<DateTime<Utc>>,
 ) -> Result<RenewalAttemptOutcome> {
-    match crate::config_client::ConfigAccess::renew_execution_lease(
-        node,
-        request_doc_id,
-        generation,
-        expected_deadline,
-        fixture_now,
-    )
+    match crate::config_client::ConfigAccess::renew_execution_lease(node, move |txn| {
+        Box::pin(renew_in_transaction(
+            txn,
+            request_doc_id,
+            generation,
+            expected_deadline,
+            fixture_now,
+        ))
+    })
     .await
     {
         Err(error) if error.is::<RenewalAdmissionExpired>() => Ok(RenewalAttemptOutcome::Lost),

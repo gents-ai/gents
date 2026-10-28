@@ -116,7 +116,7 @@ async fn observe_goal_outcome_binding(
     let root = requests[0]["_docID"]
         .as_str()
         .context("Task assignment request has no physical identity")?;
-    let versions = crate::goal::load_goal_versions_for_session(
+    let versions = crate::goal::load_assignment_versions_for_session(
         txn,
         &fire.identity.owner_did,
         &fire.session_id,

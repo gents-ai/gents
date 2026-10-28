@@ -336,24 +336,24 @@ impl DirectoryStore for GraphqlDirectoryStore {
     async fn upsert_directory_entry(&self, entry: &DirectoryEntry) -> Result<()> {
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
         let mutation = upsert_directory_entry_mutation(entry, &now);
-        crate::config_client::ConfigAccess::write_local_response(
+        Ok(crate::config_client::ConfigAccess::write_local_response(
             &self.node,
             "p2p.upsert_node_directory",
             &mutation,
         )
         .await
-        .map(|_| ())
+        .map(|_| ())?)
     }
 
     async fn delete_directory_entry(&self, source_did: &str, node_did: &str) -> Result<()> {
         let mutation = delete_directory_entry_mutation(source_did, node_did);
-        crate::config_client::ConfigAccess::write_local_response(
+        Ok(crate::config_client::ConfigAccess::write_local_response(
             &self.node,
             "p2p.delete_node_directory",
             &mutation,
         )
         .await
-        .map(|_| ())
+        .map(|_| ())?)
     }
 }
 

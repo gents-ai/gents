@@ -137,7 +137,7 @@ test.describe("half-screen window", () => {
         .filter({ visible: true })
         .first()
         .click();
-      await page.getByRole("menuitem", { name: "Trace" }).click();
+      await page.getByRole("menuitem", { name: "Started sessions" }).click();
       const sheet = page.getByRole("dialog", { name: "Side panel" });
       await expect(sheet).toBeVisible();
       await expect(async () => {

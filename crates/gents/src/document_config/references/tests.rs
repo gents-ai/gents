@@ -250,7 +250,7 @@ async fn event_args_rejection_rolls_back_the_whole_configuration_plan() {
                 )
                 .await?
                 .is_none());
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })
         })
         .await

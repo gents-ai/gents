@@ -56,6 +56,7 @@ async fn generated_hydration_routes_require_current_enrollment_materialization()
     let collections = [
         "SessionHydrationRequest",
         "FileImageHydrationRequest",
+        "FileInventoryImageRequest",
         "FileInventoryRequest",
     ];
     let filters = collections

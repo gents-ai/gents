@@ -111,6 +111,17 @@ private def resumeOf (row : DocId) : StepOutput :=
   .suspend .pause none noExtras (some guestPin)
     (some { rowDoc := row, engineCurrent := false, answer := none, budget := none })
 
+/-- A dynamic call: the host hashed its `script` to `sha-x` and resolves a
+`dynamic` origin at adoption. -/
+private def scriptContext : StepContext :=
+  { context with scriptDigest := some "sha-x", adoptionFacts := { facts with origin := .dynamic } }
+
+private def scriptStepZero : Job :=
+  { stepZero with call := { stepZero.call with argv := [], script := some "module.exports = (i) => i" } }
+
+private def scriptPin : GuestPin :=
+  { scriptId := "sha-x", sourceDigest := "sha256:sha-x", handle := "flow-1", agentBudget := 3 }
+
 def admissionCases : List AdmissionCase :=
   [ ⟨"panel_one_refused_target_admits_none", context, pinned [] 0 0,
       effects [spawn "1:a" targetA, spawn "2:c" targetC]⟩
@@ -147,7 +158,16 @@ def admissionCases : List AdmissionCase :=
         none⟩
   , ⟨"resume_of_chain_head_admitted", resumeContext true, stepZero, resumeOf "row-0"⟩
   , ⟨"resume_of_unknown_row_refused", resumeContext true, stepZero, resumeOf "row-9"⟩
-  , ⟨"resume_of_continued_row_refused", resumeContext false, stepZero, resumeOf "row-0"⟩ ]
+  , ⟨"resume_of_continued_row_refused", resumeContext false, stepZero, resumeOf "row-0"⟩
+  -- A dynamic call's step-0 pin must name its script (`pinMismatch`).
+  , ⟨"dynamic_pin_names_its_script_admitted", scriptContext, scriptStepZero,
+      effects [spawn "1:a" targetA] (some scriptPin)⟩
+  , ⟨"dynamic_pin_wrong_script_id_refused", scriptContext, scriptStepZero,
+      effects [spawn "1:a" targetA] (some { scriptPin with scriptId := "sha-other" })⟩
+  , ⟨"dynamic_pin_wrong_source_digest_refused", scriptContext, scriptStepZero,
+      effects [spawn "1:a" targetA] (some { scriptPin with sourceDigest := "sha1:sha-x" })⟩
+  , ⟨"scriptless_call_pin_not_subject", context, stepZero,
+      effects [spawn "1:a" targetA] (some guestPin)⟩ ]
 
 
 private def sourceBoundaryCases : List AdmissionCase :=
@@ -166,12 +186,12 @@ private def sourceBoundaryCases : List AdmissionCase :=
 private def observation : SpawnKey → Recovery.KillObservation := fun _ => .causedLiveLocal
 
 private def settled (c : AdmissionCase) : Job × List (SpawnKey × Recovery.KillAction) :=
-  settleStep c.ctx c.job c.out observation
+  settleStepGuarded c.ctx c.job c.out observation
 
 /-- The refusal code, the admitted row's state, spend and child count, and the
 number of kill actions. -/
 private def verdict (c : AdmissionCase) : Option String × Option (RowState × Nat × Nat) × Nat :=
-  match admitStep c.ctx c.job c.out with
+  match admitStepGuarded c.ctx c.job c.out with
   | .ok j => (none, some (j.state, j.spent, j.children.length), (settled c).2.length)
   | .error r => (r.code, none, (settled c).2.length)
 
@@ -192,7 +212,11 @@ theorem admission_regressions :
       , (none, some (.completed, 0, 0), 0)
       , (none, some (.completed, 0, 0), 0)
       , (some "plugin_job_resume_unknown", none, 0)
-      , (some "plugin_job_resume_not_head", none, 0) ] := by native_decide
+      , (some "plugin_job_resume_not_head", none, 0)
+      , (none, some (.running, 1, 1), 0)
+      , (some "plugin_job_pin_mismatch", none, 0)
+      , (some "plugin_job_pin_mismatch", none, 0)
+      , (none, some (.running, 1, 1), 0) ] := by native_decide
 
 private def targetJson (t : Target) : Json :=
   Json.mkObj [("node", toJson t.1), ("agent", toJson t.2)]
@@ -339,6 +363,7 @@ private def contextJson (ctx : StepContext) : Json :=
     ("within", toJson ((knownCwds.flatMap fun base => knownCwds.filterMap fun cwd =>
       if ctx.within base cwd then some (Json.mkObj [("base", toJson base), ("cwd", toJson cwd)])
       else none))),
+    ("script_digest", toJson ctx.scriptDigest),
     ("adoption_facts", hostFactsJson ctx.adoptionFacts),
     ("caller_scope", processScopeJson ctx.callerScope),
     ("control_targets", toJson (knownDocs.map fun d =>
@@ -354,7 +379,7 @@ private def contextJson (ctx : StepContext) : Json :=
 
 private def render (c : AdmissionCase) (wireTrace : Json := .null) : Json :=
   let (row, kill) := settled c
-  let (code, admitted, dynamicDisabled) : Option String × Option Job × Bool := match admitStep c.ctx c.job c.out with
+  let (code, admitted, dynamicDisabled) : Option String × Option Job × Bool := match admitStepGuarded c.ctx c.job c.out with
     | .ok j => ((none : Option String), some j, false)
     | .error r => (r.code, none, decide (r = Refusal.dynamicCodeDisabled))
   Json.mkObj [("name", toJson c.name), ("context", contextJson c.ctx), ("job", jobJson c.job),

@@ -377,6 +377,10 @@ impl TrialExecutor for EmbeddedExecutor {
     }
 }
 
+/// External premise: an eval trial reads a request's persisted
+/// `failure_reason`, the only record of why inference failed; the durable
+/// AgentRequest schema carries no failure kind, so the provider's status and
+/// wording are read from that text.
 pub fn provider_reason_from_failure(failure_reason: &str) -> Option<ProviderReason> {
     let reason = failure_reason.to_lowercase();
     if let Some(status) = http_status(&reason) {

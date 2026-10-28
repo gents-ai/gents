@@ -219,7 +219,7 @@ async fn generated_goal_rescans_recover_lost_notifications() {
                      json!({"doc":f.goal.doc_id}))
                 };
                 txn.execute_with_variables(document, &variables).await?;
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             })).await.unwrap();
             let canonical = access
                 .transact_readonly("test.current_goal_revision", |txn| {
@@ -227,7 +227,7 @@ async fn generated_goal_rescans_recover_lost_notifications() {
                         let Some(goal) =
                             load_canonical_goal_in_txn(txn, f.identity.did(), SESSION).await?
                         else {
-                            return Ok(None);
+                            return Ok::<_, anyhow::Error>(None);
                         };
                         let commit = crate::graphql::newest_document_composite_commit_in_txn(
                             txn,

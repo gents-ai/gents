@@ -59,7 +59,7 @@ test("attaches a dropped file and keeps text when a file cannot be read", async 
     buffer: Buffer.from([0, 1, 2]),
   });
   await expect(page.getByRole("alert")).toContainText("Unsupported file");
-  await expect(page.getByRole("textbox", { name: "Message", exact: true })).toHaveValue(
+  await expect(page.getByRole("textbox", { name: "Message", exact: true })).toHaveText(
     "Keep this draft",
   );
   await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();

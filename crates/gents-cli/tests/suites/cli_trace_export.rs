@@ -2320,7 +2320,7 @@ async fn projection_graphql_mock(
     Json(body): Json<ProjectionGraphqlRequest>,
 ) -> (StatusCode, Json<Value>) {
     let query = body.query.as_str();
-    let mut response = if query.contains("AgentRequest(") {
+    let response = if query.contains("AgentRequest(") {
         json!({ "data": { "AgentRequest": projection_mock_agent_requests(query) } })
     } else if query.contains("ProviderContextReduction(") {
         json!({ "data": { "ProviderContextReduction": [] } })
@@ -2354,14 +2354,26 @@ async fn projection_graphql_mock(
             }]
         })
     };
-    if query.contains("_cursor") {
-        if let Some(data) = response.get_mut("data") {
-            let mut page = data.take();
-            page["_pageInfo"] = json!({ "hasNext": false, "endCursor": null });
-            *data = json!({ "_cursor": page });
-        }
+    (
+        StatusCode::OK,
+        Json(projection_mock_cursor_page(query, response)),
+    )
+}
+
+/// Transaction reads enumerate through DefraDB's `_cursor` page; the mock
+/// serves its whole row set as one final page.
+fn projection_mock_cursor_page(query: &str, mut response: Value) -> Value {
+    if !query.trim_start().starts_with("{ _cursor {") {
+        return response;
     }
-    (StatusCode::OK, Json(response))
+    let Some(Value::Object(mut data)) = response.get_mut("data").map(Value::take) else {
+        return response;
+    };
+    data.insert(
+        "_pageInfo".to_owned(),
+        json!({ "hasNext": false, "endCursor": null }),
+    );
+    json!({ "data": { "_cursor": data } })
 }
 
 async fn projection_acp_mock(

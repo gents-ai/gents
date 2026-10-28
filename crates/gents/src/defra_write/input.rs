@@ -106,7 +106,7 @@ pub(super) fn literal(schema: &str, value: &Value) -> Result<String> {
 
 fn json_literal(value: &Value) -> Result<String> {
     reject_empty_json_arrays(value)?;
-    gents_protocol::graphql::graphql_input_literal(value)
+    Ok(gents_protocol::graphql::graphql_input_literal(value)?)
 }
 
 // The shared mutation renderer maps empty lists to null. A JSON scalar must not

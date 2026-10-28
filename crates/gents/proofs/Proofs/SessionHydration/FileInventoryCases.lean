@@ -32,12 +32,14 @@ structure CatalogInput where
   verifiedActiveMemberships : List VerifiedActiveMembership
   sessions : List SessionOwner
   closureInputs : List ClosureInput
+  sessionReads : List SessionReadObservation := []
 
 /-- List inputs retain their wire representation; the existing catalog owns
 set membership and canonical closure interpretation. -/
 def CatalogInput.model (input : CatalogInput) : Catalog :=
   ⟨input.appliedPairingRoutes.toFinset, input.selectedNetwork,
-    input.verifiedActiveMemberships.toFinset, input.sessions.toFinset, input.closureInputs⟩
+    input.verifiedActiveMemberships.toFinset, input.sessions.toFinset, input.closureInputs,
+    input.sessionReads⟩
 
 structure SourceInput where
   catalog : CatalogInput

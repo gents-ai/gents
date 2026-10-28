@@ -720,7 +720,7 @@ fn classify_client_start_error(
     error: &anyhow::Error,
     node_data_dir: &std::path::Path,
 ) -> ClientStartFailure {
-    match gents::storage_backend::incompatible_store(error, node_data_dir) {
+    match gents::storage_backend::incompatible_store(error.as_ref(), node_data_dir) {
         Some(store) => (
             BridgeError::new(BridgeErrorCode::IncompatibleLocalStore, store.to_string()),
             Some(store),

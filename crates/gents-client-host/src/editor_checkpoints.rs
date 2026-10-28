@@ -2,13 +2,16 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, ensure, Context, Result};
+#[cfg(unix)]
+use anyhow::Context;
+use anyhow::{bail, ensure, Result};
 use gents::file_lock::FileLock;
 use serde::{Deserialize, Serialize};
 
 pub const VERSION: u32 = 1;
 const MAX_BYTES: usize = gents_desktop_bridge::host::protocol::MAX_FRAME_BYTES;
 const JOURNAL: &str = "editor-undo.v1.json";
+#[cfg(unix)]
 const EDITOR_UNDO_LOCK: &str = ".editor-undo.lock";
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -190,7 +193,7 @@ fn regular(metadata: &std::fs::Metadata) -> Result<()> {
     Ok(())
 }
 
-fn open_regular(path: &Path, create: bool) -> Result<File> {
+fn checkpoint_options(create: bool) -> OpenOptions {
     let mut options = OpenOptions::new();
     options
         .read(true)
@@ -202,9 +205,24 @@ fn open_regular(path: &Path, create: bool) -> Result<File> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
     }
-    let file = options.open(path)?;
+    options
+}
+
+#[cfg(unix)]
+fn create_regular(path: &Path) -> Result<File> {
+    let file = checkpoint_options(true).open(path)?;
     regular(&file.metadata()?)?;
     Ok(file)
+}
+
+fn open_existing_regular(path: &Path) -> Result<Option<File>> {
+    let file = match checkpoint_options(false).open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    regular(&file.metadata()?)?;
+    Ok(Some(file))
 }
 
 #[cfg(unix)]
@@ -253,7 +271,7 @@ impl Session {
                     .parent()
                     .context("checkpoint directory has no parent")?,
             )?;
-            let file = open_regular(&directory.join(EDITOR_UNDO_LOCK), true)?;
+            let file = create_regular(&directory.join(EDITOR_UNDO_LOCK))?;
             let guard = match FileLock::try_exclusive(file) {
                 Ok(guard) => guard,
                 Err(std::fs::TryLockError::WouldBlock) => return Ok(None),
@@ -275,16 +293,8 @@ impl Session {
             "checkpoint session cannot reload"
         );
         let result = (|| {
-            let file = match open_regular(&self.directory.join(JOURNAL), false) {
-                Ok(file) => file,
-                Err(error)
-                    if error
-                        .downcast_ref::<std::io::Error>()
-                        .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
-                {
-                    return Ok(None);
-                }
-                Err(error) => return Err(error),
+            let Some(file) = open_existing_regular(&self.directory.join(JOURNAL))? else {
+                return Ok(None);
             };
             ensure!(
                 file.metadata()?.len() <= MAX_BYTES as u64,

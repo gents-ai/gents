@@ -42,7 +42,7 @@ export function useComposerEditing({
   onEdit: ((edit: QueueEdit) => Promise<void>) | undefined;
   setDraft: (update: (current: string) => string) => void;
   send: (text: string, attachments?: RequestAttachment[]) => Promise<boolean>;
-  textarea: RefObject<HTMLTextAreaElement | null>;
+  textarea: RefObject<HTMLElement | null>;
 }) {
   const { drafts, project } = useApp();
   const loadAttachments = useRequestAttachments();

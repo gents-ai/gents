@@ -22,6 +22,20 @@ impl HttpAuthority {
         Self { configured }
     }
 
+    pub(crate) fn protect_http(
+        self,
+        config: gents::defra_node::HttpConfig,
+    ) -> gents::defra_node::HttpConfig {
+        config.with_router_transform(std::sync::Arc::new(move |router| self.wrap(router)))
+    }
+
+    fn wrap(&self, router: axum::Router) -> axum::Router {
+        router.layer(axum::middleware::from_fn_with_state(
+            self.clone(),
+            require_authority,
+        ))
+    }
+
     fn accepts(&self, request: &Request) -> bool {
         let Some((configured_host, bound_port)) = &self.configured else {
             return false;
@@ -74,7 +88,7 @@ fn parse_authority(value: &str) -> Option<(String, u16)> {
 
 /// A browser's same-origin check does not prevent DNS rebinding. Compare the
 /// actual request authority without consulting DNS or proxy-supplied headers.
-pub(crate) async fn require_authority(
+async fn require_authority(
     State(authority): State<HttpAuthority>,
     request: Request,
     next: Next,

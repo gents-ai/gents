@@ -35,7 +35,7 @@ fn render_value(value: &Value) -> Result<String> {
 }
 
 pub(crate) fn validate_identifier(name: &str) -> Result<()> {
-    crate::graphql::validate_graphql_name(name)
+    Ok(crate::graphql::validate_graphql_name(name)?)
 }
 
 #[cfg(test)]

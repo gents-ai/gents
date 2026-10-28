@@ -60,7 +60,7 @@ async fn requests_token_usage_scoped(
     let observations = usage
         .into_iter()
         .map(|row| row.usage.observation())
-        .collect::<Result<Vec<_>>>();
+        .collect::<Result<Vec<_>, _>>();
     Ok(observations
         .map(TokenTotals::from_observations)
         .unwrap_or_default())

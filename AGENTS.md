@@ -128,6 +128,19 @@ decoders and native adapters translate representations, not redefine policy.
   HTTP GraphQL from feature code, and never add another retry loop or access
   wrapper. `write_owner_structure.rs` is a syntactic ratchet over direct node
   access, not complete enforcement; its allowlist only shrinks.
+- Owner and library interfaces, the seams where callers decide behavior by
+  which failure occurred, return module-owned `thiserror` enums, and classifiers
+  match those enums or ask the owner's classifier. `OWNER_MODULES` in
+  `owner_interfaces_use_thiserror` lists them. Application code (commands, tool
+  handlers, daemon glue, tests) may use `anyhow` with context; where an erased
+  error reaches an owner boundary, find the owner enum with
+  `gents_protocol::error_chain::find_map_source` and ask it, since `source()`
+  skips a transparent variant's own error. A decision on error text belongs only
+  in an adapter-boundary classifier whose docstring names the external premise
+  (third-party or persisted text is the only signal).
+  `error_text_classification_only_shrinks` and `downcast_classifiers_only_shrink`
+  ratchet both; their allowlists only shrink. Print typed error chains with
+  `gents_protocol::error_chain::ErrorChain`.
 - Request context (identity, signing, ACP bypass, transaction handles, the
   requester or session, trace or request IDs) travels with the task or message
   as an explicit argument or field, never in `thread_local!` or `task_local!`.

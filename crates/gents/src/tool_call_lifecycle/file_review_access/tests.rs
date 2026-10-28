@@ -47,6 +47,7 @@ async fn file_image_read_grant_matches_signed_receipt_contract() {
                 .unwrap();
         }
         let mut demand = FileImageDemand {
+            inventory_reference: None,
             admission: HydrationRequest {
                 request_key: String::new(),
                 peer_id: "peer".into(),

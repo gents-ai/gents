@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use gents_protocol::message::{
     AssistantContent as AssistantMessageContent, Message as CompletionMessage,
     Reasoning as AssistantReasoning, Text as CompletionText, ToolCall as AssistantToolCall,
@@ -6,6 +5,7 @@ use gents_protocol::message::{
 
 use crate::error::LoopStreamError;
 use crate::loop_stream::LoopStreamItem;
+use crate::provider_audit::AuxiliaryOutputError;
 use crate::provider_input::ProviderInputProfile;
 use crate::request_lifecycle::RequestLifecycleControl;
 use crate::session_hook::CanonicalSessionHook;
@@ -13,6 +13,100 @@ use crate::stream_writer::CanonicalStreamWriter;
 
 mod progress;
 pub use progress::flush_while_polling;
+
+type Result<T, E = StreamProcessorError> = std::result::Result<T, E>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum StreamProcessorError {
+    #[error("audit fragment belongs to another content block")]
+    AuditBlockMismatch,
+    #[error("audit fragment has no reasoning declaration")]
+    AuditWithoutReasoning,
+    #[error("redacted audit payload repeated")]
+    RedactedPayloadRepeated,
+    #[error("audit fragment changed reasoning field kind")]
+    AuditFieldKindChanged,
+    #[error("provider block order changed")]
+    ProviderBlockOrderChanged,
+    #[error("empty Claude reasoning block")]
+    EmptyClaudeReasoning,
+    #[error("Claude reasoning block is unsigned or unsupported")]
+    ClaudeReasoningUnsupported,
+    #[error("Claude thinking has no declared position")]
+    ClaudeThinkingNoPosition,
+    #[error("Claude thinking changed native kind")]
+    ClaudeThinkingKindChanged,
+    #[error("Claude thinking completion changed native kind")]
+    ClaudeThinkingCompletionKindChanged,
+    #[error("Claude thinking bytes changed")]
+    ClaudeThinkingBytesChanged,
+    #[error("Claude thinking signature changed")]
+    ClaudeThinkingSignatureChanged,
+    #[error("Claude redacted block has no declared position")]
+    ClaudeRedactedNoPosition,
+    #[error("Claude redacted block changed native kind")]
+    ClaudeRedactedKindChanged,
+    #[error("Claude redacted completion changed native kind")]
+    ClaudeRedactedCompletionKindChanged,
+    #[error("Claude redacted bytes changed")]
+    ClaudeRedactedBytesChanged,
+    #[error("Claude redacted block followed unfinished text preview")]
+    ClaudeRedactedAfterPreview,
+    #[error("Claude signed thinking changed preview bytes")]
+    ClaudeSignedPreviewChanged,
+    #[error("provider block index overflow")]
+    ProviderBlockIndexOverflow,
+    #[error("agent stream completed without producing any visible response content")]
+    EmptyResponse,
+    #[error("natural completion has no saved provider message")]
+    NoSavedProviderMessage,
+    #[error("reasoning audit belongs to a different provider attempt")]
+    AuditDifferentAttempt,
+    #[error("Claude audit reached another provider profile")]
+    AuditWrongProfile,
+    #[error("accepted tool bindings do not match streamed native tool calls")]
+    AcceptedToolBindingsMismatch,
+    #[error("authored message index exhausted")]
+    AuthoredIndexExhausted,
+    #[error("provider failure does not match the exact active attempt")]
+    AttemptMismatch,
+    #[error("queued provider audit caused an unexpected stream action")]
+    QueuedAuditAction,
+    #[error(transparent)]
+    Writer(Box<dyn std::error::Error + Send + Sync>),
+    #[error(transparent)]
+    Hook(Box<dyn std::error::Error + Send + Sync>),
+    #[error(transparent)]
+    Lifecycle(Box<dyn std::error::Error + Send + Sync>),
+    #[error("{context}: closing partial provider attempt")]
+    PartialAttemptClose {
+        context: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    #[error("{context}: resetting partial assistant tail")]
+    PartialTailReset {
+        context: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+    #[error(transparent)]
+    Auxiliary(#[from] AuxiliaryOutputError),
+}
+
+impl StreamProcessorError {
+    fn writer(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
+        Self::Writer(source.into())
+    }
+
+    fn hook(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
+        Self::Hook(source.into())
+    }
+
+    fn lifecycle(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> Self {
+        Self::Lifecycle(source.into())
+    }
+}
 
 pub enum StreamAction {
     Continue,
@@ -58,7 +152,8 @@ where
             if self
                 .stream_writer
                 .try_publish_steering_message(self.lifecycle, &candidate.key, &candidate.message)
-                .await?
+                .await
+                .map_err(StreamProcessorError::writer)?
                 .is_none()
             {
                 break;
@@ -70,8 +165,15 @@ where
 
     async fn finish_or_intake(&mut self, text: &str) -> Result<crate::loop_stream::FinishOrIntake> {
         loop {
-            self.validate_execution().await?;
-            let Some(snapshot) = self.persistence_hook.finish_steering_snapshot().await? else {
+            self.validate_execution()
+                .await
+                .map_err(StreamProcessorError::lifecycle)?;
+            let Some(snapshot) = self
+                .persistence_hook
+                .finish_steering_snapshot()
+                .await
+                .map_err(StreamProcessorError::hook)?
+            else {
                 return Ok(crate::loop_stream::FinishOrIntake::Finished);
             };
             if !snapshot.inputs.is_empty() {
@@ -81,14 +183,13 @@ where
                 }
                 return Ok(crate::loop_stream::FinishOrIntake::Continue(committed));
             }
-            anyhow::ensure!(
-                !text.trim().is_empty() || !self.streamed_text.trim().is_empty(),
-                "agent stream completed without producing any visible response content"
-            );
+            if text.trim().is_empty() && self.streamed_text.trim().is_empty() {
+                return Err(StreamProcessorError::EmptyResponse);
+            }
             let message_doc_id = self
                 .final_message_doc_id
                 .as_deref()
-                .context("natural completion has no saved provider message")?;
+                .ok_or(StreamProcessorError::NoSavedProviderMessage)?;
             if self
                 .stream_writer
                 .finish_natural_turn(
@@ -96,7 +197,8 @@ where
                     message_doc_id,
                     &snapshot.pending_request_doc_ids,
                 )
-                .await?
+                .await
+                .map_err(StreamProcessorError::writer)?
             {
                 self.natural_finished = true;
                 return Ok(crate::loop_stream::FinishOrIntake::Finished);
@@ -130,7 +232,7 @@ where
         }
     }
 
-    pub async fn validate_execution(&self) -> Result<()> {
+    pub async fn validate_execution(&self) -> Result<(), L::Error> {
         self.lifecycle.validate_owned_execution().await
     }
 
@@ -142,8 +244,12 @@ where
         if let Some(message) = self.assistant_turn.message_snapshot() {
             self.stream_writer
                 .flush_native_partial(self.lifecycle, &message)
-                .await?;
-            self.stream_writer.flush_pending(self.doc_id).await?;
+                .await
+                .map_err(StreamProcessorError::writer)?;
+            self.stream_writer
+                .flush_pending(self.doc_id)
+                .await
+                .map_err(StreamProcessorError::writer)?;
         }
         Ok(())
     }
@@ -154,15 +260,14 @@ where
     ) -> Result<StreamAction> {
         match item {
             Ok(LoopStreamItem::ProviderAudit(observation)) => {
-                anyhow::ensure!(
-                    self.active_provider_attempt == Some((observation.turn, observation.attempt))
-                        && self.active_capture_scope == Some(observation.capture_scope),
-                    "reasoning audit belongs to a different provider attempt"
-                );
-                anyhow::ensure!(
-                    self.provider_profile == ProviderInputProfile::ClaudeMessages,
-                    "Claude audit reached another provider profile"
-                );
+                if !(self.active_provider_attempt == Some((observation.turn, observation.attempt))
+                    && self.active_capture_scope == Some(observation.capture_scope))
+                {
+                    return Err(StreamProcessorError::AuditDifferentAttempt);
+                }
+                if self.provider_profile != ProviderInputProfile::ClaudeMessages {
+                    return Err(StreamProcessorError::AuditWrongProfile);
+                }
                 if self
                     .assistant_turn
                     .apply_provider_audit(&observation.event)?
@@ -172,7 +277,8 @@ where
                             self.doc_id,
                             crate::stream_writer::PendingOutput::of_audit(&observation.event),
                         )
-                        .await?
+                        .await
+                        .map_err(StreamProcessorError::writer)?
                 {
                     self.flush_pending().await?;
                 }
@@ -198,12 +304,15 @@ where
                 let published = self
                     .stream_writer
                     .publish_native_turn(self.lifecycle, turn, attempt, &message)
-                    .await?;
-                self.stream_writer.flush_pending(self.doc_id).await?;
-                anyhow::ensure!(
-                    published.accepted_tools.len() == self.pending_tool_internal_ids.len(),
-                    "accepted tool bindings do not match streamed native tool calls"
-                );
+                    .await
+                    .map_err(StreamProcessorError::writer)?;
+                self.stream_writer
+                    .flush_pending(self.doc_id)
+                    .await
+                    .map_err(StreamProcessorError::writer)?;
+                if published.accepted_tools.len() != self.pending_tool_internal_ids.len() {
+                    return Err(StreamProcessorError::AcceptedToolBindingsMismatch);
+                }
                 let accepted = self
                     .pending_tool_internal_ids
                     .drain(..)
@@ -211,7 +320,8 @@ where
                     .collect();
                 self.persistence_hook
                     .adopt_accepted_tool_calls(accepted)
-                    .await?;
+                    .await
+                    .map_err(StreamProcessorError::hook)?;
                 self.final_message_doc_id = Some(published.message_doc_id);
                 self.active_provider_attempt = None;
                 self.active_capture_scope = None;
@@ -223,7 +333,11 @@ where
                 let had_visible_text = !self.streamed_text.trim().is_empty();
                 self.assistant_turn.push_text(&text);
                 self.streamed_text.push_str(&text);
-                let flush_due = self.stream_writer.write_tokens(self.doc_id, &text).await?;
+                let flush_due = self
+                    .stream_writer
+                    .write_tokens(self.doc_id, &text)
+                    .await
+                    .map_err(StreamProcessorError::writer)?;
                 let has_visible_text = !self.streamed_text.trim().is_empty();
                 if flush_due || (!had_visible_text && has_visible_text) {
                     self.flush_pending().await?;
@@ -242,7 +356,8 @@ where
                     let flush_due = self
                         .stream_writer
                         .write_reasoning(self.doc_id, &rendered)
-                        .await?;
+                        .await
+                        .map_err(StreamProcessorError::writer)?;
                     if flush_due {
                         self.flush_pending().await?;
                     }
@@ -260,7 +375,8 @@ where
                     let flush_due = self
                         .stream_writer
                         .write_reasoning(self.doc_id, &reasoning)
-                        .await?;
+                        .await
+                        .map_err(StreamProcessorError::writer)?;
                     if flush_due {
                         self.flush_pending().await?;
                     }
@@ -292,7 +408,10 @@ where
                 self.assistant_turn = AssistantTurnAccumulator::default();
                 self.committed_text_len = self.streamed_text.len();
                 let _ = (tool_result, internal_call_id);
-                self.stream_writer.reset_tail(self.doc_id).await?;
+                self.stream_writer
+                    .reset_tail(self.doc_id)
+                    .await
+                    .map_err(StreamProcessorError::writer)?;
                 Ok(StreamAction::Continue)
             }
             Ok(LoopStreamItem::FinishOrIntake { text, reply }) => {
@@ -321,13 +440,17 @@ where
                         attempt,
                         crate::stream_writer::ProviderAttemptClose::Retracted,
                     )
-                    .await?;
+                    .await
+                    .map_err(StreamProcessorError::writer)?;
                 self.active_provider_attempt = None;
                 self.active_capture_scope = None;
                 self.assistant_turn = AssistantTurnAccumulator::default();
                 self.pending_tool_internal_ids.clear();
                 self.streamed_text.truncate(self.committed_text_len);
-                self.stream_writer.reset_tail(self.doc_id).await?;
+                self.stream_writer
+                    .reset_tail(self.doc_id)
+                    .await
+                    .map_err(StreamProcessorError::writer)?;
                 Ok(StreamAction::Continue)
             }
             Ok(LoopStreamItem::AuthoredInputReady {
@@ -339,11 +462,13 @@ where
                 if let Some(context) = context.as_ref() {
                     self.stream_writer
                         .publish_authored_message(self.lifecycle, "context", context)
-                        .await?;
+                        .await
+                        .map_err(StreamProcessorError::writer)?;
                 }
                 self.stream_writer
                     .publish_authored_message(self.lifecycle, "prompt", &prompt)
-                    .await?;
+                    .await
+                    .map_err(StreamProcessorError::writer)?;
                 let candidates = folded
                     .into_iter()
                     .map(|(key, message)| crate::loop_stream::FoldedPrompt { key, message })
@@ -355,7 +480,7 @@ where
             Ok(LoopStreamItem::SteeringBoundary { reply }) => {
                 let result = match self.persistence_hook.pending_steering_inputs().await {
                     Ok(candidates) => self.publish_steering(candidates).await,
-                    Err(error) => Err(error),
+                    Err(error) => Err(StreamProcessorError::hook(error)),
                 };
                 let _ = reply.send(result);
                 Ok(StreamAction::Continue)
@@ -365,13 +490,17 @@ where
                 let key = format!("output-obligation:{}", self.authored_index);
                 self.stream_writer
                     .publish_authored_message(self.lifecycle, &key, &reminder)
-                    .await?;
+                    .await
+                    .map_err(StreamProcessorError::writer)?;
                 self.authored_index = self
                     .authored_index
                     .checked_add(1)
-                    .context("authored message index exhausted")?;
+                    .ok_or(StreamProcessorError::AuthoredIndexExhausted)?;
                 self.streamed_text.truncate(self.committed_text_len);
-                self.stream_writer.reset_tail(self.doc_id).await?;
+                self.stream_writer
+                    .reset_tail(self.doc_id)
+                    .await
+                    .map_err(StreamProcessorError::writer)?;
                 Ok(StreamAction::Continue)
             }
             Ok(LoopStreamItem::AttemptFailed {
@@ -382,10 +511,9 @@ where
             }) => {
                 self.flush_pending().await?;
                 if let Some(active) = self.active_provider_attempt {
-                    anyhow::ensure!(
-                        active == (turn, attempt),
-                        "provider failure does not match the exact active attempt"
-                    );
+                    if active != (turn, attempt) {
+                        return Err(StreamProcessorError::AttemptMismatch);
+                    }
                     self.stream_writer
                         .close_provider_attempt(
                             self.lifecycle,
@@ -397,7 +525,8 @@ where
                                 crate::stream_writer::ProviderAttemptClose::Partial
                             },
                         )
-                        .await?;
+                        .await
+                        .map_err(StreamProcessorError::writer)?;
                     self.active_provider_attempt = None;
                     self.active_capture_scope = None;
                 }
@@ -428,13 +557,19 @@ where
                     crate::stream_writer::ProviderAttemptClose::Partial,
                 )
                 .await
-                .with_context(|| format!("{context}: closing partial provider attempt"))?;
+                .map_err(|error| StreamProcessorError::PartialAttemptClose {
+                    context: context.to_owned(),
+                    source: error.into(),
+                })?;
             self.active_capture_scope = None;
         }
         self.stream_writer
             .reset_tail(self.doc_id)
             .await
-            .with_context(|| format!("{context}: resetting partial assistant tail"))?;
+            .map_err(|error| StreamProcessorError::PartialTailReset {
+                context: context.to_owned(),
+                source: error.into(),
+            })?;
 
         Ok(had_output)
     }
@@ -442,7 +577,9 @@ where
     /// Persist observations already parsed by the provider before an external
     /// cancellation drops the stream that normally delivers them.
     pub async fn persist_received_partial_turn(&mut self, context: &str) -> Result<bool> {
-        self.validate_execution().await?;
+        self.validate_execution()
+            .await
+            .map_err(StreamProcessorError::lifecycle)?;
         let handled_auxiliary =
             crate::rendered_request::scope::flush_received_auxiliary_partial().await?;
         if !handled_auxiliary {
@@ -452,7 +589,7 @@ where
                     .await?
                 {
                     StreamAction::Continue => {}
-                    _ => anyhow::bail!("queued provider audit caused an unexpected stream action"),
+                    _ => return Err(StreamProcessorError::QueuedAuditAction),
                 }
             }
         }
@@ -471,7 +608,7 @@ impl AssistantTurnAccumulator {
     pub fn apply_provider_audit(
         &mut self,
         event: &crate::provider_audit::ClaudeAuditEvent,
-    ) -> Result<bool> {
+    ) -> Result<bool, StreamProcessorError> {
         use crate::provider_audit::{ClaudeAuditEvent, ClaudeBlockKind};
         use gents_protocol::message::ReasoningContent;
         if let ClaudeAuditEvent::BlockStart { index, kind } = event {
@@ -485,15 +622,14 @@ impl AssistantTurnAccumulator {
             | ClaudeAuditEvent::BlockStop { index } => *index,
             ClaudeAuditEvent::BlockStart { .. } => unreachable!(),
         };
-        anyhow::ensure!(
-            self.next_provider_block.checked_sub(1) == Some(index),
-            "audit fragment belongs to another content block"
-        );
+        if !(self.next_provider_block.checked_sub(1) == Some(index)) {
+            return Err(StreamProcessorError::AuditBlockMismatch);
+        }
         if matches!(event, ClaudeAuditEvent::BlockStop { .. }) {
             return Ok(false);
         }
         let Some(AssistantMessageContent::Reasoning(reasoning)) = self.content.last_mut() else {
-            anyhow::bail!("audit fragment has no reasoning declaration");
+            return Err(StreamProcessorError::AuditWithoutReasoning);
         };
         match (event, reasoning.content.as_mut_slice()) {
             (
@@ -513,10 +649,12 @@ impl AssistantTurnAccumulator {
                 ClaudeAuditEvent::RedactedData { data, .. },
                 [ReasoningContent::Redacted { data: observed }],
             ) => {
-                anyhow::ensure!(observed.is_empty(), "redacted audit payload repeated");
+                if !(observed.is_empty()) {
+                    return Err(StreamProcessorError::RedactedPayloadRepeated);
+                }
                 *observed = data.clone();
             }
-            _ => anyhow::bail!("audit fragment changed reasoning field kind"),
+            _ => return Err(StreamProcessorError::AuditFieldKindChanged),
         }
         Ok(true)
     }
@@ -525,16 +663,15 @@ impl AssistantTurnAccumulator {
         &mut self,
         index: u32,
         kind: &crate::provider_audit::ClaudeBlockKind,
-    ) -> Result<()> {
+    ) -> Result<(), StreamProcessorError> {
         use crate::provider_audit::ClaudeBlockKind;
         use gents_protocol::message::ReasoningContent;
-        anyhow::ensure!(
-            index == self.next_provider_block,
-            "provider block order changed"
-        );
+        if !(index == self.next_provider_block) {
+            return Err(StreamProcessorError::ProviderBlockOrderChanged);
+        }
         self.next_provider_block = index
             .checked_add(1)
-            .context("provider block index overflow")?;
+            .ok_or(StreamProcessorError::ProviderBlockIndexOverflow)?;
         self.provider_block = Some(kind.clone());
         match kind {
             ClaudeBlockKind::Text => {
@@ -612,16 +749,15 @@ impl AssistantTurnAccumulator {
         &mut self,
         profile: ProviderInputProfile,
         reasoning: AssistantReasoning,
-    ) -> Result<()> {
+    ) -> Result<(), StreamProcessorError> {
         if profile != ProviderInputProfile::ClaudeMessages {
             self.push_reasoning(reasoning);
             return Ok(());
         }
         use gents_protocol::message::ReasoningContent;
-        anyhow::ensure!(
-            !reasoning.content.is_empty(),
-            "empty Claude reasoning block"
-        );
+        if !(!reasoning.content.is_empty()) {
+            return Err(StreamProcessorError::EmptyClaudeReasoning);
+        }
         for part in &reasoning.content {
             match part {
                 ReasoningContent::Text {
@@ -629,7 +765,7 @@ impl AssistantTurnAccumulator {
                     ..
                 } if !signature.is_empty() => {}
                 ReasoningContent::Redacted { data } if !data.is_empty() => {}
-                _ => anyhow::bail!("Claude reasoning block is unsigned or unsupported"),
+                _ => return Err(StreamProcessorError::ClaudeReasoningUnsupported),
             }
         }
 
@@ -639,27 +775,28 @@ impl AssistantTurnAccumulator {
             Some(crate::provider_audit::ClaudeBlockKind::Thinking)
         ) {
             let Some(AssistantMessageContent::Reasoning(current)) = self.content.last_mut() else {
-                anyhow::bail!("Claude thinking has no declared position");
+                return Err(StreamProcessorError::ClaudeThinkingNoPosition);
             };
             let [ReasoningContent::Text {
                 text: observed,
                 signature: observed_signature,
             }] = current.content.as_slice()
             else {
-                anyhow::bail!("Claude thinking changed native kind");
+                return Err(StreamProcessorError::ClaudeThinkingKindChanged);
             };
             let [ReasoningContent::Text {
                 text: completed,
                 signature: completed_signature,
             }] = reasoning.content.as_slice()
             else {
-                anyhow::bail!("Claude thinking completion changed native kind");
+                return Err(StreamProcessorError::ClaudeThinkingCompletionKindChanged);
             };
-            anyhow::ensure!(observed == completed, "Claude thinking bytes changed");
-            anyhow::ensure!(
-                observed_signature.is_none() || observed_signature == completed_signature,
-                "Claude thinking signature changed"
-            );
+            if !(observed == completed) {
+                return Err(StreamProcessorError::ClaudeThinkingBytesChanged);
+            }
+            if !(observed_signature.is_none() || observed_signature == completed_signature) {
+                return Err(StreamProcessorError::ClaudeThinkingSignatureChanged);
+            }
             *current = reasoning;
             return Ok(());
         }
@@ -668,19 +805,18 @@ impl AssistantTurnAccumulator {
             Some(crate::provider_audit::ClaudeBlockKind::RedactedThinking)
         ) {
             let Some(AssistantMessageContent::Reasoning(current)) = self.content.last_mut() else {
-                anyhow::bail!("Claude redacted block has no declared position");
+                return Err(StreamProcessorError::ClaudeRedactedNoPosition);
             };
             let [ReasoningContent::Redacted { data: observed }] = current.content.as_slice() else {
-                anyhow::bail!("Claude redacted block changed native kind");
+                return Err(StreamProcessorError::ClaudeRedactedKindChanged);
             };
             let [ReasoningContent::Redacted { data: completed }] = reasoning.content.as_slice()
             else {
-                anyhow::bail!("Claude redacted completion changed native kind");
+                return Err(StreamProcessorError::ClaudeRedactedCompletionKindChanged);
             };
-            anyhow::ensure!(
-                observed.is_empty() || observed == completed,
-                "Claude redacted bytes changed"
-            );
+            if !(observed.is_empty() || observed == completed) {
+                return Err(StreamProcessorError::ClaudeRedactedBytesChanged);
+            }
             *current = reasoning;
             return Ok(());
         }
@@ -695,12 +831,11 @@ impl AssistantTurnAccumulator {
                         text: final_text, ..
                     } = first
                     else {
-                        anyhow::bail!("Claude redacted block followed unfinished text preview");
+                        return Err(StreamProcessorError::ClaudeRedactedAfterPreview);
                     };
-                    anyhow::ensure!(
-                        preview == final_text,
-                        "Claude signed thinking changed preview bytes"
-                    );
+                    if !(preview == final_text) {
+                        return Err(StreamProcessorError::ClaudeSignedPreviewChanged);
+                    }
                     *current.content.last_mut().expect("preview exists") = first.clone();
                     current
                         .content

@@ -95,7 +95,7 @@ where
                             .with_context(|| {
                                 format!("the backend of profile {profile_id:?} no longer exists")
                             })?;
-                        Ok((profile, backend))
+                        Ok::<_, anyhow::Error>((profile, backend))
                     })
                 })
                 .await?;

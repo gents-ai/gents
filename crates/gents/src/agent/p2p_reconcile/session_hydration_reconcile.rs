@@ -19,7 +19,7 @@ use super::session_hydration::{
     apply_hydration_delivery, decide_hydration, hydration_collection_name, AppliedPairingRoute,
     HydrationApplyOutcome, HydrationCatalog, HydrationDeliveryResult, HydrationDocument,
     HydrationRequest, HydrationTerminalWriteResult, HydrationVerdict, SessionOwner,
-    VerifiedActiveMembership,
+    SessionReadObservation, VerifiedActiveMembership,
 };
 use super::session_hydration_closure::{
     build_canonical_selection, CanonicalClosureInput, CanonicalPublicationOrigin, ScopedDocument,
@@ -140,7 +140,7 @@ async fn reconcile_hydration_tick(
     let mut record_error = |request_key: &str, error: anyhow::Error| {
         tracing::warn!(
             request_key = %request_key,
-            error = %error,
+            error = %format!("{error:#}"),
             "session hydration reconcile failed; continuing sweep"
         );
         if first_error.is_none() {
@@ -367,6 +367,7 @@ pub async fn run_session_hydration_reconciler(
         [
             "SessionHydrationRequest",
             "FileImageHydrationRequest",
+            "FileInventoryImageRequest",
             "FileInventoryRequest",
         ],
     )?;
@@ -592,9 +593,56 @@ struct AppliedPairingRow {
 
 #[derive(Deserialize)]
 struct SessionRow {
+    #[serde(rename = "_docID")]
+    doc_id: Option<String>,
     session_id: Option<String>,
     requester_did: Option<String>,
     node_did: Option<String>,
+}
+
+async fn observe_session_reader(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    request: &HydrationRequest,
+    physical_root: &str,
+    rows: Vec<SessionRow>,
+    authenticated: bool,
+) -> Result<(BTreeSet<SessionOwner>, BTreeSet<SessionReadObservation>)> {
+    let matching: Vec<_> = rows
+        .into_iter()
+        .filter(|row| {
+            row.node_did.as_deref() == Some(request.node_did.as_str())
+                && row.session_id.as_deref() == Some(request.session_id.as_str())
+        })
+        .collect();
+    let [root] = matching.as_slice() else {
+        return Ok(Default::default());
+    };
+    if !authenticated || root.doc_id.as_deref() != Some(physical_root) {
+        return Ok(Default::default());
+    }
+    let reader: identity::Did = request.requester_did.parse()?;
+    let observed = txn
+        .document_owners_as(&reader, "AgentSession", &[physical_root.to_owned()])
+        .await?;
+    if observed.len() != 1 || observed[0].doc_id != physical_root || !observed[0].visible {
+        return Ok(Default::default());
+    }
+    let source = SessionOwner {
+        session_doc_id: root.doc_id.clone(),
+        node_did: request.node_did.clone(),
+        session_id: request.session_id.clone(),
+        requester_did: root.requester_did.clone().unwrap_or_default(),
+    };
+    Ok((
+        BTreeSet::from([source.clone()]),
+        BTreeSet::from([SessionReadObservation {
+            peer_id: request.peer_id.clone(),
+            requester_did: request.requester_did.clone(),
+            session_doc_id: physical_root.to_owned(),
+            source,
+            visible: true,
+        }]),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -713,6 +761,15 @@ impl GraphqlHydrationStore {
         request: &HydrationRequest,
         collection: &str,
     ) -> Result<LoadedHydrationAdmission> {
+        self.load_source_admission(request, collection, None).await
+    }
+
+    async fn load_source_admission(
+        &self,
+        request: &HydrationRequest,
+        collection: &str,
+        physical_root: Option<&str>,
+    ) -> Result<LoadedHydrationAdmission> {
         let authorization = self
             .enrollment
             .fresh_authorization(&request.requester_did, &request.peer_id)
@@ -721,9 +778,42 @@ impl GraphqlHydrationStore {
         let session_id = escape_graphql_string(&request.session_id);
         let peer_id = escape_graphql_string(&request.peer_id);
         let query = hydration_admission_query(&session_id, &peer_id);
-        let response =
-            graphql_with_transaction_retry(&self.node, &query, "query session hydration admission")
-                .await?;
+        let (response, session_reads, exact_root) = if let Some(physical_root) = physical_root {
+            let authenticated = authorization.is_some();
+            crate::config_client::ConfigAccess::transact_local_readonly(
+                &self.node,
+                None,
+                "hydration.reader_admission",
+                |txn| {
+                    let query = &query;
+                    Box::pin(async move {
+                        let response = txn.execute_local_response(query).await?;
+                        let (sessions, reads) = observe_session_reader(
+                            txn,
+                            request,
+                            physical_root,
+                            rows::<SessionRow>(&response, "AgentSession")?,
+                            authenticated,
+                        )
+                        .await?;
+                        let exact_root = !sessions.is_empty() && !reads.is_empty();
+                        Ok::<_, anyhow::Error>((response, reads, exact_root))
+                    })
+                },
+            )
+            .await?
+        } else {
+            (
+                graphql_with_transaction_retry(
+                    &self.node,
+                    &query,
+                    "query session hydration admission",
+                )
+                .await?,
+                BTreeSet::new(),
+                true,
+            )
+        };
 
         let desired_agents = rows::<DesiredPairingRow>(&response, "PeerPairingDesired")?
             .into_iter()
@@ -766,8 +856,10 @@ impl GraphqlHydrationStore {
         }
         let sessions = rows::<SessionRow>(&response, "AgentSession")?
             .into_iter()
+            .filter(|_| exact_root)
             .filter_map(|row| {
                 Some(SessionOwner {
+                    session_doc_id: row.doc_id,
                     session_id: row.session_id.filter(|value| !value.is_empty())?,
                     requester_did: row.requester_did.unwrap_or_default(),
                     node_did: row.node_did.unwrap_or_default(),
@@ -790,6 +882,7 @@ impl GraphqlHydrationStore {
                 selected_network_id,
                 verified_active_memberships,
                 sessions,
+                session_reads,
                 ..HydrationCatalog::default()
             },
             authorization,
@@ -838,7 +931,7 @@ fn hydration_admission_query(session_id: &str, peer_id: &str) -> String {
                 enrollment_authorization_sequence enrollment_authorization_expires_at
             }}
             AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
-                session_id requester_did node_did
+                _docID session_id requester_did node_did
             }}
         }}"#
     )
@@ -1130,11 +1223,13 @@ mod tests {
                     member_did: "did:key:requester-1".into(),
                 }]),
                 sessions: BTreeSet::from([SessionOwner {
+                    session_doc_id: None,
                     session_id: "session-1".into(),
                     requester_did: "did:key:requester-1".into(),
                     node_did: "did:key:agent-1".into(),
                 }]),
                 documents: BTreeSet::from([document]),
+                session_reads: BTreeSet::new(),
                 authorized_reference_closure: BTreeSet::new(),
             },
             authorization_current: std::sync::atomic::AtomicBool::new(true),
@@ -1504,7 +1599,11 @@ mod tests {
                     let mut effects = Vec::new();
                     selection::load_effect_children(
                         txn,
-                        request,
+                        &crate::session_origin::SessionScope {
+                            node_did: request.node_did.clone(),
+                            session_id: request.session_id.clone(),
+                            requester_did: Some(request.requester_did.clone()),
+                        },
                         &[ScopedDocument {
                             collection: SessionHydrationCollection::AgentToolCall,
                             doc_id: parent_doc.clone(),
@@ -1515,7 +1614,7 @@ mod tests {
                         &mut effects,
                     )
                     .await?;
-                    Ok(effects)
+                    Ok::<_, anyhow::Error>(effects)
                 })
             },
         )

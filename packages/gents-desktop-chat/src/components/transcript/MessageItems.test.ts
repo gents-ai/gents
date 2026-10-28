@@ -127,6 +127,40 @@ it("offers editing only for readable authored user messages", () => {
   ).not.toContain('aria-label="Edit message"');
 });
 
+it("offers image-only message edits without exposing unreadable input", () => {
+  const item: User = {
+    kind: "userMessage",
+    itemKey: "image-only",
+    sequence: 0,
+    ownsTurn: true,
+    content: null,
+    timestamp: null,
+    reconstruction: { state: "ready" },
+    attachments: [
+      {
+        name: "capture.png",
+        mediaType: "image/png",
+        digest: "digest",
+        size: 4,
+      },
+    ],
+  };
+  const render = (message: User, onEdit?: (item: User) => void) =>
+    renderToStaticMarkup(
+      createElement(UserMessageItem, { item: message, onEdit }),
+    );
+  expect(render(item, () => {})).toContain('aria-label="Edit message"');
+  expect(render(item)).not.toContain('aria-label="Edit message"');
+  expect(render({ ...item, attachments: [] }, () => {})).not.toContain(
+    'aria-label="Edit message"',
+  );
+  for (const state of ["loading", "denied", "invalid"] as const) {
+    expect(
+      render({ ...item, reconstruction: { state } }, () => {}),
+    ).not.toContain('aria-label="Edit message"');
+  }
+});
+
 describe("received session-message presentation", () => {
   const original =
     "[message agent:engineer session:parent node:sender · at:time · cause:cause]\n\nReview the layout.";

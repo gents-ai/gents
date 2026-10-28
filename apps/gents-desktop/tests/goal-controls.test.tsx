@@ -10,6 +10,7 @@ import type { DesktopApp } from "../src/hooks/desktopApp";
 import { node, testApp, withApp } from "./app-fixture";
 import { deployment } from "./config-panel-wiring/fixtures";
 import { MemoryNavProvider } from "@gents/shell";
+import { composerText, typeInComposer } from "./composer-field";
 
 vi.mock("../src/ui/screens/Markdown", () => ({
   CopyButton: () => null,
@@ -111,8 +112,7 @@ function setup(held: DesktopSessionSnapshot) {
   return { controlGoal, message: screen.getByLabelText("Message") };
 }
 
-const type = (box: HTMLElement, value: string) =>
-  fireEvent.change(box, { target: { value } });
+const type = typeInComposer;
 const press = (box: HTMLElement, key: string) =>
   act(async () => {
     fireEvent.keyDown(box, { key });
@@ -163,8 +163,8 @@ describe("setting a goal", () => {
     type(message, "/");
     await press(message, "Enter");
     expect(screen.getByTestId("goal-mode")).toHaveTextContent("Goal");
-    expect(message).toHaveValue("");
-    expect(message).toHaveAttribute("placeholder", "Describe the goal");
+    expect(composerText(message)).toBe("");
+    expect(message).toHaveAttribute("aria-placeholder", "Describe the goal");
     type(message, "Ship the release");
     await press(message, "Enter");
     await waitFor(() =>
@@ -259,7 +259,7 @@ describe("the goal banner", () => {
     type(message, "half-written message");
     fireEvent.click(screen.getByRole("button", { name: "Edit goal" }));
     expect(screen.getByTestId("goal-mode")).toHaveTextContent("Editing goal");
-    expect(message).toHaveValue("Ship the release");
+    expect(composerText(message)).toBe("Ship the release");
     type(message, "Ship the release notes");
     await press(message, "Enter");
     await waitFor(() =>
@@ -274,7 +274,7 @@ describe("the goal banner", () => {
         }),
       ),
     );
-    await waitFor(() => expect(message).toHaveValue("half-written message"));
+    await waitFor(() => expect(composerText(message)).toBe("half-written message"));
     expect(screen.queryByTestId("goal-mode")).toBeNull();
   });
 });

@@ -2,6 +2,11 @@
 mod background;
 pub use background::background_tool;
 
+#[path = "commands/attachments.rs"]
+mod attachments;
+pub(crate) use attachments::bounded_attachment_response;
+pub use attachments::request_attachments;
+
 #[path = "commands/chat.rs"]
 mod chat;
 #[path = "commands/chat_resolve.rs"]
@@ -50,7 +55,7 @@ pub use config::{
     patch_config_components, save_agent_config, save_backend_config, save_inference_profile_config,
     save_node_config, save_skill_config, save_tools_config, set_default_agent,
 };
-pub use mailbox::{dismiss_mailbox, list_mailbox, start_mailbox_request};
+pub use mailbox::{dismiss_mailbox, list_mailbox, observe_mailbox_item, start_mailbox_request};
 pub use peer::{remove_peer, rename_peer, repair_p2p, request_status_enrollment};
 pub use task::{
     delete_event_source_config, run_schedule_config, run_task_config, save_event_source_config,

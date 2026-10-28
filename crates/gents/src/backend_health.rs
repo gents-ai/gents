@@ -428,6 +428,7 @@ pub async fn probe_backends_cycle(
         now,
         health_map,
         options,
+        cancel: None,
     };
     probe_selected_backends(node, client, backends, env, oauth, None).await
 }
@@ -437,8 +438,11 @@ struct ProbeEnv<'a> {
     now: DateTime<Utc>,
     health_map: &'a BackendHealthMap,
     options: &'a BackendProberOptions,
+    cancel: Option<&'a CancellationToken>,
 }
 
+/// Shutdown cancels remote observation, never an admitted catalog write. An
+/// interrupted observation supplies no health event or complete probe-cycle view.
 async fn probe_selected_backends(
     node: &Arc<EmbeddedNode>,
     client: &reqwest::Client,
@@ -452,6 +456,9 @@ async fn probe_selected_backends(
     let mut probed_ids = RapidHashSet::new();
 
     for backend in backends {
+        if env.cancel.is_some_and(CancellationToken::is_cancelled) {
+            return outcome;
+        }
         if backend.provider_kind.is_node_scoped_oauth() && oauth.is_none() {
             continue;
         }
@@ -463,19 +470,31 @@ async fn probe_selected_backends(
             let Some(context) = oauth.as_ref() else {
                 continue;
             };
-            let (event, error_text) = match oauth_credential_for_probe(context, backend).await {
+            let credential = oauth_credential_for_probe(context, backend).await;
+            if env.cancel.is_some_and(CancellationToken::is_cancelled) {
+                return outcome;
+            }
+            let (event, error_text) = match credential {
                 Ok(credential) => {
-                    let probe_result = tokio::time::timeout(
-                        probe_timeout(backend),
-                        crate::backend_provider::discover_models(
-                            client,
-                            backend.provider_kind,
-                            &backend.endpoint,
-                            None,
-                            Some(&credential),
-                        ),
-                    )
-                    .await;
+                    let cancellation = env.cancel.cloned().unwrap_or_default();
+                    let Some(probe_result) = cancellation
+                        .run_until_cancelled(tokio::time::timeout(
+                            probe_timeout(backend),
+                            crate::backend_provider::discover_models(
+                                client,
+                                backend.provider_kind,
+                                &backend.endpoint,
+                                None,
+                                Some(&credential),
+                            ),
+                        ))
+                        .await
+                    else {
+                        return outcome;
+                    };
+                    if cancellation.is_cancelled() {
+                        return outcome;
+                    }
                     match probe_result {
                         Ok(Ok(models)) => {
                             record_discovered_catalog(
@@ -515,18 +534,26 @@ async fn probe_selected_backends(
         let (event, error_text) = match backend.auth.resolve_api_key() {
             Err(error) => (ProbeEvent::ProbeFail, Some(error.to_string())),
             Ok(api_key) => {
-                let probe_result = tokio::time::timeout(
-                    probe_timeout(backend),
-                    crate::backend_provider::discover_models(
-                        client,
-                        backend.provider_kind,
-                        &backend.endpoint,
-                        api_key.as_deref(),
-                        None,
-                    ),
-                )
-                .await;
+                let cancellation = env.cancel.cloned().unwrap_or_default();
+                let Some(probe_result) = cancellation
+                    .run_until_cancelled(tokio::time::timeout(
+                        probe_timeout(backend),
+                        crate::backend_provider::discover_models(
+                            client,
+                            backend.provider_kind,
+                            &backend.endpoint,
+                            api_key.as_deref(),
+                            None,
+                        ),
+                    ))
+                    .await
+                else {
+                    return outcome;
+                };
 
+                if cancellation.is_cancelled() {
+                    return outcome;
+                }
                 match probe_result {
                     Ok(Ok(models)) => {
                         record_discovered_catalog(node, backend, None, models).await;
@@ -541,7 +568,9 @@ async fn probe_selected_backends(
         record_probe_event(node, backend, event, error_text, env, &mut outcome).await;
     }
 
-    health_map.retain_backends(&probed_ids).await;
+    if env.cancel.is_none_or(|cancel| !cancel.is_cancelled()) {
+        health_map.retain_backends(&probed_ids).await;
+    }
     outcome
 }
 
@@ -557,6 +586,7 @@ async fn record_probe_event(
         now,
         health_map,
         options,
+        ..
     } = env;
     let fingerprint = probe_configuration_fingerprint(backend);
     let (previous, observed_state) = health_map
@@ -636,7 +666,7 @@ pub async fn run_backend_probe_cycle(
     options: &BackendProberOptions,
     node_did: &str,
 ) -> ProbeCycleOutcome {
-    run_scheduled_backend_probe_cycle(node, client, health_map, options, node_did, None).await
+    run_scheduled_backend_probe_cycle(node, client, health_map, options, node_did, None, None).await
 }
 
 async fn run_scheduled_backend_probe_cycle(
@@ -646,7 +676,11 @@ async fn run_scheduled_backend_probe_cycle(
     options: &BackendProberOptions,
     node_did: &str,
     schedule: Option<(&mut ProbeSchedule, bool)>,
+    cancel: Option<&CancellationToken>,
 ) -> ProbeCycleOutcome {
+    if cancel.is_some_and(CancellationToken::is_cancelled) {
+        return ProbeCycleOutcome::default();
+    }
     let backends = match list_enabled_backends_for_agent(node.as_ref(), node_did).await {
         Ok(backends) => backends,
         Err(error) => {
@@ -665,6 +699,7 @@ async fn run_scheduled_backend_probe_cycle(
             now,
             health_map,
             options,
+            cancel,
         },
         Some(OAuthProbeContext {
             node: node.clone(),
@@ -680,6 +715,9 @@ async fn run_scheduled_backend_probe_cycle(
             .iter()
             .any(|backend_id| backend_id == &backend.backend_id)
     }) {
+        if cancel.is_some_and(CancellationToken::is_cancelled) {
+            break;
+        }
         match set_backend_probe_status_with_last_probe(
             &node,
             &backend.node_did,
@@ -758,6 +796,7 @@ pub fn spawn_backend_prober(
                 &options,
                 &node_did,
                 Some((&mut schedule, periodic)),
+                Some(&cancel),
             )
             .await;
             if !outcome.flipped.is_empty() {
@@ -1141,6 +1180,7 @@ mod tests {
             &probe_options(),
             "did:key:backend-owner",
             Some((schedule, periodic)),
+            None,
         )
         .await
     }
@@ -2221,6 +2261,7 @@ mod tests {
                 now: Utc::now(),
                 health_map: &health,
                 options: &options,
+                cancel: None,
             },
             &mut outcome,
         )
@@ -2246,6 +2287,7 @@ mod tests {
                 now: Utc::now(),
                 health_map: &health,
                 options: &options,
+                cancel: None,
             },
             &mut outcome,
         )
@@ -2309,5 +2351,104 @@ mod tests {
 
         assert!(health_map.get("retired").await.is_none());
         assert!(health_map.get("current").await.is_some());
+    }
+    #[tokio::test]
+    async fn probe_shutdown_cancels_pending_backend_without_pruning_or_failure() {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let seen = started.clone();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 1024];
+            assert!(stream.read(&mut request).await.unwrap() > 0);
+            seen.notify_one();
+            std::future::pending::<()>().await;
+        });
+        let node = test_node().await;
+        let health = BackendHealthMap::new();
+        health
+            .set_for_test("pending", BackendHealthState::Degraded, 1)
+            .await;
+        health
+            .set_for_test("unobserved", BackendHealthState::Healthy, 0)
+            .await;
+        let before_pending = health.get("pending").await.unwrap();
+        let before_unobserved = health.get("unobserved").await.unwrap();
+        let cancel = CancellationToken::new();
+        let mut pending = backend("pending", endpoint);
+        pending.discovery_timeout_secs = Some(60);
+        upsert_backend_configuration(&node, &pending).await;
+        let (events, mut received) = mpsc::channel(1);
+        let handle = spawn_backend_prober(
+            node.clone(),
+            health.clone(),
+            BackendProberOptions {
+                probe_timeout: Duration::from_secs(60),
+                ..probe_options()
+            },
+            events,
+            cancel.clone(),
+            pending.node_did.clone(),
+        );
+        tokio::time::timeout(Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        cancel.cancel();
+        tokio::time::timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("pending backend observation must stop on shutdown")
+            .unwrap();
+        assert!(
+            received.try_recv().is_err(),
+            "cancelled discovery has no health event"
+        );
+        for previous in [before_pending, before_unobserved] {
+            let current = health.get(&previous.backend_id).await.unwrap();
+            assert_eq!(current.state, previous.state);
+            assert_eq!(current.failure_count, previous.failure_count);
+            assert_eq!(current.last_probe_at, previous.last_probe_at);
+            assert_eq!(current.last_error, previous.last_error);
+            assert_eq!(
+                current.configuration_fingerprint,
+                previous.configuration_fingerprint
+            );
+        }
+        assert!(health.get("later").await.is_none());
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn probe_shutdown_prevents_new_backend_probes_and_pruning() {
+        let node = test_node().await;
+        let health = BackendHealthMap::new();
+        health
+            .set_for_test("unobserved", BackendHealthState::Healthy, 0)
+            .await;
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let outcome = probe_selected_backends(
+            &node,
+            &reqwest::Client::new(),
+            &[backend("pending", "http://127.0.0.1:1/v1".into())],
+            ProbeEnv {
+                now: Utc::now(),
+                health_map: &health,
+                options: &probe_options(),
+                cancel: Some(&cancel),
+            },
+            None,
+            None,
+        )
+        .await;
+        assert!(outcome.flipped.is_empty() && outcome.promotable.is_empty());
+        assert!(health.get("pending").await.is_none());
+        assert!(health.get("unobserved").await.is_some());
+        node.shutdown().await;
     }
 }

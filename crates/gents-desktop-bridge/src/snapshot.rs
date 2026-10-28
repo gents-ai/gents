@@ -311,7 +311,9 @@ pub use session::build_session_snapshot_from_store;
 #[cfg(test)]
 pub use session::build_session_snapshot_from_store_for_node;
 pub use session::load_session_context_details;
-pub(crate) use session::{attach_context_history_rows, render_transcript_rows};
+#[cfg(test)]
+pub(crate) use session::render_transcript_rows;
+pub(crate) use session::{attach_context_history_rows, render_transcript_rows_with_provenance};
 
 pub async fn build_client_snapshot_with_grants(
     core: Option<&Arc<ClientCore>>,

@@ -68,6 +68,7 @@ export function createBridgeHttpAdapter(
     explainToolSurface: unsupported("explainToolSurface"),
     fetchNetworkStatus: unsupported("fetchNetworkStatus"),
     listMailbox: unsupported("listMailbox"),
+    observeMailboxItem: unsupported("observeMailboxItem"),
     startMailboxRequest: unsupported("startMailboxRequest"),
     dismissMailboxItem: unsupported("dismissMailboxItem"),
     resendRequest: unsupported("resendRequest"),

@@ -1,5 +1,8 @@
 use super::*;
-use crate::rig_compat::classify_completion_error;
+
+fn classify_completion_error(error: &rig::agent::StreamingError) -> InferenceError {
+    crate::rig_compat::classify_completion_error(error).error
+}
 
 #[test]
 fn tool_streaming_errors_are_permanent_until_retry_metadata_exists() {
@@ -137,8 +140,8 @@ fn anthropic_account_rate_limit_is_a_non_retryable_usage_limit() {
     );
 }
 
-fn http_402(body: String) -> InferenceError {
-    classify_completion_error(&rig::agent::StreamingError::Completion(
+fn http_402(body: String) -> crate::error::ClassifiedFailure {
+    crate::rig_compat::classify_completion_error(&rig::agent::StreamingError::Completion(
         rig::completion::CompletionError::HttpError(
             rig::http_client::Error::InvalidStatusCodeWithMessage(
                 "402".parse().expect("valid status"),
@@ -159,16 +162,14 @@ fn openrouter_credits_402_is_a_non_retryable_usage_limit() {
         OPENROUTER_KEY_LIMIT,
         OPENROUTER_WEIGHT_EXCEEDS_BUDGET,
     ] {
-        let error = http_402(body.to_string());
+        let failure = http_402(body.to_string());
+        let error = &failure.error;
         assert!(
             matches!(error, InferenceError::UsageLimited(_)),
             "{body}: {error:?}"
         );
         assert!(!error.is_retryable());
-        assert_eq!(
-            failure_class(&error, &error.to_string()),
-            FailureClass::Permanent
-        );
+        assert_eq!(failure_class(&failure), FailureClass::Permanent);
     }
 }
 
@@ -177,11 +178,11 @@ fn openrouter_in_flight_402_waits_for_retry_after() {
     use crate::completion_retry::{failure_class, FailureClass};
     let retry_at = (chrono::Utc::now() + chrono::Duration::seconds(20))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let error = http_402(format!(
+    let failure = http_402(format!(
         "{} [provider-limit retry-at={retry_at}]",
         crate::provider_limit::tests::OPENROUTER_IN_FLIGHT
     ));
-    match &error {
+    match &failure.error {
         InferenceError::RateLimited {
             retry_after: Some(wait),
         } => assert!(
@@ -191,10 +192,7 @@ fn openrouter_in_flight_402_waits_for_retry_after() {
         ),
         other => panic!("expected throttle, got {other:?}"),
     }
-    assert_eq!(
-        failure_class(&error, &error.to_string()),
-        FailureClass::Transport
-    );
+    assert_eq!(failure_class(&failure), FailureClass::Transport);
 }
 
 #[test]
@@ -218,4 +216,33 @@ fn model_refusal_is_a_non_retryable_permanent_failure() {
         !classified.is_retryable(),
         "a model refusal is deterministic and must not be resampled"
     );
+}
+
+#[test]
+fn http_status_rig_carries_decides_over_status_text() {
+    let error =
+        rig::agent::StreamingError::Completion(rig::completion::CompletionError::HttpError(
+            rig::http_client::Error::InvalidStatusCodeWithMessage(
+                "503".parse().expect("valid status"),
+                "upstream relayed: Invalid status code 400".into(),
+            ),
+        ));
+    assert!(matches!(
+        classify_completion_error(&error),
+        InferenceError::TransientFailure { .. }
+    ));
+}
+
+#[test]
+fn loop_verdicts_classify_from_their_variant_not_their_text() {
+    let verdict = crate::rig_compat::loop_verdict_error(
+        crate::error::LoopVerdict::NoVisibleOutput,
+        "completion produced no visible output: maximum context length".into(),
+    );
+    assert!(matches!(
+        verdict.classify(),
+        InferenceError::TransientFailure { .. }
+    ));
+    assert!(crate::loop_stream::is_no_visible_output_failure(&verdict));
+    assert_eq!(verdict.provider_message(), None);
 }

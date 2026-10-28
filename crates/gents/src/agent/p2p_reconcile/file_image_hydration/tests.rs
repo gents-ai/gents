@@ -3,6 +3,8 @@ use super::super::session_hydration::{
 };
 use super::*;
 
+mod inventory;
+
 #[test]
 fn generated_cases_drive_exact_tool_selection() {
     #[derive(Deserialize)]
@@ -75,6 +77,7 @@ fn generated_cases_drive_exact_tool_selection() {
                 .map(|session| {
                     assert_eq!(session.native_session, 0);
                     SessionOwner {
+                        session_doc_id: None,
                         session_id: session.scope.session_id,
                         requester_did: session.scope.requester_did,
                         node_did: session.scope.node_did,

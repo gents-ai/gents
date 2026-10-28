@@ -357,14 +357,14 @@ pub async fn invalidate_run(
                 if !row["invalidated"].is_null() {
                     return Err(anyhow::Error::new(AlreadyInvalidated));
                 }
-                txn.execute_with_variables(
+                Ok(txn.execute_with_variables(
                     &format!(
                         r#"mutation($input: EvalRunMutationInputArg!) {{ update_EvalRun(filter: {{ {filter} }}, input: $input) {{ _docID }} }}"#
                     ),
                     variables,
                 )
                 .await
-                .map(|_| ())
+                .map(|_| ())?)
             })
         })
         .await?;
@@ -430,14 +430,14 @@ pub async fn complete_trial(
                 if !row["completion"].is_null() {
                     return Err(anyhow::Error::new(AlreadyCompleted));
                 }
-                txn.execute_with_variables(
+                Ok(txn.execute_with_variables(
                     &format!(
                         "mutation($input: EvalTrialMutationInputArg!) {{ update_EvalTrial(filter: {{ {filter} }}, input: $input) {{ _docID }} }}"
                     ),
                     variables,
                 )
                 .await
-                .map(|_| ())
+                .map(|_| ())?)
             })
         })
         .await

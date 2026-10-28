@@ -262,7 +262,7 @@ fn spawn_server_with_ready_json_inner(
     }
 }
 
-fn server_readiness_json(buffer: &str) -> Option<Value> {
+pub(crate) fn server_readiness_json(buffer: &str) -> Option<Value> {
     buffer
         .char_indices()
         .filter_map(|(index, ch)| (ch == '{').then_some(index))
@@ -303,7 +303,11 @@ pub fn spawn_server_with_env(
     Ok(ServeProcess::with_logs(child, stdout_log, stderr_log))
 }
 
-fn served_home_dir(home_dir: &Path, extra_args: &[&str], envs: &[(&str, &str)]) -> PathBuf {
+pub(crate) fn served_home_dir(
+    home_dir: &Path,
+    extra_args: &[&str],
+    envs: &[(&str, &str)],
+) -> PathBuf {
     if let Some(index) = extra_args.iter().position(|arg| *arg == "--home") {
         if let Some(home) = extra_args.get(index + 1) {
             return PathBuf::from(home);

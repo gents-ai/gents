@@ -1,3 +1,5 @@
+import type { MailboxItemObservation } from "../generated/MailboxItemObservation.js";
+import type { MailboxItemObservationRequest } from "../generated/MailboxItemObservationRequest.js";
 import type { RequestAttachment } from "../generated/RequestAttachment.js";
 import type { ToolFileChanges } from "../generated/ToolFileChanges.js";
 import type { ProviderRecoveryRequest } from "../generated/ProviderRecoveryRequest.js";
@@ -145,6 +147,7 @@ export type DesktopApiAdapter = {
     sessionId: string,
     requestId: string,
     messageKey?: string,
+    index?: number,
   ): Promise<RequestAttachment[]>;
   fetchSessionGoal: (
     nodeDid: string,
@@ -269,6 +272,9 @@ export type DesktopApiAdapter = {
     request: PendingQueueEditRequest,
   ) => Promise<PendingQueueEditResult>;
   listMailbox: () => Promise<MailboxItemView[]>;
+  observeMailboxItem: (
+    request: MailboxItemObservationRequest,
+  ) => Promise<MailboxItemObservation | null>;
   startMailboxRequest: (itemId: string) => Promise<MailboxItemView>;
   dismissMailboxItem: (itemId: string) => Promise<void>;
   forkSessionBeforeMessage: (
@@ -464,7 +470,9 @@ export type DesktopApiAdapter = {
   listPackWireSources: () => Promise<PackWireSources>;
   listDynamicWorkflows: () => Promise<DynamicWorkflows>;
   getDynamicWorkflow: (selector: string) => Promise<DynamicWorkflow>;
-  promoteWorkflow: (request: WorkflowPromoteRequest) => Promise<WorkflowPromoted>;
+  promoteWorkflow: (
+    request: WorkflowPromoteRequest,
+  ) => Promise<WorkflowPromoted>;
   signInToPackRegistry: (token: string) => Promise<void>;
   signOutOfPackRegistry: () => Promise<void>;
   listAllowedFolders: () => Promise<AllowedFolders>;

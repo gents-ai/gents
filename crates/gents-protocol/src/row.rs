@@ -148,7 +148,8 @@ pub struct AgentRequestRow {
     pub failure_reason: Option<String>,
     #[serde(default)]
     pub terminalized_at: Option<String>,
-    /// Exact terminal answer selection; absence on a terminal row is incomplete.
+    /// Exact terminal answer selection. Superseded work has no execution answer;
+    /// absence on other terminal rows remains incomplete.
     #[serde(default)]
     pub terminal_output: Option<crate::output::TerminalOutput>,
     #[serde(default)]
@@ -199,6 +200,16 @@ pub struct AgentRequestRow {
 }
 
 impl AgentRequestRow {
+    /// Observes the lifecycle's output obligation without rewriting retained rows.
+    /// Mirrors `CanonicalOutput.observeTerminalSelection`.
+    pub fn observed_terminal_output(&self) -> Option<&crate::output::TerminalOutput> {
+        static NO_MESSAGE: crate::output::TerminalOutput = crate::output::TerminalOutput::NoMessage;
+        match (self.lifecycle_state, self.terminal_output.as_ref()) {
+            (Some(RequestLifecycleState::Superseded), None) => Some(&NO_MESSAGE),
+            (_, selection) => selection,
+        }
+    }
+
     pub fn is_terminal(&self) -> bool {
         self.lifecycle_state
             .is_some_and(RequestLifecycleState::is_terminal)

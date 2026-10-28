@@ -4,7 +4,8 @@ use std::time::Duration;
 use anyhow::Context;
 use defra_node::EmbeddedNode;
 use gents_loop::provider_audit::{
-    AuxiliaryObserve, AuxiliaryOutputEvent, AuxiliaryOutputObservation, AuxiliaryOutputSink,
+    AuxiliaryObserve, AuxiliaryOutputError, AuxiliaryOutputEvent, AuxiliaryOutputObservation,
+    AuxiliaryOutputSink,
 };
 use gents_loop::stream_processor::AssistantTurnAccumulator;
 use gents_loop::stream_writer::PendingOutput;
@@ -57,6 +58,15 @@ pub(crate) fn sink(
     sink_with_writer(writer, request, generation, profile)
 }
 
+/// The loop receives this runtime's sink failures with their original chain.
+async fn sink_result<T>(
+    work: impl std::future::Future<Output = anyhow::Result<T>>,
+) -> Result<T, AuxiliaryOutputError> {
+    work.await.map_err(|error| AuxiliaryOutputError::Sink {
+        source: error.into(),
+    })
+}
+
 pub(crate) fn sink_with_writer(
     writer: Arc<DefraStreamWriter>,
     request: crate::watcher::AgentRequest,
@@ -77,7 +87,7 @@ pub(crate) fn sink_with_writer(
         let request = Arc::clone(&request);
         let state = Arc::clone(&state);
         let generation = generation.clone();
-        Box::pin(async move {
+        Box::pin(sink_result(async move {
             let coordinate = (
                 observation.capture_scope,
                 observation.turn,
@@ -207,7 +217,7 @@ pub(crate) fn sink_with_writer(
                 state.audit_seen = false;
             }
             Ok(())
-        })
+        }))
     });
     AuxiliaryOutputSink {
         observe,
@@ -215,21 +225,21 @@ pub(crate) fn sink_with_writer(
             let writer = Arc::clone(&deadline_writer);
             let request = Arc::clone(&deadline_request);
             let state = Arc::clone(&deadline_state);
-            Box::pin(async move {
+            Box::pin(sink_result(async move {
                 let state = state.lock().await;
                 anyhow::ensure!(
                     state.active == Some((scope, turn, attempt)),
                     "auxiliary deadline belongs to another attempt"
                 );
                 Ok(writer.next_flush_deadline(&request.doc_id).await)
-            })
+            }))
         }),
         flush_pending: Arc::new(move |scope, turn, attempt| {
             let writer = Arc::clone(&flush_writer);
             let request = Arc::clone(&flush_request);
             let state = Arc::clone(&flush_state);
             let generation = flush_generation.clone();
-            Box::pin(async move {
+            Box::pin(sink_result(async move {
                 let state = state.lock().await;
                 anyhow::ensure!(
                     state.active == Some((scope, turn, attempt)),
@@ -242,7 +252,7 @@ pub(crate) fn sink_with_writer(
                 }
                 writer.flush_pending(&request.doc_id).await?;
                 Ok(())
-            })
+            }))
         }),
     }
 }

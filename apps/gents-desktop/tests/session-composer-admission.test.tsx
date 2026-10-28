@@ -23,6 +23,7 @@ import { node, testApp, withApp } from "./app-fixture";
 import { deployment } from "./config-panel-wiring/fixtures";
 import { MemoryNavProvider } from "@gents/shell";
 import { writeSession } from "../src/hooks/sessionStore";
+import { composerText, typeInComposer, typeText } from "./composer-field";
 
 const navigate = vi.hoisted(() => vi.fn());
 const markdownRender = vi.hoisted(() => vi.fn());
@@ -138,8 +139,8 @@ describe("SessionScreen canonical composer admission", () => {
     markdownRender.mockClear();
     renderScreen(app);
     expect(markdownRender).toHaveBeenCalledTimes(1);
-    await userEvent.type(screen.getByLabelText("Message"), "a real draft");
-    expect(screen.getByLabelText("Message")).toHaveValue("a real draft");
+    await typeText(screen.getByLabelText("Message"), "a real draft");
+    expect(composerText(screen.getByLabelText("Message"))).toBe("a real draft");
     expect(markdownRender).toHaveBeenCalledTimes(1);
   });
 
@@ -156,18 +157,16 @@ describe("SessionScreen canonical composer admission", () => {
       }),
     });
     renderScreen(app);
-    fireEvent.change(screen.getByLabelText("Message"), {
-      target: { value: "send this" },
-    });
+    typeInComposer(screen.getByLabelText("Message"), "send this");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    fireEvent.change(screen.getByLabelText("Message"), {
-      target: { value: "keep this next message" },
-    });
+    typeInComposer(screen.getByLabelText("Message"), "keep this next message");
     await act(async () => {
       resolve({ sessionId: "session", requestId: "accepted" });
       await pending;
     });
-    expect(screen.getByLabelText("Message")).toHaveValue("keep this next message");
+    expect(composerText(screen.getByLabelText("Message"))).toBe(
+      "keep this next message",
+    );
   });
 
   it("restores each session draft without carrying text into another session", () => {
@@ -175,18 +174,14 @@ describe("SessionScreen canonical composer admission", () => {
     const second = heldSession({ sessionId: "second" });
     const { app } = screenApp({ session: first });
     renderScreen(app);
-    fireEvent.change(screen.getByLabelText("Message"), {
-      target: { value: "first draft" },
-    });
+    typeInComposer(screen.getByLabelText("Message"), "first draft");
     hold(app, second);
-    expect(screen.getByLabelText("Message")).toHaveValue("");
-    fireEvent.change(screen.getByLabelText("Message"), {
-      target: { value: "second draft" },
-    });
+    expect(composerText(screen.getByLabelText("Message"))).toBe("");
+    typeInComposer(screen.getByLabelText("Message"), "second draft");
     hold(app, first);
-    expect(screen.getByLabelText("Message")).toHaveValue("first draft");
+    expect(composerText(screen.getByLabelText("Message"))).toBe("first draft");
     hold(app, second);
-    expect(screen.getByLabelText("Message")).toHaveValue("second draft");
+    expect(composerText(screen.getByLabelText("Message"))).toBe("second draft");
   });
   it("uses the selected non-default agent decision, never the default or retry path", () => {
     const selected = (defaultReady: boolean, selectedReady: boolean) => {
@@ -263,9 +258,9 @@ describe("SessionScreen canonical composer admission", () => {
 
     const message = screen.getByRole("textbox", { name: "Message" });
     const send = screen.getByRole("button", { name: "Send" });
-    expect(message).toBeEnabled();
+    expect(message).not.toHaveAttribute("aria-disabled");
     expect(send).toBeDisabled();
-    await user.type(message, "hello");
+    await typeText(message, "hello");
     expect(send).toBeEnabled();
     await user.click(send);
     expect(sendChatMessage).toHaveBeenCalledWith(
@@ -288,24 +283,20 @@ describe("SessionScreen canonical composer admission", () => {
     });
     const { app } = screenApp({ sendChatMessage });
     renderScreen(app);
-    fireEvent.change(screen.getByLabelText("Message"), {
-      target: { value: "keep this draft" },
-    });
+    typeInComposer(screen.getByLabelText("Message"), "keep this draft");
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     act(() => app.actions.selectNode("did:key:other-agent"));
-    fireEvent.change(screen.getByLabelText("Message"), {
-      target: { value: "unrelated draft" },
-    });
+    typeInComposer(screen.getByLabelText("Message"), "unrelated draft");
     await act(async () => {
       resolve({ sessionId: "old-session", requestId: "old-request" });
       await Promise.resolve();
     });
 
     expect(sendChatMessage).toHaveBeenCalledOnce();
-    expect(screen.getByLabelText("Message")).toHaveValue("unrelated draft");
+    expect(composerText(screen.getByLabelText("Message"))).toBe("unrelated draft");
     expect(navigate).not.toHaveBeenCalled();
     act(() => app.actions.selectNode(NODE));
-    expect(screen.getByLabelText("Message")).toHaveValue("");
+    expect(composerText(screen.getByLabelText("Message"))).toBe("");
   });
 
   it("preserves a canonical blocker for a non-empty local draft", () => {
@@ -314,12 +305,15 @@ describe("SessionScreen canonical composer admission", () => {
     const status = app.view.getState().shellProjection.nonEmptyContentSendStatus;
     expect(status.kind).toBe("disabled");
 
-    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "hello" } });
+    typeInComposer(screen.getByLabelText("Message"), "hello");
     const send = screen.getByRole("button", { name: "Send" });
-    expect(screen.getByRole("textbox", { name: "Message" })).toBeDisabled();
+    expect(screen.getByRole("textbox", { name: "Message" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     expect(send).toBeDisabled();
     expect(screen.getByLabelText("Message")).toHaveAttribute(
-      "placeholder",
+      "aria-placeholder",
       status.kind === "disabled" ? status.hint : "",
     );
     fireEvent.click(send);
@@ -351,8 +345,8 @@ describe("SessionScreen canonical composer admission", () => {
       },
     );
     const message = screen.getByRole("textbox", { name: "Message" });
-    expect(message).toBeDisabled();
-    expect(message).toHaveAttribute("placeholder", reason);
+    expect(message).toHaveAttribute("aria-disabled", "true");
+    expect(message).toHaveAttribute("aria-placeholder", reason);
     expect(sendChatMessage).not.toHaveBeenCalled();
   });
 
@@ -366,7 +360,7 @@ describe("SessionScreen canonical composer admission", () => {
       });
       const view = renderScreen(app);
       const message = screen.getByLabelText("Message");
-      fireEvent.change(message, { target: { value: "and this" } });
+      typeInComposer(message, "and this");
       await act(async () => {
         fireEvent.keyDown(message, { key: "Enter", metaKey });
       });
@@ -381,14 +375,12 @@ describe("SessionScreen canonical composer admission", () => {
     const { app } = screenApp({ session: heldSession({ turnState: "running" }) });
     renderScreen(app);
     expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
-    fireEvent.change(screen.getByLabelText("Message"), {
-      target: { value: "follow up" },
-    });
+    typeInComposer(screen.getByLabelText("Message"), "follow up");
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
 
     hold(app, heldSession({ turnState: "interrupted" }));
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
-    expect(screen.getByLabelText("Message")).toHaveValue("follow up");
+    expect(composerText(screen.getByLabelText("Message"))).toBe("follow up");
   });
 });
 
@@ -454,9 +446,9 @@ describe("SessionScreen messages queued behind a running turn", () => {
     });
     renderScreen(app);
     const message = screen.getByRole("textbox", { name: "Message" });
-    expect(message).toBeEnabled();
+    expect(message).not.toHaveAttribute("aria-disabled");
     expect(screen.getByRole("button", { name: "Stop" })).toBeEnabled();
-    await user.type(message, "one more thing");
+    await typeText(message, "one more thing");
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(sendChatMessage).toHaveBeenCalledWith(
       expect.objectContaining({ content: "one more thing", sessionId: "session" }),
@@ -552,7 +544,7 @@ describe("SessionScreen automated inputs", () => {
     reconstruction: { state: "ready" as const },
   });
 
-  it("renders inputs nobody typed in stream order as compact items that expand", async () => {
+  it("shows agent and event bodies in order and keeps internal inputs inspectable", async () => {
     const user = userEvent.setup();
     const { app } = screenApp({
       session: heldSession({
@@ -571,8 +563,10 @@ describe("SessionScreen automated inputs", () => {
               senderNodeDid: NODE,
               senderSessionId: "sender-session",
               senderRequestId: "sender-request",
+              displayBody: "please review the diff\nit is in src/",
             },
-            content: "please review the diff\nit is in src/",
+            content:
+              "[message source envelope]\n\nplease review the diff\nit is in src/",
             ...durable("message", 3),
           },
           {
@@ -601,20 +595,37 @@ describe("SessionScreen automated inputs", () => {
     expect(items.map((item) => item.textContent)).toEqual([
       expect.stringContaining("Message from another session"),
       expect.stringContaining("Schedule · nightly"),
-      expect.stringContaining("Background work finished"),
+      expect.stringContaining("Background activity"),
       expect.stringContaining("Goal continuation · 2"),
     ]);
     const text = screen.getByTestId("transcript-panel").textContent ?? "";
     expect(text.indexOf("started")).toBeLessThan(text.indexOf("Message from"));
-    expect(screen.queryByTestId("automated-input-content")).not.toBeInTheDocument();
-    await user.click(within(items[0]!).getByRole("button", { name: "Show detail" }));
-    expect(screen.getByTestId("automated-input-content").textContent).toBe(
-      "please review the diff\nit is in src/",
+    expect(within(items[0]!).getByTestId("automated-input-body")).toHaveTextContent(
+      "please review the diff",
     );
+    expect(within(items[0]!).getByTestId("automated-input-body")).not.toHaveTextContent(
+      "[message source envelope]",
+    );
+    expect(within(items[1]!).getByTestId("automated-input-body")).toHaveTextContent(
+      "write the nightly report",
+    );
+    expect(within(items[2]!).queryByTestId("automated-input-body")).toBeNull();
+    expect(within(items[0]!).getByTestId("automated-input-content")).not.toBeVisible();
+    await user.click(within(items[0]!).getByText("Model input"));
+    expect(within(items[0]!).getByTestId("automated-input-content")).toBeVisible();
+    expect(within(items[0]!).getByTestId("automated-input-content").textContent).toBe(
+      "[message source envelope]\n\nplease review the diff\nit is in src/",
+    );
+    await user.click(within(items[2]!).getByText("Model input"));
+    expect(within(items[2]!).getByTestId("automated-input-content")).toBeVisible();
+    expect(within(items[2]!).getByTestId("automated-input-content").textContent).toBe(
+      "<agent-notification>done</agent-notification>",
+    );
+    await user.click(within(items[3]!).getByText("Model input"));
+    expect(within(items[3]!).getByTestId("automated-input-content")).toBeVisible();
   });
 
   it("says why an input is unavailable instead of expanding to nothing", async () => {
-    const user = userEvent.setup();
     const { app } = screenApp({
       session: heldSession({
         timelineItems: [
@@ -632,14 +643,10 @@ describe("SessionScreen automated inputs", () => {
       }),
     });
     renderScreen(app);
-    await user.click(
-      within(screen.getByTestId("automated-input")).getByRole("button", {
-        name: "Show detail",
-      }),
-    );
     expect(screen.getByTestId("automated-input-unavailable")).toHaveTextContent(
       "This input is not shared with this device.",
     );
+    expect(screen.queryByText("Model input")).toBeNull();
   });
 });
 
@@ -760,9 +767,7 @@ it("does not clear the replacement history draft when an earlier client's reply 
   });
   const { app } = screenApp({ session: heldSession(), sendChatMessage });
   renderScreen(app);
-  fireEvent.change(screen.getByLabelText("Message"), {
-    target: { value: "same text in another history" },
-  });
+  typeInComposer(screen.getByLabelText("Message"), "same text in another history");
   fireEvent.click(screen.getByRole("button", { name: "Send" }));
   expect(sendChatMessage).toHaveBeenCalledTimes(1);
   act(() =>
@@ -780,6 +785,8 @@ it("does not clear the replacement history draft when an earlier client's reply 
   await waitFor(() =>
     expect(app.stores.chat.getState().chatRequestsInFlight.size).toBe(0),
   );
-  expect(screen.getByLabelText("Message")).toHaveValue("same text in another history");
+  expect(composerText(screen.getByLabelText("Message"))).toBe(
+    "same text in another history",
+  );
   expect(app.stores.chat.getState().chatDrafts[0].clientDid).toBe("test-client");
 });

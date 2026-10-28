@@ -294,10 +294,12 @@ pub(crate) fn encode_against(
 }
 
 fn encode_envelope(payload: Payload) -> Result<String> {
-    super::canonical_json_string(&serde_json::to_value(Envelope {
-        gents_lossless_json: LOSSLESS_JSON_VERSION,
-        payload,
-    })?)
+    Ok(super::canonical_json_string(&serde_json::to_value(
+        Envelope {
+            gents_lossless_json: LOSSLESS_JSON_VERSION,
+            payload,
+        },
+    )?)?)
 }
 
 pub(crate) struct ChunkedBlock {
@@ -328,7 +330,7 @@ const PER_CALL_TRAILING_FIELDS: [&str; 5] = [
 
 pub(crate) fn capture_block_layout(value: &Value) -> Result<String> {
     let Value::Object(map) = super::canonical_json(value) else {
-        return super::canonical_json_string(value);
+        return Ok(super::canonical_json_string(value)?);
     };
     let (trailing, rest): (Vec<_>, Vec<_>) = map
         .iter()

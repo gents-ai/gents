@@ -112,6 +112,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) file_inventory_demand_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_issuance_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_fork_cases: Vec<serde_json::Value>,
+    pub(crate) file_inventory_reader_cases: Vec<serde_json::Value>,
+    pub(crate) file_inventory_selected_image_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_source_projection_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_receiver_cases: Vec<serde_json::Value>,
     pub(crate) file_inventory_order_window_cases: Vec<serde_json::Value>,
@@ -248,6 +250,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) client_agent_readiness_cases: Vec<LeanClientAgentReadinessCase>,
     pub(crate) startup_readiness_cases: Vec<LeanStartupReadinessCase>,
     pub(crate) snapshot_demotion_cases: Vec<serde_json::Value>,
+    pub(crate) catalog_refresh_cases: Vec<serde_json::Value>,
     pub(crate) plugin_reference_cases: Vec<serde_json::Value>,
     pub(crate) readiness_publication_cases: Vec<LeanReadinessPublicationCase>,
     pub(crate) apply_reconcile_cases: Vec<LeanApplyReconcileCase>,
@@ -324,6 +327,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
     pub(crate) r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
     pub(crate) transcript_conformance_cases: Vec<LeanTranscriptCase>,
+    pub(crate) request_terminal_selection_cases: Vec<serde_json::Value>,
     pub(crate) canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
     pub(crate) reasoning_audit_cases: Vec<LeanReasoningAuditCase>,
     pub(crate) reasoning_signature_cases: Vec<LeanReasoningSignatureCase>,
@@ -1246,6 +1250,17 @@ pub(crate) struct LeanPluginCallsRouteCase {
     pub(crate) expected: bool,
 }
 
+/// `plugin_resource_cases.host_import`: whether the `gents` imports are
+/// linked for a plugin and what `run_script` answers.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPluginHostImportCase {
+    pub(crate) declared: bool,
+    pub(crate) call_has_script: bool,
+    pub(crate) linked: bool,
+    pub(crate) answer: Option<String>,
+}
+
 /// `plugin_resource_cases.scratch`: `scratchAdmitted`. `handle` is not an
 /// owner input; rows that differ only in it share a path.
 #[derive(Debug, Deserialize)]
@@ -1351,6 +1366,8 @@ pub(crate) struct LeanPluginJobContext {
     pub(crate) started_by_job: bool,
     pub(crate) cwd_allowed: Vec<String>,
     pub(crate) within: Vec<LeanPluginJobWithin>,
+    #[serde(default)]
+    pub(crate) script_digest: Option<String>,
     pub(crate) adoption_facts: LeanPluginJobHostFacts,
     pub(crate) caller_scope: LeanPluginJobProcessScope,
     pub(crate) control_targets: Vec<LeanPluginJobControlTarget>,
@@ -2374,6 +2391,11 @@ where
 {
     serde_json::from_value(lean_contract_snapshot().plugin_resource_cases[group].clone())
         .unwrap_or_else(|error| panic!("plugin_resource_cases.{group}: {error}"))
+}
+
+pub(crate) fn lean_plugin_host_import_cases() -> &'static [LeanPluginHostImportCase] {
+    static CASES: OnceLock<Vec<LeanPluginHostImportCase>> = OnceLock::new();
+    CASES.get_or_init(|| lean_plugin_resource_group("host_import"))
 }
 
 pub(crate) fn lean_plugin_scratch_cases() -> &'static [LeanPluginScratchCase] {
@@ -4204,4 +4226,12 @@ pub(crate) fn lean_snapshot_demotion_cases() -> &'static [serde_json::Value] {
 
 pub(crate) fn lean_plugin_reference_cases() -> &'static [serde_json::Value] {
     &lean_contract_snapshot().plugin_reference_cases
+}
+
+pub(crate) fn lean_catalog_refresh_cases() -> &'static [serde_json::Value] {
+    &lean_contract_snapshot().catalog_refresh_cases
+}
+
+pub(crate) fn lean_request_terminal_selection_cases() -> &'static [serde_json::Value] {
+    &lean_contract_snapshot().request_terminal_selection_cases
 }

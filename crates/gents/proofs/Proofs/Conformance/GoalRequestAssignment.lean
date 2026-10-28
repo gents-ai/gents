@@ -1,3 +1,4 @@
+import Proofs.GoalAutomation.HistoryProjection
 import Proofs.GoalAutomation.RequestAssignment
 import Proofs.Recovery.Sweeps.SessionMessage
 import Proofs.Conformance.ContractTypes

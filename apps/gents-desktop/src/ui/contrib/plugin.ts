@@ -47,7 +47,7 @@ export interface UxShell {
   selectedSessionId: () => string | null;
   /** posts `content` as the user's next turn in the selected session, in
    *  the user's name (the app records no plugin provenance yet); rejects
-   *  without a selected session or outside a user gesture */
+   *  without a selected session, a user gesture and confirmation of the text */
   send: (content: string) => Promise<void>;
 }
 

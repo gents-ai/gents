@@ -229,6 +229,10 @@ pub(crate) fn with_provider_token_limit(error: ToolError, token_limit: bool) -> 
     }
 }
 
+/// External premise: `serde_json::Error` exposes only a coarse category
+/// (`Data` for every schema mismatch); which mismatch it was exists only in
+/// serde's fixed message prefixes (`unknown field`, `missing field`,
+/// `invalid type`).
 fn schema_args_error(error: serde_json::Error) -> ToolError {
     let raw = error.to_string();
     let kind = if raw.starts_with("unknown field") {

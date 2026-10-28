@@ -406,7 +406,13 @@ impl super::ToolCallLifecycle {
         // A record whose execution is neither live here nor running is left
         // from a crash after settlement, or from a group that outlived its
         // settled row. Stop what is still proven owned, then forget it.
-        for record in executions.process_record_list() {
+        let records = {
+            let executions = executions.clone();
+            tokio::task::spawn_blocking(move || executions.process_record_list())
+                .await
+                .context("enumerating retained background process records")?
+        };
+        for record in records {
             if running_background.contains(&record.tool_call_doc_id)
                 || executions
                     .contains(&record.tool_call_id, &record.tool_call_doc_id)

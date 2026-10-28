@@ -62,7 +62,8 @@ fn malformed(message: impl std::fmt::Display) -> JobReadError {
     }
 }
 
-fn unavailable(error: anyhow::Error) -> JobReadError {
+fn unavailable(error: impl Into<anyhow::Error>) -> JobReadError {
+    let error = error.into();
     JobReadError::Unavailable {
         message: format!("{error:#}; retry when the node answers"),
     }

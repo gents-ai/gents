@@ -131,7 +131,7 @@ pub async fn verify(
                 let source = gents::session::load_agent_session_owner_in_txn(txn, &node, &source)
                     .await?
                     .context("missing original source")?;
-                Ok((child, source))
+                Ok::<_, anyhow::Error>((child, source))
             })
         })
         .await?;

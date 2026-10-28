@@ -1,10 +1,11 @@
-use anyhow::{Context, Result};
 use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
 use serde_json::Value;
 
 use super::retry;
 use super::write_telemetry::ConflictSource;
-use super::{graphql_api_base, GraphqlEndpoint};
+use super::{graphql_api_base, ConfigClientError, GraphqlEndpoint};
+
+type Result<T, E = ConfigClientError> = std::result::Result<T, E>;
 
 const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
@@ -16,10 +17,10 @@ pub(super) async fn http_client() -> Result<&'static reqwest::Client> {
                 reqwest::Client::builder()
                     .timeout(HTTP_TIMEOUT)
                     .build()
-                    .context("building DefraDB configuration HTTP client")
+                    .map_err(ConfigClientError::HttpClientBuild)
             })
             .await
-            .context("joining DefraDB configuration HTTP client initialization")?
+            .map_err(ConfigClientError::HttpClientJoin)?
         })
         .await
 }
@@ -30,13 +31,23 @@ pub(super) async fn auto_commit(endpoint: &GraphqlEndpoint, mutation: &str) -> R
         .json(&serde_json::json!({"query": mutation}))
         .send()
         .await
-        .with_context(|| format!("posting GraphQL mutation to {endpoint}"))?
+        .map_err(|source| ConfigClientError::PostMutation {
+            endpoint: endpoint.to_string(),
+            source,
+        })?
         .error_for_status()
-        .with_context(|| format!("reading GraphQL mutation response from {endpoint}"))?;
-    let value: Value = response
-        .json()
-        .await
-        .with_context(|| format!("decoding GraphQL mutation response from {endpoint}"))?;
+        .map_err(|source| ConfigClientError::ReadMutationResponse {
+            endpoint: endpoint.to_string(),
+            source,
+        })?;
+    let value: Value =
+        response
+            .json()
+            .await
+            .map_err(|source| ConfigClientError::DecodeMutationResponse {
+                endpoint: endpoint.to_string(),
+                source,
+            })?;
     if graphql_response_has_errors(&value) {
         return Err(gents_protocol::database_error::GraphqlFailure::new(
             "config mutation",
@@ -54,7 +65,7 @@ pub(super) async fn query_with_options(
 ) -> Result<Value> {
     ensure_query_document(query)?;
     let authorization = endpoint.authorization()?;
-    execute_graphql_async(endpoint.url(), authorization.as_deref(), query, options).await
+    Ok(execute_graphql_async(endpoint.url(), authorization.as_deref(), query, options).await?)
 }
 
 pub(super) async fn txn_begin(
@@ -72,20 +83,30 @@ pub(super) async fn txn_begin(
         .authorize(client.post(url))?
         .send()
         .await
-        .with_context(|| format!("posting tx begin to {endpoint}"))?;
+        .map_err(|source| ConfigClientError::PostTxBegin {
+            endpoint: endpoint.to_string(),
+            source,
+        })?;
     let status = response.status();
-    let bytes = response.bytes().await.context("reading tx begin body")?;
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(ConfigClientError::ReadTxBegin)?;
     if !status.is_success() {
-        if let Some(cause) = storage_full_response(&bytes) {
-            return Err(anyhow::Error::new(cause)
-                .context(format!("tx begin returned HTTP {status} from {endpoint}",)));
+        if let Some(source) = storage_full_response(&bytes) {
+            return Err(ConfigClientError::TxBeginStorageFull {
+                status,
+                endpoint: endpoint.to_string(),
+                source,
+            });
         }
-        anyhow::bail!(
-            "tx begin returned HTTP {status} from {endpoint}: {}",
-            String::from_utf8_lossy(&bytes)
-        );
+        return Err(ConfigClientError::TxBeginStatus {
+            status,
+            endpoint: endpoint.to_string(),
+            body: String::from_utf8_lossy(&bytes).into_owned(),
+        });
     }
-    let body: Value = serde_json::from_slice(&bytes).context("decoding tx begin body")?;
+    let body: Value = serde_json::from_slice(&bytes).map_err(ConfigClientError::DecodeTxBegin)?;
     let id = body
         .get("id")
         .and_then(|value| {
@@ -94,7 +115,7 @@ pub(super) async fn txn_begin(
                 .map(ToOwned::to_owned)
                 .or_else(|| value.as_u64().map(|id| id.to_string()))
         })
-        .ok_or_else(|| anyhow::anyhow!("tx begin missing id"))?;
+        .ok_or(ConfigClientError::TxBeginMissingId)?;
     Ok((client, id))
 }
 
@@ -111,13 +132,23 @@ pub(super) async fn txn_execute(
         .json(&serde_json::json!({"query": query, "variables": variables}))
         .send()
         .await
-        .with_context(|| format!("posting transactional GraphQL to {endpoint}"))?
+        .map_err(|source| ConfigClientError::PostTxGraphql {
+            endpoint: endpoint.to_string(),
+            source,
+        })?
         .error_for_status()
-        .with_context(|| format!("reading transactional GraphQL from {endpoint}"))?;
-    let value: Value = response
-        .json()
-        .await
-        .with_context(|| format!("decoding transactional GraphQL from {endpoint}"))?;
+        .map_err(|source| ConfigClientError::ReadTxGraphql {
+            endpoint: endpoint.to_string(),
+            source,
+        })?;
+    let value: Value =
+        response
+            .json()
+            .await
+            .map_err(|source| ConfigClientError::DecodeTxGraphql {
+                endpoint: endpoint.to_string(),
+                source,
+            })?;
     if retry::graphql_value_is_transaction_conflict(&value) {
         return Err(retry::transaction_conflict(ConflictSource::StructuredCode));
     }
@@ -134,10 +165,10 @@ pub(super) async fn txn_execute(
 pub(super) enum TxnCommitError {
     /// The request may not have reached DefraDB, so the transaction can still
     /// be open and needs best-effort cleanup.
-    CleanupRequired(anyhow::Error),
+    CleanupRequired(ConfigClientError),
     /// DefraDB returned a commit response. Its pinned transaction registry
     /// consumes the handle before attempting the storage commit.
-    TransactionConsumed(anyhow::Error),
+    TransactionConsumed(ConfigClientError),
 }
 
 pub(super) async fn txn_commit(
@@ -151,23 +182,28 @@ pub(super) async fn txn_commit(
         .map_err(TxnCommitError::CleanupRequired)?
         .send()
         .await
-        .with_context(|| format!("posting tx commit to {endpoint}"))
-        .map_err(TxnCommitError::CleanupRequired)?;
+        .map_err(|source| {
+            TxnCommitError::CleanupRequired(ConfigClientError::PostTxCommit {
+                endpoint: endpoint.to_string(),
+                source,
+            })
+        })?;
     let status = response.status();
-    let bytes = response
-        .bytes()
-        .await
-        .context("reading tx commit body")
-        .map_err(TxnCommitError::TransactionConsumed)?;
+    let bytes = response.bytes().await.map_err(|source| {
+        TxnCommitError::TransactionConsumed(ConfigClientError::ReadTxCommit(source))
+    })?;
     if status.is_success() {
         return Ok(());
     }
     let body = String::from_utf8_lossy(&bytes);
-    if let Some(cause) = storage_full_response(&bytes) {
+    if let Some(source) = storage_full_response(&bytes) {
         return Err(TxnCommitError::TransactionConsumed(
-            anyhow::Error::new(cause).context(format!(
-                "tx commit returned HTTP {status} from {endpoint}: {body}"
-            )),
+            ConfigClientError::TxCommitStorageFull {
+                status,
+                endpoint: endpoint.to_string(),
+                body: body.into_owned(),
+                source,
+            },
         ));
     }
     if status == reqwest::StatusCode::CONFLICT && retry::is_transaction_conflict_text(&body) {
@@ -175,9 +211,13 @@ pub(super) async fn txn_commit(
             retry::transaction_conflict(ConflictSource::HttpStatusTextFallback),
         ));
     }
-    Err(TxnCommitError::TransactionConsumed(anyhow::anyhow!(
-        "tx commit returned HTTP {status} from {endpoint}: {body}"
-    )))
+    Err(TxnCommitError::TransactionConsumed(
+        ConfigClientError::TxCommitStatus {
+            status,
+            endpoint: endpoint.to_string(),
+            body: body.into_owned(),
+        },
+    ))
 }
 
 pub(super) async fn txn_discard(
@@ -189,14 +229,21 @@ pub(super) async fn txn_discard(
         .authorize(client.delete(format!("{}/tx/{id}", graphql_api_base(endpoint.url())?)))?
         .send()
         .await
-        .with_context(|| format!("posting tx discard to {endpoint}"))?;
+        .map_err(|source| ConfigClientError::PostTxDiscard {
+            endpoint: endpoint.to_string(),
+            source,
+        })?;
     let status = response.status();
-    let bytes = response.bytes().await.context("reading tx discard body")?;
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(ConfigClientError::ReadTxDiscard)?;
     if !status.is_success() {
-        anyhow::bail!(
-            "tx discard returned HTTP {status} from {endpoint}: {}",
-            String::from_utf8_lossy(&bytes)
-        );
+        return Err(ConfigClientError::TxDiscardStatus {
+            status,
+            endpoint: endpoint.to_string(),
+            body: String::from_utf8_lossy(&bytes).into_owned(),
+        });
     }
     Ok(())
 }
@@ -230,7 +277,7 @@ pub(super) fn ensure_mutation_document(document: &str) -> Result<()> {
     if document.trim_start().starts_with("mutation") {
         Ok(())
     } else {
-        anyhow::bail!("ConfigAccess::write requires a GraphQL mutation document")
+        Err(ConfigClientError::MutationDocumentRequired)
     }
 }
 
@@ -239,7 +286,7 @@ pub(crate) fn ensure_query_document(document: &str) -> Result<()> {
     if document.starts_with('{') || document.starts_with("query") {
         Ok(())
     } else {
-        anyhow::bail!("ConfigAccess::execute requires a GraphQL query document")
+        Err(ConfigClientError::QueryDocumentRequired)
     }
 }
 

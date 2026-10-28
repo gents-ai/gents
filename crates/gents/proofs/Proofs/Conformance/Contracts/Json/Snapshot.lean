@@ -1,3 +1,4 @@
+import Proofs.Conformance.Contracts.Json.TerminalSelection
 import Proofs.Conformance.WorkspaceCommandGrants
 import Proofs.Conformance.StorageFailure
 import Proofs.Conformance.RequestPatchPublicationCases
@@ -42,6 +43,7 @@ import Proofs.Conformance.TaskHooks
 import Proofs.Conformance.StoreEncryptionUpgrade
 import Proofs.Conformance.Contracts.Json.Core
 import Proofs.Conformance.Contracts.Json.Runtime
+import Proofs.Conformance.Contracts.Json.CatalogRefresh
 import Proofs.Conformance.Contracts.Json.PackInstallation
 import Proofs.Conformance.Contracts.Json.Scheduling
 import Proofs.Conformance.Contracts.Json.ToolExecution
@@ -369,6 +371,8 @@ def snapshotJson : String :=
       ++ Conformance.ClientShellContracts.requestLifecycleOperatorUiCasesJson ++ ","
     ++ "\"client_live_delta_cases\":"
       ++ Conformance.ClientLiveDeltaContracts.casesJson ++ ","
+    ++ "\"catalog_refresh_cases\":"
+      ++ CatalogRefresh.casesJson ++ ","
     ++ "\"plugin_reference_cases\":"
       ++ PackInstallation.casesJson ++ ","
     ++ "\"snapshot_demotion_cases\":"
@@ -594,6 +598,10 @@ def snapshotJson : String :=
       ++ Conformance.FileInventoryContracts.forkCasesJson ++ ","
     ++ "\"file_inventory_source_projection_cases\":"
       ++ Conformance.FileInventoryContracts.sourceProjectionCasesJson ++ ","
+    ++ "\"file_inventory_reader_cases\":"
+      ++ Conformance.FileInventoryContracts.readerCasesJson ++ ","
+    ++ "\"file_inventory_selected_image_cases\":"
+      ++ Conformance.FileInventoryContracts.selectedImageCasesJson ++ ","
     ++ "\"file_inventory_receiver_cases\":"
       ++ Conformance.FileInventoryContracts.receiverCasesJson ++ ","
     ++ "\"file_inventory_order_window_cases\":"
@@ -636,6 +644,7 @@ def snapshotJson : String :=
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","
+    ++ "\"request_terminal_selection_cases\":" ++ TerminalSelection.casesJson ++ ","
     ++ "\"canonical_output_projection_cases\":"
       ++ jsonArray
         (StreamingResponse.outputProjectionCases.map outputProjectionCaseJson) ++ ","

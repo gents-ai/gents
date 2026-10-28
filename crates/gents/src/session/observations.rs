@@ -809,7 +809,7 @@ mod observation_refresh_tests {
                 let exact = load_latest_request_in_txn(txn, "did:test:head", "head-session", Some(Some("did:test:requester"))).await?.unwrap();
                 assert_eq!(exact, all);
                 assert!(load_latest_request_in_txn(txn, "did:test:head", "head-session", Some(Some("did:test:absent"))).await?.is_none());
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             }),
         ).await.unwrap();
     }
@@ -907,7 +907,7 @@ mod observation_refresh_tests {
                     )
                     .await?;
                     assert_eq!(exact_requester[&session_ids[0]].observed.request_id, "remote-head");
-                    Ok(())
+                    Ok::<_, anyhow::Error>(())
                 })
             },
         )
@@ -1030,7 +1030,7 @@ mod observation_refresh_tests {
                 assert_eq!(session.observation.as_ref().unwrap().reply_preview.as_deref(), Some("Finished"));
                 assert_eq!(session.observation.unwrap().latest_request.unwrap().lifecycle_state,
                     RequestLifecycleState::Completed);
-                Ok(())
+                Ok::<_, anyhow::Error>(())
             }),
         ).await.unwrap();
     }

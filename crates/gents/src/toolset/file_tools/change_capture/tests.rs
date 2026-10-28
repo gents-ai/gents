@@ -117,7 +117,7 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
                 )
                 .await?
                 .unwrap();
-                Ok(gents_protocol::file_inventory::FileInventoryAdmission {
+                Ok::<_, anyhow::Error>(gents_protocol::file_inventory::FileInventoryAdmission {
                     session_doc_id: session.doc_id,
                     request: gents_protocol::session_hydration::HydrationRequest {
                         request_key: "native-inventory".into(),

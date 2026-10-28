@@ -11,6 +11,7 @@ import type {
 import { SessionsScreen } from "../src/ui/screens/SessionsScreen";
 import { SessionScreen } from "../src/ui/screens/SessionScreen";
 import { resetListViews } from "../src/ui/app/listViews";
+import { resetSessionViews } from "../src/ui/app/sessionViews";
 import { resetPreferences } from "../src/ui/preferences";
 import { sessionMarkdown } from "../src/ui/lib/session-markdown";
 import type { DesktopApp } from "../src/hooks/desktopApp";
@@ -221,6 +222,33 @@ describe("a session's menu in the sessions list", () => {
     undo();
     expect(rowTitles()).toEqual(["First", "Second"]);
     expect(screen.getAllByRole("img", { name: "Pinned" })).toHaveLength(2);
+  });
+
+  it("marks a session with new work as read, and Undo makes it new again", async () => {
+    resetSessionViews();
+    const finished = summary({
+      sessionId: "third",
+      title: "Third",
+      latestRequestId: "r1",
+      updatedAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    showList([first, finished]);
+    const dot = () => screen.queryByRole("img", { name: /new since you looked/ });
+    expect(dot()).toBeInTheDocument();
+
+    const { u, menu } = await openRowMenu("Third");
+    await u.click(within(menu).getByRole("menuitem", { name: "Mark as read" }));
+    expect(dot()).toBeNull();
+    expect(toast).toHaveBeenLastCalledWith("Marked as read", {
+      action: expect.objectContaining({ label: "Undo" }),
+    });
+    act(() => toast.mock.lastCall![1].action.onClick());
+    expect(dot()).toBeInTheDocument();
+
+    const plain = await openRowMenu("First");
+    expect(
+      within(plain.menu).queryByRole("menuitem", { name: "Mark as read" }),
+    ).toBeNull();
   });
 
   it("renames in the row, asking the session's own node", async () => {

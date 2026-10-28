@@ -10,6 +10,7 @@ use gents_protocol::enrollment::{
 use crate::cli::{Cli, Command};
 
 pub use crate::cli::args::ToolCeilingArg as ManagedToolCeiling;
+pub use crate::commands::p2p::enrollment_admin::EnrollmentDecisionRejected;
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {

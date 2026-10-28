@@ -175,7 +175,7 @@ pub async fn observe_request_output(
         .lifecycle_state
         .context("request output observation omitted lifecycle state")?;
     if state.is_terminal() {
-        return match request.terminal_output.as_ref() {
+        return match request.observed_terminal_output() {
             None => Ok(CanonicalRequestOutput::Loading),
             Some(TerminalOutput::NoMessage) => Ok(CanonicalRequestOutput::TerminalNoMessage),
             Some(TerminalOutput::Message { message_doc_id }) => {
