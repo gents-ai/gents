@@ -624,7 +624,7 @@ test.describe("each session's dock", () => {
       .filter({ visible: true })
       .first()
       .click();
-    await page.getByRole("menuitem", { name: "Trace" }).click();
+    await page.getByRole("menuitem", { name: "Started sessions" }).click();
     const resize = page.getByRole("separator", { name: "Resize panel" });
     await expect(resize).toBeVisible();
     const cell = page.getByTestId("dock-cell");

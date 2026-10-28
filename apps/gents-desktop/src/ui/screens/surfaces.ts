@@ -1,19 +1,9 @@
-import { FileDiff, ListTree, SquareStack, Terminal } from "lucide-react";
+import { FileDiff, SquareStack, Terminal } from "lucide-react";
 import { registerSurface } from "@/app/surfaces";
 import { workersOfId } from "@/hooks/useFleet";
 import { BackgroundSurface } from "./BackgroundCalls";
 import { ChangesSurface } from "./ChangesSurface";
-import { TraceSurface } from "./TracePanel";
 import { WorkersSurface } from "./WorkersSurface";
-
-registerSurface({
-  id: "trace",
-  title: "Trace",
-  icon: ListTree,
-  placements: ["dock", "sheet"],
-  routes: ["session"],
-  render: TraceSurface,
-});
 
 registerSurface({
   id: "workers",
