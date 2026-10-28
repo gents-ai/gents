@@ -826,19 +826,15 @@ fn image_attachment_read_commands_keep_scope_index_and_cancellation() {
     for field in ["nodeDid", "sessionId", "requestId"] {
         let mut missing = args.clone();
         missing.as_object_mut().unwrap().remove(field);
-        assert!(
-            serde_json::from_value::<protocol::ClientCommand>(
-                json!({"name":"desktop_request_attachments", "args": missing})
-            )
-            .is_err()
-        );
+        assert!(serde_json::from_value::<protocol::ClientCommand>(
+            json!({"name":"desktop_request_attachments", "args": missing})
+        )
+        .is_err());
     }
     let mut negative = args;
     negative["index"] = json!(-1);
-    assert!(
-        serde_json::from_value::<protocol::ClientCommand>(
-            json!({"name":"desktop_request_attachments", "args": negative})
-        )
-        .is_err()
-    );
+    assert!(serde_json::from_value::<protocol::ClientCommand>(
+        json!({"name":"desktop_request_attachments", "args": negative})
+    )
+    .is_err());
 }

@@ -22,6 +22,9 @@ const MAX_STDERR_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Copy)]
 pub struct PluginBudget {
+    /// Per-VM execution limit. An embedded JS invocation has its own meter;
+    /// Afterburner does not expose its consumed fuel for aggregate accounting.
+    /// The wall-clock limit bounds the whole plugin call across host imports.
     pub fuel: Option<u64>,
     pub memory_bytes: u64,
     pub wall_clock: std::time::Duration,

@@ -570,6 +570,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       lastInputAt = performance.now();
       readerScrolling = true;
       if (mode.kind !== "read") capture();
+      scheduleRest();
     };
     const onWheel = (event: WheelEvent) => {
       lastInputAt = performance.now();
@@ -582,6 +583,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       if (s && s.scrollTop <= 0 && event.deltaY < 0) {
         if (hidden) landCarried();
         ahead();
+        scheduleRest();
       } else {
         scheduleRest();
       }
@@ -618,6 +620,7 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       } else if (DOWN_KEYS.has(event.key)) {
         lastInputAt = performance.now();
         readerScrolling = true;
+        scheduleRest();
       }
     };
     const onPointerDown = (event: PointerEvent) => {

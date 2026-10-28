@@ -13,6 +13,20 @@ pub async fn request_attachments(
     message_key: Option<&str>,
     index: Option<u32>,
 ) -> Result<Vec<RequestAttachment>, BridgeError> {
+    let session_is_cached = core
+        .store()
+        .snapshot()
+        .sessions
+        .iter()
+        .any(|row| row.session_id == session_id && row.node_did == node_did);
+    if !session_is_cached {
+        return Err(BridgeError::untyped(
+            "Attachment session is unavailable or unreadable",
+        ));
+    }
+    if let Some(reason) = core.session_unreadable_reason(session_id, node_did) {
+        return Err(BridgeError::untyped(reason));
+    }
     let attachments = if let Some(message_key) = message_key {
         super::message_attachments(core, session_id, node_did, message_key).await?
     } else {
@@ -67,7 +81,7 @@ mod tests {
 
     #[tokio::test]
     async fn attachment_read_preserves_request_scope_and_does_not_reopen_a_filename() {
-        use base64::{Engine, engine::general_purpose::STANDARD};
+        use base64::{engine::general_purpose::STANDARD, Engine};
         let (core, _home) = crate::tests::support::boot_core().await;
         let node_did = core.node_identity().did().to_owned();
         let image = RequestAttachment {
@@ -122,31 +136,128 @@ mod tests {
                 )
                 .await
                 .unwrap(),
-                vec![image]
+                vec![image.clone()]
             );
+            assert!(request_attachments(
+                &core,
+                &node_did,
+                "different-session",
+                "image-request",
+                None,
+                Some(0)
+            )
+            .await
+            .is_err());
+            assert!(request_attachments(
+                &core,
+                "did:fixture:other",
+                "image-session",
+                "image-request",
+                None,
+                Some(0)
+            )
+            .await
+            .is_err());
+
+            let access = gents::config_client::ConfigAccess::local(core.node_arc());
+            let orphan_request =
+                gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+                    "purpose": "normal", "request_id": "orphan-image-request",
+                    "node_did": node_did, "requester_did": node_did,
+                    "agent_id": "test-agent", "session_id": "missing-image-session",
+                    "content": "", "lifecycle_state": "pending",
+                    "created_at": "2026-10-28T00:00:00Z",
+                    "input": {"attachments": [image]},
+                }))
+                .unwrap();
+            access
+                .write(
+                    "test.orphan_image_request",
+                    &format!(
+                        "mutation {{ create_AgentRequest(input: {orphan_request}) {{ _docID }} }}"
+                    ),
+                )
+                .await
+                .unwrap();
+            core.refresh_local_request(
+                &node_did,
+                "missing-image-session",
+                Some("orphan-image-request"),
+                None,
+                &[],
+            )
+            .await
+            .unwrap();
             assert!(
                 request_attachments(
                     &core,
                     &node_did,
-                    "different-session",
-                    "image-request",
+                    "missing-image-session",
+                    "orphan-image-request",
                     None,
                     Some(0)
                 )
                 .await
-                .is_err()
+                .is_err(),
+                "request attachments must not be readable without an in-scope session"
             );
+
+            let foreign_session =
+                gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+                    "session_id": "foreign-image-session", "node_did": node_did,
+                    "requester_did": "did:fixture:foreign", "agent_id": "test-agent",
+                    "created_at": "2026-10-28T00:00:00Z",
+                }))
+                .unwrap();
+            let foreign_request =
+                gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+                    "purpose": "normal", "request_id": "foreign-image-request",
+                    "node_did": node_did, "requester_did": "did:fixture:foreign",
+                    "agent_id": "test-agent", "session_id": "foreign-image-session",
+                    "content": "", "lifecycle_state": "pending",
+                    "created_at": "2026-10-28T00:00:00Z",
+                    "input": {"attachments": [image]},
+                }))
+                .unwrap();
+            access
+                .write(
+                    "test.foreign_image_session",
+                    &format!(
+                        "mutation {{ create_AgentSession(input: {foreign_session}) {{ _docID }} }}"
+                    ),
+                )
+                .await
+                .unwrap();
+            access
+                .write(
+                    "test.foreign_image_request",
+                    &format!(
+                        "mutation {{ create_AgentRequest(input: {foreign_request}) {{ _docID }} }}"
+                    ),
+                )
+                .await
+                .unwrap();
+            core.refresh_local_request(
+                &node_did,
+                "foreign-image-session",
+                Some("foreign-image-request"),
+                None,
+                &[],
+            )
+            .await
+            .unwrap();
             assert!(
                 request_attachments(
                     &core,
-                    "did:fixture:other",
-                    "image-session",
-                    "image-request",
+                    &node_did,
+                    "foreign-image-session",
+                    "foreign-image-request",
                     None,
                     Some(0)
                 )
                 .await
-                .is_err()
+                .is_err(),
+                "request attachment reads must respect session requester scope"
             );
         }
         .await;

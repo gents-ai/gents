@@ -4,8 +4,8 @@ pub use background::background_tool;
 
 #[path = "commands/attachments.rs"]
 mod attachments;
-pub use attachments::request_attachments;
 pub(crate) use attachments::bounded_attachment_response;
+pub use attachments::request_attachments;
 
 #[path = "commands/chat.rs"]
 mod chat;

@@ -148,7 +148,11 @@ impl FileImageDemand {
     }
 
     pub fn validate_reference(&self) -> Result<()> {
-        if self.reference_fields().iter().any(|(_, value)| value.is_empty()) {
+        if self
+            .reference_fields()
+            .iter()
+            .any(|(_, value)| value.is_empty())
+        {
             return Err(FileImageHydrationError::EmptyReference);
         }
         if let Some(reference) = &self.inventory_reference {
@@ -160,7 +164,11 @@ impl FileImageDemand {
                 || root.requester_did != self.admission.requester_did
                 || root.node_did != self.admission.node_did
                 || root.session_id != self.admission.session_id
-                || reference.page.cursor.as_ref().is_some_and(|cursor| cursor.binding.digest != reference.snapshot_digest)
+                || reference
+                    .page
+                    .cursor
+                    .as_ref()
+                    .is_some_and(|cursor| cursor.binding.digest != reference.snapshot_digest)
             {
                 return Err(FileImageHydrationError::InvalidInventorySelection);
             }
