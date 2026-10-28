@@ -39,6 +39,9 @@ impl ConfigRead for HistoryReader {
         if batch == 2 && self.fault == Some("foreign") {
             rows[0]["node_did"] = json!("other-owner");
         }
+        if batch == 2 && self.fault == Some("projection") {
+            rows[0]["status"] = json!("paused");
+        }
         Ok(json!({"data":{"Goal":rows}}))
     }
 }
@@ -70,7 +73,18 @@ async fn retained_history_is_complete_across_bounded_reconstruction_queries() {
     assert!(calls.len() > 1);
     assert!(calls.iter().all(|batch| batch.len() <= 32));
     assert_eq!(calls.iter().flatten().count(), versions.len());
-    let latest = super::super::latest_assignment_goals(&versions).unwrap();
+    let projected = versions
+        .into_iter()
+        .map(|version| {
+            GoalAssignmentVersion::from_snapshot(
+                version.goal,
+                version.commit_cid,
+                version.height,
+                version.parent_commit_cids,
+            )
+        })
+        .collect::<Vec<_>>();
+    let latest = super::super::latest_assignment_goals(&projected).unwrap();
     assert_eq!(latest.len(), 1);
     assert_eq!(latest[0].objective, "commit-066");
 }
@@ -93,5 +107,137 @@ async fn unavailable_or_incomplete_batches_never_return_partial_assignment_histo
         if fault == "unavailable" {
             assert!(format!("{error:#}").contains("retained block unavailable"));
         }
+    }
+}
+
+struct UnchangedAssignmentReader {
+    inner: HistoryReader,
+    metadata_fault: Option<&'static str>,
+}
+
+#[async_trait::async_trait]
+impl ConfigRead for UnchangedAssignmentReader {
+    async fn execute_read(&self, query: &str) -> Result<Value> {
+        let mut response = self.inner.execute_read(query).await?;
+        if let Some(commits) = response
+            .pointer_mut("/data/_commits")
+            .and_then(Value::as_array_mut)
+        {
+            for commit in commits {
+                let height = commit["height"].as_u64().unwrap();
+                commit["links"] = json!([{
+                    "cid":format!("field-{height}"),
+                    "height":height,
+                    "fieldName":if height == 1 {"goal_id"} else {"tokens_used"}
+                }]);
+                for head in commit["heads"].as_array_mut().unwrap() {
+                    head["height"] = json!(height - 1);
+                }
+                if height == 21 {
+                    match self.metadata_fault {
+                        Some("missing_link") => {
+                            commit["links"][0].as_object_mut().unwrap().remove("height");
+                        }
+                        Some("unknown_link") => {
+                            commit["links"][0]["fieldName"] = json!("future_field")
+                        }
+                        Some("immutable") => commit["links"][0]["fieldName"] = json!("_I"),
+                        Some("assignment") => commit["links"][0]["fieldName"] = json!("status"),
+                        Some("merge") => commit["heads"]
+                            .as_array_mut()
+                            .unwrap()
+                            .push(json!({"cid":"commit-000", "height":1,"fieldName":"_C"})),
+                        Some("missing_parent") => commit["heads"][0]["cid"] = json!("unavailable"),
+                        Some("parent_height") => commit["heads"][0]["height"] = json!(1),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Ok(response)
+    }
+}
+
+#[tokio::test]
+async fn usage_only_revisions_preserve_the_dag_without_reconstructing_every_snapshot() {
+    let reader = UnchangedAssignmentReader {
+        metadata_fault: None,
+        inner: HistoryReader {
+            calls: Mutex::new(Vec::new()),
+            fault: None,
+        },
+    };
+    let versions = load_assignment_versions_for_session(&reader, "owner", "chat")
+        .await
+        .unwrap();
+    assert_eq!(versions.len(), 67);
+    let latest = super::super::latest_assignment_goals(&versions).unwrap();
+    assert_eq!(latest.len(), 1);
+    assert_eq!(latest[0].objective, "commit-066");
+    let calls = reader.inner.calls.lock().unwrap();
+    let requested = calls.iter().flatten().collect::<Vec<_>>();
+    assert_eq!(
+        requested,
+        [&"commit-000".to_owned(), &"commit-066".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn unknown_or_changed_projection_metadata_requires_native_reconstruction() {
+    for fault in [
+        "missing_link",
+        "unknown_link",
+        "immutable",
+        "assignment",
+        "merge",
+    ] {
+        let reader = UnchangedAssignmentReader {
+            metadata_fault: Some(fault),
+            inner: HistoryReader {
+                calls: Mutex::new(Vec::new()),
+                fault: None,
+            },
+        };
+        let versions = load_assignment_versions_for_session(&reader, "owner", "chat")
+            .await
+            .unwrap();
+        assert_eq!(versions.len(), 67);
+        let calls = reader.inner.calls.lock().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .flatten()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["commit-000", "commit-020", "commit-066"],
+            "{fault}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn projection_failures_never_supply_partial_assignment_evidence() {
+    for (fault, expected) in [
+        ("unavailable", "retained block unavailable"),
+        ("omitted", "snapshots for 1 visible commits"),
+        ("foreign", "belongs to a different owner"),
+        ("projection", "disagrees with its native frontier"),
+        ("missing_parent", "history is incomplete"),
+        ("parent_height", "parent metadata disagrees"),
+    ] {
+        let reader = UnchangedAssignmentReader {
+            metadata_fault: Some(fault),
+            inner: HistoryReader {
+                calls: Mutex::new(Vec::new()),
+                fault: Some(fault),
+            },
+        };
+        let error = load_assignment_versions_for_session(&reader, "owner", "chat")
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains(expected),
+            "{fault}: {error:#}"
+        );
     }
 }
