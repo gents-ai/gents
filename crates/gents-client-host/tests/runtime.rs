@@ -38,6 +38,8 @@ mod editor_goal_removal;
 mod editor_goal_replacement;
 #[path = "support/editor_history.rs"]
 mod editor_history;
+#[path = "support/editor_images.rs"]
+mod editor_images;
 #[path = "support/editor_inventory.rs"]
 mod editor_inventory;
 #[path = "support/editor_inventory_permissions.rs"]
@@ -113,6 +115,8 @@ enum Journey {
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorWorkspace,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    EditorImages,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorRelatedWork,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     EditorRelatedWorkFailure,
@@ -143,6 +147,7 @@ impl Journey {
             Self::EditorInventory => Some("review-inventory"),
             Self::EditorUndo => Some("undo"),
             Self::EditorWorkspace => Some("workspace"),
+            Self::EditorImages => Some("images"),
             Self::EditorRelatedWork => Some("related-work"),
             Self::EditorRelatedWorkFailure => Some("related-work-failure"),
             Self::EditorQuestions => Some("questions"),
@@ -359,6 +364,29 @@ async fn editor_preserves_captured_context_in_a_multi_root_workspace() -> Result
             .join("\n")
         })?;
     copy_editor_evidence(temp.path(), "editor-workspace-canonical.json")
+}
+
+#[cfg(feature = "editor-e2e")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn editor_preserves_image_bytes_through_submission_and_reload() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let result = exercise(temp.path(), Journey::EditorImages).await;
+    result.with_context(|| {
+        [
+            "runtime.log",
+            "runtime.err",
+            "client-host.log",
+            "editor.log",
+        ]
+        .map(|name| {
+            format!(
+                "{name}:\n{}",
+                std::fs::read_to_string(temp.path().join(name)).unwrap_or_default()
+            )
+        })
+        .join("\n")
+    })?;
+    copy_editor_evidence(temp.path(), "editor-images-canonical.json")
 }
 
 #[cfg(feature = "editor-e2e")]
@@ -722,6 +750,11 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         },
         None,
         Arc::new(move |request| {
+            if matches!(journey, Journey::EditorImages) {
+                if let Some(reply) = editor_images::reply(request) {
+                    return reply;
+                }
+            }
             if matches!(journey, Journey::EditorQuestions) {
                 if let Some(reply) = editor_questions::reply(request) {
                     return reply;
@@ -1957,6 +1990,27 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         let evidence = editor_questions::verify(&access, node_did, session, &client_did).await?;
         std::fs::write(
             root.join("editor-questions-canonical.json"),
+            serde_json::to_vec_pretty(&evidence)?,
+        )?;
+    }
+    if matches!(journey, Journey::EditorImages) {
+        configured_actions::seed_editor_settings(&access, node_did, agent_id).await?;
+        client
+            .call(id, "client_connect_local", json!({"nodeHome":node_home}))
+            .await;
+        run_editor_journey(
+            root,
+            &paths,
+            &host_binary,
+            session,
+            provider.endpoint(),
+            "images",
+        )
+        .await?;
+        let evidence =
+            editor_images::verify(&access, &provider, root, node_did, session, &client_did).await?;
+        std::fs::write(
+            root.join("editor-images-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,
         )?;
     }
