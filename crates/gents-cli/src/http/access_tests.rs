@@ -70,6 +70,29 @@ struct Fixture {
     queries: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
+fn runtime_routes(endpoint: &str, owner: &PrincipalIdentity) -> axum::Router {
+    let (runtime, observation) = crate::http::router::empty_activation_state();
+    crate::http::runtime_contract_router(
+        format!("{endpoint}/api/v0/graphql"),
+        "test-runtime".into(),
+        owner.did().into(),
+        "readwrite".into(),
+        Ok(Some("/private/operator/workspace".into())),
+        Vec::new(),
+        Some("/private/operator/home".into()),
+        None,
+        None,
+        None,
+        None,
+        crate::http::enrollment::empty_issuer_handle(),
+        crate::http::enrollment::empty_decision_service_handle(),
+        runtime,
+        observation,
+        Default::default(),
+        Default::default(),
+    )
+}
+
 impl Fixture {
     async fn start() -> Self {
         let temp = tempfile::tempdir().unwrap();
@@ -85,26 +108,7 @@ impl Fixture {
             .unwrap();
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
-        let (runtime, observation) = crate::http::router::empty_activation_state();
-        let router = crate::http::runtime_contract_router(
-            format!("{endpoint}/api/v0/graphql"),
-            "test-runtime".into(),
-            owner.did().into(),
-            "readwrite".into(),
-            Ok(Some("/private/operator/workspace".into())),
-            Vec::new(),
-            Some("/private/operator/home".into()),
-            None,
-            None,
-            None,
-            None,
-            crate::http::enrollment::empty_issuer_handle(),
-            crate::http::enrollment::empty_decision_service_handle(),
-            runtime,
-            observation,
-            Default::default(),
-            Default::default(),
-        );
+        let router = runtime_routes(&endpoint, &owner);
         let queries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let observed_queries = queries.clone();
         let router = router.merge(axum::Router::new().route(
@@ -117,6 +121,7 @@ impl Fixture {
                 }
             }),
         ));
+        let router = HttpAuthority::for_endpoint(&endpoint).wrap(router);
         let server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
             axum::serve(listener, router).await.unwrap();
         }));
@@ -134,6 +139,95 @@ impl Fixture {
     fn get(&self, path: &str) -> reqwest::RequestBuilder {
         self.client.get(format!("{}{path}", self.endpoint))
     }
+}
+
+#[tokio::test]
+async fn complete_http_router_refuses_foreign_hosts_and_preserves_operator_authorization() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = DesktopPaths::from_root(directory.path().join("operator"));
+    paths.ensure_root_dirs().await.unwrap();
+    let owner = PrincipalIdentity::load_or_create(&paths).await.unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let endpoint = format!("http://{address}");
+    let config = HttpAuthority::for_endpoint(&endpoint).protect_http(
+        gents::defra_node::HttpConfig::with_listener(listener)
+            .unwrap()
+            .with_extra_routes(runtime_routes(&endpoint, &owner)),
+    );
+    let node = gents::defra_node::EmbeddedNode::builder()
+        .with_node_identity_did(owner.did())
+        .with_node_acp_enabled()
+        .with_http(config)
+        .build()
+        .await
+        .unwrap();
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap();
+
+    for path in [
+        "/health-check",
+        "/api/v0/version",
+        "/api/v1/version/",
+        "/api/v0/graphql",
+        "/api/v0/schema",
+        "/api/v0/collections",
+        "/api/v0/p2p/info",
+        "/version",
+        "/status",
+        "/self",
+        "/sessions",
+        "/missing/",
+    ] {
+        for method in [reqwest::Method::GET, reqwest::Method::POST] {
+            let response = client
+                .request(method.clone(), format!("{endpoint}{path}"))
+                .header(header::HOST, "attacker.example:9191")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::MISDIRECTED_REQUEST,
+                "{method} {path}"
+            );
+            assert_eq!(
+                response.headers()[header::CACHE_CONTROL],
+                "no-store",
+                "{method} {path}"
+            );
+        }
+    }
+
+    for (path, expected) in [
+        ("/health-check", StatusCode::OK),
+        ("/api/v0/version", StatusCode::OK),
+        ("/api/v1/version/", StatusCode::OK),
+        ("/version", StatusCode::OK),
+        ("/missing/", StatusCode::NOT_FOUND),
+        ("/sessions", StatusCode::UNAUTHORIZED),
+    ] {
+        let response = client
+            .get(format!("{endpoint}{path}"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{path}");
+    }
+    let response = gents::config_client::GraphqlEndpoint::as_principal(
+        format!("{endpoint}/api/v0/graphql"),
+        owner.did(),
+    )
+    .authorize(client.get(format!("{endpoint}/api/v0/collections")))
+    .unwrap()
+    .send()
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    node.shutdown().await;
 }
 
 #[derive(Deserialize)]

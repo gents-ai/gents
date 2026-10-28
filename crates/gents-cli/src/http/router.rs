@@ -137,7 +137,6 @@ pub(crate) fn runtime_contract_router(
     replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
     serve_lifecycle: ServeLifecycleHandle,
 ) -> Router {
-    let authority = super::access::HttpAuthority::for_endpoint(&graphql);
     let operator_did = node_did.clone();
     let graphql_for_mcp = graphql.clone();
     let state = RuntimeHttpState {
@@ -212,12 +211,7 @@ pub(crate) fn runtime_contract_router(
         );
     }
 
-    router
-        .layer(middleware::from_fn_with_state(
-            authority,
-            super::access::require_authority,
-        ))
-        .with_state(state)
+    router.with_state(state)
 }
 
 async fn activation_handler(State(state): State<RuntimeHttpState>) -> Response {
