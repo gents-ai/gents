@@ -20,6 +20,8 @@ afterEach(() => {
 });
 
 test("retains the latest user row when scrolling away from an active long turn", () => {
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(500);
+  vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(320);
   Object.defineProperty(HTMLElement.prototype, "scrollTo", {
     configurable: true,
     value: vi.fn(),
@@ -127,6 +129,24 @@ test("retains the latest user row when scrolling away from an active long turn",
   expect(panel.querySelectorAll("li[data-index]").length).toBeLessThanOrEqual(
     200,
   );
+  const longStream = Array.from({ length: 250 }, (_, index) => ({
+    kind: "assistantMessage" as const,
+    itemKey: `long-${index}`,
+    content: `long response ${index}`,
+    reconstruction: { state: "ready" as const },
+  }));
+  rerender(
+    <ChatTranscriptPanel
+      selectedSessionId="s"
+      session={{ ...session, timelineItems: [...timelineItems, ...longStream] }}
+      activity={null}
+    />,
+  );
+  const virtualRows = panel.querySelectorAll("li[data-index]");
+  expect(virtualRows.length).toBeGreaterThan(0);
+  expect(virtualRows.length).toBeLessThan(200);
+  expect(virtualRows[0]?.getAttribute("aria-setsize")).toBe("351");
+
   rerender(
     <ChatTranscriptPanel
       selectedSessionId="s"
