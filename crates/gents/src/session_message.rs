@@ -789,7 +789,72 @@ pub fn agent_interrupt_allowed(
     target_session: &str,
     target_origin_cause: Option<&str>,
 ) -> bool {
-    target_session != caller_session && target_origin_cause == Some(caller_session)
+    agent_interrupt_allowed_for_task(
+        caller_session,
+        target_session,
+        target_origin_cause,
+        false,
+        false,
+        false,
+    )
+}
+
+pub fn agent_interrupt_allowed_for_task(
+    caller_session: &str,
+    target_session: &str,
+    target_origin_cause: Option<&str>,
+    same_node: bool,
+    task_triggered_at_creation: bool,
+    has_parent_doc: bool,
+) -> bool {
+    target_session != caller_session
+        && (target_origin_cause == Some(caller_session)
+            || (target_origin_cause.is_none()
+                && !has_parent_doc
+                && same_node
+                && task_triggered_at_creation))
+}
+
+fn task_trigger_creation_matches(
+    target: &SessionScope,
+    opening_doc_id: &str,
+    request: &gents_protocol::row::AgentRequestRow,
+) -> bool {
+    request.doc_id.as_deref() == Some(opening_doc_id)
+        && request.purpose == Some(gents_protocol::request_admission::RequestPurpose::PUBLIC)
+        && request.node_did.as_deref() == Some(target.node_did.as_str())
+        && request.session_id.as_deref() == Some(target.session_id.as_str())
+        && request.requester_did == target.requester_did
+        && crate::watcher::automated_trigger_lineage(
+            request.caused_by_trigger_kind.as_deref(),
+            request.caused_by_trigger_id.as_deref(),
+        )
+        && request
+            .caused_by_trigger_doc_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty())
+}
+
+async fn task_trigger_created_session(
+    access: &ConfigAccess,
+    target: &SessionScope,
+    opening_doc_id: &str,
+) -> Result<bool> {
+    let query = format!(
+        "{{AgentRequest(docIDs: {}) {{_docID request_id purpose node_did session_id requester_did caused_by_trigger_id caused_by_trigger_kind caused_by_trigger_doc_id}}}}",
+        crate::graphql::graphql_string_list_literal(std::iter::once(opening_doc_id))
+    );
+    let response = access.execute(&query).await?;
+    let rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(serde_json::Value::as_array)
+        .context("trigger creation query omitted request rows")?;
+    if rows.len() != 1 {
+        return Ok(false);
+    }
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(rows[0].clone()).context("decoding the trigger creation request")?;
+    Ok(task_trigger_creation_matches(target, opening_doc_id, &row))
 }
 
 pub async fn interrupt_refusal(
@@ -797,15 +862,33 @@ pub async fn interrupt_refusal(
     caller: &SessionScope,
     target: &SessionScope,
 ) -> Result<Option<String>> {
-    let started_by =
-        crate::session_origin::started_by(&ConfigAccess::local(node.clone()), target).await?;
-    let cause = started_by
+    let access = ConfigAccess::local(node.clone());
+    let origin = crate::session_origin::creation_origin(&access, target).await?;
+    let cause = origin
+        .as_ref()
+        .and_then(|origin| origin.started_by.as_ref())
         .filter(|link| link.scope == *caller)
-        .map(|link| link.scope.session_id);
-    Ok(
-        (!agent_interrupt_allowed(&caller.session_id, &target.session_id, cause.as_deref()))
-            .then(|| "only the session that started this session may interrupt it".to_owned()),
-    )
+        .map(|link| link.scope.session_id.as_str());
+    let has_parent = origin
+        .as_ref()
+        .is_some_and(|origin| origin.parent_doc_id.is_some());
+    let same_node = caller.node_did == target.node_did
+        && target.requester_did.as_deref() == Some(caller.node_did.as_str());
+    let task_triggered = if same_node && !has_parent && caller.session_id != target.session_id {
+        if let Some(opening) = origin
+            .as_ref()
+            .and_then(|origin| origin.opening_request_doc_id.as_deref())
+        {
+            task_trigger_created_session(&access, target, opening).await?
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    Ok((!agent_interrupt_allowed_for_task(
+        &caller.session_id, &target.session_id, cause, same_node, task_triggered, has_parent,
+    )).then(|| "Only the session that started this session or an agent on the same node as its Task trigger may interrupt it".to_owned()))
 }
 
 pub async fn interrupt_session(
@@ -1357,7 +1440,7 @@ mod agent_tools_tests {
                     &caused.agent_id,
                     caused.requester_did.as_deref(),
                     None,
-                    crate::lifecycle::materialize::created_session_provenance(&caused),
+                    crate::lifecycle::materialize::created_session_provenance(&caused, true),
                     &created_at,
                 )
                 .await
@@ -1945,13 +2028,239 @@ mod agent_tools_tests {
         let mut without_call = caused.clone();
         without_call.caused_by_parent_tool_call_doc_id = None;
         assert_eq!(
-            crate::lifecycle::materialize::created_session_provenance(&without_call)
+            crate::lifecycle::materialize::created_session_provenance(&without_call, true)
                 .unwrap()
                 .opening_request_doc_id,
             None
         );
         without_call.caused_by_parent_request_doc_id = None;
-        assert!(crate::lifecycle::materialize::created_session_provenance(&without_call).is_none());
+        assert!(
+            crate::lifecycle::materialize::created_session_provenance(&without_call, true)
+                .is_none()
+        );
+        node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn generated_task_creation_cases_drive_recorded_session_provenance() {
+        let output = tokio::task::spawn_blocking(|| {
+            gents_lean_contract::run_prepared_generator(
+                &gents_lean_contract::proofs_dir().unwrap(),
+                "Proofs.Conformance.TaskInterrupt:olean",
+                "Proofs/Conformance/TaskInterrupt.lean",
+            )
+            .unwrap()
+        })
+        .await
+        .unwrap();
+        let model: serde_json::Value = serde_json::from_str(&output).unwrap();
+        let decisions = model["decisions"].as_array().unwrap();
+        assert_eq!(decisions.len(), 48);
+        for case in decisions {
+            assert_eq!(
+                agent_interrupt_allowed_for_task(
+                    case["caller"].as_str().unwrap(),
+                    case["target"].as_str().unwrap(),
+                    case["origin"].as_str(),
+                    case["sameNode"].as_bool().unwrap(),
+                    case["taskTriggeredAtCreation"].as_bool().unwrap(),
+                    case["hasParentDoc"].as_bool().unwrap(),
+                ),
+                case["allowed"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+        let evidence = model["evidence"].as_array().unwrap();
+        assert_eq!(evidence.len(), 80);
+        let scope = SessionScope {
+            node_did: "node".into(),
+            session_id: "target".into(),
+            requester_did: Some("requester".into()),
+        };
+        for case in evidence {
+            let row = gents_protocol::row::AgentRequestRow {
+                doc_id: Some(
+                    if case["isCreationRequest"].as_bool().unwrap() {
+                        "opening"
+                    } else {
+                        "later"
+                    }
+                    .into(),
+                ),
+                request_id: "request".into(),
+                purpose: Some(gents_protocol::request_admission::RequestPurpose::PUBLIC),
+                node_did: Some(
+                    if case["exactScope"].as_bool().unwrap() {
+                        "node"
+                    } else {
+                        "foreign"
+                    }
+                    .into(),
+                ),
+                session_id: Some("target".into()),
+                requester_did: Some("requester".into()),
+                caused_by_trigger_id: case["hasTriggerId"]
+                    .as_bool()
+                    .unwrap()
+                    .then(|| "trigger".into()),
+                caused_by_trigger_doc_id: case["hasTriggerDoc"]
+                    .as_bool()
+                    .unwrap()
+                    .then(|| "trigger-doc".into()),
+                caused_by_trigger_kind: Some(case["kind"].as_str().unwrap().into()),
+                ..Default::default()
+            };
+            assert_eq!(
+                task_trigger_creation_matches(&scope, "opening", &row),
+                case["verified"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+        let cases = model["creation"].as_array().unwrap();
+        assert_eq!(cases.len(), 16);
+        let (message, _caller, caused) = started("task-opening-cases").await;
+        for case in cases {
+            let mut request = caused.clone();
+            request.doc_id = case["requestDoc"].as_u64().unwrap().to_string();
+            request.caused_by_parent_request_doc_id =
+                case["parentDoc"].as_u64().map(|id| id.to_string());
+            request.caused_by_parent_tool_call_doc_id = case["hasCallingTool"]
+                .as_bool()
+                .unwrap()
+                .then(|| "call".into());
+            let automated = case["automatedTrigger"].as_bool().unwrap();
+            request.caused_by_trigger_id = automated.then(|| "trigger".into());
+            request.caused_by_trigger_kind = automated.then(|| "schedule".into());
+            let actual = crate::lifecycle::materialize::created_session_provenance(
+                &request,
+                case["admitted"].as_bool().unwrap(),
+            );
+            assert_eq!(
+                actual.is_some(),
+                case["hasProvenance"].as_bool().unwrap(),
+                "{case}"
+            );
+            assert_eq!(
+                actual
+                    .as_ref()
+                    .and_then(|p| p.opening_request_doc_id.clone()),
+                case["openingRequestDoc"].as_u64().map(|id| id.to_string()),
+                "{case}"
+            );
+            assert_eq!(
+                actual
+                    .as_ref()
+                    .and_then(|p| p.parent_request_doc_id.clone()),
+                case["parentRequestDoc"].as_u64().map(|id| id.to_string()),
+                "{case}"
+            );
+        }
+        message.admission.node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn trigger_authority_uses_recorded_creation_not_later_requests() {
+        let (message, caller, caused) = started("task-interrupt-creation").await;
+        let node = message.admission.node.clone();
+        let caller_scope = SessionScope::of_request(&caller);
+        let owner = caller.node_did.clone();
+        let create_trigger = |session: String, request_id: String| {
+            let node = node.clone();
+            let owner = owner.clone();
+            async move {
+                let q = format!(
+                    r#"mutation {{ create_AgentRequest(input: {{ purpose: "normal", request_id: "{}", node_did: "{}", requester_did: "{}", agent_id: "general", session_id: "{}", content: "task", lifecycle_state: "pending", backend_id: "", execution_origin: "scheduled", created_at: "2026-10-01T00:00:00Z", retry_count: 0, max_retries: 3, caused_by_trigger_id: "trigger", caused_by_trigger_doc_id: "trigger-doc", caused_by_trigger_kind: "schedule" }}) {{ _docID }} }}"#,
+                    escape_graphql_string(&request_id),
+                    escape_graphql_string(&owner),
+                    escape_graphql_string(&owner),
+                    escape_graphql_string(&session)
+                );
+                let result = node.execute(&q).await;
+                assert!(!result.has_errors(), "{:?}", result.errors);
+                crate::graphql::single_mutation_document(&result, "create_AgentRequest")
+                    .unwrap()
+                    .unwrap()["_docID"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            }
+        };
+        let task_doc = create_trigger("task-root".into(), "task-root-request".into()).await;
+        let mut task = caused.clone();
+        task.node_did = owner.clone();
+        task.requester_did = Some(owner.clone());
+        task.session_id = "task-root".into();
+        task.doc_id = task_doc;
+        task.caused_by_parent_request_id = None;
+        task.caused_by_parent_request_doc_id = None;
+        task.caused_by_parent_tool_call_id = None;
+        task.caused_by_parent_tool_call_doc_id = None;
+        task.caused_by_trigger_id = Some("trigger".into());
+        task.caused_by_trigger_kind = Some("schedule".into());
+        materialize_session(&node, &task).await;
+        let task_scope = SessionScope::of_request(&task);
+        assert!(interrupt_refusal(&node, &caller_scope, &task_scope)
+            .await
+            .unwrap()
+            .is_none());
+
+        let mut human = task.clone();
+        human.session_id = "human-root".into();
+        human.caused_by_trigger_id = None;
+        human.caused_by_trigger_kind = None;
+        materialize_session(&node, &human).await;
+        let mut late = task.clone();
+        late.session_id = human.session_id.clone();
+        late.doc_id = create_trigger(human.session_id.clone(), "later-task-request".into()).await;
+        materialize_session(&node, &late).await;
+        assert!(
+            interrupt_refusal(&node, &caller_scope, &SessionScope::of_request(&human))
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        let mut child = task.clone();
+        child.session_id = "unknown-parent".into();
+        child.doc_id = create_trigger(child.session_id.clone(), "child-task-request".into()).await;
+        child.caused_by_parent_request_doc_id = Some("missing-parent-doc".into());
+        child.caused_by_parent_tool_call_doc_id = Some("tool-doc".into());
+        materialize_session(&node, &child).await;
+        assert!(
+            interrupt_refusal(&node, &caller_scope, &SessionScope::of_request(&child))
+                .await
+                .unwrap()
+                .is_some()
+        );
+        let foreign = SessionScope {
+            node_did: "did:test:foreign".into(),
+            ..caller_scope.clone()
+        };
+        assert!(interrupt_refusal(&node, &foreign, &task_scope)
+            .await
+            .unwrap()
+            .is_some());
+        let tools = AgentToolConfig {
+            enabled: true,
+            targets: Vec::new(),
+        };
+        let listing = agent_session_list(&node, &caller, &tools, &AgentSessionListArgs::default())
+            .await
+            .unwrap();
+        let sessions = listing["sessions"].as_array().unwrap();
+        for (session, allowed) in [
+            ("task-root", true),
+            ("human-root", false),
+            ("unknown-parent", false),
+        ] {
+            let row = sessions
+                .iter()
+                .find(|row| row["session_id"] == session)
+                .unwrap();
+            assert_eq!(row["can_interrupt"], allowed, "{session}: {row}");
+        }
         node.shutdown().await;
         std::fs::remove_dir_all(&message.admission.path).unwrap();
     }

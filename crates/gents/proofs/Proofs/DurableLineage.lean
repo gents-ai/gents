@@ -472,9 +472,10 @@ not a later request delivered to an existing session. The caller's starter
 scope is resolved separately; foreign sessions gain no trigger-based grant. -/
 def interruptAllowed (callerSession targetSession : String)
     (targetOriginCause : Option String) (sameNode : Bool := false)
-    (taskTriggeredAtCreation : Bool := false) : Bool :=
+    (taskTriggeredAtCreation : Bool := false) (hasParentDoc : Bool := false) : Bool :=
   CausalHop.sendTargetAllowed callerSession targetSession &&
-    (targetOriginCause == some callerSession || (sameNode && taskTriggeredAtCreation))
+    (targetOriginCause == some callerSession ||
+      (targetOriginCause.isNone && !hasParentDoc && sameNode && taskTriggeredAtCreation))
 
 theorem non_spawner_interrupt_refused (callerSession targetSession : String)
     (targetOriginCause : Option String)
@@ -492,9 +493,15 @@ theorem root_session_not_interruptible (callerSession targetSession : String) :
   simp [interruptAllowed]
 
 theorem local_task_trigger_is_interruptible (callerSession targetSession : String)
-    (cause : Option String) (h : targetSession ≠ callerSession) :
-    interruptAllowed callerSession targetSession cause true true = true := by
+    (h : targetSession ≠ callerSession) :
+    interruptAllowed callerSession targetSession none true true false = true := by
   simp [interruptAllowed, CausalHop.sendTargetAllowed, Ne.symm h]
+
+theorem task_trigger_does_not_authorize_another_agents_child
+    (callerSession targetSession : String) (cause : Option String)
+    (h : cause ≠ some callerSession) :
+    interruptAllowed callerSession targetSession cause true true true = false := by
+  simp [interruptAllowed, h]
 
 theorem foreign_trigger_does_not_grant_interrupt (callerSession targetSession : String)
     (cause : Option String) (h : cause ≠ some callerSession) :
