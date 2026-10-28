@@ -358,14 +358,11 @@ async fn one_time_workspace_approval_creates_a_profile_only_inside_its_write_roo
                 )
                 .await
                 .unwrap();
-            let mut first = Box::pin(run());
-            let prompt = tokio::select! {
-                result = first.as_mut() => panic!("command settled before approval: {result:?}"),
-                observed = operator => observed.unwrap(),
-            };
+            let (result, prompt) = tokio::join!(run(), operator);
+            let prompt = prompt.unwrap();
             assert!(!prompt.is_empty());
             let original = observation.id().unwrap();
-            let result = first.await.unwrap();
+            let result = result.unwrap();
             let temporary = project.join(".gents-tmp");
             let profiles: Vec<_> = std::fs::read_dir(&temporary)
                 .unwrap()
@@ -389,16 +386,13 @@ async fn one_time_workspace_approval_creates_a_profile_only_inside_its_write_roo
                 )
                 .await
                 .unwrap();
-            let mut again = Box::pin(run());
-            let observed = tokio::select! {
-                result = again.as_mut() => panic!("command settled before approval: {result:?}"),
-                observed = operator => observed.unwrap(),
-            };
+            let (result, observed) = tokio::join!(run(), operator);
+            let observed = observed.unwrap();
             assert!(!observed.is_empty());
             // A one-time answer is deliberately not remembered; a later
             // invocation must publish a distinct approval identity.
             assert_ne!(next_observation.id().unwrap(), original);
-            assert!(again.await.is_err());
+            assert!(result.is_err());
             assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 1);
             assert!(pending_requests(&home).unwrap().is_empty());
         }),
