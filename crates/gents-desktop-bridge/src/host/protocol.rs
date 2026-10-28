@@ -481,6 +481,9 @@ pub enum HostMessage {
     Hello {
         version: u32,
         commands: Vec<String>,
+        /// Older helpers lack this field and must not receive image-bearing Goals.
+        #[serde(rename = "goalInputAttachments")]
+        goal_input_attachments: bool,
         #[serde(rename = "maxFrameBytes")]
         max_frame_bytes: usize,
         #[serde(rename = "installationBuild")]
