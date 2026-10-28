@@ -97,9 +97,28 @@ export async function openChat(page: Page) {
   await expect(composer(page)).toBeVisible();
 }
 
-export async function openConfig(page: Page) {
+/* a phone's window bar has neither the logo nor the node label: its menu
+   sheet has the logo and the node's card */
+async function fromWindowBar(page: Page, name: "Nodes" | "Active node") {
   await expect(page.getByTestId("app-shell")).toBeVisible();
-  await page.getByRole("link", { name: "Active node", exact: true }).click();
+  const link = page.getByTestId("window-bar").getByRole("link", { name, exact: true });
+  if (await link.isVisible()) return link.click();
+  await page.getByRole("button", { name: "Menu" }).click();
+  const sheet = page.getByRole("dialog", { name: "Navigation" });
+  await (
+    name === "Nodes"
+      ? sheet.getByRole("link", { name, exact: true }).first()
+      : sheet.getByTestId("working-node")
+  ).click();
+}
+
+export async function openNodes(page: Page) {
+  await fromWindowBar(page, "Nodes");
+  await expect(page.getByTestId("agents-screen")).toBeVisible();
+}
+
+export async function openConfig(page: Page) {
+  await fromWindowBar(page, "Active node");
   await expect(page.getByTestId("agent-screen")).toBeVisible();
 }
 

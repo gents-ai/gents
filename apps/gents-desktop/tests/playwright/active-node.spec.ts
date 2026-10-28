@@ -1,4 +1,12 @@
-import { composer, expect, gotoHarness, openChat, test } from "./desktopTest";
+import {
+  composer,
+  expect,
+  gotoHarness,
+  openChat,
+  openConfig,
+  openNodes,
+  test,
+} from "./desktopTest";
 
 test("keeps the selected node visible and reviews a draft before changing destinations", async ({
   page,
@@ -7,7 +15,7 @@ test("keeps the selected node visible and reviews a draft before changing destin
   await openChat(page);
   await expect(page.getByLabel("Active node", { exact: true })).toContainText("Local");
   await composer(page).fill("Keep this setup seed local");
-  await page.getByRole("link", { name: "Nodes", exact: true }).first().click();
+  await openNodes(page);
   await page.getByRole("link", { name: "Amy sessions", exact: true }).click();
   const review = page.getByRole("alertdialog");
   await expect(review).toContainText("Your draft stays with Bombadil UI Agent");
@@ -32,7 +40,7 @@ test("keeps the selected node visible and reviews a draft before changing destin
   await expect(page.getByRole("option", { name: /^Default/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Create new agent" })).toBeDisabled();
   await page.keyboard.press("Escape");
-  await page.getByLabel("Active node", { exact: true }).click();
+  await openConfig(page);
   await expect(
     page.getByRole("status").filter({ hasText: "Remote configuration is read-only" }),
   ).toBeVisible();

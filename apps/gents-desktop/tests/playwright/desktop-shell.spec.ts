@@ -7,6 +7,7 @@ import {
   openChat,
   openConfig,
   openConfigSection,
+  openNodes,
   primarySurfaceCount,
   sendButton,
   test,
@@ -210,8 +211,7 @@ test.describe("kit shell", () => {
 
   test("agents and configuration are reachable", async ({ page }) => {
     await gotoHarness(page);
-    await page.getByRole("link", { name: "Nodes" }).first().click();
-    await expect(page.getByTestId("agents-screen")).toBeVisible();
+    await openNodes(page);
     await expect(
       page
         .getByTestId("agents-screen")
@@ -226,6 +226,10 @@ test.describe("kit shell", () => {
   test("closing sync diagnostics does not stack with the add agent dialog", async ({
     page,
   }) => {
+    test.skip(
+      test.info().project.name === "chromium-narrow",
+      "A phone's window bar shows sync only when it fails",
+    );
     await gotoHarness(page);
     await page.getByRole("link", { name: "Nodes" }).first().click();
     const sync = page.getByRole("button", { name: /Sync healthy/ });
@@ -244,6 +248,10 @@ test.describe("kit shell", () => {
   });
 
   test("the agent filter and sync health never stack as dialogs", async ({ page }) => {
+    test.skip(
+      test.info().project.name === "chromium-narrow",
+      "A phone's window bar shows sync only when it fails",
+    );
     await gotoHarness(page);
     const filters = page.getByLabel("Session filters");
     const agent = page.getByRole("dialog", { name: "Filter by agent" });
@@ -405,6 +413,10 @@ test.describe("kit shell", () => {
   test("context and sync popovers never overlap as dialog portals", async ({
     page,
   }) => {
+    test.skip(
+      test.info().project.name === "chromium-narrow",
+      "A phone's window bar shows sync only when it fails",
+    );
     await gotoHarness(page);
     await page
       .getByTestId("sessions-screen")
@@ -480,6 +492,53 @@ test.describe("kit shell", () => {
     }));
     expect(widths.lineWidth).toBeGreaterThan(widths.viewportWidth);
     expect(widths.whiteSpace).toBe("pre");
+  });
+
+  test("a phone's window bar keeps the menu, Back and the page's own controls", async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoHarness(page);
+    await page
+      .getByTestId("sessions-screen")
+      .getByRole("link", { name: /introduction-and-greetings/ })
+      .click();
+    const bar = page.getByTestId("window-bar");
+    await expect(bar.getByRole("button", { name: "More" })).toBeVisible();
+    const shown = await bar
+      .locator("a, button")
+      .evaluateAll((controls) =>
+        controls
+          .filter((control) => control.checkVisibility())
+          .map((control) => control.getAttribute("aria-label")),
+      );
+    expect(shown.slice(0, 2)).toEqual(["Menu", "Back"]);
+    for (const gone of ["Nodes", "Search", "Forward", "Active node"]) {
+      expect(shown).not.toContain(gone);
+    }
+    expect(shown.some((label) => label?.endsWith("Show sync diagnostics."))).toBe(
+      false,
+    );
+    await testInfo.attach("phone-window-bar.png", {
+      body: await bar.screenshot(),
+      contentType: "image/png",
+    });
+
+    await page.getByRole("button", { name: "Menu" }).click();
+    const sheet = page.getByRole("dialog", { name: "Navigation" });
+    await expect(sheet.getByRole("link", { name: "Nodes" }).first()).toBeVisible();
+    await expect(sheet.getByRole("button", { name: "Search" })).toBeVisible();
+    await expect(
+      sheet.getByRole("button", { name: /Show sync diagnostics/ }),
+    ).toBeVisible();
+  });
+
+  test("a phone's window bar still shows a sync problem", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoHarness(page, "sync-offline");
+    await expect(
+      page.getByTestId("window-bar").getByRole("button", { name: /^Offline\./ }),
+    ).toBeVisible();
   });
 
   test("empty fleet is the first-run setup", async ({ page }) => {

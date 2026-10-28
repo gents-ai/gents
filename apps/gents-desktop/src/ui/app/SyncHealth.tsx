@@ -12,10 +12,12 @@ export function SyncHealth({
   syncHealth,
   compact = false,
   row = false,
+  className,
 }: {
   syncHealth: SyncHealthView | null;
   compact?: boolean;
   row?: boolean;
+  className?: string;
 }) {
   const popover = useExclusivePopover();
   const status = projectSyncOperationalStatus(syncHealth);
@@ -50,6 +52,7 @@ export function SyncHealth({
           "flex shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
           row ? "h-8 w-full rounded-lg pr-2 text-sm" : "h-7 rounded-full text-xs",
           !row && (compact ? "w-7 justify-center" : "px-2"),
+          className,
         )}
       >
         <span className={cn("grid shrink-0 place-items-center", row && "size-[30px]")}>

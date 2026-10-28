@@ -1,8 +1,15 @@
 import { useHomeDid, useSelectedNode, useSelectedNodeDid } from "@/hooks/useClient";
 import { isLocalNode } from "@/lib/firstRun";
 import { href } from "@/lib/router";
+import { cn } from "@gents/ui/lib/utils";
 
-export function ActiveNodeLabel({ composer = false }: { composer?: boolean }) {
+export function ActiveNodeLabel({
+  composer = false,
+  className,
+}: {
+  composer?: boolean;
+  className?: string;
+}) {
   const node = useSelectedNode();
   const selectedDid = useSelectedNodeDid();
   const homeDid = useHomeDid();
@@ -21,7 +28,10 @@ export function ActiveNodeLabel({ composer = false }: { composer?: boolean }) {
       )}
       aria-label={composer ? "Message destination" : "Active node"}
       title={selectedDid ? `${label} · ${selectedDid}` : label}
-      className="flex min-w-0 max-w-52 items-center gap-1.5 truncate rounded-md px-1 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+      className={cn(
+        "flex min-w-0 max-w-52 items-center gap-1.5 truncate rounded-md px-1 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground",
+        className,
+      )}
     >
       <span className="truncate">{label}</span>
       {selectedDid && (

@@ -9,6 +9,7 @@ import {
 } from "@gents/ui/components/sheet";
 import { cn } from "@gents/ui/lib/utils";
 import type { History, Route } from "@/lib/router";
+import { projectSyncOperationalStatus } from "@source-inc/gents-desktop-client";
 import { useSyncHealth } from "@/hooks/useClient";
 import { Hint } from "@/screens/Hint";
 import { openSearch, SearchButton } from "@/screens/SearchPalette";
@@ -77,6 +78,7 @@ function NavSheet({ route, settings }: { route: Route; settings: ReactNode }) {
         }}
       >
         <SheetTitle className="sr-only">Navigation</SheetTitle>
+        <MarkLink className="mx-3" />
         <button
           type="button"
           onClick={() => {
@@ -109,6 +111,7 @@ export function WindowBar({
 }) {
   const { columns, wide, docked, dockOpen, divider } = layout;
   const syncHealth = useSyncHealth();
+  const syncBlocked = projectSyncOperationalStatus(syncHealth).kind === "blocked";
   const drag = headerIsWindowBar() ? "" : undefined;
   const windows = isWindowsTauriShell();
   const { paneHidden, toEnd } = divider;
@@ -140,14 +143,22 @@ export function WindowBar({
         data-tauri-drag-region={drag}
       >
         <NavSheet route={route} settings={settings} />
-        <MarkLink className="md:hidden" />
+        {/* on a phone the logo is in the menu sheet and the node in its node card */}
+        <MarkLink className="max-sm:hidden md:hidden" />
         {history && <HistoryNav history={history} />}
-        <ActiveNodeLabel />
+        <ActiveNodeLabel className="max-sm:hidden" />
         <div
           ref={onPaneBar}
           className="flex h-full min-w-0 flex-1 items-center gap-2"
         />
-        {!wide && <SyncHealth syncHealth={syncHealth} compact />}
+        {!wide && (
+          <SyncHealth
+            syncHealth={syncHealth}
+            compact
+            /* a phone's bar keeps only a sync problem; the sheet has the rest */
+            className={syncBlocked ? undefined : "max-sm:hidden"}
+          />
+        )}
       </div>
       {docked && (
         <div
