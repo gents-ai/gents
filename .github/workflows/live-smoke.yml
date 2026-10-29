@@ -37,7 +37,7 @@ env:
 jobs:
   live-cli-smoke:
     runs-on: [self-hosted, macOS, ARM64, studio]
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
         with:
@@ -82,6 +82,9 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: Build desktop packages
+        run: npm run build:packages
 
       - name: Run live desktop chat smoke
         working-directory: apps/gents-desktop
@@ -135,6 +138,9 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: Build desktop packages
+        run: npm run build:packages
 
       - name: Install Playwright browser
         working-directory: apps/gents-desktop
