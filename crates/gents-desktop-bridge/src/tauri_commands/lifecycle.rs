@@ -117,14 +117,15 @@ where
     // leave the store open while a second start races it. Never hold the
     // std::sync::Mutex across an await (future must be Send).
     if let Some(core) = current_core(&state) {
-        super::managed_server::start_running_managed_pairing(&state, Arc::clone(&core)).await;
+        super::managed_server::pairing::start_running_managed_pairing(&state, Arc::clone(&core))
+            .await;
         return build_client_snapshot_with_grants(Some(&core), Some(&state.policy), grants)
             .await
             .map_err(BridgeError::untyped);
     }
 
     // Opening the stale store would resume the pairing this retires.
-    if let Err(error) = super::managed_server::retire_orphaned_client_state(&state).await {
+    if let Err(error) = super::managed_server::reset::retire_orphaned_client_state(&state).await {
         tracing::warn!(
             error = %error.message,
             "could not archive client state paired with a node that is no longer here"
@@ -143,7 +144,7 @@ where
         )
     })?;
 
-    super::managed_server::start_running_managed_pairing(&state, Arc::clone(&core)).await;
+    super::managed_server::pairing::start_running_managed_pairing(&state, Arc::clone(&core)).await;
 
     build_client_snapshot_with_grants(Some(&core), Some(&state.policy), grants)
         .await
@@ -472,7 +473,7 @@ pub(crate) async fn shutdown_client_under_managed_lifecycle<R>(
 where
     R: Runtime,
 {
-    super::managed_server::drain_managed_runtime_pairing(state).await;
+    super::managed_server::pairing::drain_managed_runtime_pairing(state).await;
     drop(exclude_client(state).await?);
     let _ = app.emit(
         "desktop://client-updated",

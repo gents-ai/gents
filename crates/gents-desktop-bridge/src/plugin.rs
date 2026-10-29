@@ -51,7 +51,7 @@ where
             tauri::async_runtime::spawn(async move {
                 let refresh_handle = handle.clone();
                 let refreshed = tauri::async_runtime::spawn_blocking(move || {
-                    tauri_commands::managed_server::refresh_packaged_install(
+                    tauri_commands::managed_server::native::refresh_packaged_install(
                         &refresh_handle,
                         &refresh_handle.state::<DesktopAppState>(),
                     )
@@ -70,8 +70,10 @@ where
                 }
                 let state = handle.state::<DesktopAppState>();
                 if let Err(error) =
-                    tauri_commands::managed_server::restart_outdated_managed_job(&handle, &state)
-                        .await
+                    tauri_commands::managed_server::native::restart_outdated_managed_job(
+                        &handle, &state,
+                    )
+                    .await
                 {
                     tracing::warn!(
                         error = %error.message,
