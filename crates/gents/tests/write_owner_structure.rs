@@ -1754,7 +1754,7 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-cli/src/commands/config/backend.rs", 2),
     ("crates/gents-cli/src/commands/eval/manage.rs", 1),
-    ("crates/gents-cli/src/commands/grok_shim/acp.rs", 2),
+    ("crates/gents-cli/src/commands/grok_shim/acp/errors.rs", 2),
     ("crates/gents-cli/src/commands/grok_shim/job_runs.rs", 2),
     ("crates/gents-cli/src/commands/grok_shim/workflow_command.rs", 1),
     ("crates/gents-cli/src/commands/prepare_runtime.rs", 1),
