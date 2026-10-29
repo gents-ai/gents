@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { createElement } from "react";
 import type { TaskHook } from "@source-inc/gents-desktop-client/generated/TaskHook";
 import {
   formatCommand,
+  HooksRows,
   hooksFromDraft,
   splitCommand,
   toHookDraft,
@@ -29,6 +32,23 @@ const CASES: string[][] = [
 ];
 
 describe("task hook commands", () => {
+  it("lets a user enter skip codes in a before hook", () => {
+    const change = vi.fn();
+    const draft = toHookDraft({ ...hook(["./gate"]), phase: "before" });
+    try {
+      render(
+        createElement(HooksRows, { id: "task", value: [draft], onChange: change }),
+      );
+      fireEvent.change(screen.getByRole("textbox", { name: "Skip exit codes" }), {
+        target: { value: "10, 11" },
+      });
+      expect(hooksFromDraft(change.mock.lastCall![0])).toEqual([
+        { ...hook(["./gate"]), phase: "before", skip_exit_codes: [10, 11] },
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
   it("preserves configured gate exit codes when editing other hook fields", () => {
     const gate: TaskHook = {
       ...hook(["./gate"]),
