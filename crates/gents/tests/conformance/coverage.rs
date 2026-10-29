@@ -1728,6 +1728,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "PromptAssemblyTurnBudgetCases".to_string(),
         ));
     }
+    if !snapshot.prompt_assembly_compaction_trigger_cases.is_empty() {
+        emitted.insert((
+            "prompt_assembly_cases".to_string(),
+            "PromptAssemblyCompactionTriggerCases".to_string(),
+        ));
+    }
     if !snapshot.prompt_assembly_retention_cases.is_empty() {
         emitted.insert((
             "prompt_assembly_cases".to_string(),

@@ -44,7 +44,7 @@ fn test_message_tokens(messages: &[Message]) -> usize {
 }
 
 fn test_reduction_admission() -> ReductionAdmission {
-    ReductionAdmission::for_input(1, 1, 0.0).expect("a zero threshold admits the test reduction")
+    ReductionAdmission::required(1, 0)
 }
 
 fn required_reduction(result: &ReductionResult) -> ExactReduction<'_> {
@@ -1133,7 +1133,12 @@ async fn forced_compaction_does_not_recheck_the_history_only_threshold() {
         .collect::<Vec<_>>();
 
     assert!(
-        ReductionAdmission::for_input(test_message_tokens(&messages), 100_000, 0.75).is_none(),
+        ReductionAdmission::for_context(
+            crate::provider_input::budget::ContextCalibration::default()
+                .context(test_message_tokens(&messages)),
+            crate::provider_input::budget::effective_input_budget(100_000, 0.75),
+        )
+        .is_none(),
         "the history-only guard must be below threshold for this regression"
     );
     let result = compactor
@@ -1196,8 +1201,11 @@ async fn stripping_alone_can_satisfy_an_admitted_complete_input() {
         .unwrap();
     assert!(original_tokens > stripped_tokens);
     let context_window = stripped_tokens.saturating_add(100).saturating_mul(2);
-    let admission = ReductionAdmission::for_input(original_tokens, context_window, 0.5)
-        .expect("the unstripped complete input is over threshold");
+    let admission = ReductionAdmission::for_context(
+        crate::provider_input::budget::ContextCalibration::default().context(original_tokens),
+        crate::provider_input::budget::effective_input_budget(context_window, 0.5),
+    )
+    .expect("the unstripped complete input is over threshold");
     let compactor = ProviderReductionEngine::new(Arc::new(model), config);
 
     let result = compactor
@@ -1229,8 +1237,11 @@ async fn an_indivisible_prompt_still_over_threshold_after_stripping_cannot_fit()
         .estimate_message_request(&messages)
         .unwrap();
     let context_window = input_tokens.saturating_mul(2).saturating_sub(2);
-    let admission = ReductionAdmission::for_input(input_tokens, context_window, 0.5)
-        .expect("the sole prompt is over the threshold budget");
+    let admission = ReductionAdmission::for_context(
+        crate::provider_input::budget::ContextCalibration::default().context(input_tokens),
+        crate::provider_input::budget::effective_input_budget(context_window, 0.5),
+    )
+    .expect("the sole prompt is over the threshold budget");
     let compactor = ProviderReductionEngine::new(Arc::new(model), config);
 
     let result = compactor

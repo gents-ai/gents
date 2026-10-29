@@ -36,14 +36,23 @@ fn generated_turn_budget_cases_drive_every_completion_dispatch() {
             "{}: per-turn output clamp drifted from Lean",
             case.name
         );
+        let compaction_budget = crate::provider_input::budget::compaction_input_budget(
+            case.context_window,
+            threshold,
+            case.max_output_tokens,
+        );
+        assert_eq!(
+            compaction_budget, case.compaction_input_budget,
+            "{}: compaction input budget drifted from Lean",
+            case.name
+        );
         let actual = case
             .turn_input_tokens
             .iter()
             .map(|tokens| {
-                crate::compaction::ReductionAdmission::for_input(
-                    *tokens,
-                    case.context_window,
-                    threshold,
+                crate::compaction::ReductionAdmission::for_context(
+                    crate::provider_input::budget::ContextCalibration::default().context(*tokens),
+                    compaction_budget,
                 )
                 .is_some()
             })
@@ -1214,14 +1223,89 @@ fn generated_budget_cases_drive_dynamic_output_compaction_trigger() {
             "{}: provider dispatch legality drifted from Lean",
             case.name
         );
+        let compaction_budget = crate::provider_input::budget::compaction_input_budget(
+            case.context_window,
+            threshold,
+            case.max_output_tokens,
+        );
         assert_eq!(
-            crate::compaction::ReductionAdmission::for_input(
-                input_tokens,
-                case.context_window,
-                threshold,
+            compaction_budget, case.compaction_input_budget,
+            "{}: compaction input budget drifted from Lean",
+            case.name
+        );
+        assert_eq!(
+            crate::compaction::ReductionAdmission::for_context(
+                crate::provider_input::budget::ContextCalibration::default().context(input_tokens),
+                compaction_budget,
             )
             .is_some(),
             case.should_compact,
+            "{}: production compaction trigger drifted from Lean",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn generated_compaction_trigger_cases_drive_the_production_trigger() {
+    use crate::provider_input::budget::{ContextAnchor, ContextCalibration};
+    let cases = crate::lean_vocab_test::lean_prompt_assembly_compaction_trigger_cases();
+    assert!(
+        !cases.is_empty(),
+        "Lean emitted no compaction trigger cases"
+    );
+
+    for case in cases {
+        let calibration = ContextCalibration::with_observations(
+            case.prior_basis_points,
+            case.seeded_observations.iter().copied(),
+        );
+        if let Some(anchor) = case.anchor {
+            calibration.anchor_accepted(ContextAnchor {
+                input_tokens: anchor.input_tokens,
+                output_tokens: anchor.output_tokens,
+                estimated_input_tokens: anchor.estimated_input_tokens,
+            });
+        }
+        for (provider, estimate) in &case.observed {
+            calibration.observe(*provider, *estimate);
+        }
+        if case.invalidate {
+            calibration.invalidate_anchor();
+        }
+        let context = calibration.context(case.raw_input_tokens);
+        assert_eq!(
+            (
+                context.ratio_basis_points,
+                context.calibrated,
+                context.anchored,
+                context.tokens,
+            ),
+            (
+                case.ratio_basis_points,
+                case.calibrated_tokens,
+                case.anchored_tokens,
+                case.context_tokens,
+            ),
+            "{}: production context size drifted from Lean",
+            case.name
+        );
+        let budget = crate::provider_input::budget::compaction_input_budget(
+            case.context_window,
+            case.threshold_basis_points as f64 / 10_000.0,
+            case.max_output_tokens,
+        );
+        assert_eq!(
+            budget, case.compaction_input_budget,
+            "{}: compaction input budget drifted from Lean",
+            case.name
+        );
+        let admission = crate::compaction::ReductionAdmission::for_context(context, budget)
+            .map(|admission| (admission.input_tokens(), admission.effective_input_budget()));
+        assert_eq!(
+            admission,
+            case.admission
+                .map(|admission| (admission.input_tokens, admission.input_budget)),
             "{}: production compaction trigger drifted from Lean",
             case.name
         );
@@ -1511,8 +1595,10 @@ async fn provider_usage_calibrates_the_next_dispatch() {
         "the first call's cache-inclusive usage calibrates the next dispatch"
     );
     let second_raw = accounting[1].raw_estimated_input_tokens.unwrap();
-    let anchored = crate::provider_input::budget::ContextCalibration::with_anchor(
+    let anchored = crate::provider_input::budget::ContextCalibration::with_ratio(
         observed,
+    )
+    .anchored_at(
         crate::provider_input::budget::ContextAnchor {
             input_tokens: 15_006,
             output_tokens: 10,

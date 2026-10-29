@@ -124,7 +124,8 @@ fn anchor(input_tokens: u64, output_tokens: u64, estimated_input_tokens: usize) 
 #[test]
 fn anchored_context_is_provider_total_plus_calibrated_growth() {
     let ratio = observed_input_ratio_basis_points(100_000, 60_000).unwrap();
-    let calibration = ContextCalibration::with_anchor(ratio, anchor(100_000, 2_000, 60_000));
+    let calibration =
+        ContextCalibration::with_ratio(ratio).anchored_at(anchor(100_000, 2_000, 60_000));
 
     let unchanged = calibration.context(60_000);
     assert_eq!(
@@ -153,7 +154,8 @@ fn anchored_context_is_provider_total_plus_calibrated_growth() {
 
 #[test]
 fn anchor_raises_the_count_and_never_lowers_it() {
-    let calibration = ContextCalibration::with_anchor(12_000, anchor(100_000, 0, 60_000));
+    let calibration =
+        ContextCalibration::with_ratio(12_000).anchored_at(anchor(100_000, 0, 60_000));
     let context = calibration.context(60_000);
     assert_eq!(context.calibrated, 72_000);
     assert_eq!(
@@ -161,7 +163,8 @@ fn anchor_raises_the_count_and_never_lowers_it() {
         "the provider's count beats a stale low ratio"
     );
 
-    let calibration = ContextCalibration::with_anchor(30_000, anchor(100_000, 0, 60_000));
+    let calibration =
+        ContextCalibration::with_ratio(30_000).anchored_at(anchor(100_000, 0, 60_000));
     let context = calibration.context(60_000);
     assert_eq!(context.anchored, Some(100_000));
     assert_eq!(
@@ -172,7 +175,7 @@ fn anchor_raises_the_count_and_never_lowers_it() {
 
 #[test]
 fn ratio_only_copies_never_anchor_or_share_state() {
-    let session = ContextCalibration::with_anchor(17_000, anchor(100_000, 0, 60_000));
+    let session = ContextCalibration::with_ratio(17_000).anchored_at(anchor(100_000, 0, 60_000));
     let summary = session.ratio_only();
     assert_eq!(summary.ratio_basis_points(), 17_000);
     assert_eq!(summary.context(60_000).anchored, None);

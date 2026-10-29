@@ -31,6 +31,39 @@ def effectiveInputBudget
     (configuredThresholdBudget contextWindow : Nat) : Nat :=
   min configuredThresholdBudget contextWindow
 
+/-- The output a compacting request reserves inside the window: the
+configured max output, but never more than a quarter of the window, so an
+unbounded or implausible ceiling cannot starve the input. -/
+def compactionOutputReserve (contextWindow maxOutputTokens : Nat) : Nat :=
+  min maxOutputTokens (contextWindow / 4)
+
+/-- The input budget compaction keeps a request within, in provider tokens:
+the configured threshold of the window, and never more than the window less
+the output the request reserves. After a provider overflow the window is the
+provider's stated limit. -/
+def compactionInputBudget (contextWindow basisPoints maxOutputTokens : Nat) : Nat :=
+  min (effectiveInputBudget (configuredThresholdBudget contextWindow basisPoints) contextWindow)
+    (contextWindow - compactionOutputReserve contextWindow maxOutputTokens)
+
+theorem compaction_input_budget_le_effective (contextWindow basisPoints maxOutputTokens : Nat) :
+    compactionInputBudget contextWindow basisPoints maxOutputTokens ≤
+      effectiveInputBudget (configuredThresholdBudget contextWindow basisPoints)
+        contextWindow :=
+  Nat.min_le_left _ _
+
+/-- A request within the compaction budget leaves its reserved output inside
+the window. -/
+theorem compaction_input_budget_reserves_output (contextWindow basisPoints maxOutputTokens : Nat) :
+    compactionInputBudget contextWindow basisPoints maxOutputTokens +
+        compactionOutputReserve contextWindow maxOutputTokens ≤ contextWindow := by
+  unfold compactionInputBudget compactionOutputReserve
+  have hreserve : min maxOutputTokens (contextWindow / 4) ≤ contextWindow :=
+    (Nat.min_le_right _ _).trans (Nat.div_le_self _ _)
+  have hmin := Nat.min_le_right
+    (effectiveInputBudget (configuredThresholdBudget contextWindow basisPoints) contextWindow)
+    (contextWindow - min maxOutputTokens (contextWindow / 4))
+  omega
+
 /-- The recovery band: four fifths of the effective input budget. The whole
 request right after a reduction fits it, so the next turns grow back toward
 the threshold instead of crossing it again straight away. -/
@@ -71,9 +104,12 @@ theorem compaction_retention_le_available
       4 * effectiveInputBudget / 5 - fixedInput - summaryReserve := Nat.min_le_right _ _
   omega
 
-/-- The recovery band invariant: when the fixed layers and the checkpoint's
-reserve fit the band, the whole post-compaction request (fixed layers,
-checkpoint and retained tail) is at most four fifths of the budget. -/
+/-- The recovery band invariant on the retention target: when the fixed
+layers and the checkpoint's reserve fit the band, fixed layers plus reserve
+plus the target are at most four fifths of the budget. The reduced request
+attains it only when the retained latest turn fits the target and the
+checkpoint stays within its reserve; the engine keeps the latest turn whole,
+so a larger turn lands above the band. -/
 theorem compaction_post_request_within_recovery_band
     (configuredKeepRecent effectiveInputBudget fixedInput summaryReserve : Nat)
     (hfits : fixedInput + summaryReserve ≤ recoveryBandBudget effectiveInputBudget) :

@@ -151,12 +151,23 @@ pub fn estimator_input_budget(budget: usize, ratio_basis_points: u64) -> usize {
     ((budget as u128 * u128::from(UNIT_INPUT_RATIO_BASIS_POINTS)) / u128::from(ratio)) as usize
 }
 
+/// `tokens` provider tokens in this estimator's units at `ratio_basis_points`,
+/// rounded up.
+pub fn estimator_input_units(tokens: usize, ratio_basis_points: u64) -> usize {
+    let ratio = ratio_basis_points.max(UNIT_INPUT_RATIO_BASIS_POINTS);
+    usize::try_from(
+        (tokens as u128 * u128::from(UNIT_INPUT_RATIO_BASIS_POINTS)).div_ceil(u128::from(ratio)),
+    )
+    .unwrap_or(usize::MAX)
+}
+
 /// The input budget compaction keeps a request within, in provider tokens:
 /// the configured threshold of `context_window`, and never more than the
 /// window less the output the request reserves. The reserve is the
 /// configured max output; an unbounded or implausible one (over a quarter of
 /// the window) reserves a quarter. After a provider overflow,
-/// `context_window` is the provider's stated limit.
+/// `context_window` is the provider's stated limit. Modelled by
+/// `PromptAssembly.Budget.compactionInputBudget`.
 pub fn compaction_input_budget(
     context_window: usize,
     threshold: f64,
@@ -311,11 +322,6 @@ impl ContextCalibration {
         self
     }
 
-    /// `ratio_basis_points` with `anchor` as the latest completed call.
-    pub fn with_anchor(ratio_basis_points: u64, anchor: ContextAnchor) -> Self {
-        Self::with_ratio(ratio_basis_points).anchored_at(anchor)
-    }
-
     /// The ratio to assume before this session has observed the provider.
     pub fn prior_for(profile: super::ProviderInputProfile) -> Self {
         Self::with_ratio(match profile {
@@ -388,7 +394,8 @@ impl ContextCalibration {
     }
 
     /// The context size of a request this estimator counts as
-    /// `estimated_input_tokens`.
+    /// `estimated_input_tokens`. Modelled by
+    /// `PromptAssembly.ContextCalibration.State.tokens`.
     pub fn context(&self, estimated_input_tokens: usize) -> ContextEstimate {
         let (ratio_basis_points, anchor) = {
             let state = self.lock();
@@ -425,12 +432,7 @@ impl ContextCalibration {
 
     /// `tokens` provider tokens in this estimator's units, rounded up.
     pub fn estimator_units(&self, tokens: usize) -> usize {
-        let ratio = self.ratio_basis_points().max(UNIT_INPUT_RATIO_BASIS_POINTS);
-        usize::try_from(
-            (tokens as u128 * u128::from(UNIT_INPUT_RATIO_BASIS_POINTS))
-                .div_ceil(u128::from(ratio)),
-        )
-        .unwrap_or(usize::MAX)
+        estimator_input_units(tokens, self.ratio_basis_points())
     }
 }
 

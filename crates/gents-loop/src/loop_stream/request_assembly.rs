@@ -1636,9 +1636,9 @@ where
         crate::provider_input::budget::configured_output_ceiling(config.max_tokens),
     );
     let context = config.context_calibration.context(before_tokens);
-    if crate::provider_input::budget::threshold_decision(context.tokens, provider_budget)
-        != crate::provider_input::budget::ThresholdDecision::ReduceEligible
-    {
+    let Some(admission) =
+        crate::compaction::ReductionAdmission::for_context(context, provider_budget)
+    else {
         return Ok((
             request,
             TurnContextDecision {
@@ -1646,21 +1646,7 @@ where
                 pre_compaction_input_tokens: None,
             },
         ));
-    }
-    let effective_input_budget = config.context_calibration.estimator_budget(provider_budget);
-    // The admission is in estimator units: the raw count, unless the anchor
-    // is what put the request over budget.
-    let admission = crate::compaction::ReductionAdmission::required(
-        if context.tokens > context.calibrated {
-            config
-                .context_calibration
-                .estimator_units(context.tokens)
-                .max(before_tokens)
-        } else {
-            before_tokens
-        },
-        effective_input_budget,
-    );
+    };
     reduce_and_rebuild(
         model,
         history,
@@ -1762,8 +1748,8 @@ where
 /// Run the turn compactor under `admission` and rebuild the request. The
 /// rebuilt request, in provider tokens (calibrated: the anchor describes the
 /// unreduced transcript), must fit `provider_budget`, the budget that
-/// admitted the reduction. `pre_compaction_tokens` is the reduced request's
-/// size in provider tokens, for the accounting.
+/// admitted the reduction. `pre_compaction_tokens` is the unreduced
+/// request's size in provider tokens, for the accounting.
 ///
 /// The transcript, replay keys and anchor change only when the rebuilt
 /// request fits: a reduction that fails, or cannot fit, leaves the session as

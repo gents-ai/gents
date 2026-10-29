@@ -165,7 +165,7 @@ async fn exercise(reject_guidance: bool) {
                     mode: ReductionMode::Summarize,
                     ..Default::default()
                 },
-                ReductionAdmission::for_input(1, 1, 0.0).unwrap(),
+                ReductionAdmission::required(1, 0),
             )
             .await
             .unwrap();

@@ -429,22 +429,8 @@ where
                         ),
                     );
                     let context = context_calibration.context(complete_input_tokens);
-                    let reduction_admission = (crate::provider_input::budget::threshold_decision(
-                        context.tokens,
-                        provider_budget,
-                    ) == crate::provider_input::budget::ThresholdDecision::ReduceEligible)
-                        .then(|| {
-                            compaction::ReductionAdmission::required(
-                                if context.tokens > context.calibrated {
-                                    context_calibration
-                                        .estimator_units(context.tokens)
-                                        .max(complete_input_tokens)
-                                } else {
-                                    complete_input_tokens
-                                },
-                                context_calibration.estimator_budget(provider_budget),
-                            )
-                        });
+                    let reduction_admission =
+                        compaction::ReductionAdmission::for_context(context, provider_budget);
                     let over_threshold = reduction_admission.is_some();
                     let may_reduce = if over_threshold {
                         let gate_open = canonical_prefix_is_stable;

@@ -203,24 +203,29 @@ pub struct ReductionAdmission {
 }
 
 impl ReductionAdmission {
-    pub fn for_input(input_tokens: usize, context_window: usize, threshold: f64) -> Option<Self> {
-        Self::over_budget(
-            input_tokens,
-            crate::provider_input::budget::effective_input_budget(context_window, threshold),
-        )
-    }
-
-    /// Admission when `input_tokens` exceeds `effective_input_budget`, both in
-    /// the same estimator units.
-    pub fn over_budget(input_tokens: usize, effective_input_budget: usize) -> Option<Self> {
+    /// The compaction trigger: admission when `context` exceeds
+    /// `provider_budget` (provider tokens). The admission is in estimator
+    /// units: the raw count, unless the anchor is what put the request over
+    /// budget. Modelled by `PromptAssembly.ContextCalibration.State.admission`.
+    pub fn for_context(
+        context: crate::provider_input::budget::ContextEstimate,
+        provider_budget: usize,
+    ) -> Option<Self> {
+        use crate::provider_input::budget;
         matches!(
-            threshold_decision(input_tokens, effective_input_budget),
+            threshold_decision(context.tokens, provider_budget),
             ThresholdDecision::ReduceEligible
         )
-        .then_some(Self {
-            input_tokens,
-            effective_input_budget,
-            threshold_decision: ThresholdDecision::ReduceEligible,
+        .then(|| {
+            Self::required(
+                if context.tokens > context.calibrated {
+                    budget::estimator_input_units(context.tokens, context.ratio_basis_points)
+                        .max(context.raw)
+                } else {
+                    context.raw
+                },
+                budget::estimator_input_budget(provider_budget, context.ratio_basis_points),
+            )
         })
     }
 
