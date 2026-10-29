@@ -96,16 +96,25 @@ export function needsFirstRunSetup(snapshot: DesktopClientSnapshot): boolean {
 
 export type FirstRunPhase = "unknown" | "active" | "done";
 
+export function hasSavedRemote(snapshot: DesktopClientSnapshot): boolean {
+  return snapshot.bootstrap.savedPeers.some(
+    (peer) =>
+      peer.source === "enrollment" &&
+      !isLocalNode(peer, snapshot.bootstrap.initNodeDid),
+  );
+}
+
 export function projectFirstRunPhase(
   phase: FirstRunPhase,
   snapshotReady: boolean,
   initConfigStatus: DesktopClientSnapshot["bootstrap"]["initConfigStatus"],
   needsSetup: boolean,
   authoritative: boolean,
+  savedRemote = false,
 ): FirstRunPhase {
   if (phase !== "unknown") return phase;
   if (!snapshotReady) return "unknown";
-  if (initConfigStatus === "absent") return "active";
+  if (initConfigStatus === "absent") return savedRemote ? "done" : "active";
   if (initConfigStatus !== "configured") return "unknown";
   if (!authoritative) return "unknown";
   return needsSetup ? "active" : "done";

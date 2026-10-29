@@ -36,11 +36,12 @@ def main : IO Unit := do
   let firstRunRows := firstRunPhases.flatMap fun phase =>
     [false, true].flatMap fun snapshotReady =>
       [false, true].flatMap fun initConfigAbsent =>
+       [false, true].flatMap fun savedRemote =>
         [false, true].flatMap fun needsSetup =>
           [false, true].map fun authoritative =>
-            let expected := ClientSnapshotObservation.observeFirstRun phase snapshotReady initConfigAbsent needsSetup authoritative
+            let expected := ClientSnapshotObservation.observeFirstRun phase snapshotReady initConfigAbsent savedRemote needsSetup authoritative
             "{\"phase\":\"" ++ firstRunName phase ++ "\",\"snapshotReady\":" ++ toString snapshotReady ++
-            ",\"initConfigAbsent\":" ++ toString initConfigAbsent ++ ",\"needsSetup\":" ++ toString needsSetup ++
+            ",\"initConfigAbsent\":" ++ toString initConfigAbsent ++ ",\"savedRemote\":" ++ toString savedRemote ++ ",\"needsSetup\":" ++ toString needsSetup ++
             ",\"authoritative\":" ++ toString authoritative ++ ",\"expected\":\"" ++ firstRunName expected ++ "\"}"
   IO.println ("{\"fences\":[" ++ String.intercalate "," rows ++
     "],\"startup\":[" ++ String.intercalate "," startupRows ++

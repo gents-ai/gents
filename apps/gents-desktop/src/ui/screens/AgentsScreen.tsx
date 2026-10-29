@@ -41,7 +41,9 @@ import { NodeHoverCard } from "./HoverCards";
 import { isWorkingNode } from "@/lib/nodes";
 import { toastFailure } from "@/lib/failure";
 import { useApp } from "@/app/AppContext";
-import { useEnrollmentRequests, useHomeDid } from "@/hooks/useClient";
+import { useBootstrap, useEnrollmentRequests, useHomeDid } from "@/hooks/useClient";
+import { supportsLocalManagedServer } from "../../lib/shellPlatform";
+import { SetupScreen } from "./setup/SetupScreen";
 import { NO_SESSIONS, useFleet } from "@/hooks/useFleet";
 import { fleetNodes } from "@/lib/scope";
 import { nodeKeyOf, type NodeView } from "../../hooks/fleetStore";
@@ -54,6 +56,7 @@ export function AgentsScreen() {
   } = useApp();
   const nodes = useFleet(useShallow(fleetNodes));
   const [adding, setAdding] = useState(false);
+  const [addingLocal, setAddingLocal] = useState(false);
   const [renaming, setRenaming] = useState<{
     peerId: string;
     label: string;
@@ -66,6 +69,18 @@ export function AgentsScreen() {
   const [removingBusy, setRemovingBusy] = useState(false);
   const pending = useEnrollmentRequests();
   const homeDid = useHomeDid();
+  const bootstrap = useBootstrap();
+  if (addingLocal) {
+    return (
+      <SetupScreen
+        localOnly
+        onCancel={() => setAddingLocal(false)}
+        onDone={() => {
+          setAddingLocal(false);
+        }}
+      />
+    );
+  }
   const groups = [
     {
       key: "local",
@@ -128,11 +143,23 @@ export function AgentsScreen() {
               )}
             </h2>
             {g.nodes.length === 0 && (
-              <p className="mt-3 rounded-2xl border border-dashed border-border px-5 py-4 text-sm text-muted-foreground">
+              <div className="mt-3 rounded-2xl border border-dashed border-border px-5 py-4 text-sm text-muted-foreground">
                 {g.key === "local"
                   ? "No node runs on this machine; work happens on the remote nodes."
                   : "No remote nodes paired."}
-              </p>
+                {g.key === "local" &&
+                  bootstrap?.initConfigStatus === "absent" &&
+                  supportsLocalManagedServer() && (
+                    <Button
+                      className="mt-3"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setAddingLocal(true)}
+                    >
+                      Set up local node
+                    </Button>
+                  )}
+              </div>
             )}
             <ul className="mt-3 grid grid-cols-[minmax(0,1fr)] gap-3">
               {g.nodes.map((d) => (

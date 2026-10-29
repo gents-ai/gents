@@ -133,15 +133,21 @@ inductive FirstRunPhase where
 reports absence, or after a configured home has a complete operator snapshot.
 Unreadable init state and partial operator snapshots remain unresolved. Once
 setup owns the window, observations cannot restart or dismiss it. -/
-def observeFirstRun (phase : FirstRunPhase) (snapshotReady initConfigAbsent needsSetup authoritative : Bool) : FirstRunPhase :=
+def observeFirstRun (phase : FirstRunPhase) (snapshotReady initConfigAbsent savedRemote needsSetup authoritative : Bool) : FirstRunPhase :=
   match phase with
   | .active => .active
   | .done => .done
   | .unknown =>
       if !snapshotReady then .unknown
-      else if initConfigAbsent then .active
+      else if initConfigAbsent then if savedRemote then .done else .active
       else if !authoritative then .unknown
       else if needsSetup then .active else .done
+
+/-- A saved remote setup survives temporary route unavailability. Readiness
+and authorization continue to gate the operations that use that route. -/
+theorem saved_remote_bypasses_local_setup (needsSetup authoritative : Bool) :
+    observeFirstRun .unknown true true true needsSetup authoritative = .done := by
+  simp [observeFirstRun]
 
 /-- A client observation can recover a client error, not managed-server authority.
 

@@ -5,6 +5,7 @@ export {
   shouldRebindSetupDefault,
   nodeSetUp,
   configIsRead,
+  hasSavedRemote,
   needsFirstRunSetup,
   projectFirstRunPhase,
   type FirstRunPhase,

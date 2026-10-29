@@ -4,6 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 
 import {
   configIsRead,
+  hasSavedRemote,
   needsFirstRunSetup,
   projectFirstRunPhase,
   type FirstRunPhase,
@@ -27,6 +28,7 @@ export function useFirstRun(generation: number, startupReady: boolean) {
       return {
         hasSnapshot: snapshot !== null,
         initConfigStatus,
+        savedRemote: snapshot !== null && hasSavedRemote(snapshot),
         needsSetup: snapshot !== null && needsFirstRunSetup(snapshot),
         authoritative:
           initConfigStatus === "configured" &&
@@ -47,6 +49,7 @@ export function useFirstRun(generation: number, startupReady: boolean) {
       facts.initConfigStatus,
       facts.needsSetup,
       facts.authoritative,
+      facts.savedRemote,
     );
   }
   if (held.generation !== generation || held.phase !== phase) {

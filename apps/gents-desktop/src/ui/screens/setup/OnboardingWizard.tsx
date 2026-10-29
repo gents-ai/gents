@@ -130,12 +130,14 @@ export function OnboardingWizard({
   nodeDid,
   onCancel,
   provider,
+  localOnly = false,
 }: {
   onDone: (snapshot: DesktopClientSnapshot) => void;
   initialStep?: Step;
   nodeDid?: string;
   onCancel?: () => void;
   provider?: ProviderId;
+  localOnly?: boolean;
 }) {
   const bootstrap = useBootstrap();
   const home = useHomeFolder();
@@ -432,26 +434,28 @@ export function OnboardingWizard({
               ) : null}
             </Option>
           )}
-          <Option
-            selected={where === "remote"}
-            onSelect={() => setWhere("remote")}
-            title="Remote connect"
-            hint="Join a Gents server someone else runs."
-            icon={Wifi}
-          >
-            <Field label="Server address">
-              <Input
-                type="url"
-                value={address}
-                onChange={(event) => setAddress(event.target.value)}
-                placeholder="https://gents.example.net:8787"
-              />
-            </Field>
-            <p className="text-xs text-muted-foreground">
-              Use the server’s status address. Its administrator approves your access
-              request.
-            </p>
-          </Option>
+          {!localOnly && (
+            <Option
+              selected={where === "remote"}
+              onSelect={() => setWhere("remote")}
+              title="Remote connect"
+              hint="Join a Gents server someone else runs."
+              icon={Wifi}
+            >
+              <Field label="Server address">
+                <Input
+                  type="url"
+                  value={address}
+                  onChange={(event) => setAddress(event.target.value)}
+                  placeholder="https://gents.example.net:8787"
+                />
+              </Field>
+              <p className="text-xs text-muted-foreground">
+                Use the server’s status address. Its administrator approves your access
+                request.
+              </p>
+            </Option>
+          )}
         </div>
         {error ? (
           <p role="alert" className="mt-3 text-sm text-destructive">
@@ -459,6 +463,7 @@ export function OnboardingWizard({
           </p>
         ) : null}
         <Nav
+          onBack={onCancel}
           next={where === "local" ? createNode : enrol}
           nextLabel={where === "local" ? "Next" : "Request access"}
           busy={busy}

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 import {
   inferenceIsConfigured,
+  hasSavedRemote,
   isLocalNode,
   needsFirstRunSetup,
   nodeSetUp,
@@ -21,6 +22,40 @@ describe("first-run inference gate", () => {
 
   it("allows setup for an existing but uninitialized home", () => {
     expect(projectFirstRunPhase("unknown", true, "absent", true, false)).toBe("active");
+  });
+
+  it("reopens a saved remote setup even while its route is not ready", () => {
+    const snapshot = {
+      bootstrap: {
+        ...bootstrap,
+        initConfigStatus: "absent",
+        initNodeDid: null,
+        savedPeers: [{ ...deployment, source: "enrollment" }],
+      },
+      client: null,
+    } as Parameters<typeof hasSavedRemote>[0];
+    expect(hasSavedRemote(snapshot)).toBe(true);
+    expect(projectFirstRunPhase("unknown", true, "absent", true, false, true)).toBe(
+      "done",
+    );
+    expect(projectFirstRunPhase("unknown", false, "absent", true, false, true)).toBe(
+      "unknown",
+    );
+    expect(projectFirstRunPhase("unknown", true, "configured", true, true, true)).toBe(
+      "active",
+    );
+  });
+
+  it("does not treat a local or unrelated route as a saved remote setup", () => {
+    const snapshot = {
+      bootstrap: {
+        ...bootstrap,
+        initNodeDid: deployment.nodeDid,
+        savedPeers: [{ ...deployment, source: "enrollment" }],
+      },
+      client: null,
+    } as Parameters<typeof hasSavedRemote>[0];
+    expect(hasSavedRemote(snapshot)).toBe(false);
   });
 
   it("keeps setup unresolved when an existing init config cannot be decoded", () => {
