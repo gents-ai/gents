@@ -177,10 +177,12 @@ async fn live_steering_edits_reorders_and_removes_before_same_request_continues(
             selected_request_doc_ids: vec![old.clone(), second.clone()],
             messages: vec![
                 PendingMessageEdit {
+                    authored_input: None,
                     request_doc_id: second,
                     content: SECOND.into(),
                 },
                 PendingMessageEdit {
+                    authored_input: None,
                     request_doc_id: old,
                     content: FIRST.into(),
                 },

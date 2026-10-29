@@ -193,6 +193,10 @@ pub fn current_capabilities() -> BTreeMap<String, u64> {
             u64::from(crate::request_input::REQUEST_INPUT_CONTRACT_VERSION),
         ),
         (
+            "authored_queue_edit",
+            crate::session_input_edit::AUTHORED_QUEUE_EDIT_VERSION,
+        ),
+        (
             "goal_stop",
             u64::from(crate::goal_control::GOAL_STOP_CONTRACT_VERSION),
         ),

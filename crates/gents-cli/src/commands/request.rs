@@ -147,6 +147,7 @@ async fn request_edit_pending(args: RequestEditPendingArgs) -> Result<()> {
     let content = resolve_request_content(args.content.as_deref(), args.content_file.as_deref())?;
     let selected = vec![args.request_doc_id.clone()];
     let message = gents::lifecycle::PendingMessageEdit {
+        authored_input: None,
         request_doc_id: args.request_doc_id,
         content,
     };
@@ -178,6 +179,7 @@ async fn request_reorder_pending(args: RequestReorderPendingArgs) -> Result<()> 
                 .find(|entry| entry.request_doc_id == id)
                 .context("Selected message is no longer pending")?;
             Ok(gents::lifecycle::PendingMessageEdit {
+                authored_input: None,
                 request_doc_id: id,
                 content: entry.content.clone(),
             })

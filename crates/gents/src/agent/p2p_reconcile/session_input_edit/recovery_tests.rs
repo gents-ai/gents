@@ -72,6 +72,7 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
         expected_request_doc_ids: vec![original.clone()],
         selected_request_doc_ids: vec![original.clone()],
         messages: vec![PendingMessageEdit {
+            authored_input: None,
             request_doc_id: original,
             content: "corrected content".into(),
         }],

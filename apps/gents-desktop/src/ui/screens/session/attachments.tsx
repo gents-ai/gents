@@ -107,10 +107,14 @@ export function SentAttachments({
   items,
   requestId,
   messageKey,
+  removed,
+  onRemove,
 }: {
   items?: AttachmentView[] | null;
   requestId?: string | null;
   messageKey?: string;
+  removed?: readonly number[];
+  onRemove?: (index: number) => void;
 }) {
   const { root, previews, error, retry } = useSentAttachmentPreviews(
     items,
@@ -124,31 +128,45 @@ export function SentAttachments({
       className="my-2 flex max-w-full flex-wrap justify-end gap-2 text-foreground"
       aria-label="Sent attachments"
     >
-      {items.map((item, index) => (
-        <div
-          key={`${index}:${item.digest}`}
-          title={item.name}
-          className="flex h-20 max-w-60 items-center gap-2 rounded-lg border border-border bg-muted/40 p-2 text-xs"
-        >
-          {previews[index] ? (
-            <img
-              src={previews[index]}
-              alt={item.name}
-              className="size-16 rounded bg-muted object-contain"
-            />
-          ) : item.mediaType.startsWith("image/") ? (
-            <ImageIcon className="size-5" />
-          ) : (
-            <File className="size-5" />
-          )}
-          <span className="min-w-0">
-            <span className="block truncate">{item.name}</span>
-            <span className="block text-muted-foreground">
-              {attachmentDetails(item.mediaType, item.size)}
+      {items.map((item, index) =>
+        removed?.includes(index) ? null : (
+          <div
+            key={`${index}:${item.digest}`}
+            title={item.name}
+            className="relative flex h-20 max-w-60 items-center gap-2 rounded-lg border border-border bg-muted/40 p-2 text-xs"
+          >
+            {previews[index] ? (
+              <img
+                src={previews[index]}
+                alt={item.name}
+                className="size-16 rounded bg-muted object-contain"
+              />
+            ) : item.mediaType.startsWith("image/") ? (
+              <ImageIcon className="size-5" />
+            ) : (
+              <File className="size-5" />
+            )}
+            <span className="min-w-0">
+              <span className="block truncate">{item.name}</span>
+              <span className="block text-muted-foreground">
+                {attachmentDetails(item.mediaType, item.size)}
+              </span>
             </span>
-          </span>
-        </div>
-      ))}
+            {onRemove && (
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                className="absolute right-0 top-0"
+                aria-label={`Remove ${item.name}`}
+                onClick={() => onRemove(index)}
+              >
+                <X />
+              </Button>
+            )}
+          </div>
+        ),
+      )}
       {error && (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span>{error}</span>

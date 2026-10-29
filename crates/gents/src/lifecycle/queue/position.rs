@@ -5,6 +5,10 @@ use crate::config_client::ConfigRead;
 #[error("replacement request does not own its queue position")]
 pub(crate) struct InvalidQueuePosition;
 
+pub(super) fn same_execution_directory(old: &RequestInput, new: &RequestInput) -> bool {
+    old.cwd == new.cwd
+}
+
 pub async fn validate_position(read: &impl ConfigRead, row: &AgentRequestRow) -> Result<()> {
     let Some(position) = row
         .input
@@ -65,8 +69,7 @@ pub async fn validate_position(read: &impl ConfigRead, row: &AgentRequestRow) ->
                 && previous.workspace_owner_node_did == current.workspace_owner_node_did
                 && previous.workspace_authority == current.workspace_authority
                 && previous.workspace_seal_hash == current.workspace_seal_hash
-                && old_input.cwd == input.cwd
-                && old_input.selected_skill_ids == input.selected_skill_ids
+                && same_execution_directory(old_input, input)
                 && old_queue.source == QueueSource::User
                 && queue.source == QueueSource::User
                 && old_queue.policy == QueuePolicy::Append

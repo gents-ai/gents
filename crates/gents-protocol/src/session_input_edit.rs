@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const SESSION_INPUT_EDIT_VERSION: u8 = 1;
+pub const AUTHORED_QUEUE_EDIT_VERSION: u64 = 1;
+pub const STATUS_AUTHORED_QUEUE_EDIT_FIELD: &str = "authored_queue_edit_version";
 
 #[derive(Debug, thiserror::Error)]
 pub enum SessionInputEditError {
@@ -44,6 +46,8 @@ type Result<T, E = SessionInputEditError> = std::result::Result<T, E>;
 pub struct PendingMessageEdit {
     pub request_doc_id: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authored_input: Option<crate::request_input::AuthoredRequestInput>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,6 +114,25 @@ impl SessionInputEdit {
         for message in &self.edit.messages {
             fields.push(message.request_doc_id.clone());
             fields.push(message.content.clone());
+        }
+        if self
+            .edit
+            .messages
+            .iter()
+            .any(|message| message.authored_input.is_some())
+        {
+            fields.push("authored-input-v1".into());
+            for message in &self.edit.messages {
+                match &message.authored_input {
+                    Some(authored) => {
+                        fields.push("some".into());
+                        fields.push(hex(
+                            &serde_json::to_vec(authored).expect("authored input serializes")
+                        ));
+                    }
+                    None => fields.push("none".into()),
+                }
+            }
         }
         fields.push(self.replacements.len().to_string());
         for replacement in &self.replacements {
@@ -262,5 +285,47 @@ impl SessionInputEditReceipt {
             return Err(SessionInputEditError::ReceiptReplacementsDiffer);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn signature_binds_authored_input_to_its_message() {
+        let message = |id: &str| PendingMessageEdit {
+            request_doc_id: id.into(),
+            content: "message".into(),
+            authored_input: None,
+        };
+        let mut command = SessionInputEdit {
+            version: SESSION_INPUT_EDIT_VERSION,
+            command_id: "command".into(),
+            requester_did: "requester".into(),
+            requester_peer_id: None,
+            node_did: "node".into(),
+            session_id: "session".into(),
+            issued_at: "2026-01-01T00:00:00Z".into(),
+            expires_at: "2026-01-01T00:01:00Z".into(),
+            edit: PendingQueueEdit {
+                expected_request_doc_ids: vec!["one".into(), "two".into()],
+                selected_request_doc_ids: vec!["one".into(), "two".into()],
+                messages: vec![message("one"), message("two")],
+            },
+            replacements: Vec::new(),
+            signature: Vec::new(),
+        };
+        let legacy = command.signing_payload();
+        let input = crate::request_input::AuthoredRequestInput {
+            selected_skill_ids: vec!["review".into()],
+            ..Default::default()
+        };
+        command.edit.messages[0].authored_input = Some(input.clone());
+        let first = command.signing_payload();
+        assert_ne!(first, legacy);
+        command.edit.messages[0].authored_input = None;
+        command.edit.messages[1].authored_input = Some(input);
+        assert_ne!(first, command.signing_payload());
     }
 }

@@ -604,13 +604,7 @@ async fn verify_request_input(
             "auxiliary request cannot carry ordinary request input",
         );
     }
-    deny_if(
-        input.captured_context.iter().all(|context| context.is_well_formed()),
-        "captured context requires an ordered UTF-16 range and a positive buffer version when present",
-    )?;
-    input
-        .validate_attachments()
-        .map_err(AgentRequestAdmissionError::denied)?;
+    validate_authored_content(input)?;
     let owner = required_row_string(row.node_did.as_deref(), "node_did")?;
     let agent = required_row_string(row.agent_id.as_deref(), "agent_id")?;
     let (context, tools, _) = load_request_context(node, owner, agent).await?;
@@ -618,13 +612,7 @@ async fn verify_request_input(
         .as_ref()
         .map(|context| context.skill_ids.as_slice())
         .unwrap_or_default();
-    deny_if(
-        input
-            .selected_skill_ids
-            .iter()
-            .all(|id| skills.contains(id)),
-        "request activates a skill outside its context allowlist",
-    )?;
+    validate_authored_skills(input, skills)?;
     let request =
         AgentRequest::try_from(row.clone()).map_err(AgentRequestAdmissionError::denied)?;
     let artifact_requested = tools
@@ -695,6 +683,31 @@ async fn verify_request_input(
         .map_err(AgentRequestAdmissionError::denied)?;
     }
     Ok(())
+}
+
+pub(crate) fn validate_authored_content(
+    input: &gents_protocol::request_input::RequestInput,
+) -> AdmissionResult<()> {
+    deny_if(
+        input.captured_context.iter().all(|context| context.is_well_formed()),
+        "captured context requires an ordered UTF-16 range and a positive buffer version when present",
+    )?;
+    input
+        .validate_attachments()
+        .map_err(AgentRequestAdmissionError::denied)
+}
+
+pub(crate) fn validate_authored_skills(
+    input: &gents_protocol::request_input::RequestInput,
+    skills: &[String],
+) -> AdmissionResult<()> {
+    deny_if(
+        input
+            .selected_skill_ids
+            .iter()
+            .all(|id| skills.contains(id)),
+        "request activates a skill outside its context allowlist",
+    )
 }
 
 async fn request_hop_admitted(node: &EmbeddedNode, row: &AgentRequestRow) -> AdmissionResult<bool> {
@@ -834,12 +847,14 @@ pub(crate) async fn load_request_context(
         Box::pin(async move { load_request_context_in_txn(txn, &owner, &agent_id).await })
     })
     .await
-    .map_err(
-        |error| match error.downcast::<AgentRequestAdmissionError>() {
-            Ok(error) => error,
-            Err(error) => AgentRequestAdmissionError::unavailable(error),
-        },
-    )
+    .map_err(classify_context_error)
+}
+
+pub(crate) fn classify_context_error(error: anyhow::Error) -> AgentRequestAdmissionError {
+    match error.downcast::<AgentRequestAdmissionError>() {
+        Ok(error) => error,
+        Err(error) => AgentRequestAdmissionError::unavailable(error),
+    }
 }
 
 /// [`load_request_context`] inside `txn`; a refusal is an
