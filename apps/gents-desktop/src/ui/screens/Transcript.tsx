@@ -618,12 +618,13 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   /* A finished turn's changes keep their identity while later turns stream,
      so its memoised row is not drawn again on every update. */
   const keptChanges = useRef(new Map<string, ItemChanges>());
+  const startLoaded = rows.olderBefore === null;
   const changes = useMemo(() => {
     const was = keptChanges.current;
     const next = new Map<string, ItemChanges>();
     if (nodeDid && sessionKey) {
       const scope = { nodeDid, sessionId: sessionKey };
-      for (const [key, files] of turnChanges(entries, finalKeys)) {
+      for (const [key, files] of turnChanges(entries, finalKeys, startLoaded)) {
         const held = was.get(key);
         next.set(
           key,
@@ -638,7 +639,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     }
     keptChanges.current = next;
     return next;
-  }, [entries, finalKeys, nodeDid, sessionKey]);
+  }, [entries, finalKeys, startLoaded, nodeDid, sessionKey]);
   const groupState = useGroupState(sessionKey);
   const dayOpens = useMemo(
     () =>
