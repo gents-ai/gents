@@ -1,8 +1,16 @@
 namespace Session.ExecutionActivity
 
 inductive Phase where
-  | queued | generating | toolWait | providerRetry | unavailable | terminal
+  | unknown | queued | generating | toolWait | providerRetry | unavailable | terminal
   deriving DecidableEq, Repr
+
+/-- A retry is known from the loop's decision. An unreachable endpoint is
+unavailable only when that attempt will not be retried. Other failures do not
+prove that the provider is unavailable. -/
+def failurePhase (willRetry unreachable : Bool) : Phase :=
+  if willRetry then .providerRetry
+  else if unreachable then .unavailable
+  else .unknown
 
 structure Identity where
   request : String
@@ -43,12 +51,27 @@ def project (active : Identity) (terminal : Bool) (now maxAge : Nat)
     | some o =>
         if o.identity != active || o.observedAt > now || now - o.observedAt > maxAge then .unknown
         else match o.phase with
+          | .unknown => .unknown
           | .queued => .queued
           | .generating => .working
           | .toolWait => .waiting
           | .providerRetry => .retrying
           | .unavailable => .unavailable
           | .terminal => .unknown
+
+/-- A pending request is queued even before an execution generation exists.
+Terminal lifecycle remains authoritative over any observation. -/
+def projectRequest (terminal pending : Bool) (active : Option Identity) (now maxAge : Nat)
+    (observation : Option Observation) : Display :=
+  if terminal then .terminal
+  else if pending then .queued
+  else match active with
+    | none => .unknown
+    | some identity => project identity false now maxAge observation
+
+theorem pending_is_queued (active : Option Identity) (now age : Nat)
+    (observation : Option Observation) :
+    projectRequest false true active now age observation = .queued := by simp [projectRequest]
 
 theorem terminal_wins (active : Identity) (now age : Nat) (observation : Option Observation) :
     project active true now age observation = .terminal := by simp [project]

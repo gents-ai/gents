@@ -45,6 +45,16 @@ where
 {
     type AcceptedToolCall: Send;
 
+    fn observe_execution_phase(
+        &self,
+        _lifecycle: &L,
+        _turn: usize,
+        _attempt: u32,
+        _phase: gents_protocol::execution_activity::ExecutionPhase,
+    ) -> impl std::future::Future<Output = ()> + Send {
+        std::future::ready(())
+    }
+
     fn publish_authored_message(
         &self,
         lifecycle: &L,

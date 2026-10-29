@@ -9,6 +9,7 @@ import { logShellEvent } from "./clientLifecycle";
 import { desktopUpdateRefreshScope } from "./projectionController";
 import { timingConfig } from "./timing";
 import { errorText } from "../lib/errorText";
+import { activityExpiry } from "./activityExpiry";
 
 export function startClientObservation(
   { api, stores, view, actions, lifecycle, trackedRequestId }: DesktopApp,
@@ -63,6 +64,32 @@ export function startClientObservation(
     const pollMs = timingConfig().activeSessionPollMs;
     let polled: string | null = null;
     let pollTimer: ReturnType<typeof setTimeout> | undefined;
+    let activityTimer: ReturnType<typeof setTimeout> | undefined;
+    let activityKey: string | null = null;
+    const followActivityExpiry = () => {
+      const session = readSession(stores.session) as
+        | (NonNullable<ReturnType<typeof readSession>> & {
+            executionActivityExpiresAt?: number | null;
+          })
+        | null;
+      const selected = selection.getState();
+      const expiry = activityExpiry(
+        session,
+        selected.sessionId,
+        selected.nodeDid,
+        Date.now(),
+      );
+      const key = expiry?.key ?? null;
+      if (key === activityKey) return;
+      activityKey = key;
+      clearTimeout(activityTimer);
+      activityTimer = undefined;
+      if (key !== null && expiry) {
+        activityTimer = setTimeout(() => {
+          if (!stopped && activityKey === key) void controller.request("session");
+        }, expiry.delay);
+      }
+    };
     const followPoll = () => {
       const sessionId = selection.getState().sessionId;
       const requestId = view.getState().trackedRequestId;
@@ -87,11 +114,14 @@ export function startClientObservation(
     publishSelection();
     void controller.request("session");
     followPoll();
+    followActivityExpiry();
+    const unsubscribeSession = stores.session.subscribe(followActivityExpiry);
     const unsubscribeSelection = selection.subscribe((state, prev) => {
       if (state.nodeDid !== prev.nodeDid) publishSelection();
       if (state.nodeDid !== prev.nodeDid || state.sessionId !== prev.sessionId) {
         void controller.request("session");
         followPoll();
+        followActivityExpiry();
       }
     });
     const unsubscribeTracked = view.subscribe((state, prev) => {
@@ -114,6 +144,8 @@ export function startClientObservation(
       controller.dispose();
       actions.invalidateSessionReads();
       clearTimeout(pollTimer);
+      clearTimeout(activityTimer);
+      unsubscribeSession();
       unsubscribeSelection();
       unsubscribeTracked();
       document.removeEventListener("visibilitychange", onVisibilityChange);

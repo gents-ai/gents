@@ -4,6 +4,7 @@ import Lean
 open Lean Session.ExecutionActivity
 
 private def phaseName : Phase → String
+  | .unknown => "unknown"
   | .queued => "queued"
   | .generating => "generating"
   | .toolWait => "tool_wait"
@@ -22,7 +23,7 @@ private def displayName : Display → String
 
 def main : IO Unit := do
   let active : Identity := ⟨"request", "generation"⟩
-  let phases : List Phase := [.queued, .generating, .toolWait, .providerRetry, .unavailable, .terminal]
+  let phases : List Phase := [.unknown, .queued, .generating, .toolWait, .providerRetry, .unavailable, .terminal]
   let cases := [false, true].flatMap fun terminal =>
     [false, true].flatMap fun sameGeneration =>
       [8, 10, 11, 15].flatMap fun observedAt =>

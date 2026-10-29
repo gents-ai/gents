@@ -292,6 +292,14 @@ where
                 self.stream_writer
                     .start_provider_attempt(self.doc_id, turn, attempt, capture_scope)
                     .await;
+                self.stream_writer
+                    .observe_execution_phase(
+                        self.lifecycle,
+                        turn,
+                        attempt,
+                        gents_protocol::execution_activity::ExecutionPhase::Generating,
+                    )
+                    .await;
                 self.active_provider_attempt = Some((turn, attempt));
                 self.active_capture_scope = Some(capture_scope);
                 Ok(StreamAction::Continue)
@@ -507,6 +515,7 @@ where
                 turn,
                 attempt,
                 will_retry,
+                error,
                 ..
             }) => {
                 self.flush_pending().await?;
@@ -530,6 +539,13 @@ where
                     self.active_provider_attempt = None;
                     self.active_capture_scope = None;
                 }
+                let phase = gents_protocol::execution_activity::failure_execution_phase(
+                    will_retry,
+                    matches!(error, crate::error::InferenceError::ModelUnreachable { .. }),
+                );
+                self.stream_writer
+                    .observe_execution_phase(self.lifecycle, turn, attempt, phase)
+                    .await;
                 Ok(StreamAction::Continue)
             }
             Err(error) => Ok(StreamAction::Error(error)),

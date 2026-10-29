@@ -2,91 +2,10 @@ use std::sync::Mutex;
 
 use tokio::time::Instant;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ExecutionIdentity {
-    pub request: String,
-    pub generation: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExecutionPhase {
-    Queued,
-    Generating,
-    ToolWait,
-    ProviderRetry,
-    Unavailable,
-    Terminal,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ExecutionObservation {
-    pub identity: ExecutionIdentity,
-    pub sequence: u64,
-    pub turn: u64,
-    pub attempt: u64,
-    pub observed_at: u64,
-    pub phase: ExecutionPhase,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ExecutionDisplay {
-    Unknown,
-    Queued,
-    Working,
-    Waiting,
-    Retrying,
-    Unavailable,
-    Terminal,
-}
-
-pub fn accept_execution_observation(
-    active: &ExecutionIdentity,
-    current: Option<ExecutionObservation>,
-    incoming: ExecutionObservation,
-) -> Option<ExecutionObservation> {
-    if &incoming.identity != active {
-        return current;
-    }
-    if current.as_ref().is_none_or(|previous| {
-        &previous.identity != active
-            || (incoming.sequence > previous.sequence
-                && (incoming.turn > previous.turn
-                    || (incoming.turn == previous.turn && incoming.attempt >= previous.attempt)))
-    }) {
-        Some(incoming)
-    } else {
-        current
-    }
-}
-
-pub fn project_execution_activity(
-    active: &ExecutionIdentity,
-    terminal: bool,
-    now: u64,
-    max_age: u64,
-    observation: Option<&ExecutionObservation>,
-) -> ExecutionDisplay {
-    if terminal {
-        return ExecutionDisplay::Terminal;
-    }
-    let Some(observation) = observation else {
-        return ExecutionDisplay::Unknown;
-    };
-    if &observation.identity != active
-        || observation.observed_at > now
-        || now - observation.observed_at > max_age
-    {
-        return ExecutionDisplay::Unknown;
-    }
-    match observation.phase {
-        ExecutionPhase::Queued => ExecutionDisplay::Queued,
-        ExecutionPhase::Generating => ExecutionDisplay::Working,
-        ExecutionPhase::ToolWait => ExecutionDisplay::Waiting,
-        ExecutionPhase::ProviderRetry => ExecutionDisplay::Retrying,
-        ExecutionPhase::Unavailable => ExecutionDisplay::Unavailable,
-        ExecutionPhase::Terminal => ExecutionDisplay::Unknown,
-    }
-}
+pub use gents_protocol::execution_activity::{
+    accept_execution_observation, project_execution_activity, ExecutionDisplay, ExecutionIdentity,
+    ExecutionObservation, ExecutionPhase,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ActivityPhase {
@@ -150,6 +69,86 @@ mod execution_tests {
     use super::*;
 
     #[test]
+    fn generated_request_execution_projection_cases() {
+        let raw = gents_lean_contract::run_prepared_generator(
+            &gents_lean_contract::proofs_dir().unwrap(),
+            "Proofs.Conformance.ExecutionActivityRequest:olean",
+            "Proofs/Conformance/ExecutionActivityRequest.lean",
+        )
+        .unwrap();
+        let cases: Vec<serde_json::Value> = serde_json::from_str(&raw).unwrap();
+        assert_eq!(cases.len(), 8);
+        let observation = ExecutionObservation {
+            identity: ExecutionIdentity {
+                request: "request".into(),
+                generation: "generation".into(),
+            },
+            sequence: 0,
+            turn: 0,
+            attempt: 0,
+            observed_at: 10,
+            phase: ExecutionPhase::ProviderRetry,
+        };
+        for case in cases {
+            use gents_protocol::request_lifecycle::RequestLifecycleState as State;
+            let request = gents_protocol::row::AgentRequestRow {
+                doc_id: Some("request".into()),
+                execution_generation: case["hasGeneration"]
+                    .as_bool()
+                    .unwrap()
+                    .then(|| "generation".into()),
+                lifecycle_state: Some(if case["terminal"] == true {
+                    State::Completed
+                } else if case["pending"] == true {
+                    State::Pending
+                } else {
+                    State::Processing
+                }),
+                ..Default::default()
+            };
+            let actual = gents_protocol::execution_activity::project_request_execution_activity(
+                &request,
+                10,
+                1,
+                Some(&observation),
+            );
+            let expected = match case["display"].as_str().unwrap() {
+                "terminal" => ExecutionDisplay::Terminal,
+                "queued" => ExecutionDisplay::Queued,
+                "retrying" => ExecutionDisplay::Retrying,
+                "unknown" => ExecutionDisplay::Unknown,
+                other => panic!("unknown modeled display {other}"),
+            };
+            assert_eq!(actual, expected, "{case}");
+        }
+    }
+
+    #[test]
+    fn generated_execution_failure_cases() {
+        let raw = gents_lean_contract::run_prepared_generator(
+            &gents_lean_contract::proofs_dir().unwrap(),
+            "Proofs.Conformance.ExecutionActivityFailure:olean",
+            "Proofs/Conformance/ExecutionActivityFailure.lean",
+        )
+        .unwrap();
+        let cases: Vec<serde_json::Value> = serde_json::from_str(&raw).unwrap();
+        assert_eq!(cases.len(), 4);
+        for case in cases {
+            let phase = gents_protocol::execution_activity::failure_execution_phase(
+                case["retry"].as_bool().unwrap(),
+                case["unreachable"].as_bool().unwrap(),
+            );
+            let expected = match case["phase"].as_str().unwrap() {
+                "provider_retry" => ExecutionPhase::ProviderRetry,
+                "unavailable" => ExecutionPhase::Unavailable,
+                "unknown" => ExecutionPhase::Unknown,
+                other => panic!("unknown modeled phase {other}"),
+            };
+            assert_eq!(phase, expected, "{case}");
+        }
+    }
+
+    #[test]
     fn generated_execution_ordering_cases() {
         let raw = gents_lean_contract::run_prepared_generator(
             &gents_lean_contract::proofs_dir().unwrap(),
@@ -202,13 +201,14 @@ mod execution_tests {
         )
         .unwrap();
         let cases: Vec<serde_json::Value> = serde_json::from_str(&raw).unwrap();
-        assert_eq!(cases.len(), 96);
+        assert_eq!(cases.len(), 112);
         let active = ExecutionIdentity {
             request: "request".into(),
             generation: "generation".into(),
         };
         for case in cases {
             let phase = match case["phase"].as_str().unwrap() {
+                "unknown" => ExecutionPhase::Unknown,
                 "queued" => ExecutionPhase::Queued,
                 "generating" => ExecutionPhase::Generating,
                 "tool_wait" => ExecutionPhase::ToolWait,

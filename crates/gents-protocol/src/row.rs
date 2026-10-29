@@ -160,6 +160,8 @@ pub struct AgentRequestRow {
     pub claimed_at: Option<String>,
     #[serde(default)]
     pub execution_generation: Option<String>,
+    #[serde(default)]
+    pub execution_observation: Option<serde_json::Value>,
     /// Lease length installed at claim. The request owner explicitly renews at
     /// bounded cadence; output never extends expiry or rewrites this row.
     #[serde(default)]

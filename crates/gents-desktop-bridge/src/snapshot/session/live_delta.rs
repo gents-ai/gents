@@ -108,6 +108,7 @@ pub(super) fn canonical_live_text(
         request_id,
         request_doc_id,
         execution_generation,
+        &request.execution_observation,
         source,
         writer,
         message_id,

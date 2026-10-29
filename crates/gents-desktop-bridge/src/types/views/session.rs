@@ -740,6 +740,12 @@ pub struct DesktopSessionSnapshot {
     pub status: Option<String>,
     pub goal: Option<GoalView>,
     pub turn_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub execution_activity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub execution_activity_expires_at: Option<u64>,
     pub latest_request_id: Option<String>,
     pub retry_eligibility: RetryEligibilityView,
     pub latest_request_outcome: Option<RequestOutcomeView>,

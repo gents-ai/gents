@@ -59,6 +59,9 @@ type AgentRequest @branchable {
     # generation and observed deadline; decisions keep the matching-generation
     # CAS without implicit renewal. Tool-owned output never renews the parent.
     execution_generation: String @index
+    # Bounded presentation only; lifecycle and execution generation remain
+    # authoritative. A stale or mismatched observation must not imply work.
+    execution_observation: JSON
     execution_lease_secs: Int
     execution_lease_expires_at: String @index
     background_completion_input_through_sequence: Int

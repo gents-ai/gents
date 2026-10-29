@@ -523,7 +523,13 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   );
 
   const latest = session?.latestRequestOutcome;
-  const status = inFlight && rows.joined ? activityStatus(rows.items, stopping) : null;
+  const executionActivity = (
+    session as (DesktopSessionSnapshot & { executionActivity?: string | null }) | null
+  )?.executionActivity;
+  const status =
+    inFlight && rows.joined
+      ? activityStatus(rows.items, stopping, executionActivity)
+      : null;
   const wasInterrupted = session?.turnState === "interrupted";
   const responseError =
     latest?.failureReason?.trim() ||

@@ -31,6 +31,62 @@ async fn claimed(node: &Arc<EmbeddedNode>, request_id: &str, session_id: &str) -
 }
 
 #[tokio::test]
+async fn execution_observation_is_fenced_by_generation_and_terminal_state() {
+    use gents_protocol::execution_activity::{
+        ExecutionIdentity, ExecutionObservation, ExecutionPhase,
+    };
+
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    crate::test_support::install_test_agent(&node, "did:test:test", "general").await;
+    let mut lifecycle = claimed(&node, "activity-fence", "activity-fence").await;
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::ZERO);
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let doc_id = lifecycle.request().doc_id.clone();
+    let generation = lifecycle.execution_generation().unwrap().to_owned();
+    let mut observation = ExecutionObservation {
+        identity: ExecutionIdentity {
+            request: doc_id.clone(),
+            generation: "stale".into(),
+        },
+        sequence: 1,
+        turn: 0,
+        attempt: 0,
+        observed_at: 1,
+        phase: ExecutionPhase::ProviderRetry,
+    };
+    let read = || async {
+        let doc = crate::graphql::escape_graphql_string(&doc_id);
+        let result = crate::config_client::ConfigAccess::local(node.clone())
+            .execute(&format!(
+                r#"{{ AgentRequest(docID: "{doc}") {{ execution_observation }} }}"#
+            ))
+            .await
+            .unwrap();
+        result["data"]["AgentRequest"][0]["execution_observation"].clone()
+    };
+    publish_execution_observation(&node, &observation)
+        .await
+        .unwrap();
+    assert!(read().await.is_null());
+    observation.identity.generation = generation;
+    publish_execution_observation(&node, &observation)
+        .await
+        .unwrap();
+    assert_eq!(read().await, serde_json::to_value(&observation).unwrap());
+    let doc = crate::graphql::escape_graphql_string(&doc_id);
+    crate::config_client::ConfigAccess::write_local(&node, "test.terminal_activity_fence", &format!(
+        r#"mutation {{ update_AgentRequest(docID: "{doc}", input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#
+    )).await.unwrap();
+    observation.sequence = 2;
+    publish_execution_observation(&node, &observation)
+        .await
+        .unwrap();
+    assert_eq!(read().await["sequence"], 1);
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn authored_publication_replays_and_reconstructs_exact_message() {
     let path = std::env::temp_dir().join(format!("canonical-authored-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(

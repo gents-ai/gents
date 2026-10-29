@@ -470,6 +470,40 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
                 .flatten()
         });
     let retry_eligibility = project_retry_eligibility(latest_request);
+    let activity_projection = latest_request.map(|request| {
+        use gents_protocol::execution_activity::{
+            project_request_execution_activity, ExecutionDisplay,
+        };
+        let now = u64::try_from(chrono::Utc::now().timestamp_millis()).unwrap_or_default();
+        let observation = request.execution_observation.as_ref().and_then(|value| {
+            serde_json::from_value::<gents_protocol::execution_activity::ExecutionObservation>(
+                value.clone(),
+            )
+            .ok()
+        });
+        let display =
+            project_request_execution_activity(request, now, 60_000, observation.as_ref());
+        let label = match display {
+            ExecutionDisplay::Unknown => "unknown",
+            ExecutionDisplay::Queued => "queued",
+            ExecutionDisplay::Working => "working",
+            ExecutionDisplay::Waiting => "waiting",
+            ExecutionDisplay::Retrying => "retrying",
+            ExecutionDisplay::Unavailable => "unavailable",
+            ExecutionDisplay::Terminal => "terminal",
+        }
+        .to_owned();
+        let expires_at = match display {
+            ExecutionDisplay::Working
+            | ExecutionDisplay::Waiting
+            | ExecutionDisplay::Retrying
+            | ExecutionDisplay::Unavailable => observation
+                .as_ref()
+                .and_then(|value| value.observed_at.checked_add(60_001)),
+            _ => None,
+        };
+        (label, expires_at)
+    });
     let latest_request_outcome = latest_request.and_then(|request| {
         let failure_reason = normalize_optional(request.failure_reason.as_deref());
         let evidence = RequestEvidence {
@@ -742,6 +776,10 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         }),
         goal,
         turn_state: turn_state_label,
+        execution_activity: activity_projection
+            .as_ref()
+            .map(|(activity, _)| activity.clone()),
+        execution_activity_expires_at: activity_projection.and_then(|(_, expires_at)| expires_at),
         latest_request_id,
         retry_eligibility,
         latest_request_outcome,

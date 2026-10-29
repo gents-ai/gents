@@ -7,6 +7,7 @@ pub mod database_error;
 pub mod enrollment;
 pub mod error_chain;
 pub mod event_delivery;
+pub mod execution_activity;
 pub mod file_changes;
 pub mod file_image_hydration;
 pub mod file_inventory;

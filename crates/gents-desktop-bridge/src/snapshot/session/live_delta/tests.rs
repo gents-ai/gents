@@ -68,6 +68,20 @@ fn cursor(store: &ClientStore) -> String {
         .cursor
 }
 
+#[test]
+fn changed_execution_activity_requires_a_fresh_snapshot() {
+    let mut source = rows();
+    let before = cursor(&ClientStore::from_rows(source.clone()));
+    source.requests[0].execution_observation = Some(serde_json::json!({
+        "identity": { "request": "physical", "generation": "generation" },
+        "sequence": 1, "turn": 0, "attempt": 0,
+        "observed_at": 10, "phase": "provider_retry"
+    }));
+    let after = ClientStore::from_rows(source);
+    assert_ne!(cursor(&after), before);
+    assert_eq!(delta(&after, &before).outcome, "snapshotRequired");
+}
+
 fn delta(store: &ClientStore, cursor: &str) -> SessionLiveDeltaView {
     build_session_live_delta_from_store(
         store,

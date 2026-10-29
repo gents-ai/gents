@@ -50,6 +50,45 @@ pub struct DefraStreamWriter {
     buffers: Mutex<RapidHashMap<String, StreamBuffer>>,
     published: Mutex<RapidHashMap<String, String>>,
     provider_tails: Mutex<RapidHashMap<String, ProviderTail>>,
+    execution_activity: Mutex<Option<gents_protocol::execution_activity::ExecutionObservation>>,
+    execution_activity_tx: Mutex<
+        Option<
+            tokio::sync::watch::Sender<
+                Option<gents_protocol::execution_activity::ExecutionObservation>,
+            >,
+        >,
+    >,
+}
+
+async fn publish_execution_observation(
+    node: &Arc<EmbeddedNode>,
+    observation: &gents_protocol::execution_activity::ExecutionObservation,
+) -> Result<()> {
+    let doc = crate::graphql::escape_graphql_string(&observation.identity.request);
+    let generation = crate::graphql::escape_graphql_string(&observation.identity.generation);
+    let variables = serde_json::json!({"observation": observation});
+    crate::config_client::ConfigAccess::transact_local_idempotent(
+        node,
+        None,
+        crate::config_client::IdempotentTransactionRetry::Standard,
+        "streaming.execution_observation",
+        move |txn| {
+            let (doc, generation, variables) = (doc.clone(), generation.clone(), variables.clone());
+            Box::pin(async move {
+                let now = crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+                let query = format!(r#"mutation($observation: JSON) {{ update_AgentRequest(
+                    docID: "{doc}", filter: {{ _docID: {{ _eq: "{doc}" }},
+                        lifecycle_state: {{ _eq: "processing" }}, execution_generation: {{ _eq: "{generation}" }},
+                        execution_lease_expires_at: {{ _gt: "{now}" }} }},
+                    input: {{ execution_observation: $observation }}
+                ) {{ _docID }} }}"#);
+                let response = txn.execute_with_variables(&query, &variables).await?;
+                crate::graphql::mutation_documents(&response, "update_AgentRequest")?
+                    .context("execution observation mutation omitted its result")?;
+                Ok(())
+            })
+        },
+    ).await
 }
 
 #[derive(Default)]
@@ -500,7 +539,15 @@ impl DefraStreamWriter {
             buffers: Mutex::new(RapidHashMap::new()),
             published: Mutex::new(RapidHashMap::new()),
             provider_tails: Mutex::new(RapidHashMap::new()),
+            execution_activity: Mutex::new(None),
+            execution_activity_tx: Mutex::new(None),
         }
+    }
+
+    pub(crate) async fn execution_observation(
+        &self,
+    ) -> Option<gents_protocol::execution_activity::ExecutionObservation> {
+        self.execution_activity.lock().await.clone()
     }
 
     pub(crate) async fn initialize_request_buffer(&self, request_doc_id: &str) -> Result<()> {
@@ -584,6 +631,72 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
     for DefraStreamWriter
 {
     type AcceptedToolCall = AcceptedToolCall;
+
+    async fn observe_execution_phase(
+        &self,
+        lifecycle: &crate::lifecycle::RequestLifecycle,
+        turn: usize,
+        attempt: u32,
+        phase: gents_protocol::execution_activity::ExecutionPhase,
+    ) {
+        use gents_protocol::execution_activity::{
+            accept_execution_observation, ExecutionIdentity, ExecutionObservation,
+        };
+        let Ok(generation) = lifecycle.execution_generation() else {
+            return;
+        };
+        let Ok(observed_at) = u64::try_from(chrono::Utc::now().timestamp_millis()) else {
+            return;
+        };
+        let identity = ExecutionIdentity {
+            request: lifecycle.request().doc_id.clone(),
+            generation: generation.to_owned(),
+        };
+        let mut current = self.execution_activity.lock().await;
+        if current
+            .as_ref()
+            .is_some_and(|item| item.identity != identity)
+        {
+            return;
+        }
+        let sequence = match current.as_ref() {
+            Some(item) => match item.sequence.checked_add(1) {
+                Some(next) => next,
+                None => return,
+            },
+            None => 0,
+        };
+        let incoming = ExecutionObservation {
+            identity: identity.clone(),
+            sequence,
+            turn: turn as u64,
+            attempt: u64::from(attempt),
+            observed_at,
+            phase,
+        };
+        let previous = current.take();
+        let next = accept_execution_observation(&identity, previous.clone(), incoming);
+        if next != previous {
+            let mut sender = self.execution_activity_tx.lock().await;
+            let sender = sender.get_or_insert_with(|| {
+                let (sender, mut receiver) = tokio::sync::watch::channel(None);
+                let node = self.node.clone();
+                tokio::spawn(async move {
+                    while receiver.changed().await.is_ok() {
+                        let observation = receiver.borrow_and_update().clone();
+                        if let Some(observation) = observation {
+                            if let Err(error) = publish_execution_observation(&node, &observation).await {
+                                tracing::debug!(%error, "execution activity observation unavailable");
+                            }
+                        }
+                    }
+                });
+                sender
+            });
+            sender.send_replace(next.clone());
+        }
+        *current = next;
+    }
 
     async fn publish_authored_message(
         &self,

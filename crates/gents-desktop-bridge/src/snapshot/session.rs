@@ -739,6 +739,8 @@ fn build_hydration_only_session_snapshot(
         status: None,
         goal: None,
         turn_state: None,
+        execution_activity: None,
+        execution_activity_expires_at: None,
         latest_request_id: None,
         retry_eligibility: project_retry_eligibility(None),
         latest_request_outcome: None,

@@ -400,6 +400,21 @@ async fn pre_stream_failures_do_not_fabricate_provider_attempt_closures() {
                 .unwrap(),
             StreamAction::Continue
         ));
+        let activity = writer
+            .execution_observation()
+            .await
+            .expect("retry observation");
+        assert_eq!(activity.identity.request, doc_id);
+        assert_eq!(activity.turn, 0);
+        assert_eq!(activity.attempt, u64::from(attempt));
+        assert_eq!(
+            activity.phase,
+            if will_retry {
+                gents_protocol::execution_activity::ExecutionPhase::ProviderRetry
+            } else {
+                gents_protocol::execution_activity::ExecutionPhase::Unavailable
+            }
+        );
     }
     drop(processor);
 
