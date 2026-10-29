@@ -19,9 +19,9 @@ use super::projection::{
 };
 use super::protocol::{ClientCapabilities, RegisterMode};
 use super::server::{AcpDelegate, AcpOutbound};
-use super::turn::{
-    parse_cancel_notification, parse_prompt_request, PromptSender, PromptSenderLine, TurnManager,
-};
+use super::turn::sender::{PromptSender, PromptSenderLine};
+use super::turn::wire::{parse_cancel_notification, parse_prompt_request};
+use super::turn::TurnManager;
 
 pub(crate) const JSONRPC_INVALID_REQUEST: i64 = -32600;
 
@@ -947,7 +947,7 @@ impl AcpService {
                                 json!({"sessionUpdate":kind,"content":{"type":"text","text":text}, "_meta":{"hostTurn":true}}),
                                 super::projection::stamp_update_meta(event_id, total_tokens,
                                     parsed.prompt_id.as_deref(), None, super::projection::UpdateTimestamps::default())))
-                        }, super::turn::PromptSenderLine(prompt_sender)).await?;
+                        }, super::turn::sender::PromptSenderLine(prompt_sender)).await?;
                     }
                     self.turns
                         .observe_session(
@@ -1307,7 +1307,7 @@ mod tests {
         configure_runtime_agent, seed_job_row,
         streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse},
     };
-    use crate::commands::grok_shim::turn::PromptBlock;
+    use crate::commands::grok_shim::turn::wire::PromptBlock;
     use gents::graphql::ensure_no_errors;
     use tokio::sync::Mutex;
 
@@ -1717,7 +1717,7 @@ mod tests {
             "/workflow save alpha",
         ] {
             assert_eq!(WorkflowCommand::parse(text), None, "{text}");
-            let request = crate::commands::grok_shim::turn::PromptRequest {
+            let request = crate::commands::grok_shim::turn::wire::PromptRequest {
                 session_id: "s".to_owned(),
                 prompt: vec![PromptBlock {
                     kind: "text".to_owned(),
@@ -1729,7 +1729,7 @@ mod tests {
                 send_now: false,
                 id: None,
             };
-            assert_eq!(super::super::turn::prompt_text(&request), text);
+            assert_eq!(super::super::turn::wire::prompt_text(&request), text);
         }
     }
 
@@ -2917,8 +2917,8 @@ mod tests {
         assert_eq!(error_code_for(&internal_looking), -32603);
         let typed = invalid_params("any message");
         assert_eq!(error_code_for(&typed), -32602);
-        let parser_error =
-            super::super::turn::parse_prompt_request(&json!({}), None).expect_err("missing params");
+        let parser_error = super::super::turn::wire::parse_prompt_request(&json!({}), None)
+            .expect_err("missing params");
         assert!(
             parser_error.to_string().contains("session/prompt"),
             "the source parser message is preserved: {parser_error}"
@@ -3669,7 +3669,7 @@ mod tests {
                 service.projections.session_updates(),
                 "s-dup",
                 "prompt-1",
-                &crate::commands::grok_shim::turn::PromptBlock {
+                &crate::commands::grok_shim::turn::wire::PromptBlock {
                     kind: "text".to_string(),
                     text: "hello".to_string(),
                     meta: None,

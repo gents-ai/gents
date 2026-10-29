@@ -20,7 +20,7 @@ use super::observation_cursor::{
     observe_due, ObservationSet, Observed, ObservedView, Sink, ABANDONED_REVISION,
 };
 use super::projection::ProjectionEngine;
-use super::turn::PromptSender;
+use super::turn::sender::PromptSender;
 use crate::commands::job::next_calls;
 
 /// How long a transient read failure of one job is retried before the pager
@@ -807,7 +807,7 @@ mod tests {
 
     use super::super::observation_cursor::{ABANDONED_REVISION, MAX_RETRY_DELAY_SECS};
     use super::super::projection::{BoundModelContext, ProjectionEngine};
-    use super::super::turn::PromptSender;
+    use super::super::turn::sender::PromptSender;
 
     pub(super) fn at(seconds: i64) -> DateTime<Utc> {
         now() + Duration::seconds(seconds)

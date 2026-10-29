@@ -35,7 +35,7 @@
   },
   {
     "read": {
-      "path": "crates/gents-cli/src/commands/grok_shim/turn.rs",
+      "path": "crates/gents-cli/src/commands/grok_shim/turn/observe.rs",
       "collection": "AgentRequest",
       "arguments": "filter: { $GENTS_scope$ }, order: [{ request_id: ASC }, { _docID: ASC }], limit: $GENTS_PAGE_SIZE$"
     },
@@ -48,7 +48,7 @@
   },
   {
     "read": {
-      "path": "crates/gents-cli/src/commands/grok_shim/turn.rs",
+      "path": "crates/gents-cli/src/commands/grok_shim/turn/stream.rs",
       "collection": "AgentRequest",
       "arguments": "filter: {$GENTS_scope$}, order: {request_id: ASC}, limit: 128, offset: $GENTS_offset$"
     },

@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 
 use super::projection::{ProjectionEngine, UpdateTimestamps};
-use super::turn::{PromptSender, PromptSenderLine};
+use super::turn::sender::{PromptSender, PromptSenderLine};
 
 #[derive(Debug, PartialEq)]
 pub(super) enum GoalCommand {
@@ -61,7 +61,7 @@ impl GoalCommand {
         Ok(Some(command))
     }
 
-    pub(super) fn from_prompt(request: &super::turn::PromptRequest) -> Result<Option<Self>> {
+    pub(super) fn from_prompt(request: &super::turn::wire::PromptRequest) -> Result<Option<Self>> {
         if let [block] = request.prompt.as_slice() {
             if block.kind == "text"
                 && block
