@@ -8,6 +8,7 @@ mod resolve;
 mod rows;
 mod serving;
 mod sign_in;
+pub(crate) mod token_endpoint;
 
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};

@@ -1,18 +1,27 @@
 use chrono::{DateTime, Utc};
 use gents_claude::oauth::{self, RefreshFailure};
-use serde_json::Value;
 
 use crate::claude_oauth::{CLAUDE_OAUTH_PRODUCT, CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV};
+use crate::oauth_credential::token_endpoint::{
+    endpoint_url, BadRequest, TokenEndpoint, TransportDetail,
+};
 use crate::oauth_credential::{OAuthAuthProblem, RefreshedTokens};
+
+const TOKEN_ENDPOINT: TokenEndpoint = TokenEndpoint {
+    provider: "Claude",
+    bad_request: BadRequest::InvalidGrant { nested_code: false },
+    forbidden_is_not_entitled: true,
+    reads_error_description: true,
+    transport_detail: TransportDetail::Kind,
+};
 
 pub async fn refresh_claude_token(
     refresh_token: &str,
     http: &reqwest::Client,
 ) -> Result<RefreshedTokens, OAuthAuthProblem> {
-    let endpoint = std::env::var(CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| oauth::TOKEN_URL.to_string());
+    let endpoint = endpoint_url(CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV, || {
+        oauth::TOKEN_URL.to_string()
+    });
     refresh_claude_token_at(&endpoint, refresh_token, http).await
 }
 
@@ -31,27 +40,14 @@ pub(crate) async fn refresh_claude_token_at(
     .map_err(|error| OAuthAuthProblem::Other(format!("Claude token refresh failed: {error}")))?;
     // The caller's client bounds the exchange (`REFRESH_REQUEST_TIMEOUT`, Claude Code's 30 s);
     // a per-request timeout would replace that bound.
-    let response = http
-        .post(endpoint)
-        .header("Accept", "application/json")
-        .header("Content-Type", "application/json")
-        .body(post.body)
-        .send()
-        .await
-        .map_err(|error| {
-            OAuthAuthProblem::Other(format!(
-                "Claude token refresh request failed: {}",
-                transport_kind(&error)
-            ))
-        })?;
-
-    let status = response.status();
-    let body = response.bytes().await.map_err(|error| {
-        OAuthAuthProblem::Other(format!(
-            "Claude token refresh request failed: {}",
-            transport_kind(&error)
-        ))
-    })?;
+    let (status, body) = TOKEN_ENDPOINT
+        .respond(
+            http.post(endpoint)
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .body(post.body),
+        )
+        .await?;
     if !status.is_success() {
         return Err(refresh_problem(status, &body));
     }
@@ -85,8 +81,9 @@ pub(crate) async fn refresh_claude_token_at(
     })
 }
 
-/// Maps a failed token call onto the credential problem, using the owner's
-/// classification of the status and body.
+/// Maps a failed token call onto the credential problem: the Claude owner's classification
+/// decides a signed-out or on-hold account, and the shared endpoint semantics decide the rest
+/// (an unreadable 401 is an invalid token and a 403 is the plan gate).
 fn refresh_problem(status: reqwest::StatusCode, body: &[u8]) -> OAuthAuthProblem {
     match oauth::classify_failure(Some(status.as_u16()), body) {
         RefreshFailure::SignedOut => OAuthAuthProblem::Expired,
@@ -94,49 +91,10 @@ fn refresh_problem(status: reqwest::StatusCode, body: &[u8]) -> OAuthAuthProblem
             "the Claude account is on hold; resolve the hold with Anthropic, then sign in again with `gents {}`",
             CLAUDE_OAUTH_PRODUCT.login_command
         )),
-        // An unreadable 401 is an invalid token and a 403 is the plan gate.
-        RefreshFailure::Rejected if status == reqwest::StatusCode::UNAUTHORIZED => {
-            OAuthAuthProblem::Expired
-        }
-        RefreshFailure::Rejected if status == reqwest::StatusCode::FORBIDDEN => {
-            OAuthAuthProblem::NotEntitled
-        }
         RefreshFailure::InvalidScope | RefreshFailure::Rejected | RefreshFailure::Transient => {
-            OAuthAuthProblem::Other(format!(
-                "Claude token refresh failed with HTTP {status}: {}",
-                parse_error_message(&String::from_utf8_lossy(body))
-            ))
+            TOKEN_ENDPOINT.rejection(status, &String::from_utf8_lossy(body))
         }
     }
-}
-
-fn transport_kind(error: &reqwest::Error) -> &'static str {
-    if error.is_timeout() {
-        "timed out"
-    } else if error.is_connect() {
-        "could not connect"
-    } else {
-        "failed"
-    }
-}
-
-fn parse_error_message(body: &str) -> String {
-    let Ok(value) = serde_json::from_str::<Value>(body) else {
-        return body.to_string();
-    };
-    value
-        .get("error_description")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            value.get("error").and_then(|error| {
-                error
-                    .as_str()
-                    .or_else(|| error.get("message").and_then(Value::as_str))
-            })
-        })
-        .or_else(|| value.get("message").and_then(Value::as_str))
-        .unwrap_or(body)
-        .to_string()
 }
 
 #[cfg(test)]
