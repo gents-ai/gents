@@ -1033,7 +1033,7 @@ where
                         self.finalize_failure_before_work(
                             &mut lifecycle,
                             &stream_writer,
-                            &error.to_string(),
+                            &request_failure_reason(&error),
                             &request,
                         )
                         .await;
@@ -1042,6 +1042,7 @@ where
                 }
                 match terminalize_request(&mut lifecycle, &stream_writer, terminal, None).await {
                     Ok(true) if skipped_before_work => {
+                        record_current_request_outcome("completed");
                         if let Err(error) =
                             crate::workspace::release_writer_binding(&self.node, &request).await
                         {

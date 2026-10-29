@@ -196,6 +196,7 @@ export function HooksRows({
               aria-label="Skip exit codes"
               placeholder="e.g. 10, 11"
               title="Before hooks: these exit codes skip the agent and complete the task after cleanup."
+              disabled={h.phase !== "before" && !h.skipExitCodes}
               value={h.skipExitCodes}
               onChange={(e) => set(i, { skipExitCodes: e.target.value })}
             />

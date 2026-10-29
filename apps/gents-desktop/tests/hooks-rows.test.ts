@@ -49,6 +49,27 @@ describe("task hook commands", () => {
       cleanup();
     }
   });
+  it("offers skip codes only on before hooks, while still letting stale codes be cleared", () => {
+    try {
+      render(
+        createElement(HooksRows, {
+          id: "task",
+          value: [
+            toHookDraft(hook(["./after"])),
+            { ...toHookDraft(hook(["./stale"])), skipExitCodes: "10" },
+          ],
+          onChange: vi.fn(),
+        }),
+      );
+      const [after, stale] = screen.getAllByRole("textbox", {
+        name: "Skip exit codes",
+      });
+      expect(after).toBeDisabled();
+      expect(stale).toBeEnabled();
+    } finally {
+      cleanup();
+    }
+  });
   it("preserves configured gate exit codes when editing other hook fields", () => {
     const gate: TaskHook = {
       ...hook(["./gate"]),

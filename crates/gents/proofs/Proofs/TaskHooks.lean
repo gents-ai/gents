@@ -83,12 +83,14 @@ theorem admitted_timeout_positive (h : TaskHook) (ha : hookAdmitted h = true) :
     simp only [TaskHook.effectiveTimeout, ht]
     omega
 
-/-- Validate the whole task before execution. IDs identify occurrences across
-all phases, so uniqueness is task-wide rather than per phase. -/
+/-- Skip codes are process exit statuses; only a before hook gates the agent,
+and exit status 0 already means success. -/
 def skipCodesAdmitted (h : TaskHook) : Bool :=
   h.skipExitCodes.isEmpty ||
     (h.phase == .before && h.skipExitCodes.all (fun code => decide (0 < code ∧ code ≤ 255)))
 
+/-- Validate the whole task before execution. IDs identify occurrences across
+all phases, so uniqueness is task-wide rather than per phase. -/
 def admitHooks (hs : List TaskHook) : Option (List TaskHook) :=
   if hs.all hookAdmitted && hs.all skipCodesAdmitted && decide (hs.map TaskHook.hookId).Nodup then some hs else none
 
