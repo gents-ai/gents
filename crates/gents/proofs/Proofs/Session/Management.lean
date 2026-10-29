@@ -70,6 +70,26 @@ theorem steering_selection_preserves_entries (active : QueueEntry) (admitted : L
               exact List.Perm.cons entry ih
         · simp [selectSteeringPastDeferred, queued, eligible]
 
+theorem steering_selection_preserves_deferred_order (active : QueueEntry)
+    (admitted : List RequestId) (entries : List QueueEntry) :
+    (selectSteeringPastDeferred active admitted entries).2.filter
+        (fun entry => decide (entry.delivery = .queue)) =
+      entries.filter (fun entry => decide (entry.delivery = .queue)) := by
+  induction entries with
+  | nil => simp [selectSteeringPastDeferred]
+  | cons entry rest ih =>
+      by_cases queued : entry.delivery = .queue
+      · cases result : selectSteeringPastDeferred active admitted rest with
+        | mk selected pending =>
+            simp only [result] at ih
+            simpa [selectSteeringPastDeferred, queued, result] using ih
+      · by_cases eligible : steersInto active entry ∧ entry.requestId ∈ admitted
+        · cases result : selectSteeringPastDeferred active admitted rest with
+          | mk selected pending =>
+              simp only [result] at ih
+              simpa [selectSteeringPastDeferred, queued, eligible, result] using ih
+        · simp [selectSteeringPastDeferred, queued, eligible]
+
 /-- The native execution owner supplies the exact active row and generation;
 this operation grants no lease. -/
 def intakeSteering? (target : AgentSession.Scope) (pre : SessionQueueState)
