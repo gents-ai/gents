@@ -9,6 +9,8 @@ use tokio::task::JoinError;
 use tracing::Instrument;
 
 mod auxiliary_tasks;
+#[cfg(test)]
+mod failure_reason_tests;
 mod inference;
 mod request;
 #[cfg(test)]
@@ -84,6 +86,16 @@ async fn terminalize_request(
     }
 }
 
+/// The durable failure reason for a request error: the error and every cause,
+/// joined as anyhow's `{:#}` joins them. Display alone keeps only the
+/// outermost context (e.g. "projecting compactable provider messages") and
+/// drops the cause that explains it. Each cause is redacted and capped, and
+/// the whole reason is capped: a cause can carry a whole provider response
+/// body, and the reason replicates.
+fn request_failure_reason(error: &anyhow::Error) -> String {
+    crate::failure_text::bounded_error_chain(error.as_ref())
+}
+
 async fn finalize_request_failure(
     lifecycle: &mut RequestLifecycle,
     stream_writer: &DefraStreamWriter,
@@ -102,7 +114,7 @@ async fn finalize_request_failure(
         Err(error) => {
             record_current_request_outcome("terminalization_failed");
             record_current_failure_class(&error);
-            tracing::error!(request_id, error = %error,
+            tracing::error!(request_id, error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
                 "failed to atomically terminalize request and response; durable lease recovery remains pending");
             false
         }
@@ -146,7 +158,7 @@ pub(crate) async fn verify_request_at_claim_boundary(
             record_current_request_outcome("admission_retry");
             tracing::warn!(
                 request_id = %request.request_id,
-                error = %error,
+                error = %crate::failure_text::BoundedErrorChain(&error),
                 "request admission authority is temporarily unavailable; leaving request pending"
             );
             None
@@ -219,7 +231,7 @@ fn auxiliary_task_join_result(joined: std::result::Result<Result<()>, JoinError>
         Ok(Ok(())) => Ok(()),
         Ok(Err(error)) if ShutdownDrainFailure::occurs_in(&error) => Err(error),
         Ok(Err(error)) => {
-            tracing::warn!(error = %error, "failed to resume owned auxiliary request");
+            tracing::warn!(error = %crate::failure_text::BoundedErrorChain(error.as_ref()), "failed to resume owned auxiliary request");
             Ok(())
         }
         Err(error) => Err(anyhow::anyhow!("owned auxiliary task join failed: {error}")),
@@ -498,7 +510,7 @@ where
             let active_guard = match guard {
                 Ok(guard) => Some(RequestGuard::Unbound(guard)),
                 Err(error) => {
-                    tracing::warn!(agent_id, error = %error, "request worker capacity admission stopped");
+                    tracing::warn!(agent_id, error = %crate::failure_text::BoundedErrorChain(&error), "request worker capacity admission stopped");
                     break Ok(());
                 }
             };
@@ -536,7 +548,7 @@ where
         let mut auxiliary_error = None;
         while let Some(joined) = auxiliary_tasks.join_next().await {
             if let Err(error) = auxiliary_task_join_result(joined) {
-                tracing::error!(error = %error, "owned auxiliary task failed during daemon exit");
+                tracing::error!(error = %crate::failure_text::BoundedErrorChain(error.as_ref()), "owned auxiliary task failed during daemon exit");
                 if auxiliary_error.is_none() {
                     auxiliary_error = Some(error);
                 }
@@ -578,7 +590,7 @@ where
                 Err(error) => tracing::debug!(
                     request_id = %request.request_id,
                     candidate_request_id = %candidate.request_id,
-                    error = %error,
+                    error = %crate::failure_text::BoundedErrorChain(&error),
                     "queued message admission not verified; it keeps its own turn"
                 ),
             }
@@ -665,7 +677,7 @@ where
                         self.finalize_failure_before_work(
                             &mut lifecycle,
                             &stream_writer,
-                            &error.to_string(),
+                            &request_failure_reason(&error),
                             &request,
                         )
                         .await;
@@ -680,7 +692,7 @@ where
                     self.finalize_failure_before_work(
                         &mut lifecycle,
                         &stream_writer,
-                        &error.to_string(),
+                        &request_failure_reason(&error),
                         &request,
                     )
                     .await;
@@ -735,11 +747,12 @@ where
                     tracing::warn!(
                         agent_id = %self.agent_config.agent_id,
                         request_id = %request.request_id,
-                        error = %error,
+                        error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
                         "rejecting request with an invalid canonical admission binding"
                     );
-                    if let Err(rejection_error) =
-                        lifecycle.reject_admission(&error.to_string()).await
+                    if let Err(rejection_error) = lifecycle
+                        .reject_admission(&request_failure_reason(&error))
+                        .await
                     {
                         tracing::error!(
                             agent_id = %self.agent_config.agent_id,
@@ -753,7 +766,7 @@ where
                 tracing::warn!(
                     agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
-                    error = %error,
+                    error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
                     "failed to claim request; leaving it pending for retry"
                 );
                 return Ok(());
@@ -790,7 +803,7 @@ where
             self.finalize_failure_before_work(
                 &mut lifecycle,
                 &stream_writer,
-                &error.to_string(),
+                &request_failure_reason(&error),
                 &request,
             )
             .await;
@@ -815,7 +828,7 @@ where
                     finalize_request_failure(
                         &mut lifecycle,
                         &stream_writer,
-                        &error.to_string(),
+                        &request_failure_reason(&error),
                         &request.request_id,
                     )
                     .await;
@@ -836,13 +849,13 @@ where
                     record_current_failure_class(&error);
                     tracing::error!(
                         request_id = %request.request_id,
-                        error = %error,
+                        error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
                         "failed to repair workspace seal after writer success"
                     );
                     finalize_request_failure(
                         &mut lifecycle,
                         &stream_writer,
-                        &error.to_string(),
+                        &request_failure_reason(&error),
                         &request.request_id,
                     )
                     .await;
@@ -858,7 +871,7 @@ where
                 {
                     record_current_request_outcome("terminalization_failed");
                     record_current_failure_class(&error);
-                    tracing::error!(request_id = %request.request_id, error = %error,
+                    tracing::error!(request_id = %request.request_id, error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
                         "failed to atomically terminalize completed request and response");
                 }
                 return Ok(());
@@ -868,13 +881,13 @@ where
                 record_current_failure_class(&error);
                 tracing::error!(
                     request_id = %request.request_id,
-                    error = %error,
+                    error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
                     "failed to inspect writer workspace seal state"
                 );
                 self.finalize_failure_before_work(
                     &mut lifecycle,
                     &stream_writer,
-                    &error.to_string(),
+                    &request_failure_reason(&error),
                     &request,
                 )
                 .await;
@@ -1019,7 +1032,7 @@ where
                 {
                     record_current_request_outcome("terminalization_failed");
                     record_current_failure_class(&error);
-                    tracing::error!(request_id = %request.request_id, error = %error,
+                    tracing::error!(request_id = %request.request_id, error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
                         "failed to atomically terminalize completed request and response");
                 }
             }
@@ -1048,7 +1061,7 @@ where
                     Err(error) => {
                         record_current_request_outcome("terminalization_failed");
                         record_current_failure_class(&error);
-                        tracing::error!(request_id = %request.request_id, error = %error,
+                        tracing::error!(request_id = %request.request_id, error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
                             "failed to atomically terminalize interrupted request and response");
                         return Ok(());
                     }
@@ -1059,7 +1072,7 @@ where
                 {
                     tracing::warn!(
                         request_id = %request.request_id,
-                        error = %error,
+                        error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
                         "failed to release writer workspace binding after interrupt"
                     );
                 }
@@ -1086,7 +1099,7 @@ where
         if let Err(error) = crate::workspace::release_writer_binding(&self.node, request).await {
             tracing::warn!(
                 request_id = %request.request_id,
-                error = %error,
+                error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
                 "failed to release writer workspace binding after failure"
             );
         }
@@ -1207,12 +1220,12 @@ where
                     record_current_failure_class(&error);
                     tracing::error!(
                         request_id = %request.request_id,
-                        error = %error,
+                        error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
                         "failed to seal workspace after writer success"
                     );
                     return OwnedWorkOutcome::observed(
                         TaskAgentResult::Failure,
-                        Some(error.to_string()),
+                        Some(request_failure_reason(&error)),
                         true,
                     );
                 }
@@ -1230,14 +1243,14 @@ where
                     record_current_failure_class(&error);
                     tracing::error!(
                         request_id = %request.request_id,
-                        error = %error,
+                        error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
                         "failed to integrate workspace after integrator success"
                     );
                     // Keep the Active Integrate binding so a retry can observe
                     // the pending commit-tree and write the durable receipt.
                     return OwnedWorkOutcome::observed(
                         TaskAgentResult::Failure,
-                        Some(error.to_string()),
+                        Some(request_failure_reason(&error)),
                         false,
                     );
                 }
@@ -1257,10 +1270,14 @@ where
                 tracing::error!(
                     agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
-                    error = %error,
+                    error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
                     "request failed after response started"
                 );
-                OwnedWorkOutcome::observed(TaskAgentResult::Failure, Some(error.to_string()), true)
+                OwnedWorkOutcome::observed(
+                    TaskAgentResult::Failure,
+                    Some(request_failure_reason(&error)),
+                    true,
+                )
             }
             Err(error) if ShutdownDrainFailure::occurs_in(&error) => {
                 record_current_request_outcome("shutdown_drain_failed");
@@ -1268,7 +1285,7 @@ where
                 tracing::error!(
                     agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
-                    error = %error,
+                    error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
                     "graceful shutdown could not confirm provider output retention; leaving durable execution for recovery"
                 );
                 OwnedWorkOutcome::DrainFailed(error)
@@ -1283,10 +1300,14 @@ where
                 tracing::error!(
                     agent_id = %self.agent_config.agent_id,
                     request_id = %request.request_id,
-                    error = %error,
+                    error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
                     "request handling failed"
                 );
-                OwnedWorkOutcome::observed(TaskAgentResult::Failure, Some(error.to_string()), true)
+                OwnedWorkOutcome::observed(
+                    TaskAgentResult::Failure,
+                    Some(request_failure_reason(&error)),
+                    true,
+                )
             }
         }
     }

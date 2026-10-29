@@ -96,6 +96,9 @@ pub(crate) use tool_call_identity::normalize_tool_call_ids;
 #[cfg(all(test, feature = "native"))]
 pub(crate) mod tool_call_identity_tests;
 
+#[cfg(all(test, feature = "native"))]
+mod estimate_fallback_tests;
+
 /// Native capture metadata belongs to immutable documents. Convert each typed
 /// snapshot to provider text before request accounting and durable HTTP capture;
 /// never send the storage marker as an opaque provider parameter.
@@ -434,7 +437,34 @@ impl ProviderInputCounter {
         Ok(body)
     }
 
+    /// The provider-input estimate of `messages` sent alone, without preamble
+    /// or tools; callers add those from the whole request's estimate. An
+    /// estimate only sizes decisions, so it never fails a request: a slice the
+    /// wire projection rejects is counted by its serialized bytes instead, and
+    /// the rejection is logged with its full cause chain. Requests built from
+    /// the same slice still fail or succeed on their own.
     pub fn estimate_message_request(
+        &self,
+        messages: &[gents_protocol::message::Message],
+    ) -> Result<usize> {
+        match self.project_message_request(messages) {
+            Ok(tokens) => Ok(tokens),
+            Err(error) => {
+                let tokens = message_byte_estimate(messages);
+                tracing::warn!(
+                    profile = ?self.profile,
+                    model = %self.model,
+                    messages = messages.len(),
+                    fallback_tokens = tokens,
+                    error = %gents_protocol::error_chain::ErrorChain(&error),
+                    "provider-input projection of compactable messages failed; using a byte estimate"
+                );
+                Ok(tokens)
+            }
+        }
+    }
+
+    fn project_message_request(
         &self,
         messages: &[gents_protocol::message::Message],
     ) -> Result<usize> {
@@ -680,6 +710,16 @@ fn field_estimate(value: &Value, fields: &[&str]) -> Result<usize> {
             .checked_add(field_tokens)
             .ok_or(ProviderInputError::FieldOverflow)
     })
+}
+
+/// Serialized bytes / 4 of `messages`, the fallback when the wire projection
+/// rejects them.
+fn message_byte_estimate(messages: &[gents_protocol::message::Message]) -> usize {
+    serde_json::to_vec(messages)
+        .map(|bytes| bytes.len())
+        .unwrap_or_else(|_| format!("{messages:?}").len())
+        .div_ceil(4)
+        .max(1)
 }
 
 pub fn estimate_json(value: &Value) -> Result<usize> {
