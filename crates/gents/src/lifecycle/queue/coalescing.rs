@@ -98,7 +98,7 @@ pub(super) async fn reconcile_coalesced_pending_request_for(
                             txn,
                             node_did,
                             &duplicate.request_id,
-                            "superseded",
+                            RequestLifecycleState::Superseded,
                             "coalesced into earlier queued request",
                             &chrono::Utc::now().to_rfc3339(),
                         )
@@ -128,10 +128,10 @@ pub(crate) fn supersede_pending_mutation(
                 filter: {{
                     _docID: {{ _eq: "{}" }},
                     node_did: {{ _eq: "{}" }},
-                    lifecycle_state: {{ _eq: "pending" }}
+                    lifecycle_state: {{ _eq: "{pending}" }}
                 }},
                 input: {{
-                    lifecycle_state: "superseded",
+                    lifecycle_state: "{superseded}",
                     superseded_by_request: "{}",
                     superseded_by_request_doc_id: "{}",
                     failure_reason: "{}",
@@ -146,7 +146,7 @@ pub(crate) fn supersede_pending_mutation(
         escape_graphql_string(survivor_doc_id),
         escape_graphql_string(reason),
         escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
-        physical_doc_id = escape_graphql_string(doc_id),
+        physical_doc_id = escape_graphql_string(doc_id), pending = RequestLifecycleState::Pending.as_str(), superseded = RequestLifecycleState::Superseded.as_str()
     )
 }
 
@@ -163,10 +163,10 @@ async fn matching_coalesced_pending_requests(
     let query = format!(
         r#"{{ AgentRequest(
             filter: {{session_id: {{_eq: "{escaped_session_id}"}},
-                node_did: {{_eq: "{escaped_node_did}"}}, lifecycle_state: {{_eq: "pending"}}}},
+                node_did: {{_eq: "{escaped_node_did}"}}, lifecycle_state: {{_eq: "{pending}"}}}},
             order: [{{created_at: ASC}}, {{request_id: ASC}}]
         ) {{{}}} }}"#,
-        crate::request_admission::SIGNED_REQUEST_FIELDS,
+        crate::request_admission::SIGNED_REQUEST_FIELDS, pending = RequestLifecycleState::Pending.as_str()
     );
     crate::config_client::ConfigAccess::transact_local_readonly(
         node,

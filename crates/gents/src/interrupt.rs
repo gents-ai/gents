@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
@@ -207,8 +208,8 @@ pub(crate) async fn interrupt_active_session_in_txn(
     let response = txn
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ {scope}, purpose: {{ _eq: "normal" }},
-                lifecycle_state: {{ _in: ["claimed", "processing"] }} }}, limit: 2)
-                {{ _docID request_id }} }}"#
+                lifecycle_state: {{ _in: {claimed_or_processing} }} }}, limit: 2)
+                {{ _docID request_id }} }}"#, claimed_or_processing = RequestLifecycleState::graphql_list([RequestLifecycleState::Claimed, RequestLifecycleState::Processing])
         ))
         .await?;
     let rows = response
@@ -243,7 +244,7 @@ pub(crate) async fn active_session_request(
     let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let response = graphql_with_transaction_retry(
         node,
-        &format!(r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:["claimed","processing"]}}}},limit:2){{_docID request_id node_did requester_did session_id lifecycle_state}}}}"#),
+        &format!(r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:{claimed_or_processing}}}}},limit:2){{_docID request_id node_did requester_did session_id lifecycle_state}}}}"#, claimed_or_processing = RequestLifecycleState::graphql_list([RequestLifecycleState::Claimed, RequestLifecycleState::Processing])),
         "active request lookup",
     )
     .await?;

@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use defra_node::EmbeddedNode;
 use serde_json::Value;
 
@@ -83,8 +84,8 @@ pub(super) async fn load(
             let doc = escape_graphql_string(&request.doc_id);
             let response = txn.execute(&format!(r#"{{
                 current: AgentRequest(filter: {{{scope}, _docID: {{_eq: "{doc}"}}, background_completion_input_through_sequence: {{_eq: {cutoff}}}}}, limit: 1) {{background_completion_notification_keys_json}}
-                acknowledged: AgentRequest(filter: {{{scope}, _docID: {{_ne: "{doc}"}}, lifecycle_state: {{_eq: "completed"}}, background_completion_notification_keys_json: {{_ne: null}}, background_completion_input_through_sequence: {{_le: {cutoff}}}}}) {{_docID background_completion_input_through_sequence background_completion_notification_keys_json}}
-            }}"#)).await?;
+                acknowledged: AgentRequest(filter: {{{scope}, _docID: {{_ne: "{doc}"}}, lifecycle_state: {{_eq: "{completed}"}}, background_completion_notification_keys_json: {{_ne: null}}, background_completion_input_through_sequence: {{_le: {cutoff}}}}}) {{_docID background_completion_input_through_sequence background_completion_notification_keys_json}}
+            }}"#, completed = RequestLifecycleState::Completed.as_str())).await?;
             let current = rows(&response, "current")?.first().context("current wake claim receipt is unavailable")?;
             let claimed = receipt_keys(current)?;
             if claimed.is_empty() { return Ok(Vec::new()); }

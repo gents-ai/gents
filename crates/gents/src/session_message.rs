@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
@@ -801,12 +802,12 @@ async fn validate_steer_in_txn(
 ) -> Result<std::result::Result<(), crate::lifecycle::queue::SteerAdmissionRefusal>> {
     let response = txn.execute(&format!(
         r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }},
-            purpose: {{ _eq: "normal" }}, lifecycle_state: {{ _in: ["claimed", "processing"] }} }}, limit: 2) {{
+            purpose: {{ _eq: "normal" }}, lifecycle_state: {{ _in: {claimed_or_processing} }} }}, limit: 2) {{
             {} execution_lease_secs interrupt_requested_at
         }} }}"#,
         escape_graphql_string(&create.node_did),
         escape_graphql_string(&create.session_id),
-        crate::request_admission::SIGNED_REQUEST_FIELDS,
+        crate::request_admission::SIGNED_REQUEST_FIELDS, claimed_or_processing = RequestLifecycleState::graphql_list([RequestLifecycleState::Claimed, RequestLifecycleState::Processing])
     )).await?;
     let rows: Vec<gents_protocol::row::AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;

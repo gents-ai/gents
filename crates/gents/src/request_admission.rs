@@ -6,6 +6,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use defra_node::EmbeddedNode;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::request_admission::{
     project_agent_request_admission_disposition, validate_signing_fields,
     AgentRequestAdmissionDisposition, AgentRequestAdmissionKind, AgentRequestAdmissionObservation,
@@ -216,10 +217,10 @@ pub(crate) async fn terminalize_pending_request_rejection(
                 docID: "{doc_id}", filter: {{
                     _docID: {{ _eq: "{doc_id}" }},
                     node_did: {{ _eq: "{node_did}" }},
-                    lifecycle_state: {{ _eq: "pending" }}
+                    lifecycle_state: {{ _eq: "{pending}" }}
                 }},
                 input: {{
-                    lifecycle_state: "failed",
+                    lifecycle_state: "{failed}",
                     failure_reason: "{failure_reason}",
                     terminalized_at: "{terminalized_at}",
                     terminal_redrive_attempts: 0,
@@ -228,7 +229,7 @@ pub(crate) async fn terminalize_pending_request_rejection(
             ) {{ _docID request_id purpose node_did requester_did agent_id session_id content
                  input created_at caused_by_parent_request_doc_id
                  workspace_id workspace_owner_node_did }}
-        }}"#
+        }}"#, pending = RequestLifecycleState::Pending.as_str(), failed = RequestLifecycleState::Failed.as_str()
     );
     let mutation = &mutation;
     crate::config_client::ConfigAccess::transact_local_idempotent(
@@ -256,7 +257,7 @@ pub(crate) async fn terminalize_pending_request_rejection(
                         crate::workspace::release_terminal_writer_binding(txn, row).await?;
                         if let Some(request_id) = row["request_id"].as_str() {
                             crate::trigger_engine::durable::publish_request_outcome(
-                                txn, owner, request_id, "failed", reason, now,
+                                txn, owner, request_id, RequestLifecycleState::Failed, reason, now,
                             )
                             .await?;
                         }

@@ -300,10 +300,10 @@ pub(crate) async fn consume_folded_in_txn(
         r#"mutation {{ update_AgentRequest(docID: "{doc_id}", filter: {{
             _docID: {{ _eq: "{doc_id}" }},
             node_did: {{ _eq: "{}" }},
-            lifecycle_state: {{ _eq: "pending" }},
+            lifecycle_state: {{ _eq: "{pending}" }},
             interrupt_requested_at: {{ _eq: null }}
         }}, input: {{
-            lifecycle_state: "superseded",
+            lifecycle_state: "{superseded}",
             superseded_by_request: "{}",
             superseded_by_request_doc_id: "{}",
             failure_reason: "{}",
@@ -314,7 +314,7 @@ pub(crate) async fn consume_folded_in_txn(
         escape_graphql_string(&consumption.head_request_id),
         escape_graphql_string(&consumption.head_doc_id),
         escape_graphql_string(FOLDED_REASON),
-        escape_graphql_string(published_at),
+        escape_graphql_string(published_at), pending = RequestLifecycleState::Pending.as_str(), superseded = RequestLifecycleState::Superseded.as_str()
     );
     let response = txn.execute(&mutation).await?;
     let updated = response["data"]["update_AgentRequest"]
@@ -336,7 +336,7 @@ pub(crate) async fn consume_folded_in_txn(
         txn,
         &consumption.node_did,
         &request_id,
-        RequestLifecycleState::Superseded.as_str(),
+        RequestLifecycleState::Superseded,
         FOLDED_REASON,
         published_at,
     )
@@ -381,13 +381,13 @@ pub(crate) async fn load_consumed_folded_inputs(
             node_did: {{ _eq: "{}" }},
             session_id: {{ _eq: "{}" }},
             superseded_by_request_doc_id: {{ _eq: "{}" }},
-            lifecycle_state: {{ _eq: "superseded" }},
+            lifecycle_state: {{ _eq: "{superseded}" }},
             failure_reason: {{ _eq: "{}" }}
         }}) {{ _docID request_id requester_did content }} }}"#,
         escape_graphql_string(&head.node_did),
         escape_graphql_string(&head.session_id),
         escape_graphql_string(&head.doc_id),
-        escape_graphql_string(FOLDED_REASON),
+        escape_graphql_string(FOLDED_REASON), superseded = RequestLifecycleState::Superseded.as_str()
     );
     let observed = crate::graphql::graphql_with_transaction_retry(
         node,

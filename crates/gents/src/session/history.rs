@@ -1,5 +1,6 @@
 use super::*;
 use anyhow::Context;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 pub fn sequence_message_key(
     node_did: &str,
@@ -112,8 +113,8 @@ pub(crate) async fn retry_has_published_input(
             parents.len() == 1
                 && parents[0]["node_did"].as_str() == Some(request.node_did.as_str())
                 && matches!(
-                    parents[0]["lifecycle_state"].as_str(),
-                    Some("failed" | "dead")
+                    RequestLifecycleState::parse_opt(parents[0]["lifecycle_state"].as_str()),
+                    Some(RequestLifecycleState::Failed | RequestLifecycleState::Dead)
                 ),
             "retry parent must be an exact terminal request in the same agent scope"
         );
