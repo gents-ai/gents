@@ -768,6 +768,8 @@ export function createChatActions({
     backgroundTool: (request: Parameters<DesktopApiAdapter["backgroundTool"]>[0]) =>
       api.backgroundTool(request),
     controlJob: (request: DesktopJobControlRequest) => api.jobControl(request),
+    stopProcess: (request: Parameters<DesktopApiAdapter["processStop"]>[0]) =>
+      api.processStop(request),
     setChatFolder,
   };
 }

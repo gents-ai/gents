@@ -870,12 +870,14 @@ async fn run_agent_owned(
 
     let session_command_node = agent.node.clone();
     let session_command_identity = agent.runtime_node_arc().identity.clone();
+    let session_command_executions = agent.background_execution_registry.clone();
     let session_command_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::SessionCommandReconcile(
-            crate::agent::p2p_reconcile::session_commands::run_session_command_reconciler(
+            crate::agent::p2p_reconcile::session_commands::run_session_command_reconciler_with_registry(
                 session_command_node,
                 session_command_identity,
+                session_command_executions,
                 session_command_cancel,
             )
             .await,

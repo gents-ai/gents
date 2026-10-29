@@ -2,6 +2,23 @@
 mod background;
 pub use background::background_tool;
 
+pub(crate) async fn process_stop(
+    core: &gents_desktop_core::client::ClientCore,
+    request: &crate::types::DesktopProcessStopRequest,
+) -> anyhow::Result<()> {
+    let receipt = core.stop_background_process(
+        &request.node_did,
+        &request.session_id,
+        &request.tool_call_id,
+        &request.tool_call_doc_id,
+    ).await?;
+    match receipt.outcome {
+        gents_protocol::process_control::ProcessStopOutcome::Stopped
+        | gents_protocol::process_control::ProcessStopOutcome::AlreadyTerminal => Ok(()),
+        _ => anyhow::bail!("process stop failed: {}", receipt.reason),
+    }
+}
+
 #[path = "commands/attachments.rs"]
 mod attachments;
 pub(crate) use attachments::bounded_attachment_response;

@@ -282,6 +282,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         DesktopInterruptRequest,
         DesktopBackgroundToolRequest,
         DesktopJobControlRequest,
+        DesktopProcessStopRequest,
         DesktopProbeMcpServiceRequest,
         InferenceProbeRequest,
         InferenceDiscoveryRequest,

@@ -312,5 +312,7 @@ export function createDesktopApiAdapter(
     backgroundTool: (request) =>
       invokeDesktop("desktop_background_tool", { request }),
     jobControl: (request) => invokeDesktop("desktop_job_control", { request }),
+    processStop: (request) =>
+      invokeDesktop("desktop_process_stop", { request }),
   };
 }

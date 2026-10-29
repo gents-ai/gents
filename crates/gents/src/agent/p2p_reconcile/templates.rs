@@ -244,6 +244,7 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "FileInventoryRequest",
     "AgentSessionInputEdit",
     "AgentSessionGoalControl",
+    "AgentSessionProcessStop",
     "Agent",
     "AgentContext",
     "CompactionConfig",
@@ -281,6 +282,7 @@ pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
     "FileInventoryRequest",
     "AgentSessionInputEdit",
     "AgentSessionGoalControl",
+    "AgentSessionProcessStop",
 ];
 
 const CONVERSATION_RULES: &[CollectionRule] = &[
@@ -358,6 +360,7 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "SessionHydrationRequest",
     "AgentSessionInputEdit",
     "AgentSessionGoalControl",
+    "AgentSessionProcessStop",
     NODE_DIRECTORY_COLLECTION,
 ];
 
@@ -409,6 +412,11 @@ const MACHINE_RULES: &[CollectionRule] = &[
     },
     CollectionRule {
         collection: "AgentSessionGoalControl",
+        field: "requester_did",
+        source: DidSource::PeerDid,
+    },
+    CollectionRule {
+        collection: "AgentSessionProcessStop",
         field: "requester_did",
         source: DidSource::PeerDid,
     },

@@ -10,6 +10,9 @@ use crate::hook::BackgroundExecutionRegistry;
 use crate::plugin_job::control::control_by_doc_id;
 use crate::tool_call_lifecycle::{AwaitMode, CancelCause, ToolCallLifecycle, ToolRowKind};
 
+mod client;
+pub use client::{prepare_process_stop, submit_prepared_process_stop};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CancelBackgroundToolCallOutcome {
     Cancelled { live_execution_cancelled: bool },
@@ -46,7 +49,57 @@ pub async fn cancel_session_background_process(
     {
         return Ok(CancelBackgroundToolCallOutcome::NotFound);
     }
-    cancel_background_tool_call(node, executions, session_id, tool_call_id).await
+    cancel_loaded_background_tool(node, executions, lifecycle).await
+}
+
+pub(crate) async fn cancel_session_background_process_by_doc_id(
+    node: Arc<EmbeddedNode>,
+    executions: &BackgroundExecutionRegistry,
+    node_did: &str,
+    requester_did: Option<&str>,
+    session_id: &str,
+    tool_call_id: &str,
+    tool_call_doc_id: &str,
+) -> Result<CancelBackgroundToolCallOutcome> {
+    let Some(lifecycle) = ToolCallLifecycle::load_by_doc_id(
+        node.clone(),
+        tool_call_doc_id,
+        node_did,
+        session_id,
+        requester_did,
+    )
+    .await?
+    else {
+        return Ok(CancelBackgroundToolCallOutcome::NotFound);
+    };
+    if lifecycle.tool_call_id() != tool_call_id || lifecycle.kind() != ToolRowKind::Native {
+        return Ok(CancelBackgroundToolCallOutcome::NotFound);
+    }
+    if lifecycle.await_mode() != AwaitMode::Background {
+        return Ok(CancelBackgroundToolCallOutcome::NotBackground);
+    }
+    if lifecycle.is_cancelled() {
+        use crate::managed_exec::ProcessStopOutcome;
+        return Ok(
+            match executions
+                .stop_execution(tool_call_id, tool_call_doc_id)
+                .await
+            {
+                ProcessStopOutcome::Stopped => CancelBackgroundToolCallOutcome::Cancelled {
+                    live_execution_cancelled: true,
+                },
+                ProcessStopOutcome::StillRunning | ProcessStopOutcome::NotOwned => {
+                    CancelBackgroundToolCallOutcome::Unverified
+                }
+                ProcessStopOutcome::AlreadyExited => {
+                    CancelBackgroundToolCallOutcome::AlreadyTerminal {
+                        state: lifecycle.state().as_str().to_owned(),
+                    }
+                }
+            },
+        );
+    }
+    cancel_loaded_background_tool(node, executions, lifecycle).await
 }
 
 pub async fn cancel_background_tool_call(
@@ -55,12 +108,21 @@ pub async fn cancel_background_tool_call(
     session_id: &str,
     tool_call_id: &str,
 ) -> Result<CancelBackgroundToolCallOutcome> {
-    let Some(mut lifecycle) =
-        ToolCallLifecycle::load(node.clone(), session_id, tool_call_id).await?
+    let Some(lifecycle) = ToolCallLifecycle::load(node.clone(), session_id, tool_call_id).await?
     else {
         return Ok(CancelBackgroundToolCallOutcome::NotFound);
     };
 
+    cancel_loaded_background_tool(node, background_executions, lifecycle).await
+}
+
+async fn cancel_loaded_background_tool(
+    node: Arc<EmbeddedNode>,
+    background_executions: &BackgroundExecutionRegistry,
+    mut lifecycle: ToolCallLifecycle,
+) -> Result<CancelBackgroundToolCallOutcome> {
+    let session_id = lifecycle.session_id().to_owned();
+    let tool_call_id = lifecycle.tool_call_id().to_owned();
     if lifecycle.await_mode() != AwaitMode::Background {
         return Ok(CancelBackgroundToolCallOutcome::NotBackground);
     }
@@ -74,7 +136,7 @@ pub async fn cancel_background_tool_call(
         // The operator holds the node, so the job's own scope authorizes it.
         let scope = ProcessControlScope {
             request_id: String::new(),
-            session_id: session_id.into(),
+            session_id: session_id.clone(),
             node_did: lifecycle.node_did().into(),
             requester_did: lifecycle.requester_did().map(str::to_owned),
         };
@@ -135,13 +197,24 @@ pub async fn cancel_background_tool_call(
 
     if !background_executions
         .contains(
-            tool_call_id,
+            &tool_call_id,
             lifecycle
                 .doc_id()
                 .context("background cancellation lacks physical identity")?,
         )
         .await
     {
+        if lifecycle.state() == crate::tool_call_lifecycle::ToolCallState::Pending {
+            if lifecycle
+                .cancel_before_dispatch_owned(CancelCause::UserCancelled)
+                .await?
+            {
+                return Ok(CancelBackgroundToolCallOutcome::Cancelled {
+                    live_execution_cancelled: false,
+                });
+            }
+            return Ok(CancelBackgroundToolCallOutcome::Unverified);
+        }
         let (process, _) = ToolCallLifecycle::cancel_unowned_background_tool(
             &node,
             &mut lifecycle,
@@ -153,21 +226,70 @@ pub async fn cancel_background_tool_call(
         return Ok(outcome_for_process(process, false));
     }
 
-    let persisted = lifecycle
-        .cancel_during_run(CancelCause::UserCancelled)
-        .await;
+    let persisted = if lifecycle.state() == crate::tool_call_lifecycle::ToolCallState::Pending {
+        match lifecycle
+            .cancel_before_dispatch_owned(CancelCause::UserCancelled)
+            .await
+        {
+            Ok(true) => Ok(()),
+            Ok(false) => {
+                let Some(current) = ToolCallLifecycle::load_by_doc_id(
+                    node.clone(),
+                    lifecycle
+                        .doc_id()
+                        .context("background cancellation lacks physical identity")?,
+                    lifecycle.node_did(),
+                    lifecycle.session_id(),
+                    lifecycle.requester_did(),
+                )
+                .await?
+                else {
+                    return Ok(CancelBackgroundToolCallOutcome::NotFound);
+                };
+                lifecycle = current;
+                if lifecycle.is_terminal() && !lifecycle.is_cancelled() {
+                    return Ok(CancelBackgroundToolCallOutcome::AlreadyTerminal {
+                        state: lifecycle.state().as_str().into(),
+                    });
+                }
+                if lifecycle.is_cancelled() {
+                    Ok(())
+                } else {
+                    lifecycle
+                        .cancel_during_run(CancelCause::UserCancelled)
+                        .await
+                        .map(|_| ())
+                }
+            }
+            Err(error) => Err(error),
+        }
+    } else {
+        lifecycle
+            .cancel_during_run(CancelCause::UserCancelled)
+            .await
+            .map(|_| ())
+    };
     let doc_id = lifecycle
         .doc_id()
         .ok_or_else(|| anyhow::anyhow!("background cancellation lacks physical identity"))?
         .to_owned();
+    if persisted.is_ok() && !lifecycle.is_cancelled() {
+        return Ok(if lifecycle.is_terminal() {
+            CancelBackgroundToolCallOutcome::AlreadyTerminal {
+                state: lifecycle.state().as_str().to_string(),
+            }
+        } else {
+            CancelBackgroundToolCallOutcome::Unverified
+        });
+    }
     let process = background_executions
-        .stop_execution(tool_call_id, &doc_id)
+        .stop_execution(&tool_call_id, &doc_id)
         .await;
     let live_execution_cancelled = true;
     let process = Some(process);
     if let Err(error) = persisted {
         tracing::error!(
-            tool_call_id,
+            tool_call_id = %tool_call_id,
             live_execution_cancelled,
             %error,
             "failed to persist background cancellation after stopping live execution",
@@ -209,6 +331,506 @@ fn outcome_for_process(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn completed_process_wins_against_stale_stop() {
+        use crate::tool_call_lifecycle::admission_fixture::{
+            published_admission_with_owner, PublishedAdmissionOptions,
+        };
+        use crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission;
+        let (mut fixture, owner) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: "completed-process-stop-race".into(),
+            tool_name: Some("spawn_process".into()),
+            real_identity: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let mut child = fixture
+            .tool
+            .admit_spawned_background(
+                SpawnedBackgroundToolAdmission {
+                    tool_name: "bash".into(),
+                    deadline_at: chrono::Utc::now() + chrono::Duration::minutes(10),
+                    selected_tool_identity: None,
+                },
+                "spawned",
+            )
+            .await
+            .unwrap();
+        child.start_running().await.unwrap();
+        let stale = ToolCallLifecycle::load_by_doc_id(
+            fixture.node.clone(),
+            child.doc_id().unwrap(),
+            child.node_did(),
+            child.session_id(),
+            child.requester_did(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let registry = BackgroundExecutionRegistry::default();
+        let token = tokio_util::sync::CancellationToken::new();
+        let _reservation = registry
+            .reserve(
+                child.tool_call_id().into(),
+                child.doc_id().unwrap().into(),
+                token.clone(),
+            )
+            .unwrap();
+        child.complete("done").await.unwrap();
+        let outcome = cancel_loaded_background_tool(fixture.node.clone(), &registry, stale)
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome,
+            CancelBackgroundToolCallOutcome::AlreadyTerminal {
+                state: "completed".into()
+            }
+        );
+        assert!(!token.is_cancelled());
+        drop(owner);
+        fixture.node.shutdown().await;
+        std::fs::remove_dir_all(&fixture.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stop_reloads_when_spawn_wins_pending_transition() {
+        use crate::tool_call_lifecycle::admission_fixture::{
+            published_admission_with_owner, PublishedAdmissionOptions,
+        };
+        use crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission;
+        let (mut fixture, owner) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: "stop-spawn-wins".into(),
+            tool_name: Some("spawn_process".into()),
+            real_identity: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let mut child = fixture
+            .tool
+            .admit_spawned_background(
+                SpawnedBackgroundToolAdmission {
+                    tool_name: "bash".into(),
+                    deadline_at: chrono::Utc::now() + chrono::Duration::minutes(10),
+                    selected_tool_identity: None,
+                },
+                "spawned",
+            )
+            .await
+            .unwrap();
+        let stale = ToolCallLifecycle::load_by_doc_id(
+            fixture.node.clone(),
+            child.doc_id().unwrap(),
+            child.node_did(),
+            child.session_id(),
+            child.requester_did(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let registry = BackgroundExecutionRegistry::default();
+        let token = tokio_util::sync::CancellationToken::new();
+        let reservation = registry
+            .reserve(
+                child.tool_call_id().into(),
+                child.doc_id().unwrap().into(),
+                token.clone(),
+            )
+            .unwrap();
+        child.start_running().await.unwrap();
+        let worker = tokio::spawn({
+            let token = token.clone();
+            async move {
+                token.cancelled().await;
+                drop(reservation);
+            }
+        });
+        let outcome = cancel_loaded_background_tool(fixture.node.clone(), &registry, stale)
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome,
+            CancelBackgroundToolCallOutcome::Cancelled {
+                live_execution_cancelled: true
+            }
+        );
+        assert!(token.is_cancelled());
+        worker.await.unwrap();
+        let retained = ToolCallLifecycle::load_by_doc_id(
+            fixture.node.clone(),
+            child.doc_id().unwrap(),
+            child.node_did(),
+            child.session_id(),
+            child.requester_did(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(retained.is_cancelled());
+        drop(owner);
+        fixture.node.shutdown().await;
+        std::fs::remove_dir_all(&fixture.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn desktop_stop_before_reservation_prevents_spawn_dispatch() {
+        use crate::tool_call_lifecycle::admission_fixture::{
+            published_admission_with_owner, PublishedAdmissionOptions,
+        };
+        use crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission;
+        let (mut fixture, owner) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: "stop-before-reservation".into(),
+            tool_name: Some("spawn_process".into()),
+            real_identity: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let mut child = fixture
+            .tool
+            .admit_spawned_background(
+                SpawnedBackgroundToolAdmission {
+                    tool_name: "bash".into(),
+                    deadline_at: chrono::Utc::now() + chrono::Duration::minutes(10),
+                    selected_tool_identity: None,
+                },
+                "spawned",
+            )
+            .await
+            .unwrap();
+        let registry = BackgroundExecutionRegistry::default();
+        let stopped = cancel_session_background_process_by_doc_id(
+            fixture.node.clone(),
+            &registry,
+            child.node_did(),
+            child.requester_did(),
+            child.session_id(),
+            child.tool_call_id(),
+            child.doc_id().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            stopped,
+            CancelBackgroundToolCallOutcome::Cancelled {
+                live_execution_cancelled: false
+            }
+        );
+        assert!(child.start_running().await.is_err());
+        let retained = ToolCallLifecycle::load_by_doc_id(
+            fixture.node.clone(),
+            child.doc_id().unwrap(),
+            child.node_did(),
+            child.session_id(),
+            child.requester_did(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(retained.is_cancelled());
+        drop(owner);
+        fixture.node.shutdown().await;
+        std::fs::remove_dir_all(&fixture.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn generated_stop_cases_cover_background_lifecycle() {
+        use crate::tool_call_lifecycle::admission_fixture::{
+            published_admission_with_owner, PublishedAdmissionOptions,
+        };
+        use crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission;
+        let model = tokio::task::spawn_blocking(|| {
+            gents_lean_contract::run_prepared_generator(
+                &gents_lean_contract::proofs_dir().unwrap(),
+                "Proofs.Conformance.DesktopProcessStop:olean",
+                "Proofs/Conformance/DesktopProcessStop.lean",
+            )
+            .unwrap()
+        })
+        .await
+        .unwrap();
+        let cases: Vec<serde_json::Value> = serde_json::from_str(&model).unwrap();
+        for state in ["running", "completed", "failed", "timedOut", "cancelled"] {
+            let (mut fixture, owner) = published_admission_with_owner(PublishedAdmissionOptions {
+                name: format!("model-stop-{state}"),
+                tool_name: Some("spawn_process".into()),
+                real_identity: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+            let mut child = fixture
+                .tool
+                .admit_spawned_background(
+                    SpawnedBackgroundToolAdmission {
+                        tool_name: "bash".into(),
+                        deadline_at: chrono::Utc::now() + chrono::Duration::minutes(10),
+                        selected_tool_identity: None,
+                    },
+                    "spawned",
+                )
+                .await
+                .unwrap();
+            child.start_running().await.unwrap();
+            match state {
+                "completed" => child.complete("done").await.unwrap(),
+                "failed" => child
+                    .fail("failed", crate::tool_call_lifecycle::FailureClass::External)
+                    .await
+                    .unwrap(),
+                "timedOut" => {
+                    child.timeout().await.unwrap();
+                }
+                "cancelled" => {
+                    child
+                        .cancel_during_run(CancelCause::UserCancelled)
+                        .await
+                        .unwrap();
+                }
+                _ => {}
+            }
+            let registry = BackgroundExecutionRegistry::default();
+            let token = tokio_util::sync::CancellationToken::new();
+            let reservation = registry
+                .reserve(
+                    child.tool_call_id().into(),
+                    child.doc_id().unwrap().into(),
+                    token.clone(),
+                )
+                .unwrap();
+            let worker = tokio::spawn({
+                let token = token.clone();
+                async move {
+                    token.cancelled().await;
+                    drop(reservation);
+                }
+            });
+            let selected: Vec<_> = cases
+                .iter()
+                .filter(|case| case["state"] == state && case["background"] == true)
+                .collect();
+            assert_eq!(selected.len(), 4);
+            for case in selected {
+                let requester = if case["authorized"] == true {
+                    child.requester_did()
+                } else {
+                    Some("did:foreign:requester")
+                };
+                let doc = if case["sameDocument"] == true {
+                    child.doc_id().unwrap()
+                } else {
+                    fixture.tool.doc_id().unwrap()
+                };
+                let outcome = cancel_session_background_process_by_doc_id(
+                    fixture.node.clone(),
+                    &registry,
+                    child.node_did(),
+                    requester,
+                    child.session_id(),
+                    child.tool_call_id(),
+                    doc,
+                )
+                .await
+                .unwrap();
+                match case["decision"].as_str().unwrap() {
+                    "refuse" => {
+                        assert_eq!(outcome, CancelBackgroundToolCallOutcome::NotFound, "{case}");
+                        assert!(!token.is_cancelled(), "{case}");
+                    }
+                    "request_stop" => assert_eq!(
+                        outcome,
+                        CancelBackgroundToolCallOutcome::Cancelled {
+                            live_execution_cancelled: true
+                        },
+                        "{case}"
+                    ),
+                    "already_terminal" => {
+                        assert_eq!(
+                            outcome,
+                            CancelBackgroundToolCallOutcome::AlreadyTerminal {
+                                state: state.into()
+                            },
+                            "{case}"
+                        );
+                        assert!(!token.is_cancelled(), "{case}");
+                    }
+                    decision => panic!("unexpected decision {decision}: {case}"),
+                }
+            }
+            if state == "running" || state == "cancelled" {
+                worker.await.unwrap();
+            } else {
+                worker.abort();
+                let _ = worker.await;
+            }
+            drop(owner);
+            fixture.node.shutdown().await;
+            std::fs::remove_dir_all(&fixture.path).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn desktop_stop_cancels_pending_spawned_process() {
+        use crate::tool_call_lifecycle::admission_fixture::{
+            published_admission_with_owner, PublishedAdmissionOptions,
+        };
+        use crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission;
+        let model = tokio::task::spawn_blocking(|| {
+            gents_lean_contract::run_prepared_generator(
+                &gents_lean_contract::proofs_dir().unwrap(),
+                "Proofs.Conformance.DesktopProcessStop:olean",
+                "Proofs/Conformance/DesktopProcessStop.lean",
+            )
+            .unwrap()
+        })
+        .await
+        .unwrap();
+        let cases: Vec<serde_json::Value> = serde_json::from_str(&model).unwrap();
+        let (mut fixture, owner) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: "pending-spawn-stop".into(),
+            tool_name: Some("spawn_process".into()),
+            real_identity: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let child = fixture
+            .tool
+            .admit_spawned_background(
+                SpawnedBackgroundToolAdmission {
+                    tool_name: "bash".into(),
+                    deadline_at: chrono::Utc::now() + chrono::Duration::minutes(10),
+                    selected_tool_identity: None,
+                },
+                "spawned",
+            )
+            .await
+            .unwrap();
+        let registry = BackgroundExecutionRegistry::default();
+        let token = tokio_util::sync::CancellationToken::new();
+        let reservation = registry
+            .reserve(
+                child.tool_call_id().into(),
+                child.doc_id().unwrap().into(),
+                token.clone(),
+            )
+            .unwrap();
+        let worker = tokio::spawn({
+            let token = token.clone();
+            async move {
+                token.cancelled().await;
+                drop(reservation);
+            }
+        });
+        let pending_cases: Vec<_> = cases
+            .iter()
+            .filter(|case| case["state"] == "pending" && case["background"] == true)
+            .collect();
+        assert_eq!(pending_cases.len(), 4);
+        for case in pending_cases {
+            let authorized = case["authorized"].as_bool().unwrap();
+            let same_document = case["sameDocument"].as_bool().unwrap();
+            let requester = if authorized {
+                child.requester_did()
+            } else {
+                Some("did:foreign:requester")
+            };
+            let doc = if same_document {
+                child.doc_id().unwrap()
+            } else {
+                fixture.tool.doc_id().unwrap()
+            };
+            let outcome = cancel_session_background_process_by_doc_id(
+                fixture.node.clone(),
+                &registry,
+                child.node_did(),
+                requester,
+                child.session_id(),
+                child.tool_call_id(),
+                doc,
+            )
+            .await
+            .unwrap();
+            match case["decision"].as_str().unwrap() {
+                "refuse" => {
+                    assert_eq!(outcome, CancelBackgroundToolCallOutcome::NotFound, "{case}");
+                    assert!(!token.is_cancelled(), "{case}");
+                }
+                "request_stop" => {
+                    assert_eq!(
+                        outcome,
+                        CancelBackgroundToolCallOutcome::Cancelled {
+                            live_execution_cancelled: true
+                        },
+                        "{case}"
+                    );
+                }
+                decision => panic!("unexpected pending decision {decision}: {case}"),
+            }
+        }
+        assert!(token.is_cancelled());
+        worker.await.unwrap();
+        let persisted = ToolCallLifecycle::load_by_doc_id(
+            fixture.node.clone(),
+            child.doc_id().unwrap(),
+            child.node_did(),
+            child.session_id(),
+            child.requester_did(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(persisted.is_cancelled());
+        drop(owner);
+        fixture.node.shutdown().await;
+        std::fs::remove_dir_all(&fixture.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn desktop_stop_rejects_cancelled_foreground_invocation() {
+        use crate::tool_call_lifecycle::admission_fixture::{
+            published_admission, PublishedAdmissionOptions,
+        };
+
+        let mut fixture = published_admission(PublishedAdmissionOptions {
+            name: "cancelled-foreground-stop".into(),
+            await_mode: AwaitMode::Foreground,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        fixture
+            .tool
+            .cancel_during_run(CancelCause::UserCancelled)
+            .await
+            .unwrap();
+        let registry = BackgroundExecutionRegistry::default();
+        let token = tokio_util::sync::CancellationToken::new();
+        let _reservation = registry
+            .reserve(
+                fixture.tool.tool_call_id().into(),
+                fixture.tool.doc_id().unwrap().into(),
+                token.clone(),
+            )
+            .unwrap();
+        let outcome = cancel_session_background_process_by_doc_id(
+            fixture.node.clone(),
+            &registry,
+            fixture.tool.node_did(),
+            fixture.tool.requester_did(),
+            fixture.tool.session_id(),
+            fixture.tool.tool_call_id(),
+            fixture.tool.doc_id().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome, CancelBackgroundToolCallOutcome::NotBackground);
+        assert!(!token.is_cancelled());
+        fixture.node.shutdown().await;
+        std::fs::remove_dir_all(&fixture.path).unwrap();
+    }
     use crate::ensure_runtime_schemas;
     use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
     use crate::streaming::DefraStreamWriter;
@@ -354,13 +976,45 @@ mod tests {
             "unauthorized UI cancellation must not signal the worker"
         );
 
-        let outcome = cancel_session_background_process(
+        let mut selected = ToolCallLifecycle::load(node.clone(), "session-1", "cancel-native-tool")
+            .await
+            .unwrap()
+            .unwrap();
+        let sibling = ToolCallLifecycle::load(node.clone(), "session-1", "sibling-native-tool")
+            .await
+            .unwrap()
+            .unwrap();
+        let mismatched = cancel_session_background_process_by_doc_id(
             node.clone(),
             &registry,
             node_did,
             None,
             "session-1",
             "cancel-native-tool",
+            sibling.doc_id().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(mismatched, CancelBackgroundToolCallOutcome::NotFound);
+        assert!(!token.is_cancelled());
+
+        selected
+            .cancel_during_run(CancelCause::UserCancelled)
+            .await
+            .unwrap();
+        assert!(
+            !token.is_cancelled(),
+            "simulates interruption after durable cancellation"
+        );
+
+        let outcome = cancel_session_background_process_by_doc_id(
+            node.clone(),
+            &registry,
+            node_did,
+            None,
+            "session-1",
+            "cancel-native-tool",
+            selected.doc_id().unwrap(),
         )
         .await
         .unwrap();
@@ -373,6 +1027,19 @@ mod tests {
         );
         assert!(token.is_cancelled());
         worker.await.unwrap();
+
+        let unknown = cancel_session_background_process_by_doc_id(
+            node.clone(),
+            &registry,
+            node_did,
+            None,
+            "session-1",
+            "cancel-native-tool",
+            selected.doc_id().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(unknown, CancelBackgroundToolCallOutcome::Unverified);
 
         let row = ToolCallLifecycle::load(node.clone(), "session-1", "cancel-native-tool")
             .await

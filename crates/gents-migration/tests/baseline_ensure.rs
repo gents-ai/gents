@@ -12,6 +12,24 @@ use gents_migration::{
 mod common;
 use common::fresh_node;
 
+#[tokio::test]
+async fn process_stop_schema_has_pinned_version() {
+    let node = fresh_node().await;
+    node.add_collection(schemas::AGENT_SESSION_PROCESS_STOP)
+        .await
+        .unwrap();
+    let collection = node
+        .get_collection(schemas::AGENT_SESSION_PROCESS_STOP_NAME)
+        .unwrap()
+        .unwrap();
+    let entry = gents_migration::DEFAULT_BASELINE
+        .iter()
+        .find(|entry| entry.name == schemas::AGENT_SESSION_PROCESS_STOP_NAME)
+        .unwrap();
+    assert_eq!(entry.expected_version, Some(collection.version_id.as_str()));
+    node.shutdown().await;
+}
+
 #[test]
 fn default_baseline_matches_ordered_protocol_catalog() {
     let actual = gents_migration::DEFAULT_BASELINE

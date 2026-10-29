@@ -215,6 +215,28 @@ fn inventory_image_reads_accept_only_received_coordinates() {
 }
 
 #[test]
+fn process_stop_is_advertised_scoped_and_not_cancellable() {
+    let command: protocol::ClientCommand = serde_json::from_value(json!({
+        "name":"desktop_process_stop", "args":{"request":{
+            "nodeDid":"node", "sessionId":"session", "toolCallId":"call", "toolCallDocId":"document"
+        }}
+    }))
+    .unwrap();
+    assert!(
+        matches!(&command, protocol::ClientCommand::ProcessStop { request }
+        if request.node_did == "node" && request.session_id == "session" && request.tool_call_doc_id == "document")
+    );
+    assert!(!command.is_cancellable());
+    assert!(protocol::ClientCommand::NAMES.contains(&"desktop_process_stop"));
+    assert!(serde_json::from_value::<protocol::ClientCommand>(json!({
+        "name":"desktop_process_stop", "args":{"request":{
+            "nodeDid":"node", "sessionId":"session", "toolCallId":"call"
+        }}
+    }))
+    .is_err());
+}
+
+#[test]
 fn request_retry_is_scoped_and_not_cancellable() {
     let command: protocol::ClientCommand = serde_json::from_value(json!({
         "name":"desktop_request_retry", "args":{"requestId":"request", "nodeDid":"node"}

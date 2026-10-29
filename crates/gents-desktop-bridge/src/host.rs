@@ -721,6 +721,12 @@ impl ClientHost {
                     .await
                     .map_err(BridgeError::untyped)?,
             ),
+            ClientCommand::ProcessStop { request } => {
+                crate::commands::process_stop(&self.core, &request)
+                    .await
+                    .map_err(backend_error)?;
+                encode(())
+            }
         }
     }
 
