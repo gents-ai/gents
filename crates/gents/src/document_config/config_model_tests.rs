@@ -29,6 +29,27 @@ fn task_hooks_are_compact_explicit_and_preserve_order() {
 }
 
 #[test]
+fn task_hook_skip_codes_round_trip_and_old_records_remain_readable() {
+    let hook: TaskHook = round_trip(json!({
+        "hook_id": "gate", "command": ["./gate"], "phase": "before",
+        "skip_exit_codes": [10, 11]
+    }));
+    assert_eq!(hook.skip_exit_codes, [10, 11]);
+
+    for input in [
+        json!({"hook_id":"gate", "command":["./gate"], "phase":"before"}),
+        json!({"hook_id":"gate", "command":["./gate"], "phase":"before", "skip_exit_codes":null}),
+    ] {
+        let decoded: TaskHook = serde_json::from_value(input).unwrap();
+        assert!(decoded.skip_exit_codes.is_empty());
+        assert!(serde_json::to_value(decoded)
+            .unwrap()
+            .get("skip_exit_codes")
+            .is_none());
+    }
+}
+
+#[test]
 fn null_defaults_are_compact_but_explicit_disable_and_tags_survive() {
     let task: Task = serde_json::from_value(json!({"task_id":"code", "node_did":"did:key:test",
         "agent_id":"coder", "prompt_template":"work", "enabled":null,"hooks":null,"tags":null}))
