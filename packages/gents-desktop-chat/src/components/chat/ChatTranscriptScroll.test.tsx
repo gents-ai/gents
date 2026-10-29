@@ -107,6 +107,22 @@ test.each([false, true])(
       fireEvent.scroll(panel);
       expect(screen.queryByText("latest user marker")).not.toBeNull();
       expect(screen.getByText("older response 0")).toBeTruthy();
+      const nextItem: RenderedTimelineItem = {
+        kind: "assistantMessage",
+        itemKey: "page-stream",
+        content: "response after paging",
+        reconstruction: { state: "ready" },
+      };
+      rerender(
+        <ChatTranscriptPanel
+          selectedSessionId="s"
+          session={{ ...session, timelineItems: [...timelineItems, nextItem] }}
+          activity={null}
+        />,
+      );
+      expect(screen.getByText("older response 0")).toBeTruthy();
+      expect(screen.getByText("latest user marker")).toBeTruthy();
+      expect(panel.querySelector('li[aria-setsize="122"]')).not.toBeNull();
       return;
     }
     fireEvent.scroll(panel);
