@@ -204,6 +204,7 @@ impl ReadFileTool {
 
 #[derive(Clone)]
 pub(super) struct GlobTool {
+    context: ToolContext,
     native_runner: NativeFsRunner,
     default_max_matches: usize,
 }
@@ -212,6 +213,7 @@ impl GlobTool {
     pub(super) fn new(context: ToolContext, default_max_matches: usize) -> Self {
         Self {
             native_runner: NativeFsRunner::new(&context),
+            context,
             default_max_matches,
         }
     }
@@ -219,6 +221,7 @@ impl GlobTool {
 
 #[derive(Clone)]
 pub(super) struct GrepTool {
+    context: ToolContext,
     native_runner: NativeFsRunner,
     default_max_matches: usize,
 }
@@ -227,6 +230,7 @@ impl GrepTool {
     pub(super) fn new(context: ToolContext, default_max_matches: usize) -> Self {
         Self {
             native_runner: NativeFsRunner::new(&context),
+            context,
             default_max_matches,
         }
     }
@@ -278,12 +282,69 @@ impl EditFileTool {
     }
 }
 
+fn filesystem_read_footprint(
+    context: &ToolContext,
+    runner: &NativeFsRunner,
+    path: Option<&str>,
+    directory_only: bool,
+) -> gents_loop::parallel_tools::Footprint {
+    scoped_filesystem_read_footprint(
+        context,
+        runner.has_builtin_read_only_runner(),
+        path,
+        directory_only,
+    )
+}
+
+pub(super) fn scoped_filesystem_read_footprint(
+    context: &ToolContext,
+    trusted_runner: bool,
+    path: Option<&str>,
+    directory_only: bool,
+) -> gents_loop::parallel_tools::Footprint {
+    use gents_loop::parallel_tools::Footprint;
+    if !trusted_runner {
+        return Footprint::Barrier;
+    }
+    let path = if directory_only {
+        context.resolve_existing_dir(path)
+    } else {
+        match path.filter(|path| !path.trim().is_empty()) {
+            Some(path) => context.resolve_path(path),
+            None => context.resolve_existing_dir(None),
+        }
+    };
+    let Ok(path) = path else {
+        return Footprint::Barrier;
+    };
+    if !path.is_file() && !path.is_dir() {
+        return Footprint::Barrier;
+    }
+    let components: Option<Vec<String>> = path
+        .components()
+        .map(|part| part.as_os_str().to_str().map(str::to_owned))
+        .collect();
+    match components {
+        Some(path) => Footprint::Read { paths: vec![path] },
+        None => Footprint::Barrier,
+    }
+}
+
 impl Tool for ListFilesTool {
     const NAME: &'static str = "list_files";
 
     type Error = ToolError;
     type Args = ListFilesArgs;
     type Output = String;
+
+    fn scheduling_footprint(&self, args: &Self::Args) -> gents_loop::parallel_tools::Footprint {
+        filesystem_read_footprint(
+            &self.context,
+            &self.native_runner,
+            args.path.as_deref(),
+            true,
+        )
+    }
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
@@ -481,6 +542,15 @@ impl Tool for GlobTool {
     type Args = GlobArgs;
     type Output = String;
 
+    fn scheduling_footprint(&self, args: &Self::Args) -> gents_loop::parallel_tools::Footprint {
+        filesystem_read_footprint(
+            &self.context,
+            &self.native_runner,
+            args.path.as_deref(),
+            true,
+        )
+    }
+
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
@@ -559,6 +629,15 @@ impl Tool for GrepTool {
     type Error = ToolError;
     type Args = GrepArgs;
     type Output = String;
+
+    fn scheduling_footprint(&self, args: &Self::Args) -> gents_loop::parallel_tools::Footprint {
+        filesystem_read_footprint(
+            &self.context,
+            &self.native_runner,
+            args.path.as_deref(),
+            false,
+        )
+    }
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {

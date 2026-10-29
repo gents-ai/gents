@@ -206,6 +206,40 @@ mod invocation_correlation_tests {
     use super::*;
     use tokio_util::sync::CancellationToken;
 
+    #[tokio::test]
+    async fn parallel_child_scope_keeps_workspace_authority_and_identity() {
+        let parent = CancellationToken::new();
+        let child = parent.child_token();
+        let workspace = ToolWorkspaceScope {
+            runtime_home: Some(PathBuf::from("/runtime")),
+            workspace_cwd: Some(PathBuf::from("/work/project")),
+            workspace_root: Some(PathBuf::from("/work")),
+            workspace_authority: Some(WorkspaceAuthority::ReadOnly),
+            workspace_artifact: None,
+        };
+        scope_tool_request_identity(Some("did:requester".into()), Some("did:node".into()), None, Some("request".into()), async {
+            scope_request_tool_execution_with_workspace_overlay(
+                None, parent.clone(), workspace, None, Some("session".into()), None, Default::default(), false, async {
+                    let inherited = gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context().unwrap();
+                    gents_loop::tool_call_lifecycle::runtime::scope_tool_execution_with_cancellation(inherited, child.clone(), async {
+                        let observed = current_tool_runtime_context().unwrap();
+                        assert_eq!(observed.runtime_home, Some(PathBuf::from("/runtime")));
+                        assert_eq!(observed.workspace_cwd, Some(PathBuf::from("/work/project")));
+                        assert_eq!(observed.workspace_root, Some(PathBuf::from("/work")));
+                        assert_eq!(observed.workspace_authority, Some(WorkspaceAuthority::ReadOnly));
+                        assert_eq!(observed.requester_did.as_deref(), Some("did:requester"));
+                        assert_eq!(observed.node_did.as_deref(), Some("did:node"));
+                        assert_eq!(observed.request_id.as_deref(), Some("request"));
+                        assert_eq!(observed.session_id.as_deref(), Some("session"));
+                        child.cancel();
+                        assert!(observed.cancellation_token.is_cancelled());
+                        assert!(!parent.is_cancelled());
+                    }).await;
+                },
+            ).await;
+        }).await;
+    }
+
     #[test]
     fn invocation_correlation_matches_lean() {
         let snapshot = crate::lean_vocab_test::lean_contract_snapshot();

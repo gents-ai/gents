@@ -136,6 +136,11 @@ enum RecordedCall {
 struct RecordingHook {
     log: Arc<Mutex<Vec<RecordedCall>>>,
     deny_dispatch: bool,
+    parallel_reads: bool,
+    terminate_on_result: bool,
+    skip_call_id: Option<String>,
+    terminate_call_id: Option<String>,
+    cancelled_results: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl RecordingHook {
@@ -158,6 +163,10 @@ impl RecordingHook {
 impl SessionHook for RecordingHook {
     type Error = std::convert::Infallible;
 
+    fn allows_parallel_read(&self, tool_name: &str) -> bool {
+        self.parallel_reads && tool_name == "parallel_read"
+    }
+
     async fn on_completion_call_with_context(
         &self,
         prompt: &Message,
@@ -174,13 +183,18 @@ impl SessionHook for RecordingHook {
         &self,
         tool_name: &str,
         _tool_call_id: Option<String>,
-        _internal_call_id: &str,
+        internal_call_id: &str,
         _args: &str,
     ) -> ToolCallHookAction {
         self.log(RecordedCall::ToolCall {
             tool_name: tool_name.to_string(),
         });
-        if self.deny_dispatch {
+        if self.skip_call_id.as_deref() == Some(internal_call_id) {
+            ToolCallHookAction::Skip {
+                reason: "skipped by hook".into(),
+            }
+        } else if self.deny_dispatch || self.terminate_call_id.as_deref() == Some(internal_call_id)
+        {
             ToolCallHookAction::Terminate {
                 reason: "dispatch not acknowledged".to_owned(),
             }
@@ -216,7 +230,17 @@ impl SessionHook for RecordingHook {
             tool_name: tool_name.to_string(),
             outcome: outcome.model_facing_text().to_string(),
         });
-        HookAction::Continue
+        if matches!(outcome, ToolOutcome::Cancelled) {
+            self.cancelled_results
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        if self.terminate_on_result {
+            HookAction::Terminate {
+                reason: "result rejected".into(),
+            }
+        } else {
+            HookAction::Continue
+        }
     }
 
     async fn foreground_live_output_writer(
@@ -836,4 +860,617 @@ async fn modeled_unsafe_stream_boundaries_never_intake_or_finish_before_provider
         assert!(requests[1].contains("first answer"));
         assert!(requests[1].contains("late correction"));
     }
+}
+
+fn parallel_model_cases() -> &'static serde_json::Value {
+    static CASES: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+    CASES.get_or_init(|| {
+        let json = gents_lean_contract::run_prepared_generator(
+            &gents_lean_contract::proofs_dir().unwrap(),
+            "Proofs.Conformance.ParallelTools:olean",
+            "Proofs/Conformance/ParallelTools.lean",
+        )
+        .unwrap();
+        serde_json::from_str(&json).unwrap()
+    })
+}
+
+struct ParallelReadTool {
+    barrier: Arc<tokio::sync::Barrier>,
+    second_finished: Arc<tokio::sync::Notify>,
+    completion_order: Arc<Mutex<Vec<String>>>,
+    hold_second: bool,
+    immediate: bool,
+    fail_beta: bool,
+}
+
+impl Tool for ParallelReadTool {
+    const NAME: &'static str = "parallel_read";
+    type Error = crate::tool::ToolError;
+    type Args = EchoArgs;
+    type Output = String;
+
+    async fn definition(&self, _: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.into(),
+            description: "Read a value".into(),
+            parameters: serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}),
+        }
+    }
+
+    fn scheduling_footprint(&self, args: &Self::Args) -> crate::parallel_tools::Footprint {
+        crate::parallel_tools::Footprint::Read {
+            paths: vec![vec![args.text.clone()]],
+        }
+    }
+
+    fn into_dyn_error(error: Self::Error) -> crate::tool::ToolError {
+        error
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        if self.immediate {
+            self.completion_order
+                .lock()
+                .unwrap()
+                .push(args.text.clone());
+            return Ok(args.text.to_uppercase());
+        }
+        self.barrier.wait().await;
+        if self.hold_second {
+            if args.text == "beta" {
+                std::future::pending::<()>().await;
+            }
+            return Ok(args.text.to_uppercase());
+        }
+        if args.text == "alpha" {
+            self.second_finished.notified().await;
+        } else {
+            self.completion_order
+                .lock()
+                .unwrap()
+                .push(args.text.clone());
+            self.second_finished.notify_one();
+        }
+        if args.text == "alpha" {
+            self.completion_order
+                .lock()
+                .unwrap()
+                .push(args.text.clone());
+        }
+        if self.fail_beta && args.text == "beta" {
+            return Err(crate::tool::ToolError::ReportedFailure {
+                class: crate::tool_call_lifecycle::FailureClass::ToolReturnedError,
+                text: "read failed".into(),
+            });
+        }
+        Ok(args.text.to_uppercase())
+    }
+}
+
+struct SerialBarrierTool {
+    completion_order: Arc<Mutex<Vec<String>>>,
+}
+
+impl Tool for SerialBarrierTool {
+    const NAME: &'static str = "serial_barrier";
+    type Error = crate::tool::ToolError;
+    type Args = EchoArgs;
+    type Output = String;
+
+    async fn definition(&self, _: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.into(),
+            description: "A tool with unknown effects".into(),
+            parameters: serde_json::json!({"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}),
+        }
+    }
+
+    fn into_dyn_error(error: Self::Error) -> crate::tool::ToolError {
+        error
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let mut order = self.completion_order.lock().unwrap();
+        assert_eq!(
+            *order,
+            ["beta", "alpha"],
+            "a barrier must wait for all preceding reads"
+        );
+        order.push(args.text.clone());
+        Ok(args.text.to_uppercase())
+    }
+}
+
+#[tokio::test]
+async fn parallel_reads_overlap_and_publish_results_in_call_order() {
+    use crate::loop_stream::LoopStreamItem;
+    use futures::StreamExt;
+    let call = |id: &str, text: &str| {
+        RawStreamingChoice::ToolCall(RawStreamingToolCall {
+            id: id.into(),
+            internal_call_id: id.into(),
+            call_id: Some(id.into()),
+            name: "parallel_read".into(),
+            arguments: serde_json::json!({"text": text}),
+            signature: None,
+            additional_params: None,
+        })
+    };
+    let model = ScriptedModel::new(vec![
+        vec![
+            call("first", "alpha"),
+            call("second", "beta"),
+            RawStreamingChoice::ToolCall(RawStreamingToolCall {
+                id: "third".into(),
+                internal_call_id: "third".into(),
+                call_id: Some("third".into()),
+                name: "serial_barrier".into(),
+                arguments: serde_json::json!({"text": "gamma"}),
+                signature: None,
+                additional_params: None,
+            }),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+        vec![
+            RawStreamingChoice::Message("done".into()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ]);
+    let requests = model.requests.clone();
+    let hook = RecordingHook {
+        parallel_reads: true,
+        ..Default::default()
+    };
+    let observed = hook.clone();
+    let completion_order = Arc::new(Mutex::new(Vec::new()));
+    let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![
+        Box::new(ParallelReadTool {
+            barrier: Arc::new(tokio::sync::Barrier::new(2)),
+            second_finished: Arc::new(tokio::sync::Notify::new()),
+            completion_order: completion_order.clone(),
+            hold_second: false,
+            immediate: false,
+            fail_beta: false,
+        }),
+        Box::new(SerialBarrierTool {
+            completion_order: completion_order.clone(),
+        }),
+    ]);
+    let run = async {
+        let stream = crate::loop_stream::run_loop_stream(
+            model,
+            Some(hook),
+            TaggedMessage::unassociated(Message::user("read both")),
+            Vec::new(),
+            tools,
+            steering_loop_config(),
+        );
+        futures::pin_mut!(stream);
+        while let Some(item) = stream.next().await {
+            match item.expect("loop succeeds") {
+                LoopStreamItem::AuthoredInputReady { reply, .. }
+                | LoopStreamItem::SteeringBoundary { reply } => {
+                    reply.send(Ok(Vec::new())).unwrap();
+                }
+                LoopStreamItem::FinishOrIntake { reply, .. } => {
+                    reply
+                        .send(Ok(crate::loop_stream::FinishOrIntake::Finished))
+                        .ok();
+                }
+                _ => {}
+            }
+        }
+    };
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        with_steering_capture_scope(
+            crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+                run,
+            ),
+        ),
+    )
+    .await
+    .expect("both reads must start concurrently");
+    assert_eq!(
+        *completion_order.lock().unwrap(),
+        ["beta", "alpha", "gamma"]
+    );
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    let results = &requests[1];
+    assert!(
+        results.find("ALPHA").unwrap() < results.find("BETA").unwrap(),
+        "results must follow call order: {results}"
+    );
+    assert!(results.find("BETA").unwrap() < results.find("GAMMA").unwrap());
+    let results: Vec<_> = observed
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            RecordedCall::ToolResult { outcome, .. } => Some(outcome),
+            _ => None,
+        })
+        .collect();
+    let expected = parallel_model_cases()["loop_ordered"].as_array().unwrap();
+    assert_eq!(
+        serde_json::to_value(&results[..2])
+            .unwrap()
+            .as_array()
+            .unwrap(),
+        expected
+    );
+    assert_eq!(results[2], "GAMMA");
+}
+
+#[tokio::test]
+async fn terminating_parallel_result_cancels_and_settles_other_calls() {
+    use crate::loop_stream::LoopStreamItem;
+    use futures::StreamExt;
+    let call = |id: &str, text: &str| {
+        RawStreamingChoice::ToolCall(RawStreamingToolCall {
+            id: id.into(),
+            internal_call_id: id.into(),
+            call_id: Some(id.into()),
+            name: "parallel_read".into(),
+            arguments: serde_json::json!({"text": text}),
+            signature: None,
+            additional_params: None,
+        })
+    };
+    let model = ScriptedModel::new(vec![vec![
+        call("first", "alpha"),
+        call("second", "beta"),
+        RawStreamingChoice::FinalResponse(()),
+    ]]);
+    let hook = RecordingHook {
+        parallel_reads: true,
+        terminate_on_result: true,
+        ..Default::default()
+    };
+    let observed = hook.clone();
+    let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(ParallelReadTool {
+        barrier: Arc::new(tokio::sync::Barrier::new(2)),
+        second_finished: Arc::new(tokio::sync::Notify::new()),
+        completion_order: Arc::new(Mutex::new(Vec::new())),
+        hold_second: true,
+        immediate: false,
+        fail_beta: false,
+    })]);
+    let run = async {
+        let stream = crate::loop_stream::run_loop_stream(
+            model,
+            Some(hook),
+            TaggedMessage::unassociated(Message::user("read both")),
+            Vec::new(),
+            tools,
+            steering_loop_config(),
+        );
+        futures::pin_mut!(stream);
+        let mut saw_error = false;
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(LoopStreamItem::AuthoredInputReady { reply, .. })
+                | Ok(LoopStreamItem::SteeringBoundary { reply }) => {
+                    reply.send(Ok(Vec::new())).unwrap();
+                }
+                Err(_) => {
+                    saw_error = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_error, "hook termination must stop the turn");
+    };
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        with_steering_capture_scope(
+            crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+                run,
+            ),
+        ),
+    )
+    .await
+    .expect("cancelled reads must settle");
+    let results: Vec<_> = observed
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            RecordedCall::ToolResult { outcome, .. } => Some(outcome),
+            _ => None,
+        })
+        .collect();
+    let expected = parallel_model_cases()["loop_stopped"].as_array().unwrap();
+    assert_eq!(results[0], expected[0]["finished"].as_str().unwrap());
+    assert_eq!(
+        results.len(),
+        expected.len(),
+        "every admitted read is settled"
+    );
+    let cancellation_requests = expected
+        .iter()
+        .filter(|state| state.as_str() == Some("cancel_requested"))
+        .count();
+    assert_eq!(
+        observed
+            .cancelled_results
+            .load(std::sync::atomic::Ordering::SeqCst),
+        cancellation_requests
+    );
+}
+
+#[tokio::test]
+async fn skipped_parallel_call_does_not_execute_and_keeps_its_result_order() {
+    use crate::loop_stream::LoopStreamItem;
+    use futures::StreamExt;
+    let call = |id: &str, text: &str| {
+        RawStreamingChoice::ToolCall(RawStreamingToolCall {
+            id: id.into(),
+            internal_call_id: id.into(),
+            call_id: Some(id.into()),
+            name: "parallel_read".into(),
+            arguments: serde_json::json!({"text": text}),
+            signature: None,
+            additional_params: None,
+        })
+    };
+    let model = ScriptedModel::new(vec![
+        vec![
+            call("first", "alpha"),
+            call("second", "beta"),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+        vec![
+            RawStreamingChoice::Message("done".into()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ]);
+    let requests = model.requests.clone();
+    let hook = RecordingHook {
+        parallel_reads: true,
+        skip_call_id: Some("first".into()),
+        ..Default::default()
+    };
+    let observed = hook.clone();
+    let completed = Arc::new(Mutex::new(Vec::new()));
+    let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(ParallelReadTool {
+        barrier: Arc::new(tokio::sync::Barrier::new(2)),
+        second_finished: Arc::new(tokio::sync::Notify::new()),
+        completion_order: completed.clone(),
+        hold_second: false,
+        immediate: true,
+        fail_beta: false,
+    })]);
+    let run = async {
+        let stream = crate::loop_stream::run_loop_stream(
+            model,
+            Some(hook),
+            TaggedMessage::unassociated(Message::user("read both")),
+            Vec::new(),
+            tools,
+            steering_loop_config(),
+        );
+        futures::pin_mut!(stream);
+        while let Some(item) = stream.next().await {
+            match item.expect("loop succeeds") {
+                LoopStreamItem::AuthoredInputReady { reply, .. }
+                | LoopStreamItem::SteeringBoundary { reply } => {
+                    reply.send(Ok(Vec::new())).unwrap();
+                }
+                LoopStreamItem::FinishOrIntake { reply, .. } => {
+                    reply
+                        .send(Ok(crate::loop_stream::FinishOrIntake::Finished))
+                        .ok();
+                }
+                _ => {}
+            }
+        }
+    };
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        with_steering_capture_scope(
+            crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+                run,
+            ),
+        ),
+    )
+    .await
+    .expect("the unskipped call finishes");
+    assert_eq!(*completed.lock().unwrap(), ["beta"]);
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].find("skipped by hook").unwrap() < requests[1].find("BETA").unwrap());
+    let results: Vec<_> = observed
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            RecordedCall::ToolResult { outcome, .. } => Some(outcome),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results, ["BETA"]);
+}
+
+#[tokio::test]
+async fn terminating_parallel_admission_settles_previously_admitted_calls() {
+    use crate::loop_stream::LoopStreamItem;
+    use futures::StreamExt;
+    let call = |id: &str, text: &str| {
+        RawStreamingChoice::ToolCall(RawStreamingToolCall {
+            id: id.into(),
+            internal_call_id: id.into(),
+            call_id: Some(id.into()),
+            name: "parallel_read".into(),
+            arguments: serde_json::json!({"text": text}),
+            signature: None,
+            additional_params: None,
+        })
+    };
+    let model = ScriptedModel::new(vec![vec![
+        call("first", "alpha"),
+        call("second", "beta"),
+        RawStreamingChoice::FinalResponse(()),
+    ]]);
+    let hook = RecordingHook {
+        parallel_reads: true,
+        terminate_call_id: Some("second".into()),
+        ..Default::default()
+    };
+    let observed = hook.clone();
+    let completed = Arc::new(Mutex::new(Vec::new()));
+    let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(ParallelReadTool {
+        barrier: Arc::new(tokio::sync::Barrier::new(2)),
+        second_finished: Arc::new(tokio::sync::Notify::new()),
+        completion_order: completed.clone(),
+        hold_second: false,
+        immediate: true,
+        fail_beta: false,
+    })]);
+    let run = async {
+        let stream = crate::loop_stream::run_loop_stream(
+            model,
+            Some(hook),
+            TaggedMessage::unassociated(Message::user("read both")),
+            Vec::new(),
+            tools,
+            steering_loop_config(),
+        );
+        futures::pin_mut!(stream);
+        let mut saw_error = false;
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(LoopStreamItem::AuthoredInputReady { reply, .. })
+                | Ok(LoopStreamItem::SteeringBoundary { reply }) => {
+                    reply.send(Ok(Vec::new())).unwrap();
+                }
+                Err(_) => {
+                    saw_error = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(saw_error, "hook termination must stop the turn");
+    };
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        with_steering_capture_scope(
+            crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+                run,
+            ),
+        ),
+    )
+    .await
+    .expect("admitted calls must be settled");
+    assert!(
+        completed.lock().unwrap().is_empty(),
+        "no calls start after admission terminates"
+    );
+    assert_eq!(
+        observed
+            .cancelled_results
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the admitted first call must be cancelled"
+    );
+}
+
+#[tokio::test]
+async fn failed_parallel_read_keeps_other_result_and_call_order() {
+    use crate::loop_stream::LoopStreamItem;
+    use futures::StreamExt;
+    let call = |id: &str, text: &str| {
+        RawStreamingChoice::ToolCall(RawStreamingToolCall {
+            id: id.into(),
+            internal_call_id: id.into(),
+            call_id: Some(id.into()),
+            name: "parallel_read".into(),
+            arguments: serde_json::json!({"text": text}),
+            signature: None,
+            additional_params: None,
+        })
+    };
+    let model = ScriptedModel::new(vec![
+        vec![
+            call("first", "alpha"),
+            call("second", "beta"),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+        vec![
+            RawStreamingChoice::Message("done".into()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ]);
+    let requests = model.requests.clone();
+    let hook = RecordingHook {
+        parallel_reads: true,
+        ..Default::default()
+    };
+    let observed = hook.clone();
+    let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(ParallelReadTool {
+        barrier: Arc::new(tokio::sync::Barrier::new(2)),
+        second_finished: Arc::new(tokio::sync::Notify::new()),
+        completion_order: Arc::new(Mutex::new(Vec::new())),
+        hold_second: false,
+        immediate: false,
+        fail_beta: true,
+    })]);
+    let run = async {
+        let stream = crate::loop_stream::run_loop_stream(
+            model,
+            Some(hook),
+            TaggedMessage::unassociated(Message::user("read both")),
+            Vec::new(),
+            tools,
+            steering_loop_config(),
+        );
+        futures::pin_mut!(stream);
+        while let Some(item) = stream.next().await {
+            match item.expect("loop succeeds") {
+                LoopStreamItem::AuthoredInputReady { reply, .. }
+                | LoopStreamItem::SteeringBoundary { reply } => {
+                    reply.send(Ok(Vec::new())).unwrap();
+                }
+                LoopStreamItem::FinishOrIntake { reply, .. } => {
+                    reply
+                        .send(Ok(crate::loop_stream::FinishOrIntake::Finished))
+                        .ok();
+                }
+                _ => {}
+            }
+        }
+    };
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        with_steering_capture_scope(
+            crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+                None,
+                tokio_util::sync::CancellationToken::new(),
+                run,
+            ),
+        ),
+    )
+    .await
+    .expect("both reads settle");
+    let requests = requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].find("ALPHA").unwrap() < requests[1].find("read failed").unwrap());
+    let results: Vec<_> = observed
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            RecordedCall::ToolResult { outcome, .. } => Some(outcome),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results, ["ALPHA", "read failed"]);
 }
