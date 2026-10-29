@@ -40,21 +40,61 @@ impl InventoryPermissions {
             .current
             .iter()
             .chain(observation.previous.iter())
-            .find(|snapshot| snapshot.complete && snapshot.known_inventory)
+            .find(|snapshot| snapshot.complete)
             .context("review did not retain complete metadata")?
             .clone();
-        ensure!(
-            snapshot.entries.len() == 1
-                && snapshot.entries[0].tool_call_doc_id == demand.tool_call_doc_id,
-            "permission probe selected a different physical tool"
-        );
+        let mut page = snapshot.clone();
+        let entry_index = loop {
+            if let Some(index) = page
+                .entries
+                .iter()
+                .position(|entry| entry.tool_call_doc_id == demand.tool_call_doc_id)
+            {
+                break index;
+            }
+            let cursor = page
+                .next
+                .clone()
+                .context("permission probe did not find the physical tool")?;
+            let expected_offset = cursor.offset;
+            let observation: FileInventoryObservation = serde_json::from_value(
+                client
+                    .try_call(
+                        *id,
+                        "desktop_session_file_inventory",
+                        json!({
+                            "nodeDid": demand.admission.node_did,
+                            "sessionId": demand.admission.session_id,
+                            "action": {"kind": "read", "cursor": cursor},
+                        }),
+                    )
+                    .await?,
+            )?;
+            *id += 1;
+            let previous_offset = page.offset;
+            page = observation
+                .current
+                .into_iter()
+                .chain(observation.previous)
+                .find(|candidate| {
+                    candidate.attempt_id == snapshot.attempt_id
+                        && candidate.binding.digest == snapshot.binding.digest
+                        && candidate.offset == expected_offset
+                })
+                .context("inventory page changed its snapshot")?;
+            ensure!(
+                page.offset > previous_offset,
+                "inventory cursor did not advance"
+            );
+        };
         let reference = FileInventoryImageReference {
             cursor: FileInventoryViewCursor {
-                attempt_id: snapshot.attempt_id.clone(),
-                snapshot_digest: snapshot.binding.digest.clone(),
-                offset: snapshot.offset,
+                attempt_id: page.attempt_id.clone(),
+                snapshot_digest: page.binding.digest.clone(),
+                offset: page.offset,
             },
-            entry_index: 0,
+            entry_index: u8::try_from(entry_index)
+                .context("inventory entry index exceeds page size")?,
         };
         let mut selected = args.clone();
         selected["reference"] = serde_json::to_value(reference)?;
@@ -65,7 +105,7 @@ impl InventoryPermissions {
         )?;
         *id += 1;
         ensure!(
-            image.entry == snapshot.entries[0],
+            image.entry == page.entries[entry_index],
             "selected image changed its metadata"
         );
         Ok(Self {
@@ -187,7 +227,6 @@ impl InventoryPermissions {
         ensure!(
             resumed.attempt_id == REFRESH
                 && snapshot.complete
-                && snapshot.known_inventory
                 && snapshot.entries == self.snapshot.entries,
             "reenrollment did not resume the exact pending metadata attempt"
         );

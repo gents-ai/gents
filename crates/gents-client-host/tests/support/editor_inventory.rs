@@ -532,8 +532,18 @@ pub async fn verify(
             "recorded review changed a working copy"
         );
     }
+    let selected_tool = tools
+        .iter()
+        .find_map(|(tool, index)| (*index == selected).then_some(tool))
+        .context("selected inventory tool")?;
+    let selected_request = requests
+        .iter()
+        .find(|request| request.content.as_deref() == Some(PROMPT))
+        .context("selected inventory request")?;
     Ok(
         json!({"sessionId":session, "initialCaptures":COUNT, "newCaptures":5, "receivedEntries":received.len(),
+        "requestId":selected_request.request_id, "physicalTool":selected_tool,
+        "workingCopyPath":root.join(file(selected)),
         "nativePages":pages, "imageDemands":receipts.len(), "selectedIndex":selected,
         "onlySelectedImagesRequested":true, "signedImageReceiptsVerified":true, "workingCopiesPreserved":true,
         "canonicalRepeatedPositions":repeated_positions.len(), "exactlyOnceInputs":5, "verifiedUnchangedRead":verified_read,
