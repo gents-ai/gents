@@ -119,6 +119,7 @@ fn generated_retention_cases_drive_production_compaction_target() {
             case.configured_keep_recent,
             case.effective_input_budget,
             case.fixed_input,
+            case.effective_summary_output,
         );
         assert_eq!(
             actual, case.retention_target,
@@ -127,13 +128,17 @@ fn generated_retention_cases_drive_production_compaction_target() {
         );
         assert!(actual <= case.configured_keep_recent, "{}", case.name);
         assert!(actual <= case.available_input, "{}", case.name);
-        assert!(
-            actual
-                .checked_add(case.available_input.div_ceil(4))
-                .is_some_and(|used| used <= case.available_input),
-            "{}: retention did not preserve the checkpoint quarter",
-            case.name
-        );
+        let band = crate::provider_input::budget::recovery_band_budget(case.effective_input_budget);
+        let reserved = case.fixed_input + case.effective_summary_output;
+        if reserved <= band {
+            assert!(
+                reserved + actual <= band,
+                "{}: the post-compaction request left the recovery band",
+                case.name
+            );
+        } else {
+            assert_eq!(actual, 0, "{}: no band left for a tail", case.name);
+        }
         assert_eq!(
             crate::provider_input::budget::summary_output_ceiling(
                 case.summary_max_output,
@@ -160,8 +165,18 @@ fn machine_width_budget_arithmetic_is_exact_and_fail_closed() {
     let third = usize::MAX / 3;
     for value in [0, 1, third, third.saturating_add(1), usize::MAX] {
         let retained =
-            crate::provider_input::budget::compaction_retention_target(usize::MAX, value, 0);
-        assert_eq!(retained.checked_add(value.div_ceil(4)), Some(value));
+            crate::provider_input::budget::compaction_retention_target(usize::MAX, value, 0, 0);
+        assert_eq!(retained.checked_add(value.div_ceil(5)), Some(value));
+        assert_eq!(
+            crate::provider_input::budget::compaction_retention_target(
+                usize::MAX,
+                value,
+                value,
+                value
+            ),
+            0,
+            "reserves past the band floor the tail at zero"
+        );
     }
 
     let threshold_29 = crate::provider_input::budget::threshold_budget(usize::MAX, 0.29);
@@ -304,6 +319,29 @@ fn generated_aggregate_token_budget_cases_drive_the_owned_loop_ledger() {
     }
 }
 
+/// The second dispatch's context size after the first call's usage: its
+/// estimate at the ratio that usage set, anchored on the first call when that
+/// call's response was accepted into the transcript.
+fn context_after_first_usage(
+    dispatches: &[(u64, Option<u64>)],
+    first_input: u64,
+    accepted_output: Option<u64>,
+) -> u64 {
+    let first_estimate = usize::try_from(dispatches[0].0).unwrap();
+    let calibration = crate::provider_input::budget::ContextCalibration::default();
+    calibration.observe(first_input, first_estimate).unwrap();
+    if let Some(output_tokens) = accepted_output {
+        calibration.anchor_accepted(crate::provider_input::budget::ContextAnchor {
+            input_tokens: first_input,
+            output_tokens,
+            estimated_input_tokens: first_estimate,
+        });
+    }
+    calibration
+        .context(usize::try_from(dispatches[1].0).unwrap())
+        .tokens as u64
+}
+
 #[tokio::test]
 async fn aggregate_budget_charges_tool_turn_before_clamping_later_dispatch() {
     let model = UsageScriptedModel::new(vec![
@@ -332,7 +370,11 @@ async fn aggregate_budget_charges_tool_turn_before_clamping_later_dispatch() {
     let dispatches = model.seen_dispatches().await;
     assert_eq!(dispatches.len(), 2);
     assert_eq!(dispatches[0].1, Some(40_000));
-    assert_eq!(dispatches[1].1, Some(30_000 - dispatches[1].0));
+    assert_eq!(
+        dispatches[1].1,
+        Some(30_000 - context_after_first_usage(&dispatches, 10_000, Some(10_000))),
+        "the later dispatch reserves its input anchored on the accepted tool turn"
+    );
 }
 
 #[tokio::test]
@@ -523,7 +565,11 @@ async fn aggregate_budget_charges_retracted_structured_output_attempt() {
     let dispatches = model.seen_dispatches().await;
     assert_eq!(dispatches.len(), 2);
     assert_eq!(dispatches[0].1, Some(40_000));
-    assert_eq!(dispatches[1].1, Some(30_000 - dispatches[1].0));
+    assert_eq!(
+        dispatches[1].1,
+        Some(30_000 - context_after_first_usage(&dispatches, 10_000, None)),
+        "a retracted attempt calibrates the ratio but does not anchor"
+    );
 }
 
 #[tokio::test]
@@ -1180,4 +1226,430 @@ fn generated_budget_cases_drive_dynamic_output_compaction_trigger() {
             case.name
         );
     }
+}
+
+/// The live Claude Messages rejection, as the transport renders it.
+const CLAUDE_PROMPT_TOO_LONG: &str = r#"Claude Messages HTTP 400 Bad Request (request-id -) body={"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 1001685 tokens > 1000000 maximum"},"request_id":"req_011CgVVYfxcw64a1gDiAAhYC"}"#;
+
+type AdmittedReduction = Arc<std::sync::Mutex<Vec<(usize, usize)>>>;
+
+/// A 1M-window turn whose bytes/4 estimate (~561k) is below the 0.75
+/// threshold, as in the live failure, with a compactor that records each
+/// admission it receives.
+fn overflow_loop_config(admitted: AdmittedReduction) -> LoopConfig {
+    let mut loop_config = config(0);
+    loop_config.context_window = 1_000_000;
+    loop_config.compaction_threshold = 0.75;
+    loop_config.max_tokens = Some(32_000);
+    loop_config.turn_compactor = Some(Arc::new(move |request: TurnCompactionRequest| {
+        admitted.lock().unwrap().push((
+            request.admission.input_tokens(),
+            request.admission.effective_input_budget(),
+        ));
+        Box::pin(async {
+            Ok(TurnCompactionOutcome::Reduced {
+                messages: vec![TaggedMessage::unassociated(Message::user(
+                    "compacted prompt",
+                ))],
+                reduction_key: "overflow-reduction-1".to_string(),
+            })
+        })
+    }));
+    loop_config
+}
+
+fn live_sized_prompt() -> TaggedMessage {
+    TaggedMessage::unassociated(Message::user("x".repeat(2_244_000)))
+}
+
+#[tokio::test(start_paused = true)]
+async fn provider_context_overflow_compacts_once_and_retries() {
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::FailStream(CompletionError::ProviderError(
+            CLAUDE_PROMPT_TOO_LONG.to_string(),
+        )),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("done".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ]);
+    let admitted = AdmittedReduction::default();
+
+    let collected = collect_scripted_stream(run_loop_stream(
+        model.clone(),
+        None::<crate::hook::DefraSessionHook>,
+        live_sized_prompt(),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        overflow_loop_config(admitted.clone()),
+    ))
+    .await;
+
+    assert_eq!(collected.error, None);
+    assert_eq!(collected.final_text.as_deref(), Some("done"));
+    let admitted = admitted.lock().unwrap().clone();
+    assert_eq!(admitted.len(), 1, "exactly one forced reduction");
+    let (rejected_estimate, estimator_budget) = admitted[0];
+    assert!(
+        rejected_estimate < 750_000,
+        "the rejected request was below the threshold by estimate: {rejected_estimate}"
+    );
+    let ratio = crate::provider_input::budget::observed_input_ratio_basis_points(
+        1_001_685,
+        rejected_estimate,
+    )
+    .unwrap();
+    assert_eq!(
+        estimator_budget,
+        crate::provider_input::budget::estimator_input_budget(750_000, ratio),
+        "the forced budget is the provider limit's threshold scaled by the observed ratio"
+    );
+    assert_eq!(
+        collected
+            .attempts
+            .iter()
+            .map(|attempt| (attempt.attempt, attempt.will_retry, attempt.backoff))
+            .collect::<Vec<_>>(),
+        vec![(0, true, Duration::ZERO)]
+    );
+    let histories = model.seen_histories().await;
+    assert_eq!(histories.len(), 2);
+    assert_eq!(
+        histories[1],
+        vec![Message::user("compacted prompt")],
+        "the retry dispatches the compacted provider input"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn second_provider_context_overflow_fails_after_the_one_compaction() {
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::FailStream(CompletionError::ProviderError(
+            CLAUDE_PROMPT_TOO_LONG.to_string(),
+        )),
+        ScriptedCall::FailStream(CompletionError::ProviderError(
+            CLAUDE_PROMPT_TOO_LONG.to_string(),
+        )),
+    ]);
+    let admitted = AdmittedReduction::default();
+
+    let collected = collect_scripted_stream(run_loop_stream(
+        model.clone(),
+        None::<crate::hook::DefraSessionHook>,
+        live_sized_prompt(),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        overflow_loop_config(admitted.clone()),
+    ))
+    .await;
+
+    let error = collected.error.expect("a second overflow ends the request");
+    assert!(
+        error.contains("provider context overflow persisted after the one forced compaction"),
+        "{error}"
+    );
+    assert_eq!(admitted.lock().unwrap().len(), 1);
+    assert_eq!(model.seen_histories().await.len(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn provider_context_overflow_without_a_compactor_fails_with_its_reason() {
+    let model = ScriptedModel::new_calls(vec![ScriptedCall::FailStream(
+        CompletionError::ProviderError(CLAUDE_PROMPT_TOO_LONG.to_string()),
+    )]);
+    let mut loop_config = overflow_loop_config(AdmittedReduction::default());
+    loop_config.turn_compactor = None;
+
+    let collected = collect_scripted_stream(run_loop_stream(
+        model.clone(),
+        None::<crate::hook::DefraSessionHook>,
+        live_sized_prompt(),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        loop_config,
+    ))
+    .await;
+
+    let error = collected
+        .error
+        .expect("an unreducible overflow ends the request");
+    assert!(
+        error.contains("no per-turn compactor") && error.contains("prompt is too long"),
+        "{error}"
+    );
+    assert_eq!(model.seen_histories().await.len(), 1);
+    assert!(collected.attempts.iter().all(|attempt| !attempt.will_retry));
+}
+
+type CapturedAccounting = Arc<std::sync::Mutex<Vec<crate::rendered_request::ContextAccounting>>>;
+
+fn capture_accounting(loop_config: &mut LoopConfig) -> CapturedAccounting {
+    let captured = CapturedAccounting::default();
+    let sink = captured.clone();
+    loop_config.on_rendered_request = Some(Arc::new(move |_, _, _, trace| {
+        let sink = sink.clone();
+        Box::pin(async move {
+            sink.lock().unwrap().extend(trace.context_accounting);
+            Ok(())
+        })
+    }));
+    captured
+}
+
+#[tokio::test(start_paused = true)]
+async fn calibrated_estimate_compacts_before_the_provider_rejects_the_input() {
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::Message("done".to_string()),
+        RawStreamingChoice::FinalResponse(()),
+    ]);
+    let admitted = AdmittedReduction::default();
+    let mut loop_config = overflow_loop_config(admitted.clone());
+    loop_config.context_calibration = crate::provider_input::budget::ContextCalibration::with_ratio(
+        crate::provider_input::budget::CLAUDE_MESSAGES_PRIOR_INPUT_RATIO_BASIS_POINTS,
+    );
+    let captured = capture_accounting(&mut loop_config);
+
+    let collected = collect_scripted_stream(run_loop_stream(
+        model.clone(),
+        None::<crate::hook::DefraSessionHook>,
+        live_sized_prompt(),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        loop_config,
+    ))
+    .await;
+
+    assert_eq!(collected.error, None);
+    assert_eq!(collected.final_text.as_deref(), Some("done"));
+    let admitted = admitted.lock().unwrap().clone();
+    assert_eq!(
+        admitted.len(),
+        1,
+        "the calibrated estimate crossed the threshold"
+    );
+    let (raw_before, estimator_budget) = admitted[0];
+    assert!(
+        raw_before < 750_000,
+        "raw estimate stayed below the threshold: {raw_before}"
+    );
+    assert_eq!(
+        estimator_budget,
+        crate::provider_input::budget::estimator_input_budget(750_000, 18_000)
+    );
+    assert_eq!(
+        model.seen_histories().await.len(),
+        1,
+        "no provider rejection"
+    );
+    let accounting = captured.lock().unwrap().clone();
+    assert_eq!(accounting.len(), 1);
+    let accounting = &accounting[0];
+    assert_eq!(accounting.accounting_version, 3);
+    assert_eq!(accounting.input_calibration_basis_points, Some(18_000));
+    let raw = accounting.raw_estimated_input_tokens.expect("raw estimate");
+    assert_eq!(raw, accounting.components.estimated_input_tokens());
+    assert_eq!(
+        accounting.estimated_input_tokens,
+        crate::provider_input::budget::calibrated_input_tokens(raw, 18_000)
+    );
+    assert_eq!(
+        accounting.pre_compaction_input_tokens,
+        Some(crate::provider_input::budget::calibrated_input_tokens(
+            raw_before, 18_000
+        ))
+    );
+    assert_eq!(
+        accounting.compaction_reason,
+        ContextCompactionReason::Compacted
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn provider_usage_calibrates_the_next_dispatch() {
+    let model = UsageScriptedModel::new(vec![
+        usage_echo_tool_turn(UsageResponse {
+            usage: Some(Usage {
+                input_tokens: 15_006,
+                output_tokens: 10,
+                total_tokens: 15_016,
+                cached_input_tokens: 15_000,
+                cache_creation_input_tokens: 3,
+            }),
+        }),
+        vec![
+            RawStreamingChoice::Message("done".to_string()),
+            RawStreamingChoice::FinalResponse(usage_response(15_100, 10, 15_110)),
+        ],
+    ]);
+    let mut loop_config = config(2);
+    let calibration = loop_config.context_calibration.clone();
+    let captured = capture_accounting(&mut loop_config);
+
+    let collected = collect_scripted_stream(run_loop_stream(
+        model,
+        None::<crate::hook::DefraSessionHook>,
+        TaggedMessage::unassociated(Message::user("x".repeat(40_000))),
+        Vec::new(),
+        Arc::new(vec![echo_tool()]),
+        loop_config,
+    ))
+    .await;
+
+    assert_eq!(collected.error, None);
+    let accounting = captured.lock().unwrap().clone();
+    assert_eq!(accounting.len(), 2);
+    assert_eq!(accounting[0].input_calibration_basis_points, Some(10_000));
+    let first_raw = accounting[0].raw_estimated_input_tokens.unwrap();
+    assert_eq!(accounting[0].estimated_input_tokens, first_raw);
+    let observed =
+        crate::provider_input::budget::observed_input_ratio_basis_points(15_006, first_raw)
+            .unwrap();
+    assert!(observed > 10_000, "{observed}");
+    assert_eq!(
+        accounting[1].input_calibration_basis_points,
+        Some(observed),
+        "the first call's cache-inclusive usage calibrates the next dispatch"
+    );
+    let second_raw = accounting[1].raw_estimated_input_tokens.unwrap();
+    let anchored = crate::provider_input::budget::ContextCalibration::with_anchor(
+        observed,
+        crate::provider_input::budget::ContextAnchor {
+            input_tokens: 15_006,
+            output_tokens: 10,
+            estimated_input_tokens: first_raw,
+        },
+    )
+    .context(second_raw);
+    assert!(anchored.anchored.is_some());
+    assert_eq!(
+        accounting[1].anchored_input_tokens, anchored.anchored,
+        "the accepted tool turn anchors the next dispatch"
+    );
+    assert_eq!(accounting[1].estimated_input_tokens, anchored.tokens);
+    assert_eq!(
+        calibration.ratio_basis_points(),
+        crate::provider_input::budget::observed_input_ratio_basis_points(15_100, second_raw)
+            .unwrap()
+            .max(observed),
+        "the seeding owner sees the loop's observations, highest first"
+    );
+}
+
+async fn anchored_compaction_run(
+    first_output_tokens: u64,
+) -> (
+    Vec<(usize, usize)>,
+    Vec<crate::rendered_request::ContextAccounting>,
+) {
+    let model = UsageScriptedModel::new(vec![
+        usage_echo_tool_turn(UsageResponse {
+            usage: Some(Usage {
+                input_tokens: 700_000,
+                output_tokens: first_output_tokens,
+                total_tokens: 700_000 + first_output_tokens,
+                cached_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            }),
+        }),
+        vec![
+            RawStreamingChoice::Message("done".to_string()),
+            RawStreamingChoice::FinalResponse(usage_response(1_000, 10, 1_010)),
+        ],
+    ]);
+    let admitted = AdmittedReduction::default();
+    let mut loop_config = overflow_loop_config(admitted.clone());
+    let captured = capture_accounting(&mut loop_config);
+
+    let collected = collect_scripted_stream(run_loop_stream(
+        model,
+        None::<crate::hook::DefraSessionHook>,
+        TaggedMessage::unassociated(Message::user("x".repeat(1_600_000))),
+        Vec::new(),
+        Arc::new(vec![echo_tool()]),
+        loop_config,
+    ))
+    .await;
+    assert_eq!(collected.error, None);
+    let admitted = admitted.lock().unwrap().clone();
+    let accounting = captured.lock().unwrap().clone();
+    (admitted, accounting)
+}
+
+#[tokio::test]
+async fn anchored_provider_count_triggers_compaction_the_ratio_alone_misses() {
+    let (admitted, accounting) = anchored_compaction_run(0).await;
+    assert!(admitted.is_empty(), "700k counted, no output: below 750k");
+    assert_eq!(accounting.len(), 2);
+    assert!(accounting[1].anchored_input_tokens.is_some());
+    assert!(accounting[1].estimated_input_tokens < 750_000);
+
+    let (admitted, accounting) = anchored_compaction_run(60_000).await;
+    assert_eq!(
+        admitted.len(),
+        1,
+        "the anchored 760k crosses the 750k threshold"
+    );
+    assert_eq!(accounting.len(), 2);
+    let second = &accounting[1];
+    assert_eq!(second.compaction_reason, ContextCompactionReason::Compacted);
+    assert!(
+        second.pre_compaction_input_tokens.unwrap() >= 760_000,
+        "{:?}",
+        second.pre_compaction_input_tokens
+    );
+    assert_eq!(
+        second.anchored_input_tokens, None,
+        "the reduction drops the anchor for the rebuilt request"
+    );
+    let raw = second.raw_estimated_input_tokens.unwrap();
+    assert_eq!(
+        second.estimated_input_tokens,
+        crate::provider_input::budget::calibrated_input_tokens(
+            raw,
+            second.input_calibration_basis_points.unwrap()
+        )
+    );
+}
+
+async fn pre_turn_admissions(incoming_bytes: usize) -> usize {
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::Message("done".to_string()),
+        RawStreamingChoice::FinalResponse(()),
+    ]);
+    let admitted = AdmittedReduction::default();
+    let mut loop_config = overflow_loop_config(admitted.clone());
+    loop_config.context_calibration = crate::provider_input::budget::ContextCalibration::with_ratio(
+        crate::provider_input::budget::CLAUDE_MESSAGES_PRIOR_INPUT_RATIO_BASIS_POINTS,
+    );
+    let history = vec![
+        TaggedMessage::unassociated(Message::user("h".repeat(1_200_000))),
+        TaggedMessage::unassociated(Message::assistant("ok")),
+    ];
+
+    let collected = collect_scripted_stream(run_loop_stream(
+        model,
+        None::<crate::hook::DefraSessionHook>,
+        TaggedMessage::unassociated(Message::user("y".repeat(incoming_bytes))),
+        history,
+        Arc::new(Vec::new()),
+        loop_config,
+    ))
+    .await;
+    assert_eq!(collected.error, None);
+    let admitted = admitted.lock().unwrap().len();
+    admitted
+}
+
+#[tokio::test(start_paused = true)]
+async fn pre_turn_check_counts_the_incoming_user_message() {
+    assert_eq!(
+        pre_turn_admissions(16).await,
+        0,
+        "the history alone (~540k calibrated) is under the 750k budget"
+    );
+    assert_eq!(
+        pre_turn_admissions(600_000).await,
+        1,
+        "the incoming message takes the same turn over the budget"
+    );
 }

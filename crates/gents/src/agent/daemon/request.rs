@@ -159,14 +159,25 @@ where
                     &request,
                 )
                 .await?;
-            Ok::<_, anyhow::Error>((resume_from_history, aggregate_token_budget))
+            let context_calibration = crate::completion_factory::context_calibration_for_session(
+                self.node.as_ref(),
+                &self.agent_config,
+                &request.node_did,
+                &request.session_id,
+            )
+            .await;
+            Ok::<_, anyhow::Error>((
+                resume_from_history,
+                aggregate_token_budget,
+                context_calibration,
+            ))
         };
         let Some(admitted) = prepare_unless_interrupted(&mut interrupt_rx, admitted).await else {
             return Ok(HandleRequestOutcome::Interrupted(
                 RequestInterruptionSource::Claimed,
             ));
         };
-        let (resume_from_history, aggregate_token_budget) = admitted?;
+        let (resume_from_history, aggregate_token_budget, context_calibration) = admitted?;
         let trace_attrs = RequestTraceAttrs::from_request(&request);
         let agent_name = self.agent_config.agent_id.clone();
         let admission_context = AdmissionCallContext::for_request(
@@ -407,11 +418,33 @@ where
                             &wake_notifications,
                         )
                         .await?;
-                    let reduction_admission = compaction::ReductionAdmission::for_input(
-                        complete_input_tokens,
+                    let provider_budget = crate::provider_input::budget::compaction_input_budget(
                         self.agent_config.context_window,
                         self.agent_config.compaction_threshold(),
+                        crate::provider_input::budget::configured_output_ceiling(
+                            crate::completion_factory::effective_max_tokens(
+                                self.agent_config.max_output_tokens,
+                                self.agent_config.sampling.max_tokens,
+                            ),
+                        ),
                     );
+                    let context = context_calibration.context(complete_input_tokens);
+                    let reduction_admission = (crate::provider_input::budget::threshold_decision(
+                        context.tokens,
+                        provider_budget,
+                    ) == crate::provider_input::budget::ThresholdDecision::ReduceEligible)
+                        .then(|| {
+                            compaction::ReductionAdmission::required(
+                                if context.tokens > context.calibrated {
+                                    context_calibration
+                                        .estimator_units(context.tokens)
+                                        .max(complete_input_tokens)
+                                } else {
+                                    complete_input_tokens
+                                },
+                                context_calibration.estimator_budget(provider_budget),
+                            )
+                        });
                     let over_threshold = reduction_admission.is_some();
                     let may_reduce = if over_threshold {
                         let gate_open = canonical_prefix_is_stable;
@@ -434,6 +467,7 @@ where
                             lifecycle.claimed_deadline_at(),
                             aggregate_token_budget.clone(),
                             effective_seed,
+                            context_calibration.clone(),
                         );
                         let projected = provider_view_tagged(history)?;
                         options.max_compacted_prefix_messages =
@@ -445,6 +479,8 @@ where
                             options.keep_recent_tokens,
                             &projected_native,
                             admission,
+                            &options,
+                            self.agent_config.context_window,
                         )?;
                         let result = admission::scope_call(
                             CallKind::Compaction,
@@ -458,6 +494,8 @@ where
                         )
                         .await?;
 
+                        // The seeded anchor described the unreduced history.
+                        context_calibration.invalidate_anchor();
                         history = if let Some(exact) = result.exact_reduction() {
                             anyhow::ensure!(projected_native == exact.compacted_prefix.iter().chain(exact.retained_suffix).cloned().collect::<Vec<_>>(),
                                 "session reduction changed its exact provider source");
@@ -647,6 +685,7 @@ where
                     resume_from_history,
                     consumed_prompts,
                     folded_prompts,
+                    context_calibration,
                 )
                 .instrument(tracing::info_span!(
                     "request.run_inference",

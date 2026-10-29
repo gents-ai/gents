@@ -189,6 +189,7 @@ where
         resume_from_history: bool,
         consumed_prompts: Vec<crate::agent::loop_stream::FoldedPrompt>,
         folded_prompts: Vec<crate::agent::loop_stream::FoldedPrompt>,
+        context_calibration: crate::provider_input::budget::ContextCalibration,
     ) -> Result<HandleRequestOutcome> {
         workspace.runtime_home = self.approval_home.clone();
         let request_deadline = lifecycle.claimed_deadline_at();
@@ -295,6 +296,7 @@ where
                         self.loop_tools.len(),
                     )?;
                     loop_config.deadline = request_deadline;
+                    loop_config.context_calibration = context_calibration.clone();
                     loop_config.output_obligation_gate = output_obligation_gate
                         .map(|gate| Arc::new(gate) as Arc<dyn OutputObligationCheck>);
                     let turn_compactor = self.compactor.clone();
@@ -305,6 +307,7 @@ where
                         request_deadline,
                         aggregate_token_budget,
                         effective_seed,
+                        context_calibration.clone(),
                     );
                     let turn_node = self.node.clone();
                     let turn_request = request.clone();
@@ -347,6 +350,8 @@ where
                                 options.keep_recent_tokens,
                                 &native_messages,
                                 compaction_request.admission,
+                                &options,
+                                turn_context_window,
                             )?;
                             // Request-local sticky projection, not a
                             // session-prefix cursor; the stronger

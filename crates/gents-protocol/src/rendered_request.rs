@@ -15,7 +15,7 @@ pub const ASSEMBLY_TRACE_VERSION: u32 = 4;
 
 /// Version of the request-bound context accounting payload; the exact values
 /// the runtime used for its dispatch decision, not a provider tokenizer claim.
-pub const CONTEXT_ACCOUNTING_VERSION: u32 = 2;
+pub const CONTEXT_ACCOUNTING_VERSION: u32 = 3;
 
 /// Request paths whose body is a completion request. The capturing transport
 /// only claims a pending capture for one of these.
@@ -369,7 +369,9 @@ pub enum ContextCompactionReason {
 }
 
 /// Token-estimate components for the exact provider-wire request that was
-/// captured. Their saturating sum is `estimated_input_tokens`.
+/// captured. Their saturating sum is the estimator's own count:
+/// `raw_estimated_input_tokens` from accounting version 3, before that
+/// `estimated_input_tokens`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextInputComponents {
     pub messages: usize,
@@ -399,7 +401,21 @@ pub struct ContextAccounting {
     pub attempt: u32,
     pub estimator: String,
     pub components: ContextInputComponents,
+    /// The input the provider is expected to count: the estimator's count
+    /// scaled by `input_calibration_basis_points` from accounting version 3.
     pub estimated_input_tokens: usize,
+    /// The estimator's own count, before calibration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_estimated_input_tokens: Option<usize>,
+    /// Provider tokens per estimated token, in basis points, observed for this
+    /// session and model when the request was dispatched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_calibration_basis_points: Option<u64>,
+    /// The session's latest completed call's provider count plus the
+    /// calibrated growth since it, when that call anchored this request.
+    /// `estimated_input_tokens` is never below it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchored_input_tokens: Option<usize>,
     pub context_window: usize,
     pub compaction_threshold_basis_points: u64,
     pub compaction_threshold_tokens: usize,

@@ -19,6 +19,13 @@ const DEFAULT_MAX_TOKENS: u64 = 4096;
 #[doc(hidden)]
 pub const ADVERTISED_REASONING_EFFORTS_PARAM: &str = "_gents_advertised_reasoning_efforts";
 
+/// Request parameter (never sent) asking for a prompt-cache breakpoint on the
+/// last block before the final message, in addition to the ones on the
+/// system prompt and the final block. Requests that share everything but
+/// their final instruction (a guided summary attempt and its strict JSON
+/// fallback) then share a cache entry at that boundary.
+pub const CACHE_PREFIX_BREAKPOINT_PARAM: &str = "_gents_cache_prefix_breakpoint";
+
 pub const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -496,7 +503,7 @@ pub fn select_replay(
 pub fn build_messages_body(
     model: &str,
     request: &CompletionRequest,
-) -> Result<Value, AssistantCodecError> {
+) -> Result<Value, MessagesBodyError> {
     let history: Vec<Message> = request
         .chat_history
         .iter()
@@ -511,12 +518,38 @@ pub fn build_messages_body(
     )?;
     if let Some(params) = &request.additional_params {
         apply_reasoning_parameters(model, params, &mut body);
+        if params.get(CACHE_PREFIX_BREAKPOINT_PARAM) == Some(&Value::Bool(true)) {
+            mark_prefix_breakpoint(&mut body);
+        }
     }
     if let Some(schema) = &request.output_schema {
-        body["output_config"]["format"] = json!({
-            "type": "json_schema",
-            "schema": schema,
-        });
+        // A request that asks for structured output must carry it; one that
+        // cannot is an error, never a silently unguided request.
+        let schema = serde_json::to_value(schema)
+            .map_err(|error| MessagesBodyError::UnsendableOutputSchema(error.to_string()))?;
+        if !schema.is_object() {
+            return Err(MessagesBodyError::UnsendableOutputSchema(
+                "the schema is not a JSON object".to_string(),
+            ));
+        }
+        let output_config = body
+            .as_object_mut()
+            .ok_or_else(|| {
+                MessagesBodyError::UnsendableOutputSchema(
+                    "the request body is not a JSON object".to_string(),
+                )
+            })?
+            .entry("output_config")
+            .or_insert_with(|| json!({}));
+        let Some(output_config) = output_config.as_object_mut() else {
+            return Err(MessagesBodyError::UnsendableOutputSchema(
+                "output_config is not a JSON object".to_string(),
+            ));
+        };
+        output_config.insert(
+            "format".to_string(),
+            json!({"type": "json_schema", "schema": schema}),
+        );
     }
     Ok(body)
 }
@@ -585,6 +618,23 @@ pub fn build_messages_body_native(
     }
     // No sampling keys: live claude-sonnet-5 rejects `temperature` / `top_p` / `top_k`.
     Ok(body)
+}
+
+/// Mark the last block of the message before the final one. With the system
+/// and final-block breakpoints this is three of Anthropic's four.
+fn mark_prefix_breakpoint(body: &mut Value) {
+    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let Some(prefix_end) = messages.len().checked_sub(2) else {
+        return;
+    };
+    if let Some(blocks) = messages[prefix_end]
+        .get_mut("content")
+        .and_then(Value::as_array_mut)
+    {
+        mark_ephemeral(blocks.last_mut());
+    }
 }
 
 fn mark_ephemeral(block: Option<&mut Value>) {
@@ -844,6 +894,17 @@ pub enum AssistantCodecError {
     EmptyRedacted,
     #[error("unsupported native reasoning kind in Claude replay")]
     UnsupportedReasoning,
+}
+
+/// Why a Messages request body could not be built.
+#[derive(Debug, thiserror::Error)]
+pub enum MessagesBodyError {
+    #[error(transparent)]
+    Codec(#[from] AssistantCodecError),
+    /// The request asks for structured output the body cannot carry. Sending
+    /// it unguided would silently drop the contract.
+    #[error("structured output requested but its schema cannot be sent: {0}")]
+    UnsendableOutputSchema(String),
 }
 
 pub fn encode_assistant_content(

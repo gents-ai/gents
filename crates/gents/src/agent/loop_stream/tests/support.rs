@@ -439,6 +439,7 @@ pub(super) fn config(max_turns: usize) -> LoopConfig {
         resume_from_history: false,
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
+        context_calibration: Default::default(),
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
         provider_idle_timeout: None,
         deadline: None,

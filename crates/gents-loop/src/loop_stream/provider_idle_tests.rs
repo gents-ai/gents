@@ -287,6 +287,7 @@ fn config(retry_policy: CompletionRetryPolicy) -> LoopConfig {
         resume_from_history: false,
         context_window: 128_000,
         compaction_threshold: 0.75,
+        context_calibration: Default::default(),
         retry_policy,
         provider_idle_timeout: Some(IDLE),
         deadline: None,

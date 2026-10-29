@@ -974,3 +974,307 @@ fn generated_service_tier_cases_drive_loop_config() {
         }
     }
 }
+
+fn calibration_accounting(estimator: &str, estimated: usize, ratio: Option<u64>) -> String {
+    serde_json::json!({
+        "accounting_version": 3,
+        "estimator": estimator,
+        "components": {"messages": estimated, "documents": 0, "tool_schemas": 0,
+            "additional_parameters": 0, "output_schema": 0},
+        "estimated_input_tokens": estimated,
+        "raw_estimated_input_tokens": ratio.map(|_| estimated),
+        "input_calibration_basis_points": ratio,
+        "context_window": 1_000_000,
+        "compaction_threshold_basis_points": 7_500,
+        "compaction_threshold_tokens": 750_000,
+        "compaction_reason": "below_threshold",
+    })
+    .to_string()
+}
+
+/// The ratio the seed sets before any default prior: the window's maximum,
+/// else the newest dispatched ratio.
+fn session_input_ratio_only(rows: &[CalibrationCallRow], estimator: &str) -> Option<u64> {
+    let seed = session_calibration_seed(rows, estimator);
+    seed.observations
+        .iter()
+        .copied()
+        .max()
+        .or(seed.dispatched_ratio)
+}
+
+fn calibration_row(
+    usage: Option<(i64, i64, i64)>,
+    accounting: Option<String>,
+) -> CalibrationCallRow {
+    CalibrationCallRow {
+        prompt_tokens: usage.map(|(input, _, _)| input),
+        completion_tokens: usage.map(|_| 7_000),
+        cached_input_tokens: usage.map(|(_, read, _)| read),
+        cache_creation_input_tokens: usage.map(|(_, _, write)| write),
+        usage_completeness: Some(
+            if usage.is_some() {
+                "complete"
+            } else {
+                "missing"
+            }
+            .into(),
+        ),
+        context_accounting_json: accounting,
+    }
+}
+
+#[test]
+fn session_input_ratio_reads_the_newest_calibrated_call() {
+    let claude = "claude_messages_wire_json_bytes_div_4_v1";
+    let accounting = |estimated, ratio| Some(calibration_accounting(claude, estimated, ratio));
+    assert_eq!(session_input_ratio_only(&[], claude), None);
+    assert_eq!(
+        session_input_ratio_only(
+            &[calibration_row(
+                Some((109_881, 109_000, 878)),
+                accounting(65_755, None)
+            )],
+            claude
+        ),
+        Some(16_711),
+        "a version-2 call's estimate is its raw count; normalized input is the whole count"
+    );
+    for (row, why) in [
+        (
+            calibration_row(Some((3, 109_000, 878)), accounting(65_755, None)),
+            "pre-normalization uncached input",
+        ),
+        (
+            calibration_row(Some((50_000, 0, 0)), accounting(65_755, None)),
+            "input under the estimate",
+        ),
+        (
+            CalibrationCallRow {
+                usage_completeness: Some("partial".into()),
+                ..calibration_row(Some((109_881, 109_000, 878)), accounting(65_755, None))
+            },
+            "incomplete usage",
+        ),
+    ] {
+        assert_eq!(
+            session_input_ratio_only(&[row], claude),
+            None,
+            "{why} leaves the prior in place"
+        );
+    }
+    assert_eq!(
+        session_input_ratio_only(
+            &[
+                calibration_row(None, None),
+                calibration_row(Some((3, 109_000, 878)), accounting(65_755, None)),
+                calibration_row(
+                    None,
+                    Some(calibration_accounting(
+                        "openai_chat_wire_json_bytes_div_4_v1",
+                        10,
+                        None
+                    ))
+                ),
+                calibration_row(None, accounting(10_000, Some(17_000))),
+                calibration_row(Some((20_000, 0, 0)), accounting(10_000, None)),
+            ],
+            claude
+        ),
+        Some(20_000),
+        "only usable usage of this estimator is an observation; a dispatched ratio is not"
+    );
+    assert_eq!(
+        session_input_ratio_only(
+            &[calibration_row(None, accounting(10_000, Some(17_000)))],
+            claude
+        ),
+        Some(17_000),
+        "without observations the newest dispatched ratio is the prior"
+    );
+}
+
+#[test]
+fn session_seed_keeps_the_maximum_of_its_newest_observations() {
+    let claude = "claude_messages_wire_json_bytes_div_4_v1";
+    let observed = |input: i64| {
+        calibration_row(
+            Some((input, 0, 0)),
+            Some(calibration_accounting(claude, 10_000, None)),
+        )
+    };
+    let seed = session_calibration_seed(&[observed(13_000), observed(26_000)], claude);
+    assert_eq!(seed.observations, vec![26_000, 13_000], "oldest first");
+    assert_eq!(
+        session_input_ratio_only(&[observed(13_000), observed(26_000)], claude),
+        Some(26_000),
+        "a 1.3x call after a 2.6x one still seeds 2.6x"
+    );
+    let window = crate::provider_input::budget::CALIBRATION_OBSERVATION_WINDOW;
+    let mut rows = (0..window).map(|_| observed(13_000)).collect::<Vec<_>>();
+    rows.push(observed(26_000));
+    assert_eq!(
+        session_input_ratio_only(&rows, claude),
+        Some(13_000),
+        "a 2.6x call older than the newest {window} observations has aged out"
+    );
+}
+
+#[test]
+fn only_a_usable_newest_call_anchors_the_session() {
+    let claude = "claude_messages_wire_json_bytes_div_4_v1";
+    let accounting = |estimated, ratio| Some(calibration_accounting(claude, estimated, ratio));
+    assert_eq!(
+        session_calibration_seed(
+            &[calibration_row(
+                Some((109_881, 109_000, 878)),
+                accounting(65_755, None)
+            )],
+            claude
+        ),
+        CalibrationSeed {
+            observations: vec![16_711],
+            dispatched_ratio: None,
+            anchor: Some(crate::provider_input::budget::ContextAnchor {
+                input_tokens: 109_881,
+                output_tokens: 7_000,
+                estimated_input_tokens: 65_755,
+            }),
+        }
+    );
+    assert_eq!(
+        session_calibration_seed(
+            &[
+                calibration_row(None, accounting(80_000, Some(17_000))),
+                calibration_row(Some((109_881, 109_000, 878)), accounting(65_755, None)),
+            ],
+            claude
+        ),
+        CalibrationSeed {
+            observations: vec![16_711],
+            dispatched_ratio: Some(17_000),
+            anchor: None,
+        },
+        "a newest call without usable usage anchors nothing; older usage still observes"
+    );
+}
+
+#[tokio::test]
+async fn session_calibration_seeds_from_durable_inference_calls() {
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let agent = agent_with_retry(CompletionRetryProfileFields::default());
+    let did = agent.node_did().to_string();
+    let session = "session-calibration";
+    assert_eq!(
+        context_calibration_for_session(&node, &agent, &did, session)
+            .await
+            .ratio_basis_points(),
+        crate::provider_input::budget::UNIT_INPUT_RATIO_BASIS_POINTS,
+        "an unobserved OpenAI-compatible session starts unscaled"
+    );
+    let estimator = crate::provider_input::ProviderInputProfile::resolve(
+        agent.backend_provider_kind,
+        agent.openai_wire_api,
+    )
+    .estimator_name();
+    let own = agent.agent_id.as_str();
+    for (index, (agent_id, session_id, queued_at, prompt, cached, ratio)) in [
+        (own, session, "2026-10-28T10:00:00Z", 15_000, 0, None),
+        (own, session, "2026-10-28T11:00:00Z", 12_500, 0, None),
+        (
+            own,
+            "other-session",
+            "2026-10-28T12:00:00Z",
+            30_000,
+            0,
+            None,
+        ),
+        (
+            own,
+            session,
+            "2026-10-28T09:00:00Z",
+            11_000,
+            0,
+            Some(19_000),
+        ),
+        (own, session, "2026-10-28T13:00:00Z", 2, 100_000, None),
+        (
+            "other-agent",
+            session,
+            "2026-10-28T14:00:00Z",
+            30_000,
+            0,
+            None,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let accounting = escape_graphql_string(&calibration_accounting(estimator, 10_000, ratio));
+        let seed = format!(
+            r#"mutation {{
+            create_InferenceCall(input: {{
+                call_id: "calibration-{index}"
+                runtime_instance_id: "runtime-calibration"
+                request_id: "req-calibration"
+                request_doc_id: "doc-calibration-{index}"
+                session_id: "{session_id}"
+                model_name: "{model}"
+                call_seq: {index}
+                backend_id: "backend-calibration"
+                agent_id: "{agent_id}"
+                node_did: "{did}"
+                call_kind: "inference"
+                attempt: 1
+                call_state: "completed"
+                queued_at: "{queued_at}"
+                prompt_tokens: {prompt}
+                completion_tokens: 10
+                cached_input_tokens: {cached}
+                cache_creation_input_tokens: 0
+                usage_completeness: "complete"
+                queue_depth_at_enqueue: 0
+                controller_generation: 1
+                backend_config_fingerprint: "fp"
+                context_accounting_json: "{accounting}"
+            }}) {{ _docID }}
+        }}"#,
+            model = escape_graphql_string(&agent.model_name),
+            did = escape_graphql_string(&did),
+        );
+        crate::config_client::ConfigAccess::local(node.clone())
+            .write("test.calibration_call", &seed)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        context_calibration_for_session(&node, &agent, &did, session)
+            .await
+            .ratio_basis_points(),
+        15_000,
+        "the maximum of this agent's usable calls in the session, not another session's, \
+         another agent's or an older build's"
+    );
+    assert_eq!(
+        context_calibration_for_session(&node, &agent, &did, session)
+            .await
+            .anchor(),
+        Some(crate::provider_input::budget::ContextAnchor {
+            input_tokens: 12_500,
+            output_tokens: 10,
+            estimated_input_tokens: 10_000,
+        }),
+        "its provider count anchors the next request; another agent's newer call does not"
+    );
+    let first = context_calibration_for_session(&node, &agent, &did, session).await;
+    let second = context_calibration_for_session(&node, &agent, &did, session).await;
+    first.observe(40_000, 10_000);
+    first.invalidate_anchor();
+    assert_eq!(
+        (second.ratio_basis_points(), second.anchor().is_some()),
+        (15_000, true),
+        "each request seeds its own calibration; one request's observations never reach another's"
+    );
+    node.shutdown().await;
+}
