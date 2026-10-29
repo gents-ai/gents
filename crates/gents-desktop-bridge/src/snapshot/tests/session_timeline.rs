@@ -101,7 +101,7 @@ fn interrupted_queued_steering_keeps_request_owned_input_without_transcript() {
     let pending = snapshot.pending_turn.expect("request-owned steering input");
     assert_eq!(pending.request_doc_id.as_deref(), Some("steering-doc-1"));
     assert_eq!(pending.content, "queued steering text");
-    assert_eq!(pending.lifecycle_state.as_deref(), Some("interrupted"));
+    assert_eq!(pending.lifecycle_state, Some(RequestLifecycleState::Interrupted));
     assert!(snapshot.messages.is_empty());
 }
 
@@ -1075,7 +1075,7 @@ fn historical_pending_input_pages_with_its_durable_anchor() {
             captured_context: None,
             attachments: None,
             selected_skill_ids: vec![],
-            lifecycle_state: Some("interrupted".into()),
+            lifecycle_state: Some(RequestLifecycleState::Interrupted),
             folded_into_request_id: None,
             origin: None,
             created_at: None,
@@ -1115,7 +1115,7 @@ fn request_only_history_uses_existing_local_window_without_durable_cursor() {
             captured_context: None,
             attachments: None,
             selected_skill_ids: vec![],
-            lifecycle_state: Some("interrupted".into()),
+            lifecycle_state: Some(RequestLifecycleState::Interrupted),
             folded_into_request_id: None,
             origin: None,
             created_at: None,
@@ -1151,7 +1151,7 @@ fn local_pending_history_pages_with_durable_anchor_cursor() {
         captured_context: None,
         attachments: None,
         selected_skill_ids: vec![],
-        lifecycle_state: Some("interrupted".into()),
+        lifecycle_state: Some(RequestLifecycleState::Interrupted),
         folded_into_request_id: None,
         origin: None,
         created_at: None,
@@ -1189,7 +1189,7 @@ fn tail_request_input_is_not_anchored_to_an_old_orphan_tool_group() {
             captured_context: None,
             attachments: None,
             selected_skill_ids: vec![],
-            lifecycle_state: Some("interrupted".into()),
+            lifecycle_state: Some(RequestLifecycleState::Interrupted),
             folded_into_request_id: None,
             origin: None,
             created_at: None,

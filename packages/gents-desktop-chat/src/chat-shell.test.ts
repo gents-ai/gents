@@ -8,6 +8,7 @@ import type {
   DeploymentView,
   DesktopSessionSnapshot,
   NodeReadinessDecision,
+  RequestLifecycleState,
   SessionSummary,
 } from "@source-inc/gents-desktop-client";
 import { projectDeploymentOperationalState } from "@source-inc/gents-desktop-client";
@@ -118,7 +119,7 @@ type LeanContractSnapshot = {
   frontend_client_shell_cases: LeanClientShellCase[];
   request_progress_cases: Array<{
     name: string;
-    lifecycleState: string;
+    lifecycleState: RequestLifecycleState;
     label: string;
     animated: boolean;
   }>;

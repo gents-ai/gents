@@ -1,3 +1,4 @@
+export type { RequestLifecycleState } from "../generated/RequestLifecycleState.js";
 export type { SessionForkBeforeRequest } from "../generated/SessionForkBeforeRequest.js";
 export type { SessionForkResult } from "../generated/SessionForkResult.js";
 import type { NodeConfigSaveRequest as GeneratedNodeConfigSaveRequest } from "../generated/NodeConfigSaveRequest.js";

@@ -7,6 +7,7 @@ import type {
   LinkedSessionView,
   RenderedTimelineItem,
   RenderedToolCallView,
+  RequestLifecycleState,
   SessionProvenanceView,
 } from "@source-inc/gents-desktop-client";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
@@ -53,7 +54,7 @@ const group = (...tools: RenderedToolCallView[]): RenderedTimelineItem =>
 const caused = (
   requestId: string,
   sessionId: string,
-  lifecycleState: string,
+  lifecycleState: RequestLifecycleState,
   byRequest: string,
   byToolCall: string,
   nodeDid = AGENT,
@@ -301,7 +302,7 @@ describe("the provenance owner", () => {
 
 describe("agent lineage freshness", () => {
   it("asks again on a session-list change and keeps the last view on a failed ask", async () => {
-    let state = "processing";
+    let state: RequestLifecycleState = "processing";
     const api = apiWith(async () =>
       view([caused("r-1", "session-1", state, "req-1", "call-1")]),
     );
@@ -335,7 +336,7 @@ describe("agent lineage freshness", () => {
   it("asks again when remote lineage inputs change, with no timer of its own", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      let state = "processing";
+      let state: RequestLifecycleState = "processing";
       const api = apiWith(async () =>
         view([
           caused(
@@ -478,7 +479,7 @@ describe("agent lineage freshness", () => {
     expect(api.sessionProvenance).toHaveBeenCalledTimes(3);
   });
 
-  it.each(["processing", "completed"])(
+  it.each<RequestLifecycleState>(["processing", "completed"])(
     "does not reread %s lineage for parent chunks, and observes a remote completion",
     async (initial) => {
       let lifecycle = initial;

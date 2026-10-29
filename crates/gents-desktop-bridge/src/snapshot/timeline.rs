@@ -121,7 +121,7 @@ fn render_timeline_order(
                         captured_context: pending_turn.captured_context.clone(),
                         attachments: pending_turn.attachments.clone(),
                         selected_skill_ids: pending_turn.selected_skill_ids.clone(),
-                        lifecycle_state: pending_turn.lifecycle_state.clone(),
+                        lifecycle_state: pending_turn.lifecycle_state,
                         folded_into_request_id: pending_turn.folded_into_request_id.clone(),
                         origin: pending_turn.origin.clone(),
                         created_at: pending_turn.created_at.clone(),

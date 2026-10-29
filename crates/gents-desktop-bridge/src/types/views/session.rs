@@ -384,7 +384,7 @@ pub struct PendingTurnView {
     #[ts(optional = nullable)]
     pub attachments: Option<Vec<gents_protocol::request_input::AttachmentView>>,
     pub selected_skill_ids: Vec<String>,
-    pub lifecycle_state: Option<String>,
+    pub lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
     /// The request whose transcript published this as a folded entry; it is
     /// that turn's input, not a turn.
     pub folded_into_request_id: Option<String>,
@@ -503,7 +503,7 @@ pub enum RenderedTimelineItem {
         #[ts(optional = nullable)]
         attachments: Option<Vec<gents_protocol::request_input::AttachmentView>>,
         selected_skill_ids: Vec<String>,
-        lifecycle_state: Option<String>,
+        lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
         folded_into_request_id: Option<String>,
         origin: Option<RequestOriginView>,
         created_at: Option<String>,

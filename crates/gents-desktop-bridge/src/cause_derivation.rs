@@ -1,3 +1,5 @@
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+
 use crate::types::DerivedCancelCauseView;
 
 #[derive(Debug, Clone, Default)]
@@ -76,7 +78,7 @@ pub fn derive_tool_call_cause(
 }
 
 pub fn derive_request_cause(
-    lifecycle_state: Option<&str>,
+    lifecycle_state: Option<RequestLifecycleState>,
     req: &RequestEvidence,
     terminalized_at: Option<String>,
 ) -> Option<DerivedCancelCauseView> {
@@ -89,7 +91,7 @@ pub fn derive_request_cause(
             evidence: vec![format!("AgentRequest.interrupt_requested_at = {at}")],
         });
     }
-    if !matches!(lifecycle_state, Some("interrupted")) {
+    if lifecycle_state != Some(RequestLifecycleState::Interrupted) {
         return None;
     }
     Some(DerivedCancelCauseView {

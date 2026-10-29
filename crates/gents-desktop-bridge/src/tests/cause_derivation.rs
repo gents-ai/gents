@@ -1,3 +1,5 @@
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+
 use crate::cause_derivation::{
     derive_request_cause, derive_tool_call_cause, RequestEvidence, ToolCallEvidence,
 };
@@ -98,7 +100,7 @@ fn none_for_failed_tool_calls() {
 #[test]
 fn request_cause_uses_interrupted_lifecycle_and_terminal_timestamp() {
     let cause = derive_request_cause(
-        Some("interrupted"),
+        Some(RequestLifecycleState::Interrupted),
         &req_default(),
         Some("2026-05-20T10:36:11Z".into()),
     )
@@ -112,10 +114,10 @@ fn request_cause_uses_interrupted_lifecycle_and_terminal_timestamp() {
 fn request_cause_none_without_cancellation_evidence() {
     for state in [
         None,
-        Some("pending"),
-        Some("processing"),
-        Some("completed"),
-        Some("failed"),
+        Some(RequestLifecycleState::Pending),
+        Some(RequestLifecycleState::Processing),
+        Some(RequestLifecycleState::Completed),
+        Some(RequestLifecycleState::Failed),
     ] {
         assert!(derive_request_cause(state, &req_default(), None).is_none());
     }

@@ -427,7 +427,7 @@ describe("withSentTurns with folded messages", () => {
       requestId: "second",
       content: "second text",
       selectedSkillIds: [],
-      lifecycleState: "pending",
+      lifecycleState: "pending" as const,
       createdAt: null,
     };
     expect(withSentTurns(items, local, "s").map((item) => item.itemKey)).toEqual([

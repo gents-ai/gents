@@ -27,7 +27,7 @@ pub struct TaskRunResult {
     pub session_id: String,
     pub node_did: String,
     pub agent_id: String,
-    pub lifecycle_state: Option<String>,
+    pub lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
