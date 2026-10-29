@@ -621,15 +621,17 @@
     "read": {
       "path": "crates/gents/src/session_message/inspection.rs",
       "collection": "AgentRequest",
-      "arguments": "filter: {$GENTS_scope$, purpose: {_eq: \"normal\"}, lifecycle_state: {_eq: \"pending\"}}, order: [{created_at: ASC}, {request_id: ASC}], limit: $GENTS_0$"
+      "arguments": "filter: {$GENTS_scope$, purpose: {_eq: \"normal\"}, lifecycle_state: {_eq: \"$GENTS_pending$\"}}, order: [{created_at: ASC}, {request_id: ASC}], limit: $GENTS_0$"
     },
     "bindings": [
       {
         "scope": "@session",
+        "pending": "pending",
         "0": "1"
       },
       {
         "scope": "@session-absent",
+        "pending": "pending",
         "0": "1"
       }
     ]

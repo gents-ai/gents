@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
 use crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
@@ -122,7 +123,7 @@ async fn load_candidates(
             r#"{{
                 failed: AgentRequest(filter: {{
                     node_did: {{ _eq: "{node_did}" }},
-                    lifecycle_state: {{ _eq: "failed" }},
+                    lifecycle_state: {{ _eq: "{failed}" }},
                     execution_origin: {{ _eq: "scheduled" }}
                 }}, order: [{{ terminalized_at: ASC }}, {{ request_id: ASC }}]) {{
                     _docID request_id node_did requester_did agent_id session_id
@@ -136,9 +137,9 @@ async fn load_candidates(
                 }}) {{ request_id retry_parent_request_doc_id }}
                 pending: AgentRequest(filter: {{
                     node_did: {{ _eq: "{node_did}" }},
-                    lifecycle_state: {{ _eq: "pending" }}
+                    lifecycle_state: {{ _eq: "{pending}" }}
                 }}) {{ request_id session_id requester_did input }}
-            }}"#
+            }}"#, failed = RequestLifecycleState::Failed.as_str(), pending = RequestLifecycleState::Pending.as_str()
         ),
         "load_candidates",
     )
@@ -363,7 +364,7 @@ fn precondition_query(candidate: &AgentRequestRow, retry_key: &str) -> Result<St
         r#"{{
             source: AgentRequest(filter: {{
                 _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }},
-                lifecycle_state: {{ _eq: "failed" }},
+                lifecycle_state: {{ _eq: "{failed}" }},
                 execution_origin: {{ _eq: "scheduled" }}
             }}, limit: 2) {{ {request_fields} retry_count max_retries retry_root_request }}
             successor: AgentRequest(
@@ -371,10 +372,10 @@ fn precondition_query(candidate: &AgentRequestRow, retry_key: &str) -> Result<St
             ) {{ request_id _docID }}
             pending: AgentRequest(filter: {{
                 session_id: {{ _eq: "{session_id}" }}, node_did: {{ _eq: "{node_did}" }},
-                lifecycle_state: {{ _eq: "pending" }}
+                lifecycle_state: {{ _eq: "{pending}" }}
             }}) {{ request_id input }}
         }}"#,
-        request_fields = crate::watcher::AGENT_REQUEST_FIELDS,
+        request_fields = crate::watcher::AGENT_REQUEST_FIELDS, failed = RequestLifecycleState::Failed.as_str(), pending = RequestLifecycleState::Pending.as_str()
     ))
 }
 

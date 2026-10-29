@@ -1403,8 +1403,8 @@ pub async fn supersede_trigger_requests_in_txn(
     ]);
     let response = txn.execute(&format!(r#"mutation {{ update_AgentRequest(
         filter: {{ node_did: {{ _eq: "{owner_gql}" }}, caused_by_trigger_id: {{ _eq: "{trigger_gql}" }}{excluded}, lifecycle_state: {{ _in: {unclaimed} }} }},
-        input: {{ lifecycle_state: "superseded", terminalized_at: "{}", terminal_redrive_attempts: 0 }}
-    ) {{ _docID request_id }} }}"#, escape_graphql_string(&now))).await?;
+        input: {{ lifecycle_state: "{superseded}", terminalized_at: "{}", terminal_redrive_attempts: 0 }}
+    ) {{ _docID request_id }} }}"#, escape_graphql_string(&now), superseded = RequestLifecycleState::Superseded.as_str())).await?;
     let pending = response["data"]["update_AgentRequest"]
         .as_array()
         .context("supersession omitted pending requests")?;
@@ -1415,7 +1415,7 @@ pub async fn supersede_trigger_requests_in_txn(
             row["request_id"]
                 .as_str()
                 .context("superseded request lacks ID")?,
-            "superseded",
+            RequestLifecycleState::Superseded,
             "newer trigger fire",
             &now,
         )

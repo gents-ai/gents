@@ -4,6 +4,7 @@ mod retained_tests;
 use crate::config_client::ConfigApplyTxn;
 use crate::graphql::escape_graphql_string;
 use anyhow::{ensure, Context, Result};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
 pub(crate) use recovery::recover_outcomes;
 #[cfg(test)]
@@ -326,7 +327,7 @@ pub(crate) async fn publish_request_outcome(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     request_id: &str,
-    terminal_state: &str,
+    terminal_state: RequestLifecycleState,
     reason: &str,
     now: &str,
 ) -> Result<()> {
@@ -337,7 +338,7 @@ pub(crate) async fn publish_request_outcome(
             goal: None,
             assignment_replaced: false,
             request_terminal: true,
-            terminal_state,
+            terminal_state: terminal_state.as_str(),
             reason,
         };
         stage_outcome(txn, &fire, stage, now).await?;

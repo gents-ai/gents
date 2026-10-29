@@ -571,7 +571,7 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
                 txn,
                 &goal.node_did,
                 &row.request_id,
-                "superseded",
+                RequestLifecycleState::Superseded,
                 reason,
                 now,
             )

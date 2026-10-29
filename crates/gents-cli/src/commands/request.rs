@@ -748,8 +748,8 @@ fn transition_history(request: &Value, terminal_cause: Option<&str>) -> Vec<Requ
     if let Some(claimed_at) = string_field(request, "claimed_at") {
         transitions.push(RequestTransitionView {
             action: "claim".to_string(),
-            from: Some("pending".to_string()),
-            to: "claimed".to_string(),
+            from: Some(RequestLifecycleState::Pending.as_str().to_string()),
+            to: RequestLifecycleState::Claimed.as_str().to_string(),
             at: Some(claimed_at),
             source: "AgentRequest.claimed_at".to_string(),
             inferred: false,
@@ -759,8 +759,8 @@ fn transition_history(request: &Value, terminal_cause: Option<&str>) -> Vec<Requ
     if lifecycle_has_begun_inference(&state) {
         transitions.push(RequestTransitionView {
             action: "begin_inference".to_string(),
-            from: Some("claimed".to_string()),
-            to: "processing".to_string(),
+            from: Some(RequestLifecycleState::Claimed.as_str().to_string()),
+            to: RequestLifecycleState::Processing.as_str().to_string(),
             at: string_field(request, "claimed_at"),
             source: "AgentRequest.lifecycle_state".to_string(),
             inferred: true,

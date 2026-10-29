@@ -484,16 +484,16 @@ pub(crate) async fn recover_expired_generation_with_facts(
                 }
             };
             let reply_preview = validate_selection(&mut reader, &headers, &row, &selection).await?;
-            let target = if row.interrupt_requested_at.as_deref().is_some_and(|v| !v.trim().is_empty()) {
+            let target_state = if row.interrupt_requested_at.as_deref().is_some_and(|v| !v.trim().is_empty()) {
                 RequestLifecycleState::Interrupted
             } else { RequestLifecycleState::Failed };
-            if expected_outcome.is_some_and(|expected| target != expected) {
+            if expected_outcome.is_some_and(|expected| target_state != expected) {
                 return Err(RecoverySelectionRejected.into());
             }
             let generation = escape_graphql_string(expected_generation);
             let expiry = escape_graphql_string(expected_expiry);
             let fresh = escape_graphql_string(&fresh_generation);
-            let target = escape_graphql_string(target.as_str());
+            let target = escape_graphql_string(target_state.as_str());
             let old_state = escape_graphql_string(state.as_str());
             let now = escape_graphql_string(&timestamp);
             let response = txn.execute_with_variables(&format!(r#"mutation($terminal_output: JSON) {{ update_AgentRequest(
@@ -506,7 +506,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                 anyhow::bail!("expired-generation recovery lost request CAS");
             }
             crate::trigger_engine::durable::publish_request_outcome(
-                txn, agent, &row.request_id, &target, "execution lease expired", &timestamp,
+                txn, agent, &row.request_id, target_state, "execution lease expired", &timestamp,
             ).await?;
             if !is_auxiliary {
                 session::refresh_session_request_observation_in_txn(txn, agent, row.requester_did.as_deref(), session_id, session::SessionRequestRefresh { request_doc_id: &request_doc_id, request_id: &row.request_id, reply_preview: Some(reply_preview.as_deref()) }, &timestamp).await?;
