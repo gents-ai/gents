@@ -21,6 +21,33 @@ def steeringRun (active : QueueEntry) (admitted : List RequestId) :
         entry :: steeringRun active admitted rest
       else []
 
+/-- Deferred queue deliveries stay pending while eligible steering inputs are
+selected. An incompatible steering input remains a barrier. -/
+def selectSteeringPastDeferred (active : QueueEntry) (admitted : List RequestId) :
+    List QueueEntry → List QueueEntry × List QueueEntry
+  | [] => ([], [])
+  | entry :: rest =>
+      if entry.delivery = .queue then
+        let (selected, pending) := selectSteeringPastDeferred active admitted rest
+        (selected, entry :: pending)
+      else if steersInto active entry ∧ entry.requestId ∈ admitted then
+        let (selected, pending) := selectSteeringPastDeferred active admitted rest
+        (entry :: selected, pending)
+      else ([], entry :: rest)
+
+theorem deferred_input_stays_pending (active entry : QueueEntry) (rest : List QueueEntry)
+    (admitted : List RequestId) (h : entry.delivery = .queue) :
+    (selectSteeringPastDeferred active admitted (entry :: rest)).2 =
+      entry :: (selectSteeringPastDeferred active admitted rest).2 := by
+  simp [selectSteeringPastDeferred, h]
+
+theorem incompatible_steering_stays_a_barrier (active entry : QueueEntry)
+    (rest : List QueueEntry) (admitted : List RequestId)
+    (notQueued : entry.delivery ≠ .queue)
+    (notEligible : ¬ (steersInto active entry ∧ entry.requestId ∈ admitted)) :
+    selectSteeringPastDeferred active admitted (entry :: rest) = ([], entry :: rest) := by
+  simp [selectSteeringPastDeferred, notQueued, notEligible]
+
 /-- The native execution owner supplies the exact active row and generation;
 this operation grants no lease. -/
 def intakeSteering? (target : AgentSession.Scope) (pre : SessionQueueState)
