@@ -1003,14 +1003,56 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool, shared: bool) -> 
     })
     .await
     .context("served retry image did not become readable")??;
-    if let Some(entry) = received_entry {
+    if let Some(entry) = &received_entry {
         let received = receipt
-            .read_inventory_image(client_node.clone(), &entry)
+            .read_inventory_image(client_node.clone(), entry)
             .await?
             .context("shared image is not readable after a served receipt")?;
         anyhow::ensure!(
             received == changes,
             "shared reader changed canonical captured bytes"
+        );
+    }
+    if shared && at == PauseAt::Delivered {
+        source_node
+            .delete_dac_actor_relationship(
+                source.did(),
+                "ToolFileChange",
+                &image,
+                "reader",
+                client.did(),
+            )
+            .await?;
+        let entry = received_entry.as_ref().context("shared inventory entry")?;
+        let retained = receipt
+            .read_inventory_image(client_node.clone(), entry)
+            .await?
+            .context("previously served image became unreadable")?;
+        anyhow::ensure!(
+            retained == changes,
+            "retained image changed after revocation"
+        );
+
+        let mut fresh = demand.clone();
+        fresh.admission.request_key =
+            fresh.derive_retry_request_key(&uuid::Uuid::new_v4().to_string());
+        let fresh_doc = admit_on_client(&client_node, &fresh).await?;
+        push_documents_to_peer(
+            &client_node,
+            &source_peer,
+            vec![defra_p2p_adapter::P2pDocumentRequest {
+                collection: demand.collection_name().into(),
+                doc_id: fresh_doc,
+            }],
+        )
+        .await?;
+        receipt_row(&source_node, &fresh, "pending").await?;
+        reconcile_images(&store, &delivery).await?;
+        let refused_fresh = receipt_row(&client_node, &fresh, "rejected").await?;
+        let verified_fresh = verified(&refused_fresh, &fresh, client.as_ref()).await?;
+        anyhow::ensure!(
+            verified_fresh.selection() == &FileImageSelection::Rejected,
+            "fresh request was not refused after source permission was revoked"
         );
     }
     let retained = ConfigAccess::local(client_node.clone()).execute(&format!(
