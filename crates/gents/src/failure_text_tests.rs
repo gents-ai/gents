@@ -128,3 +128,39 @@ fn provider_rejection_errors_carry_no_request_headers() {
     assert!(!rendered.contains("HEADERSECRET"), "{rendered}");
     assert!(rendered.contains("rate_limit_error"));
 }
+
+#[test]
+fn escaped_json_header_values_are_redacted() {
+    let text = r#"body={\"headers\":{\"x-api-key\":\"plain-escaped-secret\",\"authorization\":\"Bearer escapedtokenvalue123\"}}"#;
+    let reason = redact(text);
+    for secret in ["plain-escaped-secret", "escapedtokenvalue123"] {
+        assert!(!reason.contains(secret), "{secret} leaked: {reason}");
+    }
+    assert!(reason.contains(r#"\"x-api-key\":[REDACTED]"#), "{reason}");
+}
+
+#[test]
+fn scheme_credentials_are_redacted_and_scheme_prose_survives() {
+    for (text, secret) in [
+        (
+            "rejected Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig",
+            "eyJhbGci",
+        ),
+        ("sent Basic dXNlcjpwYXNzd29yZA==", "dXNlcjpw"),
+        ("Authorization: Token abcdef0123456789", "abcdef0123"),
+    ] {
+        let reason = redact(text);
+        assert!(!reason.contains(secret), "{secret} leaked: {reason}");
+        assert!(reason.contains(REDACTED), "{reason}");
+    }
+    for prose in [
+        "basic auth required",
+        "basic configuration is missing",
+        "Bearer authentication failed",
+        "Bearer token expired",
+        "operator authorization: [blockers]",
+        "runtime authorization: denied for this node",
+    ] {
+        assert_eq!(redact(prose), prose);
+    }
+}

@@ -223,7 +223,7 @@ impl Drop for AdmissionPermit {
             } else if let Some(reason) = terminal_failure_reason {
                 PermitTerminal {
                     call_state: "failed",
-                    failure_reason: Some(reason),
+                    failure_reason: Some(recorded_failure_reason(&reason)),
                     usage: None,
                     cached_input_tokens: CachedInputTokensObservation::NotAvailable,
                 }
@@ -272,6 +272,11 @@ impl Drop for AdmissionPermit {
     }
 }
 
+/// InferenceCall rows replicate like the request's own reason, so their text
+/// goes through the same redaction and bound.
 fn recorded_failure_reason(reason: &str) -> String {
-    gents_loop::provider_limit::persisted_failure_reason(reason, chrono::Utc::now())
+    crate::failure_text::bounded_text(&gents_loop::provider_limit::persisted_failure_reason(
+        reason,
+        chrono::Utc::now(),
+    ))
 }

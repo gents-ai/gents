@@ -36,6 +36,12 @@ pub fn bounded_error_chain(error: &(dyn std::error::Error + 'static)) -> String 
     truncate(&causes.join(": "), FAILURE_TEXT_MAX_BYTES)
 }
 
+/// One already-rendered failure text, redacted and cut to
+/// [`FAILURE_TEXT_MAX_BYTES`].
+pub fn bounded_text(text: &str) -> String {
+    truncate(&redact(text), FAILURE_TEXT_MAX_BYTES)
+}
+
 /// [`bounded_error_chain`] as a `Display` value for tracing fields.
 pub struct BoundedErrorChain<'a>(pub &'a (dyn std::error::Error + 'static));
 
@@ -58,22 +64,31 @@ pub fn truncate(text: &str, max_bytes: usize) -> String {
     format!("{}{TRUNCATION_MARKER}", &text[..end])
 }
 
-/// Credentials and token-bearing URL parts removed from `text`: bearer
-/// tokens, authorization / API-key header or field values, prefixed API
-/// keys, and URL query strings and userinfo.
+/// Credentials and token-bearing URL parts removed from `text`: bearer and
+/// basic credentials, authorization / API-key header or field values (also
+/// inside escaped JSON), prefixed API keys, and URL query strings and
+/// userinfo. Prose that only names a scheme or the word "authorization"
+/// keeps its meaning.
 pub fn redact(text: &str) -> String {
     static HEADER: OnceLock<Regex> = OnceLock::new();
-    static BEARER: OnceLock<Regex> = OnceLock::new();
+    static AUTHORIZATION: OnceLock<Regex> = OnceLock::new();
+    static SCHEME: OnceLock<Regex> = OnceLock::new();
     static PREFIXED_KEY: OnceLock<Regex> = OnceLock::new();
     static URL_SECRETS: OnceLock<Regex> = OnceLock::new();
     let header = HEADER.get_or_init(|| {
         Regex::new(
-            r#"(?i)(["']?\b(?:authorization|proxy-authorization|x-api-key|api[_-]?key|x-goog-api-key|access[_-]?token|refresh[_-]?token|client[_-]?secret|cookie|set-cookie)\b["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\]]+(?:[ \t]+[^\s,;}\]]+)?)"#,
+            r#"(?i)(\\?["']?\b(?:x-api-key|api[_-]?key|x-goog-api-key|access[_-]?token|refresh[_-]?token|client[_-]?secret|cookie|set-cookie)\b\\?["']?\s*[:=]\s*)(?:\\"(?:[^"\\\r\n]|\\[^"])*\\"|"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;}\]\\]+(?:[ \t]+[^\s,;}\]\\]+)?)"#,
         )
         .expect("valid header redactor")
     });
-    let bearer = BEARER.get_or_init(|| {
-        Regex::new(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{4,}").expect("valid bearer redactor")
+    let authorization = AUTHORIZATION.get_or_init(|| {
+        Regex::new(
+            r#"(?i)(\\?["']?\b(?:proxy-)?authorization\b\\?["']?\s*[:=]\s*)(\\"(?:[^"\\\r\n]|\\[^"])*\\"|"[^"\r\n]*"|'[^'\r\n]*'|[A-Za-z][A-Za-z0-9_-]*[ \t]+([A-Za-z0-9._~+/=-]+))"#,
+        )
+        .expect("valid authorization redactor")
+    });
+    let scheme = SCHEME.get_or_init(|| {
+        Regex::new(r"(?i)\b(bearer|basic)\s+([A-Za-z0-9._~+/=-]+)").expect("valid scheme redactor")
     });
     let prefixed_key = PREFIXED_KEY.get_or_init(|| {
         Regex::new(r"\b(?:sk-ant-|sk-proj-|sk-|xai-|ghp_|github_pat_|AIza)[A-Za-z0-9_\-]{8,}")
@@ -85,8 +100,39 @@ pub fn redact(text: &str) -> String {
     });
     let text = url_secrets.replace_all(text, "$1://$2$3");
     let text = header.replace_all(&text, format!("${{1}}{REDACTED}"));
-    let text = bearer.replace_all(&text, format!("${{1}} {REDACTED}"));
+    let text = authorization.replace_all(&text, |captures: &regex::Captures<'_>| {
+        match captures.get(3) {
+            Some(credential) if !token_like(credential.as_str(), 8) => captures[0].to_string(),
+            _ => format!("{}{REDACTED}", &captures[1]),
+        }
+    });
+    let text = scheme.replace_all(&text, |captures: &regex::Captures<'_>| {
+        let minimum = if captures[1].eq_ignore_ascii_case("bearer") {
+            16
+        } else {
+            8
+        };
+        if token_like(&captures[2], minimum) {
+            format!("{} {REDACTED}", &captures[1])
+        } else {
+            captures[0].to_string()
+        }
+    });
     prefixed_key.replace_all(&text, REDACTED).into_owned()
+}
+
+/// A credential-shaped word: long enough, and not a plain lowercase or
+/// capitalised word ("basic configuration", "Bearer authentication").
+fn token_like(candidate: &str, minimum: usize) -> bool {
+    let rest = candidate.chars().skip(1);
+    candidate.len() >= minimum
+        && (candidate
+            .chars()
+            .any(|character| character.is_ascii_digit() || "+/=._~-".contains(character))
+            || rest.clone().any(|character| character.is_ascii_uppercase())
+                && candidate
+                    .chars()
+                    .any(|character| character.is_ascii_lowercase()))
 }
 
 #[cfg(test)]
