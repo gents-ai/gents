@@ -203,6 +203,18 @@ pub fn client_observation_admitted(
     }
 }
 
+/// The node operator uses the existing operator authority; other actors still
+/// require the current enrollment fence. This does not authorize document reads.
+pub fn runtime_observation_admitted(
+    actor: Option<&str>,
+    node: &str,
+    current: Option<&EnrollmentAuthorizationFence>,
+) -> bool {
+    (!node.is_empty()
+        && crate::plugin_job::control::operator_control_authorized(node, node, node, actor))
+        || client_observation_admitted(actor, node, current)
+}
+
 #[async_trait]
 impl PeerAdmissionAuthority for EnrollmentAuthorityHandle {
     async fn fresh_member_authorized(&self, member_did: &str) -> Result<bool> {
@@ -1019,6 +1031,7 @@ mod tests {
         node: String,
         current: Option<super::super::enrollment::EnrollmentRequestAuthority>,
         expected_admitted: bool,
+        expected_runtime_admitted: bool,
     }
 
     #[test]
@@ -1043,6 +1056,12 @@ mod tests {
                 authorization_sequence: 1,
                 authorization_expires_at: "2099-01-01T00:00:00Z".into(),
             });
+            assert_eq!(
+                runtime_observation_admitted(case.actor.as_deref(), &case.node, current.as_ref()),
+                case.expected_runtime_admitted,
+                "{}",
+                case.name
+            );
             assert_eq!(
                 client_observation_admitted(case.actor.as_deref(), &case.node, current.as_ref()),
                 case.expected_admitted,

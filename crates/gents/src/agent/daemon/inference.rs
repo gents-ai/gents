@@ -235,6 +235,15 @@ where
         .map(|context| context.with_reviewer(reviewer.callback.clone()));
         let backend_id = lifecycle.backend_id().to_string();
         let model_name = self.agent_config.model_name.clone();
+        let inference_observation = self
+            .inference_observations
+            .begin(crate::inference_observation::InferenceKey {
+                node: request.node_did.clone(),
+                session: request.session_id.clone(),
+                request: request.request_id.clone(),
+                generation: lifecycle.execution_generation()?.to_owned(),
+            })
+            .map(Arc::new);
         let inference = Box::pin(async {
                 let prepared = async {
                     let output_obligation_gate = crate::agent::output_obligation::OutputObligationGate::for_request(
@@ -248,6 +257,7 @@ where
                         self.hook_failure_policy,
                     )
                     .await?
+                    .with_inference_observation(inference_observation.clone())
                     .with_background_tool_registry(self.background_tool_registry.clone())
                     .with_background_execution_registry(self.background_execution_registry.clone())
                     .with_operator_tool_root(self.operator_tool_root.clone())

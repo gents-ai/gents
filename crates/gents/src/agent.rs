@@ -213,6 +213,7 @@ pub struct Gents {
     retry_policy: RetryPolicy,
     hook_failure_policy: FailurePolicy,
     background_execution_registry: BackgroundExecutionRegistry,
+    inference_observations: crate::inference_observation::InferenceObservationRegistry,
     health_checker_options: HealthCheckerOptions,
     backend_prober_options: BackendProberOptions,
     backend_health: BackendHealthMap,
@@ -303,6 +304,7 @@ impl Gents {
             retry_policy: options.retry_policy,
             hook_failure_policy: options.hook_failure_policy,
             background_execution_registry: BackgroundExecutionRegistry::default(),
+            inference_observations: Default::default(),
             health_checker_options: options.health_checker_options,
             backend_prober_options: options.backend_prober_options,
             backend_health,
@@ -319,6 +321,16 @@ impl Gents {
             operator_tool_root: options.tool_ceiling.root().map(PathBuf::from),
             plugins,
         })
+    }
+
+    pub(crate) fn observation_node(&self) -> &Arc<EmbeddedNode> {
+        &self.node
+    }
+
+    pub fn inference_observations(
+        &self,
+    ) -> &crate::inference_observation::InferenceObservationRegistry {
+        &self.inference_observations
     }
 
     pub fn backend_health(&self) -> BackendHealthMap {
@@ -466,6 +478,21 @@ impl Gents {
     ) -> Result<gents_protocol::job::JobControlOutcome, gents_protocol::job::JobReadError> {
         crate::plugin_job::control::operator_control(
             &crate::config_client::ConfigAccess::local(self.node.clone()),
+            actor,
+            request,
+        )
+        .await
+    }
+
+    /// The transport must authenticate this actor with DefraDB before dispatch.
+    pub async fn operator_process_control(
+        &self,
+        actor: Option<&str>,
+        request: &gents_protocol::process_control::OperatorProcessControlRequest,
+    ) -> anyhow::Result<gents_protocol::process_control::ProcessControlOutcome> {
+        crate::tool_control::operator_process_control(
+            self.node.clone(),
+            &self.background_execution_registry,
             actor,
             request,
         )

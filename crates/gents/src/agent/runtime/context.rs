@@ -24,6 +24,7 @@ pub(super) struct RuntimeContext {
     pub(super) rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     pub(super) background_execution_registry: BackgroundExecutionRegistry,
+    pub(super) inference_observations: crate::inference_observation::InferenceObservationRegistry,
     pub(super) startup_barrier: Arc<StartupBarrier>,
     pub(super) startup_readiness: crate::startup_readiness::StartupReadinessOptions,
     pub(super) runtime_status: crate::runtime_status::RuntimeStatusHandle,
@@ -252,6 +253,7 @@ impl RuntimeContext {
             slot_generation,
             request_admission,
         })?
+        .with_inference_observations(self.inference_observations.clone())
         .with_replay_issuer(replay_issuer)
         .with_approval_home(
             self.tool_runtime

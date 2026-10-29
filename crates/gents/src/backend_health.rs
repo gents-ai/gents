@@ -9,7 +9,6 @@ use rapidhash::{HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::{mpsc, RwLock};
@@ -20,8 +19,10 @@ use crate::backend_registry::{
     list_enabled_backends_for_agent, set_backend_probe_status_with_last_probe, InferenceBackend,
     UNKNOWN_PROBE_STATUS,
 };
-use crate::oauth_credential::{BearerSource, OAuthRefreshKind};
+use crate::oauth_credential::OAuthRefreshKind;
 
+/// Node-local health observation settings, independent of an agent's
+/// inference execution and provider retry policy.
 #[derive(Clone, Debug)]
 pub struct BackendProberOptions {
     pub probe_interval: Duration,
@@ -321,14 +322,29 @@ pub struct OAuthProbeContext<'a> {
     pub node_did: &'a str,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{context}: {source:#}")]
+struct OAuthProbeError {
+    context: String,
+    #[source]
+    source: crate::oauth_credential::OAuthCredentialError,
+}
+
 async fn oauth_credential_for_probe(
     context: &OAuthProbeContext<'_>,
     backend: &InferenceBackend,
-) -> anyhow::Result<crate::oauth_credential::OAuthCredential> {
-    let Some(provider) = backend.provider_kind.oauth_provider() else {
-        anyhow::bail!("backend kind has no OAuth provider");
-    };
-    let (bearer, mut credential) = crate::oauth_http::bootstrap_oauth_client(
+) -> std::result::Result<crate::oauth_credential::OAuthCredential, OAuthProbeError> {
+    let provider = backend
+        .provider_kind
+        .oauth_provider()
+        .ok_or_else(|| OAuthProbeError {
+            context: format!(
+                "resolving OAuth credential for backend {}",
+                backend.backend_id
+            ),
+            source: anyhow::anyhow!("backend kind has no OAuth provider").into(),
+        })?;
+    let (bearer, mut credential) = crate::oauth_http::bootstrap_oauth_client_typed(
         context.node.clone(),
         context.node_did,
         provider,
@@ -337,18 +353,24 @@ async fn oauth_credential_for_probe(
         crate::oauth_credential::AccountPick::Reference(backend.auth.oauth_account_ref()),
     )
     .await
-    .with_context(|| {
-        format!(
+    .map_err(|source| OAuthProbeError {
+        context: format!(
             "resolving OAuth credential for backend {} provider {provider}",
             backend.backend_id
-        )
+        ),
+        source,
     })?;
-    credential.access_token = bearer.current_bearer().await.with_context(|| {
-        format!(
-            "resolving current bearer for backend {} provider {provider}",
-            backend.backend_id
-        )
-    })?;
+    credential.access_token =
+        bearer
+            .current_bearer_typed()
+            .await
+            .map_err(|source| OAuthProbeError {
+                context: format!(
+                    "resolving current bearer for backend {} provider {provider}",
+                    backend.backend_id
+                ),
+                source,
+            })?;
     tracing::debug!(
         backend_id = %backend.backend_id,
         provider,
@@ -511,18 +533,16 @@ async fn probe_selected_backends(
                     }
                 }
                 Err(error) => {
-                    use crate::oauth_credential::{OAuthAuthProblem, OAuthCredentialAuthError};
-                    let event = match error
-                        .downcast_ref::<OAuthCredentialAuthError>()
-                        .map(|error| &error.problem)
-                    {
-                        Some(
+                    use crate::oauth_credential::{OAuthAuthProblem, OAuthCredentialError};
+                    let event = match &error.source {
+                        OAuthCredentialError::Auth(auth) => match &auth.problem {
                             OAuthAuthProblem::Missing
                             | OAuthAuthProblem::WrongMode { .. }
-                            | OAuthAuthProblem::Expired,
-                        ) => ProbeEvent::CredentialsRejected,
-                        Some(OAuthAuthProblem::NotEntitled) => ProbeEvent::SubscriptionNotEntitled,
-                        _ => ProbeEvent::ProbeFail,
+                            | OAuthAuthProblem::Expired => ProbeEvent::CredentialsRejected,
+                            OAuthAuthProblem::NotEntitled => ProbeEvent::SubscriptionNotEntitled,
+                            OAuthAuthProblem::Other(_) => ProbeEvent::ProbeFail,
+                        },
+                        OAuthCredentialError::Other(_) => ProbeEvent::ProbeFail,
                     };
                     (event, Some(format!("{error:#}")))
                 }

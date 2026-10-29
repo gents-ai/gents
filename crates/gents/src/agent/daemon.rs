@@ -174,6 +174,7 @@ where
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     background_tool_registry: crate::hook::BackgroundToolRegistry,
     background_execution_registry: crate::hook::BackgroundExecutionRegistry,
+    inference_observations: crate::inference_observation::InferenceObservationRegistry,
     remote_tools: Option<crate::document_config::RemoteTools>,
     job_tools: rapidhash::RapidHashMap<String, crate::plugin_job::JobBinding>,
     job_driver: Option<Arc<crate::plugin_job::driver::JobDriver>>,
@@ -298,6 +299,7 @@ where
             rendered_request_capture_factory,
             background_tool_registry,
             background_execution_registry,
+            inference_observations: Default::default(),
             remote_tools: None,
             job_tools: Default::default(),
             job_driver: None,
@@ -311,6 +313,14 @@ where
             root_execution_guard: None,
             auxiliary_tasks: auxiliary_tasks::AuxiliaryTasks::default(),
         })
+    }
+
+    pub(super) fn with_inference_observations(
+        mut self,
+        registry: crate::inference_observation::InferenceObservationRegistry,
+    ) -> Self {
+        self.inference_observations = registry;
+        self
     }
 
     pub(super) fn with_compactor(
