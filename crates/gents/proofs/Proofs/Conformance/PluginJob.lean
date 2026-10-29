@@ -920,6 +920,7 @@ private def invocationJson : PluginData.Invocation → Json
   | .toolCall => toJson "tool_call"
   | .jobStep => toJson "job_step"
   | .callback => toJson "callback"
+  | .ux => toJson "ux"
 
 private def renderResultOffer (c : String × PluginData.Invocation) : Json :=
   Json.mkObj [("name", toJson c.1), ("kind", toJson "result_offer"),
@@ -1519,7 +1520,8 @@ private def renderLineage (c : LineageCase) : Json :=
   Json.mkObj [("name", toJson c.name), ("rows", toJson (c.rows.map requestRowJson)),
     ("queries", toJson ((c.queries.zip (openingDocs c)).map fun ((cause, session), opening) =>
       Json.mkObj [("cause_request_doc_id", toJson cause), ("session_id", toJson session),
-        ("expected_opening_doc_id", toJson opening)]))]
+        ("expected_opening_doc_id", toJson opening),
+        ("listed_start", toJson (DurableLineage.listedStart c.rows cause session))]))]
 
 def lineageCasesJson : String := (toJson (lineageCases.map renderLineage)).compress
 

@@ -280,6 +280,8 @@ def dataWriteCases : List DataWriteCase :=
   , { noteWrite with stampedSuppliedByGuest := true }
   , { noteWrite with invocation := .callback }, { noteWrite with invocation := .toolCall }
   , { noteWrite with invocation := .callback, collectionFields := nameFields }
+  , { noteWrite with invocation := .ux, collectionFields := nameFields }
+  , { noteWrite with invocation := .ux }
   , { noteWrite with invocation := .toolCall, collectionFields := nameFields }
   , { noteWrite with write := { boundedWrite with targets := 101, limit := 100 } } ]
 
@@ -317,7 +319,7 @@ private def opSpelling : ApplicationWrite.Operation → String
   | .create => "create" | .update => "update" | .delete => "delete"
 
 private def invocationSpelling : Invocation → String
-  | .toolCall => "tool_call" | .jobStep => "job_step" | .callback => "callback"
+  | .toolCall => "tool_call" | .jobStep => "job_step" | .callback => "callback" | .ux => "ux"
 
 private def stampSpelling : Stamp → String
   | .nodeDid => "node_did" | .sessionId => "session_id" | .requestDocId => "request_doc_id"
@@ -381,6 +383,8 @@ theorem data_regressions :
       , (noteStamps, false, some (.stampUnavailable .jobRowDocId .callback))
       , (noteStamps, false, some (.stampUnavailable .jobRowDocId .toolCall))
       , ([("node_did", .nodeDid)], true, none), ([("node_did", .nodeDid)], true, none)
+      , (noteStamps, false, some (.stampUnavailable .jobRowDocId .ux))
+      , ([("node_did", .nodeDid)], true, none)
       , (noteStamps, false, some .other) ] ∧
     dataQueryCases.map dataQueryVerdict = [false, true, true, false, false, false, false] ∧
     dataFilterCases.map dataFilterVerdict =

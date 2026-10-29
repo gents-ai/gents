@@ -96,8 +96,25 @@ pub async fn desktop_plugin_call(
     state: State<'_, DesktopAppState>,
 ) -> Result<Value, BridgeError> {
     let home = home(&state)?;
+    let operator =
+        if packs::plugin_call_uses_data(&home, &request.ux, &request.name).map_err(failed)? {
+            let node_did = packs::ux_installing_node(&home).map_err(failed)?;
+            let core = current_core(&state).ok_or_else(|| {
+                BridgeError::new(
+                    BridgeErrorCode::ClientNotRunning,
+                    "the local node that installed this app is not connected",
+                )
+            })?;
+            let access = core
+                .local_home_operator_access(&node_did, &home)
+                .map_err(failed)?;
+            Some((access, node_did))
+        } else {
+            None
+        };
     let output =
-        run(move || packs::plugin_call(home, request.ux, request.name, request.input)).await?;
+        run(move || packs::plugin_call(home, request.ux, request.name, request.input, operator))
+            .await?;
     Ok(serde_json::json!({ "output": output }))
 }
 

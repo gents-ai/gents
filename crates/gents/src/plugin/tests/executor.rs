@@ -1509,6 +1509,28 @@ mod data_calls {
     }
 
     #[tokio::test]
+    async fn operator_data_call_uses_selected_node_and_declared_grant() {
+        let node = node_with(&[(NODE, "mine"), ("did:key:z6Mkother", "theirs")]).await;
+        let requests = json!([query(
+            "q",
+            json!({"filter": {"owner": {"_eq": "$caller.node_did"}}, "limit": 10})
+        )]);
+        let canned = json!({"data_calls": {"requests": requests, "state": {}}});
+        let (home, mut record) = installed_plugin(
+            &asking_plugin_wat("data_calls", "data_results", &canned, false),
+            None,
+        );
+        record.declaration.data = Some(declaration(&["query"]));
+        store::write_record(home.path(), &record).unwrap();
+        let caller = DataCaller::operator(ConfigAccess::local(node), NODE).unwrap();
+        let call = PluginExecutor::new(Some(home.path().to_owned()))
+            .call_with_data(&record, json!({}), caller)
+            .await
+            .unwrap();
+        assert_eq!(bodies(&results_of(&call)["q"]), ["mine"]);
+    }
+
+    #[tokio::test]
     async fn data_calls_query_outside_the_grant_is_refused() {
         let node = node_with(&[(NODE, "mine")]).await;
         let call = ask(

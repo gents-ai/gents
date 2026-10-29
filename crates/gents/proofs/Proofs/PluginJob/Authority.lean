@@ -30,6 +30,16 @@ inductive Record
   | written (via : InstallProvenance)
   deriving DecidableEq, Repr
 
+/-- A document pack with desktop UX needs a local home record and explicit
+operator installation. A model-authored installation does not authorize UI code. -/
+def documentUxAllowed (hasUx hasLocalHome : Bool) (via : InstallProvenance) : Bool :=
+  !hasUx || (hasLocalHome && via == .operator)
+
+theorem document_ux_requires_operator_home (hasHome : Bool) (via : InstallProvenance)
+    (h : documentUxAllowed true hasHome via = true) :
+    hasHome = true ∧ via = .operator := by
+  cases hasHome <;> cases via <;> simp_all [documentUxAllowed]
+
 /-- A written record reads as written. A legacy record reads as `operator` for
 assets and plugins, because the CLI was their only writer, and as `selfConfig`
 for documents, which never had such a record. A missing record reads as
