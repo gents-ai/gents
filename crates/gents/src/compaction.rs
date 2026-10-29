@@ -58,9 +58,16 @@ impl ReductionEngine for BackendScopedReductionEngine {
         configured_keep_recent: usize,
         messages: &[crate::llm::message::Message],
         admission: ReductionAdmission,
+        options: &ReductionOptions,
+        context_window: usize,
     ) -> Result<usize, CompactionError> {
-        self.inner
-            .retention_target(configured_keep_recent, messages, admission)
+        self.inner.retention_target(
+            configured_keep_recent,
+            messages,
+            admission,
+            options,
+            context_window,
+        )
     }
 
     fn reduce<'a>(

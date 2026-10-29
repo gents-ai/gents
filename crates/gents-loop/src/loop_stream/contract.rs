@@ -322,6 +322,9 @@ pub struct LoopConfig {
     pub resume_from_history: bool,
     pub context_window: usize,
     pub compaction_threshold: f64,
+    /// Scale from the provider-input estimate to the provider's own count,
+    /// shared with the owner that seeded it for this session and model.
+    pub context_calibration: crate::provider_input::budget::ContextCalibration,
     pub retry_policy: CompletionRetryPolicy,
     pub provider_idle_timeout: Option<std::time::Duration>,
     pub deadline: Option<DateTime<Utc>>,

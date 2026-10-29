@@ -274,7 +274,7 @@ impl ProviderInputProfile {
         }
     }
 
-    const fn estimator_name(self) -> &'static str {
+    pub const fn estimator_name(self) -> &'static str {
         match self {
             Self::OpenAiChatCompletions => "openai_chat_wire_json_bytes_div_4_v1",
             Self::OpenAiResponsesNormalized => "openai_responses_wire_json_bytes_div_4_v1",
@@ -320,6 +320,10 @@ impl ProviderInputCounter {
 
     pub fn profile(&self) -> ProviderInputProfile {
         self.profile
+    }
+
+    pub fn model(&self) -> &str {
+        &self.model
     }
 
     pub fn project_request(&self, request: &CompletionRequest) -> Result<ProviderInputProjection> {

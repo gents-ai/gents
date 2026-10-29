@@ -31,13 +31,19 @@ def effectiveInputBudget
     (configuredThresholdBudget contextWindow : Nat) : Nat :=
   min configuredThresholdBudget contextWindow
 
-/-- After fixed provider-input layers consume part of the effective input
-budget, three quarters of the remaining capacity may be retained; the last
-quarter stays available for the rolling checkpoint and serialization framing.
-Natural subtraction matches Rust's saturating subtraction. -/
+/-- The recovery band: four fifths of the effective input budget. The whole
+request right after a reduction fits it, so the next turns grow back toward
+the threshold instead of crossing it again straight away. -/
+def recoveryBandBudget (effectiveInputBudget : Nat) : Nat :=
+  4 * effectiveInputBudget / 5
+
+/-- The retained tail after a reduction: the configured keep-recent cap,
+else what the recovery band leaves after the fixed provider-input layers and
+the rolling checkpoint's reserve (the summary call's output cap). Natural
+subtraction matches Rust's saturating subtraction. -/
 def compactionRetentionTarget
-    (configuredKeepRecent effectiveInputBudget fixedInput : Nat) : Nat :=
-  min configuredKeepRecent (3 * (effectiveInputBudget - fixedInput) / 4)
+    (configuredKeepRecent effectiveInputBudget fixedInput summaryReserve : Nat) : Nat :=
+  min configuredKeepRecent (recoveryBandBudget effectiveInputBudget - fixedInput - summaryReserve)
 
 def summaryOutputCeiling
     (configuredMaxOutputTokens contextWindow : Nat) : Nat :=
@@ -50,30 +56,51 @@ def rollingSummaryInputBudget
   else contextWindow
 
 theorem compaction_retention_le_configured
-    (configuredKeepRecent effectiveInputBudget fixedInput : Nat) :
-    compactionRetentionTarget configuredKeepRecent effectiveInputBudget fixedInput ≤
-      configuredKeepRecent := by
+    (configuredKeepRecent effectiveInputBudget fixedInput summaryReserve : Nat) :
+    compactionRetentionTarget configuredKeepRecent effectiveInputBudget fixedInput
+        summaryReserve ≤ configuredKeepRecent := by
   exact Nat.min_le_left _ _
 
 theorem compaction_retention_le_available
-    (configuredKeepRecent effectiveInputBudget fixedInput : Nat) :
-    compactionRetentionTarget configuredKeepRecent effectiveInputBudget fixedInput ≤
-      effectiveInputBudget - fixedInput := by
-  unfold compactionRetentionTarget
+    (configuredKeepRecent effectiveInputBudget fixedInput summaryReserve : Nat) :
+    compactionRetentionTarget configuredKeepRecent effectiveInputBudget fixedInput
+        summaryReserve ≤ effectiveInputBudget - fixedInput := by
+  unfold compactionRetentionTarget recoveryBandBudget
   have htarget : min configuredKeepRecent
-      (3 * (effectiveInputBudget - fixedInput) / 4) ≤
-      3 * (effectiveInputBudget - fixedInput) / 4 := Nat.min_le_right _ _
+      (4 * effectiveInputBudget / 5 - fixedInput - summaryReserve) ≤
+      4 * effectiveInputBudget / 5 - fixedInput - summaryReserve := Nat.min_le_right _ _
   omega
 
-theorem compaction_retention_reserves_quarter
-    (configuredKeepRecent effectiveInputBudget fixedInput : Nat) :
-    compactionRetentionTarget configuredKeepRecent effectiveInputBudget fixedInput +
-      ((effectiveInputBudget - fixedInput + 3) / 4) ≤
-      effectiveInputBudget - fixedInput := by
+/-- The recovery band invariant: when the fixed layers and the checkpoint's
+reserve fit the band, the whole post-compaction request (fixed layers,
+checkpoint and retained tail) is at most four fifths of the budget. -/
+theorem compaction_post_request_within_recovery_band
+    (configuredKeepRecent effectiveInputBudget fixedInput summaryReserve : Nat)
+    (hfits : fixedInput + summaryReserve ≤ recoveryBandBudget effectiveInputBudget) :
+    fixedInput + summaryReserve +
+        compactionRetentionTarget configuredKeepRecent effectiveInputBudget fixedInput
+          summaryReserve ≤
+      recoveryBandBudget effectiveInputBudget := by
   unfold compactionRetentionTarget
   have htarget : min configuredKeepRecent
-      (3 * (effectiveInputBudget - fixedInput) / 4) ≤
-      3 * (effectiveInputBudget - fixedInput) / 4 := Nat.min_le_right _ _
+      (recoveryBandBudget effectiveInputBudget - fixedInput - summaryReserve) ≤
+      recoveryBandBudget effectiveInputBudget - fixedInput - summaryReserve :=
+    Nat.min_le_right _ _
+  omega
+
+/-- When nothing binds but the band, the retained tail is exactly what the
+band leaves: the band is filled, not under-used. -/
+theorem compaction_retention_fills_recovery_band
+    (effectiveInputBudget fixedInput summaryReserve : Nat)
+    (hfits : fixedInput + summaryReserve ≤ recoveryBandBudget effectiveInputBudget) :
+    fixedInput + summaryReserve +
+        compactionRetentionTarget (recoveryBandBudget effectiveInputBudget)
+          effectiveInputBudget fixedInput summaryReserve =
+      recoveryBandBudget effectiveInputBudget := by
+  unfold compactionRetentionTarget
+  have hle : recoveryBandBudget effectiveInputBudget - fixedInput - summaryReserve ≤
+      recoveryBandBudget effectiveInputBudget := by omega
+  rw [Nat.min_eq_right hle]
   omega
 
 theorem rolling_summary_preserves_configured_output

@@ -374,11 +374,13 @@ where
         deadline: Option<chrono::DateTime<chrono::Utc>>,
         aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
         sampling_seed: Option<i64>,
+        context_calibration: crate::provider_input::budget::ContextCalibration,
     ) -> ReductionOptions {
         ReductionOptions {
             deadline,
             aggregate_token_budget,
             sampling_seed,
+            context_calibration: Some(context_calibration),
             ..self.compaction_options.clone()
         }
     }

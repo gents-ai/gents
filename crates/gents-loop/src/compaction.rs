@@ -155,6 +155,11 @@ pub struct ReductionOptions {
     pub deadline: Option<chrono::DateTime<chrono::Utc>>,
     pub aggregate_token_budget: Option<crate::loop_stream::AggregateTokenBudget>,
     pub sampling_seed: Option<i64>,
+    /// The requesting session's provider-input calibration for its own model.
+    /// An engine whose summary requests go to that same model sizes its
+    /// summary chunks with it; an engine summarizing with another model keeps
+    /// its own calibration.
+    pub context_calibration: Option<crate::provider_input::budget::ContextCalibration>,
 }
 
 impl Default for ReductionOptions {
@@ -169,10 +174,17 @@ impl Default for ReductionOptions {
             deadline: None,
             aggregate_token_budget: None,
             sampling_seed: None,
+            context_calibration: None,
         }
     }
 }
 
+/// Why a reduction may run, in estimator units (the provider-input
+/// estimator's raw count, before calibration). Both fields are in the same
+/// units as `ProviderInputCounter::estimate_message_request`, so the
+/// compactor can subtract and compare them with its own estimates; callers
+/// convert provider-token budgets with `ContextCalibration::estimator_budget`
+/// and anchored counts with `ContextCalibration::estimator_units`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReductionAdmission {
     input_tokens: usize,
@@ -182,8 +194,15 @@ pub struct ReductionAdmission {
 
 impl ReductionAdmission {
     pub fn for_input(input_tokens: usize, context_window: usize, threshold: f64) -> Option<Self> {
-        let effective_input_budget =
-            crate::provider_input::budget::effective_input_budget(context_window, threshold);
+        Self::over_budget(
+            input_tokens,
+            crate::provider_input::budget::effective_input_budget(context_window, threshold),
+        )
+    }
+
+    /// Admission when `input_tokens` exceeds `effective_input_budget`, both in
+    /// the same estimator units.
+    pub fn over_budget(input_tokens: usize, effective_input_budget: usize) -> Option<Self> {
         matches!(
             threshold_decision(input_tokens, effective_input_budget),
             ThresholdDecision::ReduceEligible
@@ -195,9 +214,10 @@ impl ReductionAdmission {
         })
     }
 
-    /// Admission after the provider itself rejected the input as over its
-    /// limit: reduction is required whatever the estimate says.
-    pub fn for_provider_overflow(input_tokens: usize, effective_input_budget: usize) -> Self {
+    /// Admission when the caller has already decided reduction is required:
+    /// the provider rejected the input as over its limit, or the anchored
+    /// provider count is over budget where the raw estimate is not.
+    pub fn required(input_tokens: usize, effective_input_budget: usize) -> Self {
         Self {
             input_tokens,
             effective_input_budget,
@@ -453,11 +473,17 @@ impl ExactReduction<'_> {
 type Result<T, E = CompactionError> = std::result::Result<T, E>;
 
 pub trait ReductionEngine: Send + Sync {
+    /// The retained tail's budget for reducing `messages` under `admission`
+    /// with `options` against `context_window`, the same arguments `reduce`
+    /// gets: the recovery band less the fixed layers and the checkpoint's
+    /// reserve.
     fn retention_target(
         &self,
         configured_keep_recent: usize,
         messages: &[Message],
         admission: ReductionAdmission,
+        options: &ReductionOptions,
+        context_window: usize,
     ) -> Result<usize>;
     fn reduce<'a>(
         &'a self,
@@ -508,11 +534,42 @@ where
         self
     }
 
+    /// The context window summary requests are sized against: this engine's
+    /// own when it summarizes with another model, else the source's.
+    fn summary_context_window(&self, source_context_window: usize) -> usize {
+        if self.source_input_counter.is_some() {
+            self.config.context_window
+        } else {
+            source_context_window
+        }
+    }
+
+    /// The `max_tokens` each summary call of a reduction gets.
+    fn summary_max_output_tokens(
+        &self,
+        options: &ReductionOptions,
+        summary_context_window: usize,
+    ) -> usize {
+        summary_output_ceiling(
+            options
+                .summary_max_output_tokens
+                .clamp(1, MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS)
+                .min(self.summary_output_limit.unwrap_or(usize::MAX)),
+            summary_context_window,
+        )
+    }
+
+    /// The checkpoint's reserve is the summary call's output cap, in output
+    /// tokens. Counted as estimator units it is conservative: replayed as
+    /// input, a summary of that many provider tokens estimates at most that
+    /// many (the ratio is at least one).
     pub fn retention_target(
         &self,
         configured_keep_recent: usize,
         compactable_messages: &[Message],
         admission: ReductionAdmission,
+        options: &ReductionOptions,
+        context_window: usize,
     ) -> Result<usize, CompactionError> {
         let compactable_input_tokens = self
             .source_input_counter
@@ -527,6 +584,7 @@ where
             configured_keep_recent,
             admission.effective_input_budget(),
             fixed_input_tokens,
+            self.summary_max_output_tokens(options, self.summary_context_window(context_window)),
         ))
     }
 
@@ -536,6 +594,15 @@ where
     ) -> Self {
         self.now = now;
         self
+    }
+
+    /// Whether this engine's summary requests are counted by the same
+    /// estimator and model as the history it reduces.
+    fn summarizes_with_source_model(&self) -> bool {
+        self.source_input_counter.as_ref().is_none_or(|source| {
+            source.profile() == self.config.provider_input_counter.profile()
+                && source.model() == self.config.provider_input_counter.model()
+        })
     }
 }
 
@@ -548,8 +615,17 @@ where
         configured: usize,
         messages: &[Message],
         admission: ReductionAdmission,
+        options: &ReductionOptions,
+        context_window: usize,
     ) -> Result<usize> {
-        ProviderReductionEngine::retention_target(self, configured, messages, admission)
+        ProviderReductionEngine::retention_target(
+            self,
+            configured,
+            messages,
+            admission,
+            options,
+            context_window,
+        )
     }
 
     fn reduce<'a>(
@@ -564,11 +640,7 @@ where
                 .source_input_counter
                 .as_deref()
                 .unwrap_or(self.config.provider_input_counter.as_ref());
-            let context_window = if self.source_input_counter.is_some() {
-                self.config.context_window
-            } else {
-                source_context_window
-            };
+            let context_window = self.summary_context_window(source_context_window);
             let original_token_estimate = counter
                 .estimate_message_request(&messages)
                 .map_err(CompactionError::ProjectOriginal)?;
@@ -618,15 +690,24 @@ where
             summary_config.preamble = Some(compaction_prompt().to_string());
             summary_config.context_message = None;
             summary_config.tool_choice = None;
+            // The summarizer never compacts. A provider overflow of a summary
+            // request ends this reduction instead of re-entering the
+            // compactor, so the forced overflow reduction cannot recurse.
             summary_config.turn_compactor = None;
+            // Summary chunks are sized against the provider's count: the
+            // session's ratio when the summarizer is the session's model, else
+            // this engine's own. Never an anchor: a summary chunk is not a
+            // continuation of the anchored call, and the copy keeps summary
+            // usage out of the session's and the engine's calibration.
+            summary_config.context_calibration = options
+                .context_calibration
+                .as_ref()
+                .filter(|_| self.summarizes_with_source_model())
+                .unwrap_or(&self.config.context_calibration)
+                .ratio_only();
             summary_config.replay = crate::loop_stream::LoopReplayInput::default();
             summary_config.max_turns = 0;
-            let configured_summary_max_output_tokens = options
-                .summary_max_output_tokens
-                .clamp(1, MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS)
-                .min(self.summary_output_limit.unwrap_or(usize::MAX));
-            let summary_max_output_tokens =
-                summary_output_ceiling(configured_summary_max_output_tokens, context_window);
+            let summary_max_output_tokens = self.summary_max_output_tokens(options, context_window);
             summary_config.max_tokens = Some(summary_max_output_tokens as u64);
             summary_config.aggregate_token_budget = options.aggregate_token_budget.clone();
             summary_config.additional_params = merge_optional_params(
@@ -894,6 +975,7 @@ where
     summary_config
         .provider_input_counter
         .estimate_request(&request)
+        .map(|estimate| summary_config.context_calibration.calibrated(estimate))
         .map_err(CompactionError::ProjectSummaryRequest)
 }
 

@@ -524,6 +524,9 @@ where
             let mut turn_text = String::new();
             let mut saw_stream_item = false;
             let mut saw_final_usage_event = false;
+            // The attempt's provider count; it anchors later requests only
+            // once the turn is accepted into the transcript.
+            let mut completed_anchor = None;
             let mut aggregate_budget_exhausted = false;
             let mut aggregate_usage_failure = None::<String>;
 
@@ -849,6 +852,19 @@ where
                     StreamedAssistantContent::Final(raw) => {
                         saw_final_usage_event = true;
                         let usage = raw.token_usage();
+                        if let Some((observed, output)) = usage.as_ref().and_then(|usage| {
+                            crate::provider_usage::contract_usage_input_tokens(usage)
+                                .map(|input| (input, usage.output_tokens))
+                        }) {
+                            config
+                                .context_calibration
+                                .observe(observed, dispatched_input_tokens);
+                            completed_anchor = Some(crate::provider_input::budget::ContextAnchor {
+                                input_tokens: observed,
+                                output_tokens: output,
+                                estimated_input_tokens: dispatched_input_tokens,
+                            });
+                        }
                         if let Some(budget) = aggregate_token_budget.as_ref() {
                             let (charge, ledger) = budget.charge_reported(usage)?;
                             match charge {
@@ -1051,6 +1067,9 @@ where
                     "provider completed without an acceptable native message".to_string(),
                 ))
             })?;
+            if let Some(anchor) = completed_anchor.take() {
+                config.context_calibration.anchor_accepted(anchor);
+            }
             if let Message::Assistant { id, .. } = &mut accepted_message {
                 *id = stream.message_id.clone();
             }

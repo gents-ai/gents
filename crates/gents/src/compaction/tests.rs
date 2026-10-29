@@ -172,6 +172,7 @@ fn gate_test_loop_config() -> crate::agent::loop_stream::LoopConfig {
         resume_from_history: false,
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
+        context_calibration: Default::default(),
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::no_retry(),
         provider_idle_timeout: None,
         deadline: None,
@@ -1411,12 +1412,18 @@ async fn fifteen_thousand_paths_produce_a_bounded_summary() {
 #[derive(Clone)]
 struct CountingFailModel {
     calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    error: &'static str,
 }
 
 impl CountingFailModel {
     fn new() -> Self {
+        Self::failing_with("transient compaction failure")
+    }
+
+    fn failing_with(error: &'static str) -> Self {
         Self {
             calls: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            error,
         }
     }
 
@@ -1440,9 +1447,7 @@ impl CompletionModel for CountingFailModel {
         _request: CompletionRequest,
     ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Err(CompletionError::ProviderError(
-            "transient compaction failure".to_string(),
-        ))
+        Err(CompletionError::ProviderError(self.error.to_string()))
     }
 
     async fn stream(
@@ -1450,9 +1455,7 @@ impl CompletionModel for CountingFailModel {
         _request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Err(CompletionError::ProviderError(
-            "transient compaction failure".to_string(),
-        ))
+        Err(CompletionError::ProviderError(self.error.to_string()))
     }
 }
 
@@ -1579,6 +1582,7 @@ fn scheduled_origin_config() -> crate::agent::loop_stream::LoopConfig {
         resume_from_history: false,
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
+        context_calibration: Default::default(),
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
         provider_idle_timeout: None,
         deadline: None,
@@ -2760,6 +2764,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         resume_from_history: false,
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
+        context_calibration: Default::default(),
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
         provider_idle_timeout: None,
         deadline: None,
@@ -3408,4 +3413,225 @@ async fn selected_summary_provider_cannot_replace_exhausted_parent_budget() {
     assert!(result.is_err());
     assert!(requests.lock().unwrap().is_empty());
     assert_eq!(parent.snapshot().unwrap().used, 10);
+}
+
+fn rolling_prefix_messages() -> Vec<Message> {
+    let mut messages = (0..20)
+        .map(|index| {
+            text_msg(
+                if index % 2 == 0 { "user" } else { "assistant" },
+                &format!("turn-{index}: {}", "x".repeat(2_000)),
+            )
+        })
+        .collect::<Vec<_>>();
+    messages.push(text_msg("user", "retained current prompt"));
+    messages
+}
+
+async fn rolling_summary_requests(
+    calibration: Option<crate::provider_input::budget::ContextCalibration>,
+    source_model: Option<&str>,
+) -> Vec<CompletionRequest> {
+    let model = SentinelCheckpointModel::default();
+    let observed = model.requests.clone();
+    let config = gate_test_loop_config();
+    let mut compactor = ProviderReductionEngine::new(Arc::new(model), config);
+    if let Some(source_model) = source_model {
+        compactor = compactor.with_source_input_counter(Arc::new(
+            crate::provider_input::ProviderInputCounter::new(
+                crate::BackendProviderKind::OpenAiCompatible,
+                crate::OpenAiWireApi::ChatCompletions,
+                source_model,
+            ),
+        ));
+    }
+    compactor
+        .reduce(
+            rolling_prefix_messages(),
+            6_000,
+            &ReductionOptions {
+                keep_recent_tokens: 20,
+                mode: ReductionMode::Summarize,
+                summary_max_output_tokens: 512,
+                context_calibration: calibration,
+                ..Default::default()
+            },
+            test_reduction_admission(),
+        )
+        .await
+        .expect("the prefix rolls through bounded chunks");
+    let requests = observed.lock().unwrap().clone();
+    requests
+}
+
+#[tokio::test]
+async fn summary_chunks_are_sized_by_the_calibrated_estimate() {
+    let ratio = 20_000;
+    let counter = gate_test_loop_config().provider_input_counter;
+    let calibrated = |request: &CompletionRequest| {
+        crate::provider_input::budget::calibrated_input_tokens(
+            counter
+                .project_request(request)
+                .unwrap()
+                .estimated_input_tokens,
+            ratio,
+        )
+    };
+    let budget = rolling_summary_input_budget(6_000, 512);
+
+    let uncalibrated = rolling_summary_requests(None, None).await;
+    assert!(
+        uncalibrated
+            .iter()
+            .any(|request| calibrated(request) > budget),
+        "raw-estimate chunks would overflow a provider counting {ratio} basis points"
+    );
+
+    let calibration = crate::provider_input::budget::ContextCalibration::with_ratio(ratio);
+    let requests = rolling_summary_requests(Some(calibration), None).await;
+    assert!(requests.len() > uncalibrated.len());
+    for request in &requests {
+        let output = usize::try_from(request.max_tokens.expect("positive output")).unwrap();
+        assert!(calibrated(request) <= budget, "{}", calibrated(request));
+        assert!(can_dispatch(calibrated(request), 6_000, output));
+    }
+
+    let other_model = |calibration| rolling_summary_requests(calibration, Some("session-model"));
+    let chunked = |requests: Vec<CompletionRequest>| {
+        requests
+            .iter()
+            .map(|request| request.chat_history.len())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        chunked(
+            other_model(Some(
+                crate::provider_input::budget::ContextCalibration::with_ratio(ratio)
+            ))
+            .await
+        ),
+        chunked(other_model(None).await),
+        "a summarizer on another model keeps its own calibration"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn summarizer_context_overflow_fails_without_reentering_compaction() {
+    let model = CountingFailModel::failing_with(
+        r#"Claude Messages HTTP 400 Bad Request (request-id -) body={"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 1001685 tokens > 1000000 maximum"}}"#,
+    );
+    let calls = model.calls();
+    let compactor = ProviderReductionEngine::new(Arc::new(model), gate_test_loop_config());
+
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        compactor.reduce(
+            summary_worthy_messages(),
+            6_000,
+            &ReductionOptions {
+                keep_recent_tokens: 50,
+                mode: ReductionMode::Summarize,
+                summary_max_output_tokens: 512,
+                ..Default::default()
+            },
+            test_reduction_admission(),
+        ),
+    )
+    .await
+    .expect("a summarizer overflow ends promptly")
+    .expect_err("a summarizer overflow fails the reduction");
+
+    let rendered = format!("{:#}", anyhow::Error::from(error));
+    assert!(
+        rendered.contains("context length exceeded") && rendered.contains("prompt is too long"),
+        "{rendered}"
+    );
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the summarizer neither retries nor compacts an overflowed summary request"
+    );
+}
+
+/// The retention target the loop's admission yields at `ratio`: the request's
+/// raw estimate against the provider budget converted to estimator units,
+/// as `build_budgeted_request` builds it, with a 32k summary cap.
+fn loop_retention_target(ratio: u64, messages: &[Message], provider_budget: usize) -> usize {
+    let config = gate_test_loop_config();
+    let counter = config.provider_input_counter.clone();
+    let calibration = crate::provider_input::budget::ContextCalibration::with_ratio(ratio);
+    let fixed_raw = 3_000;
+    let total_raw = counter.estimate_message_request(messages).unwrap() + fixed_raw;
+    let admission =
+        ReductionAdmission::required(total_raw, calibration.estimator_budget(provider_budget));
+    let options = ReductionOptions {
+        summary_max_output_tokens: 32_000,
+        ..Default::default()
+    };
+    ProviderReductionEngine::new(Arc::new(SentinelCheckpointModel::default()), config)
+        .retention_target(usize::MAX, messages, admission, &options, 1_000_000)
+        .unwrap()
+}
+
+#[test]
+fn retention_target_is_in_estimator_units_at_the_session_ratio() {
+    let messages = rolling_prefix_messages();
+    let provider_budget = 750_000;
+    let (fixed_raw, summary_reserve) = (3_000, 32_000);
+    for ratio in [10_000, 18_000] {
+        let estimator_budget =
+            crate::provider_input::budget::estimator_input_budget(provider_budget, ratio);
+        assert_eq!(
+            loop_retention_target(ratio, &messages, provider_budget),
+            crate::provider_input::budget::recovery_band_budget(estimator_budget)
+                - fixed_raw
+                - summary_reserve,
+            "ratio {ratio}: the band of the estimator budget less fixed layers and reserve"
+        );
+    }
+    assert_eq!(
+        loop_retention_target(10_000, &messages, provider_budget),
+        565_000
+    );
+    assert_eq!(
+        loop_retention_target(18_000, &messages, provider_budget),
+        298_332,
+        "at 1.8x the same provider budget keeps fewer estimator tokens"
+    );
+}
+
+#[test]
+fn summary_reserve_is_the_summary_calls_output_cap() {
+    let messages = rolling_prefix_messages();
+    let config = gate_test_loop_config();
+    let counter = config.provider_input_counter.clone();
+    let total_raw = counter.estimate_message_request(&messages).unwrap();
+    let admission = ReductionAdmission::required(total_raw, 750_000);
+    let engine = ProviderReductionEngine::new(Arc::new(SentinelCheckpointModel::default()), config);
+    let target = |summary_max_output_tokens, context_window| {
+        engine
+            .retention_target(
+                usize::MAX,
+                &messages,
+                admission,
+                &ReductionOptions {
+                    summary_max_output_tokens,
+                    ..Default::default()
+                },
+                context_window,
+            )
+            .unwrap()
+    };
+    let band = crate::provider_input::budget::recovery_band_budget(750_000);
+    assert_eq!(target(32_000, 1_000_000), band - 32_000);
+    assert_eq!(
+        target(100_000, 1_000_000),
+        band - MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
+        "the configured cap is clamped as the summary call clamps it"
+    );
+    assert_eq!(
+        target(32_000, 40_000),
+        band - 10_000,
+        "a small window caps the summary output at a quarter of it"
+    );
 }
