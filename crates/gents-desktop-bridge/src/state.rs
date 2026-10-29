@@ -43,8 +43,8 @@ pub struct ManagedServerState {
     pub starting: bool,
     pub last_error: Option<String>,
     /// Cancels a start that is waiting outside the lifecycle lock.
-    pub start_wait: Option<crate::tauri_commands::managed_server::StartWait>,
-    pub crash_loop: crate::tauri_commands::managed_server::CrashLoopWatch,
+    pub start_wait: Option<crate::tauri_commands::managed_server::start_wait::StartWait>,
+    pub crash_loop: crate::tauri_commands::managed_server::status::CrashLoopWatch,
     pub approval_refused: bool,
     pub incompatible_store: Option<gents::storage_backend::IncompatibleStore>,
 }
