@@ -8,6 +8,8 @@ pub fn authorize(_stopped: &AtomicBool) -> anyhow::Result<()> {
 /// CoreAudio can return silence before microphone authorization. Request it
 /// only after explicit capture, before opening a stream. AVFoundation reports
 /// its decision on an arbitrary dispatch queue, so no UI run loop is required.
+/// A pending system prompt cannot keep capture open indefinitely, and the
+/// bounded receive intervals also let cancellation interrupt the wait.
 #[cfg(target_os = "macos")]
 pub fn authorize(stopped: &AtomicBool) -> anyhow::Result<()> {
     use anyhow::{bail, ensure, Context};

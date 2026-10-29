@@ -39,6 +39,7 @@ fn generated_cases_drive_exact_tool_selection() {
         tools: Vec<FileImageTool>,
         images: Vec<FileImageObservation>,
         expected: FileImageSelection,
+        delivery_documents: Option<Vec<String>>,
     }
     let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
     let cases: Vec<Case> =
@@ -86,12 +87,17 @@ fn generated_cases_drive_exact_tool_selection() {
                 .collect(),
             ..HydrationCatalog::default()
         };
-        assert_eq!(
-            select_file_images(&case.demand, &catalog, &case.tools, &case.images),
-            case.expected,
-            "{}",
-            case.name
-        );
+        let selection = select_file_images(&case.demand, &catalog, &case.tools, &case.images);
+        assert_eq!(selection, case.expected, "{}", case.name);
+        let delivered = match &selection {
+            FileImageSelection::Selected { document } => case
+                .images
+                .iter()
+                .find(|image| &image.doc_id == document)
+                .map(FileImageObservation::delivery_documents),
+            _ => None,
+        };
+        assert_eq!(delivered, case.delivery_documents, "{}", case.name);
     }
 }
 

@@ -17,6 +17,8 @@ use crate::NodeIdentity;
 /// pending request until it expires; an approver relaying offers by hand may
 /// ask for up to [`MAX_OFFER_VALIDITY`]. Approval remains the only grant.
 pub const DEFAULT_OFFER_VALIDITY: Duration = Duration::minutes(5);
+/// Issuers and candidates enforce the same cap on the time an offer holder may
+/// file pending requests; approval is still required to grant access.
 pub const MAX_OFFER_VALIDITY: Duration = Duration::hours(1);
 
 #[derive(Clone)]

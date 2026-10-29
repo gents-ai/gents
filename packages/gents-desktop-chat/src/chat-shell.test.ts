@@ -12,6 +12,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { projectDeploymentOperationalState } from "@source-inc/gents-desktop-client";
 import {
+  inferenceActivityStatus,
   projectChatShell as projectChatShellWithReadiness,
   requestProgressPresentation,
   type ChatBlockedReason,
@@ -534,4 +535,36 @@ describe("requestProgressPresentation", () => {
     },
     GENERATED_CONTRACT_TEST_TIMEOUT_MS,
   );
+});
+
+test("inference activity has distinct shared presentation", () => {
+  expect(inferenceActivityStatus("awaiting_provider")?.label).toBe("Waiting for provider…");
+  expect(inferenceActivityStatus("working")?.label).toBe("Agent is working…");
+  expect(inferenceActivityStatus("waiting")?.label).toBe("Waiting…");
+  expect(inferenceActivityStatus("retrying")?.label).toBe("Retrying provider…");
+  expect(inferenceActivityStatus("unavailable")?.label).toBe(
+    "Activity unavailable",
+  );
+  expect(inferenceActivityStatus(null)).toBeNull();
+});
+
+test("running request presents its observed retry and clears on completion", () => {
+  const common = {
+    clientAvailable: true,
+    selectedNodeDid: "did:test:amy",
+    selectedSessionId: "session-1",
+    sending: false,
+    selectedSessionSummary: null,
+    localWorkflow: { kind: "ready" } as const,
+  };
+  const running = projectChatShell({
+    ...common,
+    session: session({ turnState: "running", inferenceActivity: "retrying" }),
+  });
+  expect(running.activityStatus?.label).toBe("Retrying provider…");
+  const completed = projectChatShell({
+    ...common,
+    session: session({ turnState: "completed", inferenceActivity: "retrying" }),
+  });
+  expect(completed.activityStatus).toBeNull();
 });

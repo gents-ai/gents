@@ -82,8 +82,17 @@ mod tests {
     #[tokio::test]
     async fn attachment_read_preserves_request_scope_and_does_not_reopen_a_filename() {
         use base64::{engine::general_purpose::STANDARD, Engine};
-        let (core, _home) = crate::tests::support::boot_core().await;
-        let node_did = core.node_identity().did().to_owned();
+        let (core, home) = crate::tests::support::boot_core().await;
+        let node_did = "did:test:attachment-runtime".to_owned();
+        let requester_did = core.node_identity().did().to_owned();
+        core.add_managed_enrollment_peer_for_test(
+            &node_did,
+            "http://127.0.0.1:1/api/v0/graphql",
+            home.path().join("runtime").to_str().unwrap(),
+            1,
+        )
+        .await
+        .unwrap();
         let image = RequestAttachment {
             name: "../not-a-file-to-open.png".into(),
             media_type: "image/png".into(),
@@ -91,14 +100,14 @@ mod tests {
         };
         let document = serde_json::json!({
             "purpose": "normal", "request_id": "image-request", "node_did": node_did,
-            "requester_did": node_did, "agent_id": "test-agent", "session_id": "image-session",
+            "requester_did": requester_did, "agent_id": "test-agent", "session_id": "image-session",
             "content": "", "lifecycle_state": "pending", "created_at": "2026-10-28T00:00:00Z",
             "input": {"attachments": [image]},
         });
         let input = gents_protocol::graphql::graphql_input_literal(&document).unwrap();
         let result = async {
             let session = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
-                "session_id": "image-session", "node_did": node_did, "requester_did": node_did,
+                "session_id": "image-session", "node_did": node_did, "requester_did": requester_did,
                 "agent_id": "test-agent", "created_at": "2026-10-28T00:00:00Z",
             }))
             .unwrap();
@@ -116,15 +125,7 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            core.refresh_local_request(
-                &node_did,
-                "image-session",
-                Some("image-request"),
-                None,
-                &[],
-            )
-            .await
-            .unwrap();
+            core.refresh_store().await.unwrap();
             assert_eq!(
                 request_attachments(
                     &core,
@@ -163,7 +164,7 @@ mod tests {
             let orphan_request =
                 gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
                     "purpose": "normal", "request_id": "orphan-image-request",
-                    "node_did": node_did, "requester_did": node_did,
+                    "node_did": node_did, "requester_did": requester_did,
                     "agent_id": "test-agent", "session_id": "missing-image-session",
                     "content": "", "lifecycle_state": "pending",
                     "created_at": "2026-10-28T00:00:00Z",
@@ -179,15 +180,7 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            core.refresh_local_request(
-                &node_did,
-                "missing-image-session",
-                Some("orphan-image-request"),
-                None,
-                &[],
-            )
-            .await
-            .unwrap();
+            core.refresh_store().await.unwrap();
             assert!(
                 request_attachments(
                     &core,
@@ -237,15 +230,7 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            core.refresh_local_request(
-                &node_did,
-                "foreign-image-session",
-                Some("foreign-image-request"),
-                None,
-                &[],
-            )
-            .await
-            .unwrap();
+            core.refresh_store().await.unwrap();
             assert!(
                 request_attachments(
                     &core,

@@ -13,12 +13,25 @@ import {
 import {
   assertLiveBridgeRunnerPlatform,
   disposeRunnerProcess,
+  normalizePeerStatusUrl,
   terminateRunnerProcess,
   waitForReadyMessage,
 } from "./live-bridge-runner/process";
 import { requestProgressSignature } from "./live-bridge-runner/observations";
 
 describe("live bridge runner invocation", () => {
+  it("normalizes mixed-case peer schemes without changing bare addresses", () => {
+    expect(
+      normalizePeerStatusUrl(" HtTpS://example.com:9191/api/v0/graphql?q=1#part "),
+    ).toBe("https://example.com:9191/status");
+    expect(normalizePeerStatusUrl("HTTP://example.com:9191")).toBe(
+      "http://example.com:9191/status",
+    );
+    expect(normalizePeerStatusUrl("example.com:9191")).toBe(
+      "http://example.com:9191/status",
+    );
+  });
+
   it("keeps Cargo as the default and forwards configured provider arguments", () => {
     expect(
       createLiveBridgeRunnerInvocation(

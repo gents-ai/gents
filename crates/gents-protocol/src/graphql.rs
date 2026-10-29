@@ -104,6 +104,16 @@ pub enum GraphqlError {
 type Result<T, E = GraphqlError> = std::result::Result<T, E>;
 
 impl GraphqlError {
+    #[cfg(feature = "native")]
+    pub fn transport_error(&self) -> Option<&reqwest::Error> {
+        match self {
+            Self::ClientBuild(source)
+            | Self::Post { source, .. }
+            | Self::ReadResponse { source, .. }
+            | Self::DecodeBody { source, .. } => Some(source),
+            _ => None,
+        }
+    }
     /// The GraphQL errors DefraDB answered with, which its transparent
     /// variant hides from `source()`.
     pub fn database_failure(&self) -> Option<&crate::database_error::GraphqlFailure> {

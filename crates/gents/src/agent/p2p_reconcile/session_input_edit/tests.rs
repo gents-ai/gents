@@ -96,6 +96,7 @@ impl Fixture {
             expected_request_doc_ids: vec![self.original.clone()],
             selected_request_doc_ids: vec![self.original.clone()],
             messages: vec![PendingMessageEdit {
+                authored_input: None,
                 request_doc_id: self.original.clone(),
                 content: "corrected content".into(),
             }],
@@ -336,6 +337,7 @@ impl ModeledQueue {
                 .iter()
                 .zip(&selected)
                 .map(|(replacement, doc)| PendingMessageEdit {
+                    authored_input: None,
                     request_doc_id: doc.clone(),
                     content: format!("message {} intent {}", replacement.request_id, model.digest),
                 })

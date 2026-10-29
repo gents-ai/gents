@@ -4,6 +4,7 @@ mod enrollment;
 mod file_inventory;
 mod file_review;
 mod goal;
+mod inference_observation;
 mod observation_scope;
 mod p2p_ops;
 mod route_manager;
@@ -42,14 +43,20 @@ use crate::remote_admin::PairingErrorClass;
 
 pub use enrollment::EnrollmentRequestResult;
 pub use goal::{GoalSubmissionReference, RetainedGoalSubmission};
+pub use inference_observation::{InferenceActivity, InferenceObservation, InferenceTarget};
 pub use observation_scope::ClientObservationAttachment;
 pub use sync_state::RuntimeSchemaObservation;
 pub use writes::RefreshedRequestProjection;
 
+/// Peer bootstrap retries need a deadline so an unreachable peer does not hold
+/// startup indefinitely.
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
+/// Route installation must report an unresponsive peer-add operation.
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
 const BOOTSTRAP_OPERATION_BACKOFF: Duration = Duration::from_millis(250);
+/// Periodic observations need spacing even when earlier probes return at once.
 const P2P_SUPERVISOR_INTERVAL: Duration = Duration::from_secs(2);
+/// Bound waits on P2P adapter operations used by observation and enrollment.
 const P2P_OPERATION_TIMEOUT: Duration = Duration::from_secs(10);
 const P2P_WEDGED_FAILURE_THRESHOLD: u32 = 3;
 const DESKTOP_P2P_MAX_CONCURRENT_PUSH_TASKS: usize = 32;
@@ -184,7 +191,9 @@ pub struct PairingCollectionStatus {
     first_failure_at: Option<SystemTime>,
 }
 
+/// Repeated unsuccessful attempts report a stuck pairing; success clears it.
 pub const STUCK_THRESHOLD_ATTEMPTS: u32 = 6;
+/// A long-running failure also reports stuck when attempts are infrequent.
 pub const STUCK_THRESHOLD_DURATION: Duration = Duration::from_secs(5 * 60);
 
 impl PairingCollectionStatus {
@@ -289,6 +298,31 @@ pub(super) fn p2p_health_materially_changed(previous: &P2PHealth, next: &P2PHeal
         || previous.last_error != next.last_error
 }
 
+/// A failed activation belongs to one signed enrollment authorization generation;
+/// it is diagnostic and never grants authority or changes retry policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnrollmentActivationError {
+    pub request_digest: String,
+    pub authorization_sequence: u64,
+    pub authorization_expires_at: String,
+    pub stage: EnrollmentActivationStage,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnrollmentActivationStage {
+    Authentication,
+    Route,
+}
+
+impl EnrollmentActivationStage {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Authentication => "authentication",
+            Self::Route => "route",
+        }
+    }
+}
+
 // The transport counters are diagnostic. Product sync readiness is derived
 // from the configured peer rows in this same revision, never from an
 // independently sampled global connection count.
@@ -297,6 +331,7 @@ pub struct ClientSyncStateSnapshot {
     pub transport: P2PHealth,
     pub database_sync: Option<P2pSyncStatusSnapshot>,
     pub database_sync_error: Option<String>,
+    pub enrollment_activation_errors: BTreeMap<String, EnrollmentActivationError>,
     // DefraDB accepts the connection but never merges either side's writes;
     // schema skew is the only visible signal.
     pub peer_schema_skew: BTreeMap<String, ReplicatedSchemaSkew>,
@@ -327,6 +362,10 @@ pub struct ClientCore {
     sync_state: sync_state::ClientSyncStateOwner,
     p2p_supervisor: Mutex<Option<JoinHandle<()>>>,
     observation_scope: observation_scope::ObservationScope,
+    inference_observation_epoch: std::sync::atomic::AtomicU64,
+    inference_observations: std::sync::Mutex<
+        RapidHashMap<(String, String), inference_observation::InferenceObservationOwner>,
+    >,
     request_patch_signatures: tokio::sync::Mutex<RapidHashMap<String, (usize, usize, u64)>>,
     context_details: context_details::ContextDetailsCache,
     p2p_control: Mutex<Option<mpsc::Sender<P2PSupervisorCommand>>>,

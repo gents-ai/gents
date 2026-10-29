@@ -294,9 +294,13 @@ pub(crate) async fn job_promote(args: JobPromoteArgs) -> Result<()> {
     if let Some(node) = access.local_node() {
         node.shutdown().await;
     }
-    let report = result.map_err(|error| match promote::refusal_code(&error) {
-        Some(code) => error.context(code),
-        None => error,
+    let report = result.map_err(|error| {
+        let code = promote::refusal_code(&error);
+        let error = anyhow::Error::new(error);
+        match code {
+            Some(code) => error.context(code),
+            None => error,
+        }
     })?;
     match format {
         OutputFormat::Json => print_json(&report),

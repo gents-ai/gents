@@ -83,6 +83,14 @@ pub(crate) struct OAuthCredentialAuthError {
     pub(crate) message: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum OAuthCredentialError {
+    #[error(transparent)]
+    Auth(#[from] OAuthCredentialAuthError),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
 pub fn classify_oauth_auth_error(
     product: &OAuthProduct,
     node_did: &str,
@@ -1640,7 +1648,7 @@ impl DbCredentialBearer {
         }
     }
 
-    async fn load_credential(&self) -> Result<OAuthCredential> {
+    async fn load_credential(&self) -> std::result::Result<OAuthCredential, OAuthCredentialError> {
         let Some(credential) =
             lookup_oauth_credential_by_id(self.node.as_ref(), &self.credential_id).await?
         else {
@@ -1751,7 +1759,7 @@ impl DbCredentialBearer {
         &self,
         credential: &OAuthCredential,
         problem: &OAuthAuthProblem,
-    ) -> anyhow::Error {
+    ) -> OAuthCredentialAuthError {
         let state = match problem {
             OAuthAuthProblem::Expired => "signed out (expired or revoked)",
             OAuthAuthProblem::NotEntitled => "not entitled",
@@ -1765,7 +1773,6 @@ impl DbCredentialBearer {
                 classify_oauth_auth_error(&self.product, &self.node_did, &self.provider, problem),
             ),
         }
-        .into()
     }
 
     async fn refresh_tokens(
@@ -1786,8 +1793,10 @@ impl DbCredentialBearer {
     }
 }
 
-impl BearerSource for DbCredentialBearer {
-    async fn current_bearer(&self) -> Result<String> {
+impl DbCredentialBearer {
+    pub(crate) async fn current_bearer_typed(
+        &self,
+    ) -> std::result::Result<String, OAuthCredentialError> {
         let forced = self.force_refresh.load(Ordering::SeqCst);
 
         if !forced {
@@ -1841,7 +1850,7 @@ impl BearerSource for DbCredentialBearer {
 
         if let Some((failed_at, problem)) = last_failure.as_ref() {
             if failed_at.elapsed() < REFRESH_FAILURE_COOLDOWN {
-                return Err(self.auth_error(&credential, problem));
+                return Err(self.auth_error(&credential, problem).into());
             }
         }
 
@@ -1850,7 +1859,7 @@ impl BearerSource for DbCredentialBearer {
             Err(problem) => {
                 let error = self.auth_error(&credential, &problem);
                 *last_failure = Some((std::time::Instant::now(), problem));
-                return Err(error);
+                return Err(error.into());
             }
         };
         *last_failure = None;
@@ -1888,6 +1897,12 @@ impl BearerSource for DbCredentialBearer {
             ),
         }
         Ok(credential.access_token)
+    }
+}
+
+impl BearerSource for DbCredentialBearer {
+    async fn current_bearer(&self) -> Result<String> {
+        self.current_bearer_typed().await.map_err(Into::into)
     }
 
     async fn invalidate(&self) {

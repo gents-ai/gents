@@ -343,6 +343,10 @@ pub enum ClientCommand {
     },
     #[serde(rename = "desktop_interrupt_request")]
     Interrupt { request: DesktopInterruptRequest },
+    #[serde(rename = "desktop_process_control")]
+    ProcessControl {
+        request: gents_protocol::process_control::OperatorProcessControlRequest,
+    },
 }
 
 impl ClientCommand {
@@ -409,6 +413,7 @@ impl ClientCommand {
         "desktop_session_archive",
         "desktop_session_history",
         "desktop_interrupt_request",
+        "desktop_process_control",
     ];
 
     pub fn is_cancellable(&self) -> bool {

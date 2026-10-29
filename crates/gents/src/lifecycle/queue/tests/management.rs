@@ -163,6 +163,7 @@ async fn generated_pending_management_cases_bind_to_signed_replacement_owner() {
                 .iter()
                 .zip(selected)
                 .map(|(replacement, original)| PendingMessageEdit {
+                    authored_input: None,
                     request_doc_id: bound[&original.request_id].clone(),
                     content: format!("message {}", replacement.request_id),
                 })

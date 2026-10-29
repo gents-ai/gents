@@ -244,6 +244,114 @@ pub(crate) mod fixtures {
     use gents_protocol::request_admission::RequestPurpose;
     use serde_json::Value;
 
+    /// The DID of [`fixture_signer`]; sessions it starts carry receipts it signed.
+    pub(crate) const FIXTURE_DID: &str = "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z";
+
+    /// A fixed test key, so fixture rows can name its DID as a constant.
+    pub(crate) fn fixture_signer() -> gents::KeyIdentity {
+        use gents::NodeIdentity as _;
+        use std::io::Write as _;
+        // A named temporary file is created private to its owner, as a key must be.
+        let mut key = tempfile::NamedTempFile::new().unwrap();
+        key.write_all(&crypto::ed25519_key_from_seed(&[7; 32]).unwrap())
+            .unwrap();
+        let signer = gents::KeyIdentity::load_existing(key.path(), None).unwrap();
+        assert_eq!(signer.did(), FIXTURE_DID);
+        signer
+    }
+
+    /// Write `session` as creation writes a started session: the immutable
+    /// starter index at create, then the receipt [`fixture_signer`] signs for
+    /// the created physical document, binding `source`, `parent` and `opening`.
+    pub(crate) async fn create_started_session(
+        node: &gents::defra_node::EmbeddedNode,
+        mut session: gents_protocol::session::AgentSession,
+        source: gents_protocol::session::SessionReference,
+        parent: &str,
+        opening: &str,
+    ) -> String {
+        use gents::NodeIdentity as _;
+        use gents_protocol::session::{
+            SessionCreationCause, SessionCreationReceipt, SessionCreationStarter, SessionProvenance,
+        };
+        assert_eq!(
+            session.node_did, FIXTURE_DID,
+            "the fixture key signs receipts"
+        );
+        let mut provenance = session.provenance.take().unwrap_or_default();
+        provenance.parent_request_doc_id = Some(parent.to_owned());
+        provenance.opening_request_doc_id = Some(opening.to_owned());
+        provenance.started_by = Some(source.clone());
+        session.provenance = Some(provenance);
+        let mut input = serde_json::to_value(&session).unwrap();
+        input["started_by_node_did"] = source.node_did.clone().into();
+        input["started_by_session_id"] = source.session_id.clone().into();
+        let input = gents_protocol::graphql::graphql_input_literal(&input).unwrap();
+        let doc_id = run(
+            node,
+            format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}"),
+            "AgentSession",
+        )
+        .await;
+        let mut receipt = SessionCreationReceipt {
+            node_did: session.node_did.clone(),
+            session_id: session.session_id.clone(),
+            session_doc_id: doc_id.clone(),
+            requester_did: session.requester_did.clone(),
+            agent_id: session.agent_id.clone(),
+            opening_request_doc_id: opening.to_owned(),
+            cause: SessionCreationCause::AgentNew,
+            cause_binding: "fixture-call".to_owned(),
+            starter: Some(SessionCreationStarter {
+                source,
+                parent_request_doc_id: parent.to_owned(),
+            }),
+            signature: Vec::new(),
+        };
+        receipt.signature = fixture_signer()
+            .sign(&receipt.signing_payload())
+            .await
+            .unwrap();
+        let provenance = SessionProvenance {
+            creation_receipt: Some(receipt),
+            ..session.provenance.unwrap()
+        };
+        let input = gents_protocol::graphql::graphql_input_literal(
+            &serde_json::json!({ "provenance": provenance }),
+        )
+        .unwrap();
+        let response = node
+            .execute(&format!(
+                r#"mutation {{ update_AgentSession(docID: "{}", input: {input}) {{ _docID }} }}"#,
+                escape_graphql_string(&doc_id)
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        doc_id
+    }
+
+    /// A fixture session with no provenance.
+    pub(crate) fn fixture_session(
+        did: &str,
+        session_id: &str,
+    ) -> gents_protocol::session::AgentSession {
+        gents_protocol::session::AgentSession {
+            session_id: session_id.into(),
+            node_did: did.into(),
+            requester_did: Some(did.into()),
+            agent_id: "worker".into(),
+            created_at: "2026-09-26T00:00:00Z".into(),
+            closed_at: None,
+            archived_at: None,
+            archive_revision: 0,
+            stopped_at: None,
+            title: None,
+            tags: Vec::new(),
+            provenance: None,
+            observation: None,
+        }
+    }
+
     async fn run(
         node: &gents::defra_node::EmbeddedNode,
         mutation: String,
@@ -401,11 +509,33 @@ pub(crate) mod fixtures {
                 openings.len() <= 1,
                 "plan_contradiction: {session} records two opening requests"
             );
-            let mut provenance = Vec::new();
-            if let Some(parent) = own
+            let parent = own
                 .iter()
-                .find_map(|other| other["caused_by_parent_request_doc_id"].as_str())
+                .find_map(|other| other["caused_by_parent_request_doc_id"].as_str());
+            let source = parent.and_then(|parent| {
+                rows.iter()
+                    .find(|other| other["_docID"].as_str() == Some(parent))?["session_id"]
+                    .as_str()
+            });
+            // A recorded opening is creation evidence; its receipt names the starter.
+            if let (Some(parent), Some(source), Some(opening)) = (parent, source, openings.first())
             {
+                create_started_session(
+                    node,
+                    fixture_session(did, session),
+                    gents_protocol::session::SessionReference {
+                        node_did: did.to_owned(),
+                        session_id: source.to_owned(),
+                        requester_did: Some(did.to_owned()),
+                    },
+                    &mapped(parent),
+                    &mapped(opening),
+                )
+                .await;
+                continue;
+            }
+            let mut provenance = Vec::new();
+            if let Some(parent) = parent {
                 provenance.push(format!(
                     r#"parent_request_doc_id: "{}""#,
                     escape_graphql_string(&mapped(parent))
@@ -459,18 +589,22 @@ pub(crate) mod fixtures {
             let cause = format!(
                 r#"caused_by_parent_request_id: "parent-request", caused_by_parent_request_doc_id: "{parent}", caused_by_parent_tool_call_id: "call-1", caused_by_parent_tool_call_doc_id: "call-doc","#
             );
-            run(
+            let opening = run(
                 node,
                 request(&format!("{child}-request"), child, &cause),
                 "AgentRequest",
             )
             .await;
-            run(
+            create_started_session(
                 node,
-                format!(
-                    r#"mutation {{ create_AgentSession(input: {{ session_id: "{child}", node_did: "{did}", requester_did: "{did}", agent_id: "worker", created_at: "2026-09-26T00:00:00Z", provenance: {{ parent_request_doc_id: "{parent}" }} }}) {{ _docID }} }}"#
-                ),
-                "AgentSession",
+                fixture_session(did, child),
+                gents_protocol::session::SessionReference {
+                    node_did: did.to_owned(),
+                    session_id: parent_session.to_owned(),
+                    requester_did: Some(did.to_owned()),
+                },
+                &parent,
+                &opening,
             )
             .await;
         }
@@ -485,7 +619,7 @@ mod tests {
     #[tokio::test]
     async fn generated_plugin_job_lineage_cases_drive_caused_session_readers() {
         let snapshot: Value = gents_lean_contract::load_contract_snapshot().unwrap();
-        let did = "did:test:node";
+        let did = fixtures::FIXTURE_DID;
         for case in snapshot["plugin_job_lineage_cases"].as_array().unwrap() {
             let dir = tempfile::tempdir().unwrap();
             let node = Arc::new(

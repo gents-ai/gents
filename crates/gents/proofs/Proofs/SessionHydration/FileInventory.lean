@@ -756,7 +756,8 @@ def selectImage (demand : ImageDemand) (catalog : Catalog) (page : PageEnvelope)
           if tool.accepted && tool.terminal && tool.scope == entry.scope &&
               tool.requestDocId == demand.image.requestDocId && image.scope == entry.scope &&
               image.docId == toString entry.observation &&
-              image.toolDocId == tool.docId && image.requestDocId == tool.requestDocId then
+              image.toolDocId == tool.docId && image.requestDocId == tool.requestDocId &&
+              image.contents.all (fun content => !content.docId.isEmpty && content.toolDocId == tool.docId && content.scope == entry.scope) then
             .selected image.docId
           else .rejected
       | _, _ => .rejected

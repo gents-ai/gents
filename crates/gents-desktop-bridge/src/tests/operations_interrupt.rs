@@ -155,7 +155,7 @@ async fn interrupt_request_reaches_only_the_named_request() {
         &core,
         &DesktopInterruptRequest {
             request_id: "req_parent".into(),
-            node_did: Some("did:test:operator".into()),
+            node_did: Some(crate::tests::support::OPERATOR.into()),
             cause: "userCancelled".into(),
         },
     )
@@ -185,7 +185,7 @@ async fn interrupt_request_stops_a_caused_request_on_its_own_node() {
         &core,
         &DesktopInterruptRequest {
             request_id: "req_peer".into(),
-            node_did: Some("did:test:other".into()),
+            node_did: Some(crate::tests::support::OTHER.into()),
             cause: "userCancelled".into(),
         },
     )

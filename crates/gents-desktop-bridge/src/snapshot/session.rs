@@ -32,6 +32,8 @@ mod command_denial;
 mod context_projection;
 #[path = "session/goal_provenance.rs"]
 pub(super) mod goal_provenance;
+#[path = "session/inference_activity.rs"]
+pub(crate) mod inference_activity;
 #[path = "session/live_delta.rs"]
 mod live_delta;
 #[path = "session/pending_turn.rs"]
@@ -308,6 +310,8 @@ pub async fn build_session_snapshot_for_node_with_transcript(
                                 request_doc_id: entry.request_doc_id,
                                 request_id: entry.request_id.clone(),
                                 content: entry.content,
+                                selected_skill_ids: (!entry.selected_skill_ids.is_empty())
+                                    .then_some(entry.selected_skill_ids),
                                 captured_context: (!entry.captured_context.is_empty())
                                     .then_some(entry.captured_context),
                                 attachments: (!entry.attachments.is_empty())
@@ -739,6 +743,7 @@ fn build_hydration_only_session_snapshot(
         status: None,
         goal: None,
         turn_state: None,
+        inference_activity: None,
         latest_request_id: None,
         retry_eligibility: project_retry_eligibility(None),
         latest_request_outcome: None,

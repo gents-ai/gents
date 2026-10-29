@@ -5,6 +5,8 @@ use crate::truncation::floor_char_boundary;
 
 const FAILURE_LIMIT: u32 = 3;
 const SUPPRESSION_LIMIT: u32 = 2;
+/// Bounds the error included in the notice and stop reason; the full error
+/// identity still determines whether dispatched calls failed identically.
 const ERROR_EXCERPT_BYTES: usize = 512;
 
 pub const REPEATED_TOOL_FAILURE_PREFIX: &str = "repeated_tool_failure: ";

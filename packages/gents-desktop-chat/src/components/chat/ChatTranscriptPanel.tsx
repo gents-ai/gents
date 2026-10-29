@@ -161,7 +161,6 @@ export function ChatTranscriptPanel({
     return -1;
   }, [timelineItems]);
   const pinUser =
-    autoFollowTranscript &&
     !isTerminalTurnState(session?.turnState) &&
     latestUserIndex >= 0;
   const stickyUserItemKey = pinUser
@@ -337,12 +336,18 @@ export function ChatTranscriptPanel({
     const generation = pageGeneration.current;
     prependScrollHeightRef.current = panel.scrollHeight;
     setAutoFollowTranscript(false);
-    setTranscriptWindow({
+    setTranscriptWindow((current) => ({
       sessionId: selectedSessionId,
       timelineLength: timelineItems.length,
       visibleCount:
-        visibleCount + (hasLocalOlderItems ? TRANSCRIPT_PAGE_SIZE : 0),
-    });
+        Math.max(
+          current.sessionId === selectedSessionId
+            ? current.visibleCount +
+                Math.max(0, timelineItems.length - current.timelineLength)
+            : TRANSCRIPT_PAGE_SIZE,
+          timelineItems.length - firstVisibleIndex,
+        ) + (hasLocalOlderItems ? TRANSCRIPT_PAGE_SIZE : 0),
+    }));
     if (!hasLocalOlderItems && onLoadOlder) {
       pageFlight.current = true;
       setLoadingOlder(true);
@@ -399,7 +404,10 @@ export function ChatTranscriptPanel({
           : TRANSCRIPT_PAGE_SIZE;
       const nextVisibleCount = atTip
         ? Math.min(currentVisibleCount, TRANSCRIPT_RETAINED_ITEMS)
-        : currentVisibleCount;
+        : Math.max(
+            currentVisibleCount,
+            timelineItems.length - firstVisibleIndex,
+          );
       if (
         current.sessionId === selectedSessionId &&
         current.timelineLength === timelineItems.length &&

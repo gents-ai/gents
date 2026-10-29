@@ -57,6 +57,8 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
                             "agent_id": agent_id,
                             "reason": reason,
                             "message": reason.public_message(),
+                            "next_step": (*reason == gents_protocol::node_readiness::AgentReadinessUnavailableReason::ToolSurfaceUnavailable)
+                                .then_some("Check installed plugins and Tools configuration on the node."),
                         })
                     })
                     .collect::<Vec<_>>();

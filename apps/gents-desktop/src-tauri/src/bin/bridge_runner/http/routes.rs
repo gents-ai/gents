@@ -951,6 +951,7 @@ async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolC
             AgentToolCall(
                 filter: { await_mode: { _eq: "background" } }
             ) {
+                _docID
                 request_id
                 tool_call_id
                 tool_name
@@ -983,6 +984,10 @@ async fn fetch_background_tool_calls(core: &Arc<ClientCore>) -> Result<Vec<ToolC
     Ok(rows
         .into_iter()
         .map(|row| ToolCallRow {
+            tool_call_doc_id: row
+                .get("_docID")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned),
             request_id: row
                 .get("request_id")
                 .and_then(|value| value.as_str())

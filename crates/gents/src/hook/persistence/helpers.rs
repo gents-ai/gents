@@ -66,6 +66,8 @@ pub(crate) enum BackgroundSlot {
     Occupied,
     /// The caller checked the ceiling against its own count in this transaction.
     Admitted,
+    /// Transfer an already-running process to recovery without creating an execution.
+    Recovery,
 }
 
 /// Admits one background slot on `request_doc_id` in `txn`, refusing with
@@ -83,7 +85,7 @@ pub(crate) async fn reserve_background_slot_in_txn(
     request_fields: &str,
 ) -> anyhow::Result<serde_json::Value> {
     txn.contend_with_request_siblings();
-    if slot != BackgroundSlot::Admitted {
+    if !matches!(slot, BackgroundSlot::Admitted | BackgroundSlot::Recovery) {
         let live = count_live_backgrounded_rows_in(txn, request_doc_id).await?;
         let admitted = if slot == BackgroundSlot::Occupied {
             live.saturating_sub(1)

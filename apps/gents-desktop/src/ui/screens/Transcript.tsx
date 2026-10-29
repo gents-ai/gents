@@ -1,3 +1,4 @@
+import { inferenceActivityStatus } from "@source-inc/gents-desktop-chat";
 import { SentAttachments } from "./session/attachments";
 import {
   Fragment,
@@ -523,7 +524,13 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   );
 
   const latest = session?.latestRequestOutcome;
-  const status = inFlight && rows.joined ? activityStatus(rows.items, stopping) : null;
+  const observed = inferenceActivityStatus(session?.inferenceActivity);
+  const status =
+    inFlight && rows.joined
+      ? stopping
+        ? "Stopping…"
+        : (observed?.label ?? activityStatus(rows.items, false))
+      : null;
   const wasInterrupted = session?.turnState === "interrupted";
   const responseError =
     latest?.failureReason?.trim() ||

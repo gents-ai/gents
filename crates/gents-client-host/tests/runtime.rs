@@ -86,6 +86,8 @@ use support::Attachment;
 enum Journey {
     Conversation,
     PassiveSettings,
+    #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
+    InstalledPassiveSettings,
     RuntimeReplacement,
     #[cfg_attr(not(feature = "editor-e2e"), allow(dead_code))]
     Editor,
@@ -691,6 +693,25 @@ async fn enrolled_model_settings_refresh_without_the_runtime_key_file() -> Resul
     exercise(root.path(), Journey::PassiveSettings).await
 }
 
+#[cfg(all(target_os = "macos", feature = "editor-e2e"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn installed_editor_refreshes_models_and_reconnects_without_the_runtime_key_file(
+) -> Result<()> {
+    let root = tempfile::tempdir()?;
+    match exercise(root.path(), Journey::InstalledPassiveSettings).await {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let retained = root.keep();
+            Err(error).with_context(|| {
+                format!(
+                    "disposable settings fixture retained at {}",
+                    retained.display()
+                )
+            })
+        }
+    }
+}
+
 async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     let history = matches!(journey, Journey::EditorHistory)
         .then(editor_history::Options::from_env)
@@ -1001,7 +1022,12 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     };
     let mut host_command = Command::new(&host_binary);
     host_command.args(["--serve", "--home"]).arg(paths.root());
-    if journey.editor_scenario().is_some() || matches!(journey, Journey::PassiveSettings) {
+    if journey.editor_scenario().is_some()
+        || matches!(
+            journey,
+            Journey::PassiveSettings | Journey::InstalledPassiveSettings
+        )
+    {
         host_command.arg("--editor-store");
     }
     #[cfg(unix)]
@@ -1072,7 +1098,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
     }
     let mut id = 2;
     let deployment = wait_chat_deployment(&mut client, &mut id, node_did, &access).await?;
-    if matches!(journey, Journey::PassiveSettings) {
+    if matches!(
+        journey,
+        Journey::PassiveSettings | Journey::InstalledPassiveSettings
+    ) {
         client = passive_settings::exercise(
             client,
             &mut id,
@@ -1080,6 +1109,7 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &host_binary,
             Path::new(init["key_path"].as_str().context("runtime key path")?),
             node_did,
+            matches!(journey, Journey::InstalledPassiveSettings),
         )
         .await?;
         client.close().await;

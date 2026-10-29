@@ -2,4 +2,4 @@
 import type { AttachmentView } from "./AttachmentView.js";
 import type { CapturedContext } from "./CapturedContext.js";
 
-export type PendingQueueEntryView = { requestDocId: string, requestId: string, content: string, capturedContext?: Array<CapturedContext> | null, attachments?: Array<AttachmentView> | null, editable: boolean, steerable: boolean, editGroup: string | null, };
+export type PendingQueueEntryView = { requestDocId: string, requestId: string, content: string, selectedSkillIds?: Array<string> | null, capturedContext?: Array<CapturedContext> | null, attachments?: Array<AttachmentView> | null, editable: boolean, steerable: boolean, editGroup: string | null, };

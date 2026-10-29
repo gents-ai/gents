@@ -10,6 +10,9 @@ use super::FailureClass;
 use crate::live_output::LiveToolOutputWriter;
 use crate::tool_policy::CommandPolicyDenial;
 
+/// Allows an owned native process to finish its bounded termination and reap before its future is dropped.
+pub(crate) const NATIVE_PROCESS_CLEANUP_GRACE: Duration = Duration::from_secs(4);
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolOutcome {
     Completed(String),
@@ -508,15 +511,31 @@ pub(crate) async fn record_dispatch_receipt(
 /// branch also rechecks the wall clock because an inner managed boundary can
 /// wake at the same deadline before Tokio observes the sibling sleep as ready.
 pub async fn call_tool_managed(tool: &dyn ToolDyn, args: String) -> ToolOutcome {
+    call_tool_managed_with_cleanup(tool, args, |_| false).await
+}
+
+/// A caller that owns native process cleanup can allow an already spawned
+/// process to observe cancellation and publish its stop evidence before the
+/// tool future is dropped. A pre-spawn wait is still cancelled immediately.
+pub async fn call_tool_managed_with_cleanup<F>(
+    tool: &dyn ToolDyn,
+    args: String,
+    spawned: F,
+) -> ToolOutcome
+where
+    F: Fn(Option<&ToolOutcome>) -> bool,
+{
     let name = tool.name();
     let Ok(scope) = TOOL_RUNTIME_SCOPE.try_with(Clone::clone) else {
         return ToolOutcome::from_dispatch(&name, dispatch_with_receipt(tool, args, None).await);
     };
 
     if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
-        return ToolOutcome::TimedOut {
+        let outcome = ToolOutcome::TimedOut {
             deadline_at: scope.deadline_at,
         };
+        spawned(Some(&outcome));
+        return outcome;
     }
 
     let deadline_at = scope.deadline_at;
@@ -527,17 +546,44 @@ pub async fn call_tool_managed(tool: &dyn ToolDyn, args: String) -> ToolOutcome 
         }
     });
 
+    let mut dispatched = Box::pin(tool.call_with_receipt(args));
     tokio::select! {
         biased;
-        _ = scope.cancellation_token.cancelled() => ToolOutcome::Cancelled,
-        _ = &mut deadline => ToolOutcome::TimedOut { deadline_at: scope.deadline_at },
-        dispatched = tool.call_with_receipt(args) => {
-            let result = record_dispatch_receipt(dispatched, scope.live_output.clone()).await;
-            if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
+        _ = scope.cancellation_token.cancelled() => {
+            let decided = if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
                 ToolOutcome::TimedOut { deadline_at: scope.deadline_at }
-            } else {
-                ToolOutcome::from_dispatch(&name, result)
+            } else { ToolOutcome::Cancelled };
+            if spawned(Some(&decided)) {
+                if let Ok(cleaned) = tokio::time::timeout(NATIVE_PROCESS_CLEANUP_GRACE, &mut dispatched).await {
+                    if let Err(error) = cleaned.result { spawned(Some(&ToolOutcome::from_dispatch(&name, Err(error)))); }
+                }
             }
+            ToolOutcome::Cancelled
+        },
+        _ = &mut deadline => {
+            if spawned(Some(&ToolOutcome::TimedOut { deadline_at: scope.deadline_at })) {
+                if let Ok(cleaned) = tokio::time::timeout(NATIVE_PROCESS_CLEANUP_GRACE, &mut dispatched).await {
+                    if let Err(error) = cleaned.result { spawned(Some(&ToolOutcome::from_dispatch(&name, Err(error)))); }
+                }
+            }
+            ToolOutcome::TimedOut { deadline_at: scope.deadline_at }
+        },
+        mut dispatched = &mut dispatched => {
+            let original = std::mem::replace(&mut dispatched.result, Ok(String::new()));
+            let (successful, early_failure) = match original {
+                Ok(value) => (Some(value), None),
+                Err(error) => (None, Some(ToolOutcome::from_dispatch(&name, Err(error)))),
+            };
+            if let Some(failure) = &early_failure { spawned(Some(failure)); }
+            let receipt = record_dispatch_receipt(dispatched, scope.live_output.clone()).await;
+            let outcome = if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
+                ToolOutcome::TimedOut { deadline_at: scope.deadline_at }
+            } else if let Err(error) = receipt {
+                ToolOutcome::from_dispatch(&name, Err(error))
+            } else if let Some(failure) = early_failure { failure }
+            else { ToolOutcome::Completed(successful.expect("dispatch result")) };
+            spawned(Some(&outcome));
+            outcome
         },
     }
 }

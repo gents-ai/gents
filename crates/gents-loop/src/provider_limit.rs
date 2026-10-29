@@ -3,12 +3,15 @@ use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
 
+/// Treat long provider waits as usage exhaustion so transport retries do not
+/// hold the request until a distant reset; the reset time remains observable.
 pub const LONG_RATE_LIMIT_WAIT: Duration = Duration::from_secs(5 * 60);
 
 const MARKER_OPEN: &str = " [provider-limit";
 const MARKER_TOKEN: &str = "[provider-limit";
 const NEUTRALIZED_TOKEN: &str = "[provider limit";
 const USAGE_LIMIT_PREFIX: &str = "provider usage limit reached";
+/// Bounds provider-controlled detail included in a usage-limit message.
 const DETAIL_MAX_CHARS: usize = 300;
 
 const USAGE_NEEDLES: &[&str] = &[

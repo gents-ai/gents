@@ -230,6 +230,7 @@ impl StructuredOutputConfig {
 }
 
 fn bounded_structured_output_preview(raw: &str) -> String {
+    /// Prevents an invalid provider response from inflating validation errors.
     const MAX_PREVIEW_BYTES: usize = 192;
     let mut cut = raw.len().min(MAX_PREVIEW_BYTES);
     while !raw.is_char_boundary(cut) {

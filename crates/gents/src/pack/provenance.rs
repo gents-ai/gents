@@ -50,7 +50,16 @@ pub(super) async fn apply_pack_documents(
             let guard = &guard;
             Box::pin(async move {
                 crate::config_client::apply_desired_state_plan(txn, guard).await?;
-                super::installation::install_in_txn(txn, owner, pack, documents, policy).await
+                let report =
+                    super::installation::install_in_txn(txn, owner, pack, documents, policy)
+                        .await?;
+                super::installation::validate_plugin_replacements_in_txn(
+                    txn,
+                    owner,
+                    std::slice::from_ref(pack),
+                )
+                .await?;
+                Ok(report)
             })
         })
         .await

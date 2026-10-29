@@ -222,7 +222,7 @@ pub async fn build_session_live_delta(
             }
         }
     }
-    let delta = build_session_live_delta_from_store(
+    let mut delta = build_session_live_delta_from_store(
         &observed,
         &live_store,
         revision,
@@ -235,6 +235,51 @@ pub async fn build_session_live_delta(
         base_reasoning_byte_len,
         base_reasoning_hash,
     );
+    if delta.outcome != "snapshotRequired" {
+        if let Some(node) = node_did {
+            let matching = observed
+                .requests
+                .iter()
+                .filter(|request| {
+                    request.request_id == request_id
+                        && request.node_did.as_deref() == Some(node)
+                        && request.session_id.as_deref() == Some(session_id)
+                })
+                .collect::<Vec<_>>();
+            if let [request] = matching.as_slice() {
+                let generation = super::inference_activity::active_generation(
+                    request, node, session_id, request_id,
+                );
+                if let Some(generation) = generation {
+                    delta.inference_activity = super::inference_activity::read_activity(
+                        core, request, node, session_id, request_id,
+                    )
+                    .await;
+                    let latest = core.store().snapshot();
+                    let current = latest
+                        .requests
+                        .iter()
+                        .filter(|row| {
+                            row.request_id == request_id
+                                && row.node_did.as_deref() == Some(node)
+                                && row.session_id.as_deref() == Some(session_id)
+                        })
+                        .collect::<Vec<_>>();
+                    if !matches!(current.as_slice(), [row] if row.doc_id == request.doc_id && row.requester_did == request.requester_did && super::inference_activity::active_generation(row, node, session_id, request_id) == Some(generation))
+                    {
+                        delta.outcome = "snapshotRequired".into();
+                        delta.inference_activity = None;
+                    }
+                } else {
+                    delta.outcome = "snapshotRequired".into();
+                }
+            } else {
+                delta.outcome = "snapshotRequired".into();
+            }
+        } else {
+            delta.outcome = "snapshotRequired".into();
+        }
+    }
     tracing::debug!(
         target: "gents_desktop::chat", session_id, request_id,
         outcome = %delta.outcome,
@@ -275,6 +320,7 @@ pub(crate) fn build_session_live_delta_from_store(
         revision,
         request_id: request_id.into(),
         turn_state: turn_state.map(turn_state_label).map(str::to_owned),
+        inference_activity: None,
         status: None,
         content: None,
         reasoning: None,

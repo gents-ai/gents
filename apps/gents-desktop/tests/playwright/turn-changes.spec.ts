@@ -176,3 +176,72 @@ test("a file shows all its lines from its menu, and hides the unchanged ones aga
   await expect(tail).toHaveCount(0);
   await expect(section.getByText("split_whitespace", { exact: false })).toBeVisible();
 });
+
+test("a file marked viewed folds away with a check, stays folded, and opens again when not viewed", async ({
+  page,
+}) => {
+  await gotoHarness(page, "coding");
+  await page
+    .getByTestId("sessions-screen")
+    .getByRole("link", { name: /introduction-and-greetings/ })
+    .click();
+  const card = page.getByTestId("turn-changes");
+  await card.getByRole("button", { name: /lexer\.rs/ }).click();
+  const section = page.locator("section[data-path='src/lexer.rs']");
+  const header = section.locator("button[aria-expanded]").first();
+  const menu = section.getByRole("button", { name: "lexer.rs actions" });
+  await expect(header).toHaveAttribute("aria-expanded", "true");
+
+  await menu.click();
+  await page.getByRole("menuitem", { name: "Mark as viewed" }).click();
+  await expect(header).toHaveAttribute("aria-expanded", "false");
+  await expect(section.getByRole("img", { name: "Viewed" })).toBeVisible();
+
+  /* a later visit opens the turn's changes with it still folded */
+  await page.reload();
+  await page
+    .getByTestId("sessions-screen")
+    .getByRole("link", { name: /introduction-and-greetings/ })
+    .click();
+  await card.getByRole("button", { name: /parser\.rs/ }).click();
+  await expect(header).toHaveAttribute("aria-expanded", "false");
+  await expect(section.getByRole("img", { name: "Viewed" })).toBeVisible();
+
+  await menu.click();
+  await page.getByRole("menuitem", { name: "Mark as not viewed" }).click();
+  await expect(header).toHaveAttribute("aria-expanded", "true");
+  await expect(section.getByRole("img", { name: "Viewed" })).toHaveCount(0);
+});
+
+test("a right-click on a file's header or its row in the list gives the file's menu", async ({
+  page,
+}) => {
+  await gotoHarness(page, "coding");
+  await page
+    .getByTestId("sessions-screen")
+    .getByRole("link", { name: /introduction-and-greetings/ })
+    .click();
+  await page
+    .getByTestId("turn-changes")
+    .getByRole("button", { name: /lexer\.rs/ })
+    .click();
+  const lexer = page.locator("section[data-path='src/lexer.rs']");
+  await lexer.locator("button[aria-expanded]").first().click({ button: "right" });
+  await expect(page.getByRole("menuitem", { name: "Copy diff" })).toBeVisible();
+  await page.getByRole("menuitem", { name: "Mark as viewed" }).click();
+  await expect(lexer.locator("button[aria-expanded]").first()).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+
+  const list = page.getByRole("navigation", { name: "Files changed in this turn" });
+  test.skip(!(await list.isVisible()), "the panel is too narrow for its file list");
+  await list.getByRole("button", { name: /parser\.rs/ }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Mark as viewed" }).click();
+  const parser = page.locator("section[data-path='src/parser.rs']");
+  await expect(parser.locator("button[aria-expanded]").first()).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  await expect(list.getByRole("img", { name: "Viewed" })).toHaveCount(2);
+});

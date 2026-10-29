@@ -33,6 +33,8 @@ export type Tone = "running" | "stuck" | "overdue" | "done" | "failed" | "stoppe
 
 const keyOf = (requestId: string, toolCallId: string) =>
   `${requestId}\u0000${toolCallId}`;
+const physicalKey = (requestId: string, toolCallId: string, physical: string) =>
+  `${keyOf(requestId, toolCallId)}\u0000${physical}`;
 
 /* the runtime names the call that spawn_process starts after the spawning
    call's document: `spawned:<doc id>` */
@@ -75,7 +77,11 @@ export function backgroundCalls(
   views: readonly BackgroundedToolView[],
   requestIds: ReadonlySet<string>,
 ): BackgroundCall[] {
-  const viewOf = new Map(views.map((v) => [keyOf(v.requestId, v.toolCallId), v]));
+  const viewOf = new Map(
+    views
+      .filter((v) => v.toolCallDocId)
+      .map((v) => [physicalKey(v.requestId, v.toolCallId, v.toolCallDocId!), v]),
+  );
   const backgrounded = tools.filter(
     (t): t is RenderedToolCallView & { requestId: string; toolCallId: string } =>
       t.awaitMode === "background" &&
@@ -93,8 +99,12 @@ export function backgroundCalls(
   const calls = new Map<string, BackgroundCall>();
   for (const tool of backgrounded) {
     if (spawns.has(tool)) continue;
-    const key = keyOf(tool.requestId, tool.toolCallId);
-    const view = viewOf.get(key) ?? null;
+    const key = physicalKey(
+      tool.requestId,
+      tool.toolCallId,
+      tool.toolCallDocId ?? tool.itemKey,
+    );
+    const view = tool.toolCallDocId ? (viewOf.get(key) ?? null) : null;
     if (view?.startsSession) continue;
     calls.set(key, {
       key,
@@ -112,8 +122,23 @@ export function backgroundCalls(
       t.requestId && t.toolCallId ? keyOf(t.requestId, t.toolCallId) : "",
     ),
   );
-  for (const [key, view] of viewOf) {
-    if (loaded.has(key) || view.startsSession || !requestIds.has(view.requestId))
+  const loadedPhysical = new Set(
+    tools.flatMap((t) =>
+      t.requestId && t.toolCallId && t.toolCallDocId
+        ? [physicalKey(t.requestId, t.toolCallId, t.toolCallDocId)]
+        : [],
+    ),
+  );
+  for (const view of views) {
+    const logical = keyOf(view.requestId, view.toolCallId);
+    const key = view.toolCallDocId
+      ? physicalKey(view.requestId, view.toolCallId, view.toolCallDocId)
+      : logical;
+    if (
+      (view.toolCallDocId ? loadedPhysical.has(key) : loaded.has(logical)) ||
+      view.startsSession ||
+      !requestIds.has(view.requestId)
+    )
       continue;
     calls.set(key, {
       key,
@@ -360,8 +385,12 @@ export function openBackgroundLog(
   sessionId: string,
   requestId: string,
   toolCallId: string,
+  physical: string,
 ) {
-  asked.setState({ sessionId, key: keyOf(requestId, toolCallId) }, true);
+  asked.setState(
+    { sessionId, key: physicalKey(requestId, toolCallId, physical) },
+    true,
+  );
   workspace.openSurface(dockScopeOf("session", sessionId), "background");
 }
 

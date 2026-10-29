@@ -451,3 +451,131 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
         node.shutdown().await;
     }
 }
+
+#[derive(Clone)]
+struct OneshotBashProvider(Arc<AtomicUsize>);
+
+#[allow(refining_impl_trait)]
+impl CompletionModel for OneshotBashProvider {
+    type Response = ();
+    type StreamingResponse = ();
+    type Client = ();
+
+    fn make(_: &(), _: impl Into<String>) -> Self {
+        Self(Arc::new(AtomicUsize::new(0)))
+    }
+
+    async fn completion(
+        &self,
+        _: CompletionRequest,
+    ) -> Result<CompletionResponse<()>, CompletionError> {
+        Err(CompletionError::ProviderError("streaming only".into()))
+    }
+
+    async fn stream(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
+        let body = capture_scripted_request(request).await?;
+        let chunks = match self.0.fetch_add(1, Ordering::SeqCst) {
+            0 => vec![
+                RawStreamingChoice::ToolCall(rig::streaming::RawStreamingToolCall::new(
+                    "oneshot-bash".into(),
+                    "bash".into(),
+                    serde_json::json!({"command":"ls", "args":["."]}),
+                )),
+                RawStreamingChoice::FinalResponse(()),
+            ],
+            1 => {
+                assert!(
+                    body.to_string().contains("oneshot-visible.txt"),
+                    "one-shot provider must receive real bash output: {body}"
+                );
+                vec![
+                    RawStreamingChoice::Message("done".into()),
+                    RawStreamingChoice::FinalResponse(()),
+                ]
+            }
+            other => panic!("unexpected one-shot turn {other}"),
+        };
+        let stream: rig::streaming::StreamingResult<()> =
+            Box::pin(futures::stream::iter(chunks.into_iter().map(Ok)));
+        Ok(StreamingCompletionResponse::stream(stream))
+    }
+}
+
+#[tokio::test]
+async fn oneshot_bash_uses_owned_request_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let identity =
+        crate::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(crate::identity::NodeIdentity::did(&identity))
+            .data_path(dir.path().join("db"))
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let mut agent =
+        crate::agent::PendingAgent::new("oneshot-bash").build_with_identity_for_test(identity);
+    crate::test_support::install_test_agent(&node, agent.node_did(), &agent.agent_id).await;
+    agent.model_name = "scripted".into();
+    agent.stream_liveness_timeout = Duration::from_secs(60);
+    agent.deadline_duration = Duration::from_secs(120);
+    let root = tempfile::tempdir().unwrap();
+    tokio::fs::write(root.path().join("oneshot-visible.txt"), "visible")
+        .await
+        .unwrap();
+    let tools = Arc::new(
+        crate::toolset::ToolSet::builder()
+            .read_root(root.path())
+            .bash_read_only()
+            .build()
+            .build_native_tools()
+            .unwrap(),
+    );
+    let prompt = LayeredPromptBuilder::for_agent(
+        &agent.system_prompt,
+        &agent.agent_id,
+        &["bash"],
+        false,
+        &[],
+    );
+    let mut config = loop_config(
+        &agent,
+        prompt.preamble().to_owned(),
+        tools.len(),
+        crate::rendered_request::CaptureScopeKind::OneShot,
+    );
+    config.max_turns = 4;
+    let runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), agent.node_did());
+    let calls = Arc::new(AtomicUsize::new(0));
+    let result = run_oneshot_owned(
+        node.clone(),
+        &agent,
+        None,
+        &prompt,
+        OneshotBashProvider(calls.clone()),
+        "inspect the directory",
+        tools,
+        config,
+        &[],
+        BackgroundToolRegistry::default(),
+        runtime.lsp_pool.clone(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.response_text, "done");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    let rows = node
+        .execute("{ AgentToolCall(filter: { tool_name: { _eq: \"bash\" } }) { lifecycle_state } }")
+        .await;
+    assert!(!rows.has_errors(), "{:?}", rows.errors);
+    assert_eq!(
+        rows.data.unwrap()["AgentToolCall"][0]["lifecycle_state"],
+        "completed"
+    );
+    node.shutdown().await;
+}

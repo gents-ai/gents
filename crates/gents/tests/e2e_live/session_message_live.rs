@@ -688,8 +688,8 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
         managed_caused.session_id.as_str()
     );
     assert_eq!(
-        message_receipt["delivery"], "steering",
-        "a message to a busy started session must be delivered as steering"
+        message_receipt["delivery"], "queue",
+        "a message to a busy started session must be queued behind its active turn"
     );
     assert!(
         !is_terminal(

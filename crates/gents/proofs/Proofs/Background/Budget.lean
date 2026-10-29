@@ -2,8 +2,9 @@ import Proofs.Basic
 
 namespace Background
 
-/-- Admitted background rows one physical parent request may own; this limit
-is runtime-local under the one-active-runtime-per-node convention. -/
+/-- Bound the live background calls one physical parent request can retain so
+one request cannot monopolize node resources. This runtime-local budget relies
+on the one-active-runtime-per-node convention. -/
 def maxBackgroundedPerParent : Nat := 8
 
 /-- The native owner counts running background rows and reserved spawn children,
@@ -11,6 +12,16 @@ excluding accepted calls that have not reserved capacity. It serializes that
 count with the reservation or transition to running in one transaction. -/
 def admitBackground (liveCount : Nat) : Option Nat :=
   if liveCount < maxBackgroundedPerParent then some (liveCount + 1) else none
+
+/-- Recovery transfers an already-running physical invocation into the background
+owner. It creates no execution; the transferred row continues to count when
+subsequent admissions enforce the ordinary ceiling. -/
+def recoverRunningBackground (liveCount : Nat) : Nat := liveCount + 1
+
+theorem recovery_at_capacity_remains_counted :
+    recoverRunningBackground maxBackgroundedPerParent = maxBackgroundedPerParent + 1 ∧
+    admitBackground (recoverRunningBackground maxBackgroundedPerParent) = none := by
+  decide
 
 /-- Pending accepted calls do not occupy capacity. A child reservation or a
 running call does; terminal rows release their slot and remain in history. -/

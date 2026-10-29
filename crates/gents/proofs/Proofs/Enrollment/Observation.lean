@@ -1,4 +1,5 @@
 import Proofs.Enrollment.DurableProjection
+import Proofs.Background.ProcessControl
 
 namespace Enrollment
 
@@ -13,6 +14,16 @@ def clientObservationAdmitted (actor : Option Did) (servingNode : Did)
       member ≠ "" ∧ servingNode ≠ "" ∧ authority.candidateDid = member ∧
       authority.ownerNode = servingNode ∧ authority.profile = "client")
   | _, _ => false
+
+/-- Runtime activity is available to the authenticated node operator or to a
+currently enrolled client. Document visibility is checked separately in the
+same database transaction as the exact request selection. -/
+def runtimeObservationAdmitted (actor : Option Did) (servingNode : Did)
+    (current : Option RequestAuthority) : Bool :=
+  (servingNode != "" && Background.ProcessControl.operatorAtNode
+    servingNode servingNode servingNode actor) ||
+  clientObservationAdmitted actor servingNode current
+
 
 theorem unauthenticated_observation_denied (node : Did)
     (current : Option RequestAuthority) :

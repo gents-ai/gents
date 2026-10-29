@@ -8,6 +8,10 @@ pub(super) struct InvalidToolProgress {
 }
 
 impl InvalidToolProgress {
+    pub(super) fn remaining(&self) -> usize {
+        usize::from(INVALID_TOOL_CALL_LIMIT - self.invalid_used)
+    }
+
     pub(super) fn record(&mut self, outcome: &ToolOutcome) {
         if !self.exhausted() && Self::charges(outcome) {
             self.invalid_used += 1;

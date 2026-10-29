@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
+import { enrollmentActivationMessage } from "@source-inc/gents-desktop-client";
 import type {
   BootstrapSummary,
   DeploymentView,
@@ -108,13 +109,20 @@ export function FleetDashboard({
             <div>
               <p className="eyebrow">Enrollment requested</p>
               <strong>
-                {request.state === "approved"
-                  ? "Approval received · finishing secure route"
-                  : "Waiting for pairing request acceptance"}
+                {enrollmentActivationMessage(request)
+                  ? "Access approved · connection retrying"
+                  : request.state === "approved"
+                    ? "Approval received · finishing secure route"
+                    : "Waiting for pairing request acceptance"}
               </strong>
+              {enrollmentActivationMessage(request) && (
+                <p role="alert">{enrollmentActivationMessage(request)}</p>
+              )}
               <p className="muted">
-                Request <span className="mono">{request.requestId}</span> ·
-                expires {request.expiresAt}
+                Request <span className="mono">{request.requestId}</span>
+                {request.state !== "approved" && (
+                  <> · expires {request.expiresAt}</>
+                )}
               </p>
             </div>
           </section>

@@ -182,7 +182,7 @@ pub async fn dispatch_tool(
     live_output: Option<crate::live_output::LiveToolOutputWriter>,
     session_id: Option<String>,
 ) -> ToolOutcome {
-    dispatch_provider_tool(tools, name, args, live_output, session_id, false).await
+    dispatch_provider_tool(tools, name, args, live_output, session_id, false, None).await
 }
 
 pub(super) async fn dispatch_provider_tool(
@@ -192,6 +192,7 @@ pub(super) async fn dispatch_provider_tool(
     live_output: Option<crate::live_output::LiveToolOutputWriter>,
     session_id: Option<String>,
     token_limit: bool,
+    cleanup: Option<crate::session_hook::NativeCleanupCheck>,
 ) -> ToolOutcome {
     let Some(tool) = tools.iter().find(|tool| tool.name() == name) else {
         return ToolOutcome::from_dispatch(
@@ -222,9 +223,13 @@ pub(super) async fn dispatch_provider_tool(
     };
 
     if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
-        return ToolOutcome::TimedOut {
+        let decided = ToolOutcome::TimedOut {
             deadline_at: scope.deadline_at,
         };
+        if let Some(check) = &cleanup {
+            check(Some(&decided));
+        }
+        return decided;
     }
 
     let deadline_at = scope.deadline_at;
@@ -236,26 +241,142 @@ pub(super) async fn dispatch_provider_tool(
     });
 
     let receipt_writer = live_output.clone();
-    let call = scope_request_tool_execution_with_session(
+    let mut call = Box::pin(scope_request_tool_execution_with_session(
         scope.deadline_at,
         scope.cancellation_token.clone(),
         scope.workspace_cwd.clone(),
         live_output,
         session_id.or(scope.session_id.clone()),
         tool.call_with_receipt(args),
-    );
+    ));
     tokio::select! {
         biased;
-        _ = scope.cancellation_token.cancelled() => ToolOutcome::Cancelled,
-        _ = &mut deadline => ToolOutcome::TimedOut { deadline_at: scope.deadline_at },
-        dispatched = call => {
-            let result = crate::tool_call_lifecycle::runtime::record_dispatch_receipt(dispatched, receipt_writer).await;
-            if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
+        _ = scope.cancellation_token.cancelled() => {
+            let decided = if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
                 ToolOutcome::TimedOut { deadline_at: scope.deadline_at }
-            } else {
-                outcome(result)
+            } else { ToolOutcome::Cancelled };
+            if cleanup.as_ref().is_some_and(|check| check(Some(&decided))) {
+                if let Ok(cleaned) = tokio::time::timeout(crate::tool_call_lifecycle::runtime::NATIVE_PROCESS_CLEANUP_GRACE, &mut call).await {
+                    if let (Some(check), Err(error)) = (&cleanup, cleaned.result) { check(Some(&outcome(Err(error)))); }
+                }
             }
+            ToolOutcome::Cancelled
         },
+        _ = &mut deadline => {
+            if cleanup.as_ref().is_some_and(|check| check(Some(&ToolOutcome::TimedOut { deadline_at: scope.deadline_at }))) {
+                if let Ok(cleaned) = tokio::time::timeout(crate::tool_call_lifecycle::runtime::NATIVE_PROCESS_CLEANUP_GRACE, &mut call).await {
+                    if let (Some(check), Err(error)) = (&cleanup, cleaned.result) { check(Some(&outcome(Err(error)))); }
+                }
+            }
+            ToolOutcome::TimedOut { deadline_at: scope.deadline_at }
+        },
+        mut dispatched = &mut call => {
+            let original = std::mem::replace(&mut dispatched.result, Ok(String::new()));
+            let (successful, early_failure) = match original {
+                Ok(value) => (Some(value), None),
+                Err(error) => (None, Some(outcome(Err(error)))),
+            };
+            if let (Some(check), Some(failure)) = (&cleanup, &early_failure) { check(Some(failure)); }
+            let receipt = crate::tool_call_lifecycle::runtime::record_dispatch_receipt(dispatched, receipt_writer).await;
+            let decided = if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
+                ToolOutcome::TimedOut { deadline_at: scope.deadline_at }
+            } else if let Err(error) = receipt { outcome(Err(error)) }
+            else if let Some(failure) = early_failure { failure }
+            else { ToolOutcome::Completed(successful.expect("dispatch result")) };
+            if let Some(check) = &cleanup { check(Some(&decided)); }
+            decided
+        },
+    }
+}
+
+pub(super) struct ForegroundExecution<H> {
+    pub(super) tools: Arc<Vec<Box<dyn ToolDyn>>>,
+    pub(super) name: String,
+    pub(super) args: String,
+    pub(super) live_output: Option<crate::live_output::LiveToolOutputWriter>,
+    pub(super) session_id: Option<String>,
+    pub(super) effects: Option<Arc<EffectDispatcher<H>>>,
+    pub(super) scope: Option<crate::tool_call_lifecycle::runtime::CurrentToolRuntimeContext>,
+    pub(super) token_limit: bool,
+    pub(super) batch_token: Option<tokio_util::sync::CancellationToken>,
+}
+
+pub(super) fn foreground_call<H>(
+    input: ForegroundExecution<H>,
+) -> crate::session_hook::ForegroundCall
+where
+    H: SessionHook + 'static,
+{
+    Box::new(move |hook_token, cleanup| {
+        Box::pin(async move {
+            let token = hook_token.child_token();
+            let execute = crate::tool_effects::scope(
+                input
+                    .effects
+                    .map(|value| value as Arc<dyn crate::tool_effects::ToolEffectDispatcher>),
+                dispatch_provider_tool(
+                    input.tools.as_slice(),
+                    &input.name,
+                    input.args,
+                    input.live_output,
+                    input.session_id,
+                    input.token_limit,
+                    cleanup,
+                ),
+            );
+            let scoped = async {
+                match input.scope {
+                Some(scope) => crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
+                    scope.requester_did, scope.node_did, scope.agent_id, scope.request_id,
+                    crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                        scope.deadline_at, token.clone(), scope.workspace_cwd, scope.live_output,
+                        scope.session_id, scope.correlation, scope.source_fields, scope.background, execute,
+                    ),
+                ).await,
+                None => tokio::select! {
+                    biased;
+                    _ = token.cancelled() => ToolOutcome::Cancelled,
+                    outcome = execute => outcome,
+                },
+            }
+            };
+            match input.batch_token {
+                Some(batch) => {
+                    tokio::pin!(scoped);
+                    tokio::select! {
+                        biased;
+                        _ = batch.cancelled() => { token.cancel(); scoped.await }
+                        outcome = &mut scoped => outcome,
+                    }
+                }
+                None => scoped.await,
+            }
+        })
+    })
+}
+
+pub(super) async fn settle_foreground<H>(
+    hook: &H,
+    effects: Option<&Arc<EffectDispatcher<H>>>,
+    name: &str,
+    call_id: Option<String>,
+    internal_id: &str,
+    args: &str,
+    outcome: &ToolOutcome,
+) -> HookAction
+where
+    H: SessionHook + 'static,
+{
+    match effects {
+        Some(effects) => {
+            effects
+                .settle_parent_result(name, call_id, args, outcome)
+                .await
+        }
+        None => {
+            hook.on_tool_result(name, call_id, internal_id, args, outcome)
+                .await
+        }
     }
 }
 
@@ -360,6 +481,7 @@ mod tests {
                         None,
                         None,
                         activity.token_limit_reached(),
+                        None,
                     );
                     let outcome = if scoped {
                         scope_request_tool_execution(

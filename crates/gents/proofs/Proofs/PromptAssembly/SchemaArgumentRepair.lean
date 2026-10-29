@@ -82,6 +82,8 @@ def repair (observations : List ParseObservation) : Nat → Json → Json → St
                 ownPaths ++ children.flatMap Result.paths⟩
           | _, _ => ⟨decoded, ownPaths⟩
 
+/-- Bound stack use when repairing provider-supplied nested arguments. Values
+below this depth stay unchanged rather than rejecting the entire call. -/
 def maxDepth : Nat := 32
 
 def run (observations : List ParseObservation) (schema value : Json) : Result :=

@@ -5,6 +5,7 @@ use serde_json::Value;
 use super::render::{render_filter, validate_identifier};
 
 pub const DEFAULT_LIMIT: u32 = 50;
+/// Caps database rows per query to bound result allocation and provider input.
 pub const MAX_LIMIT: u32 = 1000;
 
 // The node holds the store's at-rest key, so encryption protects only the

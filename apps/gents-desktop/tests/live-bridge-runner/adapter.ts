@@ -273,6 +273,7 @@ export function createBridgeHttpAdapter(
     jobControl: async () => {
       throw new Error("desktop_job_control is not served by the live bridge runner");
     },
+    processControl: unsupported("processControl"),
   };
 }
 

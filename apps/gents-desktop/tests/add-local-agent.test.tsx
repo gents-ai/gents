@@ -103,6 +103,28 @@ async function openAddAgent(app: DesktopApp) {
 beforeEach(() => vi.clearAllMocks());
 
 describe("Add node enrollment", () => {
+  it("offers local setup after a remote-only enrollment and can return to the node list", async () => {
+    const { app } = fleet([remote]);
+    const snapshot = app.stores.client.getState().snapshot!;
+    app.stores.client.setState({
+      snapshot: {
+        ...snapshot,
+        bootstrap: {
+          ...snapshot.bootstrap,
+          initConfigStatus: "absent",
+          initNodeDid: null,
+          nodeHomeExists: false,
+        },
+      },
+    });
+    renderIn(app, <AgentsScreen />);
+    await userEvent.click(screen.getByRole("button", { name: "Set up local node" }));
+    expect(screen.getByText("Local node")).toBeVisible();
+    expect(screen.queryByText("Remote connect")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Back/ }));
+    expect(screen.getByText("Remote")).toBeVisible();
+  });
+
   it.each([[forge], [remote]])(
     "does not offer local reconnect for existing or removed local agents",
     async (listed) => {

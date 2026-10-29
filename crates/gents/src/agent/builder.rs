@@ -247,6 +247,7 @@ impl GentsBuilder {
             retry_policy: self.retry_policy,
             hook_failure_policy: self.hook_failure_policy,
             background_execution_registry: BackgroundExecutionRegistry::default(),
+            inference_observations: Default::default(),
             health_checker_options: self.health_checker_options,
             backend_prober_options: crate::backend_health::BackendProberOptions::default(),
             backend_health: self.backend_health,

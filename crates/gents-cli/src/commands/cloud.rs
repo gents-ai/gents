@@ -11,12 +11,16 @@ use crate::cli::args::{CloudCommand, CloudLoginArgs};
 use crate::config_writes::ConfigAccess;
 use crate::{print_json, resolve_config_access, resolve_node_did};
 
+/// A cloud endpoint must not leave the interactive sign-in waiting indefinitely.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The server's suggested polling interval cannot force a hot loop.
 const MIN_POLL_INTERVAL_SECS: u64 = 1;
 
+/// The server's expiry cannot keep an unattended sign-in active indefinitely.
 const MAX_LOGIN_WAIT_SECS: u64 = 15 * 60;
 
+/// Cloud error text is untrusted and is displayed in the terminal.
 const MAX_MESSAGE_CHARS: usize = 200;
 
 const DEFAULT_REFUSAL: &str = "this sign-in was refused; run `gents cloud login` again";

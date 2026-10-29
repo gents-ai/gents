@@ -1,4 +1,10 @@
 import type { ThemePreference } from "@/theme";
+import { useEffect, useRef, useState } from "react";
+import {
+  productTelemetryStatus,
+  setProductTelemetry,
+  type ProductTelemetryStatus,
+} from "../../../lib/nativeShell";
 import type { FollowUp, NavMode, SentTurnPlacement } from "@/preferences";
 import {
   preferences,
@@ -16,6 +22,17 @@ export function GeneralPanel() {
   const nav = useNavMode();
   const sentTurn = useSentTurnPlacement();
   const followUp = useFollowUp();
+  const [usageTelemetry, setUsageTelemetry] = useState<ProductTelemetryStatus | null>(
+    null,
+  );
+  const [telemetryError, setTelemetryError] = useState(false);
+  const [telemetrySaving, setTelemetrySaving] = useState(false);
+  const telemetryPending = useRef(false);
+  useEffect(() => {
+    void productTelemetryStatus()
+      .then(setUsageTelemetry)
+      .catch(() => setTelemetryError(true));
+  }, []);
   return (
     <div>
       <Group title="Appearance">
@@ -42,6 +59,61 @@ export function GeneralPanel() {
             { value: "collapsed", label: "Collapsed" },
           ]}
         />
+      </Group>
+      <Group title="Privacy">
+        {usageTelemetry?.configured || usageTelemetry?.enabled ? (
+          <ChoiceRow
+            id="settings-usage-telemetry"
+            label="Usage telemetry"
+            description={
+              usageTelemetry.configured
+                ? "Share app opens with the configured analytics service on the next launch. Your network address is visible to that service."
+                : "Usage telemetry is not configured. You can still turn off the saved preference."
+            }
+            value={usageTelemetry.enabled ? "on" : "off"}
+            disabled={telemetrySaving}
+            onChange={(value) => {
+              if (
+                telemetryPending.current ||
+                (value === "on" && !usageTelemetry.configured)
+              )
+                return;
+              telemetryPending.current = true;
+              setTelemetrySaving(true);
+              setTelemetryError(false);
+              void setProductTelemetry(value === "on")
+                .then(setUsageTelemetry)
+                .catch(async () => {
+                  setTelemetryError(true);
+                  try {
+                    setUsageTelemetry(await productTelemetryStatus());
+                  } catch {}
+                })
+                .finally(() => {
+                  telemetryPending.current = false;
+                  setTelemetrySaving(false);
+                });
+            }}
+            items={[
+              { value: "off", label: "Off" },
+              { value: "on", label: "On" },
+            ]}
+          />
+        ) : (
+          <p>
+            {usageTelemetry
+              ? "Usage telemetry is not configured."
+              : telemetryError
+                ? "Usage telemetry status is unavailable."
+                : "Checking usage telemetry…"}
+          </p>
+        )}
+        {telemetryError && (
+          <p>
+            Could not save or read the telemetry preference. Unsaved changes may be lost
+            after restart.
+          </p>
+        )}
       </Group>
       <Group title="Sessions">
         <ChoiceRow

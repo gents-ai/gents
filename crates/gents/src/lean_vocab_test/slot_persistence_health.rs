@@ -163,12 +163,28 @@ pub(crate) struct LeanManagedExecLivenessCase {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanProcessStopCase {
     pub(crate) name: String,
+    pub(crate) live_evidence: String,
+    pub(crate) worker_released: bool,
+    pub(crate) settle_completed: bool,
+    pub(crate) settle_cancelled: bool,
+    pub(crate) settle_timed_out: bool,
+    pub(crate) settle_failed: bool,
+    pub(crate) settle_panicked: bool,
+    pub(crate) retire_before_commit: bool,
+    pub(crate) retire_after_commit: bool,
+    pub(crate) preserve_timeout: bool,
+    pub(crate) preserve_failure: bool,
+    pub(crate) pending_failure_beats_cancel: bool,
+    pub(crate) pending_failure_resolves: bool,
+    pub(crate) retained_completion_notified: bool,
+    pub(crate) retired_completion_notified: bool,
     pub(crate) before: String,
     pub(crate) after: String,
     pub(crate) may_terminate: bool,
     pub(crate) retain_record: bool,
     pub(crate) outcome: String,
     pub(crate) cancel_reply: String,
+    pub(crate) durable_state: String,
 }
 
 #[derive(Debug, Deserialize)]

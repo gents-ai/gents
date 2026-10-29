@@ -114,10 +114,27 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
         .spawn()
         .context("spawning gents config apply through transaction proxy")?;
 
-    let staged_permit = tokio::time::timeout(TRANSACTION_STAGE_DEADLINE, mutation_staged.acquire())
-        .await
-        .context("config apply did not stage a transactional mutation")?
-        .context("transaction proxy closed before staging a mutation")?;
+    let staged_permit = match tokio::time::timeout(
+        TRANSACTION_STAGE_DEADLINE,
+        mutation_staged.acquire(),
+    )
+    .await
+    {
+        Ok(result) => result.context("transaction proxy closed before staging a mutation")?,
+        Err(elapsed) => {
+            if cli.try_wait()?.is_none() {
+                cli.kill().context("stopping unstaged config apply")?;
+            }
+            let output = cli
+                .wait_with_output()
+                .context("capturing unstaged config apply")?;
+            return Err(anyhow!(
+                "config apply did not stage a transactional mutation: {elapsed}\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            ));
+        }
+    };
     staged_permit.forget();
     if let Some(status) = cli
         .try_wait()
@@ -184,7 +201,12 @@ async fn start_stalling_transaction_proxy(
     let app = Router::new()
         .fallback(any(forward_and_stall_transactional_mutation))
         .with_state(state);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+    // The runtime only serves its bound port, and DefraDB binds the bearer
+    // audience to `Host`, so the proxy shares that port on another loopback.
+    let port = origin
+        .port_or_known_default()
+        .context("GraphQL endpoint port")?;
+    let listener = tokio::net::TcpListener::bind(("::1", port))
         .await
         .context("binding transaction proxy")?;
     let address = listener.local_addr().context("transaction proxy address")?;

@@ -281,6 +281,22 @@ pub async fn bootstrap_oauth_client(
     product: OAuthProduct,
     pick: AccountPick<'_>,
 ) -> Result<(Arc<DbCredentialBearer>, OAuthCredential)> {
+    bootstrap_oauth_client_typed(node, node_did, provider, refresh_kind, product, pick)
+        .await
+        .map_err(Into::into)
+}
+
+pub(crate) async fn bootstrap_oauth_client_typed(
+    node: Arc<EmbeddedNode>,
+    node_did: &str,
+    provider: &str,
+    refresh_kind: OAuthRefreshKind,
+    product: OAuthProduct,
+    pick: AccountPick<'_>,
+) -> std::result::Result<
+    (Arc<DbCredentialBearer>, OAuthCredential),
+    crate::oauth_credential::OAuthCredentialError,
+> {
     let credential = resolve_oauth_credential(
         &crate::config_client::ConfigAccess::local(node.clone()),
         node_did,

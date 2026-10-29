@@ -15,6 +15,102 @@ pub(crate) enum ProcessObservation {
     Unowned,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LiveProcessEvidence {
+    NeverSpawned,
+    SpawnedUnverified,
+    Exited,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum NativeTerminalIntent {
+    Completed,
+    Cancelled,
+    TimedOut,
+    Failed,
+    Panicked,
+}
+
+pub(crate) const fn may_settle_native(
+    intent: NativeTerminalIntent,
+    evidence: LiveProcessEvidence,
+) -> bool {
+    matches!(intent, NativeTerminalIntent::Completed)
+        || !matches!(evidence, LiveProcessEvidence::SpawnedUnverified)
+}
+
+pub(crate) fn native_terminal_intent(
+    outcome: Option<&crate::tool_call_lifecycle::ToolOutcome>,
+) -> NativeTerminalIntent {
+    use crate::tool_call_lifecycle::ToolOutcome;
+    match outcome {
+        Some(ToolOutcome::Completed(_)) => NativeTerminalIntent::Completed,
+        Some(ToolOutcome::Cancelled) => NativeTerminalIntent::Cancelled,
+        Some(ToolOutcome::TimedOut { .. }) => NativeTerminalIntent::TimedOut,
+        Some(ToolOutcome::Failed { .. }) => NativeTerminalIntent::Failed,
+        None => NativeTerminalIntent::Panicked,
+    }
+}
+
+pub(crate) fn native_terminal_needs_confirmation(
+    outcome: Option<&crate::tool_call_lifecycle::ToolOutcome>,
+) -> bool {
+    !may_settle_native(
+        native_terminal_intent(outcome),
+        LiveProcessEvidence::SpawnedUnverified,
+    )
+}
+
+pub(crate) const fn retire_stop_receipt(terminal_committed: bool) -> bool {
+    terminal_committed
+}
+
+pub(crate) const fn settle_live_cancel(
+    released: bool,
+    evidence: LiveProcessEvidence,
+) -> ProcessStopOutcome {
+    if released
+        && matches!(
+            evidence,
+            LiveProcessEvidence::NeverSpawned | LiveProcessEvidence::Exited
+        )
+    {
+        ProcessStopOutcome::Stopped
+    } else {
+        ProcessStopOutcome::StillRunning
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct LiveProcessEvidenceOwner(std::sync::atomic::AtomicU8);
+
+impl LiveProcessEvidenceOwner {
+    pub(crate) fn initialized(&self) {
+        self.0.store(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    fn spawned(&self) {
+        self.0.store(2, std::sync::atomic::Ordering::SeqCst);
+    }
+    pub(crate) fn exited(&self) {
+        self.0.store(3, std::sync::atomic::Ordering::SeqCst);
+    }
+    pub(crate) fn mark_unverified_failure(&self) {
+        let _ = self.0.compare_exchange(
+            2,
+            4,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+    }
+    pub(crate) fn get(&self) -> LiveProcessEvidence {
+        match self.0.load(std::sync::atomic::Ordering::SeqCst) {
+            1 => LiveProcessEvidence::NeverSpawned,
+            3 => LiveProcessEvidence::Exited,
+            _ => LiveProcessEvidence::SpawnedUnverified,
+        }
+    }
+}
+
 impl ProcessObservation {
     #[cfg(test)]
     pub(crate) const ALL: [Self; 3] = [Self::Running, Self::Exited, Self::Unowned];
@@ -112,10 +208,20 @@ pub(crate) struct ProcessIdentity {
 }
 
 impl ProcessIdentity {
-    #[cfg(unix)]
+    #[cfg(all(unix, test))]
     pub(crate) fn of_live(pid: i32) -> Option<Self> {
         let info = platform::process_info(pid)?;
         (!info.zombie).then_some(Self {
+            pid,
+            pgid: info.pgid,
+            start: info.start,
+        })
+    }
+
+    #[cfg(unix)]
+    fn of_waitable_child(pid: i32) -> Option<Self> {
+        let info = platform::process_info(pid)?;
+        Some(Self {
             pid,
             pgid: info.pgid,
             start: info.start,
@@ -215,13 +321,67 @@ type RecordFn = dyn Fn(ProcessIdentity) + Send + Sync;
 #[derive(Clone)]
 pub(crate) struct ProcessRecorder {
     _record: Arc<RecordFn>,
+    evidence: Option<Arc<LiveProcessEvidenceOwner>>,
+    failure_decided: Option<Arc<dyn Fn() + Send + Sync>>,
+    #[cfg(windows)]
+    retain_failed_job: Option<Arc<dyn Fn(Arc<super::process::FailedJobOwner>) + Send + Sync>>,
+    #[cfg(windows)]
+    release_failed_job: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl ProcessRecorder {
     pub(crate) fn new(record: impl Fn(ProcessIdentity) + Send + Sync + 'static) -> Self {
         Self {
             _record: Arc::new(record),
+            evidence: None,
+            failure_decided: None,
+            #[cfg(windows)]
+            retain_failed_job: None,
+            #[cfg(windows)]
+            release_failed_job: None,
         }
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn with_failed_job_owner(
+        mut self,
+        retain: impl Fn(Arc<super::process::FailedJobOwner>) + Send + Sync + 'static,
+        release: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
+        self.retain_failed_job = Some(Arc::new(retain));
+        self.release_failed_job = Some(Arc::new(release));
+        self
+    }
+
+    #[cfg(windows)]
+    pub(super) fn retain_failed_job(&self, owner: Arc<super::process::FailedJobOwner>) -> bool {
+        if let Some(retain) = &self.retain_failed_job {
+            retain(owner);
+            true
+        } else {
+            false
+        }
+    }
+
+    #[cfg(windows)]
+    pub(super) fn release_failed_job(&self) {
+        if let Some(release) = &self.release_failed_job {
+            release();
+        }
+    }
+
+    pub(crate) fn with_failure_decision(
+        mut self,
+        report: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
+        self.failure_decided = Some(Arc::new(report));
+        self
+    }
+
+    pub(crate) fn with_evidence(mut self, evidence: Arc<LiveProcessEvidenceOwner>) -> Self {
+        evidence.initialized();
+        self.evidence = Some(evidence);
+        self
     }
 }
 
@@ -236,17 +396,52 @@ where
     PROCESS_RECORDER.scope(recorder, future).await
 }
 
+pub(super) fn current_process_recorder() -> Option<ProcessRecorder> {
+    PROCESS_RECORDER.try_with(Clone::clone).ok()
+}
+
+pub(crate) fn record_failure_decision(recorder: Option<&ProcessRecorder>) {
+    if let Some(report) = recorder.and_then(|recorder| recorder.failure_decided.as_ref()) {
+        report();
+    }
+}
+
+pub(super) fn record_spawn_attempt(recorder: Option<&ProcessRecorder>) {
+    if let Some(evidence) = recorder.and_then(|recorder| recorder.evidence.as_ref()) {
+        evidence.spawned();
+    }
+}
+
+pub(super) fn record_unconfirmed_spawn_failure(recorder: Option<&ProcessRecorder>) {
+    if let Some(evidence) = recorder.and_then(|recorder| recorder.evidence.as_ref()) {
+        evidence.mark_unverified_failure();
+    }
+}
+
+pub(super) fn record_confirmed_exit(recorder: Option<&ProcessRecorder>) {
+    if let Some(evidence) = recorder.and_then(|recorder| recorder.evidence.as_ref()) {
+        evidence.exited();
+    }
+}
+
 #[cfg(unix)]
-pub(super) fn record_spawned(pid: i32) {
-    let Ok(recorder) = PROCESS_RECORDER.try_with(Clone::clone) else {
-        return;
-    };
-    match ProcessIdentity::of_live(pid) {
-        Some(identity) => (recorder._record)(identity),
-        None => tracing::warn!(
-            pid,
-            "spawned background process exited before it was recorded"
-        ),
+pub(super) fn record_spawned(
+    recorder: Option<&ProcessRecorder>,
+    pid: i32,
+) -> Option<ProcessIdentity> {
+    let recorder = recorder?;
+    match ProcessIdentity::of_waitable_child(pid) {
+        Some(identity) => {
+            (recorder._record)(identity.clone());
+            Some(identity)
+        }
+        None => {
+            tracing::warn!(
+                pid,
+                "spawned background process exited before it was recorded"
+            );
+            None
+        }
     }
 }
 
@@ -273,35 +468,38 @@ mod platform {
 
     const PROC_PGRP_ONLY: u32 = 2;
 
-    pub(super) fn process_info(pid: i32) -> Option<ProcessInfo> {
+    unsafe extern "C" {
+        fn gents_darwin_process_info(
+            pid: libc::c_int,
+            pgid: *mut libc::c_int,
+            seconds: *mut u64,
+            microseconds: *mut u32,
+            zombie: *mut libc::c_int,
+        ) -> libc::c_int;
+    }
+
+    fn process_info_checked(pid: i32) -> Result<Option<ProcessInfo>, ()> {
         if pid <= 0 {
-            return None;
+            return Ok(None);
         }
-        let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
-        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-        // SAFETY: the buffer is a properly sized, writable proc_bsdinfo.
-        let written = unsafe {
-            libc::proc_pidinfo(
-                pid,
-                libc::PROC_PIDTBSDINFO,
-                0,
-                info.as_mut_ptr().cast(),
-                size,
-            )
+        let (mut pgid, mut seconds, mut microseconds, mut zombie) = (0, 0, 0, 0);
+        // SAFETY: the shim writes only to these valid output pointers.
+        let result = unsafe {
+            gents_darwin_process_info(pid, &mut pgid, &mut seconds, &mut microseconds, &mut zombie)
         };
-        if written != size {
-            return None;
+        match result {
+            1 => Ok(Some(ProcessInfo {
+                pgid,
+                start: format!("darwin:{seconds}.{microseconds:06}"),
+                zombie: zombie != 0,
+            })),
+            0 => Ok(None),
+            _ => Err(()),
         }
-        // SAFETY: proc_pidinfo filled the whole structure.
-        let info = unsafe { info.assume_init() };
-        Some(ProcessInfo {
-            pgid: i32::try_from(info.pbi_pgid).ok()?,
-            start: format!(
-                "darwin:{}.{:06}",
-                info.pbi_start_tvsec, info.pbi_start_tvusec
-            ),
-            zombie: info.pbi_status == libc::SZOMB,
-        })
+    }
+
+    pub(super) fn process_info(pid: i32) -> Option<ProcessInfo> {
+        process_info_checked(pid).ok().flatten()
     }
 
     pub(super) fn group_has_live_member(pgid: i32) -> Option<bool> {
@@ -322,9 +520,16 @@ mod platform {
                 capacity *= 4;
                 continue;
             }
-            return Some(pids[..count].iter().any(|pid| {
-                process_info(*pid).is_some_and(|info| !info.zombie && info.pgid as u32 == pgid)
-            }));
+            for &pid in &pids[..count] {
+                match process_info_checked(pid) {
+                    Ok(Some(info)) if !info.zombie && info.pgid as u32 == pgid => {
+                        return Some(true);
+                    }
+                    Err(()) => return None,
+                    _ => {}
+                }
+            }
+            return Some(false);
         }
     }
 
@@ -508,6 +713,37 @@ pub(crate) mod test_support {
             "notOwned" => None,
             other => panic!("a test-owned group cannot produce process outcome {other}"),
         }
+    }
+
+    #[tokio::test]
+    async fn exited_unreaped_child_retains_exact_start_identity() {
+        let mut child = tokio::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg("read ignored")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = i32::try_from(child.id().unwrap()).unwrap();
+        let live = ProcessIdentity::of_waitable_child(pid).expect("live child identity");
+        drop(child.stdin.take());
+        tokio::task::spawn_blocking(move || {
+            // WNOWAIT leaves the child waitable, preventing PID reuse before identity capture.
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            let result = unsafe {
+                libc::waitid(
+                    libc::P_PID,
+                    pid as libc::id_t,
+                    &mut info,
+                    libc::WEXITED | libc::WNOWAIT,
+                )
+            };
+            assert_eq!(result, 0);
+        })
+        .await
+        .unwrap();
+        let identity = ProcessIdentity::of_waitable_child(pid).expect("unreaped child identity");
+        assert_eq!(identity, live);
+        child.wait().await.unwrap();
     }
 
     #[tokio::test]

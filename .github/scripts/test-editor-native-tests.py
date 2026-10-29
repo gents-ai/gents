@@ -34,7 +34,8 @@ class ArtifactTests(unittest.TestCase):
         return e.artifacts(self.log, self.root, self.target)
 
     def required(self):
-        return [self.event('gents-desktop-bridge', 'gents_desktop_bridge'),
+        return [self.event('gents', 'gents'),
+                self.event('gents-desktop-bridge', 'gents_desktop_bridge'),
                 self.event('gents-client-host', 'runtime', 'test'),
                 self.event('gents-cli', 'port_allocation', 'test'),
                 self.event('gents-cli', 'gents', 'bin', False),
@@ -44,7 +45,7 @@ class ArtifactTests(unittest.TestCase):
         events = self.required()
         main = self.event('gents-client-host', 'gents-client-host', 'bin')
         found = self.select([*events, main, self.event('unrelated', 'other')])
-        self.assertEqual(len(found), 6)
+        self.assertEqual(len(found), 7)
         bridge = next(item for item in found if item['role'] == 'bridge')
         self.assertEqual(e.command(bridge)[1], 'host::local::windows')
         self.assertNotIn('cargo', e.command(found[-1]))
@@ -55,7 +56,7 @@ class ArtifactTests(unittest.TestCase):
     def test_non_test_libraries_are_ignored_and_paths_cannot_escape_target(self):
         events = self.required()
         normal = self.event('gents-client-host', 'normal', testing=False)
-        self.assertEqual(len(self.select([*events, normal])), 5)
+        self.assertEqual(len(self.select([*events, normal])), 6)
         events[1]['executable'] = str(self.root / 'outside')
         with self.assertRaises(ValueError):
             self.select(events)
@@ -82,6 +83,7 @@ class ArtifactTests(unittest.TestCase):
         self.assertIn('gents-client-host/runtime-e2e', command)
         self.assertIn('gents-desktop-bridge', command)
         self.assertIn('gents-cli', command)
+        self.assertIn('gents', command)
         targets = [command[i + 1] for i, value in enumerate(command[:-1]) if value == '--test']
         self.assertEqual(targets, ['port_allocation', 'metadata', 'runtime', 'runtime_cli'])
         self.assertIn('--no-default-features', command)
@@ -132,6 +134,21 @@ class ArtifactTests(unittest.TestCase):
         manifest.write_text('[]')
         with self.assertRaises(ValueError):
             e.run_tests(manifest, 'bridge')
+
+    def test_process_phase_runs_each_exact_windows_job_case(self):
+        manifest = self.root / 'manifest.json'
+        manifest.write_text(json.dumps(self.select(self.required())))
+        with patch.object(e.subprocess, 'Popen') as run, patch.object(e, 'check_result'):
+            run.return_value.wait.return_value = 0
+            e.run_tests(manifest, 'process')
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual([call.args[0][1:] for call in run.call_args_list],
+                         [[name, '--exact'] for name in e.PROCESS_TESTS])
+        for call in run.call_args_list:
+            self.assertEqual(call.kwargs['cwd'], str(self.root / 'crates/gents'))
+        with self.assertRaises(RuntimeError):
+            e.check_result({'role': 'process', 'name': 'gents'}, 0,
+                           'test result: ok. 0 passed; 0 failed;')
 
     def test_host_phase_runs_the_cli_port_fixture_with_verified_native_binaries(self):
         manifest = self.root / 'manifest.json'

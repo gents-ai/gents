@@ -13,6 +13,8 @@ use crate::provider_input::replay_frontier::{
     admissible_turn_drop, anchored, ords, FlatItem, Turn,
 };
 
+/// Keeps the Messages request's output budget finite when the caller omits one;
+/// a caller-supplied maximum takes precedence.
 const DEFAULT_MAX_TOKENS: u64 = 4096;
 #[doc(hidden)]
 pub const ADVERTISED_REASONING_EFFORTS_PARAM: &str = "_gents_advertised_reasoning_efforts";

@@ -21,8 +21,12 @@ use crate::cli::{P2pTransportArg, ServeArgs};
 use crate::home_state::{load_initialized_home_identity, read_init_config, read_runtime_state};
 use crate::shared::{StoredInitConfig, StoredRuntimeState};
 
+/// Preparation must eventually report a busy home if its startup reservation
+/// or the prior runtime's store release does not arrive.
 const STARTUP_WAIT: Duration = Duration::from_secs(60);
+/// A recorded runtime endpoint may be stale or unresponsive during preparation.
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
+/// Bound the receipt read from a recorded runtime before decoding it.
 const MAX_CONTROL_RECEIPT: usize = 64 * 1024;
 
 mod unlock;

@@ -54,6 +54,15 @@ impl std::fmt::Display for UnparseableArgsKind {
     }
 }
 
+/// A read footprint is a promise from the tool owner that the call has no
+/// mutating effects. Non-mutating observation receipts may be deferred. Untrusted tools must use
+/// the default barrier, regardless of their advertised metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolFootprint {
+    Read,
+    Barrier,
+}
+
 pub trait Tool: Sized + Send + Sync {
     const NAME: &'static str;
     const EMITS_COMMAND_ENVELOPE: bool = false;
@@ -79,6 +88,10 @@ pub trait Tool: Sized + Send + Sync {
         _output: &Self::Output,
     ) -> Option<crate::live_output::DeferredToolWrites> {
         None
+    }
+
+    fn footprint(&self, _args: &Self::Args) -> ToolFootprint {
+        ToolFootprint::Barrier
     }
 
     fn admit(&self, _args: &Self::Args) -> Result<(), Self::Error> {
@@ -111,6 +124,10 @@ pub trait ToolDyn: Send + Sync {
                 deferred_writes: None,
             }
         })
+    }
+
+    fn footprint(&self, _args: &str) -> ToolFootprint {
+        ToolFootprint::Barrier
     }
 
     fn emits_command_envelope(&self) -> bool {
@@ -178,6 +195,12 @@ where
                 deferred_writes,
             }
         })
+    }
+
+    fn footprint(&self, args: &str) -> ToolFootprint {
+        parse_tool_args::<<Self as Tool>::Args>(args)
+            .map(|parsed| <Self as Tool>::footprint(self, &parsed))
+            .unwrap_or(ToolFootprint::Barrier)
     }
 
     fn admit(&self, args: &str) -> Result<(), ToolError> {
@@ -375,6 +398,7 @@ pub fn normalize_tool_call_arguments(
     }
 }
 
+/// Bounds provider-supplied argument text included in coercion warning logs.
 const COERCION_WARN_SNIPPET_CHARS: usize = 256;
 
 fn warn_nonobject_arguments_coerced(seam: &str, tool_name: &str, arguments: &serde_json::Value) {

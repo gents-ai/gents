@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useStore } from "zustand";
 import type { SurfaceContext } from "@/app/surfaces";
 import { ArrowLeft, Ban, CircleCheck, CircleX, TriangleAlert } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
@@ -8,6 +10,7 @@ import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
 import { useApp } from "@/app/AppContext";
 import { toastFailure } from "@/lib/failure";
+import { configIsRead } from "@/lib/firstRun";
 import {
   isActive,
   nextWrite,
@@ -50,27 +53,57 @@ function ToneIcon({ tone, className }: { tone: Tone; className?: string }) {
 
 const warns = (tone: Tone) => tone === "failed" || tone === "stuck";
 
-/* only a job's row can be stopped from here; a native process has no
-   desktop stop control */
+const job = (call: BackgroundCall) =>
+  Boolean(
+    call.tool?.jobState ||
+    call.tool?.jobHandle ||
+    call.tool?.jobOrigin ||
+    call.view?.job,
+  );
 const stoppable = (call: BackgroundCall) =>
-  isActive(call) &&
-  (call.tool?.jobState ? call.tool.jobState === "running" : call.view?.job === true);
+  isActive(call) && Boolean(call.tool?.toolCallDocId);
 
-function Stop({ call }: { call: BackgroundCall; sessionId: string | null }) {
-  const { actions } = useApp();
+function Stop({ call, sessionId }: { call: BackgroundCall; sessionId: string | null }) {
+  const { actions, stores } = useApp();
   const nodeDid = call.tool?.nodeDid;
   const toolCallDocId = call.tool?.toolCallDocId;
-  if (!nodeDid || !toolCallDocId || !stoppable(call)) return null;
-  return (
-    <StopButton
-      name={call.runs}
-      onStop={() =>
-        void actions
-          .controlJob({ nodeDid, toolCallDocId, action: "stop" })
-          .catch((e: unknown) => toastFailure("stop", e))
-      }
-    />
+  const operator = useStore(stores.client, (state) =>
+    state.snapshot ? configIsRead(state.snapshot, nodeDid) : false,
   );
+  const isJob = job(call);
+  if (!nodeDid || !sessionId || !toolCallDocId || !stoppable(call)) return null;
+  if (!isJob && (!operator || call.view?.job !== false)) return null;
+  const stop = async () => {
+    try {
+      const result = isJob
+        ? await actions.controlJob({ nodeDid, toolCallDocId, action: "stop" })
+        : await actions.controlProcess({
+            nodeDid,
+            sessionId,
+            toolCallDocId,
+            toolCallId: call.toolCallId,
+          });
+      const tag = (typeof result === "string" ? result : (Object.keys(result)[0] ?? ""))
+        .toLowerCase()
+        .replace(/_/g, "");
+      if (tag === "cancelled" || tag === "applied")
+        toast.success(`Stopped ${call.runs}`);
+      else if (tag === "alreadyterminal")
+        toast.info(`${call.runs} has already finished.`);
+      else if (tag === "unverified")
+        toast.warning(`Could not confirm that ${call.runs} stopped.`);
+      else if (tag === "lost")
+        toast.warning(`The runtime no longer has ownership of ${call.runs}.`);
+      else if (tag === "notfound")
+        toast.warning(`The selected process is no longer available.`);
+      else if (tag === "notbackground")
+        toast.warning(`The selected call cannot be stopped as a background process.`);
+      else toast.warning(`The result of stopping ${call.runs} is unavailable.`);
+    } catch (error) {
+      toastFailure("stop", error);
+    }
+  };
+  return <StopButton name={call.runs} onStop={() => void stop()} />;
 }
 
 export function BackgroundGroup({

@@ -5,6 +5,7 @@ use super::super::types::{
 
 #[derive(Debug, Clone)]
 pub struct ToolCallRow {
+    pub tool_call_doc_id: Option<String>,
     pub request_id: String,
     pub tool_call_id: String,
     pub tool_name: String,
@@ -25,6 +26,10 @@ pub fn project_backgrounded_tools(
     liveness: &RuntimeLivenessView,
 ) -> Vec<BackgroundedToolView> {
     let now = chrono::Utc::now();
+    let mut labels = rapidhash::RapidHashMap::default();
+    for row in rows {
+        *labels.entry(row.tool_call_id.as_str()).or_insert(0_usize) += 1;
+    }
     rows.iter()
         .filter(|r| r.await_mode.as_deref() == Some("background"))
         // Preserve existing panel semantics: terminal calls (per the shared
@@ -46,17 +51,25 @@ pub fn project_backgrounded_tools(
                 r.completed_at.as_deref(),
                 now,
             );
-            let age_ms =
-                age_from_live_snapshot(r.tool_call_id.as_str(), &liveness.active_tool_calls);
-            let deadline_expired = liveness
-                .active_tool_calls
-                .iter()
-                .find(|tc| tc.tool_call_id == r.tool_call_id)
-                .map(|tc| tc.deadline_expired)
-                .unwrap_or(false);
-            let native_executor = correlate_native_executor(r, &liveness.active_native_executors);
+            let unique_label = labels.get(r.tool_call_id.as_str()).copied() == Some(1);
+            let age_ms = unique_label
+                .then(|| {
+                    age_from_live_snapshot(r.tool_call_id.as_str(), &liveness.active_tool_calls)
+                })
+                .flatten();
+            let deadline_expired = unique_label
+                && liveness
+                    .active_tool_calls
+                    .iter()
+                    .find(|tc| tc.tool_call_id == r.tool_call_id)
+                    .map(|tc| tc.deadline_expired)
+                    .unwrap_or(false);
+            let native_executor = unique_label
+                .then(|| correlate_native_executor(r, &liveness.active_native_executors))
+                .flatten();
             let wait_status = wait_status_view(&projection);
             BackgroundedToolView {
+                tool_call_doc_id: r.tool_call_doc_id.clone(),
                 request_id: r.request_id.clone(),
                 tool_call_id: r.tool_call_id.clone(),
                 tool_name: r.tool_name.clone(),

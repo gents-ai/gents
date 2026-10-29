@@ -21,6 +21,7 @@ import {
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import {
+  BASH_OUTPUT_LIMIT,
   FILE_LIMITS,
   TOOL_LIMIT_DEFAULTS,
   ToolGroupControls,
@@ -103,6 +104,12 @@ export function parseAdvancedTools(
     if (typeof value === "number" && value > max)
       throw new Error(`${label} must be at most ${max.toLocaleString("en-US")}`);
   }
+  const bashOutputLimit = advanced.host?.bash?.max_output_chars;
+  positiveWholeNumber(BASH_OUTPUT_LIMIT.label, bashOutputLimit);
+  if (typeof bashOutputLimit === "number" && bashOutputLimit > BASH_OUTPUT_LIMIT.max)
+    throw new Error(
+      `${BASH_OUTPUT_LIMIT.label} must be at most ${BASH_OUTPUT_LIMIT.max.toLocaleString("en-US")}`,
+    );
   boundedSeconds(
     "Bash timeout",
     advanced.host?.bash?.timeout_secs,

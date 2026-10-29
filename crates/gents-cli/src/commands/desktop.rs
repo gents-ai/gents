@@ -252,6 +252,8 @@ async fn wait_for_exit(pid: u32) -> Result<()> {
     }
 }
 
+/// The installed desktop owns its WebKit store; bound the wait for its helper
+/// receipt so a stalled process cannot hold reset indefinitely.
 const BROWSER_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 const BROWSER_CLEAR_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(75);
 

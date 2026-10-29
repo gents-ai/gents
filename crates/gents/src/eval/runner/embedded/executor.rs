@@ -2295,6 +2295,7 @@ mod tests {
         assert!(outside.is_empty());
     }
 
+    #[cfg(unix)]
     #[test]
     fn file_capture_does_not_follow_a_symlink_out_of_the_workspace() {
         let dir = tempfile::tempdir().unwrap();
@@ -2321,6 +2322,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_file_capture_that_cannot_be_read_is_omitted() {
         use std::os::unix::fs::PermissionsExt;
@@ -3069,6 +3071,7 @@ mod tests {
         assert!(executor.recollect(&locator("inside"), &[]).await.is_some());
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn recollect_refuses_a_home_hint_that_resolves_outside_the_runs_directory() {
         let dir = tempfile::tempdir().unwrap();

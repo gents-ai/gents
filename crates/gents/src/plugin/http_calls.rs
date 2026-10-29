@@ -13,6 +13,8 @@ use reqwest::header::{HeaderName, HeaderValue};
 use reqwest::{Method, Url};
 use serde_json::{json, Map, Value};
 
+/// The host limits guest HTTP fan-out and retained bodies independently of the
+/// guest budget so a single plugin cannot monopolize connections or memory.
 pub const MAX_REQUESTS_PER_ROUND: usize = 16;
 pub const MAX_IN_FLIGHT: usize = 8;
 pub const MAX_REQUESTS_PER_CALL: usize = 256;

@@ -17,6 +17,7 @@ import { inNativeShell, listenFileDrop, pickFiles } from "../lib/nativeShell";
 import { writeAttachments, type DraftAttachment } from "./draftStore";
 
 const EMPTY: DraftAttachment[] = [];
+/** The raw-file cap matches the encoded attachment protocol limit before reading it into memory. */
 const MAX_FILE = 4 * 1024 * 1024;
 
 function previewOf(content: RequestAttachment) {
@@ -71,9 +72,11 @@ export function useAttachmentDraft(
   root: RefObject<HTMLDivElement | null>,
   disabled: boolean,
   textarea?: RefObject<HTMLElement | null>,
+  draftKeyOverride?: string,
 ) {
   const { drafts, api } = useApp();
-  const key = useView((view) => view.draftKey);
+  const currentKey = useView((view) => view.draftKey);
+  const key = draftKeyOverride ?? currentKey;
   const items = useStore(drafts, (state) => state.attachments[key] ?? EMPTY);
   const [over, setOver] = useState(false);
   const input = useRef<HTMLInputElement>(null);

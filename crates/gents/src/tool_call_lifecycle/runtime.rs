@@ -125,8 +125,9 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
 #[cfg(test)]
 pub(crate) use gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session;
 pub(crate) use gents_loop::tool_call_lifecycle::runtime::{
-    call_tool_managed, scope_request_tool_execution_with_trigger_context,
-    scope_tool_request_identity, tool_execution_bounds,
+    call_tool_managed, call_tool_managed_with_cleanup,
+    scope_request_tool_execution_with_trigger_context, scope_tool_request_identity,
+    tool_execution_bounds,
 };
 
 #[cfg(test)]

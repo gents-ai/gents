@@ -396,6 +396,10 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
   , r6BudgetCase
       "background_tool_budget_count_8_rejects_spawn"
       8
+  , r6Case "recovery_transfer_at_capacity" "budget_recovery" "recover_running"
+      (Background.recoverRunningBackground Background.maxBackgroundedPerParent == Background.maxBackgroundedPerParent + 1)
+      Background.maxBackgroundedPerParent "running"
+      (some (toString (Background.recoverRunningBackground Background.maxBackgroundedPerParent)))
   ] ++ r6BatchCases ++ [
     r6NativeStepCase
       "tool_kind_background_mode_executes"
@@ -550,6 +554,7 @@ theorem r6BackgroundingCases_pinned :
           "running", none, none)
       , ("background_tool_budget_count_8_rejects_spawn", false, "background",
           "rejected", none, none)
+      , ("recovery_transfer_at_capacity", true, "background", "running", none, none)
       , ("background_batch_attempt_0", true, "background", "running", none, none)
       , ("background_batch_attempt_1", true, "background", "running", none, none)
       , ("background_batch_attempt_2", true, "background", "running", none, none)

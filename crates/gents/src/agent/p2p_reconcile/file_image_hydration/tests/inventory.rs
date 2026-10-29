@@ -208,6 +208,14 @@ fn generated_inventory_images_keep_reader_root_snapshot_and_source_distinct() {
                 tool_call_doc_id: text(row, "tool_call_doc_id"),
                 request_doc_id: text(row, "request_doc_id"),
                 scope: scope(&row["scope"]),
+                contents: rows(row, "contents")
+                    .iter()
+                    .map(|content| FileImageContent {
+                        doc_id: text(content, "doc_id"),
+                        tool_call_doc_id: text(content, "tool_call_doc_id"),
+                        scope: scope(&content["scope"]),
+                    })
+                    .collect(),
             })
             .collect();
         let expected: FileImageSelection =
@@ -215,6 +223,20 @@ fn generated_inventory_images_keep_reader_root_snapshot_and_source_distinct() {
         assert_eq!(
             select_inventory_file_images(&demand, &catalog, &page, &read, &tools, &images),
             expected,
+            "{}",
+            case["name"]
+        );
+        let delivery = match &expected {
+            FileImageSelection::Selected { document } => images
+                .iter()
+                .find(|image| &image.doc_id == document)
+                .map(FileImageObservation::delivery_documents)
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(delivery).unwrap(),
+            case["delivery_documents"],
             "{}",
             case["name"]
         );

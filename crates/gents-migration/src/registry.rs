@@ -253,7 +253,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::NODE_MEMORY_NAME,
         gents_protocol::schemas::NODE_MEMORY,
-        "bafyreifcm3bi3qofvhfws7nps45xomrsxb2zslvjkkhb7uwh34esxi5okq"
+        "bafyreich7rj5lgj3ce5mfndp7xy4awh2khblveen7c7ihf6djm5j2dpo5m"
     ),
     baseline_entry!(
         gents_protocol::schemas::TOOLS_NAME,
@@ -413,7 +413,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_SESSION_NAME,
         gents_protocol::schemas::AGENT_SESSION,
-        "bafyreigjtrpi4dok7u5lehp3n4ekttzafnok4eqmykcr46rxzvhfbd2m3q"
+        "bafyreibdqs7gugr4se3wvsu5yjd73yyrnrglixlk454erepqvpnhihpwhu"
     ),
     baseline_entry!(
         gents_protocol::schemas::GOAL_NAME,
@@ -444,6 +444,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
         gents_protocol::schemas::TOOL_FILE_CHANGE,
         "bafyreihw4weuomlxjf2imd46bw5mgcpbfaicnbjiuqhs5yo6tvaam4prae"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::TOOL_FILE_CONTENT_NAME,
+        gents_protocol::schemas::TOOL_FILE_CONTENT,
+        "bafyreibqziwhiq4dxkeqfeokkt22yajmnimxegww4lbr3r7k57b6dvetby"
     ),
     baseline_entry!(
         gents_protocol::schemas::TOOL_FILE_INVENTORY_NAME,
@@ -839,6 +844,22 @@ static RENDERED_REQUEST_CALL_FIELDS: &[OrdinaryIndexField<'static>] = &[
 ];
 
 pub static DEFAULT_ORDINARY_INDEXES: &[OrdinaryIndex<'static>] = &[
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::AGENT_SESSION_NAME,
+        name: "AgentSession_started_by_node_did_ASC",
+        fields: &[OrdinaryIndexField {
+            name: "started_by_node_did",
+            descending: false,
+        }],
+    },
+    OrdinaryIndex {
+        collection: gents_protocol::schemas::AGENT_SESSION_NAME,
+        name: "AgentSession_started_by_session_id_ASC",
+        fields: &[OrdinaryIndexField {
+            name: "started_by_session_id",
+            descending: false,
+        }],
+    },
     OrdinaryIndex {
         collection: gents_protocol::schemas::INFERENCE_CALL_NAME,
         name: "InferenceCall_session_id_ASC",

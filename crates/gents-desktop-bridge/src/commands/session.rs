@@ -262,6 +262,26 @@ pub async fn session_snapshot(
     )
     .await;
     if let Some(snapshot) = snapshot.as_mut() {
+        if let (Some(node), Some(requests), Some(selected)) = (
+            node_did.as_deref(),
+            fresh_requests.as_ref(),
+            request_id.as_deref(),
+        ) {
+            if let Some(request) = requests.iter().find(|request| {
+                request.request_id == selected
+                    && request.session_id.as_deref() == Some(session_id.as_str())
+                    && request.node_did.as_deref() == Some(node)
+            }) {
+                snapshot.inference_activity = crate::snapshot::read_session_inference_activity(
+                    core.as_ref(),
+                    request,
+                    node,
+                    &session_id,
+                    selected,
+                )
+                .await;
+            }
+        }
         apply_session_timeline_page_with_query(
             snapshot,
             timeline_before_item_key.as_deref(),

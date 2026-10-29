@@ -1727,3 +1727,75 @@ async fn retry_frontier_matches_lean_admission() {
     }
     node.shutdown().await;
 }
+
+#[tokio::test]
+async fn unsigned_starter_cannot_populate_the_index() {
+    let starter_cases = &crate::lean_vocab_test::lean_contract_snapshot()
+        .session_document_cases
+        .starter_verification;
+    assert_eq!(
+        starter_cases
+            .iter()
+            .find(|case| case["name"] == "signature")
+            .unwrap()["accepted"],
+        false
+    );
+    let case = crate::lean_vocab_test::lean_contract_snapshot()
+        .session_document_cases
+        .projection
+        .iter()
+        .find(|case| case["operation"] == "rename")
+        .unwrap();
+    let session = super::model_test_support::model_session(&case["before"]);
+    let source = session
+        .provenance
+        .as_ref()
+        .unwrap()
+        .started_by
+        .as_ref()
+        .unwrap();
+    let scope = crate::session_origin::SessionScope::from(source);
+    let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    for provenance in [session.provenance.clone(), None] {
+        let session = &session;
+        crate::config_client::ConfigAccess::transact_local_write(
+            &node,
+            None,
+            "test.session_starter",
+            |txn| {
+                let provenance = provenance.clone();
+                Box::pin(async move {
+                    ensure_session_in_txn(
+                        txn,
+                        &session.session_id,
+                        &session.node_did,
+                        &session.agent_id,
+                        session.requester_did.as_deref(),
+                        session.title.clone(),
+                        provenance,
+                        &session.created_at,
+                    )
+                    .await
+                })
+            },
+        )
+        .await
+        .unwrap();
+    }
+    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let child_scope = crate::session_origin::SessionScope::from(&session);
+    assert!(
+        crate::session_origin::started_by(&access, &child_scope)
+            .await
+            .unwrap()
+            .is_none(),
+        "unsigned descriptive source cannot populate the index"
+    );
+    assert!(crate::session_origin::lineage(&access, &scope)
+        .await
+        .unwrap()
+        .started
+        .is_empty());
+    node.shutdown().await;
+}

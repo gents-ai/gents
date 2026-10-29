@@ -539,4 +539,105 @@ theorem missing_plugin_refuses_install (references shipped installed : List Stri
         reference hReference
       exact False.elim (resolved.elim hShipped hInstalled)
 
+
+/-- A pin is checked against the artifact that will be installed; an
+unpublished older artifact at the same coordinate does not satisfy it. -/
+def pluginPinMatches (pin : Option String) (actual : String) : Bool :=
+  match pin with
+  | none => true
+  | some expected => expected == actual
+
+theorem mismatched_plugin_pin_refuses (expected actual : String) (h : expected ≠ actual) :
+    pluginPinMatches (some expected) actual = false := by
+  simp [pluginPinMatches, h]
+
+/-- The surviving graph must accept every newly published plugin digest. -/
+def pluginReplacementSafe (pins : List (Option String)) (replacement : String) : Bool :=
+  pins.all fun pin => pluginPinMatches pin replacement
+
+theorem mismatched_survivor_rejected (expected replacement : String) (h : expected ≠ replacement) :
+    pluginReplacementSafe [some expected] replacement = false := by
+  simp [pluginReplacementSafe, pluginPinMatches, h]
+
+/-- Callback rejection precedes commit; an unconfirmed commit may have won and
+must retain the published plugin until its outcome can be observed. -/
+inductive PackDocumentOutcome where
+  | committed | callbackRejected | unconfirmed
+  deriving DecidableEq, Repr
+
+def retainPluginPublication : PackDocumentOutcome → Bool
+  | .committed => true
+  | .callbackRejected => false
+  | .unconfirmed => true
+
+theorem rejected_document_restores_plugin : retainPluginPublication .callbackRejected = false := rfl
+theorem unknown_commit_keeps_plugin : retainPluginPublication .unconfirmed = true := rfl
+
+/-- Once a commit request may have succeeded, later failed attempts cannot
+prove that the earlier attempt did not commit. A successful receipt resolves
+the operation; otherwise only histories with no uncertain commit may restore. -/
+inductive PackAttemptEvidence where
+  | noCommit | unknownCommit
+  deriving DecidableEq, Repr
+
+def packCommitUnconfirmed (attempts : List PackAttemptEvidence) : Bool :=
+  attempts.any fun attempt => match attempt with | .noCommit => false | .unknownCommit => true
+
+def packFinalityCases : List (List PackAttemptEvidence) :=
+  [[], [.noCommit], [.noCommit, .noCommit], [.unknownCommit],
+    [.unknownCommit, .noCommit], [.noCommit, .unknownCommit, .noCommit]]
+
+theorem later_begin_failure_cannot_clear_unknown_commit :
+    packCommitUnconfirmed [.unknownCommit, .noCommit] = true := by decide
+
+/-- An installed pin is rechecked while holding the store lock through the
+document commit, so a concurrent publisher cannot change its artifact between
+the check and the corresponding configuration write. -/
+def installedPinCommitAllowed (pin : Option String) (underLock : String) : Bool :=
+  pluginPinMatches pin underLock
+
+/-- Wiring holds the shared plugin store lock from reading the digest through
+configuration publication. Competing store mutation cannot publish in that interval. -/
+def wireAndPluginPublishAllowed (wireHoldsLock : Bool) : Bool := !wireHoldsLock
+
+theorem plugin_publish_blocked_during_wire :
+    wireAndPluginPublishAllowed true = false := by decide
+
+/-- Publishing a plugin pin requires an embedded transaction on the runtime's
+own store. A preview or removal does not publish a new plugin reference. -/
+def wireTargetAllowed (localTarget preview remove : Bool) : Bool :=
+  localTarget || preview || remove
+
+theorem graphql_wire_cannot_publish_pin : wireTargetAllowed false false false = false := by decide
+
+/-- Only a node-local installer can inspect or publish plugin bytes. A remote
+GraphQL install may write plugin-free documents, but recorded pack metadata is
+not evidence of host file availability. -/
+def pluginInstallAvailable (references shipped installed : List String) (isLocal : Bool) : Bool :=
+  if isLocal then pluginReferencesAvailable references shipped installed
+  else references.isEmpty && shipped.isEmpty
+
+theorem remote_plugin_install_requires_no_plugins (references shipped installed : List String) :
+    pluginInstallAvailable references shipped installed false = true ↔
+      references = [] ∧ shipped = [] := by
+  simp [pluginInstallAvailable]
+
+/-- Removing plugin files must not invalidate any surviving agent's Tools.
+References are collected after the same transaction's document deletions, so an
+agent removed with its pack does not prevent that pack's removal. -/
+def pluginRemovalSafe (references removed : List String) : Bool :=
+  references.all fun reference => decide (reference ∉ removed)
+
+theorem pluginRemovalSafe_iff (references removed : List String) :
+    pluginRemovalSafe references removed = true ↔
+      ∀ reference ∈ references, reference ∉ removed := by
+  simp [pluginRemovalSafe, List.all_eq_true]
+
+theorem referenced_plugin_refuses_removal (references removed : List String)
+    (reference : String) (hReference : reference ∈ references) (hRemoved : reference ∈ removed) :
+    pluginRemovalSafe references removed = false := by
+  cases h : pluginRemovalSafe references removed with
+  | false => rfl
+  | true => exact False.elim ((pluginRemovalSafe_iff references removed).mp h reference hReference hRemoved)
+
 end Configuration

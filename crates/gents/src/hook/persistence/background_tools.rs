@@ -262,6 +262,7 @@ impl DefraSessionHook {
             .map(|runtime| runtime.source_fields)
             .unwrap_or_default();
         let executions = self.background_executions.clone();
+        let process_tool = crate::toolset::is_bash_tool_name(target_name);
         let process_recorder =
             executions.process_recorder(&execution_call_id, &execution_tool_doc_id);
         tokio::spawn(crate::plugin::approval::carry_interactive(async move {
@@ -282,10 +283,21 @@ impl DefraSessionHook {
                             correlation,
                             source_fields,
                             true,
-                            crate::tool_call_lifecycle::runtime::call_tool_managed(
-                                target_tool.as_ref(),
-                                target_args,
-                            ),
+                            async {
+                                if process_tool {
+                                    crate::tool_call_lifecycle::runtime::call_tool_managed_with_cleanup(
+                                        target_tool.as_ref(), target_args, |outcome| {
+                                            if let Some(outcome) = outcome.filter(|outcome| crate::managed_exec::ownership::native_terminal_needs_confirmation(Some(outcome))) {
+                                                executions.set_stop_receipt(&execution_call_id, &execution_tool_doc_id, crate::hook::RetainedStopReceipt::from_outcome(outcome));
+                                            }
+                                            executions.live_process_evidence(&execution_call_id, &execution_tool_doc_id)
+                                                != crate::managed_exec::ownership::LiveProcessEvidence::NeverSpawned
+                                        },
+                                    ).await
+                                } else {
+                                    crate::tool_call_lifecycle::runtime::call_tool_managed(target_tool.as_ref(), target_args).await
+                                }
+                            },
                         )
                         .await
                     },
@@ -809,86 +821,47 @@ impl DefraSessionHook {
                 )
                 .await;
         }
-        let notification_tool_name = lifecycle.tool_name().to_string();
-        let notification_request_id = lifecycle.request_id().to_string();
         let notification_reason = parsed
             .reason
             .as_deref()
             .map(str::trim)
             .unwrap_or("explicit_cancel");
-        if !self
-            .background_executions
-            .contains(
-                background_tool_call_id,
-                lifecycle
-                    .doc_id()
-                    .context("background cancellation lacks physical identity")?,
-            )
-            .await
-        {
-            let mut lifecycle = lifecycle;
-            let (process, _) =
-                crate::tool_call_lifecycle::ToolCallLifecycle::cancel_unowned_background_tool(
-                    &self.node,
-                    &mut lifecycle,
-                    &self.background_executions,
-                    CancelCause::UserCancelled,
-                    notification_reason,
-                )
-                .await?;
-            let result = cancel_process_reply(background_tool_call_id, process);
-            return self
-                .complete_control_tool_call(
-                    &mut control_lifecycle,
-                    CANCEL_PROCESS_TOOL_NAME,
-                    result,
-                )
-                .await;
-        }
-        let (lifecycle, won_terminal_compare, process) = self
-            .cancel_background_tool_lifecycle(
-                lifecycle,
-                CancelCause::UserCancelled,
-                notification_reason,
-            )
-            .await?;
-        if !won_terminal_compare {
-            let result = self
-                .background_tool_envelope(lifecycle, "terminal_compare_lost")
-                .await?;
-            return self
-                .complete_control_tool_call(
-                    &mut control_lifecycle,
-                    CANCEL_PROCESS_TOOL_NAME,
-                    result,
-                )
-                .await;
-        }
-        if let Err(error) = crate::background_completion::append_background_tool_completion(
-            &self.node,
-            &session_id,
-            &notification_request_id,
-            lifecycle.doc_id().ok_or_else(|| {
-                anyhow::anyhow!("cancelled background lifecycle lacks physical identity")
-            })?,
-            &notification_tool_name,
-            "cancelled",
-            "",
-            Some(notification_reason),
-            crate::lifecycle::RequestHopCause::Continuation,
+        let result = match crate::tool_control::cancel_loaded_background_tool_call(
+            self.node.clone(),
+            &self.background_executions,
+            lifecycle,
+            notification_reason,
         )
-        .await
+        .await?
         {
-            tracing::warn!(
-                tool_call_id = %background_tool_call_id,
-                error = %error,
-                "failed to append explicitly cancelled background tool notification"
-            );
-        }
-        let result = cancel_process_reply(
-            background_tool_call_id,
-            process.unwrap_or(crate::managed_exec::ProcessStopOutcome::StillRunning),
-        );
+            crate::tool_control::CancelBackgroundToolCallOutcome::Cancelled { .. } => {
+                cancel_process_reply(
+                    background_tool_call_id,
+                    crate::managed_exec::ProcessStopOutcome::Stopped,
+                )
+            }
+            crate::tool_control::CancelBackgroundToolCallOutcome::Unverified => {
+                cancel_process_reply(
+                    background_tool_call_id,
+                    crate::managed_exec::ProcessStopOutcome::StillRunning,
+                )
+            }
+            crate::tool_control::CancelBackgroundToolCallOutcome::Lost => cancel_process_reply(
+                background_tool_call_id,
+                crate::managed_exec::ProcessStopOutcome::NotOwned,
+            ),
+            crate::tool_control::CancelBackgroundToolCallOutcome::AlreadyTerminal { state } => {
+                json_string(json!({
+                    "ok": true, "tool_call_id": background_tool_call_id, "status": "already_terminal", "state": state, "error": null
+                }))
+            }
+            crate::tool_control::CancelBackgroundToolCallOutcome::NotBackground
+            | crate::tool_control::CancelBackgroundToolCallOutcome::NotFound => {
+                json_string(json!({
+                    "ok": false, "tool_call_id": background_tool_call_id, "status": "not_found", "error": null
+                }))
+            }
+        };
         self.complete_control_tool_call(&mut control_lifecycle, CANCEL_PROCESS_TOOL_NAME, result)
             .await
     }
@@ -942,13 +915,36 @@ pub(super) async fn finish_background_execution(
     execution_reservation: crate::hook::BackgroundExecutionReservation,
     execution: Result<crate::tool_call_lifecycle::ToolOutcome, Box<dyn std::any::Any + Send>>,
 ) {
+    let execution = if let Some(doc) = lifecycle.doc_id() {
+        match executions.finalize_pending_failure(lifecycle.tool_call_id(), doc) {
+            Some(outcome) => Ok(outcome),
+            None => execution,
+        }
+    } else {
+        execution
+    };
+    if crate::toolset::is_bash_tool_name(lifecycle.tool_name()) {
+        let outcome = execution.as_ref().ok();
+        if crate::managed_exec::ownership::native_terminal_needs_confirmation(outcome) {
+            let receipt = match outcome {
+                Some(outcome) => crate::hook::RetainedStopReceipt::from_outcome(outcome),
+                None => crate::hook::RetainedStopReceipt::Failure(
+                    crate::tool_call_lifecycle::ToolOutcome::tool_returned_error(
+                        "native command panicked",
+                    ),
+                ),
+            };
+            if let Some(doc) = lifecycle.doc_id() {
+                executions.set_stop_receipt(lifecycle.tool_call_id(), doc, receipt);
+            }
+        }
+    }
     let execution_call_id = lifecycle.tool_call_id().to_owned();
     let execution_tool_doc_id = lifecycle
         .doc_id()
         .expect("registered execution identity")
         .to_owned();
     let execution_session_id = lifecycle.session_id().to_owned();
-    let execution_request_id = lifecycle.request_id().to_owned();
     let execution_tool_name = lifecycle.tool_name().to_owned();
     let execution_request_doc_id = lifecycle
         .request_doc_id()
@@ -970,6 +966,55 @@ pub(super) async fn finish_background_execution(
             .await,
     );
 
+    if crate::toolset::is_bash_tool_name(&execution_tool_name)
+        && crate::managed_exec::ownership::native_terminal_needs_confirmation(
+            execution.as_ref().ok(),
+        )
+    {
+        let confirmed = match executions.process_record(&execution_call_id, &execution_tool_doc_id)
+        {
+            Some(record) => matches!(
+                record
+                    .identity
+                    .await_signalled_group_exit(crate::managed_exec::ownership::KILL_GRACE)
+                    .await,
+                crate::managed_exec::ownership::ProcessObservation::Exited
+            ),
+            None => !matches!(
+                executions.live_process_evidence(&execution_call_id, &execution_tool_doc_id),
+                crate::managed_exec::ownership::LiveProcessEvidence::SpawnedUnverified
+            ),
+        };
+        {
+            let receipt = match execution.as_ref().ok() {
+                Some(crate::tool_call_lifecycle::ToolOutcome::Cancelled) => {
+                    crate::hook::RetainedStopReceipt::Cancel(
+                        crate::tool_call_lifecycle::CancelCause::Interrupted,
+                        executions.cancellation_reason(&execution_call_id, &execution_tool_doc_id),
+                    )
+                }
+                Some(crate::tool_call_lifecycle::ToolOutcome::TimedOut { .. }) => {
+                    crate::hook::RetainedStopReceipt::Timeout
+                }
+                Some(outcome @ crate::tool_call_lifecycle::ToolOutcome::Failed { .. }) => {
+                    crate::hook::RetainedStopReceipt::Failure(outcome.clone())
+                }
+                None => crate::hook::RetainedStopReceipt::Failure(
+                    crate::tool_call_lifecycle::ToolOutcome::tool_returned_error(
+                        "native command panicked",
+                    ),
+                ),
+                Some(crate::tool_call_lifecycle::ToolOutcome::Completed(_)) => {
+                    unreachable!("completed execution does not require stop confirmation")
+                }
+            };
+            executions
+                .retain_terminal_settlement(lifecycle, execution_reservation, receipt, confirmed)
+                .await;
+            return;
+        }
+    }
+
     match execution {
         Ok(outcome) => match outcome {
             crate::tool_call_lifecycle::ToolOutcome::TimedOut { .. } => {
@@ -984,28 +1029,32 @@ pub(super) async fn finish_background_execution(
                         false
                     }
                 };
-                if let Some(Err(error)) = project_background_completion_if_owned(
-                    won_terminal_compare,
-                    crate::background_completion::append_background_tool_completion(
-                        &node,
-                        &execution_session_id,
-                        &execution_request_id,
-                        &execution_tool_doc_id,
-                        &execution_tool_name,
-                        BACKGROUND_TIMEOUT_NOTIFICATION.0,
-                        "",
-                        Some(BACKGROUND_TIMEOUT_NOTIFICATION.1),
-                        crate::lifecycle::RequestHopCause::Continuation,
-                    ),
-                )
-                .await
+                if let Some(Err(error)) =
+                    project_background_completion_if_owned(won_terminal_compare, async {
+                        let execution_request_id = lifecycle.calling_request_id().await?;
+                        crate::background_completion::append_background_tool_completion(
+                            &node,
+                            &execution_session_id,
+                            &execution_request_id,
+                            &execution_tool_doc_id,
+                            &execution_tool_name,
+                            BACKGROUND_TIMEOUT_NOTIFICATION.0,
+                            "",
+                            Some(BACKGROUND_TIMEOUT_NOTIFICATION.1),
+                            crate::lifecycle::RequestHopCause::Continuation,
+                        )
+                        .await
+                    })
+                    .await
                 {
                     tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append timed-out background tool notification");
                 }
             }
             crate::tool_call_lifecycle::ToolOutcome::Cancelled => {
+                let cancel_reason =
+                    executions.cancellation_reason(&execution_call_id, &execution_tool_doc_id);
                 let won_terminal_compare = match lifecycle
-                    .cancel_during_run_owned(CancelCause::UserCancelled, "explicit_cancel")
+                    .cancel_during_run_owned(CancelCause::UserCancelled, &cancel_reason)
                     .await
                 {
                     Ok(updated) => updated,
@@ -1018,21 +1067,23 @@ pub(super) async fn finish_background_execution(
                         false
                     }
                 };
-                if let Some(Err(error)) = project_background_completion_if_owned(
-                    won_terminal_compare,
-                    crate::background_completion::append_background_tool_completion(
-                        &node,
-                        &execution_session_id,
-                        &execution_request_id,
-                        &execution_tool_doc_id,
-                        &execution_tool_name,
-                        "cancelled",
-                        "",
-                        Some("explicit_cancel"),
-                        crate::lifecycle::RequestHopCause::Continuation,
-                    ),
-                )
-                .await
+                if let Some(Err(error)) =
+                    project_background_completion_if_owned(won_terminal_compare, async {
+                        let execution_request_id = lifecycle.calling_request_id().await?;
+                        crate::background_completion::append_background_tool_completion(
+                            &node,
+                            &execution_session_id,
+                            &execution_request_id,
+                            &execution_tool_doc_id,
+                            &execution_tool_name,
+                            "cancelled",
+                            "",
+                            Some(&cancel_reason),
+                            crate::lifecycle::RequestHopCause::Continuation,
+                        )
+                        .await
+                    })
+                    .await
                 {
                     tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append cancelled background tool notification");
                 }
@@ -1091,21 +1142,23 @@ pub(super) async fn finish_background_execution(
                 } else {
                     String::new()
                 };
-                if let Some(Err(error)) = project_background_completion_if_owned(
-                    won_terminal_compare,
-                    crate::background_completion::append_background_tool_completion(
-                        &node,
-                        &execution_session_id,
-                        &execution_request_id,
-                        &execution_tool_doc_id,
-                        &execution_tool_name,
-                        "completed",
-                        &notification_result,
-                        None,
-                        crate::lifecycle::RequestHopCause::Continuation,
-                    ),
-                )
-                .await
+                if let Some(Err(error)) =
+                    project_background_completion_if_owned(won_terminal_compare, async {
+                        let execution_request_id = lifecycle.calling_request_id().await?;
+                        crate::background_completion::append_background_tool_completion(
+                            &node,
+                            &execution_session_id,
+                            &execution_request_id,
+                            &execution_tool_doc_id,
+                            &execution_tool_name,
+                            "completed",
+                            &notification_result,
+                            None,
+                            crate::lifecycle::RequestHopCause::Continuation,
+                        )
+                        .await
+                    })
+                    .await
                 {
                     tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append completed background tool notification");
                 }
@@ -1168,21 +1221,23 @@ pub(super) async fn finish_background_execution(
                 } else {
                     String::new()
                 };
-                if let Some(Err(error)) = project_background_completion_if_owned(
-                    won_terminal_compare,
-                    crate::background_completion::append_background_tool_completion(
-                        &node,
-                        &execution_session_id,
-                        &execution_request_id,
-                        &execution_tool_doc_id,
-                        &execution_tool_name,
-                        "failed",
-                        &notification_result,
-                        Some("tool_failed"),
-                        crate::lifecycle::RequestHopCause::Continuation,
-                    ),
-                )
-                .await
+                if let Some(Err(error)) =
+                    project_background_completion_if_owned(won_terminal_compare, async {
+                        let execution_request_id = lifecycle.calling_request_id().await?;
+                        crate::background_completion::append_background_tool_completion(
+                            &node,
+                            &execution_session_id,
+                            &execution_request_id,
+                            &execution_tool_doc_id,
+                            &execution_tool_name,
+                            "failed",
+                            &notification_result,
+                            Some("tool_failed"),
+                            crate::lifecycle::RequestHopCause::Continuation,
+                        )
+                        .await
+                    })
+                    .await
                 {
                     tracing::warn!(tool_call_id = %execution_call_id, error = %error, "failed to append failed background tool notification");
                 }
@@ -1205,21 +1260,23 @@ pub(super) async fn finish_background_execution(
                     false
                 }
             };
-            if let Some(Err(error)) = project_background_completion_if_owned(
-                won_terminal_compare,
-                crate::background_completion::append_background_tool_completion(
-                    &node,
-                    &execution_session_id,
-                    &execution_request_id,
-                    &execution_tool_doc_id,
-                    &execution_tool_name,
-                    "failed",
-                    &reason,
-                    Some("tool_panicked"),
-                    crate::lifecycle::RequestHopCause::Continuation,
-                ),
-            )
-            .await
+            if let Some(Err(error)) =
+                project_background_completion_if_owned(won_terminal_compare, async {
+                    let execution_request_id = lifecycle.calling_request_id().await?;
+                    crate::background_completion::append_background_tool_completion(
+                        &node,
+                        &execution_session_id,
+                        &execution_request_id,
+                        &execution_tool_doc_id,
+                        &execution_tool_name,
+                        "failed",
+                        &reason,
+                        Some("tool_panicked"),
+                        crate::lifecycle::RequestHopCause::Continuation,
+                    )
+                    .await
+                })
+                .await
             {
                 tracing::warn!(
                     tool_call_id = %execution_call_id,
@@ -1236,3 +1293,7 @@ pub(super) async fn finish_background_execution(
         .await;
     drop(execution_reservation);
 }
+
+#[cfg(test)]
+#[path = "background_tools_tests.rs"]
+mod tests;

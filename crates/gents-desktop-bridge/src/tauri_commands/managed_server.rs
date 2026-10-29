@@ -1558,10 +1558,11 @@ async fn settle_adoption<'a>(
     tracing::warn!(target: "gents_desktop::managed_server", error = %message, "managed Gents server did not become ready");
     let refused = refused_kind(&error);
     let typed = match error.downcast_ref::<BridgeError>() {
-        Some(typed) => BridgeError {
-            message,
-            ..typed.clone()
-        },
+        Some(typed) => {
+            let mut typed = typed.clone();
+            typed.message = message;
+            typed
+        }
         None => BridgeError::new(BridgeErrorCode::EndpointUnreachable, message),
     };
     let mut managed = state.managed_server.lock().await;
@@ -5264,6 +5265,7 @@ mod tests {
             owner_node: "did:key:managed".to_string(),
             state: state.to_string(),
             expires_at: expires_at.to_string(),
+            activation_error: None,
         }
     }
 

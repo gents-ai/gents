@@ -67,6 +67,8 @@ const STAGING_DIR_PREFIX: &str = ".gents-grok-";
 
 const STAGING_ATTEMPTS: usize = 8;
 
+/// A disconnected peer cannot hold connection cleanup open indefinitely while
+/// dispatch tasks drain or the writer flushes queued frames.
 const MAX_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
 /// Internal bound for joining live connection tasks during leader shutdown,
@@ -75,6 +77,7 @@ const CONNECTION_CLEANUP_GRACE: Duration = Duration::from_secs(5);
 
 const WIRE_SHUTDOWN_DELAY_MS: u64 = 0;
 
+/// Backpressure bounds frames retained for a peer that is slow to read.
 const OUTBOUND_FRAME_CAPACITY: usize = 256;
 
 /// One decoded inbound envelope may wait while the connection loop services a

@@ -12,6 +12,7 @@ use super::shared::{
     StructuredToolError,
 };
 
+/// Bound a delegated tool result before it enters the caller's provider context.
 const CALL_TOOL_MAX_BYTES: usize = 50 * 1024;
 const CALL_TOOL_MAX_LINES: usize = 2_000;
 pub(crate) const CALL_TOOL_NAME: &str = "call_tool";

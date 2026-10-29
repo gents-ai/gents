@@ -14,7 +14,7 @@ fn generated_fresh_session_resubmissions_drop_invocation_lineage() {
     let cases = snapshot["goal_fresh_session_input_cases"]
         .as_array()
         .unwrap();
-    assert_eq!(cases.len(), 12);
+    assert_eq!(cases.len(), 36);
     for case in cases {
         let modeled = &case["input"];
         let payload = modeled["authored"].as_u64().unwrap();
@@ -26,6 +26,17 @@ fn generated_fresh_session_resubmissions_drop_invocation_lineage() {
                 "version":4,"unsaved":true,"range":{"start":{"line":1,"character":0},"end":{"line":2,"character":0}},
                 "content":format!("private unsaved payload {payload}")}]
         })).unwrap();
+        input.session_creation = match modeled["creation"].as_str() {
+            None => None,
+            Some("agent_new") => Some(SessionCreationIntent::AgentNew),
+            Some("plugin_job") => Some(SessionCreationIntent::PluginJob),
+            other => panic!("unexpected modeled creation intent: {other:?}"),
+        };
+        assert_eq!(
+            input.reissued("source-doc").session_creation,
+            input.session_creation,
+            "{case}"
+        );
         input.goal_assignment = reference(&modeled["reference"]);
         input.queue = modeled["queued"].as_bool().unwrap().then(|| RequestQueue {
             source: QueueSource::BackgroundCompletion,
@@ -50,6 +61,11 @@ fn generated_fresh_session_resubmissions_drop_invocation_lineage() {
                 });
         let actual = input.for_fresh_session();
         let expected = &case["expected"];
+        assert_eq!(
+            serde_json::to_value(actual.session_creation).unwrap(),
+            expected["creation"],
+            "{case}"
+        );
         assert_eq!(
             actual.goal_assignment,
             reference(&expected["reference"]),

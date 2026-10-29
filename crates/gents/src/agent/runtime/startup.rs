@@ -496,6 +496,7 @@ async fn run_agent_owned(
         hook_failure_policy: agent.hook_failure_policy,
         rendered_request_capture_factory: agent.rendered_request_capture_factory.clone(),
         background_execution_registry: agent.background_execution_registry.clone(),
+        inference_observations: agent.inference_observations.clone(),
         startup_barrier: startup_barrier.clone(),
         startup_readiness: agent.startup_readiness.clone(),
         runtime_status: runtime_status.clone(),

@@ -20,6 +20,7 @@ pub mod package_tools;
 #[cfg(feature = "tauri-host")]
 pub mod plugin;
 pub mod plugin_access;
+pub mod process_control;
 pub mod provenance;
 pub mod provider_recovery;
 #[cfg(feature = "tauri-host")]

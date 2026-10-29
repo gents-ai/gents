@@ -6,9 +6,9 @@ namespace CompletionRetry.InvalidToolProgress
 `recordDurable` is called only after the outcome has been persisted/threaded.
 It does not terminalize a request: exhaustion asks the existing stream error
 path and execution lease owner to do so. Assumes serialized dispatch; a stream
-containing several calls must check eligibility before each dispatch. -/
-
-
+containing several calls must check eligibility before each dispatch. The
+request-wide budget limits resources spent on invalid, denied, and unknown tool
+calls even when successful calls occur between them. -/
 def limit : Nat := 8
 
 inductive Outcome

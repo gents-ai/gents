@@ -139,6 +139,8 @@ impl Capture {
     }
 }
 
+/// CPAL receives a finite initialization wait so supported backends need not
+/// wait indefinitely for the device; CPAL does not guarantee every backend honors it.
 fn capture_stream<T>(
     device: &Device,
     config: StreamConfig,
@@ -204,6 +206,8 @@ pub struct Playback {
 }
 
 impl Playback {
+    /// The completion deadline bounds waiting for a device that never reports
+    /// the end of a clip after the protocol's maximum clip duration.
     pub fn start(sample_rate: u32, samples: Vec<i16>, stopped: &AtomicBool) -> Result<Self> {
         ensure!(
             !stopped.load(Ordering::Acquire),
@@ -305,6 +309,8 @@ impl Playback {
 
 /// A callback delivering the final sample has only queued it for playback.
 /// Keep the stream alive through the backend's predicted DAC timestamp.
+/// Reject implausibly distant timestamps to bound that wait. CPAL receives a
+/// finite stream initialization timeout, though not every backend honors it.
 fn playback_stream<T>(
     device: &Device,
     config: StreamConfig,

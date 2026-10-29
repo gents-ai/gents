@@ -15,6 +15,8 @@ use gents::agent::p2p_reconcile::{
 
 use crate::client::PrincipalIdentity;
 
+/// Remote administration must report an unresponsive endpoint rather than
+/// block route reconciliation indefinitely.
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 pub const ACTOR_DID_HEADER: &str = "x-defra-actor-did";
 pub const ACTOR_SIGNATURE_HEADER: &str = "x-defra-actor-signature";

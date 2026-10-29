@@ -180,8 +180,7 @@ impl ToolCallLifecycle {
                 .doc_id
                 .clone()
                 .context("plugin job row lacks physical identity")?;
-            let calling_request_id =
-                crate::session_message::calling_request_id(self.node.as_ref(), self).await?;
+            let calling_request_id = self.calling_request_id().await?;
             let status = match terminal.state {
                 ToolCallState::Completed => "completed",
                 ToolCallState::Cancelled => "cancelled",

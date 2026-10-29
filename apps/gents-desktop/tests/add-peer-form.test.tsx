@@ -12,6 +12,7 @@ const enrollmentRequest: EnrollmentRequestView = {
   serverLabel: "Amy",
   ownerNode: "did:key:z6MkAmy",
   state: "pending",
+  activationError: null,
   expiresAt: "2099-01-01T00:00:00Z",
 };
 

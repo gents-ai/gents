@@ -310,6 +310,7 @@ pub use session::build_session_snapshot_for_node_with_transcript;
 pub use session::build_session_snapshot_from_store;
 #[cfg(test)]
 pub use session::build_session_snapshot_from_store_for_node;
+pub(crate) use session::inference_activity::read_activity as read_session_inference_activity;
 pub use session::load_session_context_details;
 #[cfg(test)]
 pub(crate) use session::render_transcript_rows;

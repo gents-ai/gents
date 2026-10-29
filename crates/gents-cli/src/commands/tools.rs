@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::ValueEnum;
-use gents::config_client::GraphqlEndpoint;
 use gents::tool_surface::{measured_mcp_services_for_access, RuntimeToolAvailability};
 use gents::{AgentToolSurfaceConfig, ToolCeiling};
 use serde::Serialize;
@@ -29,30 +28,40 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let host = match &access {
-        ConfigAccess::Graphql(endpoint) => HostCeiling::live(endpoint).await?,
+        ConfigAccess::Graphql(endpoint) => {
+            let status = fetch_runtime_status(endpoint, Duration::from_secs(10))
+                .await
+                .context(
+                    "the GraphQL endpoint has no gents runtime status to read its tool ceiling",
+                )?;
+            let live = status
+                .get("node_did")
+                .and_then(Value::as_str)
+                .context("runtime status has no node_did")?;
+            if args.graphql.is_none() && args.node_did.is_none() {
+                if let Some(expected) = read_init_config(&home_dir)?.map(|config| config.node_did) {
+                    anyhow::ensure!(
+                        expected == live,
+                        "home {} belongs to node {expected}, but the runtime its runtime.json names \
+                         serves node {live}; restart `gents server --home {}` to serve this home, or \
+                         pass --graphql to explain that node",
+                        home_dir.display(),
+                        shell_quoted_path(&home_dir)?
+                    );
+                }
+            }
+            if let Some(explicit) = args.node_did.as_deref() {
+                anyhow::ensure!(
+                    explicit == live,
+                    "the runtime at this endpoint serves node {live}, so its tool ceiling does not \
+                     apply to --node-did {explicit}; omit --node-did or point --graphql at that node"
+                );
+            }
+            HostCeiling::from_status(&status)?
+        }
         ConfigAccess::Local(_) => HostCeiling::configured(&home_dir)?,
     };
-    if let (None, None, Some(live)) = (
-        args.graphql.as_deref(),
-        args.node_did.as_deref(),
-        host.live_node_did.as_deref(),
-    ) {
-        if let Some(expected) = read_init_config(&home_dir)?.map(|config| config.node_did) {
-            anyhow::ensure!(
-                expected == live,
-                "home {} belongs to node {expected}, but the runtime its runtime.json names \
-                 serves node {live}; restart `gents server --home {}` to serve this home, or \
-                 pass --graphql to explain that node",
-                home_dir.display(),
-                shell_quoted_path(&home_dir)?
-            );
-        }
-    }
     let node_did = match (args.node_did.as_deref(), host.live_node_did.as_deref()) {
-        (Some(explicit), Some(live)) if explicit != live => anyhow::bail!(
-            "the runtime at this endpoint serves node {live}, so its tool ceiling does not \
-             apply to --node-did {explicit}; omit --node-did or point --graphql at that node"
-        ),
         (None, Some(live)) => live.to_owned(),
         (explicit, _) => resolve_node_did(args.home.as_deref(), explicit)?,
     };
@@ -290,10 +299,7 @@ struct HostCeiling {
 }
 
 impl HostCeiling {
-    async fn live(endpoint: &GraphqlEndpoint) -> Result<Self> {
-        let status = fetch_runtime_status(endpoint, Duration::from_secs(10))
-            .await
-            .context("the GraphQL endpoint has no gents runtime status to read its tool ceiling")?;
+    fn from_status(status: &Value) -> Result<Self> {
         let field = |name: &str| status.get(name).and_then(Value::as_str).map(str::to_owned);
         let mode_text = field("tool_ceiling").context("runtime status has no tool_ceiling")?;
         let mode = ToolCeilingArg::from_str(&mode_text, false)

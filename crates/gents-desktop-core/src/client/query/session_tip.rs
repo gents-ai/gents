@@ -4,6 +4,8 @@ use gents::session::canonical_rows::{
     decode_transcript_message_row, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,
 };
 
+/// Bound the rows read for an active request; oversized results fail instead
+/// of silently presenting a truncated tip.
 const MAX_TIP_REQUEST_ROWS: usize = 2_048;
 
 pub async fn load_session_tip_store(

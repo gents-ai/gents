@@ -24,3 +24,6 @@ mod cli_response;
 mod cli_session;
 #[path = "suites/cli_status.rs"]
 mod cli_status;
+
+#[path = "suites/cli_pack_safety.rs"]
+mod cli_pack_safety;

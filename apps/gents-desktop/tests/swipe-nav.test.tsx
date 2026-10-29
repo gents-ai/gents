@@ -1,7 +1,8 @@
 import { render, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SwipeHandles } from "../src/ui/app/SwipeHandles";
-import { COMMIT, scrollRoom, useSwipeNav } from "../src/ui/lib/swipe-nav";
+import { COMMIT, useSwipeNav } from "../src/ui/lib/swipe-nav";
+import { scrollRoom } from "../src/ui/lib/scrollRoom";
 
 type Progress = { amount: number; phase: "moving" | "ended" | "cancelled" };
 

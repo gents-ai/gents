@@ -12,7 +12,7 @@ import {
   separatedBySettings,
   steerEdit,
   steerRun,
-} from "@source-inc/gents-desktop-client";
+} from "../../../packages/gents-desktop-client/src/pendingQueue";
 
 const entry = (id: string, group: string | null = "same"): PendingQueueEntryView => ({
   requestDocId: `doc-${id}`,
@@ -117,6 +117,21 @@ describe("queue edits", () => {
       expectedRequestDocIds: ["doc-a", "doc-b", "doc-c"],
       selectedRequestDocIds: ["doc-c"],
       messages: [],
+    });
+  });
+
+  it("sends the complete authored replacement with the selected queue slot", () => {
+    const authored = {
+      selected_skill_ids: ["review"],
+      captured_context: [],
+      attachments: [{ name: "note.txt", mediaType: "text/plain", data: "aGk=" }],
+    };
+    expect(rewriteEdit(queue, queue[1]!, "changed", authored)).toEqual({
+      expectedRequestDocIds: ["doc-a", "doc-b", "doc-c"],
+      selectedRequestDocIds: ["doc-b"],
+      messages: [
+        { requestDocId: "doc-b", content: "changed", authoredInput: authored },
+      ],
     });
   });
 });

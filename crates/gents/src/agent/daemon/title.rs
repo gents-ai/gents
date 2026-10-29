@@ -16,6 +16,8 @@ use crate::watcher::AgentRequest;
 
 pub(super) mod review;
 
+/// Title generation is auxiliary work: bound its history, retries, elapsed time
+/// and output so naming a session cannot compete indefinitely with requests.
 const RECENT_TITLE_LIMIT: usize = 5;
 const TITLE_GENERATION_MAX_ATTEMPTS: i64 = 2;
 const TITLE_GENERATION_TIMEOUT_SECS: u64 = 10;

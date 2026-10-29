@@ -367,6 +367,73 @@ fn peer_record_owning_node_at(
         .cloned()
 }
 
+fn normalize_pending_edit_skills(edit: &mut gents::lifecycle::PendingQueueEdit) {
+    for message in &mut edit.messages {
+        if let Some(authored) = &mut message.authored_input {
+            let selection = gents::skills::prompt_slash_skill_selection(&message.content);
+            if !selection.selected_skill_ids.is_empty() {
+                authored.selected_skill_ids = selection.selected_skill_ids;
+                message.content = selection.prompt;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod pending_authored_skill_tests {
+    use super::normalize_pending_edit_skills;
+
+    #[test]
+    fn authored_edit_uses_the_send_skill_parser() {
+        let mut edit = gents::lifecycle::PendingQueueEdit {
+            expected_request_doc_ids: vec!["request".into()],
+            selected_request_doc_ids: vec!["request".into()],
+            messages: vec![gents::lifecycle::PendingMessageEdit {
+                request_doc_id: "request".into(),
+                content: "/skill review\nPlease review".into(),
+                authored_input: Some(Default::default()),
+            }],
+        };
+        normalize_pending_edit_skills(&mut edit);
+        assert_eq!(edit.messages[0].content, "Please review");
+        assert_eq!(
+            edit.messages[0]
+                .authored_input
+                .as_ref()
+                .unwrap()
+                .selected_skill_ids,
+            ["review"]
+        );
+    }
+}
+
+fn ux_local_runtime_record<'a>(
+    records: &'a [PeerRecord],
+    node_did: &str,
+    home: &Path,
+) -> Result<&'a PeerRecord> {
+    let record = records
+        .iter()
+        .find(|record| record.node_did == node_did)
+        .context("the local node that installed this app is not connected")?;
+    let recorded_home = record
+        .local_node_home
+        .as_deref()
+        .context("the local node that installed this app is not connected locally")?;
+    let recorded_home = std::fs::canonicalize(recorded_home)
+        .context("the installed app's runtime home is unavailable")?;
+    let home = std::fs::canonicalize(home).context("the installed app's home is unavailable")?;
+    anyhow::ensure!(
+        recorded_home == home,
+        "the app's local node belongs to a different home"
+    );
+    anyhow::ensure!(
+        record.operator_graphql().is_some(),
+        "the local node that installed this app has no operator connection"
+    );
+    Ok(record)
+}
+
 impl ClientCore {
     pub async fn refresh_local_standard_peer(
         &self,
@@ -613,8 +680,9 @@ impl ClientCore {
         &self,
         node_did: &str,
         session_id: &str,
-        edit: gents::lifecycle::PendingQueueEdit,
+        mut edit: gents::lifecycle::PendingQueueEdit,
     ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
+        normalize_pending_edit_skills(&mut edit);
         self.apply_pending_queue_edit(node_did, session_id, edit, None, None)
             .await
     }
@@ -649,6 +717,13 @@ impl ClientCore {
             .peer_record_for_chat_write(node_did, Utc::now())
             .await?;
         ensure_peer_chat_ready_at(node_did, peer.as_ref(), Utc::now())?;
+        if edit
+            .messages
+            .iter()
+            .any(|message| message.authored_input.is_some())
+        {
+            crate::local_runtime::ensure_authored_queue_edit_supported(peer.as_ref()).await?;
+        }
         let (signer, admission, _) = self.request_authority(node_did, peer.as_ref()).await?;
         let selected_doc_ids = edit.selected_request_doc_ids.clone();
         let access = self.session_queue_access(node_did);
@@ -1752,6 +1827,22 @@ impl ClientCore {
             .and_then(|record| self.options.operator_identity_interaction.endpoint(record))
     }
 
+    pub async fn operator_observation_endpoint(
+        &self,
+        node_did: &str,
+    ) -> Option<gents::config_client::GraphqlEndpoint> {
+        let record = self
+            .sync_state
+            .records()
+            .into_iter()
+            .find(|record| record.node_did == node_did)?;
+        let interaction = self.options.operator_identity_interaction;
+        tokio::task::spawn_blocking(move || interaction.endpoint(&record))
+            .await
+            .ok()
+            .flatten()
+    }
+
     pub fn operator_signer(
         &self,
         node_did: &str,
@@ -1782,6 +1873,18 @@ impl ClientCore {
             ),
             None => Ok(ConfigAccess::local(self.node_arc())),
         }
+    }
+
+    pub fn local_home_operator_access(
+        &self,
+        node_did: &str,
+        home: &std::path::Path,
+    ) -> Result<ConfigAccess> {
+        let records = self.sync_state.records();
+        let record = ux_local_runtime_record(&records, node_did, home)?;
+        crate::local_runtime::operator_endpoint(record)
+            .map(ConfigAccess::Graphql)
+            .context("the local node that installed this app has no operator connection")
     }
 
     pub async fn save_agent(&self, row: &gents::AgentDocument) -> Result<()> {
@@ -3142,6 +3245,23 @@ mod delete_source_tests {
             record.enrollment_authorization_expires_at = Some("2099-09-29T00:00:00Z".into());
         }
         record
+    }
+
+    #[test]
+    fn ux_data_requires_the_installing_local_runtime() {
+        let home = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let mut record = peer_record(Some("local-standard"));
+        record.graphql = Some("http://127.0.0.1:1234/api/v0/graphql".into());
+        assert!(ux_local_runtime_record(&[], &record.node_did, home.path()).is_err());
+        assert!(ux_local_runtime_record(&[record.clone()], &record.node_did, home.path()).is_err());
+        record.local_node_home = Some(other.path().display().to_string());
+        assert!(ux_local_runtime_record(&[record.clone()], &record.node_did, home.path()).is_err());
+        record.local_node_home = Some(home.path().display().to_string());
+        assert!(ux_local_runtime_record(&[record.clone()], "did:key:other", home.path()).is_err());
+        assert!(ux_local_runtime_record(&[record.clone()], &record.node_did, home.path()).is_ok());
+        record.graphql = None;
+        assert!(ux_local_runtime_record(&[record.clone()], &record.node_did, home.path()).is_err());
     }
 
     #[tokio::test(start_paused = true)]

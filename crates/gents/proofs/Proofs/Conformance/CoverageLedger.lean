@@ -771,6 +771,59 @@ def caseCoverage : List CoverageEntry :=
       "agent::loop_stream::tests::generated_authored_input_is_durable_before_provider_stream_entry"
       "Native binding covers only the publication-before-provider-stream-entry script: it reconstructs the generated prepared prompt from its canonical candidate and observes the durable authored header before the provider stream opens. It does not execute generated steering queue ingress, inspect the UI admissionVisible projection or serialized capture body, or prove native lease authorization. Claimed pre-start failure, prepublication send denial, conflicting capture, and exact replay scripts remain model-derived/decoder-checked only.")
       "prompt-assembly" [Surface.agentFacing]
+  , tagged (consumerWithFollowUp
+      "pack_finality_cases"
+      "PackFinalityCases"
+      "config_client::txn::owner_tests::tracked_transaction_finality_distinguishes_rejection_from_lost_receipt"
+      "Binds callback rejection, lost receipt and a later failed retry to the shared transaction owner.")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "agent_steer_disposition_cases"
+      "AgentSteerDispositionCases"
+      "session_message::agent_tools_tests::explicit_steer_checks_the_physical_head_at_publication"
+      "Binds refusal of incompatible contexts; signed cross-requester and workspace integration remain to be exercised.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "agent_steer_target_cases"
+      "AgentSteerTargetCases"
+      "session_message::agent_tools_tests::explicit_steer_checks_the_physical_head_at_publication")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "agent_steering_boundary_cases"
+      "AgentSteeringBoundaryCases"
+      "lifecycle::queue::intake::tests::boundary_selection_matches_lean"
+      "Binds ordered boundary selection; held-tool delivery and exact replay need native flow coverage.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "agent_steer_reachability_cases"
+      "AgentSteerReachabilityCases"
+      "session_message::agent_tools_tests::steer_reachability_matches_lean"
+      "Binds admission against the ordered boundary owner, including compatible earlier steers.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "agent_delivery_cases"
+      "AgentDeliveryCases"
+      "session_message::delivery_conformance::agent_delivery_matches_lean"
+      "Binds delivery resolution; transaction admission and owned-loop delivery need native flow coverage.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "interrupt_delivery_cases"
+      "InterruptDeliveryCases"
+      "session_message::agent_tools_tests::interrupt_delivery_latches_only_the_prepublication_head"
+      "Binds the physical target selected in the message publication transaction; cross-node replication remains a separate boundary.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "agent_folded_binding_cases"
+      "AgentFoldedBindingCases"
+      "background_completion::session_message::turn_assignment_tests::folded_session_message_waits_for_exact_head_and_replays_once"
+      "Binds requester and physical-head outcome checks; cross-node replication races remain to be exercised.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "agent_message_outcome_cases"
+      "AgentMessageOutcomeCases"
+      "background_completion::session_message::folded_outcome_conformance::folded_outcome_matches_lean"
+      "Binds outcome selection; physical-head binding and notification replay need native flow coverage.")
+      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "queued_steering_guard_cases"
       "QueuedSteeringGuardCases"
@@ -1134,6 +1187,16 @@ def caseCoverage : List CoverageEntry :=
       "client_observation_scope_cases"
       "ClientObservationScopeCases"
       "client::core::observation_scope::tests::generated_attachment_traces_keep_every_frontend_observable")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "inference_observation_cases"
+      "InferenceObservationCases"
+      "client::core::inference_observation::tests::generated_inference_observation_traces")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerCoverage
+      "client_telemetry_cases"
+      "ClientTelemetryCases"
+      "bridge::product_telemetry::tests::generated_telemetry_traces_match_native_consent_and_http")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "client_settings_cases"
@@ -1817,6 +1880,16 @@ def caseCoverage : List CoverageEntry :=
       "OperatorJobControlCases"
       "plugin_job::operator_control_conformance::generated_operator_controls_stay_on_the_owning_runtime")
       "plugin-jobs" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "operator_process_control_cases"
+      "OperatorProcessControlCases"
+      "tool_control::tests::operator_process_control_matches_executable_model")
+      "process-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "process_stop_action_cases"
+      "ProcessStopActionCases"
+      "tool_control::tests::generated_stop_actions_select_the_durable_transition")
+      "process-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "background_process_identity_cases"
       "BackgroundProcessIdentityCases"

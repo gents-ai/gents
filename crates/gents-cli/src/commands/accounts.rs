@@ -364,6 +364,8 @@ pub(crate) async fn account_rows(
     Ok(rows)
 }
 
+/// An unresponsive runtime must not leave the interactive usage request pending
+/// indefinitely after the signed command has been sent.
 pub async fn request_usage_reads(
     identity: &dyn gents::NodeIdentity,
     graphql: &gents::config_client::GraphqlEndpoint,

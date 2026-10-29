@@ -62,7 +62,118 @@ pub async fn seed_standalone_fixture() -> (Arc<ClientCore>, TempDir) {
     (core, tmp)
 }
 
-pub const OPERATOR: &str = "did:test:operator";
+/// The DIDs of [`fixture_signer`]`(7)` and `(9)`; the sessions they start
+/// carry receipts those keys signed.
+pub const OPERATOR: &str = "did:key:z6MkvDqGT54cXesYGvABpF1UapVNwjCqRcafi4Px6Thv5T3Z";
+pub const OTHER: &str = "did:key:z6MkwVDfCg9LbbY6xjH3EZk8YSFQZujV5Y4y1ZWeER9tDiN3";
+
+/// A fixed test key, so fixture rows can name its DID as a constant.
+pub fn fixture_signer(seed: u8) -> gents::KeyIdentity {
+    use std::io::Write as _;
+    // A named temporary file is created private to its owner, as a key must be.
+    let mut key = tempfile::NamedTempFile::new().unwrap();
+    key.write_all(&crypto::ed25519_key_from_seed(&[seed; 32]).unwrap())
+        .unwrap();
+    gents::KeyIdentity::load_existing(key.path(), None).unwrap()
+}
+
+/// Write `session` as creation writes a started session: the immutable
+/// starter index at create, then the receipt `signer` signs for the created
+/// physical document, binding `source`, `parent` and `opening`.
+pub async fn create_started_session(
+    core: &Arc<ClientCore>,
+    signer: &gents::KeyIdentity,
+    mut session: gents_protocol::session::AgentSession,
+    source: &gents_protocol::session::SessionReference,
+    parent: &str,
+    opening: &str,
+) {
+    use gents::NodeIdentity as _;
+    use gents_protocol::session::{
+        SessionCreationCause, SessionCreationReceipt, SessionCreationStarter,
+    };
+    assert_eq!(
+        session.node_did,
+        signer.did(),
+        "the session's node signs its receipt"
+    );
+    let mut provenance = session.provenance.take().unwrap_or_default();
+    provenance.parent_request_doc_id = Some(parent.into());
+    provenance.opening_request_doc_id = Some(opening.into());
+    provenance.started_by = Some(source.clone());
+    let mut input = serde_json::to_value(&gents_protocol::session::AgentSession {
+        provenance: Some(provenance.clone()),
+        ..session.clone()
+    })
+    .unwrap();
+    input["started_by_node_did"] = source.node_did.clone().into();
+    input["started_by_session_id"] = source.session_id.clone().into();
+    let input = gents_protocol::graphql::graphql_input_literal(&input).unwrap();
+    let doc_id = created_doc_id(
+        core,
+        &format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}"),
+        "AgentSession",
+    )
+    .await;
+    let mut receipt = SessionCreationReceipt {
+        node_did: session.node_did.clone(),
+        session_id: session.session_id.clone(),
+        session_doc_id: doc_id,
+        requester_did: session.requester_did.clone(),
+        agent_id: session.agent_id.clone(),
+        opening_request_doc_id: opening.into(),
+        cause: SessionCreationCause::AgentNew,
+        cause_binding: "fixture-call".into(),
+        starter: Some(SessionCreationStarter {
+            source: source.clone(),
+            parent_request_doc_id: parent.into(),
+        }),
+        signature: Vec::new(),
+    };
+    receipt.signature = signer.sign(&receipt.signing_payload()).await.unwrap();
+    provenance.creation_receipt = Some(receipt);
+    write_provenance(core, &session.node_did, &session.session_id, &provenance).await;
+}
+
+pub async fn write_provenance(
+    core: &Arc<ClientCore>,
+    node_did: &str,
+    session_id: &str,
+    provenance: &gents_protocol::session::SessionProvenance,
+) {
+    let input = gents_protocol::graphql::graphql_input_literal(
+        &serde_json::json!({ "provenance": provenance }),
+    )
+    .unwrap();
+    let response = core
+        .node()
+        .execute(&format!(
+            r#"mutation {{ update_AgentSession(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }}, input: {input}) {{ _docID }} }}"#,
+            escape_graphql_string(node_did),
+            escape_graphql_string(session_id),
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+}
+
+/// A fixture session on `node_did` with no provenance.
+pub fn fixture_session(node_did: &str, session_id: &str) -> gents_protocol::session::AgentSession {
+    gents_protocol::session::AgentSession {
+        session_id: session_id.into(),
+        node_did: node_did.into(),
+        requester_did: Some(OPERATOR.into()),
+        agent_id: "worker".into(),
+        created_at: "2026-05-20T00:00:00Z".into(),
+        closed_at: None,
+        archived_at: None,
+        archive_revision: 0,
+        stopped_at: None,
+        title: None,
+        tags: Vec::new(),
+        provenance: None,
+        observation: None,
+    }
+}
 
 pub struct CountingRead {
     inner: gents::config_client::ConfigAccess,
@@ -155,7 +266,7 @@ pub async fn seed_provenance_fixture() -> (Arc<ClientCore>, TempDir, String) {
             "tc_peer",
             "agent_new",
             "req_peer",
-            "did:test:other",
+            OTHER,
             "sess_peer",
             "processing",
             "2026-05-20T00:03:00Z",
@@ -173,7 +284,7 @@ pub async fn seed_provenance_fixture() -> (Arc<ClientCore>, TempDir, String) {
         ),
     ] {
         let call_doc = create_tool_call(&core, call, tool).await;
-        create_request(
+        let opening = create_request(
             &core,
             request_id,
             node_did,
@@ -184,7 +295,20 @@ pub async fn seed_provenance_fixture() -> (Arc<ClientCore>, TempDir, String) {
         )
         .await;
         if started {
-            create_session(&core, node_did, session_id, Some(&parent)).await;
+            let signer = fixture_signer(if node_did == OTHER { 9 } else { 7 });
+            create_started_session(
+                &core,
+                &signer,
+                fixture_session(node_did, session_id),
+                &gents_protocol::session::SessionReference {
+                    node_did: OPERATOR.into(),
+                    session_id: "sess_parent".into(),
+                    requester_did: Some(OPERATOR.into()),
+                },
+                &parent,
+                &opening,
+            )
+            .await;
         }
     }
     (core, tmp, parent)
@@ -214,56 +338,6 @@ pub async fn refresh_request_and_assert_fresh_projection(
         }),
         "fresh request projection omitted {request_id} for node {node_did}"
     );
-}
-
-pub async fn seed_fleet_starter_fixture() -> (Arc<ClientCore>, TempDir, String, String) {
-    let (core, tmp) = boot_core().await;
-    let parent_a = create_request(
-        &core,
-        "req_fleet_parent_a",
-        OPERATOR,
-        "sess_fleet_parent_a",
-        "completed",
-        "2026-05-20T00:00:00Z",
-        None,
-    )
-    .await;
-    create_session(&core, OPERATOR, "sess_fleet_parent_a", None).await;
-    let parent_b = create_request(
-        &core,
-        "req_fleet_parent_b",
-        OPERATOR,
-        "sess_fleet_parent_b",
-        "completed",
-        "2026-05-20T00:00:10Z",
-        None,
-    )
-    .await;
-    create_session(&core, OPERATOR, "sess_fleet_parent_b", None).await;
-    create_session(
-        &core,
-        OPERATOR,
-        "sess_fleet_child_shared_1",
-        Some(&parent_a),
-    )
-    .await;
-    create_session(
-        &core,
-        OPERATOR,
-        "sess_fleet_child_shared_2",
-        Some(&parent_a),
-    )
-    .await;
-    create_session(&core, OPERATOR, "sess_fleet_child_b", Some(&parent_b)).await;
-    create_session(
-        &core,
-        OPERATOR,
-        "sess_fleet_child_dangling",
-        Some("doc_id_of_no_stored_request"),
-    )
-    .await;
-    create_session(&core, OPERATOR, "sess_fleet_plain", None).await;
-    (core, tmp, parent_a, parent_b)
 }
 
 async fn created_doc_id(core: &Arc<ClientCore>, mutation: &str, collection: &str) -> String {

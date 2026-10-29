@@ -22,6 +22,7 @@ use serde_json::{json, Value};
 use super::split_namespace;
 use crate::cli::PackWireArgs;
 
+#[derive(Clone)]
 pub(crate) struct WireRequest {
     pub(crate) plugin: String,
     pub(crate) agent: String,
@@ -29,6 +30,17 @@ pub(crate) struct WireRequest {
     pub(crate) remove: bool,
     pub(crate) preview: bool,
 }
+
+#[cfg(test)]
+pub(super) struct WireTestPause {
+    pub(super) home: std::path::PathBuf,
+    pub(super) reached: tokio::sync::Notify,
+    pub(super) release: tokio::sync::Notify,
+}
+
+#[cfg(test)]
+pub(super) static WIRE_TEST_PAUSE: std::sync::Mutex<Option<std::sync::Arc<WireTestPause>>> =
+    std::sync::Mutex::new(None);
 
 pub(crate) async fn wire(args: PackWireArgs) -> Result<()> {
     let (access, owner) = super::resolve_scope_owner(&args.scope).await?;
@@ -51,13 +63,48 @@ pub(crate) async fn wire_in(
     home: &Path,
     request: &WireRequest,
 ) -> Result<Value> {
-    let (namespace, name) = split_namespace(&request.plugin);
-    let plugin = read_record(home, namespace, name).with_context(|| {
-        format!(
-            "{} is not installed. Next: gents pack install <pack>",
-            request.plugin
-        )
-    })?;
+    let access = access.clone();
+    let owner = owner.to_owned();
+    let home = home.to_owned();
+    let request = request.clone();
+    tokio::spawn(async move { wire_in_owned(&access, &owner, &home, &request).await }).await?
+}
+
+async fn wire_in_owned(
+    access: &ConfigAccess,
+    owner: &str,
+    home: &Path,
+    request: &WireRequest,
+) -> Result<Value> {
+    if !request.preview && !request.remove {
+        anyhow::ensure!(matches!(access, ConfigAccess::Local(_)),
+            "cannot publish a plugin pin through GraphQL because the commit outcome may be unknown; stop the runtime serving the owning node home, then run `gents pack wire {} --agent {} --home <node-home>` without --graphql",
+            request.plugin, request.agent);
+    }
+    let home_for_read = home.to_owned();
+    let plugin_name = request.plugin.clone();
+    let (_store_guard, plugin) = tokio::task::spawn_blocking(move || {
+        let guard = gents::plugin::store::try_lock_store(&home_for_read)?;
+        let (namespace, name) = split_namespace(&plugin_name);
+        let plugin = read_record(&home_for_read, namespace, name).with_context(|| {
+            format!("{plugin_name} is not installed. Next: gents pack install <pack>")
+        })?;
+        Ok::<_, anyhow::Error>((guard, plugin))
+    })
+    .await??;
+    #[cfg(test)]
+    {
+        let pause = WIRE_TEST_PAUSE
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|pause| pause.home == home)
+            .cloned();
+        if let Some(pause) = pause {
+            pause.reached.notify_one();
+            pause.release.notified().await;
+        }
+    }
 
     let (mut tools_ids, mut skill_ids) = (Vec::new(), Vec::new());
     if let Some(pack) = plugin.owner_pack_coordinate.as_deref() {

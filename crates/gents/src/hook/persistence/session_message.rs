@@ -61,7 +61,7 @@ impl DefraSessionHook {
         }
 
         let create = tool_name == AGENT_NEW_TOOL_NAME;
-        let (target, body, title, interrupt) = if create {
+        let (target, body, title, delivery) = if create {
             let parsed = match serde_json::from_str::<AgentNewArgs>(args) {
                 Ok(parsed) => parsed,
                 Err(error) => refuse!(
@@ -110,7 +110,7 @@ impl DefraSessionHook {
                 },
                 (parsed.prompt, parsed.task),
                 parsed.title,
-                false,
+                crate::session_message::AgentMessageDelivery::Queue,
             )
         } else {
             let parsed = match serde_json::from_str::<AgentMessageArgs>(args) {
@@ -154,7 +154,14 @@ impl DefraSessionHook {
                     )
                 );
             };
-            if parsed.interrupt {
+            let delivery = match parsed.delivery() {
+                Ok(delivery) => delivery,
+                Err(message) => refuse!(
+                    FailureClass::ArgumentInvalid,
+                    invalid_tool_arguments_payload(tool_name, "/delivery", message)
+                ),
+            };
+            if delivery == crate::session_message::AgentMessageDelivery::Interrupt {
                 if let Some(reason) = crate::session_message::interrupt_refusal(
                     &self.node,
                     &crate::session_origin::SessionScope::of_request(&caller),
@@ -168,12 +175,7 @@ impl DefraSessionHook {
                     );
                 }
             }
-            (
-                target,
-                (parsed.message, parsed.task),
-                None,
-                parsed.interrupt,
-            )
+            (target, (parsed.message, parsed.task), None, delivery)
         };
         let field = if create { "prompt" } else { "message" };
         let body =
@@ -210,6 +212,7 @@ impl DefraSessionHook {
             caller_node_did: caller.node_did.clone(),
             caller_agent_id: caller.agent_id.clone(),
             caller_session_id: caller.session_id.clone(),
+            caller_requester_did: caller.requester_did.clone(),
             caller_request_id: caller.request_id.clone(),
             caller_request_doc_id: caller.doc_id.clone(),
             caller_hop,
@@ -217,20 +220,30 @@ impl DefraSessionHook {
             tool_call_doc_id,
             correlation: caller.caused_by_correlation.clone(),
         };
-        let plan = match crate::session_message::plan(
+        let mut plan = match crate::session_message::plan_with_delivery(
             &self.node,
             &cause,
             &target,
             rendered,
             title.as_deref(),
-            interrupt,
+            delivery,
         )
         .await
         {
             Ok(Ok(plan)) => plan,
             Ok(Err(message)) => refuse!(
                 FailureClass::ArgumentInvalid,
-                invalid_tool_arguments_payload(tool_name, "/task", message)
+                invalid_tool_arguments_payload(
+                    tool_name,
+                    if delivery == crate::session_message::AgentMessageDelivery::Steer
+                        && target.node_did != caller.node_did
+                    {
+                        "/delivery"
+                    } else {
+                        "/task"
+                    },
+                    message
+                )
             ),
             Err(error) => refuse!(
                 FailureClass::ServiceUnavailable,
@@ -242,6 +255,9 @@ impl DefraSessionHook {
                 )
             ),
         };
+        if create {
+            plan.sign_agent_creation(&caller.node_did).await?;
+        }
         if target.node_did == caller.node_did {
             let max_request_hop =
                 crate::request_admission::max_request_hop(&self.node, &caller.node_did).await?;
@@ -262,12 +278,20 @@ impl DefraSessionHook {
                     &receipt,
                     &["status", "session_id", "request_id", "tool_call_id"],
                 )?,
+                Err(crate::session_message::CommitError::Steer(refusal)) => {
+                    refuse!(
+                        FailureClass::ArgumentInvalid,
+                        invalid_tool_arguments_payload(tool_name, "/delivery", refusal.to_string())
+                    );
+                }
                 Err(error) => {
-                    if let Some(capacity) = error.downcast_ref::<BackgroundCapacityExceeded>() {
-                        refuse!(
-                            FailureClass::ServiceUnavailable,
-                            background_budget_exceeded_payload(tool_name, capacity.0)
-                        );
+                    if let crate::session_message::CommitError::Other(ref error) = error {
+                        if let Some(capacity) = error.downcast_ref::<BackgroundCapacityExceeded>() {
+                            refuse!(
+                                FailureClass::ServiceUnavailable,
+                                background_budget_exceeded_payload(tool_name, capacity.0)
+                            );
+                        }
                     }
                     refuse!(
                         FailureClass::ServiceUnavailable,
@@ -280,20 +304,6 @@ impl DefraSessionHook {
                     );
                 }
             };
-        // Stop the target's turn only once the message is durably delivered,
-        // so a failed commit never interrupts without delivering. The new
-        // request waits behind the interrupted one.
-        if interrupt {
-            let scope = crate::session_message::target_scope(&caller.node_did, &target);
-            if let Err(error) = crate::session_message::interrupt_session(&self.node, &scope).await
-            {
-                tracing::warn!(
-                    target_session = %target.session_id,
-                    error = %format!("{error:#}"),
-                    "agent_message delivered, but interrupting the target's turn failed"
-                );
-            }
-        }
         Ok(self.skip_tool_result(tool_name, receipt))
     }
 }

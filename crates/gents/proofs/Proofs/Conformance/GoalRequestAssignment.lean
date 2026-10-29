@@ -83,21 +83,26 @@ def inputCasesJson : String := (toJson (inputCases.map inputCaseJson)).compress
 example : inputCases.length = 12 := by decide
 
 def resubmissionInputJson (input : ResubmissionInput) : Json :=
-  Json.mkObj [("reference", input.reference.map referenceJson |>.getD Json.null),
+  let creation := match input.creation with
+    | none => Json.null
+    | some .agentNew => toJson "agent_new"
+    | some .pluginJob => toJson "plugin_job"
+  Json.mkObj [("creation", creation), ("reference", input.reference.map referenceJson |>.getD Json.null),
     ("queued", toJson input.queued), ("continuation", toJson input.continuation),
     ("authored", toJson input.authored)]
 
 def freshSessionCases : List ResubmissionInput :=
-  [none, some ⟨1, none⟩, some ⟨1, some 100⟩].flatMap fun reference =>
-    [false, true].flatMap fun queued =>
-      [false, true].map fun continuation => ⟨reference, queued, continuation, 42⟩
+  [none, some .agentNew, some .pluginJob].flatMap fun creation =>
+    [none, some ⟨1, none⟩, some ⟨1, some 100⟩].flatMap fun reference =>
+      [false, true].flatMap fun queued =>
+        [false, true].map fun continuation => ⟨creation, reference, queued, continuation, 42⟩
 
 def freshSessionCasesJson : String :=
   (toJson (freshSessionCases.map fun input => Json.mkObj [
     ("input", resubmissionInputJson input),
     ("expected", resubmissionInputJson (freshSessionInput input))])).compress
 
-example : freshSessionCases.length = 12 := by decide
+example : freshSessionCases.length = 36 := by decide
 
 structure MessageInputCase where
   name : String

@@ -10,6 +10,8 @@ use super::edits::{apply_prepared_with_held_locks, prepare_workspace_edit};
 use super::pool::{LspLease, LspPool, PoolKey};
 use super::LspToolConfig;
 
+/// Diagnostics attached to a file write are incidental to that operation; bound
+/// their output so they do not crowd the write result out of the model context.
 const MAX_WRITETHROUGH_DIAGNOSTICS: usize = 50;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -9,6 +9,8 @@ use serde_json::Value;
 
 use crate::post_graphql;
 
+/// Bound the request scan used to discover sessions for this context estimate;
+/// the response reports this limit so callers can interpret its coverage.
 const RECENT_REQUEST_SCAN: usize = 200;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

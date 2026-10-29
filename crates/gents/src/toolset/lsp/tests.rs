@@ -221,11 +221,40 @@ async fn invalid_inbound_file_is_rejected_before_server_start() {
             apply: None,
             payload: None,
             timeout: Some(5),
+            limit: None,
         })
         .await
         .unwrap_err();
     assert!(error.to_string().contains("unsupported URI"), "{error}");
     assert_eq!(pool.live_count().await, 0);
+}
+
+#[tokio::test]
+async fn result_limit_is_parsed_and_rejected_outside_bounds() {
+    let root = tempfile::tempdir().unwrap();
+    let tool = LspTool::new(
+        sample_config(
+            root.path().to_path_buf(),
+            FileToolMode::ReadOnly,
+            "limit",
+            vec![],
+        ),
+        LspPool::new(),
+    )
+    .unwrap();
+    for limit in [0, 1001] {
+        let args: LspArgs = serde_json::from_value(serde_json::json!({
+            "action": "status", "limit": limit,
+        }))
+        .unwrap();
+        let error = tool.call(args).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("limit must be between 1 and 1000"),
+            "{error}"
+        );
+    }
 }
 
 #[test]
@@ -335,6 +364,7 @@ async fn fixture_hover_definition_and_rename_preview() {
             apply: None,
             payload: None,
             timeout: None,
+            limit: None,
         })
         .await
         .expect("hover");
@@ -350,6 +380,7 @@ async fn fixture_hover_definition_and_rename_preview() {
             apply: None,
             payload: None,
             timeout: None,
+            limit: None,
         })
         .await
         .expect("definition");
@@ -365,6 +396,7 @@ async fn fixture_hover_definition_and_rename_preview() {
             apply: Some(false),
             payload: None,
             timeout: None,
+            limit: None,
         })
         .await
         .expect("rename preview");
@@ -406,6 +438,7 @@ async fn rename_file_allows_a_new_destination() {
             apply: Some(true),
             payload: None,
             timeout: Some(5),
+            limit: None,
         })
         .await
         .expect("rename_file must admit a destination that does not exist yet");
@@ -566,6 +599,7 @@ async fn status_does_not_start_a_server() {
             apply: None,
             payload: None,
             timeout: None,
+            limit: None,
         })
         .await
         .expect("status");
@@ -696,6 +730,7 @@ while True:
             apply: None,
             payload: None,
             timeout: None,
+            limit: None,
         })
         .await
         .expect("definition completes");
@@ -802,6 +837,7 @@ while True:
             apply: None,
             payload: None,
             timeout: None,
+            limit: None,
         })
         .await;
     assert!(!target.exists(), "workspace/applyEdit must not write files");
@@ -943,6 +979,7 @@ async fn execute_command_is_argument_invalid() {
             apply: None,
             payload: Some(r#"{"command":"evil"}"#.into()),
             timeout: None,
+            limit: None,
         })
         .await
         .unwrap_err();
@@ -2206,6 +2243,7 @@ async fn rust_analyzer_starts_and_reports_ready() {
             apply: None,
             payload: None,
             timeout: Some(120),
+            limit: None,
         })
         .await
         .expect("rust-analyzer must return document symbols after cold start");
@@ -2224,6 +2262,7 @@ async fn rust_analyzer_starts_and_reports_ready() {
             apply: None,
             payload: None,
             timeout: Some(40),
+            limit: None,
         })
         .await
         .expect("rust-analyzer must accept hover after start");
@@ -2243,6 +2282,7 @@ async fn rust_analyzer_starts_and_reports_ready() {
             apply: None,
             payload: None,
             timeout: None,
+            limit: None,
         })
         .await
         .expect("status");
@@ -2298,6 +2338,7 @@ async fn rust_analyzer_hover_on_gents_crate() {
                 apply: None,
                 payload: None,
                 timeout: Some(60),
+                limit: None,
             })
             .await
             .unwrap_or_else(|err| panic!("document symbols for {file}: {err}"));
@@ -2318,6 +2359,7 @@ async fn rust_analyzer_hover_on_gents_crate() {
             apply: None,
             payload: None,
             timeout: Some(60),
+            limit: None,
         })
         .await
         .expect("hover lsp_advertised");
@@ -2337,6 +2379,7 @@ async fn rust_analyzer_hover_on_gents_crate() {
             apply: None,
             payload: None,
             timeout: Some(60),
+            limit: None,
         })
         .await
         .expect("hover meet");
@@ -2356,6 +2399,7 @@ async fn rust_analyzer_hover_on_gents_crate() {
             apply: None,
             payload: None,
             timeout: None,
+            limit: None,
         })
         .await
         .expect("status");
@@ -2498,6 +2542,40 @@ fn document_symbol_cap_is_global_and_output_is_qualified() {
     assert!(output.contains("Demo::method_0 (method):1"), "{output}");
     assert!(output.starts_with("Found 200 result(s):"), "{output}");
     assert!(!output.contains("method_199"), "{output}");
+}
+
+#[test]
+fn requested_result_limit_applies_to_diagnostics_symbols_and_references() {
+    let root = tempfile::tempdir().unwrap();
+    let context = ToolContext::new(root.path().to_path_buf(), false).unwrap();
+    let uri = super::uri::path_to_file_uri(&root.path().join("lib.rs"));
+    let diagnostics = (0..60)
+        .map(|n| {
+            serde_json::json!({
+                "range": {"start": {"line": n, "character": 0}}, "message": format!("error_{n}")
+            })
+        })
+        .collect::<Vec<_>>();
+    let output = super::actions::format_result_with_limit(
+        &context,
+        LspAction::Diagnostics,
+        serde_json::json!({"items": diagnostics}),
+        Some(60),
+    );
+    assert!(output.contains("error_59"), "{output}");
+    let locations = (0..60).map(|n| serde_json::json!({
+        "uri": uri, "range": {"start": {"line": n, "character": 0}}, "name": format!("symbol_{n}")
+    })).collect::<Vec<_>>();
+    for action in [LspAction::Symbols, LspAction::References] {
+        let output = super::actions::format_result_with_limit(
+            &context,
+            action,
+            serde_json::json!(locations),
+            Some(55),
+        );
+        assert!(output.contains("symbol_54"), "{output}");
+        assert!(!output.contains("symbol_55"), "{output}");
+    }
 }
 
 #[cfg(unix)]
@@ -2936,6 +3014,7 @@ async fn reload_retires_current_snapshot_clients() {
             apply: None,
             payload: None,
             timeout: None,
+            limit: None,
         })
         .await
         .expect("hover starts client");
@@ -2951,6 +3030,7 @@ async fn reload_retires_current_snapshot_clients() {
             apply: None,
             payload: None,
             timeout: None,
+            limit: None,
         })
         .await
         .expect("reload");
@@ -3127,6 +3207,7 @@ pub(crate) async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispa
                         apply: None,
                         payload: None,
                         timeout: None,
+                        limit: None,
                     })
                     .await
                     .unwrap_err();

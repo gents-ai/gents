@@ -306,6 +306,7 @@ where
     .await;
     hook.set_request_deadline_at(config.deadline).await;
     let provider_profile = config.provider_input_counter.profile();
+    let deadline = config.deadline;
     let inference = async {
         let mut stream = Box::pin(crate::agent::loop_stream::run_loop_stream(
             model,
@@ -357,10 +358,31 @@ where
             "provider stream ended without an explicit terminal response"
         ))
     };
-    let response = match capture_scope {
-        Some(scope) => crate::rendered_request::scope::scope_request(scope, inference).await,
-        None => inference.await,
-    };
+    let scoped_inference = crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
+        request.requester_did.clone(),
+        Some(request.node_did.clone()),
+        Some(request.agent_id.clone()),
+        Some(request.request_id.clone()),
+        crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+            deadline,
+            tokio_util::sync::CancellationToken::new(),
+            None,
+            None,
+            Some(request.session_id.clone()),
+            None,
+            Default::default(),
+            false,
+            async {
+                match capture_scope {
+                    Some(scope) => {
+                        crate::rendered_request::scope::scope_request(scope, inference).await
+                    }
+                    None => inference.await,
+                }
+            },
+        ),
+    );
+    let response = scoped_inference.await;
 
     let session_id = hook.session_id().await;
     match response {

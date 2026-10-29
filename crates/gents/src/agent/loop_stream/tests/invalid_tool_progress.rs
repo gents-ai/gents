@@ -335,7 +335,7 @@ async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeed
     .unwrap();
     assert!(
         corrected.contains("visible-proof.txt"),
-        "successful corrected result must reach provider"
+        "successful corrected result must reach provider: {corrected}"
     );
     let bash = requests[1]
         .tools
@@ -426,7 +426,10 @@ async fn empty_bash_arguments_exhaust_owned_loop_without_side_effects() {
         let error = collected
             .error
             .expect("budget exhaustion must fail the loop");
-        assert!(error.contains("invalid_tool_call_budget_exhausted:"));
+        assert!(
+            error.contains("invalid_tool_call_budget_exhausted:"),
+            "unexpected owned loop error: {error}"
+        );
         assert_eq!(model.seen_requests().await.len(), 8);
         let response = node
             .execute("{ AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }")

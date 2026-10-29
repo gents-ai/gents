@@ -108,6 +108,8 @@ pub async fn attach(paths: DesktopPaths, editor_store: bool, interactive: bool) 
 
 /// Editors keep attachment stdin open until the helper exits, so host socket
 /// EOF must end the attachment even when no more editor input is available.
+/// The installation/connect deadline also bounds waiting for a child that
+/// remains alive without opening its socket.
 async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool) -> Result<()> {
     #[cfg(windows)]
     crate::windows_stdio::prevent_inheritance()

@@ -6,6 +6,8 @@ pub trait StartupBuildFailureObserver: Send + Sync {
 }
 
 #[derive(Debug, Clone)]
+/// Host startup policy for waiting on agent builds. Embedders may set these
+/// values without changing an agent's inference or tool execution budget.
 pub struct StartupReadinessOptions {
     pub build_failure_budget: u32,
     pub build_timeout: Duration,

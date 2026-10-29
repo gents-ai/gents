@@ -260,6 +260,7 @@ fn normalize_optional(value: Option<&str>) -> Option<String> {
 
 pub const INFERENCE_SETTINGS_CONTRACT_VERSION: u32 = 1;
 pub const INFERENCE_SETTINGS_PATH: &str = "/inference/settings";
+/// Bound an endpoint's response before retaining and decoding its JSON body.
 const INFERENCE_SETTINGS_MAX_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -307,6 +308,8 @@ impl crate::client::ClientCore {
     }
 }
 
+/// A runtime endpoint can be unavailable or unresponsive while settings are
+/// opened; bound the HTTP wait as well as the response body.
 async fn read_inference_setup_state_from(
     graphql: &str,
     node_did: &str,
@@ -338,7 +341,12 @@ async fn read_inference_setup_state_from(
         .authorize(client.get(url))?
         .send()
         .await
-        .context("reading runtime model settings")?;
+        .map_err(|error| {
+            crate::error::BridgeError::runtime_http_error(
+                error,
+                "reading runtime model settings".to_owned(),
+            )
+        })?;
     anyhow::ensure!(
         response.status().is_success(),
         "runtime model settings are unavailable (HTTP {}); reconnect the runtime and try again",
@@ -351,7 +359,10 @@ async fn read_inference_setup_state_from(
         "runtime model settings exceed the response limit"
     );
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await? {
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        let message = error.to_string();
+        crate::error::BridgeError::runtime_http_error(error, message)
+    })? {
         anyhow::ensure!(
             bytes.len().saturating_add(chunk.len()) <= INFERENCE_SETTINGS_MAX_BYTES,
             "runtime model settings exceed the response limit"

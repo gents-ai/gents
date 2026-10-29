@@ -39,6 +39,8 @@ struct MemoryRow {
     #[serde(default)]
     value: Option<String>,
     #[serde(default)]
+    value_text: Option<String>,
+    #[serde(default)]
     updated_at: Option<String>,
 }
 
@@ -192,6 +194,7 @@ async fn read_memory(node: &EmbeddedNode, node_did: &str, key: &str) -> Result<M
                 node_did
                 key
                 value
+                value_text
                 updated_at
             }}
         }}"#
@@ -211,7 +214,7 @@ async fn read_memory(node: &EmbeddedNode, node_did: &str, key: &str) -> Result<M
             action: "read",
             key: row.key.unwrap_or_else(|| key.to_string()),
             found: true,
-            value: row.value,
+            value: row.value_text.or(row.value),
             updated_at: row.updated_at,
         },
         None => MemoryOutput {
@@ -247,11 +250,11 @@ async fn write_memory(
                     memory_id: "{escaped_memory_id}",
                     node_did: "{escaped_node_did}",
                     key: "{escaped_key}",
-                    value: "{escaped_value}",
+                    value_text: "{escaped_value}",
                     updated_at: "{escaped_updated_at}"
                 }},
                 update: {{
-                    value: "{escaped_value}",
+                    value_text: "{escaped_value}",
                     updated_at: "{escaped_updated_at}"
                 }}
             ) {{ _docID }}
@@ -292,6 +295,47 @@ mod tests {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         node
+    }
+
+    #[tokio::test]
+    async fn legacy_memory_survives_schema_upgrade_and_empty_text_write() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let old_sdl = gents_protocol::schemas::NODE_MEMORY
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("value_text:"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        node.add_collection(&old_sdl).await.unwrap();
+        crate::config_client::ConfigAccess::write_local_response(
+            &node,
+            "test.seed_legacy_memory",
+            r#"mutation { create_NodeMemory(input: {memory_id: "16:did:key:z-memoryproject", node_did: "did:key:z-memory", key: "project", value: "original", updated_at: "2026-01-01T00:00:00Z"}) { _docID } }"#,
+        ).await.unwrap();
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let before = read_memory(&node, "did:key:z-memory", "project")
+            .await
+            .unwrap();
+        assert_eq!(before.value.as_deref(), Some("original"));
+        write_memory(&node, "did:key:z-memory", "project", "")
+            .await
+            .unwrap();
+        let empty = read_memory(&node, "did:key:z-memory", "project")
+            .await
+            .unwrap();
+        assert_eq!(empty.value.as_deref(), Some(""));
+        write_memory(&node, "did:key:z-memory", "project", "updated")
+            .await
+            .unwrap();
+        let updated = read_memory(&node, "did:key:z-memory", "project")
+            .await
+            .unwrap();
+        assert_eq!(updated.value.as_deref(), Some("updated"));
+        let response = crate::config_client::ConfigAccess::local(node)
+            .execute("{ NodeMemory { value value_text } }")
+            .await
+            .unwrap();
+        assert_eq!(response["data"]["NodeMemory"][0]["value"], "original");
+        assert_eq!(response["data"]["NodeMemory"][0]["value_text"], "updated");
     }
 
     #[tokio::test]

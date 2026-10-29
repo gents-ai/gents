@@ -154,6 +154,28 @@ mod tests {
     }
 
     #[test]
+    fn replaced_catalog_cannot_reuse_its_previous_freshness_watermark() -> Result<()> {
+        let original = catalog(None, "first");
+        let replacement = catalog(None, "replacement");
+        let mut freshness = Freshness::load(&Value::Null, std::slice::from_ref(&original))?;
+        freshness.record(&original, original.observed_at.clone())?;
+        let mut row = serde_json::json!({
+            "backend_id": "backend", "catalogs": {"entries": [replacement.clone()]},
+            "catalog_freshness": freshness,
+        });
+        let error = decode_backend_observation(row.clone()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("freshness does not match its retained payload"),
+            "{error:#}"
+        );
+        row["catalog_freshness"] = Value::Null;
+        assert_eq!(decode_backend_observation(row)?.catalogs, [replacement]);
+        Ok(())
+    }
+
+    #[test]
     fn freshness_projection_is_scoped_and_requires_matching_retained_content() -> Result<()> {
         let shared = catalog(None, "shared");
         let private = catalog(Some("did:key:private"), "private");

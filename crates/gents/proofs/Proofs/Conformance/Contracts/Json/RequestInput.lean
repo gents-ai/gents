@@ -128,6 +128,12 @@ private def requestInputCaseJson (c : RequestInputCase) : String :=
   ",\"expected_continuation\":" ++ requestInputJson (continuationInput c.input queue c.input.goalContinuation "physical:parent") ++
   ",\"reissued_source_doc_id\":" ++ jsonString "physical:parent" ++
   ",\"expected_reissued_input\":" ++ requestInputJson (reissuedInput c.input "physical:parent") ++
+  ",\"edit_queue\":" ++ queueJson (some queue) ++
+  ",\"edit_authored_input\":" ++ requestInputJson ({} : RequestInput) ++
+  ",\"expected_edited_input\":" ++ requestInputJson (editedInput c.input {} "physical:parent" queue) ++
+  ",\"expected_edited_from_empty\":" ++ requestInputJson (editedInput {} c.input "physical:parent" queue) ++
+  ",\"expected_edit_directory_same\":" ++ boolString (editDirectoryCompatible c.input (editedInput c.input {} "physical:parent" queue)) ++
+  ",\"expected_edit_directory_changed\":" ++ boolString (editDirectoryCompatible c.input { c.input with cwd := some "/gents-edit-different" }) ++
   ",\"expected_fresh_input\":" ++ requestInputJson (freshSessionInput c.input) ++
   ",\"workspace\":" ++ workspaceJson c.workspace ++
   ",\"workspace_source\":" ++ workspaceJson c.workspaceSource ++

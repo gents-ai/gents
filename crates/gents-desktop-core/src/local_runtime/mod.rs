@@ -5,7 +5,9 @@ mod request_input;
 mod workspace_permissions;
 
 pub(crate) use goal_control::ensure_goal_stop_supported;
-pub(crate) use request_input::ensure_request_input_supported;
+pub(crate) use request_input::{
+    ensure_authored_queue_edit_supported, ensure_request_input_supported,
+};
 pub use workspace_permissions::workspace_permission_support;
 
 #[cfg(test)]
@@ -29,8 +31,11 @@ use self::identity::{normalize_optional_string, resolve_p2p_peer_id};
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = gents::home::RUNTIME_STATE_FILE_NAME;
 const LOCAL_STANDARD_SOURCE: &str = "local-standard";
+/// The recorded runtime endpoint may be stale or unresponsive.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+/// Startup reports failure if the runtime never reaches serving readiness.
 const SERVE_READY_TIMEOUT: Duration = Duration::from_secs(60);
+/// Space readiness probes while waiting for an external runtime to start.
 const SERVE_READY_POLL: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -298,7 +303,9 @@ pub fn runtime_status_url(server_address: &str) -> Result<String> {
         anyhow::bail!("server_address is required");
     }
 
-    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+    let with_scheme = if trimmed.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    }) {
         trimmed.to_string()
     } else {
         format!("http://{trimmed}")
@@ -322,7 +329,9 @@ pub fn runtime_graphql_url(endpoint: &str) -> Result<String> {
         anyhow::bail!("graphql endpoint is required");
     }
 
-    let with_scheme = if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+    let with_scheme = if trimmed.split_once("://").is_some_and(|(scheme, _)| {
+        scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https")
+    }) {
         trimmed.to_string()
     } else {
         format!("http://{trimmed}")
@@ -397,17 +406,25 @@ pub async fn fetch_hosted_runtime_status(
     let response = endpoint
         .authorize(client.get(&status_url))?
         .send()
-        .await?
+        .await
+        .map_err(|error| {
+            crate::error::BridgeError::runtime_http_error(
+                error,
+                format!("sending runtime status request to {status_url}"),
+            )
+        })?
         .error_for_status()?;
     anyhow::ensure!(
         response.status().is_success(),
         "runtime status returned HTTP {}",
         response.status(),
     );
-    let payload = response
-        .json()
-        .await
-        .context("decoding authenticated runtime status")?;
+    let payload = response.json().await.map_err(|error| {
+        crate::error::BridgeError::runtime_http_error(
+            error,
+            "decoding authenticated runtime status".to_owned(),
+        )
+    })?;
     Ok(Some(augment_peer_status_payload_for_desktop(
         payload,
         &status_url,
@@ -733,12 +750,19 @@ async fn fetch_graphql_node_identity(
         .json(&json!({ "query": query }))
         .send()
         .await
-        .with_context(|| format!("sending GraphQL identity query to {graphql}"))?;
+        .map_err(|error| {
+            crate::error::BridgeError::runtime_http_error(
+                error,
+                format!("sending GraphQL identity query to {graphql}"),
+            )
+        })?;
     let status = response.status();
-    let body = response
-        .bytes()
-        .await
-        .with_context(|| format!("reading GraphQL identity response from {graphql}"))?;
+    let body = response.bytes().await.map_err(|error| {
+        crate::error::BridgeError::runtime_http_error(
+            error,
+            format!("reading GraphQL identity response from {graphql}"),
+        )
+    })?;
     if !status.is_success() {
         anyhow::bail!(
             "GraphQL identity query to {graphql} failed with {status}: {}",

@@ -71,7 +71,7 @@ theorem metadata_does_not_authorize_an_unbound_image :
       [⟨"tool-document", "request-document", ⟨canonicalSource.requester, admission.node,
           admission.session⟩, true, true⟩]
       [⟨"image-document", "tool-document", "request-document",
-          ⟨canonicalSource.requester, admission.node, admission.session⟩⟩] = .rejected := by
+          ⟨canonicalSource.requester, admission.node, admission.session⟩, []⟩] = .rejected := by
   native_decide
 
 def imagePage : PageEnvelope :=
@@ -91,7 +91,7 @@ def selectedImageTool : FileImages.Tool :=
 def imageTools : List FileImages.Tool := [selectedImageTool]
 
 def selectedImage : FileImages.Image :=
-  ⟨"2001", "1", "1001", ⟨canonicalSource.requester, admission.node, admission.session⟩⟩
+  ⟨"2001", "1", "1001", ⟨canonicalSource.requester, admission.node, admission.session⟩, []⟩
 
 def images : List FileImages.Image := [selectedImage]
 
@@ -134,6 +134,14 @@ def imageCases : List ImageCase :=
       {selectedImage with docId := "another-observation"}] }
   , { name := "image_scope_cannot_impersonate_the_reader", images := [{selectedImage with
       scope := scope}] }
+  , { name := "content_shares_source_scope", images := [{selectedImage with contents :=
+      [⟨"content", selectedImage.toolDocId, selectedImage.scope⟩]}], expected := .selected "2001" }
+  , { name := "foreign_content_rejected", images := [{selectedImage with contents :=
+      [⟨"content", selectedImage.toolDocId, scope⟩]}] }
+  , { name := "content_from_another_tool_rejected", images := [{selectedImage with contents :=
+      [⟨"content", "other-tool", selectedImage.scope⟩]}] }
+  , { name := "empty_content_identity_rejected", images := [{selectedImage with contents :=
+      [⟨"", selectedImage.toolDocId, selectedImage.scope⟩]}] }
   , { name := "image_permission_reauthorized", expected := .selected "2001" }
   , { name := "canonical_reader_can_use_a_bound_image", catalog := catalog [1],
       page := {imagePage with page := (makePage (getSnapshot (source 1)) 0).toWire "reader-snapshot"},

@@ -742,6 +742,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
         }),
         goal,
         turn_state: turn_state_label,
+        inference_activity: None,
         latest_request_id,
         retry_eligibility,
         latest_request_outcome,

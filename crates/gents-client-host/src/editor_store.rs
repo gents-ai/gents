@@ -11,8 +11,13 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
+/// This private bootstrap carries only store metadata and key material; a
+/// bounded frame limits allocation before its contents can be validated.
 const MAX_FRAME_BYTES: usize = 4096;
 pub use gents_desktop_bridge::host::protocol::EDITOR_STORE_BOOTSTRAP_VERSION as VERSION;
+
+#[cfg(all(test, target_os = "macos", feature = "editor-e2e"))]
+mod unlock_tests;
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
@@ -57,6 +62,8 @@ where
     Ok(())
 }
 
+/// The editor owns secret storage and can disconnect or stop responding while
+/// bootstrap waits for it; fail the attachment rather than wait indefinitely.
 pub async fn receive<S>(channel: &mut Framed<S, LengthDelimitedCodec>) -> Result<bytes::BytesMut>
 where
     S: AsyncRead + AsyncWrite + Unpin,

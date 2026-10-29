@@ -9,6 +9,7 @@ use gents::defra_node::EmbeddedNode;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::job::JobControlOutcome;
+use gents_protocol::process_control::{OperatorProcessControlRequest, ProcessControlOutcome};
 use tauri::State;
 
 use crate::commands::mcp_health::{load_mcp_services_with_health, probe_mcp_service};
@@ -104,6 +105,10 @@ async fn fetch_background_tool_calls(
     Ok(rows
         .into_iter()
         .map(|row| ToolCallRow {
+            tool_call_doc_id: row
+                .get("_docID")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
             request_id: row
                 .get("request_id")
                 .and_then(|v| v.as_str())
@@ -166,6 +171,7 @@ fn background_tool_calls_query(node_did: &str) -> String {
                 }},
                 limit: {BACKGROUND_TOOL_CALL_LIMIT}
             ) {{
+                _docID
                 request_id
                 tool_call_id
                 tool_name
@@ -271,6 +277,18 @@ pub async fn desktop_job_control(
         ),
     }
     result.map_err(|error| BridgeError::untyped(error.to_string()))
+}
+
+#[tauri::command]
+pub async fn desktop_process_control(
+    state: State<'_, DesktopAppState>,
+    request: OperatorProcessControlRequest,
+) -> Result<ProcessControlOutcome, BridgeError> {
+    let core = current_core(&state)
+        .ok_or_else(|| BridgeError::untyped("desktop bridge core not initialized"))?;
+    crate::process_control::process_control(&core, &request)
+        .await
+        .map_err(BridgeError::untyped)
 }
 
 #[tauri::command]

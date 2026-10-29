@@ -70,7 +70,7 @@ impl ImageRequestStore for ObservedStore {
         &self,
         demand: &FileImageDemand,
         catalog: &HydrationCatalog,
-    ) -> Result<FileImageSelection> {
+    ) -> Result<(FileImageSelection, Vec<String>)> {
         let selection = self.inner.selection(demand, catalog).await?;
         self.gate.pause(PauseAt::Selection).await;
         Ok(selection)
@@ -112,7 +112,7 @@ impl HydrationDelivery for ObservedDelivery {
         self.inner.push_documents_to_peer(peer, target).await?;
         self.gate.pause(PauseAt::Acknowledged).await;
         if self.gate.at == PauseAt::Delivered {
-            let DeliveryTarget::FileImage(image) = target else {
+            let DeliveryTarget::FileImage(image, _) = target else {
                 anyhow::bail!("file review delivered an unexpected collection")
             };
             self.wait_materialized(image).await?;
@@ -515,6 +515,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool, shared: bool) -> 
     let ToolFileChangeRead::Retained {
         document_id: image,
         changes,
+        ..
     } = load_tool_file_change_observation(
         &access,
         &physical,
@@ -687,7 +688,8 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool, shared: bool) -> 
         demand.admission.request_key = demand.derive_request_key();
         let facts = source_store.admission(&demand).await?;
         anyhow::ensure!(
-            source_store.selection(&demand, &facts.catalog).await? == FileImageSelection::Rejected,
+            source_store.selection(&demand, &facts.catalog).await?.0
+                == FileImageSelection::Rejected,
             "metadata access granted image bytes"
         );
         source_node
@@ -709,7 +711,8 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool, shared: bool) -> 
             )
             .await?;
         anyhow::ensure!(
-            source_store.selection(&demand, &facts.catalog).await? == FileImageSelection::Rejected,
+            source_store.selection(&demand, &facts.catalog).await?.0
+                == FileImageSelection::Rejected,
             "revocation between metadata and image selection retained read authority"
         );
 
@@ -733,6 +736,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool, shared: bool) -> 
             source_store
                 .selection(&forged, &forged_admission.catalog)
                 .await?
+                .0
                 == FileImageSelection::Rejected,
             "a forged requester borrowed the reader's signed metadata"
         );
@@ -788,7 +792,13 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool, shared: bool) -> 
         calls: AtomicUsize::new(0),
         recipient: client_node.clone(),
         source_did: source.did().into(),
-        expected_changes: serde_json::to_value(&changes)?,
+        expected_changes: access
+            .execute(&format!(
+                r#"{{ ToolFileChange(docID: "{}") {{ file_changes }} }}"#,
+                escape_graphql_string(&image),
+            ))
+            .await?["data"]["ToolFileChange"][0]["file_changes"]
+            .clone(),
     };
     let sweep = reconcile_images(&store, &delivery);
     tokio::pin!(sweep);
@@ -1003,9 +1013,9 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool, shared: bool) -> 
     })
     .await
     .context("served retry image did not become readable")??;
-    if let Some(entry) = received_entry {
+    if let Some(entry) = &received_entry {
         let received = receipt
-            .read_inventory_image(client_node.clone(), &entry)
+            .read_inventory_image(client_node.clone(), entry)
             .await?
             .context("shared image is not readable after a served receipt")?;
         anyhow::ensure!(
@@ -1027,10 +1037,31 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool, shared: bool) -> 
             && rows[0]["request_doc_id"] == retry.request_doc_id
             && rows[0]["node_did"] == source.did()
             && rows[0]["requester_did"] == author.did()
-            && rows[0]["session_id"] == session
-            && rows[0]["file_changes"] == serde_json::to_value(&changes)?,
+            && rows[0]["session_id"] == session,
         "retry changed retained file images or their exact scope"
     );
+    if received_entry.is_none() {
+        let ToolFileChangeRead::Retained {
+            document_id: delivered,
+            changes: delivered_changes,
+            ..
+        } = load_tool_file_change_observation(
+            &ConfigAccess::local(client_node.clone()),
+            &physical,
+            &retry.request_doc_id,
+            source.did(),
+            session,
+            Some(author.did()),
+        )
+        .await?
+        else {
+            anyhow::bail!("delivered file images are unreadable on the client");
+        };
+        anyhow::ensure!(
+            delivered == image && delivered_changes == changes,
+            "retry changed retained file images or their exact scope"
+        );
+    }
     anyhow::ensure!(
         receipt_row(&source_node, &demand, "rejected").await? == refused,
         "reenrollment replaced the signed refusal"

@@ -63,6 +63,9 @@ pub struct NativeExecutorStatusView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BackgroundedToolView {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub tool_call_doc_id: Option<String>,
     pub request_id: String,
     pub tool_call_id: String,
     pub tool_name: String,

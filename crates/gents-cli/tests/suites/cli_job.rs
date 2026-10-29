@@ -744,7 +744,7 @@ async fn children_of(graphql: &str, request_id: &str) -> Result<Vec<Value>> {
         .clone())
 }
 
-/// A Goal-held Task does not continue while a job it watches runs: the
+/// A Goal-held Task does not continue while a process held on a job runs: the
 /// background-completion delivery, not a goal child, carries it on.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn goal_held_task_defers_while_job_runs() -> Result<()> {
@@ -758,6 +758,10 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
     let gate = Arc::new(tokio::sync::Semaphore::new(0));
     let released = Arc::new(AtomicBool::new(false));
     let watch_address = Arc::new(Mutex::new(String::new()));
+    // Tool commands cannot read the runtime home's credentials, so a command
+    // cannot watch the job as the node; the test releases this pipe once the
+    // job row is terminal.
+    let job_ended = Arc::new(Mutex::new(String::new()));
     let spawn_handle = Arc::new(Mutex::new(String::new()));
     // The responder is built before the node starts: (gents home, graphql, agent id).
     let node = Arc::new(Mutex::new(None::<(String, String, String)>));
@@ -767,7 +771,7 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
     let responder: Responder = {
         let gate = gate.clone();
         let released = released.clone();
-        let watch_address = watch_address.clone();
+        let job_ended = job_ended.clone();
         let spawn_handle = spawn_handle.clone();
         let node = node.clone();
         Arc::new(move |request: &Value| {
@@ -845,15 +849,13 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
             }
             let held_turn = request["messages"].to_string().contains(OBJECTIVE);
             if held_turn && !released.load(Ordering::SeqCst) {
-                let (h, g, _) = node_state.expect("node state is set before submits");
                 return match results.len() {
                     0 => ChatAction::Sse(tool_call_sse_with_id(
                         "watch-spawn-1",
                         "spawn_process",
                         &json!({"tool_name": "bash_unrestricted", "args": {
-                            "command": cli_bin(),
-                            "args": ["job", "watch", watch_address.lock().unwrap().as_str(),
-                                "--until-terminal", "--home", h, "--graphql", g],
+                            "command": "cat",
+                            "args": [job_ended.lock().unwrap().as_str()],
                         }})
                         .to_string(),
                     )),
@@ -944,6 +946,17 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
         .and_then(Value::as_str)
         .with_context(|| format!("job row: {job_rows}"))?;
     *watch_address.lock().unwrap() = format!("{s_job}:{job_call_id}");
+    let job_ended_pipe = served.home.join("job-ended");
+    let made = Command::new("mkfifo").arg(&job_ended_pipe).status()?;
+    anyhow::ensure!(
+        made.success(),
+        "mkfifo {}: {made}",
+        job_ended_pipe.display()
+    );
+    *job_ended.lock().unwrap() = job_ended_pipe
+        .to_str()
+        .context("job-ended pipe path is not UTF-8")?
+        .to_owned();
 
     // Hold the Goal on the job.
     let predecessor_receipt = run_cli_json(
@@ -1051,9 +1064,38 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
-    // Release the job: the watch exits and the completion delivery carries the Goal on.
+    // Release the job; once its row is terminal the held process exits and
+    // the completion delivery carries the Goal on.
     released.store(true, Ordering::SeqCst);
     gate.add_permits(1);
+    let watch_home = served.home.clone();
+    let watch_target = watch_address.lock().unwrap().clone();
+    let watch_graphql = g.clone();
+    let ended = tokio::task::spawn_blocking(move || {
+        let node_home = watch_home.join(".gents");
+        let node_home = node_home.to_str().context("gents home is not UTF-8")?;
+        let ended = run_cli_json(
+            &watch_home,
+            &[
+                "job",
+                "watch",
+                &watch_target,
+                "--until-terminal",
+                "--home",
+                node_home,
+                "--graphql",
+                &watch_graphql,
+            ],
+        )?;
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&job_ended_pipe)
+            .context("releasing the held process")?;
+        Ok::<_, anyhow::Error>(ended)
+    })
+    .await
+    .context("job watch worker")??;
+    assert_eq!(ended["state"], "completed", "{ended}");
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
     let delivery = loop {
         let children = children_of(&g, &held).await?;
@@ -1061,10 +1103,53 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
             assert_eq!(children.len(), 1, "{children:?}");
             break first.clone();
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "no delivery request after the job ended"
-        );
+        if std::time::Instant::now() >= deadline {
+            let state = graphql_query(
+                &g,
+                r#"{
+                    AgentRequest(limit: 100) { _docID request_id session_id lifecycle_state failure_reason caused_by_parent_request_id caused_by_parent_request_doc_id }
+                    AgentToolCall(limit: 100) { _docID request_id request_doc_id session_id tool_name tool_call_id lifecycle_state status await_mode tool_failure_class completion_notification_delivered_at }
+                    AgentMessage(limit: 100) { _docID session_id request_doc_id message_key sequence role }
+                    Goal(limit: 10) { session_id status assignment_root_request_doc_id continuation_sequence last_failure }
+                }"#,
+            )
+            .await;
+            let warnings = served._serve.captured_output().map(|(stdout, stderr)| {
+                let lines: Vec<_> = stdout
+                    .lines()
+                    .chain(stderr.lines())
+                    .filter(|line| line.contains("WARN") || line.contains("ERROR"))
+                    .collect();
+                lines[lines.len().saturating_sub(40)..]
+                    .iter()
+                    .map(|line| line.chars().take(1000).collect::<String>())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            });
+            let probe_home = served.home.clone();
+            let probe_address = watch_address.lock().unwrap().clone();
+            let probe_graphql = g.clone();
+            let probe = tokio::task::spawn_blocking(move || {
+                let node_home = probe_home.join(".gents");
+                let node_home = node_home.to_string_lossy();
+                run_cli_json(
+                    &probe_home,
+                    &[
+                        "job",
+                        "show",
+                        &probe_address,
+                        "--home",
+                        &node_home,
+                        "--graphql",
+                        &probe_graphql,
+                        "--output",
+                        "json",
+                    ],
+                )
+            })
+            .await;
+            panic!("no delivery request after the job ended; durable state: {state:?}; server warnings: {warnings:?}; job show: {probe:?}");
+        }
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
     assert!(delivery["caused_by_trigger_kind"].is_null(), "{delivery}");

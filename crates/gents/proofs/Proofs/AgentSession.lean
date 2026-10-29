@@ -28,17 +28,59 @@ structure ForkOrigin where
   sourceSession : SessionId
   atUserTurn : Nat
   deriving DecidableEq, Repr
+structure StarterEvidence where
+  source : Scope
+  parentRequestDoc : Nat
+  deriving DecidableEq, Repr
+
+/-- A node-signed receipt is issued only in the transaction that creates a
+session. Its request and causal kind bind the verified opening evidence; a
+pre-existing session never receives one from a later request. -/
+structure CreationReceipt where
+  scope : Scope
+  sessionDoc : Nat
+  agent : AgentId
+  openingRequestDoc : Nat
+  causalKind : Nat
+  causeBinding : Nat
+  starter : Option StarterEvidence := none
+  deriving DecidableEq, Repr
+
+def creationReceiptAtEnsure (existing : Bool) (receipt : CreationReceipt) : Option CreationReceipt :=
+  if existing then none else some receipt
+
+theorem existing_session_never_receives_creation_receipt (receipt : CreationReceipt) :
+    creationReceiptAtEnsure true receipt = none := by
+  simp [creationReceiptAtEnsure]
+
+theorem new_session_receives_creation_receipt (receipt : CreationReceipt) :
+    creationReceiptAtEnsure false receipt = some receipt := by
+  simp [creationReceiptAtEnsure]
+
 structure Provenance where
   task : Option Nat := none
   parentRequestDoc : Option Nat := none
+  /-- The signed calling request carries its source session because the receiver
+      need not hold that request. Creation records the complete scope once;
+      neither this reference nor its indexed node/session projection grants
+      access or creates runtime hierarchy. The absent requester remains exact
+      absence, never a wildcard. Older sessions may have no recorded scope. -/
+  startedBy : Option Scope := none
   /-- The request whose claim or refusal created this session through a
-      calling tool call. It is written once, with `parentRequestDoc`, and
+      calling tool call or an automated Task trigger. It is written once and
       never rewritten (`advance`, `rename` and `setClosed` keep
       `provenance`). `DurableLineage.openingRequest` opens the session at
       it; a session created before it was recorded has none. -/
   openingRequestDoc : Option Nat := none
   fork : Option ForkOrigin := none
   deriving DecidableEq, Repr
+
+def openingRequestAtCreation (request : Nat) (toolCall taskTrigger : Bool) : Option Nat :=
+  if toolCall || taskTrigger then some request else none
+
+theorem task_opening_recorded (request : Nat) :
+    openingRequestAtCreation request false true = some request := by
+  simp [openingRequestAtCreation]
 structure RequestObservation where
   docId : Nat
   requestId : RequestId
@@ -76,6 +118,75 @@ def ensure? (existing : Option Document) (requested : Document) : Option Documen
 theorem ensure_existing_preserves_document (current requested : Document)
     (scope : current.scope = requested.scope) (agent : current.agent = requested.agent) :
     ensure? (some current) requested = some current := by simp [ensure?, scope, agent]
+
+/-- Indexed display is evidence only when the target receipt is authenticated,
+    belongs to the physical session and binds the same source, parent and index.
+    These observations do not authorize session control. -/
+def verifiedStarter (receipt : CreationReceipt) (physical : Nat)
+    (source : Scope) (parent : Nat) (indexed : Nat × SessionId)
+    (signatureValid : Bool) : Option Scope :=
+  if signatureValid && receipt.sessionDoc == physical &&
+      receipt.starter == some ⟨source, parent⟩ && indexed == (source.node, source.session)
+  then some source else none
+
+theorem verified_starter_rejects_other_physical (receipt : CreationReceipt)
+    (physical : Nat) (source : Scope) (parent : Nat) (indexed : Nat × SessionId)
+    (valid : Bool) (mismatch : receipt.sessionDoc ≠ physical) :
+    verifiedStarter receipt physical source parent indexed valid = none := by
+  simp [verifiedStarter, mismatch]
+
+def startedBy (session : Document) : Option Scope :=
+  session.provenance.bind (·.startedBy)
+
+/-- Scalar storage indexes are derived from the canonical provenance, not
+    independently writable origins. Requester scope remains in provenance. -/
+def starterIndex (session : Document) : Option (Nat × SessionId) :=
+  (startedBy session).map fun scope => (scope.node, scope.session)
+
+theorem ensure_preserves_starter (current requested : Document)
+    (scope : current.scope = requested.scope) (agent : current.agent = requested.agent) :
+    (ensure? (some current) requested).bind startedBy = startedBy current := by
+  rw [ensure_existing_preserves_document current requested scope agent]
+  rfl
+
+theorem starter_index_retains_node (session : Document) (source : Scope)
+    (h : startedBy session = some source) :
+    starterIndex session = some (source.node, source.session) := by
+  simp [starterIndex, h]
+
+/-- The one starter reading of a stored row. The immutable index columns select
+    verification; the mutable provenance never does, so removing `startedBy` or
+    rewriting `parentRequestDoc` cannot route an indexed row to a weaker lookup.
+    An unindexed row has no starter: no signed or immutable field separates a
+    row created before the index from a new row whose starter failed
+    verification, so a parent pointer alone is never lineage. -/
+def observedStarter (indexed : Option (Nat × SessionId)) (receipt : Option CreationReceipt)
+    (physical : Nat) (recorded : Option Scope) (parent : Option Nat)
+    (signatureValid : Bool) : Option Scope :=
+  match indexed, receipt, recorded, parent with
+  | some index, some receipt, some source, some parent =>
+      verifiedStarter receipt physical source parent index signatureValid
+  | _, _, _, _ => none
+
+theorem unindexed_row_has_no_starter (receipt : Option CreationReceipt) (physical : Nat)
+    (recorded : Option Scope) (parent : Option Nat) (valid : Bool) :
+    observedStarter none receipt physical recorded parent valid = none := rfl
+
+theorem removed_starter_has_no_fallback (indexed : Option (Nat × SessionId))
+    (receipt : Option CreationReceipt) (physical : Nat) (parent : Option Nat) (valid : Bool) :
+    observedStarter indexed receipt physical none parent valid = none := by
+  cases indexed <;> cases receipt <;> cases parent <;> rfl
+
+theorem observed_starter_is_signed (indexed : Option (Nat × SessionId))
+    (receipt : Option CreationReceipt) (physical : Nat) (recorded : Option Scope)
+    (parent : Option Nat) (valid : Bool) (source : Scope)
+    (h : observedStarter indexed receipt physical recorded parent valid = some source) :
+    ∃ r p, receipt = some r ∧ r.starter = some ⟨source, p⟩ := by
+  cases indexed <;> cases receipt <;> cases recorded <;> cases parent <;>
+    simp [observedStarter, verifiedStarter] at h
+  case some.some.some.some index r s p =>
+    obtain ⟨⟨⟨⟨_, _⟩, hs⟩, _⟩, rfl⟩ := h
+    exact ⟨r, p, rfl, hs⟩
 
 theorem ensure_cannot_rebind_agent (current requested : Document)
     (agent : current.agent ≠ requested.agent) : ensure? (some current) requested = none := by

@@ -14,7 +14,27 @@ def session : Document :=
     provenance := some
       { task := some 4
         parentRequestDoc := some 6
+        startedBy := some ⟨5, 6, some 7⟩
         fork := some ⟨7, 2⟩ } }
+example : starterIndex session = some (5, 6) := by decide
+example : startedBy session = some ⟨5, 6, some 7⟩ := by decide
+example : ensure? (some session) { session with provenance := none } = some session := by decide
+example : starterIndex { session with provenance := none } = none := by decide
+
+def starterReceipt : CreationReceipt :=
+  { scope := scope, sessionDoc := 8, agent := 3, openingRequestDoc := 9,
+    causalKind := 1, causeBinding := 2,
+    starter := some ⟨⟨5, 6, some 7⟩, 11⟩ }
+example : verifiedStarter starterReceipt 8 ⟨5, 6, some 7⟩ 11 (5, 6) true = some ⟨5, 6, some 7⟩ := by decide
+example : verifiedStarter starterReceipt 9 ⟨5, 6, some 7⟩ 11 (5, 6) true = none := by decide
+example : verifiedStarter starterReceipt 8 ⟨5, 6, some 7⟩ 11 (5, 7) true = none := by decide
+example : verifiedStarter starterReceipt 8 ⟨5, 7, some 7⟩ 11 (5, 7) true = none := by decide
+example : verifiedStarter starterReceipt 8 ⟨5, 6, some 7⟩ 12 (5, 6) true = none := by decide
+example : verifiedStarter starterReceipt 8 ⟨5, 6, some 7⟩ 11 (5, 6) false = none := by decide
+example : observedStarter (some (5, 6)) (some starterReceipt) 8 (some ⟨5, 6, some 7⟩) (some 11) true = some ⟨5, 6, some 7⟩ := by decide
+example : observedStarter (some (5, 6)) (some starterReceipt) 8 none (some 12) true = none := by decide
+example : observedStarter none (some starterReceipt) 8 (some ⟨5, 6, some 7⟩) (some 11) true = none := by decide
+
 def request (id time : Nat) : RequestFact :=
   { purpose := .normal, scope, agent:= 3, createdAt := time, observed := ⟨id + 100, id, .failed⟩ }
 def old := request 1 2

@@ -186,10 +186,12 @@ async fn signed_queue_edit_reorders_preserves_slots_and_cancels_atomically() {
             selected_request_doc_ids: vec![first.clone(), second.clone()],
             messages: vec![
                 PendingMessageEdit {
+                    authored_input: None,
                     request_doc_id: second.clone(),
                     content: "second edited".into(),
                 },
                 PendingMessageEdit {
+                    authored_input: None,
                     request_doc_id: first.clone(),
                     content: "first edited".into(),
                 },
@@ -306,6 +308,7 @@ async fn stale_queue_snapshot_rejects_edit_without_mutating_signed_requests() {
             expected_request_doc_ids: vec![first.clone()],
             selected_request_doc_ids: vec![first.clone()],
             messages: vec![PendingMessageEdit {
+                authored_input: None,
                 request_doc_id: first.clone(),
                 content: "must never appear".into(),
             }],
@@ -333,6 +336,196 @@ async fn stale_queue_snapshot_rejects_edit_without_mutating_signed_requests() {
 }
 
 #[tokio::test]
+async fn invalid_edited_attachment_does_not_supersede_the_original() {
+    let db = test_db("invalid-edited-attachment").await;
+    let original = enqueue(
+        &db,
+        "general",
+        "invalid-edit-session",
+        "invalid-edit-original",
+        "original message",
+        QueueDelivery::Queue,
+    )
+    .await;
+    let before = row(&db, &original).await;
+    let result = submit_edit(
+        &db,
+        "invalid-edit-session",
+        PendingQueueEdit {
+            expected_request_doc_ids: vec![original.clone()],
+            selected_request_doc_ids: vec![original.clone()],
+            messages: vec![PendingMessageEdit {
+                request_doc_id: original.clone(),
+                content: "replacement".into(),
+                authored_input: Some(gents_protocol::request_input::AuthoredRequestInput {
+                    attachments: vec![gents_protocol::request_input::RequestAttachment {
+                        name: "image.png".into(),
+                        media_type: "image/png".into(),
+                        data: "not base64".into(),
+                    }],
+                    ..Default::default()
+                }),
+            }],
+        },
+    )
+    .await;
+    assert!(result.is_err());
+    assert_eq!(row(&db, &original).await, before);
+}
+
+#[tokio::test]
+async fn edited_skill_outside_context_does_not_supersede_the_original() {
+    let db = test_db("invalid-edited-skill").await;
+    let did = db.node_identity.did();
+    crate::support::create_agent(&db.node, "general", did).await;
+    let original = enqueue(
+        &db,
+        "general",
+        "invalid-skill-session",
+        "original",
+        "original message",
+        QueueDelivery::Queue,
+    )
+    .await;
+    let before = row(&db, &original).await;
+    let error = submit_edit(
+        &db,
+        "invalid-skill-session",
+        PendingQueueEdit {
+            expected_request_doc_ids: vec![original.clone()],
+            selected_request_doc_ids: vec![original.clone()],
+            messages: vec![PendingMessageEdit {
+                request_doc_id: original.clone(),
+                content: "changed".into(),
+                authored_input: Some(gents_protocol::request_input::AuthoredRequestInput {
+                    selected_skill_ids: vec!["unavailable".into()],
+                    ..Default::default()
+                }),
+            }],
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("skill"));
+    assert_eq!(row(&db, &original).await, before);
+}
+
+#[tokio::test]
+async fn authored_edit_keeps_queue_slot_and_retains_new_attachment_bytes() {
+    let db = test_db("authored-queue-edit").await;
+    let did = db.node_identity.did();
+    crate::support::create_agent(&db.node, "general", did).await;
+    let original = enqueue(
+        &db,
+        "general",
+        "authored-edit-session",
+        "authored-original",
+        "original",
+        QueueDelivery::Queue,
+    )
+    .await;
+    let attachment = gents_protocol::request_input::RequestAttachment {
+        name: "note.txt".into(),
+        media_type: "text/plain".into(),
+        data: "aGVsbG8=".into(),
+    };
+    let receipt = submit_edit(
+        &db,
+        "authored-edit-session",
+        PendingQueueEdit {
+            expected_request_doc_ids: vec![original.clone()],
+            selected_request_doc_ids: vec![original.clone()],
+            messages: vec![PendingMessageEdit {
+                request_doc_id: original.clone(),
+                content: "changed".into(),
+                authored_input: Some(gents_protocol::request_input::AuthoredRequestInput {
+                    attachments: vec![attachment.clone()],
+                    ..Default::default()
+                }),
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(receipt.request_doc_ids.len(), 1);
+    assert_eq!(row(&db, &original).await["lifecycle_state"], "superseded");
+    let replacement = row(&db, &receipt.request_doc_ids[0]).await;
+    let input: gents_protocol::request_input::RequestInput =
+        serde_json::from_value(replacement["input"].clone()).unwrap();
+    assert_eq!(input.attachments, vec![attachment]);
+    assert_eq!(
+        input.queue.unwrap().position.unwrap().slot_request_doc_id,
+        original
+    );
+    let pending = pending_user_queue(
+        &ConfigAccess::local(db.node.clone()),
+        did,
+        "authored-edit-session",
+        did,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        pending.entries[0].request_doc_id,
+        receipt.request_doc_ids[0]
+    );
+}
+
+#[tokio::test]
+async fn authored_edit_changes_allowed_skills_without_losing_queue_position() {
+    let db = test_db("allowed-edited-skill").await;
+    let did = db.node_identity.did();
+    crate::support::create_agent(&db.node, "general", did).await;
+    let access = ConfigAccess::local(db.node.clone());
+    let owner = escape_graphql_string(did);
+    access.write("test.skill_context", &format!(r#"mutation {{ create_AgentContext(input: {{ node_did: "{owner}", context_id: "general:context", skill_ids: ["review"] }}) {{ _docID }} }}"#)).await.unwrap();
+    access.write("test.attach_context", &format!(r#"mutation {{ update_Agent(filter: {{ node_did: {{ _eq: "{owner}" }}, agent_id: {{ _eq: "general" }} }}, input: {{ context_id: "general:context" }}) {{ _docID }} }}"#)).await.unwrap();
+    let original = enqueue(
+        &db,
+        "general",
+        "allowed-skill-session",
+        "original",
+        "original message",
+        QueueDelivery::Queue,
+    )
+    .await;
+    let receipt = submit_edit(
+        &db,
+        "allowed-skill-session",
+        PendingQueueEdit {
+            expected_request_doc_ids: vec![original.clone()],
+            selected_request_doc_ids: vec![original.clone()],
+            messages: vec![PendingMessageEdit {
+                request_doc_id: original.clone(),
+                content: "changed".into(),
+                authored_input: Some(gents_protocol::request_input::AuthoredRequestInput {
+                    selected_skill_ids: vec!["review".into()],
+                    ..Default::default()
+                }),
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    let pending = pending_user_queue(&access, did, "allowed-skill-session", did)
+        .await
+        .unwrap();
+    assert_eq!(pending.entries.len(), 1);
+    assert_eq!(
+        pending.entries[0].request_doc_id,
+        receipt.request_doc_ids[0]
+    );
+    assert_eq!(pending.entries[0].selected_skill_ids, ["review"]);
+    let replacement = row(&db, &receipt.request_doc_ids[0]).await;
+    let input: gents_protocol::request_input::RequestInput =
+        serde_json::from_value(replacement["input"].clone()).unwrap();
+    assert_eq!(
+        input.queue.unwrap().position.unwrap().slot_request_doc_id,
+        original
+    );
+}
+
+#[tokio::test]
 async fn signed_pending_replacement_authenticates_delivery_and_each_position_field() {
     let db = test_db("queue-signature-tampering").await;
     let _did = db.node_identity.did();
@@ -353,6 +546,7 @@ async fn signed_pending_replacement_authenticates_delivery_and_each_position_fie
             expected_request_doc_ids: vec![original.clone()],
             selected_request_doc_ids: vec![original.clone()],
             messages: vec![PendingMessageEdit {
+                authored_input: None,
                 request_doc_id: original.clone(),
                 content: "replacement signed message".into(),
             }],

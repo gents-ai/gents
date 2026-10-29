@@ -171,6 +171,7 @@ description = "Interrupt request execution"
 permissions = [
   "allow-desktop-interrupt-request",
   "allow-desktop-background-tool",
+  "allow-desktop-process-control",
   "allow-desktop-job-control",
 ]
 

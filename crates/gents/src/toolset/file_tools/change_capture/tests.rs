@@ -20,6 +20,23 @@ fn decoded_image(value: &Value) -> Vec<u8> {
     bytes
 }
 
+/// Stored observations name file-document versions and carry no bytes.
+fn assert_stored_versions(stored: &Value) {
+    assert_eq!(
+        stored["version"],
+        gents_protocol::file_changes::STORED_FILE_CHANGES_VERSION
+    );
+    for change in stored["changes"].as_array().unwrap() {
+        for side in ["before", "after"] {
+            assert!(change[side].get("data").is_none(), "{change}");
+            if change[side]["kind"] == "file" {
+                assert!(change["content_doc_id"].is_string(), "{change}");
+                assert!(change[side]["version"].is_string(), "{change}");
+            }
+        }
+    }
+}
+
 #[test]
 fn images_distinguish_missing_empty_binary_and_unavailable_files() {
     let root = tempfile::tempdir().unwrap();
@@ -192,7 +209,20 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
         row["ToolFileChange"][0]["file_changes"]["tool_call_doc_id"],
         doc_id
     );
-    let change = &row["ToolFileChange"][0]["file_changes"]["changes"][0];
+    assert_stored_versions(&row["ToolFileChange"][0]["file_changes"]);
+    let wire = serde_json::to_value(
+        load(
+            request_doc_id.clone(),
+            admission.node_did.clone(),
+            session_id.clone(),
+            requester_did.clone(),
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+    )
+    .unwrap();
+    let change = &wire["changes"][0];
     assert_eq!(change["root"], root_path.to_str().unwrap());
     assert_eq!(change["path"], "file.bin");
     assert_eq!(decoded_image(&change["before"]), [0, 255, 128]);
@@ -289,6 +319,35 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
         .as_array()
         .unwrap()
         .is_empty());
+    let content_doc_id = row["ToolFileChange"][0]["file_changes"]["changes"][0]["content_doc_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let reader = requester_did.as_ref().unwrap().parse().unwrap();
+    let denied = ConfigAccess::transact_local_readonly(
+        &admission.node,
+        Some(reader),
+        "test.file_content.no_implicit_read",
+        |txn| {
+            let id = content_doc_id.clone();
+            Box::pin(async move {
+                txn.execute(&format!(
+                    "{{ ToolFileContent(docID: \"{}\") {{ _docID text blob }} }}",
+                    escape_graphql_string(&id),
+                ))
+                .await
+            })
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        denied["data"]["ToolFileContent"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "file content is readable without a receipt grant"
+    );
 
     assert_eq!(std::fs::read(&path).unwrap(), b"replacement bytes");
     let retained = load(
@@ -300,13 +359,11 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     .await
     .unwrap()
     .unwrap();
-    assert_eq!(
-        serde_json::to_value(&retained).unwrap(),
-        row["ToolFileChange"][0]["file_changes"]
-    );
+    assert_eq!(serde_json::to_value(&retained).unwrap(), wire);
     let crate::tool_call_lifecycle::ToolFileChangeRead::Retained {
         document_id,
         changes,
+        ..
     } = crate::tool_call_lifecycle::load_tool_file_change_observation(
         &access,
         &doc_id,
@@ -321,10 +378,7 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
         panic!("expected exact retained observation")
     };
     assert_eq!(row["ToolFileChange"][0]["_docID"], document_id);
-    assert_eq!(
-        serde_json::to_value(changes).unwrap(),
-        row["ToolFileChange"][0]["file_changes"]
-    );
+    assert_eq!(serde_json::to_value(changes).unwrap(), wire);
     for (request, node, session, requester) in [
         (
             "foreign-request".into(),
@@ -570,7 +624,22 @@ async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
         .unwrap();
     let row = access.execute(&query).await.unwrap()["data"].clone();
     assert_eq!(row["AgentToolCall"][0]["lifecycle_state"], "failed");
-    let change = &row["ToolFileChange"][0]["file_changes"]["changes"][0];
+    assert_stored_versions(&row["ToolFileChange"][0]["file_changes"]);
+    let wire = serde_json::to_value(
+        crate::tool_call_lifecycle::query::load_tool_call_file_changes(
+            &access,
+            &doc_id,
+            call.request_doc_id().unwrap(),
+            &admission.node_did,
+            call.session_id(),
+            call.requester_did(),
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+    )
+    .unwrap();
+    let change = &wire["changes"][0];
     assert_eq!(decoded_image(&change["before"]), b"original");
     assert_eq!(change["after"]["reason"], "mutationIncomplete");
     assert_eq!(row["ToolFileInventory"].as_array().unwrap().len(), 1);

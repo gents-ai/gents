@@ -43,21 +43,24 @@ where
     T: for<'de> Deserialize<'de>,
 {
     let response = client.get(url).send().await.map_err(|error| {
-        if error.is_connect() {
-            anyhow::Error::from(error).context(format!(
+        let message = if error.is_connect() {
+            format!(
                 "no gents server found at {url}. Start one first with \
                  `gents server`. Remote runtimes must be added \
                  through authenticated status enrollment in the desktop app."
-            ))
+            )
         } else {
-            anyhow::Error::from(error).context(format!("sending GET request to {url}"))
-        }
+            format!("sending GET request to {url}")
+        };
+        crate::error::BridgeError::runtime_http_error(error, message)
     })?;
     let status = response.status();
-    let body = response
-        .bytes()
-        .await
-        .with_context(|| format!("reading GET response body from {url}"))?;
+    let body = response.bytes().await.map_err(|error| {
+        crate::error::BridgeError::runtime_http_error(
+            error,
+            format!("reading GET response body from {url}"),
+        )
+    })?;
     if !status.is_success() {
         anyhow::bail!(
             "GET {url} failed with {status}: {}",

@@ -50,6 +50,14 @@ struct UnknownKindBackend {
     kind: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+enum InferenceSelectionError {
+    #[error(transparent)]
+    UnknownKind(#[from] UnknownKindBackend),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
 /// First-run setup must remain reachable without a model. Only an explicitly
 /// disabled backend permits that unfinished selection; it supplies no runnable
 /// agent and becomes invalid if enabled before model selection.
@@ -447,8 +455,10 @@ pub(super) fn collect_unresolved_behavior_references(
     details: &mut Vec<String>,
 ) {
     let scope = view.node.value.node_did.as_str();
-    let result: Result<()> = (|| {
-        anyhow::ensure!(agent_config.node_did == scope, "agent owner mismatch");
+    let result: std::result::Result<(), InferenceSelectionError> = (|| {
+        if agent_config.node_did != scope {
+            return Err(anyhow!("agent owner mismatch").into());
+        }
         select_inference_documents(view, &agent_config.inference_profile_id)?;
         if let Some(id) = &agent_config.context_id {
             let context = owned_doc!(&view.contexts, id.as_str(), scope)?;
@@ -467,10 +477,8 @@ pub(super) fn collect_unresolved_behavior_references(
         }
         Ok(())
     })();
-    if let Err(error) = result {
-        if error.downcast_ref::<UnknownKindBackend>().is_none() {
-            details.push(format!("agent {}: {error:#}", agent_config.agent_id));
-        }
+    if let Err(InferenceSelectionError::Other(error)) = result {
+        details.push(format!("agent {}: {error:#}", agent_config.agent_id));
     }
 }
 
@@ -490,7 +498,7 @@ struct SelectedInferenceDocuments<'a> {
 fn select_inference_documents<'a>(
     view: &'a DocumentRuntimeView,
     id: &str,
-) -> Result<SelectedInferenceDocuments<'a>> {
+) -> std::result::Result<SelectedInferenceDocuments<'a>, InferenceSelectionError> {
     let scope = view.node.value.node_did.as_str();
     let profile = owned_doc!(&view.inference_profiles, id, scope)?;
     if let Some(kind) = view.unknown_kind_backends.get(&profile.backend_id) {

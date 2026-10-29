@@ -67,14 +67,25 @@ structure Tool where
   terminal : Bool
   deriving DecidableEq, Repr
 
-/-- The immutable observation names the accepted physical tool. Native readers
-validate its bytes through the file-image owner before transport. Images are
+/-- A document holds only the before and after versions for one physical tool
+observation. A DefraDB document grant exposes every version, so independently
+authorized observations must never share a content document. -/
+structure Content where
+  docId : String
+  toolDocId : String
+  scope : Scope
+  deriving DecidableEq, Repr
+
+/-- The immutable observation names the accepted physical tool and the file
+documents whose versions hold its before and after bytes. Native readers
+validate those bytes through the file-image owner before transport. Images are
 not part of the ordinary transcript closure. -/
 structure Image where
   docId : String
   toolDocId : String
   requestDocId : String
   scope : Scope
+  contents : List Content
   deriving DecidableEq, Repr
 
 inductive Selection where
@@ -95,9 +106,18 @@ def toolMatches (demand : Demand) (tool : Tool) : Bool :=
   tool.accepted && tool.terminal && tool.docId == demand.toolDocId &&
   tool.requestDocId == demand.requestDocId && tool.scope == scopeFor demand
 
+def contentMatches (demand : Demand) (content : Content) : Bool :=
+  !content.docId.isEmpty && content.toolDocId == demand.toolDocId && content.scope == scopeFor demand
+
 def imageMatches (demand : Demand) (image : Image) : Bool :=
   !image.docId.isEmpty && image.toolDocId == demand.toolDocId &&
-  image.requestDocId == demand.requestDocId && image.scope == scopeFor demand
+  image.requestDocId == demand.requestDocId && image.scope == scopeFor demand &&
+  image.contents.all (contentMatches demand)
+
+/-- Delivery carries the observation and every file document it references;
+the read grant covers the same set. -/
+def deliveryDocuments (image : Image) : List String :=
+  image.docId :: image.contents.map (·.docId)
 
 /-- Pairing, current membership and session ownership retain their existing
 admission owner. A successful empty selection requires one accepted terminal
@@ -147,6 +167,26 @@ theorem mismatched_image_is_rejected (demand : Demand) (catalog : Catalog)
     (hm : imageMatches demand image = false) :
     select demand catalog [tool] [image] = .rejected := by
   simp [select, ht, hi, hm]
+
+theorem foreign_content_is_rejected (demand : Demand) (catalog : Catalog)
+    (tool : Tool) (image : Image) (content : Content)
+    (ht : tool.docId = demand.toolDocId) (hi : image.toolDocId = demand.toolDocId)
+    (hc : content ∈ image.contents) (hs : content.scope ≠ scopeFor demand) :
+    select demand catalog [tool] [image] = .rejected := by
+  apply mismatched_image_is_rejected demand catalog tool image ht hi
+  have : contentMatches demand content = false := by simp [contentMatches, hs]
+  simp only [imageMatches, Bool.and_eq_false_iff]
+  right
+  exact List.all_eq_false.mpr ⟨content, hc, by simp [this]⟩
+
+/-- Every document a selected observation delivers lies in the demand's scope. -/
+theorem delivered_contents_share_scope (demand : Demand) (image : Image)
+    (h : imageMatches demand image = true) (content : Content)
+    (hc : content ∈ image.contents) : content.scope = scopeFor demand := by
+  simp only [imageMatches, Bool.and_eq_true, List.all_eq_true] at h
+  have := h.2 content hc
+  simp [contentMatches] at this
+  exact this.2
 
 def deliveryTarget (selection : Selection) (authorized : Bool) : Option String :=
   if !authorized then none

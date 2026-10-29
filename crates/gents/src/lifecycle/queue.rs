@@ -68,7 +68,12 @@ use input::queue_is_automated_wakeup;
 pub(crate) use input::{
     background_wake_queue, is_automated_wakeup, row_is_automated_wakeup, row_queue,
 };
-pub(crate) use intake::{pending_ids_in_txn, steering_inputs, steering_snapshot};
+pub(crate) use intake::{
+    pending_ids_in_txn, pending_with_new_candidate_in_txn, steer_reachable, steering_inputs,
+    steering_snapshot, SteerAdmissionRefusal,
+};
+#[cfg(test)]
+pub(crate) use intake::{pending_in_txn, pending_rows_in_txn, steering_compatible};
 pub(crate) use management::{
     apply_pending_user_edit_in_txn, persisted_replacements_in_txn,
     validate_pending_user_edit_in_txn, PersistedReplacements,

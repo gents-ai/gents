@@ -129,19 +129,56 @@ inductive FirstRunPhase where
   | unknown | active | done
   deriving DecidableEq, Repr
 
-/-- First-run enters setup only after the local init-config owner explicitly
-reports absence, or after a configured home has a complete operator snapshot.
-Unreadable init state and partial operator snapshots remain unresolved. Once
-setup owns the window, observations cannot restart or dismiss it. -/
-def observeFirstRun (phase : FirstRunPhase) (snapshotReady initConfigAbsent needsSetup authoritative : Bool) : FirstRunPhase :=
+inductive InitConfigStatus where
+  | absent | configured | unreadable | unknown
+  deriving DecidableEq, Repr
+
+/-- Remote-only clients have no local init file, and a desktop that may run a
+local node has none until local setup is chosen. In either case a persisted
+enrollment marks configuration complete even while the live route reconnects
+after restart; local setup stays available from the node list. Enrollment
+authority and send readiness remain with their existing owners; operator
+configuration access is not required. Unreadable bootstrap state stays
+unresolved, and an active wizard retains ownership until explicit completion. -/
+def observeFirstRun (phase : FirstRunPhase) (snapshotReady : Bool)
+    (initConfigStatus : InitConfigStatus)
+    (needsSetup authoritative localRuntimeAllowed remoteConfigured : Bool) : FirstRunPhase :=
   match phase with
   | .active => .active
   | .done => .done
   | .unknown =>
       if !snapshotReady then .unknown
-      else if initConfigAbsent then .active
-      else if !authoritative then .unknown
-      else if needsSetup then .active else .done
+      else match initConfigStatus with
+        | .unreadable | .unknown => .unknown
+        | status =>
+          if !localRuntimeAllowed || status == .absent then
+            if remoteConfigured then .done else .active
+          else if !authoritative then .unknown
+          else if needsSetup then .active else .done
+
+theorem configured_remote_completes_without_operator_access :
+    observeFirstRun .unknown true .absent true false false true = .done := by rfl
+
+theorem unconfigured_remote_keeps_setup :
+    observeFirstRun .unknown true .absent false true false false = .active := by rfl
+
+theorem desktop_saved_remote_completes_without_local_home (needsSetup authoritative : Bool) :
+    observeFirstRun .unknown true .absent needsSetup authoritative true true = .done := by
+  cases needsSetup <;> cases authoritative <;> rfl
+
+theorem desktop_without_local_home_or_remote_keeps_setup (needsSetup authoritative : Bool) :
+    observeFirstRun .unknown true .absent needsSetup authoritative true false = .active := by
+  cases needsSetup <;> cases authoritative <;> rfl
+
+theorem active_setup_keeps_ownership (snapshotReady : Bool) (status : InitConfigStatus)
+    (needsSetup authoritative localRuntimeAllowed remoteConfigured : Bool) :
+    observeFirstRun .active snapshotReady status needsSetup authoritative localRuntimeAllowed remoteConfigured = .active := by
+  rfl
+
+theorem unreadable_bootstrap_stays_unresolved
+    (needsSetup authoritative localRuntimeAllowed remoteConfigured : Bool) :
+    observeFirstRun .unknown true .unreadable needsSetup authoritative localRuntimeAllowed remoteConfigured = .unknown := by
+  rfl
 
 /-- A client observation can recover a client error, not managed-server authority.
 
@@ -602,3 +639,49 @@ theorem newer_delivery_keeps_entire_revision (current incoming : Notice)
   simp [deliver, h]
 
 end ClientStoreNotice
+namespace EnrollmentActivationObservation
+
+structure Authority where
+  request : Nat
+  digest : Nat
+  generation : Nat
+  expiresAt : Nat
+  deriving DecidableEq, Repr
+
+inductive Failure where
+  | authentication | route
+  deriving DecidableEq, Repr
+
+structure State where
+  current : Option Authority
+  failure : Option Failure
+  deriving DecidableEq, Repr
+
+/-- The observation belongs to one verified request and authorization
+generation. Replacing that authority clears the previous diagnostic. -/
+def select (s : State) (authority : Option Authority) : State :=
+  if s.current = authority then s else ⟨authority, none⟩
+
+def finish (s : State) (authority : Authority) (failure : Option Failure) : State :=
+  if s.current = some authority then { s with failure } else s
+
+def project (s : State) (authority : Authority) (approved routeObserved : Bool) : Option Failure :=
+  if approved && s.current == some authority then
+    s.failure.orElse (fun _ => if routeObserved then some .route else none)
+  else none
+
+theorem stale_completion_ignored (s : State) (authority : Authority)
+    (failure : Option Failure) (h : s.current ≠ some authority) :
+    finish s authority failure = s := by
+  simp [finish, h]
+
+theorem success_clears_failure (s : State) (authority : Authority)
+    (h : s.current = some authority) :
+    (finish s authority none).failure = none := by
+  simp [finish, h]
+
+theorem unapproved_has_no_activation_error (s : State) (authority : Authority) :
+    project s authority false false = none := by
+  simp [project]
+
+end EnrollmentActivationObservation

@@ -473,3 +473,35 @@ async fn managed_readiness_status_uses_the_hosted_node_principal() {
         "authority never follows a repointed endpoint"
     );
 }
+
+#[tokio::test]
+async fn remote_pack_install_requires_the_runtime_operator_before_work() {
+    let fixture = Fixture::start().await;
+    let body = serde_json::json!({
+        "node_did": fixture.owner.did(), "root": "", "dependencies": [],
+        "inference_slots": [], "overwrite": false, "keep": false,
+        "preview": false, "force_rebind": false, "grant_authority": false,
+        "explicit": true, "wire": []
+    });
+    for (identity, expected) in [
+        (None, StatusCode::UNAUTHORIZED),
+        (Some(&fixture.other), StatusCode::FORBIDDEN),
+        (Some(&fixture.owner), StatusCode::SERVICE_UNAVAILABLE),
+    ] {
+        let mut request = fixture
+            .client
+            .post(format!("{}/packs/install", fixture.endpoint))
+            .json(&body);
+        if let Some(identity) = identity {
+            request = gents::config_client::GraphqlEndpoint::as_principal(
+                format!("{}/api/v0/graphql", fixture.endpoint),
+                identity.did(),
+            )
+            .authorize(request)
+            .unwrap();
+        }
+        let response = request.send().await.unwrap();
+        assert_eq!(response.status(), expected);
+    }
+    assert_eq!(fixture.queries.load(std::sync::atomic::Ordering::SeqCst), 0);
+}

@@ -187,6 +187,7 @@ async fn steering_case(hold_tool: bool, promote: bool) {
             expected_request_doc_ids: ids,
             selected_request_doc_ids: vec![old.clone()],
             messages: vec![PendingMessageEdit {
+                authored_input: None,
                 request_doc_id: old.clone(),
                 content: correction.clone(),
             }],
@@ -424,5 +425,217 @@ async fn signed_request_cannot_forge_another_requests_queue_slot() {
         .as_array()
         .unwrap()
         .is_empty());
+    runtime.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn signed_agent_steer_passes_a_queued_turn_after_a_held_tool() {
+    let name = "agent-steer-past-queue";
+    let db = test_db(name).await;
+    let did = db.node_identity.did();
+    let backend = MockStreamingBackend::start_with_plans(
+        MODEL,
+        vec![
+            StreamPlan::new(
+                name,
+                vec![
+                    StreamResponse::streams(
+                        name,
+                        vec![StreamChunk::tool_call("held-call", "held_probe", "{}")],
+                    ),
+                    StreamResponse::Stream(StreamScript::paused(name, ["head result"])),
+                ],
+            ),
+            StreamPlan::current_authored_user(
+                "queued turn",
+                vec![StreamResponse::completes("queued turn", ["queued result"])],
+            ),
+        ],
+    )
+    .unwrap();
+    bind_agent_backend(&db.node, did, AGENT, BACKEND, backend.endpoint(), MODEL).await;
+    let mut session = session_document(name, AGENT, &chrono::Utc::now().to_rfc3339());
+    session.node_did = did.into();
+    session.requester_did = Some(did.into());
+    session.title = Some(gents_protocol::session::SessionTitle {
+        text: "Agent steering replay".into(),
+        source: gents_protocol::session::SessionTitleSource::Generated,
+    });
+    create_session_document(db.node.as_ref(), &session).await;
+    let mut head = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        "priority-head",
+        did,
+        did,
+        AGENT,
+        name,
+        name,
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        AgentRequestAdmissionRecord::local_self(did),
+    );
+    head.request_hop = 1;
+    head.caused_by_parent_request_id = Some("origin-request".into());
+    head.caused_by_parent_request_doc_id = Some("origin-request-doc".into());
+    head.caused_by_parent_tool_call_id = Some("origin-tool".into());
+    head.caused_by_parent_tool_call_doc_id = Some("origin-tool-doc".into());
+    head.request_hop = 1;
+    let active = insert_signed(&db, head).await;
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
+    let runtime = Gents::builder()
+        .node(db.node.clone())
+        .identity(identity)
+        .default_agent_id(AGENT)
+        .tool_ceiling(gents::ToolCeiling::meta_only())
+        .agent(AGENT)
+        .backend_id(BACKEND)
+        .model_name(MODEL)
+        .stream_batch_ms(0)
+        .deadline_duration_secs(60)
+        .custom_tool(HeldTool {
+            entered: entered.clone(),
+            release: release.clone(),
+        })
+        .done()
+        .build()
+        .await
+        .unwrap();
+    let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
+    let handle = tokio::spawn(runtime.run(shutdown_rx));
+    wait_for_runtime_ready(db.node.as_ref(), did).await;
+    let runtime = BootedAgent::new(shutdown, handle, did.into());
+    let reached = tokio::time::timeout(Duration::from_secs(60), entered.notified()).await;
+    assert!(
+        reached.is_ok(),
+        "head did not reach held tool: request={:?}, provider_requests={}, bodies={:?}",
+        row(&db, &active).await,
+        backend.observed_completion_requests(),
+        backend.observed_completion_bodies(),
+    );
+    let queued = enqueue(
+        &db,
+        AGENT,
+        name,
+        "priority-queued",
+        "queued turn",
+        QueueDelivery::Queue,
+    )
+    .await;
+    let mut steer = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        "priority-steer",
+        did,
+        did,
+        AGENT,
+        name,
+        "steer at tool boundary",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        AgentRequestAdmissionRecord::local_self(did),
+    );
+    steer.request_hop = 2;
+    steer.caused_by_parent_request_id = Some("priority-head".into());
+    steer.caused_by_parent_request_doc_id = Some(active.clone());
+    steer.caused_by_parent_tool_call_id = Some("agent-message-tool".into());
+    steer.caused_by_parent_tool_call_doc_id = Some("agent-message-tool-doc".into());
+    steer.request_hop = 2;
+    steer.input.queue = Some(RequestQueue {
+        source: QueueSource::Steering,
+        policy: QueuePolicy::Append,
+        delivery: QueueDelivery::Steer,
+        position: None,
+        key: None,
+        queued_after_request_id: Some("priority-head".into()),
+        interrupted_request_id: None,
+        background_completion_wake_version: None,
+    });
+    let steer_doc = insert_signed(&db, steer).await;
+    assert_eq!(backend.observed_completion_requests(), 1);
+    release.notify_one();
+    backend.wait_for_chunks(name, 2).await;
+    assert_eq!(row(&db, &queued).await["lifecycle_state"], "pending");
+    let consumed = row(&db, &steer_doc).await;
+    assert_eq!(consumed["lifecycle_state"], "superseded");
+    assert_eq!(consumed["superseded_by_request_doc_id"], active);
+    let bodies = backend.observed_completion_bodies();
+    assert_eq!(bodies.len(), 2);
+    assert!(!bodies[0].to_string().contains("steer at tool boundary"));
+    assert!(bodies[1].to_string().contains("steer at tool boundary"));
+    assert!(bodies[1].to_string().contains("held tool settled"));
+    assert!(!bodies[1].to_string().contains("queued turn"));
+    runtime.crash().await;
+    let identity: Arc<dyn NodeIdentity> = db.node_identity.clone();
+    let restarted = Gents::builder()
+        .node(db.node.clone())
+        .identity(identity)
+        .default_agent_id(AGENT)
+        .tool_ceiling(gents::ToolCeiling::meta_only())
+        .agent(AGENT)
+        .backend_id(BACKEND)
+        .model_name(MODEL)
+        .stream_batch_ms(0)
+        .deadline_duration_secs(60)
+        .custom_tool(HeldTool {
+            entered: entered.clone(),
+            release: release.clone(),
+        })
+        .done()
+        .build()
+        .await
+        .unwrap();
+    let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
+    let handle = tokio::spawn(restarted.run(shutdown_rx));
+    let runtime = BootedAgent::new(shutdown, handle, did.into());
+    let head_state =
+        wait_for_request_terminal(db.node.as_ref(), "priority-head", Duration::from_secs(60)).await;
+    let head_row = row(&db, &active).await;
+    assert_eq!(
+        head_state,
+        "failed",
+        "head={head_row} bodies={:?}",
+        backend.observed_completion_bodies()
+    );
+    assert_eq!(
+        head_row["failure_reason"], "execution lease expired",
+        "head={head_row}"
+    );
+    let queued_state =
+        wait_for_request_terminal(db.node.as_ref(), "priority-queued", Duration::from_secs(60))
+            .await;
+    let queued_row = row(&db, &queued).await;
+    assert_eq!(
+        queued_state,
+        "completed",
+        "head={head_row} queued={queued_row} bodies={:?}",
+        backend.observed_completion_bodies()
+    );
+    let bodies = backend.observed_completion_bodies();
+    assert!(
+        bodies.len() >= 3,
+        "queued successor sends a provider request after recovery"
+    );
+    let successor_bodies = bodies
+        .iter()
+        .filter(|body| body.to_string().contains("queued turn"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        successor_bodies.len(),
+        1,
+        "queued successor dispatches once: {bodies:?}"
+    );
+    let replay = successor_bodies[0].to_string();
+    assert_eq!(
+        replay.matches("steer at tool boundary").count(),
+        1,
+        "the folded input replays exactly once"
+    );
+    assert!(replay.contains("queued turn"));
+    assert_eq!(
+        row(&db, &steer_doc).await["superseded_by_request_doc_id"],
+        active
+    );
+    backend.release(name);
     runtime.shutdown().await;
 }

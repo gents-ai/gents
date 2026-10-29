@@ -244,8 +244,7 @@ pub(crate) async fn settle_session_message_row(
         .doc_id()
         .context("session-message row lacks physical identity")?
         .to_owned();
-    let calling_request_id =
-        crate::session_message::calling_request_id(node.as_ref(), lifecycle).await?;
+    let calling_request_id = lifecycle.calling_request_id().await?;
     let caused = match crate::session_message::observe_caused_request(node, lifecycle).await? {
         crate::session_message::CausedObservation::Bound(caused) => caused,
         crate::session_message::CausedObservation::NotVisible => return Ok(false),
@@ -277,7 +276,7 @@ pub(crate) async fn settle_session_message_row(
         .as_deref()
         .context("caused request lacks physical identity")?;
     let Some(terminal) =
-        crate::background_tools::load_caused_request_terminal(node, caused_doc_id).await?
+        crate::background_tools::load_session_message_terminal(node, caused_doc_id).await?
     else {
         return Ok(false);
     };
@@ -308,6 +307,39 @@ pub(crate) async fn settle_session_message_row(
     )
     .await?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod folded_outcome_conformance {
+    use crate::tool_call_lifecycle::CausedRequestTerminal as Terminal;
+
+    fn terminal(name: &str) -> Option<Terminal> {
+        match name {
+            "pending" => None,
+            "completed" => Some(Terminal::Completed {
+                output: String::new(),
+            }),
+            "failed" => Some(Terminal::Failed {
+                reason: String::new(),
+            }),
+            "superseded" => Some(Terminal::Superseded),
+            _ => panic!("unknown modeled outcome {name}"),
+        }
+    }
+
+    #[test]
+    fn folded_outcome_matches_lean() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().agent_message_outcome_cases;
+        assert_eq!(cases.len(), 5);
+        for case in cases {
+            let actual = crate::background_tools::select_folded_outcome(
+                case.folded,
+                terminal(&case.caused),
+                terminal(&case.head),
+            );
+            assert_eq!(actual, terminal(&case.expected), "{case:?}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -429,6 +461,242 @@ mod turn_assignment_tests {
 
     /// A completed turn must not read as assignment evidence: only a
     /// complete assignment is the reasonless success form.
+    #[tokio::test]
+    async fn folded_session_message_waits_for_exact_head_and_replays_once() {
+        let PublishedSessionMessage {
+            admission,
+            caused_request_doc_id,
+            ..
+        } = crate::tool_call_lifecycle::admission_fixture::published_session_message(
+            crate::tool_call_lifecycle::admission_fixture::PublishedAdmissionOptions {
+                name: "folded-session-message".into(),
+                real_identity: true,
+                await_mode: AwaitMode::Background,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let node = &admission.node;
+        let did = &admission.node_did;
+        let session = caused_session_id(node, &caused_request_doc_id).await;
+        let head_id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        let create = format!(
+            r#"mutation {{ create_AgentRequest(input: {{
+            request_id: "{}", purpose: "normal", node_did: "{}", requester_did: "{}",
+            agent_id: "general", session_id: "{}", content: "head", lifecycle_state: "pending",
+            execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3, request_hop: 0
+        }}) {{ _docID }} }}"#,
+            escape_graphql_string(&head_id),
+            escape_graphql_string(did),
+            escape_graphql_string(did),
+            escape_graphql_string(&session),
+            escape_graphql_string(&now)
+        );
+        let created =
+            crate::config_client::ConfigAccess::write_local(node, "test.folded_head", &create)
+                .await
+                .unwrap();
+        let head_doc = crate::graphql::created_doc_id(&created, "AgentRequest").unwrap();
+        let foreign_create = create
+            .replace(
+                &format!("request_id: \"{}\"", head_id),
+                "request_id: \"foreign-head\"",
+            )
+            .replace(
+                &format!("requester_did: \"{}\"", escape_graphql_string(did)),
+                "requester_did: \"did:test:foreign\"",
+            );
+        let foreign = crate::config_client::ConfigAccess::write_local(
+            node,
+            "test.foreign_head",
+            &foreign_create,
+        )
+        .await
+        .unwrap();
+        let foreign_doc = crate::graphql::created_doc_id(&foreign, "AgentRequest").unwrap();
+        let foreign_fold = format!(
+            r#"mutation {{ update_AgentRequest(docID: "{}", input: {{
+            lifecycle_state: "superseded", superseded_by_request: "foreign-head", superseded_by_request_doc_id: "{}",
+            failure_reason: "{}"
+        }}) {{ _docID }} }}"#,
+            escape_graphql_string(&caused_request_doc_id),
+            escape_graphql_string(&foreign_doc),
+            escape_graphql_string(crate::lifecycle::FOLDED_REASON)
+        );
+        crate::config_client::ConfigAccess::write_local(node, "test.foreign_fold", &foreign_fold)
+            .await
+            .unwrap();
+        let binding_cases =
+            &crate::lean_vocab_test::lean_contract_snapshot().agent_folded_binding_cases;
+        let foreign_model = binding_cases
+            .iter()
+            .find(|case| {
+                case.caused_requester != case.head_requester && case.named_head == case.actual_head
+            })
+            .unwrap();
+        let foreign_accepted =
+            crate::background_tools::load_session_message_terminal(node, &caused_request_doc_id)
+                .await
+                .is_ok();
+        assert_eq!(foreign_accepted, foreign_model.expected);
+        assert_eq!(
+            settle_running_session_message_rows(node, did)
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(
+            session_message_notifications(node, did, admission.tool.session_id())
+                .await
+                .is_empty()
+        );
+        let foreign_agent_create = create
+            .replace(
+                &format!("request_id: \"{}\"", head_id),
+                "request_id: \"foreign-agent-head\"",
+            )
+            .replace("agent_id: \"general\"", "agent_id: \"foreign-agent\"");
+        let foreign_agent = crate::config_client::ConfigAccess::write_local(
+            node,
+            "test.foreign_agent_head",
+            &foreign_agent_create,
+        )
+        .await
+        .unwrap();
+        let foreign_agent_doc =
+            crate::graphql::created_doc_id(&foreign_agent, "AgentRequest").unwrap();
+        let foreign_agent_fold = format!(
+            r#"mutation {{ update_AgentRequest(docID: "{}", input: {{
+            lifecycle_state: "superseded", superseded_by_request: "foreign-agent-head", superseded_by_request_doc_id: "{}",
+            failure_reason: "{}"
+        }}) {{ _docID }} }}"#,
+            escape_graphql_string(&caused_request_doc_id),
+            escape_graphql_string(&foreign_agent_doc),
+            escape_graphql_string(crate::lifecycle::FOLDED_REASON)
+        );
+        crate::config_client::ConfigAccess::write_local(
+            node,
+            "test.foreign_agent_fold",
+            &foreign_agent_fold,
+        )
+        .await
+        .unwrap();
+        let foreign_agent_model = binding_cases
+            .iter()
+            .find(|case| {
+                case.caused_requester == case.head_requester
+                    && case.caused_agent != case.head_agent
+                    && case.named_head == case.actual_head
+            })
+            .unwrap();
+        let foreign_agent_accepted =
+            crate::background_tools::load_session_message_terminal(node, &caused_request_doc_id)
+                .await
+                .is_ok();
+        assert_eq!(foreign_agent_accepted, foreign_agent_model.expected);
+        assert_eq!(
+            settle_running_session_message_rows(node, did)
+                .await
+                .unwrap(),
+            0
+        );
+        let mismatched_fold = format!(
+            r#"mutation {{ update_AgentRequest(docID: "{}", input: {{
+            lifecycle_state: "superseded", superseded_by_request: "wrong-head", superseded_by_request_doc_id: "{}",
+            failure_reason: "{}"
+        }}) {{ _docID }} }}"#,
+            escape_graphql_string(&caused_request_doc_id),
+            escape_graphql_string(&head_doc),
+            escape_graphql_string(crate::lifecycle::FOLDED_REASON)
+        );
+        crate::config_client::ConfigAccess::write_local(
+            node,
+            "test.mismatched_fold",
+            &mismatched_fold,
+        )
+        .await
+        .unwrap();
+        let mismatch_model = binding_cases
+            .iter()
+            .find(|case| {
+                case.caused_requester == case.head_requester && case.named_head != case.actual_head
+            })
+            .unwrap();
+        let mismatch_accepted =
+            crate::background_tools::load_session_message_terminal(node, &caused_request_doc_id)
+                .await
+                .is_ok();
+        assert_eq!(mismatch_accepted, mismatch_model.expected);
+        let fold = format!(
+            r#"mutation {{ update_AgentRequest(docID: "{}", input: {{
+            lifecycle_state: "superseded", superseded_by_request: "{}", superseded_by_request_doc_id: "{}",
+            failure_reason: "{}"
+        }}) {{ _docID }} }}"#,
+            escape_graphql_string(&caused_request_doc_id),
+            escape_graphql_string(&head_id),
+            escape_graphql_string(&head_doc),
+            escape_graphql_string(crate::lifecycle::FOLDED_REASON)
+        );
+        crate::config_client::ConfigAccess::write_local(node, "test.folded_cause", &fold)
+            .await
+            .unwrap();
+        let matching_model = binding_cases
+            .iter()
+            .find(|case| {
+                case.caused_requester == case.head_requester
+                    && case.caused_agent == case.head_agent
+                    && case.named_head == case.actual_head
+            })
+            .unwrap();
+        let matching_accepted =
+            crate::background_tools::load_session_message_terminal(node, &caused_request_doc_id)
+                .await
+                .is_ok();
+        assert_eq!(matching_accepted, matching_model.expected);
+        assert_eq!(
+            settle_running_session_message_rows(node, did)
+                .await
+                .unwrap(),
+            0
+        );
+        assert!(
+            session_message_notifications(node, did, admission.tool.session_id())
+                .await
+                .is_empty()
+        );
+        crate::tool_call_lifecycle::admission_fixture::complete_child(
+            node,
+            &head_id,
+            did,
+            "head answer",
+        )
+        .await;
+        assert_eq!(
+            settle_running_session_message_rows(node, did)
+                .await
+                .unwrap(),
+            1
+        );
+        let notifications =
+            session_message_notifications(node, did, admission.tool.session_id()).await;
+        assert_eq!(notifications.len(), 1);
+        assert!(notifications[0].contains("head answer"));
+        assert!(!notifications[0].contains("request_superseded"));
+        settle_running_session_message_rows(node, did)
+            .await
+            .unwrap();
+        crate::tool_call_lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(node, did)
+            .await.unwrap();
+        assert_eq!(
+            session_message_notifications(node, did, admission.tool.session_id()).await,
+            notifications
+        );
+        node.shutdown().await;
+        std::fs::remove_dir_all(&admission.path).unwrap();
+    }
+
     #[tokio::test]
     async fn completed_turn_with_live_goal_hands_off_a_non_complete_reason() {
         let PublishedSessionMessage {

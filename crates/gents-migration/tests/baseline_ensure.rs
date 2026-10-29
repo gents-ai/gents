@@ -111,9 +111,15 @@ async fn existing_agent_session_schema_upgrades_in_place_and_preserves_rows() {
     let legacy_sdl = gents_protocol::schemas::AGENT_SESSION
         .lines()
         .filter(|line| {
-            !["stopped_at:", "archived_at:", "archive_revision:"]
-                .iter()
-                .any(|field| line.trim_start().starts_with(field))
+            ![
+                "stopped_at:",
+                "archived_at:",
+                "archive_revision:",
+                "started_by_node_did:",
+                "started_by_session_id:",
+            ]
+            .iter()
+            .any(|field| line.trim_start().starts_with(field))
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -863,9 +869,14 @@ async fn archive_columns_preserve_existing_sessions_and_field_identities() {
     let previous = schemas::AGENT_SESSION
         .lines()
         .filter(|line| {
-            !["archived_at:", "archive_revision:"]
-                .iter()
-                .any(|field| line.trim_start().starts_with(field))
+            ![
+                "archived_at:",
+                "archive_revision:",
+                "started_by_node_did:",
+                "started_by_session_id:",
+            ]
+            .iter()
+            .any(|field| line.trim_start().starts_with(field))
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -949,5 +960,142 @@ async fn archive_columns_preserve_existing_sessions_and_field_identities() {
     let reopened = node.execute(query).await;
     assert!(!reopened.has_errors(), "{reopened:?}");
     assert_eq!(reopened.data.unwrap(), rows);
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn node_memory_text_schema_pins_match() {
+    let fresh = fresh_node().await;
+    fresh.add_collection(schemas::NODE_MEMORY).await.unwrap();
+    let fresh_id = fresh
+        .get_collection("NodeMemory")
+        .unwrap()
+        .unwrap()
+        .version_id;
+    let old = fresh_node().await;
+    let old_sdl = schemas::NODE_MEMORY
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("value_text:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    old.add_collection(&old_sdl).await.unwrap();
+    assert_eq!(
+        old.get_collection("NodeMemory")
+            .unwrap()
+            .unwrap()
+            .version_id,
+        "bafyreifcm3bi3qofvhfws7nps45xomrsxb2zslvjkkhb7uwh34esxi5okq"
+    );
+    let patched = old.patch_collection("NodeMemory", r#"[{"op":"add","path":"/NodeMemory/Fields/-","value":{"Name":"value_text","Kind":"String","Typ":6}}]"#).await.unwrap();
+    assert_eq!(
+        (fresh_id.as_str(), patched.version_id.as_str()),
+        (
+            "bafyreich7rj5lgj3ce5mfndp7xy4awh2khblveen7c7ihf6djm5j2dpo5m",
+            "bafyreihb3faohzgyj4zedddsedlnivyjhonk6tkhdovvrzyiaris3rkmtu"
+        )
+    );
+    fresh.shutdown().await;
+    old.shutdown().await;
+}
+
+#[tokio::test]
+async fn starter_columns_preserve_each_supported_session_lineage() {
+    let old = schemas::AGENT_SESSION
+        .lines()
+        .filter(|line| !line.contains("started_by_"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for removed in [
+        vec![],
+        vec![
+            "archived_at:",
+            "archive_revision:",
+            "started_by_node_did:",
+            "started_by_session_id:",
+        ],
+        vec![
+            "stopped_at:",
+            "archived_at:",
+            "archive_revision:",
+            "started_by_node_did:",
+            "started_by_session_id:",
+        ],
+    ] {
+        let node = fresh_node().await;
+        let sdl = old
+            .lines()
+            .filter(|line| {
+                !removed
+                    .iter()
+                    .any(|field| line.trim_start().starts_with(field))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        node.add_collection(&sdl).await.unwrap();
+        let before = node.get_collection("AgentSession").unwrap().unwrap();
+        let create = node
+            .execute(
+                r#"mutation {create_AgentSession(input: {
+            session_id: "retained", node_did: "owner", agent_id: "worker",
+            provenance: {parent_request_doc_id: "original-parent"}
+        }) {_docID}}"#,
+            )
+            .await;
+        assert!(!create.has_errors(), "{create:?}");
+        let query = "{AgentSession {_docID session_id node_did provenance}}";
+        let retained = node.execute(query).await;
+        ensure_migrations(&node).await.unwrap();
+        let after = node.get_collection("AgentSession").unwrap().unwrap();
+        assert_eq!(after.collection_id, before.collection_id);
+        for field in before.fields {
+            assert_eq!(
+                after
+                    .fields
+                    .iter()
+                    .find(|next| next.name == field.name)
+                    .unwrap()
+                    .id,
+                field.id
+            );
+        }
+        for field in ["started_by_node_did", "started_by_session_id"] {
+            assert!(after
+                .fields
+                .iter()
+                .any(|next| next.name == field && next.immutable));
+            assert!(after
+                .indexes
+                .iter()
+                .any(|index| index.name == format!("AgentSession_{field}_ASC")));
+        }
+        assert_eq!(node.execute(query).await.data, retained.data);
+        let source = node
+            .execute("{AgentSession {started_by_node_did started_by_session_id}}")
+            .await;
+        assert_eq!(
+            source.data.unwrap()["AgentSession"][0],
+            serde_json::json!({"started_by_node_did": null, "started_by_session_id": null})
+        );
+        assert_eq!(ensure_migrations(&node).await.unwrap().steps_applied, 0);
+        assert_eq!(node.execute(query).await.data, retained.data);
+        node.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn tool_file_content_schema_pin_matches() {
+    let node = fresh_node().await;
+    node.add_collection(schemas::TOOL_FILE_CONTENT)
+        .await
+        .unwrap();
+    let actual = node
+        .get_collection(schemas::TOOL_FILE_CONTENT_NAME)
+        .unwrap()
+        .unwrap()
+        .version_id;
+    assert_eq!(
+        actual,
+        "bafyreibqziwhiq4dxkeqfeokkt22yajmnimxegww4lbr3r7k57b6dvetby"
+    );
     node.shutdown().await;
 }

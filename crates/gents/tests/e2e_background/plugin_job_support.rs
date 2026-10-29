@@ -166,6 +166,7 @@ pub(crate) async fn install_job_fixture(
         &[],
         InstalledVia::Operator,
         Some(plugin_home),
+        Some(&archive),
         &|_| None,
     )
     .await

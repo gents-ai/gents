@@ -117,7 +117,17 @@ describe("editing a waiting message in the composer", () => {
         expect.objectContaining({
           expectedRequestDocIds: ["doc-a", "doc-barrier", "doc-b"],
           selectedRequestDocIds: ["doc-a"],
-          messages: [{ requestDocId: "doc-a", content: "corrected instruction" }],
+          messages: [
+            {
+              requestDocId: "doc-a",
+              content: "corrected instruction",
+              authoredInput: {
+                selected_skill_ids: [],
+                captured_context: [],
+                attachments: [],
+              },
+            },
+          ],
         }),
       ),
     );

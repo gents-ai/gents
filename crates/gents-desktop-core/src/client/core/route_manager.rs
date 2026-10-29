@@ -52,6 +52,7 @@ pub(super) enum PendingRemovalCleanup {
     Superseded,
 }
 
+/// Retry an unready route without spinning while its pairing state changes.
 const UNREADY_ROUTE_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 impl ClientRouteManager {

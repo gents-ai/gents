@@ -4,7 +4,7 @@ mod dirs;
 mod install;
 mod run;
 pub(crate) use gents::plugin::store;
-pub use run::call_installed;
+pub use run::{call_installed, call_installed_for_operator};
 
 use anyhow::{Context, Result};
 use serde_json::json;
@@ -107,6 +107,8 @@ fn list(args: PluginListArgs) -> Result<()> {
 async fn remove(args: PluginRemoveArgs) -> Result<()> {
     let (namespace, name) = crate::commands::pack::split_namespace(&args.name);
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let lock_home = home.clone();
+    let guard = tokio::task::spawn_blocking(move || store::try_lock_store(&lock_home)).await??;
     // A pack's home record lists its plugins: release both through the pack
     // removal owner, never the plugin record alone.
     let owner = store::read_record(&home, namespace, name)
@@ -121,16 +123,25 @@ async fn remove(args: PluginRemoveArgs) -> Result<()> {
                 ) && record.plugins.iter().all(|plugin| plugin.name == name),
                 "{namespace}/{name} is installed by pack {coordinate} with other contents; remove it with gents pack remove {coordinate}"
             );
-            let removed = crate::commands::pack::remove_home_install(&home, &coordinate).await?;
+            let removed =
+                crate::commands::pack::remove_home_install_with_guard(&home, &coordinate, guard)
+                    .await?;
             return crate::print_json(&json!({ "pack": coordinate, "removed": removed }));
         }
     }
-    let removed = store::remove_record(&home, namespace, name).with_context(|| {
-        format!(
-            "{namespace}/{name} is not installed under {}",
-            home.display()
-        )
-    })?;
+    crate::commands::pack::ensure_home_plugins_unreferenced(
+        &home,
+        &std::collections::BTreeSet::from([format!("{namespace}/{name}")]),
+    )
+    .await?;
+    let removed =
+        store::remove_record_locked(&guard, &home, namespace, name).with_context(|| {
+            format!(
+                "{namespace}/{name} is not installed under {}",
+                home.display()
+            )
+        })?;
+    drop(guard);
     if let Some(coordinate) = &removed.owner_pack_coordinate {
         crate::commands::pack::warn_on_unrecorded_removal(
             coordinate,

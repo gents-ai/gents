@@ -189,7 +189,7 @@ mod tests {
             super::super::turn_projection::tests::notification_test_state(temp.path()).await;
         crate::caused_sessions::fixtures::seed_one_call_two_sessions(
             &state.node,
-            "did:test:notification",
+            crate::caused_sessions::fixtures::FIXTURE_DID,
             "parent",
         )
         .await;
@@ -246,7 +246,7 @@ mod tests {
             crate::caused_sessions::fixtures::seed_lineage_case(
                 &state.node,
                 &case,
-                "did:test:notification",
+                crate::caused_sessions::fixtures::FIXTURE_DID,
             )
             .await;
             let mut actual = load_caused_threads_for_root_ids(&state, &roots)
@@ -258,7 +258,7 @@ mod tests {
             actual.sort();
             let mut expected = queries
                 .iter()
-                .filter(|query| query["expected_opening_doc_id"].is_string())
+                .filter(|query| query["listed_start"] == true)
                 .map(|query| query["session_id"].as_str().unwrap().to_owned())
                 .filter(|session| !roots.contains(session))
                 .collect::<Vec<_>>();

@@ -1,4 +1,5 @@
 use super::*;
+use crate::hook::RetainedStopReceipt;
 use crate::hook::{decide_persistence_outcome, FailurePolicy, PolicyDecision};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -356,19 +357,30 @@ impl DefraSessionHook {
                     .remove(internal_call_id);
 
                 if let Some(mut lc) = lifecycle {
+                    if !self.foreground_stop_confirmed(&lc, match outcome {
+                        ToolOutcome::TimedOut { .. } => RetainedStopReceipt::Timeout,
+                        _ => RetainedStopReceipt::Cancel(CancelCause::Interrupted, "request interrupted".to_owned()),
+                    }).await {
+                        self.in_flight_lifecycles.lock().await.insert(internal_call_id.to_owned(), lc);
+                        return Ok(HookAction::Terminate {
+                            reason: "tool process exit could not be confirmed".to_owned(),
+                        });
+                    }
                     let receipt = if let Some(doc_id) = lc.doc_id() {
                         self.background_live_outputs.registry.plugin_receipt(doc_id).await
                     } else { None };
                     lc.stage_plugin_receipt(receipt);
                     let output_doc_id = lc.doc_id().map(str::to_owned);
-                    match outcome {
-                        ToolOutcome::TimedOut { .. } => {
-                            let _ = lc.timeout().await?;
-                        }
-                        _ => {
-                            let _ = lc.cancel_during_run(CancelCause::Interrupted).await?;
+                    if !self.background_executions.settle_retained_stop(&mut lc).await? {
+                        match outcome {
+                            ToolOutcome::TimedOut { .. } => { let _ = lc.timeout().await?; }
+                            _ => { let _ = lc.cancel_during_run(CancelCause::Interrupted).await?; }
                         }
                     }
+                    if lc.is_terminal() {
+                        if let Some(doc) = lc.doc_id() { self.background_executions.retire_confirmed_stop(lc.tool_call_id(), doc, true); }
+                    }
+                    self.forget_foreground_evidence(&lc).await;
                     if let Some(output_doc_id) = output_doc_id {
                         self.release_live_output(&output_doc_id).await;
                     }
@@ -431,12 +443,24 @@ impl DefraSessionHook {
                     )
                 })?;
 
+            if crate::managed_exec::ownership::native_terminal_needs_confirmation(Some(outcome))
+                && !self.foreground_stop_confirmed(&lc, RetainedStopReceipt::Failure(outcome.clone())).await {
+                self.in_flight_lifecycles.lock().await.insert(internal_call_id.to_owned(), lc);
+                return Ok(HookAction::Terminate { reason: "tool process exit could not be confirmed".to_owned() });
+            }
+            self.forget_foreground_evidence(&lc).await;
             lc.stage_plugin_receipt(
                 self.background_live_outputs.registry.plugin_receipt(&tool_call_doc_id).await
             );
             lc.stage_deferred_writes(
                 self.background_live_outputs.registry.deferred_writes(&tool_call_doc_id).await
             );
+
+            if crate::managed_exec::ownership::native_terminal_needs_confirmation(Some(outcome))
+                && self.background_executions.settle_retained_stop(&mut lc).await? {
+                self.release_live_output(&tool_call_doc_id).await;
+                return Ok(HookAction::Continue);
+            }
 
             let presentation = self.background_live_outputs.registry
                 .take_prepared_presentation(&tool_call_doc_id, result)
@@ -465,6 +489,7 @@ impl DefraSessionHook {
                 }
             }
 
+            if lc.is_terminal() { self.background_executions.retire_confirmed_stop(lc.tool_call_id(), &tool_call_doc_id, true); }
             self.release_live_output(&tool_call_doc_id).await;
 
             Ok(HookAction::Continue)

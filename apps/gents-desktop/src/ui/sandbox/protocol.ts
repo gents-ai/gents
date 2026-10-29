@@ -97,5 +97,5 @@ export const isCallbackHandle = (value: unknown): value is CallbackHandle =>
   value !== null &&
   typeof (value as CallbackHandle).$cb === "string";
 
-/** a one-second ceiling on a frame's silence before its row says so */
+/** A frame that never reports readiness must not leave its host waiting forever. */
 export const FRAME_LOAD_TIMEOUT_MS = 8000;

@@ -12,6 +12,23 @@ export const inNativeShell = () =>
 
 export const windowLabel = () => getCurrentWindow().label;
 
+export function sendAppOpened() {
+  if (inNativeShell() && windowLabel() === "main") {
+    void invoke("product_telemetry_app_opened").catch(() => {});
+  }
+}
+
+export type ProductTelemetryStatus = { configured: boolean; enabled: boolean };
+
+export function productTelemetryStatus(): Promise<ProductTelemetryStatus> {
+  if (!inNativeShell()) return Promise.resolve({ configured: false, enabled: false });
+  return invoke("product_telemetry_status");
+}
+
+export function setProductTelemetry(enabled: boolean): Promise<ProductTelemetryStatus> {
+  return invoke("product_telemetry_set_enabled", { enabled });
+}
+
 export function minimizeWindow() {
   void getCurrentWindow().minimize();
 }

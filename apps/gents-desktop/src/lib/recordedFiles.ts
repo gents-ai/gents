@@ -6,7 +6,7 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import type { ChangedFile, FileEdit } from "../ui/lib/turnChanges";
 
-/** Core keeps a copy only up to this size. */
+/** Match core's retained-image limit before allocating decoded bytes for verification. */
 const MAX_IMAGE_BYTES = 1024 * 1024;
 
 /** The session a turn's edits ran in. */

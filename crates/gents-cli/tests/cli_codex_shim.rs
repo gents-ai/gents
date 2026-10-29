@@ -90,8 +90,8 @@ async fn seed_backend_catalog(
         r#"mutation($catalogs: JSON) {{
             update_InferenceBackend(
                 filter: {{node_did: {{_eq: "{}"}}, backend_id: {{_eq: "{}"}}}},
-                input: {{catalogs: $catalogs, probe_status: "healthy", last_probe: "{}"}}
-            ) {{_docID}}
+                input: {{catalogs: $catalogs, catalog_freshness: null, probe_status: "healthy", last_probe: "{}"}}
+            ) {{_docID backend_id catalogs catalog_freshness probe_status last_probe}}
         }}"#,
         escape_graphql_string(node_did),
         escape_graphql_string(backend_id),
@@ -120,6 +120,28 @@ async fn seed_backend_catalog(
             .and_then(Value::as_array)
             .is_none_or(Vec::is_empty),
         "seed backend catalog failed: {response}"
+    );
+    let rows = response
+        .pointer("/data/update_InferenceBackend")
+        .and_then(Value::as_array)
+        .context("seed backend catalog omitted updated rows")?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "seed backend catalog must update one backend"
+    );
+    let observation = gents::backend_registry::decode_backend_observation(rows[0].clone())
+        .context("seeded backend observation is incoherent")?;
+    anyhow::ensure!(
+        observation.backend_id == backend_id
+            && observation
+                .catalogs
+                .iter()
+                .any(|catalog| catalog.node_did.is_none()
+                    && catalog
+                        .models
+                        .iter()
+                        .any(|model| model.model_name == model_name)),
+        "seeded backend observation does not contain the requested model"
     );
     Ok(())
 }

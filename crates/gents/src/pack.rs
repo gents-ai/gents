@@ -25,13 +25,16 @@ pub use inference::{
     install_pack_documents, install_pack_documents_with_expectations,
     preview_pack_inference_bindings, PackInferenceBindingPreview, PackInferenceProfileOption,
 };
+pub(crate) use installation::sdl_paths;
 pub use installation::{
-    document_pack_schema_paths, install_prepared_document_pack, installed_pack_documents,
-    installed_packs, list_installed_packs, plugin_data_unique_keys, prepare_document_pack_install,
+    apply_prepared_dependency_schemas, document_pack_schema_paths, ensure_plugins_unreferenced,
+    install_documents_with_plugins, install_prepared_document_graph,
+    install_prepared_document_pack, installed_pack_documents, installed_packs,
+    list_installed_packs, plugin_data_unique_keys, prepare_document_pack_install,
     read_installed_pack, record_plugin_store_change, record_plugin_store_change_as,
     referenced_pack_digests, remove_pack, DriftPolicy, InstallReport, InstalledPack,
-    InstalledPackPlugin, PackIdentity, PreparedDependency, PreparedDocumentPackInstall,
-    RemoveReport, Retained,
+    InstalledPackPlugin, PackIdentity, PluginStoreChangeError, PreparedDependency,
+    PreparedDocumentPackInstall, RemoveReport, Retained,
 };
 pub use loader::{
     decode_pack_config, ensure_pack_leaves_default_unselected, load_pack_config, pin_pack_plugins,
@@ -279,6 +282,8 @@ pub struct PluginLimits {
     pub max_output_mib: Option<u32>,
 }
 
+/// Bounds model-facing instructions loaded from a pack so one document cannot
+/// add unbounded prompt text or allocation to each provider turn.
 pub const MAX_TOOL_INSTRUCTIONS_BYTES: usize = 64 * 1024;
 
 /// Where a UX plugin's files must live inside a pack, by convention
@@ -969,15 +974,6 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
         "a plugins pack must declare at least one plugin"
     );
 
-    // Only a pack that installs as a home file record (assets, plugins) is
-    // scanned for UX plugins; a documents pack installs into a
-    // node, where its ux[] would never be listed.
-    anyhow::ensure!(
-        manifest.metadata.ux.is_empty()
-            || matches!(manifest.metadata.kind, PackKind::Assets | PackKind::Plugins),
-        "ux plugins ship in an assets or plugins pack; a {:?} pack is never listed for them",
-        manifest.metadata.kind
-    );
     let mut ux_names = BTreeSet::new();
     for ux in &manifest.metadata.ux {
         ux.validate(&plugin_names)?;
@@ -1692,7 +1688,7 @@ mod tests {
     }
 
     #[test]
-    fn ux_plugins_ship_only_in_a_pack_that_installs_as_a_home_record() {
+    fn document_packs_can_ship_ux_as_declared_assets() {
         let ux = serde_json::to_value(valid_ux()).unwrap();
         let mut manifest = documents_manifest(vec![]);
         manifest.metadata.ux = vec![serde_json::from_value(ux).unwrap()];
@@ -1700,13 +1696,7 @@ mod tests {
             .metadata
             .assets
             .push("ux/board/plugin.js".to_owned());
-        let error = validate_pack_manifest(&manifest).unwrap_err();
-        assert!(
-            format!("{error:#}").contains("assets or plugins pack"),
-            "{error:#}"
-        );
-        manifest.metadata.ux.clear();
-        validate_pack_manifest(&manifest).expect("a documents pack without ux is unchanged");
+        validate_pack_manifest(&manifest).expect("a document pack may include UX assets");
     }
 
     #[test]

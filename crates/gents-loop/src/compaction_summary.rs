@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::history::floor_char_boundary;
 
+/// Bounds provider error text carried into compaction diagnostics and logs.
 const ERROR_DIAGNOSTIC_MAX_BYTES: usize = 256;
 #[path = "compaction_checkpoint_json.rs"]
 mod checkpoint_json;
@@ -93,6 +94,7 @@ fn strip_markdown_fence(raw: &str) -> &str {
 }
 
 fn bounded_raw_output_preview(raw: &str) -> String {
+    /// Prevents malformed model output from inflating parse-failure diagnostics.
     const RAW_OUTPUT_PREVIEW_MAX_BYTES: usize = 192;
     let cut = floor_char_boundary(raw, raw.len().min(RAW_OUTPUT_PREVIEW_MAX_BYTES));
     let preview = &raw[..cut];
@@ -101,8 +103,10 @@ fn bounded_raw_output_preview(raw: &str) -> String {
         .unwrap_or_else(|_| "\"<unavailable>\"".to_string())
 }
 
+/// Bounds each item in the continuation checkpoint sent onward.
 const SUMMARY_ITEM_MAX_BYTES: usize = 512;
 const SUMMARY_ITEM_TRUNCATION_SUFFIX: &str = "…";
+/// Bounds each model-authored list so a checkpoint stays usable as context.
 const MODEL_LIST_MAX_ITEMS: usize = 8;
 const LIST_OVERFLOW_SUFFIX: &str = "(omitted from this summary)";
 

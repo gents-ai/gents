@@ -318,6 +318,8 @@ impl CommandRunner for ProcessCommandRunner {
             }
         };
         fn read_capture(file: &mut fs::File) -> Result<String> {
+            /// A service manager can produce arbitrary output; bound the text
+            /// retained in the command result.
             const MAX_OUTPUT: u64 = 64 * 1024;
             file.seek(SeekFrom::Start(0))?;
             let mut bytes = Vec::new();
@@ -407,7 +409,9 @@ mod macos_background {
 }
 
 fn command_timeout(program: &OsStr, args: &[OsString]) -> Duration {
+    /// Bound waits on external service manager commands.
     const CONTROL_TIMEOUT: Duration = Duration::from_secs(10);
+    /// A stop gets a longer window to allow runtime shutdown and store release.
     const STOP_TIMEOUT: Duration = Duration::from_secs(120);
 
     let is_stop = (program == OsStr::new("systemctl")

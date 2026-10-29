@@ -4,4 +4,5 @@ type NodeMemory @branchable {
     key: String @index
     value: String
     updated_at: String @index(direction: DESC)
+    value_text: String @crdt(type: text)
 }

@@ -79,7 +79,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
     let running = tokio::spawn(async move {
         crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
             Some(deadline), parent_for_task,
-            task_hook.run_backgroundable_foreground("bash_unrestricted", "handoff-command", Box::new(move |token| Box::pin(async move {
+            task_hook.run_backgroundable_foreground("bash_unrestricted", "handoff-command", Box::new(move |token, _cleanup| Box::pin(async move {
                 let result = crate::managed_exec::run_managed_exec(crate::managed_exec::ManagedExecRequest {
                     argv: vec!["/bin/sh".into(), "-c".into(), "printf '%s' $$ > \"$1\"; read value < \"$2\"; printf 'finished:%s' \"$value\"".into(), "sh".into(), pid_arg, gate_arg],
                     cwd, deadline_at: Some(deadline), cancellation_token: token,
@@ -313,7 +313,7 @@ async fn cancellation_winning_handoff_clears_the_request_and_cancels_the_same_ex
             runner.run_backgroundable_foreground(
                 "bash_unrestricted",
                 "handoff-cancel-command",
-                Box::new(move |token| {
+                Box::new(move |token, _cleanup| {
                     Box::pin(async move {
                         let _ = started.send(token.clone());
                         token.cancelled().await;
@@ -390,7 +390,7 @@ async fn refused_foreground_handoff_can_be_retried() {
             runner.run_backgroundable_foreground(
                 "bash_unrestricted",
                 "retry-command",
-                Box::new(move |_| {
+                Box::new(move |_, _cleanup| {
                     Box::pin(async move {
                         let _ = started.send(());
                         finished.await.unwrap();
@@ -528,5 +528,389 @@ async fn concurrent_background_starts_on_one_request_fill_exactly_the_ceiling() 
                 .unwrap();
         }
     }
+    node.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn interrupted_foreground_with_unverified_exit_remains_background_controlled() {
+    use crate::managed_exec::ownership::test_support::OwnedTestProcess;
+    let expected = crate::lean_vocab_test::lean_process_stop_cases()
+        .iter()
+        .find(|case| case.before == "running" && case.after == "running")
+        .unwrap();
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let session = hook.session_id().await.unwrap();
+    let deadline = Utc::now() + chrono::Duration::minutes(5);
+    bind_interruptible_request(&node, &hook, "unverified-parent", &session, deadline).await;
+    let recovery =
+        crate::lean_vocab_test::lean_r6_backgrounding_case("recovery_transfer_at_capacity");
+    for index in 0..recovery.pre_live_count {
+        let mut occupied = accepted_hook_tool_lifecycle(
+            &hook,
+            &format!("occupied-recovery-{index}"),
+            "held_background_tool",
+            "{}",
+            deadline,
+            crate::tool_call_lifecycle::AwaitMode::Background,
+        )
+        .await;
+        occupied.start_running().await.unwrap();
+    }
+    assert!(recovery.legal);
+    let mut lifecycle = accepted_hook_tool_lifecycle(
+        &hook,
+        "unverified-foreground",
+        "bash",
+        "{}",
+        deadline,
+        crate::tool_call_lifecycle::AwaitMode::Foreground,
+    )
+    .await;
+    lifecycle.start_running().await.unwrap();
+    let doc = lifecycle.doc_id().unwrap().to_owned();
+    hook.in_flight_lifecycles
+        .lock()
+        .await
+        .insert("unverified-foreground".into(), lifecycle);
+    let parent = CancellationToken::new();
+    let (process_tx, process_rx) = tokio::sync::oneshot::channel();
+    let registry = hook.background_executions.clone();
+    let task_hook = hook.clone();
+    let task_parent = parent.clone();
+    let task_doc = doc.clone();
+    let running = tokio::spawn(async move {
+        crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+            Some(deadline),
+            task_parent,
+            task_hook.run_backgroundable_foreground(
+                "bash",
+                "unverified-foreground",
+                Box::new(move |token, _cleanup| {
+                    Box::pin(async move {
+                        let process = OwnedTestProcess::spawn(Some(
+                            registry.process_recorder("unverified-foreground", &task_doc),
+                        ))
+                        .await;
+                        process_tx.send(process).ok().unwrap();
+                        token.cancelled().await;
+                        crate::tool_call_lifecycle::ToolOutcome::Cancelled
+                    })
+                }),
+            ),
+        )
+        .await
+    });
+    let process = process_rx.await.unwrap();
+    parent.cancel();
+    let result = running.await.unwrap();
+    assert!(matches!(result, ForegroundResult::Backgrounded(_)));
+    let row = fetch_tool_call_row(&node, &session, "unverified-foreground").await;
+    assert_eq!(row["lifecycle_state"], expected.durable_state);
+    assert_eq!(row["await_mode"], recovery.await_mode);
+    let mut overflow = accepted_hook_tool_lifecycle(
+        &hook,
+        "after-recovery-overflow",
+        "held_background_tool",
+        "{}",
+        deadline,
+        crate::tool_call_lifecycle::AwaitMode::Background,
+    )
+    .await;
+    let refusal = overflow.start_running().await.unwrap_err();
+    let modeled_count: usize = recovery.result.as_deref().unwrap().parse().unwrap();
+    assert_eq!(
+        refusal
+            .downcast_ref::<crate::hook::persistence::BackgroundCapacityExceeded>()
+            .map(|error| error.0),
+        Some(modeled_count)
+    );
+    assert!(hook
+        .background_executions
+        .process_record("unverified-foreground", &doc)
+        .is_some());
+    assert!(matches!(
+        hook.background_executions
+            .stop_native_process("unverified-foreground", &doc)
+            .await,
+        crate::managed_exec::ProcessStopOutcome::Stopped
+            | crate::managed_exec::ProcessStopOutcome::AlreadyExited
+    ));
+    assert!(
+        hook.background_executions
+            .contains("unverified-foreground", &doc)
+            .await
+    );
+    hook.background_executions
+        .recover_retained_foreground()
+        .await;
+    assert!(
+        !hook
+            .background_executions
+            .contains("unverified-foreground", &doc)
+            .await
+    );
+    process.finish().await;
+    node.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn failed_recovery_handoff_retains_physical_owner_until_periodic_recovery() {
+    use crate::managed_exec::ownership::test_support::OwnedTestProcess;
+    let modeled =
+        crate::lean_vocab_test::lean_r6_backgrounding_case("recovery_transfer_at_capacity");
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let session = hook.session_id().await.unwrap();
+    let deadline = Utc::now() + chrono::Duration::minutes(5);
+    bind_interruptible_request(&node, &hook, "recovery-parent", &session, deadline).await;
+    let mut lifecycle = accepted_hook_tool_lifecycle(
+        &hook,
+        "failed-handoff",
+        "bash",
+        "{}",
+        deadline,
+        crate::tool_call_lifecycle::AwaitMode::Foreground,
+    )
+    .await;
+    lifecycle.start_running().await.unwrap();
+    let doc = lifecycle.doc_id().unwrap().to_owned();
+    let registry = hook.background_executions.clone();
+    let reservation = registry
+        .reserve(
+            "failed-handoff".into(),
+            doc.clone(),
+            CancellationToken::new(),
+        )
+        .unwrap();
+    let process =
+        OwnedTestProcess::spawn(Some(registry.process_recorder("failed-handoff", &doc))).await;
+    let (failed, count) =
+        crate::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+            Some(1),
+            hook.handoff_unverified_process(&mut lifecycle, "failed-handoff", &doc),
+        )
+        .await;
+    assert_eq!(count, 1);
+    assert!(failed.is_err());
+    reservation.retain_for_recovery(lifecycle);
+    assert!(registry.contains("failed-handoff", &doc).await);
+    assert!(registry.process_record("failed-handoff", &doc).is_some());
+    let row = fetch_tool_call_row(&node, &session, "failed-handoff").await;
+    assert_eq!(row["await_mode"], "foreground");
+    assert_eq!(row["lifecycle_state"], modeled.terminal_state);
+    let request_doc = hook.active_request_doc_id().await.unwrap();
+    let escaped = crate::graphql::escape_graphql_string(&request_doc);
+    crate::config_client::ConfigAccess::write_local(&node, "test.terminal_parent_with_retained_process", &format!(
+        r#"mutation {{ update_AgentRequest(docID: "{escaped}", input: {{ lifecycle_state: "failed" }}) {{ _docID }} }}"#
+    )).await.unwrap();
+    let report = crate::tool_call_lifecycle::ToolCallLifecycle::reconcile_terminal_parent_owned_tools_with_executions(&node, &hook.node_did, &registry).await.unwrap();
+    assert_eq!(report.tool_calls_terminalized, 0);
+    let row = fetch_tool_call_row(&node, &session, "failed-handoff").await;
+    assert_eq!(row["lifecycle_state"], modeled.terminal_state);
+    crate::tool_call_lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
+        &node,
+        &hook.node_did,
+        &registry,
+    )
+    .await
+    .unwrap();
+    let row = fetch_tool_call_row(&node, &session, "failed-handoff").await;
+    assert_eq!(row["await_mode"], modeled.await_mode);
+    assert_eq!(row["lifecycle_state"], modeled.terminal_state);
+    let mut settling = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+        node.clone(),
+        &doc,
+        &hook.node_did,
+        &session,
+        None,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    registry.set_cancellation_reason("failed-handoff", &doc, "operator requested stop", false);
+    assert!(matches!(
+        registry.stop_native_process("failed-handoff", &doc).await,
+        crate::managed_exec::ProcessStopOutcome::Stopped
+            | crate::managed_exec::ProcessStopOutcome::AlreadyExited
+    ));
+    let (failed, count) =
+        crate::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+            Some(1),
+            settling.cancel_during_run_owned(CancelCause::UserCancelled, "operator requested stop"),
+        )
+        .await;
+    assert_eq!(count, 1);
+    assert!(failed.is_err());
+    let receipt_model = crate::lean_vocab_test::lean_process_stop_cases()
+        .iter()
+        .find(|case| case.live_evidence == "exited" && case.worker_released)
+        .unwrap();
+    registry.retire_confirmed_stop("failed-handoff", &doc, receipt_model.retire_before_commit);
+    assert!(registry.contains("failed-handoff", &doc).await);
+    crate::tool_call_lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
+        &node,
+        &hook.node_did,
+        &registry,
+    )
+    .await
+    .unwrap();
+    let row = fetch_tool_call_row(&node, &session, "failed-handoff").await;
+    assert_eq!(row["lifecycle_state"], "cancelled");
+    assert_eq!(row["cancel_cause"], "userCancelled");
+    assert!(!registry.contains("failed-handoff", &doc).await);
+    process.finish().await;
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn confirmation_before_worker_release_keeps_typed_stop_receipt() {
+    let modeled = crate::lean_vocab_test::lean_process_stop_cases()
+        .iter()
+        .find(|case| case.live_evidence == "exited" && case.worker_released)
+        .unwrap();
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let session = hook.session_id().await.unwrap();
+    let deadline = Utc::now() + chrono::Duration::minutes(5);
+    bind_interruptible_request(&node, &hook, "early-confirm-parent", &session, deadline).await;
+    let mut lifecycle = accepted_hook_tool_lifecycle(
+        &hook,
+        "early-confirm",
+        "bash",
+        "{}",
+        deadline,
+        crate::tool_call_lifecycle::AwaitMode::Foreground,
+    )
+    .await;
+    lifecycle.start_running().await.unwrap();
+    let doc = lifecycle.doc_id().unwrap().to_owned();
+    let registry = hook.background_executions.clone();
+    let token = CancellationToken::new();
+    let reservation = registry
+        .reserve("early-confirm".into(), doc.clone(), token.clone())
+        .unwrap();
+    let _recorder = registry.process_recorder("early-confirm", &doc);
+    let execution = registry.lock_executions().get(&doc).unwrap().clone();
+    *execution.recovery_lifecycle.lock().unwrap() = Some(lifecycle);
+    execution
+        .retained
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    reservation.disarm();
+    registry.set_cancellation_reason("early-confirm", &doc, "operator requested stop", false);
+    let stopping = tokio::spawn({
+        let registry = registry.clone();
+        let doc = doc.clone();
+        async move { registry.stop_native_process("early-confirm", &doc).await }
+    });
+    token.cancelled().await;
+    execution.process_evidence.exited();
+    assert!(registry.contains("early-confirm", &doc).await);
+    execution.worker_release_tx.send_replace(true);
+    assert_eq!(stopping.await.unwrap().as_str(), modeled.outcome);
+    assert!(registry.contains("early-confirm", &doc).await);
+    registry.recover_retained_foreground().await;
+    let row = fetch_tool_call_row(&node, &session, "early-confirm").await;
+    assert_eq!(row["cancel_cause"], "userCancelled");
+    assert!(!registry.contains("early-confirm", &doc).await);
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn interruption_before_native_registration_cancels_without_starting_process() {
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let session = hook.session_id().await.unwrap();
+    let deadline = Utc::now() + chrono::Duration::minutes(5);
+    bind_interruptible_request(
+        &node,
+        &hook,
+        "before-registration-parent",
+        &session,
+        deadline,
+    )
+    .await;
+    let mut lifecycle = accepted_hook_tool_lifecycle(
+        &hook,
+        "before-registration",
+        "bash",
+        "{}",
+        deadline,
+        crate::tool_call_lifecycle::AwaitMode::Foreground,
+    )
+    .await;
+    lifecycle.start_running().await.unwrap();
+    hook.in_flight_lifecycles
+        .lock()
+        .await
+        .insert("before-registration".into(), lifecycle);
+    assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 1);
+    let row = fetch_tool_call_row(&node, &session, "before-registration").await;
+    assert_eq!(row["lifecycle_state"], "cancelled");
+    assert_eq!(row["cancel_cause"], "interrupted");
+    assert!(hook
+        .background_executions
+        .active_tool_call_doc_ids()
+        .is_empty());
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn interrupt_sweep_preserves_confirmed_timeout_intent() {
+    let modeled = crate::lean_vocab_test::lean_process_stop_cases()
+        .iter()
+        .find(|case| case.live_evidence == "exited" && case.worker_released)
+        .unwrap();
+    assert!(modeled.preserve_timeout);
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let hook =
+        DefraSessionHook::with_identity(node.clone(), "did:test:general", FailurePolicy::default());
+    let session = hook.session_id().await.unwrap();
+    let deadline = Utc::now() + chrono::Duration::minutes(5);
+    bind_interruptible_request(&node, &hook, "timeout-first-parent", &session, deadline).await;
+    let mut lifecycle = accepted_hook_tool_lifecycle(
+        &hook,
+        "timeout-first-sweep",
+        "bash",
+        "{}",
+        deadline,
+        crate::tool_call_lifecycle::AwaitMode::Foreground,
+    )
+    .await;
+    lifecycle.start_running().await.unwrap();
+    let doc = lifecycle.doc_id().unwrap().to_owned();
+    hook.in_flight_lifecycles
+        .lock()
+        .await
+        .insert("timeout-first-sweep".into(), lifecycle.clone());
+    let registry = hook.background_executions.clone();
+    let reservation = registry
+        .reserve(
+            "timeout-first-sweep".into(),
+            doc.clone(),
+            CancellationToken::new(),
+        )
+        .unwrap();
+    let _recorder = registry.process_recorder("timeout-first-sweep", &doc);
+    registry.set_stop_receipt("timeout-first-sweep", &doc, RetainedStopReceipt::Timeout);
+    reservation.retain_stopped_worker(lifecycle, false);
+    let entry = registry.lock_executions().get(&doc).unwrap().clone();
+    entry.process_evidence.exited();
+    registry.remember_confirmed_stop(&entry);
+    hook.cancel_in_flight_tool_calls().await.unwrap();
+    let row = fetch_tool_call_row(&node, &session, "timeout-first-sweep").await;
+    assert_eq!(row["lifecycle_state"], "timedOut");
+    assert!(!registry.contains("timeout-first-sweep", &doc).await);
     node.shutdown().await;
 }

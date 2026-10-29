@@ -99,33 +99,39 @@ impl PackInstaller {
         )
         .await?;
         self.fence_bindings(&inference.bindings).await?;
-        let (record, plugins) =
-            crate::pack::plugin_lifecycle::install(
-                home,
-                &distribution.0.archive,
-                false,
-                Some(self.core.node_did()),
-                &inference.bindings,
-                |identity| {
-                    let access = access.clone();
-                    let node_did = self.core.node_did().to_owned();
-                    let identity_did = self.core.identity().ok();
-                    async move {
-                        crate::pack::record_plugin_store_change_as(
-                            &access,
-                            &node_did,
-                            Some(identity_did.ok_or_else(|| {
-                                anyhow::anyhow!("node DID is not ACP-addressable")
-                            })?),
-                            home,
-                            &identity.coordinate,
-                            Some(&identity),
-                        )
-                        .await
-                    }
-                },
-            )
-            .await?;
+        let notify_access = access.clone();
+        let notify_node = self.core.node_did().to_owned();
+        let notify_identity = self.core.identity().ok();
+        let notify_home = home.to_owned();
+        let (record, plugins) = crate::pack::plugin_lifecycle::install(
+            home,
+            &distribution.0.archive,
+            false,
+            Some(self.core.node_did()),
+            &inference.bindings,
+            move |identity| {
+                let access = notify_access;
+                let node_did = notify_node;
+                let identity_did = notify_identity;
+                let home = notify_home;
+                async move {
+                    crate::pack::record_plugin_store_change_as(
+                        &access,
+                        &node_did,
+                        Some(identity_did.ok_or_else(|| {
+                            crate::pack::PluginStoreChangeError::Rejected(anyhow::anyhow!(
+                                "node DID is not ACP-addressable"
+                            ))
+                        })?),
+                        &home,
+                        &identity.coordinate,
+                        Some(&identity),
+                    )
+                    .await
+                }
+            },
+        )
+        .await?;
         let discovery = plugin_discovery_calls(
             &plugins
                 .iter()

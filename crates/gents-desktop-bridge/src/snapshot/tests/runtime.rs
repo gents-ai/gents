@@ -2,7 +2,7 @@ use super::*;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use super::lean_vocab_test::{lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases};
-use crate::types::TriggerView;
+use crate::types::{SessionSummary, TriggerView};
 
 fn canonical_session(requester: Option<&str>) -> AgentSession {
     serde_json::from_value(serde_json::json!({
@@ -409,63 +409,92 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn summary_starter_resolves_physical_cause_outside_latest_request_cache() {
-    let (core, _tmp, parent_doc_id) = crate::tests::support::seed_provenance_fixture().await;
-    let access = gents::config_client::ConfigAccess::local(core.node_arc());
-    assert_ne!(parent_doc_id, "req_parent");
-    let child = gents::session_origin::load_session(
-        &access,
-        "sess_child",
-        Some(crate::tests::support::OPERATOR),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    let mut summaries = session_summaries(&[child], &[], crate::tests::support::OPERATOR, &[], &[]);
-    super::super::runtime_tasks::resolve_summary_starters(
-        &access,
-        &Default::default(),
-        &mut summaries,
-    )
-    .await;
-    let starter = summaries[0].started_by.as_ref().unwrap();
-    assert_eq!(starter.session_id, "sess_parent");
-    assert_eq!(starter.cause_request_doc_id, parent_doc_id);
-    assert_eq!(starter.node_did, crate::tests::support::OPERATOR);
+fn starter_receipt(
+    session: &AgentSession,
+    session_doc_id: &str,
+    source: &gents_protocol::session::SessionReference,
+    parent: &str,
+) -> gents_protocol::session::SessionCreationReceipt {
+    gents_protocol::session::SessionCreationReceipt {
+        node_did: session.node_did.clone(),
+        session_id: session.session_id.clone(),
+        session_doc_id: session_doc_id.into(),
+        requester_did: session.requester_did.clone(),
+        agent_id: session.agent_id.clone(),
+        opening_request_doc_id: "opening".into(),
+        cause: gents_protocol::session::SessionCreationCause::AgentNew,
+        cause_binding: "tool".into(),
+        starter: Some(gents_protocol::session::SessionCreationStarter {
+            source: source.clone(),
+            parent_request_doc_id: parent.into(),
+        }),
+        signature: Vec::new(),
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn fleet_snapshot_resolves_all_starters_with_one_query_per_build() {
-    let (core, _tmp, parent_a, parent_b) =
-        crate::tests::support::seed_fleet_starter_fixture().await;
+async fn fleet_snapshot_verifies_indexed_starters_once_per_evidence() {
+    use crate::tests::support::OPERATOR;
+    use gents::NodeIdentity;
+    let (core, tmp) = crate::tests::support::boot_core().await;
+    let signer = gents::KeyIdentity::load_or_create(tmp.path().join("fleet.key"), None).unwrap();
+    let node_did = signer.did().to_owned();
+    let source = |session_id: &str| gents_protocol::session::SessionReference {
+        node_did: "did:test:remote-node".into(),
+        session_id: session_id.into(),
+        requester_did: Some(OPERATOR.into()),
+    };
+    for (child, parent_session, parent) in [
+        ("sess_fleet_child_shared_1", "sess_fleet_parent_a", "req-a"),
+        ("sess_fleet_child_shared_2", "sess_fleet_parent_a", "req-a"),
+        ("sess_fleet_child_b", "sess_fleet_parent_b", "req-b"),
+        ("sess_fleet_child_forged", "sess_fleet_parent_a", "req-a"),
+    ] {
+        crate::tests::support::create_started_session(
+            &core,
+            &signer,
+            crate::tests::support::fixture_session(&node_did, child),
+            &source(parent_session),
+            parent,
+            "opening",
+        )
+        .await;
+    }
     let access = gents::config_client::ConfigAccess::local(core.node_arc());
-    let mut sessions = Vec::new();
-    for session_id in [
-        "sess_fleet_parent_a",
-        "sess_fleet_parent_b",
+    let load = |session_id: &'static str| {
+        let access = access.clone();
+        async move {
+            gents::session_origin::load_session(&access, session_id, Some(OPERATOR))
+                .await
+                .unwrap()
+                .unwrap_or_else(|| panic!("fixture session {session_id} must load"))
+        }
+    };
+    let mut forged = load("sess_fleet_child_forged").await.provenance.unwrap();
+    forged.creation_receipt.as_mut().unwrap().signature[0] ^= 1;
+    crate::tests::support::write_provenance(&core, &node_did, "sess_fleet_child_forged", &forged)
+        .await;
+    crate::tests::support::create_session(&core, &node_did, "sess_fleet_legacy", Some("req-a"))
+        .await;
+    crate::tests::support::create_session(&core, &node_did, "sess_fleet_plain", None).await;
+
+    let ids = [
         "sess_fleet_child_shared_1",
         "sess_fleet_child_b",
+        "sess_fleet_legacy",
         "sess_fleet_child_shared_2",
-        "sess_fleet_child_dangling",
+        "sess_fleet_child_forged",
         "sess_fleet_plain",
-    ] {
-        sessions.push(
-            gents::session_origin::load_session(
-                &access,
-                session_id,
-                Some(crate::tests::support::OPERATOR),
-            )
-            .await
-            .unwrap()
-            .unwrap_or_else(|| panic!("fixture session {session_id} must load")),
-        );
+    ];
+    let mut sessions = Vec::new();
+    for id in ids {
+        sessions.push(load(id).await);
     }
     let reads = crate::tests::support::CountingRead::new(access);
     let starters = super::super::runtime_tasks::StarterCache::default();
-    let (first, second) = sessions.split_at(4);
-    let mut first = session_summaries(first, &[], crate::tests::support::OPERATOR, &[], &[]);
-    let mut second = session_summaries(second, &[], crate::tests::support::OPERATOR, &[], &[]);
+    let build = |sessions: &[AgentSession]| session_summaries(sessions, &[], &node_did, &[], &[]);
+    let (first, second) = sessions.split_at(3);
+    let (mut first, mut second) = (build(first), build(second));
     super::super::runtime_tasks::resolve_summary_starters(
         &reads,
         &starters,
@@ -475,100 +504,197 @@ async fn fleet_snapshot_resolves_all_starters_with_one_query_per_build() {
     assert_eq!(
         reads.queries(),
         1,
-        "starter resolution over two deployments with three distinct parent ids must issue one batched read"
+        "starters across two deployments are verified in one batched session read"
     );
     let summaries = first.into_iter().chain(second).collect::<Vec<_>>();
-
-    let starter_of = |session_id: &str| {
+    let starter_of = |summaries: &[SessionSummary], session_id: &str| {
         summaries
             .iter()
             .find(|summary| summary.session_id == session_id)
-            .unwrap_or_else(|| panic!("summary for {session_id} must exist"))
+            .unwrap()
             .started_by
             .clone()
     };
-    for (child, cause_doc_id, parent_session) in [
-        (
-            "sess_fleet_child_shared_1",
-            &parent_a,
-            "sess_fleet_parent_a",
-        ),
-        (
-            "sess_fleet_child_shared_2",
-            &parent_a,
-            "sess_fleet_parent_a",
-        ),
-        ("sess_fleet_child_b", &parent_b, "sess_fleet_parent_b"),
+    for (child, parent_session, parent) in [
+        ("sess_fleet_child_shared_1", "sess_fleet_parent_a", "req-a"),
+        ("sess_fleet_child_shared_2", "sess_fleet_parent_a", "req-a"),
+        ("sess_fleet_child_b", "sess_fleet_parent_b", "req-b"),
     ] {
-        let starter = starter_of(child)
-            .unwrap_or_else(|| panic!("{child} must resolve its stored provenance parent"));
-        assert_eq!(
-            starter.cause_request_doc_id, *cause_doc_id,
-            "{child} must name its own parent request"
-        );
-        assert_eq!(
-            starter.session_id, parent_session,
-            "{child} must resolve into its parent's session"
-        );
-        assert_eq!(
-            starter.node_did,
-            crate::tests::support::OPERATOR,
-            "{child} starter must carry the parent session's node"
-        );
-        assert_eq!(
-            starter.requester_did.as_deref(),
-            Some(crate::tests::support::OPERATOR),
-            "{child} starter must carry the parent session's requester"
-        );
+        let starter = starter_of(&summaries, child).unwrap();
+        assert_eq!(starter.session_id, parent_session, "{child}");
+        assert_eq!(starter.node_did, "did:test:remote-node", "{child}");
+        assert_eq!(starter.requester_did.as_deref(), Some(OPERATOR), "{child}");
+        assert_eq!(starter.cause_request_doc_id, parent, "{child}");
     }
     for session_id in [
-        "sess_fleet_parent_a",
-        "sess_fleet_parent_b",
-        "sess_fleet_child_dangling",
+        "sess_fleet_child_forged",
+        "sess_fleet_legacy",
         "sess_fleet_plain",
     ] {
         assert!(
-            starter_of(session_id).is_none(),
-            "{session_id} must not gain a starter: no provenance, or a parent no store holds"
+            starter_of(&summaries, session_id).is_none(),
+            "{session_id}: an unverified receipt or a parent pointer alone is no starter"
         );
     }
 
-    let mut rebuilt = session_summaries(&sessions, &[], crate::tests::support::OPERATOR, &[], &[]);
+    let mut rebuilt = build(&sessions);
     super::super::runtime_tasks::resolve_summary_starters(&reads, &starters, &mut rebuilt).await;
     assert_eq!(
         reads.queries(),
-        2,
-        "a second build must ask again only for the parent no store holds"
+        1,
+        "a rebuild of sessions with unchanged evidence does not read"
     );
-    assert!(
-        rebuilt
-            .iter()
-            .find(|summary| summary.session_id == "sess_fleet_child_shared_1")
-            .expect("rebuilt summary must exist")
-            .started_by
-            .is_some(),
-        "a rebuilt summary must resolve its starter identically"
+    assert_eq!(
+        serde_json::to_value(starter_of(&rebuilt, "sess_fleet_child_b")).unwrap(),
+        serde_json::to_value(starter_of(&summaries, "sess_fleet_child_b")).unwrap()
     );
 
-    let resolved = sessions
-        .iter()
-        .filter(|session| session.session_id != "sess_fleet_child_dangling")
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut cached = session_summaries(&resolved, &[], crate::tests::support::OPERATOR, &[], &[]);
-    super::super::runtime_tasks::resolve_summary_starters(&reads, &starters, &mut cached).await;
+    let child_b = sessions
+        .iter_mut()
+        .find(|session| session.session_id == "sess_fleet_child_b")
+        .unwrap();
+    let provenance = child_b.provenance.as_mut().unwrap();
+    provenance.started_by = None;
+    provenance.parent_request_doc_id = Some("req-a".into());
+    let provenance = provenance.clone();
+    crate::tests::support::write_provenance(&core, &node_did, "sess_fleet_child_b", &provenance)
+        .await;
+    let mut downgraded = build(&sessions);
+    super::super::runtime_tasks::resolve_summary_starters(&reads, &starters, &mut downgraded).await;
     assert_eq!(
         reads.queries(),
         2,
-        "a build whose parents are all known must not read"
+        "changed evidence is read and verified again"
     );
     assert!(
-        cached
-            .iter()
-            .find(|summary| summary.session_id == "sess_fleet_child_b")
-            .expect("cached summary must exist")
-            .started_by
-            .is_some(),
-        "a starter served from the cache must still be set"
+        starter_of(&downgraded, "sess_fleet_child_b").is_none(),
+        "removing the recorded starter never falls back to the parent pointer"
     );
+    assert!(starter_of(&downgraded, "sess_fleet_child_shared_1").is_some());
+}
+
+#[tokio::test]
+async fn recorded_summary_starters_follow_the_starter_verification_model() {
+    use gents::NodeIdentity;
+    struct SessionRead(serde_json::Value, std::sync::atomic::AtomicUsize);
+    #[async_trait::async_trait]
+    impl gents::config_client::ConfigRead for SessionRead {
+        async fn execute_read(
+            &self,
+            query: &str,
+        ) -> Result<serde_json::Value, gents::config_client::ConfigClientError> {
+            assert!(
+                query.contains("AgentSession") && !query.contains("AgentRequest"),
+                "a starter is verified from its session row alone: {query}"
+            );
+            self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(serde_json::json!({"data": {"AgentSession": [self.0.clone()]}}))
+        }
+    }
+    let model: serde_json::Value = tokio::task::spawn_blocking(
+        gents_lean_contract::load_contract_snapshot::<serde_json::Value>,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let cases = model["session_document_cases"]["starter_verification"]
+        .as_array()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let signer = gents::KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
+    for requester in [None, Some("did:test:source-requester")] {
+        let mut session = canonical_session(None);
+        session.node_did = signer.did().to_owned();
+        let source = gents_protocol::session::SessionReference {
+            node_did: "did:test:remote-node".into(),
+            session_id: "source-session".into(),
+            requester_did: requester.map(str::to_owned),
+        };
+        let mut receipt = starter_receipt(&session, "physical-session", &source, "missing-request");
+        receipt.signature = signer.sign(&receipt.signing_payload()).await.unwrap();
+        session.provenance = Some(gents_protocol::session::SessionProvenance {
+            parent_request_doc_id: Some("missing-request".into()),
+            opening_request_doc_id: Some("opening".into()),
+            started_by: Some(source.clone()),
+            creation_receipt: Some(receipt),
+            ..Default::default()
+        });
+        let mut row = serde_json::to_value(&session).unwrap();
+        row["_docID"] = "physical-session".into();
+        row["started_by_node_did"] = source.node_did.clone().into();
+        row["started_by_session_id"] = source.session_id.clone().into();
+        let scope = gents::session_origin::SessionScope::from(&session);
+        let candidate = |name: &str| {
+            let mut row = row.clone();
+            match name {
+                "valid" => {}
+                "source" => {
+                    row["provenance"]["started_by"]["session_id"] = "forged".into();
+                    row["started_by_session_id"] = "forged".into();
+                }
+                "physical" => row["_docID"] = "different-physical-session".into(),
+                "index" => row["started_by_session_id"] = "other".into(),
+                "parent" => row["provenance"]["parent_request_doc_id"] = "forged-parent".into(),
+                "signature" => {
+                    let signature = &mut row["provenance"]["creation_receipt"]["signature"][0];
+                    *signature = (signature.as_u64().unwrap() ^ 1).into();
+                }
+                "starter_removed" => {
+                    row["provenance"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("started_by");
+                }
+                "starter_removed_parent_rewritten" => {
+                    row["provenance"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("started_by");
+                    row["provenance"]["parent_request_doc_id"] = "other-request".into();
+                }
+                "unindexed" => {
+                    row["started_by_node_did"] = serde_json::Value::Null;
+                    row["started_by_session_id"] = serde_json::Value::Null;
+                }
+                other => panic!("unmapped starter verification case {other}"),
+            }
+            row
+        };
+        for case in cases {
+            let name = case["name"].as_str().unwrap();
+            let expected = case["accepted"].as_bool().unwrap();
+            let candidate = candidate(name);
+            let read = SessionRead(candidate.clone(), Default::default());
+            let verified = gents::session_origin::verified_recorded_starter(&read, &scope)
+                .await
+                .unwrap();
+            assert_eq!(verified.is_some(), expected, "{name}");
+            let mut stored = candidate.clone();
+            for field in ["_docID", "started_by_node_did", "started_by_session_id"] {
+                stored.as_object_mut().unwrap().remove(field);
+            }
+            let stored: AgentSession = serde_json::from_value(stored).unwrap();
+            let mut summaries = session_summaries(&[stored], &[], &session.node_did, &[], &[]);
+            let cache = Default::default();
+            super::super::runtime_tasks::resolve_summary_starters(&read, &cache, &mut summaries)
+                .await;
+            let summarized = summaries[0].started_by.as_ref();
+            assert_eq!(summarized.is_some(), expected, "{name}");
+            if let (Some(link), Some(view)) = (&verified, summarized) {
+                assert_eq!(view.node_did, source.node_did);
+                assert_eq!(view.session_id, source.session_id);
+                assert_eq!(view.requester_did, source.requester_did);
+                assert_eq!(view.cause_request_doc_id, "missing-request");
+                assert_eq!(link.cause_request_doc_id, "missing-request");
+            }
+            let before = read.1.load(std::sync::atomic::Ordering::SeqCst);
+            super::super::runtime_tasks::resolve_summary_starters(&read, &cache, &mut summaries)
+                .await;
+            assert_eq!(
+                read.1.load(std::sync::atomic::Ordering::SeqCst),
+                before,
+                "{name}: a rebuild with verified evidence does not read"
+            );
+        }
+    }
 }

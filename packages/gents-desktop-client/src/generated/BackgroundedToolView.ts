@@ -2,7 +2,7 @@
 import type { NativeExecutorStatusView } from "./NativeExecutorStatusView.js";
 import type { WaitStatusProjectionView } from "./WaitStatusProjectionView.js";
 
-export type BackgroundedToolView = { requestId: string, toolCallId: string, toolName: string, startsSession: boolean, job: boolean, lifecycleState: string | null, status: string | null, startedAt: string | null, ageMs: number | null, deadlineAt: string | null, deadlineExpired: boolean, awaitMode: string | null, stuckSince: string | null, nativeExecutor: NativeExecutorStatusView | null,
+export type BackgroundedToolView = { toolCallDocId?: string | null, requestId: string, toolCallId: string, toolName: string, startsSession: boolean, job: boolean, lifecycleState: string | null, status: string | null, startedAt: string | null, ageMs: number | null, deadlineAt: string | null, deadlineExpired: boolean, awaitMode: string | null, stuckSince: string | null, nativeExecutor: NativeExecutorStatusView | null,
 /**
  * Shared wait-status projection (gents-protocol::wait_status): parsed
  * lifecycle, elapsed truth, stable terminal duration. `None` fields mean

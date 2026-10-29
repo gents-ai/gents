@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { scrollParent } from "@gents/ui/conversation";
 
 const HEIGHT = "--mobile-visual-viewport-height";
 const WIDTH = "--mobile-visual-viewport-width";
@@ -7,7 +8,6 @@ const LEFT = "--mobile-visual-viewport-left";
 const MIN_USEFUL_DIMENSION = 64;
 const FOCUSED_CONTROL_SELECTOR =
   'input:not([type="hidden"]):not([disabled]), textarea:not([disabled]), select:not([disabled]), [contenteditable="true"]';
-const SCROLL_OWNER_SELECTOR = "[data-scroll-owner]";
 const FOCUSED_CONTROL_MARGIN = 16;
 const KEYBOARD_SETTLE_DELAY_MS = 350;
 
@@ -23,7 +23,7 @@ function revealFocusedControl(viewport: VisualViewport) {
   if (!(control instanceof HTMLElement) || !control.matches(FOCUSED_CONTROL_SELECTOR)) {
     return;
   }
-  const owner = control.closest<HTMLElement>(SCROLL_OWNER_SELECTOR);
+  const owner = scrollParent(control);
   if (!owner) return;
 
   const rect = control.getBoundingClientRect();
@@ -46,10 +46,21 @@ export function useMobileVisualViewport() {
     if (!viewport) return;
 
     const root = document.documentElement;
+    let width = 0;
+    let height = 0;
+    let followFocus = true;
     let frame: number | null = null;
     let revealFrame: number | null = null;
     let settleTimer: ReturnType<typeof setTimeout> | null = null;
+    const cancelReveal = () => {
+      followFocus = false;
+      if (revealFrame != null) cancelAnimationFrame(revealFrame);
+      if (settleTimer != null) clearTimeout(settleTimer);
+      revealFrame = null;
+      settleTimer = null;
+    };
     const scheduleReveal = () => {
+      if (!followFocus) return;
       if (revealFrame == null) {
         revealFrame = requestAnimationFrame(() => {
           revealFrame = null;
@@ -61,6 +72,10 @@ export function useMobileVisualViewport() {
         settleTimer = null;
         revealFocusedControl(viewport);
       }, KEYBOARD_SETTLE_DELAY_MS);
+    };
+    const onFocus = () => {
+      followFocus = true;
+      scheduleReveal();
     };
     const apply = () => {
       frame = null;
@@ -80,7 +95,9 @@ export function useMobileVisualViewport() {
       root.style.setProperty(WIDTH, `${viewport.width}px`);
       root.style.setProperty(TOP, `${Math.max(0, viewport.offsetTop)}px`);
       root.style.setProperty(LEFT, `${Math.max(0, viewport.offsetLeft)}px`);
-      scheduleReveal();
+      if (width !== viewport.width || height !== viewport.height) scheduleReveal();
+      width = viewport.width;
+      height = viewport.height;
     };
     const schedule = () => {
       if (frame == null) frame = requestAnimationFrame(apply);
@@ -93,17 +110,20 @@ export function useMobileVisualViewport() {
     window.addEventListener("resize", schedule);
     window.addEventListener("pageshow", schedule);
     window.addEventListener("orientationchange", schedule);
-    document.addEventListener("focusin", scheduleReveal);
+    document.addEventListener("focusin", onFocus);
+    document.addEventListener("touchmove", cancelReveal, { passive: true });
+    document.addEventListener("wheel", cancelReveal, { passive: true });
     return () => {
       if (frame != null) cancelAnimationFrame(frame);
-      if (revealFrame != null) cancelAnimationFrame(revealFrame);
-      if (settleTimer != null) clearTimeout(settleTimer);
+      cancelReveal();
       viewport.removeEventListener("resize", schedule);
       viewport.removeEventListener("scroll", schedule);
       window.removeEventListener("resize", schedule);
       window.removeEventListener("pageshow", schedule);
       window.removeEventListener("orientationchange", schedule);
-      document.removeEventListener("focusin", scheduleReveal);
+      document.removeEventListener("focusin", onFocus);
+      document.removeEventListener("touchmove", cancelReveal);
+      document.removeEventListener("wheel", cancelReveal);
       root.style.removeProperty(HEIGHT);
       root.style.removeProperty(WIDTH);
       root.style.removeProperty(TOP);

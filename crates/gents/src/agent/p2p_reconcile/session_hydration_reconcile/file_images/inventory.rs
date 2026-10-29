@@ -39,7 +39,7 @@ impl GraphqlHydrationStore {
         &self,
         demand: &FileImageDemand,
         catalog: &HydrationCatalog,
-    ) -> Result<FileImageSelection> {
+    ) -> Result<(FileImageSelection, Vec<String>)> {
         ConfigAccess::transact_local_readonly(
             &self.node,
             None,
@@ -48,7 +48,7 @@ impl GraphqlHydrationStore {
                 Box::pin(async move {
                     let Some(selected) = self.inventory_image_in_txn(txn, demand, catalog).await?
                     else {
-                        return Ok(FileImageSelection::Rejected);
+                        return Ok((FileImageSelection::Rejected, Vec::new()));
                     };
                     let entry = inventory_image_entry(demand, &selected.page)
                         .context("authorized inventory image lost its selected entry")?;
@@ -61,10 +61,33 @@ impl GraphqlHydrationStore {
                         Some(&entry.scope.requester_did),
                     )
                     .await?;
-                    let ToolFileChangeRead::Retained { document_id, .. } = observed else {
-                        return Ok(FileImageSelection::Rejected);
+                    let ToolFileChangeRead::Retained {
+                        document_id,
+                        contents,
+                        ..
+                    } = observed
+                    else {
+                        return Ok((FileImageSelection::Rejected, Vec::new()));
                     };
-                    Ok(select_inventory_file_images(
+                    let image = FileImageObservation {
+                        doc_id: document_id,
+                        tool_call_doc_id: entry.tool_call_doc_id.clone(),
+                        request_doc_id: entry.request_doc_id.clone(),
+                        scope: entry.scope.clone(),
+                        contents: contents
+                            .into_iter()
+                            .map(|content| FileImageContent {
+                                doc_id: content.doc_id,
+                                tool_call_doc_id: content.tool_call_doc_id,
+                                scope: FileImageScope {
+                                    requester_did: content.scope.requester_did.unwrap_or_default(),
+                                    node_did: content.scope.node_did,
+                                    session_id: content.scope.session_id,
+                                },
+                            })
+                            .collect(),
+                    };
+                    let selection = select_inventory_file_images(
                         demand,
                         &selected.catalog,
                         &selected.page,
@@ -76,13 +99,14 @@ impl GraphqlHydrationStore {
                             accepted: true,
                             terminal: true,
                         }],
-                        &[FileImageObservation {
-                            doc_id: document_id,
-                            tool_call_doc_id: entry.tool_call_doc_id.clone(),
-                            request_doc_id: entry.request_doc_id.clone(),
-                            scope: entry.scope.clone(),
-                        }],
-                    ))
+                        std::slice::from_ref(&image),
+                    );
+                    let contents = if matches!(selection, FileImageSelection::Selected { .. }) {
+                        image.delivery_documents().into_iter().skip(1).collect()
+                    } else {
+                        Vec::new()
+                    };
+                    Ok((selection, contents))
                 })
             },
         )

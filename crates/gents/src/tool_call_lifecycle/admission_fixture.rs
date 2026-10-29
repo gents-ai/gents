@@ -18,6 +18,7 @@ pub struct PublishedAdmissionOptions {
     /// Publish the row with a fixture `JobPin`, so it loads as
     /// `ToolRowKind::PluginJob`.
     pub job_pin: bool,
+    pub p2p: bool,
 }
 
 impl Default for PublishedAdmissionOptions {
@@ -31,6 +32,7 @@ impl Default for PublishedAdmissionOptions {
             tool_name: None,
             paired_client: false,
             job_pin: false,
+            p2p: false,
         }
     }
 }
@@ -453,13 +455,13 @@ pub async fn published_admission_with_owner(
     let path =
         std::env::temp_dir().join(format!("admission-fixture-{name}-{}", uuid::Uuid::new_v4()));
     let physical_identity = crate::KeyIdentity::load_or_create(path.join("test-agent.key"), None)?;
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(&path)
-            .with_node_identity_did(physical_identity.did())
-            .build()
-            .await?,
-    );
+    let mut builder = EmbeddedNode::builder()
+        .data_path(&path)
+        .with_node_identity_did(physical_identity.did());
+    if options.p2p {
+        builder = builder.with_p2p(test_p2p_config());
+    }
+    let node = Arc::new(builder.build().await?);
     crate::schema::ensure_runtime_schemas(&node).await?;
     let identity = options.real_identity.then_some(physical_identity);
     let node_did = identity.as_ref().map_or_else(
@@ -574,6 +576,26 @@ pub async fn published_admission_with_owner(
     ))
 }
 
+pub(crate) fn test_p2p_config() -> defra_node::P2PConfig {
+    defra_node::P2PConfig {
+        port: 0,
+        bind_addr: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
+        relay_mode: p2p::iroh::IrohRelayModeConfig::Disabled,
+        discovery: p2p::iroh::IrohDiscoveryConfig::Disabled,
+        allowlist: p2p::iroh::IrohAllowlistConfig::AcceptAll,
+        max_concurrent_multipath_paths: None,
+        secret_key_path: None,
+        load_persisted_collections: false,
+        max_concurrent_dag_fetches: p2p::sync::DEFAULT_MAX_CONCURRENT_DAG_FETCHES,
+        max_concurrent_push_tasks: p2p::sync::DEFAULT_MAX_CONCURRENT_PUSH_TASKS,
+        rate_limit_burst: p2p::sync::DEFAULT_RATE_LIMIT_BURST,
+        rate_limit_rate: p2p::sync::DEFAULT_RATE_LIMIT_RATE,
+        max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
+        max_pending_dags: p2p::sync::DEFAULT_MAX_PENDING_DAGS,
+        rebroadcast_on_merge: false,
+    }
+}
+
 pub async fn published_spawn_parent(name: &str) -> (Arc<EmbeddedNode>, PathBuf, ToolCallLifecycle) {
     let PublishedAdmission {
         node, path, tool, ..
@@ -615,6 +637,7 @@ pub(crate) async fn materialize_session_message(
         caller_node_did: caller.node_did.clone(),
         caller_agent_id: caller.agent_id.clone(),
         caller_session_id: caller.session_id.clone(),
+        caller_requester_did: caller.requester_did.clone(),
         caller_request_id: caller.request_id.clone(),
         caller_request_doc_id: caller.doc_id.clone(),
         caller_hop: caller.request_hop,
@@ -630,7 +653,7 @@ pub(crate) async fn materialize_session_message(
         agent_id: "general".to_owned(),
         session_id: uuid::Uuid::new_v4().to_string(),
     };
-    let plan = crate::session_message::plan(
+    let mut plan = crate::session_message::plan(
         node,
         &cause,
         &target,
@@ -643,7 +666,10 @@ pub(crate) async fn materialize_session_message(
     )
     .await?
     .map_err(anyhow::Error::msg)?;
-    crate::session_message::commit(node, &cause, tool, plan, false).await
+    plan.sign_agent_creation(&cause.caller_node_did).await?;
+    crate::session_message::commit(node, &cause, tool, plan, false)
+        .await
+        .map_err(Into::into)
 }
 
 pub struct PublishedSessionMessage {

@@ -1,3 +1,4 @@
+import Proofs.Goals
 import Proofs.Session.Interrupt
 import Proofs.Request.Executable
 import Proofs.ClientShell.Projection
@@ -11,6 +12,196 @@ namespace QueuedSteering
 
 open CanonicalOutput
 open CanonicalOutput.Execution
+
+inductive AgentDelivery where
+  | queue | steer | interrupt
+  deriving DecidableEq, Repr
+
+def resolveAgentDelivery (delivery : Option AgentDelivery) (legacyInterrupt : Option Bool) :
+    Option AgentDelivery :=
+  match delivery, legacyInterrupt with
+  | none, none | none, some false => some .queue
+  | none, some true => some .interrupt
+  | some mode, none => some mode
+  | some .interrupt, some true => some .interrupt
+  | some .queue, some false => some .queue
+  | some .steer, some false => some .steer
+  | some _, some _ => none
+
+def agentDeliveryCases : List (Option AgentDelivery × Option Bool) :=
+  [ (none, none), (none, some false), (none, some true)
+  , (some .queue, none), (some .queue, some false), (some .queue, some true)
+  , (some .steer, none), (some .steer, some false), (some .steer, some true)
+  , (some .interrupt, none), (some .interrupt, some false), (some .interrupt, some true) ]
+
+/-- Select the physical active head before publishing the delivered request.
+The request created by this publication cannot become its own interrupt target. -/
+def interruptDeliveryTarget (_planned activeBefore : Option Nat) : Option Nat := activeBefore
+
+/-- An interrupt directed at the local session pauses its autonomous goal,
+including when no request is active at publication. -/
+def interruptDeliveryGoal (localTarget : Bool) (goal : Goals.State) : Goals.State :=
+  if localTarget then (Goals.step? goal .pause).getD goal else goal
+
+theorem idle_local_interrupt_pauses_goal :
+    (interruptDeliveryGoal true ⟨.active, 0, false, false⟩).status = .paused := by decide
+
+def interruptDeliveryCases : List (Option Nat × Option Nat) :=
+  [(none, none), (none, some 1), (some 1, some 1), (some 1, none), (some 1, some 2)]
+
+theorem idle_interrupt_delivery_does_not_interrupt_new_request :
+    interruptDeliveryTarget none none = none := by decide
+
+theorem interrupt_delivery_keeps_the_prepublication_head :
+    interruptDeliveryTarget (some 1) (some 2) = some 2 := by decide
+
+inductive AgentSteerDisposition where
+  | start | steer | refuse
+  deriving DecidableEq, Repr
+
+def agentSteerDisposition (active compatible : Bool) : AgentSteerDisposition :=
+  if !active then .start else if compatible then .steer else .refuse
+
+def agentSteerDispositionCases : List (Bool × Bool) :=
+  [(false, false), (false, true), (true, false), (true, true)]
+
+theorem incompatible_active_agent_steer_refused :
+    agentSteerDisposition true false = .refuse := by decide
+
+/-- An agent steer is planned against the active turn it observed and names
+that turn as `queued_after`. Only that turn may take it at a tool boundary;
+once the turn ends the steer is an ordinary later turn and never enters the
+next active turn, whose work the sender did not see. -/
+def agentSteerTargets (plannedHead activeHead : Nat) : Bool := plannedHead == activeHead
+
+def agentSteerTargetCases : List (Nat × Nat) := [(1, 1), (1, 2)]
+
+theorem agent_steer_does_not_enter_a_later_turn (planned active : Nat)
+    (h : planned ≠ active) : agentSteerTargets planned active = false := by
+  simp [agentSteerTargets, h]
+
+/-- An agent steer may pass ordinary queued turns without moving or consuming them.
+Earlier steering inputs retain their own order and block later steers when incompatible. -/
+inductive BoundaryInputKind where
+  | queued | userSteer | agentSteer | blocked
+  deriving DecidableEq, Repr
+
+def boundaryCandidateAux (passedQueue : Bool) : List (Nat × BoundaryInputKind) → Option Nat
+  | [] => none
+  | (_, .queued) :: rest => boundaryCandidateAux true rest
+  | (id, .agentSteer) :: _ => some id
+  | (id, .userSteer) :: _ => if passedQueue then none else some id
+  | (_, .blocked) :: _ => none
+
+def boundaryCandidate (inputs : List (Nat × BoundaryInputKind)) : Option Nat :=
+  boundaryCandidateAux false inputs
+
+/-- Earlier compatible steers are consumed in arrival order. An ordinary
+queued turn may be passed by an agent steer but not by a user steer. -/
+def agentSteerReachable (target : Nat) (inputs : List (Nat × BoundaryInputKind × Bool)) : Bool :=
+  let rec walk (passedQueue : Bool) : List (Nat × BoundaryInputKind × Bool) → Bool
+    | [] => false
+    | (_, .queued, _) :: rest => walk true rest
+    | (_, .blocked, _) :: _ => false
+    | (id, .userSteer, compatible) :: rest =>
+        !passedQueue && compatible && (id == target || walk false rest)
+    | (id, .agentSteer, compatible) :: rest =>
+        compatible && (id == target || walk passedQueue rest)
+  walk false inputs
+
+def agentSteerReachabilityCases : List (List (Nat × BoundaryInputKind × Bool) × Nat) :=
+  [ ([(1, .agentSteer, true)], 1)
+  , ([(1, .agentSteer, true), (2, .agentSteer, true)], 2)
+  , ([(1, .userSteer, true), (2, .agentSteer, true)], 2)
+  , ([(1, .queued, true), (2, .agentSteer, true), (3, .agentSteer, true)], 3)
+  , ([(1, .queued, true), (2, .userSteer, true), (3, .agentSteer, true)], 3)
+  , ([(1, .agentSteer, false), (2, .agentSteer, true)], 2)
+  , ([(1, .blocked, true), (2, .agentSteer, true)], 2)
+  , ([(1, .agentSteer, false)], 1) ]
+
+def boundaryCases : List (List (Nat × BoundaryInputKind)) :=
+  [ [], [(1, .queued)], [(1, .agentSteer)], [(1, .userSteer)]
+  , [(1, .queued), (2, .agentSteer), (3, .queued)]
+  , [(1, .userSteer), (2, .agentSteer)]
+  , [(1, .queued), (2, .userSteer), (3, .agentSteer)]
+  , [(1, .queued), (2, .queued), (3, .agentSteer), (4, .agentSteer)]
+  , [(1, .blocked), (2, .agentSteer)]
+  , [(1, .queued), (2, .blocked), (3, .agentSteer)] ]
+
+theorem agent_steer_passes_queued_turns :
+    boundaryCandidate [(1, .queued), (2, .agentSteer), (3, .queued)] = some 2 := by decide
+
+theorem earlier_steering_is_not_overtaken :
+    boundaryCandidate [(1, .userSteer), (2, .agentSteer)] = some 1 ∧
+    boundaryCandidate [(1, .queued), (2, .userSteer), (3, .agentSteer)] = none := by decide
+
+structure FoldedScope where
+  node : Nat
+  session : Nat
+  requester : Option Nat
+  agent : Nat
+  deriving DecidableEq, Repr
+
+def foldedScopeMatches (caused head : FoldedScope) : Bool := caused == head
+
+theorem foreign_requester_folded_head_rejected :
+    foldedScopeMatches ⟨1, 2, some 3, 7⟩ ⟨1, 2, some 4, 7⟩ = false := by decide
+
+def foldedBindingValid (caused head : FoldedScope) (namedHead actualHead : Nat) : Bool :=
+  foldedScopeMatches caused head && namedHead == actualHead
+
+structure FoldedBindingCase where
+  causedRequester : Nat
+  headRequester : Nat
+  causedAgent : Nat
+  headAgent : Nat
+  namedHead : Nat
+  actualHead : Nat
+
+def foldedBindingCases : List FoldedBindingCase :=
+  [ ⟨3, 3, 7, 7, 4, 4⟩, ⟨3, 4, 7, 7, 4, 4⟩
+  , ⟨3, 3, 7, 7, 4, 5⟩, ⟨3, 3, 7, 8, 4, 4⟩ ]
+
+theorem mismatched_folded_head_rejected :
+    foldedBindingValid ⟨1, 2, some 3, 7⟩ ⟨1, 2, some 3, 7⟩ 4 5 = false := by decide
+
+theorem foreign_agent_folded_head_rejected :
+    foldedBindingValid ⟨1, 2, some 3, 7⟩ ⟨1, 2, some 3, 8⟩ 4 4 = false := by decide
+
+theorem blocked_input_cannot_be_overtaken :
+    boundaryCandidate [(1, .blocked), (2, .agentSteer)] = none := by decide
+
+/-- A folded request follows its exact physical head; unrelated supersession stays terminal. -/
+inductive AgentMessageOutcome where
+  | pending | completed | failed | superseded
+  deriving DecidableEq, Repr
+
+def agentMessageOutcome (folded : Bool) (caused head : AgentMessageOutcome) : AgentMessageOutcome :=
+  if folded && caused == .superseded then head else caused
+
+def agentMessageOutcomeCases : List (Bool × AgentMessageOutcome × AgentMessageOutcome) :=
+  [ (true, .superseded, .pending), (true, .superseded, .completed)
+  , (true, .superseded, .failed), (false, .superseded, .completed)
+  , (true, .completed, .failed) ]
+
+theorem folded_agent_message_waits_for_its_head :
+    agentMessageOutcome true .superseded .pending = .pending ∧
+    agentMessageOutcome true .superseded .completed = .completed := by decide
+
+theorem ordinary_supersession_stays_terminal :
+    agentMessageOutcome false .superseded .completed = .superseded := by decide
+
+theorem legacy_agent_delivery_defaults :
+    resolveAgentDelivery none none = some .queue ∧
+    resolveAgentDelivery none (some false) = some .queue ∧
+    resolveAgentDelivery none (some true) = some .interrupt := by
+  decide
+
+theorem conflicting_agent_delivery_rejected :
+    resolveAgentDelivery (some .queue) (some true) = none ∧
+    resolveAgentDelivery (some .steer) (some true) = none ∧
+    resolveAgentDelivery (some .interrupt) (some false) = none := by
+  decide
 
 structure AdmissionInput where
   requestId : RequestId

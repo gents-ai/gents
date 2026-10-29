@@ -68,7 +68,8 @@ def replacementAllowed (target : AgentSession.Scope) (pre : SessionQueueState)
       (old.zip replacements).all (fun pair => decide (
         pair.2.source = .user ∧ pair.2.policy = .append ∧
         pair.2.origin = .interactive ∧ pair.2.requester = caller ∧
-        pair.2.turnContext = pair.1.turnContext ∧
+        pair.2.executionDirectory.getD pair.2.turnContext =
+          pair.1.executionDirectory.getD pair.1.turnContext ∧
         replacementDeliveryAllowed pair.1.delivery pair.2.delivery ∧
         pair.2.orderKey = pair.1.orderKey))
 

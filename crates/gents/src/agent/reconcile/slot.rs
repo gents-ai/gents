@@ -18,7 +18,9 @@ use crate::watcher::AgentRequest;
 
 use rapidhash::{HashMapExt, RapidHashMap};
 
+/// Bounds requests buffered for one slot and applies backpressure to dispatch.
 const AGENT_EXECUTOR_QUEUE_CAPACITY: usize = 32;
+/// Caps local worker tasks even when backend admission requests more capacity.
 const MAX_BEHAVIOR_WORKERS: usize = 256;
 
 fn bounded_active_limit(requested: usize) -> usize {

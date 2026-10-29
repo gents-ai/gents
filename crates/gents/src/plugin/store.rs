@@ -278,7 +278,7 @@ pub fn lock_store(home: &Path, exclusive: bool) -> Result<StoreGuard> {
 }
 
 /// Async mutation owners use a nonblocking lock attempt to avoid parking a Tokio worker.
-pub(crate) fn try_lock_store(home: &Path) -> Result<StoreGuard> {
+pub fn try_lock_store(home: &Path) -> Result<StoreGuard> {
     let path = plugins_root(home).join(".store.lock");
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -362,6 +362,16 @@ pub fn read_record(home: &Path, namespace: &str, name: &str) -> Result<Installed
         )
     })?;
     serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))
+}
+
+pub fn remove_record_locked(
+    guard: &StoreGuard,
+    home: &Path,
+    namespace: &str,
+    name: &str,
+) -> Result<InstalledPlugin> {
+    guard.for_home(home)?;
+    remove_record(home, namespace, name)
 }
 
 pub fn remove_record(home: &Path, namespace: &str, name: &str) -> Result<InstalledPlugin> {

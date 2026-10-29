@@ -60,8 +60,8 @@ jobs:
           cache: false
       - name: Install pinned Rust toolchain
         run: rustup toolchain install --no-self-update
-      - name: Install migration fixture target
-        run: rustup target add wasm32-unknown-unknown
+      - name: Install migration and callback fixture targets
+        run: rustup target add wasm32-unknown-unknown wasm32-wasip1
       - name: Install protobuf compiler
         run: choco install protoc --yes --no-progress
       - name: Restore Rust dependencies
@@ -90,6 +90,8 @@ jobs:
       - name: Exercise metadata, ownership, runtime input and console shutdown
         timeout-minutes: 25
         run: python .github/scripts/editor-native-tests.py host --manifest "$env:RUNNER_TEMP/editor-native-tests.json"
+      - name: Exercise native process deadline and cancellation
+        run: python .github/scripts/editor-native-tests.py process --manifest "$env:RUNNER_TEMP/editor-native-tests.json"
       - name: Retain native compiler timing report
         if: always()
         uses: actions/upload-artifact@v7

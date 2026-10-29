@@ -221,7 +221,7 @@ theorem trace_preserves_uniqueCoalescedQueueKeys
       exact ih (transition_preserves_uniqueCoalescedQueueKeys h_step h_unique)
 
 theorem goal_queue_is_separate_from_background :
-    let entry : QueueEntry := ⟨1, 0, 0, .queue, .goal, .coalesce, some 7, none, .scheduled, none, 0, none, true⟩
+    let entry : QueueEntry := ⟨1, 0, 0, .queue, .goal, .coalesce, some 7, none, .scheduled, none, 0, none, none, true⟩
     entry.coalesceWellFormed 7 ∧
     containsCoalescedQueueKey [entry] .goal 7 = true ∧
     containsCoalescedQueueKey [entry] .backgroundCompletion 7 = false ∧

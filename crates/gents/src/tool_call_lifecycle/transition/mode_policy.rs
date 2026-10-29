@@ -27,6 +27,26 @@ impl ToolCallLifecycle {
     }
 
     pub(crate) async fn background_with_receipt(&mut self, receipt: &str) -> Result<()> {
+        self.background_with_receipt_slot(
+            receipt,
+            crate::hook::persistence::BackgroundSlot::Occupied,
+        )
+        .await
+    }
+
+    pub(crate) async fn background_with_recovery_receipt(&mut self, receipt: &str) -> Result<()> {
+        self.background_with_receipt_slot(
+            receipt,
+            crate::hook::persistence::BackgroundSlot::Recovery,
+        )
+        .await
+    }
+
+    async fn background_with_receipt_slot(
+        &mut self,
+        receipt: &str,
+        slot: crate::hook::persistence::BackgroundSlot,
+    ) -> Result<()> {
         self.ensure_state(&[ToolCallState::Running], "background")?;
         anyhow::ensure!(
             self.await_mode == AwaitMode::Foreground && self.plugin_effect.is_none(),
@@ -50,7 +70,7 @@ impl ToolCallLifecycle {
                 let original = original.clone();
                 let receipt = receipt.clone();
                 Box::pin(async move {
-                    if original.background_in_txn(txn, original.deadline_at, crate::hook::persistence::BackgroundSlot::Occupied).await?.is_none() {
+                    if original.background_in_txn(txn, original.deadline_at, slot).await?.is_none() {
                         let existing = txn.execute(&format!(r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{receipt_key}" }} }}, limit: 2) {{ _docID }} }}"#)).await?;
                         anyhow::ensure!(existing.pointer("/data/AgentMessage").and_then(serde_json::Value::as_array)
                             .is_some_and(|rows| rows.len() == 1), "foreground tool changed before background handoff");

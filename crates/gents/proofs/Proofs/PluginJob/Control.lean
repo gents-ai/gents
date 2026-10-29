@@ -157,7 +157,7 @@ theorem kill_reaches_only_own_children (job : Job) (c : Control)
     (∃ ch ∈ job.children, ch.key = p.1 ∧ ch.key.root = job.root ∧ ch.state = .live) ∧
       (p.1.sessionId ≠ job.callerSession →
         DurableLineage.interruptAllowed job.callerSession p.1.sessionId
-          (originCause p.1.sessionId) = true) := by
+          (originCause p.1.sessionId) false false = true) := by
   have h_own : ∃ ch ∈ job.children, ch.key = p.1 ∧ ch.key.root = job.root ∧ ch.state = .live := by
     unfold Control.kill at hp
     split at hp
@@ -287,6 +287,7 @@ def resultOffered : ToolPolicy.PluginData.Invocation → Bool
   | .toolCall => true
   | .jobStep => true
   | .callback => false
+  | .ux => false
 
 /-- The scope rule shared by `job_calls.result` and resume validation: the
     caller may manage the owner's background calls, the row belongs to the

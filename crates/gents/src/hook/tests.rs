@@ -2796,9 +2796,15 @@ async fn generated_interrupt_dispositions_drive_in_flight_interrupt() {
         let session_id = hook.session_id().await.unwrap();
         let parent_id = format!("parent-{}", case.name);
         bind_interruptible_request(&node, &hook, &parent_id, &session_id, deadline).await;
-        let mut lifecycle =
-            accepted_hook_tool_lifecycle(&hook, &case.name, "bash", "{}", deadline, await_mode)
-                .await;
+        let mut lifecycle = accepted_hook_tool_lifecycle(
+            &hook,
+            &case.name,
+            "test_tool",
+            "{}",
+            deadline,
+            await_mode,
+        )
+        .await;
         lifecycle.start_running().await.unwrap();
         hook.in_flight_lifecycles
             .lock()

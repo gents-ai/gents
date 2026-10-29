@@ -66,6 +66,43 @@ describe("canonical tool selections", () => {
     expect(files.max_matches).toBe(50);
   });
 
+  it("persists the per-stream bash output byte limit", async () => {
+    const { api, app } = harness();
+    const user = userEvent.setup();
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
+    expect(
+      screen.getByText(/shared tool-result limit can further shorten/i),
+    ).toBeInTheDocument();
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Bash output bytes shown per stream" }),
+      {
+        target: { value: "24000" },
+      },
+    );
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(
+      api.saveToolsConfig.mock.calls[0][0].document.host.bash.max_output_chars,
+    ).toBe(24000);
+  });
+
+  it("rejects bash output byte limits above the runtime ceiling", async () => {
+    const { api, app } = harness();
+    const user = userEvent.setup();
+    renderIn(app, <ToolsPanel deployment={deployment} item="tools-a" />);
+    const limit = screen.getByRole("textbox", {
+      name: "Bash output bytes shown per stream",
+    });
+    fireEvent.change(limit, { target: { value: "1000001" } });
+    expect(screen.getByRole("alert")).toHaveTextContent("at most 1,000,000");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(api.saveToolsConfig).not.toHaveBeenCalled();
+    fireEvent.change(limit, { target: { value: "1000000" } });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(
+      api.saveToolsConfig.mock.calls[0][0].document.host.bash.max_output_chars,
+    ).toBe(1_000_000);
+  });
+
   it("rejects file tool limits above their server ceilings before saving", async () => {
     const { api, app } = harness();
     const user = userEvent.setup();

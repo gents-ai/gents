@@ -1,6 +1,16 @@
-import { lazy, memo, Suspense, useState } from "react";
 import {
+  lazy,
+  memo,
+  Suspense,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
+import {
+  Check,
   ChevronRight,
+  Circle,
+  CircleCheck,
   Copy,
   EllipsisVertical,
   FoldVertical,
@@ -10,15 +20,19 @@ import {
 import { toast } from "sonner";
 import { Button } from "@gents/ui/components/button";
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuTrigger,
+} from "@gents/ui/components/context-menu";
+import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@gents/ui/components/dropdown-menu";
 import { Skeleton } from "@gents/ui/components/skeleton";
 import { cn } from "@gents/ui/lib/utils";
 import { useHomeFolder } from "@/hooks/useHomeFolder";
+import { useViewed } from "@/app/viewedFiles";
 import { shortPath } from "@/lib/paths";
 import { useRecordedDiffReader } from "../../hooks/fileChanges";
 import type { SessionScope } from "../../lib/recordedFiles";
@@ -27,6 +41,7 @@ import { relativeTo, type ChangedFile } from "@/lib/turnChanges";
 import { revealInFolder } from "../../lib/nativeShell";
 import { revealInFolderLabel } from "../../lib/shellPlatform";
 import { isAbsolutePath } from "./tool-summary";
+import { CONTEXT_MENU, DROPDOWN_MENU, type MenuParts } from "./SessionMenu";
 import { Counts, FileLabel, fileName } from "./TurnChanges";
 
 const RecordedDiffView = lazy(() => import("./RecordedDiffView"));
@@ -43,6 +58,7 @@ export const ChangedFileSection = memo(function ChangedFileSection({
   near,
   remote,
   onToggle,
+  onViewed,
   sections,
 }: {
   scope: SessionScope;
@@ -53,11 +69,28 @@ export const ChangedFileSection = memo(function ChangedFileSection({
   /** the session ran on another node, whose copies come over the network */
   remote: boolean;
   onToggle: (path: string) => void;
+  onViewed: (file: ChangedFile, viewed: boolean) => void;
   /** where the panel finds each file's section to scroll to and watch */
   sections: Map<string, HTMLElement>;
 }) {
   const [whole, setWhole] = useState(false);
   const [draws, setDraws] = useState(0);
+  const viewed = useViewed(scope, file);
+  const items: FileItemProps = {
+    scope,
+    file,
+    within,
+    remote,
+    viewed,
+    onViewed: (next) => onViewed(file, next),
+    whole: open ? whole : null,
+    onWhole: (next) => {
+      /* hiding draws the diff anew, so lines opened from its own
+         separators fold back too */
+      if (!next) setDraws((count) => count + 1);
+      setWhole(next);
+    },
+  };
   return (
     <section
       ref={(el) => {
@@ -70,7 +103,10 @@ export const ChangedFileSection = memo(function ChangedFileSection({
       aria-label={file.path}
       data-path={file.path}
     >
-      <div className="sticky top-0 z-10 flex items-center bg-surface pr-1">
+      <FileContextMenu
+        {...items}
+        render={<div className="sticky top-0 z-10 flex items-center bg-surface pr-1" />}
+      >
         <button
           type="button"
           aria-expanded={open}
@@ -85,23 +121,12 @@ export const ChangedFileSection = memo(function ChangedFileSection({
               )}
             />
             <FileLabel path={file.path} within={within} />
+            {viewed && <ViewedMark />}
           </span>
           <Counts added={file.added} removed={file.removed} />
         </button>
-        <FileMenu
-          scope={scope}
-          file={file}
-          within={within}
-          remote={remote}
-          whole={open ? whole : null}
-          onWhole={(next) => {
-            /* hiding draws the diff anew, so lines opened from its own
-               separators fold back too */
-            if (!next) setDraws((count) => count + 1);
-            setWhole(next);
-          }}
-        />
-      </div>
+        <FileMenu {...items} />
+      </FileContextMenu>
       {open &&
         (near ? (
           <Suspense fallback={<Loading remote={remote} file={file} />}>
@@ -114,25 +139,35 @@ export const ChangedFileSection = memo(function ChangedFileSection({
   );
 });
 
-/** What can be done with one changed file: show all its lines or only those
-    around its changes, copy its path or its recorded change, and, for a
-    session on this computer, show it in its folder. */
-function FileMenu({
-  scope,
-  file,
-  within,
-  remote,
-  whole,
-  onWhole,
-}: {
+type FileItemProps = {
   scope: SessionScope;
   file: ChangedFile;
   within: string;
   remote: boolean;
-  /** whether the open diff shows every line; null while it is closed */
+  viewed: boolean;
+  onViewed: (viewed: boolean) => void;
+  /** whether the open diff shows every line; null where there is no open
+      diff to change */
   whole: boolean | null;
-  onWhole: (whole: boolean) => void;
-}) {
+  onWhole?: (whole: boolean) => void;
+};
+
+/** What can be done with one changed file: mark it viewed, show all its
+    lines or only those around its changes, copy its path or its recorded
+    change, and, for a session on this computer, show it in its folder. The
+    same items in its ⋯ menu and on a right-click. */
+function FileItems({
+  Item,
+  Separator,
+  scope,
+  file,
+  within,
+  remote,
+  viewed,
+  onViewed,
+  whole,
+  onWhole,
+}: FileItemProps & MenuParts) {
   const readDiff = useRecordedDiffReader(scope);
   const home = useHomeFolder();
   const reveal = !remote && isAbsolutePath(file.path) ? revealInFolderLabel() : null;
@@ -143,13 +178,62 @@ function FileMenu({
     else toast("The recorded versions of this file could not be read.");
   };
   return (
+    <>
+      <Item onClick={() => onViewed(!viewed)}>
+        {viewed ? <Circle /> : <CircleCheck />}
+        {viewed ? "Mark as not viewed" : "Mark as viewed"}
+      </Item>
+      {whole !== null && onWhole && (
+        <Item onClick={() => onWhole(!whole)}>
+          {whole ? <FoldVertical /> : <UnfoldVertical />}
+          {whole ? "Hide unchanged lines" : "Show all lines"}
+        </Item>
+      )}
+      <Separator />
+      <Item onClick={() => copy(file.path)}>
+        <Copy />
+        Copy path
+      </Item>
+      {within && (
+        <Item onClick={() => copy(relativeTo(within, file.path))}>
+          <Copy />
+          Copy relative path
+        </Item>
+      )}
+      <Item onClick={() => void copyPatch()}>
+        <Copy />
+        Copy diff
+      </Item>
+      {reveal && (
+        <>
+          <Separator />
+          <Item
+            onClick={() =>
+              void revealInFolder(file.path).catch((error: unknown) =>
+                toast(
+                  `Couldn't find ${shortPath(file.path, { home })} on this computer: ${String(error)}`,
+                ),
+              )
+            }
+          >
+            <FolderOpen />
+            {reveal}
+          </Item>
+        </>
+      )}
+    </>
+  );
+}
+
+function FileMenu(props: FileItemProps) {
+  return (
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
           <Button
             variant="quiet"
             size="icon-sm"
-            aria-label={`${fileName(file.path)} actions`}
+            aria-label={`${fileName(props.file.path)} actions`}
             className="shrink-0"
           />
         }
@@ -157,48 +241,36 @@ function FileMenu({
         <EllipsisVertical />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-auto min-w-48">
-        {whole !== null && (
-          <>
-            <DropdownMenuItem onClick={() => onWhole(!whole)}>
-              {whole ? <FoldVertical /> : <UnfoldVertical />}
-              {whole ? "Hide unchanged lines" : "Show all lines"}
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-          </>
-        )}
-        <DropdownMenuItem onClick={() => copy(file.path)}>
-          <Copy />
-          Copy path
-        </DropdownMenuItem>
-        {within && (
-          <DropdownMenuItem onClick={() => copy(relativeTo(within, file.path))}>
-            <Copy />
-            Copy relative path
-          </DropdownMenuItem>
-        )}
-        <DropdownMenuItem onClick={() => void copyPatch()}>
-          <Copy />
-          Copy diff
-        </DropdownMenuItem>
-        {reveal && (
-          <>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onClick={() =>
-                void revealInFolder(file.path).catch((error: unknown) =>
-                  toast(
-                    `Couldn't find ${shortPath(file.path, { home })} on this computer: ${String(error)}`,
-                  ),
-                )
-              }
-            >
-              <FolderOpen />
-              {reveal}
-            </DropdownMenuItem>
-          </>
-        )}
+        <FileItems {...props} {...DROPDOWN_MENU} />
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/** The file's items on a right-click of `render`, which holds `children`. */
+export function FileContextMenu({
+  render,
+  children,
+  ...props
+}: FileItemProps & { render: ReactElement; children: ReactNode }) {
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger render={render}>{children}</ContextMenuTrigger>
+      <ContextMenuContent className="w-auto min-w-48">
+        <FileItems {...props} {...CONTEXT_MENU} />
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+/** A file marked viewed, beside its name. */
+export function ViewedMark() {
+  return (
+    <Check
+      role="img"
+      aria-label="Viewed"
+      className="size-3.5 shrink-0 text-muted-foreground"
+    />
   );
 }
 

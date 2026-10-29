@@ -233,6 +233,26 @@ impl LiveToolOutputRegistry {
         Ok(())
     }
 
+    /// Read the prepared view without consuming it; terminal settlement removes
+    /// the invocation only after its durable write commits or is adopted.
+    pub async fn prepared_presentation(
+        &self,
+        tool_call_id: &str,
+        expected_text: &str,
+    ) -> Result<Option<PayloadPresentation>> {
+        let live = self.inner.lock().await;
+        let Some(prepared) = live
+            .get(tool_call_id)
+            .and_then(|state| state.prepared.as_ref())
+        else {
+            return Ok(None);
+        };
+        if prepared.expected_text != expected_text {
+            return Err(LiveOutputError::PreparedPresentationMismatch);
+        }
+        Ok(Some(prepared.presentation.clone()))
+    }
+
     pub async fn take_prepared_presentation(
         &self,
         tool_call_id: &str,

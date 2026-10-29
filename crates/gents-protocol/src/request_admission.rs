@@ -809,6 +809,22 @@ fn push_request_input(fields: &mut Vec<Vec<u8>>, input: &crate::request_input::R
             push_text(fields, &attachment.data);
         }
     }
+    if let Some(intent) = input.session_creation {
+        push_text(fields, "session-creation-v1");
+        push_text(
+            fields,
+            match intent {
+                crate::request_input::SessionCreationIntent::AgentNew => "agent_new",
+                crate::request_input::SessionCreationIntent::PluginJob => "plugin_job",
+            },
+        );
+    }
+    if let Some(source) = &input.started_by {
+        push_text(fields, "session-starter-v1");
+        push_text(fields, &source.node_did);
+        push_text(fields, &source.session_id);
+        push_input_option(fields, source.requester_did.as_deref());
+    }
 }
 
 fn push_captured_context(

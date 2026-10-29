@@ -35,9 +35,29 @@ type Result<T, E = RequestInputError> = std::result::Result<T, E>;
 pub const REQUEST_INPUT_CONTRACT_VERSION: u32 = 3;
 pub const STATUS_INPUT_CONTRACT_FIELD: &str = "request_input_contract_version";
 
+/// A source-signed session creation intent. It does not itself grant authority;
+/// the target also verifies the exact parent and creation evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionCreationIntent {
+    AgentNew,
+    PluginJob,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[serde(deny_unknown_fields)]
+pub struct AuthoredRequestInput {
+    pub selected_skill_ids: Vec<String>,
+    pub captured_context: Vec<CapturedContext>,
+    pub attachments: Vec<RequestAttachment>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RequestInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_creation: Option<SessionCreationIntent>,
     /// Explicit activation within AgentContext.skill_ids, not an extra skill grant.
     #[serde(
         default,
@@ -53,6 +73,10 @@ pub struct RequestInput {
     /// Later title changes belong to the session title owner, not this input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_title: Option<SessionTitle>,
+    /// Source session carried by a signed session message because its receiver
+    /// may not hold the parent request. Consumed only when creating a session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_by: Option<crate::session::SessionReference>,
     /// Existing queue/steering/wake input, subject to request admission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub queue: Option<RequestQueue>,
@@ -127,8 +151,26 @@ impl RequestInput {
         }
     }
 
+    pub fn edited(
+        &self,
+        authored: &AuthoredRequestInput,
+        source_doc_id: &str,
+        queue: RequestQueue,
+    ) -> Self {
+        Self {
+            selected_skill_ids: authored.selected_skill_ids.clone(),
+            captured_context: authored.captured_context.clone(),
+            attachments: authored.attachments.clone(),
+            initial_title: None,
+            queue: Some(queue),
+            ..self.reissued(source_doc_id)
+        }
+    }
+
     pub fn for_fresh_session(&self) -> Self {
         Self {
+            session_creation: None,
+            started_by: None,
             question_reply: None,
             queue: None,
             goal_continuation: None,

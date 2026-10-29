@@ -45,20 +45,29 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
         }
 
         let mut plugin_digests = BTreeSet::new();
-        let pack_plugin_records = release_plugin_records(
-            &home,
-            &report.pack,
-            &report.documents.plugins,
-            &mut plugin_digests,
-        )?;
+        let local = args.scope.graphql.is_none();
+        let pack_plugin_records = if local {
+            release_plugin_records(
+                &home,
+                &report.pack,
+                &report.documents.plugins,
+                &mut plugin_digests,
+            )?
+        } else {
+            Vec::new()
+        };
         let mut dependency_plugin_records = Vec::with_capacity(report.dependencies.len());
         for dependency in &report.dependencies {
-            dependency_plugin_records.push(release_plugin_records(
-                &home,
-                &dependency.pack,
-                &dependency.documents.plugins,
-                &mut plugin_digests,
-            )?);
+            dependency_plugin_records.push(if local {
+                release_plugin_records(
+                    &home,
+                    &dependency.pack,
+                    &dependency.documents.plugins,
+                    &mut plugin_digests,
+                )?
+            } else {
+                Vec::new()
+            });
         }
         let plugin_bytes = plugin_release_result(&home, &plugin_digests)?;
 
@@ -159,13 +168,89 @@ async fn release_archives(
     Ok(released)
 }
 
+#[cfg(test)]
+pub(super) struct RemovalTestPause {
+    pub(super) home: std::path::PathBuf,
+    pub(super) reached: tokio::sync::Notify,
+    pub(super) release: tokio::sync::Notify,
+}
+
+#[cfg(test)]
+pub(super) static REMOVAL_TEST_PAUSE: std::sync::Mutex<Option<std::sync::Arc<RemovalTestPause>>> =
+    std::sync::Mutex::new(None);
+
+/// This preflight observes one document snapshot. The post-removal
+/// PackInstallation notification remains required for configuration changes
+/// racing the filesystem operation.
+pub(crate) async fn ensure_home_plugins_unreferenced(
+    home: &Path,
+    plugins: &BTreeSet<String>,
+) -> Result<()> {
+    if plugins.is_empty() || !gents::home::init_config_path(home).is_file() {
+        return Ok(());
+    }
+    let scope = crate::cli::ScopeArgs {
+        home: Some(home.to_path_buf()),
+        graphql: None,
+        node_did: None,
+    };
+    let (access, owner) = super::resolve_scope_owner(&scope).await?;
+    let result = gents::pack::ensure_plugins_unreferenced(&access, &owner, plugins).await;
+    if let Some(node) = access.local_node() {
+        node.shutdown().await;
+    }
+    drop(access);
+    #[cfg(test)]
+    if result.is_ok() {
+        let pause = REMOVAL_TEST_PAUSE
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|pause| pause.home == home)
+            .cloned();
+        if let Some(pause) = pause {
+            pause.reached.notify_one();
+            pause.release.notified().await;
+        }
+    }
+    result
+}
+
 pub(crate) async fn remove_home_install(home: &Path, coordinate: &str) -> Result<Value> {
+    let lock_home = home.to_owned();
+    let guard =
+        tokio::task::spawn_blocking(move || gents::plugin::store::try_lock_store(&lock_home))
+            .await??;
+    remove_home_install_with_guard(home, coordinate, guard).await
+}
+
+pub(crate) async fn remove_home_install_with_guard(
+    home: &Path,
+    coordinate: &str,
+    guard: gents::plugin::store::StoreGuard,
+) -> Result<Value> {
+    guard.for_home(home)?;
+    let record = gents::pack::read_home_install(home, coordinate)?
+        .with_context(|| format!("{coordinate} is not installed"))?;
+    let (namespace, _) = super::split_namespace(coordinate);
+    let plugins = record
+        .plugins
+        .iter()
+        .map(|plugin| format!("{namespace}/{}", plugin.name))
+        .collect();
+    ensure_home_plugins_unreferenced(home, &plugins).await?;
+    let checked_record = record;
     let mut retained = Vec::new();
     let mut assets_removed = Vec::new();
-    let removal = gents::pack::plugin_lifecycle::remove_local(
+    let removal = gents::pack::plugin_lifecycle::remove_local_locked(
+        &guard,
         home,
         coordinate,
         |record| {
+            anyhow::ensure!(
+                record == &checked_record,
+                "{coordinate} changed while checking plugin references; retry removal"
+            );
             Ok((
                 super::cache::prepare_recorded_cache(home, coordinate, record)?,
                 record.assets.clone(),
@@ -183,6 +268,7 @@ pub(crate) async fn remove_home_install(home: &Path, coordinate: &str) -> Result
             Ok(())
         },
     )?;
+    drop(guard);
     let record = removal.record;
     let plugin_records = removal.plugins;
     if let Some(reason) = removal.cache_error {

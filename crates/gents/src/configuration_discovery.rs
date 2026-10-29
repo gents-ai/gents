@@ -15,6 +15,8 @@ use std::sync::OnceLock;
 
 pub const DISCOVERY_SCHEMA_VERSION: u32 = 1;
 pub const DEFAULT_MAX_DISCOVERY_SOURCES: usize = 8;
+// These ceilings bound filesystem traversal, decoding, and retained inventory
+// size even when a caller requests larger discovery budgets.
 const HARD_MAX_SOURCES: usize = 32;
 const HARD_MAX_FILES_PER_SOURCE: usize = 512;
 const HARD_MAX_ITEMS: usize = 4_096;
@@ -25,6 +27,7 @@ const HARD_MAX_NOTICES: usize = 1_024;
 const MAX_SKILL_DEPTH: usize = 6;
 const MAX_TEXT_FACT_BYTES: usize = 4_096;
 const MAX_METADATA_FACT_BYTES: usize = 512;
+/// Bounds the serialized inventory handed to the model-facing tool surface.
 pub const MAX_MODEL_INVENTORY_JSON_BYTES: usize = 8 * 1_048_576;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -67,6 +70,8 @@ pub struct DiscoverySourceRoot {
     pub root: PathBuf,
 }
 
+/// Callers select discovery budgets per scan; hard ceilings remain host-owned
+/// because roots and files are untrusted. The model-facing scan uses defaults.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DiscoveryLimits {

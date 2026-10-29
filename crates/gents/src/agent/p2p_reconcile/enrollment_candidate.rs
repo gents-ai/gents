@@ -25,6 +25,8 @@ use crate::identity::NodeIdentity;
 
 use super::enrollment_store::RequestRow;
 
+/// Bounds each transport operation during enrollment so an unavailable peer
+/// cannot keep the request or its replicator cleanup waiting indefinitely.
 pub const ENROLLMENT_P2P_TIMEOUT: Duration = Duration::from_secs(10);
 
 const REQUEST_FIELDS: &str = "_docID protocol_version request_id request_digest offer_id offer_token challenge network_id admin_did server_peer candidate_did candidate_peer candidate_ticket owner_agent profile client_nonce issued_at expires_at candidate_sig";

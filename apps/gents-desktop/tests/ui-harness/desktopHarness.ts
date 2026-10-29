@@ -1554,6 +1554,7 @@ export function createDesktopUiHarness(
         serverLabel: "Bombadil UI Agent",
         ownerNode: NODE_DID,
         state: "pending_approval",
+        activationError: null,
         expiresAt: "2026-09-03T15:00:00.000Z",
       };
       enrollmentRequests = [request];
@@ -2973,6 +2974,9 @@ export function createDesktopUiHarness(
         AlreadyTerminal: { state: "completed" },
       };
       return outcome;
+    },
+    async processControl() {
+      throw new Error("Process control is unavailable in this fixture.");
     },
   };
 

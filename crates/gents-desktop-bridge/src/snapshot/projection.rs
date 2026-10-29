@@ -286,6 +286,7 @@ mod tests {
                     owner_node: "did:test:remote".into(),
                     state: "pending_approval".into(),
                     expires_at: "2099-01-01T00:00:00Z".into(),
+                    activation_error: None,
                 }]),
                 bootstrap_errors: vec![],
                 last_mutation_error: None,

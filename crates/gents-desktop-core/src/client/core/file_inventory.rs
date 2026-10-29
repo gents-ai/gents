@@ -166,6 +166,8 @@ impl ClientCore {
             .map(Some)
     }
 
+    /// A peer can remain connected without delivering the requested page;
+    /// end the read with a retryable error instead of waiting indefinitely.
     async fn remote_inventory_page(
         &self,
         demand: &FileInventoryPageDemand,
@@ -240,6 +242,7 @@ async fn load_inventory_session(
         .await
 }
 
+/// An operator endpoint can be stale or unresponsive while a page is requested.
 async fn operator_http_client() -> Result<&'static reqwest::Client> {
     static CLIENT: tokio::sync::OnceCell<reqwest::Client> = tokio::sync::OnceCell::const_new();
     CLIENT
@@ -262,6 +265,7 @@ async fn read_operator_page(
     demand: &FileInventoryPageDemand,
     verifier: &dyn NodeIdentity,
 ) -> Result<FileInventoryReply> {
+    /// Bound the operator's response before retaining and decoding the page.
     const MAX_BYTES: usize = 8 * 1024 * 1024;
     ensure!(
         !endpoint.is_anonymous(),
@@ -287,7 +291,12 @@ async fn read_operator_page(
         .json(demand)
         .send()
         .await
-        .context("reading runtime file changes")?;
+        .map_err(|error| {
+            crate::error::BridgeError::runtime_http_error(
+                error,
+                "reading runtime file changes".to_owned(),
+            )
+        })?;
     ensure!(
         response.status().is_success(),
         "File changes could not be loaded (HTTP {}). Reconnect the runtime or retry.",
@@ -300,7 +309,10 @@ async fn read_operator_page(
         "file inventory response exceeds its limit"
     );
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await? {
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        let message = error.to_string();
+        crate::error::BridgeError::runtime_http_error(error, message)
+    })? {
         ensure!(
             bytes.len().saturating_add(chunk.len()) <= MAX_BYTES,
             "file inventory response exceeds its limit"

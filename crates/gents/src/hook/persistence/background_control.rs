@@ -171,39 +171,6 @@ impl DefraSessionHook {
         }
     }
 
-    pub(super) async fn cancel_background_tool_lifecycle(
-        &self,
-        mut lifecycle: ToolCallLifecycle,
-        cause: CancelCause,
-        completion_reason: &str,
-    ) -> anyhow::Result<(
-        ToolCallLifecycle,
-        bool,
-        Option<crate::managed_exec::ProcessStopOutcome>,
-    )> {
-        let won_terminal_compare = if lifecycle.is_running() {
-            lifecycle
-                .cancel_during_run_owned(cause, completion_reason)
-                .await?
-        } else {
-            false
-        };
-        let process = if won_terminal_compare {
-            let doc_id = lifecycle
-                .doc_id()
-                .context("cancelled background lifecycle lacks physical identity")?
-                .to_owned();
-            Some(
-                self.background_executions
-                    .stop_execution(lifecycle.tool_call_id(), &doc_id)
-                    .await,
-            )
-        } else {
-            None
-        };
-        Ok((lifecycle, won_terminal_compare, process))
-    }
-
     pub(super) async fn background_tool_envelope(
         &self,
         lifecycle: ToolCallLifecycle,

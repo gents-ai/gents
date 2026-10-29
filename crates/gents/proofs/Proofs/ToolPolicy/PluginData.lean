@@ -4,12 +4,13 @@ import Proofs.ToolPolicy.ApplicationWrite
 namespace ToolPolicy.PluginData
 
 /-- The context a plugin's `data_calls` and `writes` run in. One predicate
-covers all three. A pinless step 0 is a `toolCall`: it is never adopted, so it
+covers each invocation. A pinless step 0 is a `toolCall`: it is never adopted, so it
 has no job stamps, and the engine keeps its notes in memory until adoption. -/
 inductive Invocation where
   | toolCall
   | jobStep
   | callback
+  | ux
   deriving DecidableEq, Repr
 
 /-- Host facts a manifest's `data.stamped` map may bind to a field of the
@@ -28,6 +29,7 @@ any session, so it has only the node DID; a non-job tool output has no job row
 or chain root. -/
 def Stamp.available : Invocation → Stamp → Bool
   | .callback, s => s == .nodeDid
+  | .ux, s => s == .nodeDid
   | .toolCall, .jobRowDocId => false
   | .toolCall, .chainRootDocId => false
   | .toolCall, _ => true
@@ -180,6 +182,10 @@ theorem stamp_unavailable_refuses_write (op : ToolPolicy.ApplicationWrite.Operat
 
 theorem callback_has_only_node_did (s : Stamp) :
     s.available .callback = true ↔ s = .nodeDid := by
+  cases s <;> simp [Stamp.available]
+
+theorem ux_has_only_node_did (s : Stamp) :
+    s.available .ux = true ↔ s = .nodeDid := by
   cases s <;> simp [Stamp.available]
 
 /-- A WfScript or WfName write is never refused for a WfNote-only job stamp. -/
