@@ -21,7 +21,7 @@ function takeFlag(argv, name) {
   return null;
 }
 
-const DEFAULT_LIVE_INFERENCE_URL = "http://100.73.235.38:8000/v1";
+const DEFAULT_LIVE_INFERENCE_URL = "http://workstation-1:8000/v1";
 const DEFAULT_LIVE_MODEL_NAME = "GLM-5.2";
 
 export function resolveLiveProvider(providerFlag, env) {
