@@ -192,11 +192,16 @@ impl Tool for AgentMessageTool {
         });
         properties["interrupt"] = serde_json::json!({
             "type": "boolean",
-            "description": "Stop the session's current turn first, then queue the message for a new turn. Allowed only for sessions this conversation started."
+            "description": "Legacy interrupt flag; if delivery is also supplied, true requires interrupt and false requires queue or steer."
+        });
+        properties["delivery"] = serde_json::json!({
+            "type": "string",
+            "enum": ["queue", "steer", "interrupt"],
+            "description": "Queue after the current turn (default), steer at the next tool boundary, or interrupt the current turn before delivery when authorized."
         });
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Send a message to an agent session you can reach. An idle session starts a new turn; a busy one queues it as a new request after the current request finishes unless interrupt is set. Returns request_id, delivery (request or steering) and tool_call_id immediately; the result arrives later as a message in this conversation."
+            description: "Send a message to an agent session you can reach. An idle session starts a new turn; choose queue, steer, or interrupt for a busy session. Returns request_id, delivery (request, queue or steer) and tool_call_id immediately; the result arrives later as a message in this conversation."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -216,6 +221,8 @@ impl Tool for AgentMessageTool {
         }
         args.body()
             .map_err(|message| invalid_arguments_error(Self::NAME, "/", message))?;
+        args.delivery()
+            .map_err(|message| invalid_arguments_error(Self::NAME, "/delivery", message))?;
         Err(not_yet_executable_error(Self::NAME))
     }
 }
@@ -230,7 +237,7 @@ impl Tool for AgentInterruptTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Interrupt the current turn and pause its Goal, preserving ordinary queued messages. Allowed only for sessions this conversation started. agent_message queues further input; agent_resume resumes paused Goal work."
+            description: "Interrupt the current turn and pause its Goal, preserving ordinary queued messages. Allowed for sessions this conversation started and same-node sessions opened by a Task trigger. agent_message queues further input; agent_resume resumes paused Goal work."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",

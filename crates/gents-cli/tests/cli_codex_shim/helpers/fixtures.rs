@@ -1,7 +1,7 @@
 use super::*;
 use crate::support::graphql::graphql_mutation_with_variables;
 
-async fn exact_request_binding(
+pub(super) async fn exact_request_binding(
     graphql: &str,
     request_id: &str,
 ) -> Result<(String, String, Option<String>)> {
@@ -643,120 +643,4 @@ pub(super) async fn seed_background_completion_wake(
     )
     .await?;
     Ok(request_id)
-}
-
-pub(super) async fn seed_caused_running_request(
-    graphql: &str,
-    parent_request_id: &str,
-    agent_id: &str,
-) -> Result<(String, String)> {
-    let (parent_doc_id, node_did, requester_did) =
-        exact_request_binding(graphql, parent_request_id).await?;
-    let request_id = Uuid::new_v4().to_string();
-    let session_id = Uuid::new_v4().to_string();
-    let requester_field = requester_did
-        .as_deref()
-        .map(|did| format!(r#"requester_did: "{}","#, escape_graphql_string(did)))
-        .unwrap_or_default();
-    let parent = graphql_query(
-        graphql,
-        &format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ session_id }} }}"#,
-            escape_graphql_string(&parent_doc_id),
-        ),
-    )
-    .await?;
-    let parent_session_id = parent
-        .pointer("/data/AgentRequest/0/session_id")
-        .and_then(Value::as_str)
-        .context("parent request binding missing session")?
-        .to_string();
-    let sequence = 1_000;
-    let tool_call_id = format!("codex-agent-new-{}", Uuid::new_v4().simple());
-    let tool = graphql_query(
-        graphql,
-        &format!(
-            r#"mutation {{
-                create_AgentToolCall(input: {{
-                    tool_call_key: "{session}:{tool_call_id}",
-                    request_id: "{parent_request_id}",
-                    request_doc_id: "{parent_doc_id}",
-                    session_id: "{session}",
-                    node_did: "{node_did}",
-                    {requester_field}
-                    message_sequence: {sequence},
-                    tool_name: "agent_new",
-                    tool_call_id: "{tool_call_id}",
-                    status: "called",
-                    lifecycle_state: "running",
-                    started_at: "{now}",
-                    await_mode: "background"
-                }}) {{ _docID }}
-            }}"#,
-            session = escape_graphql_string(&parent_session_id),
-            tool_call_id = escape_graphql_string(&tool_call_id),
-            parent_request_id = escape_graphql_string(parent_request_id),
-            parent_doc_id = escape_graphql_string(&parent_doc_id),
-            node_did = escape_graphql_string(&node_did),
-            now = escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
-        ),
-    )
-    .await?;
-    let tool_call_doc_id = doc_id_from_create(&tool, "add_AgentToolCall")?;
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                purpose: "normal",
-                request_id: "{request_id}",
-                node_did: "{node_did}",
-                {requester_field}
-                agent_id: "{agent_id}",
-                session_id: "{session_id}",
-                caused_by_parent_request_id: "{parent_request_id}",
-                caused_by_parent_request_doc_id: "{parent_doc_id}",
-                caused_by_parent_tool_call_id: "{tool_call_id}",
-                caused_by_parent_tool_call_doc_id: "{tool_call_doc_id}",
-                content: "caused work",
-                lifecycle_state: "processing",
-                backend_id: "",
-                execution_origin: "interactive",
-                failure_reason: "",
-                created_at: "{now}",
-                retry_count: 0,
-                max_retries: 3
-            }}) {{ _docID }}
-        }}"#,
-        request_id = escape_graphql_string(&request_id),
-        node_did = escape_graphql_string(&node_did),
-        agent_id = escape_graphql_string(agent_id),
-        session_id = escape_graphql_string(&session_id),
-        parent_request_id = escape_graphql_string(parent_request_id),
-        parent_doc_id = escape_graphql_string(&parent_doc_id),
-        tool_call_id = escape_graphql_string(&tool_call_id),
-        tool_call_doc_id = escape_graphql_string(&tool_call_doc_id),
-        now = escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
-    );
-    graphql_query(graphql, &mutation).await?;
-    graphql_query(
-        graphql,
-        &format!(
-            r#"mutation {{
-                create_AgentSession(input: {{
-                    session_id: "{session_id}",
-                    node_did: "{node_did}",
-                    {requester_field}
-                    agent_id: "{agent_id}",
-                    created_at: "{now}",
-                    provenance: {{parent_request_doc_id: "{parent_doc_id}"}}
-                }}) {{ _docID }}
-            }}"#,
-            session_id = escape_graphql_string(&session_id),
-            node_did = escape_graphql_string(&node_did),
-            agent_id = escape_graphql_string(agent_id),
-            now = escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
-            parent_doc_id = escape_graphql_string(&parent_doc_id),
-        ),
-    )
-    .await?;
-    Ok((request_id, session_id))
 }

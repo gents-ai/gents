@@ -320,6 +320,8 @@ async fn stage_request(
     let existing = one_request(txn, &retry_key).await?;
     let mut input = gents_protocol::request_input::RequestInput {
         cwd,
+        session_creation: (!existing_destination)
+            .then_some(gents_protocol::request_input::SessionCreationIntent::PluginJob),
         ..Default::default()
     };
     if let Some(existing) = &existing {
@@ -470,6 +472,7 @@ mod tests {
         assert_eq!(read(&path), b"hello");
     }
 
+    #[cfg(unix)]
     #[test]
     fn scratch_traversal_and_symlink_escape_are_refused() {
         let cwd = tempfile::tempdir().unwrap();
@@ -485,6 +488,7 @@ mod tests {
             .exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn scratch_link_component_that_does_not_resolve_is_refused() {
         let cwd = tempfile::tempdir().unwrap();
@@ -593,7 +597,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repeated_slot_interrupt_is_a_no_op() {
+    async fn descriptive_slot_provenance_cannot_grant_interrupt() {
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let parent = insert(&node, "AgentRequest", json!({"request_id":"parent","purpose":"normal","node_did":"owner","requester_did":null,"session_id":"caller","agent_id":"configured","lifecycle_state":"processing"})).await;
@@ -610,13 +614,8 @@ mod tests {
             requester_did: None,
         };
         assert!(stamp(&node, &child).await.is_none());
-        interrupt_slots(&node, &caller, std::slice::from_ref(&target))
-            .await
-            .unwrap();
-        let latched = stamp(&node, &child).await;
-        assert!(latched.is_some());
-        interrupt_slots(&node, &caller, &[target]).await.unwrap();
-        assert_eq!(stamp(&node, &child).await, latched);
+        assert!(interrupt_slots(&node, &caller, &[target]).await.is_err());
+        assert!(stamp(&node, &child).await.is_none());
         node.shutdown().await;
     }
 
@@ -659,7 +658,7 @@ mod tests {
     use crate::background_tools::ProcessControlScope;
     use crate::lifecycle::SessionMessageCause;
     use crate::plugin_job::admit::{HostFacts, StepCall, StepChild, StepContext, StepRow};
-    use crate::plugin_job::keys::{job_message_key, job_spawn_key};
+    use crate::plugin_job::keys::{job_message_key, job_session_id, job_spawn_key};
     use crate::tool_call_lifecycle::admission_fixture::{
         published_admission, PublishedAdmissionOptions,
     };
@@ -696,6 +695,7 @@ mod tests {
             caller_node_did: admission.node_did.clone(),
             caller_agent_id: "caller-agent".to_owned(),
             caller_session_id: "caller-session".to_owned(),
+            caller_requester_did: None,
             caller_request_id: caller.request_id,
             caller_request_doc_id: request_doc_id,
             caller_hop: 0,
@@ -941,6 +941,95 @@ mod tests {
             row["caused_by_parent_tool_call_doc_id"],
             harness.cause.tool_call_doc_id
         );
+        harness.close().await;
+    }
+
+    #[tokio::test]
+    async fn signed_staged_slot_can_be_interrupted_only_by_its_caller() {
+        let mut harness = harness("job-slot-authority").await;
+        harness.cause.caller_session_id = "session-job-slot-authority".into();
+        harness.cause.caller_agent_id = "general".into();
+        harness.row.root = harness.cause.tool_call_doc_id.clone();
+        harness.row.row_doc_id = harness.row.root.clone();
+        let mut job_pin = pin();
+        job_pin.chain_root_doc_id = harness.row.root.clone();
+        ConfigAccess::transact_local_write(&harness.node, None, "test.job_slot_pin", |txn| {
+            let doc = &harness.row.root;
+            let pin = &job_pin;
+            Box::pin(
+                async move { crate::plugin_job::records::write_pin_in_txn(txn, doc, pin).await },
+            )
+        })
+        .await
+        .unwrap();
+        let child = spawn("worker", 0, "work", "Worker", None);
+        stage(
+            &harness,
+            std::slice::from_ref(&child),
+            &job_effects(vec![child.clone()], Vec::new()),
+            &harness.row,
+        )
+        .await
+        .unwrap();
+        let key = job_spawn_key(&harness.row.root, "worker", 0);
+        let rows = by_key(&harness.node, &key).await;
+        let doc = rows[0]["_docID"].as_str().unwrap();
+        let response = ConfigAccess::local(harness.node.clone())
+            .execute(&format!(
+                "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
+                crate::graphql::escape_graphql_string(doc),
+                crate::watcher::AGENT_REQUEST_FIELDS,
+            ))
+            .await
+            .unwrap();
+        let row: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
+            harness.node.clone(),
+            "general",
+            &harness.cause.caller_node_did,
+            row.try_into().unwrap(),
+            60,
+        );
+        assert_eq!(
+            lifecycle.claim().await.unwrap(),
+            crate::lifecycle::ClaimOutcome::Claimed
+        );
+        let writer = crate::streaming::DefraStreamWriter::new(
+            harness.node.clone(),
+            &harness.cause.caller_node_did,
+            std::time::Duration::ZERO,
+        );
+        lifecycle.begin_owned_execution(&writer).await.unwrap();
+        let caller = SessionScope {
+            node_did: harness.cause.caller_node_did.clone(),
+            session_id: harness.cause.caller_session_id.clone(),
+            requester_did: Some(harness.cause.caller_node_did.clone()),
+        };
+        let target = SessionScope {
+            node_did: harness.cause.caller_node_did.clone(),
+            session_id: job_session_id(&harness.row.root, "worker", 0),
+            requester_did: Some(harness.cause.caller_node_did.clone()),
+        };
+        let foreign = SessionScope {
+            session_id: "other-session".into(),
+            ..caller.clone()
+        };
+        assert!(
+            interrupt_slots(&harness.node, &foreign, std::slice::from_ref(&target))
+                .await
+                .is_err()
+        );
+        assert!(stamp(&harness.node, doc).await.is_none());
+        interrupt_slots(&harness.node, &caller, std::slice::from_ref(&target))
+            .await
+            .unwrap();
+        let latched = stamp(&harness.node, doc).await;
+        assert!(latched.is_some());
+        interrupt_slots(&harness.node, &caller, &[target])
+            .await
+            .unwrap();
+        assert_eq!(stamp(&harness.node, doc).await, latched);
         harness.close().await;
     }
 

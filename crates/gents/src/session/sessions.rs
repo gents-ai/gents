@@ -82,7 +82,7 @@ pub(crate) async fn ensure_session_in_txn(
     agent_id: &str,
     requester_did: Option<&str>,
     title: Option<gents_protocol::session::SessionTitle>,
-    provenance: Option<gents_protocol::session::SessionProvenance>,
+    mut provenance: Option<gents_protocol::session::SessionProvenance>,
     now: &str,
 ) -> Result<bool> {
     anyhow::ensure!(
@@ -156,12 +156,28 @@ pub(crate) async fn ensure_session_in_txn(
         return Ok(false);
     }
 
+    if let Some(origin) = provenance.as_mut() {
+        origin.started_by = crate::session_origin::verified_starter_in_txn(
+            txn,
+            origin,
+            node_did,
+            session_id,
+            requester_did,
+            agent_id,
+        )
+        .await?;
+        origin.creation_receipt = None;
+    }
+
     let created = txn.execute_with_variables(
         "mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }",
         &serde_json::json!({"input": {
             "session_id": session_id, "node_did": node_did,
             "requester_did": requester_did, "agent_id": agent_id,
-            "created_at": now, "title": title, "provenance": provenance
+            "created_at": now, "title": title,
+            "started_by_node_did": provenance.as_ref().and_then(|p| p.started_by.as_ref()).map(|s| &s.node_did),
+            "started_by_session_id": provenance.as_ref().and_then(|p| p.started_by.as_ref()).map(|s| &s.session_id),
+            "provenance": provenance
         }}),
     ).await?;
     let created = defra_node::QueryResponse::success(
@@ -170,7 +186,8 @@ pub(crate) async fn ensure_session_in_txn(
             .context("session create omitted data")?
             .clone(),
     );
-    if crate::graphql::single_mutation_document(&created, "create_AgentSession")?.is_none() {
+    let created_doc = crate::graphql::single_mutation_document(&created, "create_AgentSession")?;
+    if created_doc.is_none() {
         // Revalidate scope through the same preserved-document contract so a
         // colliding writer cannot silently win with a different binding.
         let response = txn.execute(&query).await?;
@@ -193,6 +210,39 @@ pub(crate) async fn ensure_session_in_txn(
             return Ok(false);
         }
         anyhow::bail!("session create matched no document");
+    }
+    if let Some(origin) = provenance.as_mut() {
+        let doc_id = created_doc
+            .and_then(|doc| doc.get("_docID"))
+            .and_then(serde_json::Value::as_str)
+            .context("created session lacks physical identity")?;
+        origin.creation_receipt = crate::session_origin::issue_creation_receipt_in_txn(
+            txn,
+            node_did,
+            session_id,
+            doc_id,
+            requester_did,
+            agent_id,
+            origin.opening_request_doc_id.as_deref(),
+        )
+        .await?;
+        if origin.creation_receipt.is_some() {
+            let mutation = format!("mutation($provenance: JSON) {{update_AgentSession(docID: \"{}\", input: {{provenance: $provenance}}) {{_docID}}}}", crate::graphql::escape_graphql_string(doc_id));
+            let response = txn
+                .execute_with_variables(&mutation, &serde_json::json!({"provenance": origin}))
+                .await?;
+            let response = defra_node::QueryResponse::success(
+                response
+                    .get("data")
+                    .context("session receipt update omitted data")?
+                    .clone(),
+            );
+            anyhow::ensure!(
+                crate::graphql::single_mutation_document(&response, "update_AgentSession")?
+                    .is_some(),
+                "session creation receipt was not attached"
+            );
+        }
     }
     tracing::info!(
         session_id = %session_id,

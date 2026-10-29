@@ -11,6 +11,373 @@ async fn materializer_with_node() -> (Arc<defra_node::EmbeddedNode>, ProductionM
 }
 
 #[tokio::test]
+async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
+    let snapshot =
+        snapshot_with_agent_and_schedules(integration_test_agent("general"), RapidHashMap::new());
+    let owner = snapshot.local_did.clone();
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(&owner)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let (_snapshot_tx, snapshot_rx) = watch::channel(snapshot);
+    let materializer = ProductionMaterializer::new(node.clone(), snapshot_rx);
+    let identity = gents_protocol::trigger_delivery::FireIdentity {
+        owner_did: owner.clone(),
+        trigger_id: "authority-trigger".into(),
+        source_collection: "Schedule".into(),
+        source_doc_id: "authority-occurrence".into(),
+    };
+    let prepared = crate::trigger_engine::durable::PreparedFire {
+        receipt: gents_protocol::trigger_delivery::TriggerFire {
+            fire_key: identity.fire_key(),
+            request_id: identity.request_id(),
+            session_id: identity.session_id(),
+            identity,
+            task_id: "authority-task".into(),
+            goal_id: None,
+            goal_objective: None,
+            goal_token_budget: None,
+            goal_assignment_applied: false,
+            emit_outcome: false,
+            queued_serial: false,
+            source_handoff_id: None,
+            reply_session_id: None,
+            shard_id: None,
+            attempt: None,
+            created_at: "2030-01-01T00:00:00Z".into(),
+        },
+        target_existing: false,
+        replace_prior: false,
+    };
+    let mut task = resolved_task("work");
+    task.task_id = prepared.receipt.task_id.clone();
+    materializer
+        .materialize(
+            &task,
+            Some("authority-trigger"),
+            TriggerKind::Schedule,
+            Some("authority-trigger-document"),
+            None,
+            None,
+            None,
+            "work",
+            None,
+            &prepared.receipt.fire_key,
+            Some(&prepared),
+            None,
+        )
+        .await
+        .unwrap();
+    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let rows = access
+        .execute(&format!(
+            "{{AgentRequest {{{}}}}}",
+            crate::request_admission::SIGNED_REQUEST_FIELDS
+        ))
+        .await
+        .unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(rows["data"]["AgentRequest"][0].clone()).unwrap();
+    let request = crate::AgentRequest::try_from(row).unwrap();
+    let scope = crate::session_origin::SessionScope::of_request(&request);
+    assert!(
+        !crate::session_origin::task_triggered_opening(&access, &scope)
+            .await
+            .unwrap()
+    );
+    let session_request = request.clone();
+    crate::config_client::ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "test.task_session",
+        move |txn| {
+            let request = session_request.clone();
+            Box::pin(async move {
+                crate::session::ensure_session_in_txn(
+                    txn,
+                    &request.session_id,
+                    &request.node_did,
+                    &request.agent_id,
+                    request.requester_did.as_deref(),
+                    None,
+                    crate::lifecycle::materialize::created_session_provenance(&request),
+                    &request.created_at,
+                )
+                .await
+            })
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        crate::session_origin::task_triggered_opening(&access, &scope)
+            .await
+            .unwrap()
+    );
+    let caller = crate::session_origin::SessionScope {
+        session_id: "caller".into(),
+        ..scope.clone()
+    };
+    assert!(
+        crate::session_message::interrupt_refusal(&node, &caller, &scope)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mut caller_request = request.clone();
+    caller_request.session_id = caller.session_id.clone();
+    let tools = crate::tool_surface::AgentToolConfig {
+        enabled: true,
+        targets: vec![crate::document_config::AgentTargetDocument {
+            target_id: "worker".into(),
+            node_did: owner.clone(),
+            target_node_did: owner.clone(),
+            agent_id: request.agent_id.clone(),
+            name: "worker".into(),
+            description: None,
+            tags: Vec::new(),
+        }],
+    };
+    let listed = crate::session_message::agent_session_list(
+        &node,
+        &caller_request,
+        &tools,
+        &crate::session_message::AgentSessionListArgs::default(),
+    )
+    .await
+    .unwrap();
+    let entry = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["session_id"] == scope.session_id)
+        .unwrap();
+    assert_eq!(entry["can_interrupt"], true);
+    let wrong_requester = crate::session_origin::SessionScope {
+        requester_did: Some("did:wrong:requester".into()),
+        ..scope.clone()
+    };
+    assert!(
+        !crate::session_origin::task_triggered_opening(&access, &wrong_requester)
+            .await
+            .unwrap()
+    );
+    let foreign = crate::session_origin::SessionScope {
+        node_did: "did:other".into(),
+        ..caller
+    };
+    assert!(
+        crate::session_message::interrupt_refusal(&node, &foreign, &scope)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    access.write("test.ambiguous_fire", &format!(
+        r#"mutation {{create_TriggerFire(input: {{fire_key: "duplicate-fire", owner_did: "{}", request_id: "{}", session_id: "{}", trigger_id: "authority-trigger", task_id: "authority-task"}}) {{_docID}}}}"#,
+        escape_graphql_string(&owner), escape_graphql_string(&request.request_id), escape_graphql_string(&scope.session_id)
+    )).await.unwrap();
+    assert!(
+        !crate::session_origin::task_triggered_opening(&access, &scope)
+            .await
+            .unwrap()
+    );
+    let listed = crate::session_message::agent_session_list(
+        &node,
+        &caller_request,
+        &tools,
+        &crate::session_message::AgentSessionListArgs::default(),
+    )
+    .await
+    .unwrap();
+    let entry = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["session_id"] == scope.session_id)
+        .unwrap();
+    assert_eq!(entry["can_interrupt"], false);
+
+    access.write("test.remove_fires", &format!(
+        r#"mutation {{delete_TriggerFire(filter: {{owner_did: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}}}) {{_docID}}}}"#,
+        escape_graphql_string(&owner), escape_graphql_string(&request.request_id)
+    )).await.unwrap();
+    access.write("test.wrong_trigger_fire", &format!(
+        r#"mutation {{create_TriggerFire(input: {{fire_key: "wrong-trigger-fire", owner_did: "{}", request_id: "{}", session_id: "{}", trigger_id: "other-trigger", task_id: "authority-task"}}) {{_docID}}}}"#,
+        escape_graphql_string(&owner), escape_graphql_string(&request.request_id), escape_graphql_string(&scope.session_id)
+    )).await.unwrap();
+    assert!(
+        !crate::session_origin::task_triggered_opening(&access, &scope)
+            .await
+            .unwrap()
+    );
+    access.write("test.remove_wrong_fire",
+        r#"mutation {delete_TriggerFire(filter: {fire_key: {_eq: "wrong-trigger-fire"}}) {_docID}}"#
+    ).await.unwrap();
+    access.write("test.replace_fire_task", &format!(
+        r#"mutation {{create_TriggerFire(input: {{fire_key: "{}", owner_did: "{}", request_id: "{}", session_id: "{}", trigger_id: "authority-trigger", task_id: "different-task", source_collection: "Schedule", source_doc_id: "authority-occurrence"}}) {{_docID}}}}"#,
+        escape_graphql_string(&prepared.receipt.fire_key), escape_graphql_string(&owner), escape_graphql_string(&request.request_id), escape_graphql_string(&scope.session_id)
+    )).await.unwrap();
+    assert!(
+        !crate::session_origin::task_triggered_opening(&access, &scope)
+            .await
+            .unwrap()
+    );
+    access.write("test.remove_task_session", &format!(
+        r#"mutation {{delete_AgentSession(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{_docID}}}}"#,
+        escape_graphql_string(&owner), escape_graphql_string(&scope.session_id)
+    )).await.unwrap();
+    let original_request = request.clone();
+    crate::config_client::ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "test.wrong_requester_session",
+        move |txn| {
+            let request = original_request.clone();
+            Box::pin(async move {
+                crate::session::ensure_session_in_txn(
+                    txn,
+                    &request.session_id,
+                    &request.node_did,
+                    &request.agent_id,
+                    Some("did:wrong:requester"),
+                    None,
+                    crate::lifecycle::materialize::created_session_provenance(&request),
+                    &request.created_at,
+                )
+                .await
+            })
+        },
+    )
+    .await
+    .unwrap();
+    let wrong_requester_scope = crate::session_origin::SessionScope {
+        requester_did: Some("did:wrong:requester".into()),
+        ..scope.clone()
+    };
+    assert!(
+        !crate::session_origin::task_triggered_opening(&access, &wrong_requester_scope)
+            .await
+            .unwrap()
+    );
+
+    let mut forged = rows["data"]["AgentRequest"][0].clone();
+    let fields = forged.as_object_mut().unwrap();
+    fields.remove("_docID");
+    fields.remove("input");
+    fields.retain(|_, value| !value.is_null());
+    fields.insert(
+        "request_id".into(),
+        serde_json::json!("forged-authority-request"),
+    );
+    fields.insert(
+        "session_id".into(),
+        serde_json::json!("forged-authority-session"),
+    );
+    fields.insert(
+        "admission_signature".into(),
+        serde_json::json!("invalid-signature"),
+    );
+    fields.insert(
+        "retry_key".into(),
+        serde_json::json!("forged-authority-retry"),
+    );
+    let input = gents_protocol::graphql::graphql_input_literal(&forged).unwrap();
+    access
+        .write(
+            "test.forged_opening",
+            &format!("mutation {{create_AgentRequest(input: {input}) {{_docID}}}}"),
+        )
+        .await
+        .unwrap();
+    let forged_rows = access
+        .execute(&format!(
+        "{{AgentRequest(filter: {{request_id: {{_eq: \"forged-authority-request\"}}}}) {{{}}}}}",
+        crate::request_admission::SIGNED_REQUEST_FIELDS,
+    ))
+        .await
+        .unwrap();
+    let forged_row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(forged_rows["data"]["AgentRequest"][0].clone()).unwrap();
+    assert!(crate::request_admission::verify_request_receipt_signature(&forged_row).is_err());
+    let forged_request = crate::AgentRequest::try_from(forged_row).unwrap();
+    let forged_scope = crate::session_origin::SessionScope::of_request(&forged_request);
+    access.write("test.forged_fire", &format!(
+        r#"mutation {{create_TriggerFire(input: {{fire_key: "forged-fire", owner_did: "{}", request_id: "forged-authority-request", session_id: "forged-authority-session", trigger_id: "authority-trigger", task_id: "authority-task"}}) {{_docID}}}}"#,
+        escape_graphql_string(&owner)
+    )).await.unwrap();
+    let missing_doc = document::DocID::new_v0_from_seed("missing-task-opening").to_string();
+    for (test_session, opening, requester) in [
+        (
+            "forged-authority-session",
+            forged_request.doc_id.clone(),
+            forged_request.requester_did.clone(),
+        ),
+        (
+            "missing-authority-session",
+            missing_doc,
+            forged_request.requester_did.clone(),
+        ),
+        (
+            "wrong-requester-session",
+            forged_request.doc_id.clone(),
+            Some("did:wrong:requester".into()),
+        ),
+    ] {
+        let session = test_session.to_owned();
+        let node_did = owner.clone();
+        crate::config_client::ConfigAccess::transact_local_write(
+            &node,
+            None,
+            "test.bad_opening_session",
+            move |txn| {
+                let session = session.clone();
+                let node_did = node_did.clone();
+                let opening = opening.clone();
+                let requester = requester.clone();
+                Box::pin(async move {
+                    crate::session::ensure_session_in_txn(
+                        txn,
+                        &session,
+                        &node_did,
+                        "general",
+                        requester.as_deref(),
+                        None,
+                        Some(gents_protocol::session::SessionProvenance {
+                            opening_request_doc_id: Some(opening),
+                            ..Default::default()
+                        }),
+                        "2030-01-01T00:00:00Z",
+                    )
+                    .await
+                })
+            },
+        )
+        .await
+        .unwrap();
+        let bad_scope = crate::session_origin::SessionScope {
+            node_did: owner.clone(),
+            session_id: test_session.into(),
+            requester_did: if test_session == "wrong-requester-session" {
+                Some("did:wrong:requester".into())
+            } else {
+                forged_scope.requester_did.clone()
+            },
+        };
+        assert!(
+            !crate::session_origin::task_triggered_opening(&access, &bad_scope)
+                .await
+                .unwrap(),
+            "{test_session}"
+        );
+    }
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -325,6 +692,28 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
         crate::request_admission::SIGNED_REQUEST_FIELDS
     );
     let admitted = access.execute(&query).await.unwrap();
+    let existing_scope = crate::session_origin::SessionScope {
+        node_did: owner.clone(),
+        session_id: session.to_owned(),
+        requester_did: Some(owner.clone()),
+    };
+    assert!(
+        !crate::session_origin::task_triggered_opening(&access, &existing_scope)
+            .await
+            .unwrap()
+    );
+    let later_doc = admitted["data"]["AgentRequest"][0]["_docID"]
+        .as_str()
+        .unwrap();
+    access.write("test.later_task_is_not_creation", &format!(
+        r#"mutation {{update_AgentSession(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}, input: {{provenance: {{opening_request_doc_id: "{}"}}}}) {{_docID}}}}"#,
+        escape_graphql_string(&owner), escape_graphql_string(session), escape_graphql_string(later_doc),
+    )).await.unwrap();
+    assert!(
+        !crate::session_origin::task_triggered_opening(&access, &existing_scope)
+            .await
+            .unwrap()
+    );
     assert_eq!(
         admitted["data"]["TriggerFire"][0]["goal_id"],
         selected.goal_id

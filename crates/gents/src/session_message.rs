@@ -47,7 +47,17 @@ pub(crate) struct AgentMessageArgs {
     #[serde(default)]
     pub task: Option<TaskBody>,
     #[serde(default)]
-    pub interrupt: bool,
+    pub interrupt: Option<bool>,
+    #[serde(default)]
+    pub delivery: Option<AgentMessageDelivery>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AgentMessageDelivery {
+    Queue,
+    Steer,
+    Interrupt,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -89,11 +99,27 @@ impl AgentMessageArgs {
     pub(crate) fn body(&self) -> Result<MessageBody<'_>, String> {
         message_body("message", self.message.as_ref(), self.task.as_ref())
     }
+
+    pub(crate) fn delivery(&self) -> Result<AgentMessageDelivery, String> {
+        match (self.delivery, self.interrupt) {
+            (None, None | Some(false)) => Ok(AgentMessageDelivery::Queue),
+            (None, Some(true)) | (Some(AgentMessageDelivery::Interrupt), Some(true)) => {
+                Ok(AgentMessageDelivery::Interrupt)
+            }
+            (Some(delivery), None) => Ok(delivery),
+            (
+                Some(delivery @ (AgentMessageDelivery::Queue | AgentMessageDelivery::Steer)),
+                Some(false),
+            ) => Ok(delivery),
+            (Some(_), Some(_)) => Err("interrupt conflicts with delivery".into()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Delivery {
     Request,
+    Queued,
     Steering,
 }
 
@@ -101,7 +127,8 @@ impl Delivery {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Request => "request",
-            Self::Steering => "steering",
+            Self::Queued => "queue",
+            Self::Steering => "steer",
         }
     }
 }
@@ -283,10 +310,21 @@ enum PlannedWrite {
 pub(crate) struct Plan {
     session_id: String,
     hop: u32,
+    steer_head: Option<Option<String>>,
+    interrupt_before_publish: bool,
     write: PlannedWrite,
 }
 
 impl Plan {
+    pub(crate) async fn sign_agent_creation(&mut self, node_did: &str) -> Result<()> {
+        let create = match &mut self.write {
+            PlannedWrite::Request { create, .. } | PlannedWrite::Goal { create, .. } => create,
+        };
+        create.input.session_creation =
+            Some(gents_protocol::request_input::SessionCreationIntent::AgentNew);
+        let signer = crate::identity::RegisteredIdentity::from_registered_did(node_did, None)?;
+        crate::sign_agent_request_create(&signer, create).await
+    }
     pub(crate) fn hop(&self) -> u32 {
         self.hop
     }
@@ -299,6 +337,8 @@ impl Plan {
         Self {
             session_id,
             hop,
+            steer_head: None,
+            interrupt_before_publish: false,
             write: PlannedWrite::Request {
                 create,
                 delivery: Delivery::Request,
@@ -388,6 +428,7 @@ async fn target_goal_assignment(
     }
 }
 
+#[cfg(test)]
 pub(crate) async fn plan(
     node: &Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
@@ -396,8 +437,36 @@ pub(crate) async fn plan(
     title: Option<&str>,
     interrupt: bool,
 ) -> Result<Result<Plan, String>> {
+    plan_with_delivery(
+        node,
+        cause,
+        target,
+        rendered,
+        title,
+        if interrupt {
+            AgentMessageDelivery::Interrupt
+        } else {
+            AgentMessageDelivery::Queue
+        },
+    )
+    .await
+}
+
+pub(crate) async fn plan_with_delivery(
+    node: &Arc<EmbeddedNode>,
+    cause: &SessionMessageCause,
+    target: &SessionMessageTarget,
+    rendered: RenderedBody,
+    title: Option<&str>,
+    delivery: AgentMessageDelivery,
+) -> Result<Result<Plan, String>> {
     let request_id = uuid::Uuid::new_v4().to_string();
     let local = target.node_did == cause.caller_node_did;
+    if !local && delivery == AgentMessageDelivery::Steer {
+        return Ok(Err(
+            "steering requires a local target session; use delivery=queue".to_owned(),
+        ));
+    }
     if crate::session::session_is_stopped(
         node,
         &target.node_did,
@@ -435,6 +504,8 @@ pub(crate) async fn plan(
     } else {
         None
     };
+    let steer_head = (delivery == AgentMessageDelivery::Steer)
+        .then(|| active.as_ref().map(|request| request.doc_id.clone()));
     let own_hop = match &active {
         Some(active) => active.request_hop.max(
             crate::session::load_session_current_hop(node, &target.node_did, &target.session_id)
@@ -481,11 +552,15 @@ pub(crate) async fn plan(
             token_budget,
         }
     } else {
-        let steering = active.filter(|_| !interrupt);
+        let steering = active.filter(|_| delivery != AgentMessageDelivery::Interrupt);
         let queue = steering
             .as_ref()
             .map(|active| gents_protocol::request_input::RequestQueue {
-                delivery: Default::default(),
+                delivery: if delivery == AgentMessageDelivery::Steer {
+                    gents_protocol::request_input::QueueDelivery::Steer
+                } else {
+                    gents_protocol::request_input::QueueDelivery::Queue
+                },
                 position: None,
                 source: gents_protocol::request_input::QueueSource::Steering,
                 policy: gents_protocol::request_input::QueuePolicy::Append,
@@ -510,16 +585,18 @@ pub(crate) async fn plan(
                 },
             )
             .await?,
-            delivery: if steering.is_some() {
-                Delivery::Steering
-            } else {
-                Delivery::Request
+            delivery: match (&steering, delivery) {
+                (None, _) => Delivery::Request,
+                (Some(_), AgentMessageDelivery::Steer) => Delivery::Steering,
+                (Some(_), _) => Delivery::Queued,
             },
         }
     };
     Ok(Ok(Plan {
         session_id: target.session_id.clone(),
         hop,
+        steer_head,
+        interrupt_before_publish: delivery == AgentMessageDelivery::Interrupt,
         write,
     }))
 }
@@ -537,13 +614,35 @@ pub(crate) struct SessionMessageReceipt {
     pub status: String,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum CommitError {
+    #[error(transparent)]
+    Steer(#[from] crate::lifecycle::queue::SteerAdmissionRefusal),
+    #[error(transparent)]
+    Access(#[from] crate::config_client::ConfigClientError),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl crate::config_client::TransactionFailure for CommitError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::Access(error) => Some(error),
+            Self::Other(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+            Self::Steer(_) => None,
+        }
+    }
+}
+
 pub(crate) async fn commit(
     node: &Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
     lifecycle: &mut crate::tool_call_lifecycle::ToolCallLifecycle,
     plan: Plan,
     report_delivery: bool,
-) -> Result<SessionMessageReceipt> {
+) -> std::result::Result<SessionMessageReceipt, CommitError> {
     let error = match commit_once(node, cause, lifecycle, plan, report_delivery).await {
         Ok(receipt) => return Ok(receipt),
         Err(error) => error,
@@ -584,7 +683,7 @@ async fn commit_once(
     lifecycle: &mut crate::tool_call_lifecycle::ToolCallLifecycle,
     plan: Plan,
     report_delivery: bool,
-) -> Result<SessionMessageReceipt> {
+) -> std::result::Result<SessionMessageReceipt, CommitError> {
     let delivery = report_delivery.then(|| plan.delivery().as_str().to_owned());
     let tool_call_id = lifecycle.tool_call_id().to_owned();
     let receipt_for =
@@ -620,10 +719,10 @@ async fn commit_once(
                 crate::tool_call_lifecycle::publish_background_receipt_in_txn(
                     txn,
                     binding,
-                    &serde_json::to_string(&receipt)?,
+                    &serde_json::to_string(&receipt).map_err(anyhow::Error::from)?,
                 )
                 .await?;
-                Ok::<_, anyhow::Error>((receipt, started_at))
+                Ok::<_, CommitError>((receipt, started_at))
             })
         })
         .await?;
@@ -635,15 +734,35 @@ async fn commit_once(
 /// transaction. It writes no tool row.
 pub(crate) async fn stage_planned_write_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    _cause: &SessionMessageCause,
+    cause: &SessionMessageCause,
     plan: &Plan,
-) -> Result<crate::lifecycle::EnqueuedAgentRequest> {
+) -> std::result::Result<crate::lifecycle::EnqueuedAgentRequest, CommitError> {
+    if plan.interrupt_before_publish {
+        let create = match &plan.write {
+            PlannedWrite::Request { create, .. } | PlannedWrite::Goal { create, .. } => create,
+        };
+        let active = crate::interrupt::interrupt_active_session_in_txn(
+            txn,
+            &create.session_id,
+            &create.node_did,
+            Some(create.requester_did.as_str()),
+        )
+        .await?;
+        if active.is_none() && create.node_did == cause.caller_node_did {
+            crate::goal::pause_goal_for_interrupt_in_txn(txn, &create.node_did, &create.session_id)
+                .await?;
+        }
+    }
     match &plan.write {
         PlannedWrite::Request { create, .. } => {
             ensure_planned_hop_current(txn, create).await?;
             let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
             let response = txn.execute(&mutation).await?;
-            let doc_id = crate::graphql::created_doc_id(&response, "AgentRequest")?;
+            let doc_id = crate::graphql::created_doc_id(&response, "AgentRequest")
+                .map_err(anyhow::Error::from)?;
+            if let Some(expected_head) = &plan.steer_head {
+                validate_steer_in_txn(txn, create, &doc_id, expected_head.as_deref()).await??;
+            }
             Ok(crate::lifecycle::EnqueuedAgentRequest {
                 doc_id,
                 request_id: create.request_id.clone(),
@@ -656,7 +775,7 @@ pub(crate) async fn stage_planned_write_in_txn(
             token_budget,
         } => {
             ensure_planned_hop_current(txn, create).await?;
-            crate::goal::stage_goal_backed_request_in_txn(
+            let enqueued = crate::goal::stage_goal_backed_request_in_txn(
                 txn,
                 &create.node_did,
                 &plan.session_id,
@@ -664,9 +783,58 @@ pub(crate) async fn stage_planned_write_in_txn(
                 *token_budget,
                 create,
             )
-            .await
+            .await?;
+            if let Some(expected_head) = &plan.steer_head {
+                validate_steer_in_txn(txn, create, &enqueued.doc_id, expected_head.as_deref())
+                    .await??;
+            }
+            Ok(enqueued)
         }
     }
+}
+
+async fn validate_steer_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    create: &gents_protocol::request_admission::AgentRequestCreate,
+    candidate_doc_id: &str,
+    expected_head: Option<&str>,
+) -> Result<std::result::Result<(), crate::lifecycle::queue::SteerAdmissionRefusal>> {
+    let response = txn.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }},
+            purpose: {{ _eq: "normal" }}, lifecycle_state: {{ _in: ["claimed", "processing"] }} }}, limit: 2) {{
+            {} execution_lease_secs interrupt_requested_at
+        }} }}"#,
+        escape_graphql_string(&create.node_did),
+        escape_graphql_string(&create.session_id),
+        crate::request_admission::SIGNED_REQUEST_FIELDS,
+    )).await?;
+    let rows: Vec<gents_protocol::row::AgentRequestRow> =
+        serde_json::from_value(response["data"]["AgentRequest"].clone())?;
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "multiple active requests in target session"
+    );
+    anyhow::ensure!(
+        rows.first().and_then(|row| row.doc_id.as_deref()) == expected_head,
+        "the target session changed while the steer was planned"
+    );
+    let Some(row) = rows.into_iter().next() else {
+        return Ok(Ok(()));
+    };
+    let head = crate::watcher::AgentRequest::try_from(row)?;
+    let pending = crate::lifecycle::queue::pending_with_new_candidate_in_txn(
+        txn,
+        &create.node_did,
+        &create.session_id,
+        candidate_doc_id,
+    )
+    .await?;
+    Ok(crate::lifecycle::queue::steer_reachable(
+        &head,
+        pending,
+        candidate_doc_id,
+        chrono::Utc::now(),
+    ))
 }
 
 async fn ensure_planned_hop_current(
@@ -788,8 +956,11 @@ pub fn agent_interrupt_allowed(
     caller_session: &str,
     target_session: &str,
     target_origin_cause: Option<&str>,
+    same_node: bool,
+    task_triggered: bool,
 ) -> bool {
-    target_session != caller_session && target_origin_cause == Some(caller_session)
+    target_session != caller_session
+        && (target_origin_cause == Some(caller_session) || (same_node && task_triggered))
 }
 
 pub async fn interrupt_refusal(
@@ -797,15 +968,22 @@ pub async fn interrupt_refusal(
     caller: &SessionScope,
     target: &SessionScope,
 ) -> Result<Option<String>> {
-    let started_by =
-        crate::session_origin::started_by(&ConfigAccess::local(node.clone()), target).await?;
-    let cause = started_by
-        .filter(|link| link.scope == *caller)
-        .map(|link| link.scope.session_id);
-    Ok(
-        (!agent_interrupt_allowed(&caller.session_id, &target.session_id, cause.as_deref()))
-            .then(|| "only the session that started this session may interrupt it".to_owned()),
+    let started = crate::session_origin::verified_agent_new_creation(
+        &ConfigAccess::local(node.clone()),
+        target,
+        caller,
     )
+    .await?;
+    let cause = started.then_some(caller.session_id.clone());
+    let same_node = caller.node_did == target.node_did;
+    let task_triggered = if same_node && cause.is_none() {
+        crate::session_origin::task_triggered_opening(&ConfigAccess::local(node.clone()), target)
+            .await?
+    } else {
+        false
+    };
+    Ok((!agent_interrupt_allowed(&caller.session_id, &target.session_id, cause.as_deref(), same_node, task_triggered))
+        .then(|| "only the session that started this session or a same-node agent for a Task-triggered session may interrupt it".to_owned()))
 }
 
 pub async fn interrupt_session(
@@ -965,7 +1143,7 @@ pub(crate) async fn kill(
         )
         .await?
     {
-        let calling_request_id = calling_request_id(node, lifecycle).await?;
+        let calling_request_id = lifecycle.calling_request_id().await?;
         crate::background_completion::append_background_tool_completion(
             node,
             lifecycle.session_id(),
@@ -984,22 +1162,31 @@ pub(crate) async fn kill(
     Ok(KillOutcome::Cancelled)
 }
 
-pub(crate) async fn calling_request_id(
-    node: &EmbeddedNode,
-    lifecycle: &crate::tool_call_lifecycle::ToolCallLifecycle,
-) -> Result<String> {
-    if !lifecycle.request_id().trim().is_empty() {
-        return Ok(lifecycle.request_id().to_owned());
+#[cfg(test)]
+mod delivery_conformance {
+    use super::*;
+
+    #[test]
+    fn agent_delivery_matches_lean() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().agent_delivery_cases;
+        assert_eq!(cases.len(), 12);
+        for case in cases {
+            let mut input = serde_json::json!({
+                "session_id": "target", "message": "hello",
+                "delivery": case.delivery, "interrupt": case.interrupt
+            });
+            if case.interrupt.is_none() {
+                input.as_object_mut().unwrap().remove("interrupt");
+            }
+            let args: AgentMessageArgs = serde_json::from_value(input).unwrap();
+            let actual = args.delivery().ok().map(|mode| match mode {
+                AgentMessageDelivery::Queue => "queue",
+                AgentMessageDelivery::Steer => "steer",
+                AgentMessageDelivery::Interrupt => "interrupt",
+            });
+            assert_eq!(actual, case.expected.as_deref(), "{case:?}");
+        }
     }
-    let doc_id = lifecycle
-        .request_doc_id()
-        .context("session-message row lacks its calling request document")?;
-    Ok(
-        crate::request_binding::load_agent_request_by_doc_id(node, doc_id)
-            .await?
-            .context("session-message calling request disappeared")?
-            .request_id,
-    )
 }
 
 #[cfg(test)]
@@ -1010,7 +1197,7 @@ mod hop_tests {
     };
     use crate::tool_call_lifecycle::AwaitMode;
 
-    fn cause(
+    pub(super) fn cause(
         message: &crate::tool_call_lifecycle::admission_fixture::PublishedSessionMessage,
         caller_hop: u32,
     ) -> SessionMessageCause {
@@ -1018,6 +1205,7 @@ mod hop_tests {
             caller_node_did: message.admission.node_did.clone(),
             caller_agent_id: "caller-agent".to_owned(),
             caller_session_id: "caller-session".to_owned(),
+            caller_requester_did: None,
             caller_request_id: "caller-request".to_owned(),
             caller_request_doc_id: message.admission.tool.request_doc_id().unwrap().to_owned(),
             caller_hop,
@@ -1053,14 +1241,15 @@ mod hop_tests {
         let cases = &crate::lean_vocab_test::lean_contract_snapshot()
             .causal_hop_contract
             .write_cases;
-        assert!(cases.iter().any(|case| case.delivery == "steering"));
+        assert!(cases.iter().any(|case| case.delivery == "queue"));
+        assert!(cases.iter().any(|case| case.delivery == "steer"));
         for case in cases {
             let name = case.name.as_str();
             assert_eq!(case.own_hop, caused.request_hop, "{name}");
-            let state = if case.delivery == "steering" {
-                "processing"
-            } else {
+            let state = if case.delivery == "request" {
                 "pending"
+            } else {
+                "processing"
             };
             let response = node
                 .execute(&format!(
@@ -1074,10 +1263,21 @@ mod hop_tests {
                 content: "again".to_owned(),
                 goal: None,
             };
-            let planned = plan(&node, &cause, &target, body, None, false)
-                .await
-                .unwrap()
-                .unwrap();
+            let planned = plan_with_delivery(
+                &node,
+                &cause,
+                &target,
+                body,
+                None,
+                if case.delivery == "steer" {
+                    AgentMessageDelivery::Steer
+                } else {
+                    AgentMessageDelivery::Queue
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
             assert_eq!(planned.delivery().as_str(), case.delivery, "{name}");
             assert_eq!(planned.hop(), case.expected_hop, "{name}");
             let PlannedWrite::Request { create, .. } = &planned.write else {
@@ -1378,6 +1578,384 @@ mod agent_tools_tests {
     }
 
     #[tokio::test]
+    async fn steer_reachability_matches_lean() {
+        use gents_protocol::request_input::{
+            QueueDelivery, QueuePolicy, QueueSource, RequestQueue,
+        };
+        let (message, _, head) = started("steer-reachability-model").await;
+        let cases =
+            &crate::lean_vocab_test::lean_contract_snapshot().agent_steer_reachability_cases;
+        for case in cases {
+            let rows = case
+                .inputs
+                .iter()
+                .map(|item| {
+                    let (delivery, source, agent) = match item.kind.as_str() {
+                        "queued" => (QueueDelivery::Queue, QueueSource::User, false),
+                        "user_steer" => (QueueDelivery::Steer, QueueSource::User, false),
+                        "agent_steer" => (QueueDelivery::Steer, QueueSource::Steering, true),
+                        "blocked" => (
+                            QueueDelivery::Queue,
+                            QueueSource::BackgroundCompletion,
+                            false,
+                        ),
+                        other => panic!("unexpected modeled boundary kind: {other}"),
+                    };
+                    let mut input = head.input.clone();
+                    input.cwd = if item.compatible {
+                        head.input.cwd.clone()
+                    } else {
+                        Some("/incompatible".into())
+                    };
+                    input.queue = Some(RequestQueue {
+                        delivery,
+                        source,
+                        policy: QueuePolicy::Append,
+                        position: None,
+                        key: None,
+                        queued_after_request_id: agent.then(|| head.request_id.clone()),
+                        interrupted_request_id: None,
+                        background_completion_wake_version: None,
+                    });
+                    gents_protocol::row::AgentRequestRow {
+                        doc_id: Some(item.id.to_string()),
+                        request_id: item.id.to_string(),
+                        node_did: Some(head.node_did.clone()),
+                        session_id: Some(head.session_id.clone()),
+                        requester_did: head.requester_did.clone(),
+                        agent_id: Some(head.agent_id.clone()),
+                        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
+                        execution_origin: Some("interactive".into()),
+                        caused_by_parent_request_doc_id: agent.then(|| "parent".into()),
+                        caused_by_parent_tool_call_doc_id: agent.then(|| "tool".into()),
+                        input: Some(input),
+                        ..Default::default()
+                    }
+                })
+                .collect();
+            let actual = crate::lifecycle::queue::steer_reachable(
+                &head,
+                rows,
+                &case.target.to_string(),
+                chrono::Utc::now(),
+            )
+            .is_ok();
+            assert_eq!(actual, case.expected, "{case:?}");
+        }
+        message.admission.node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn interrupt_delivery_latches_only_the_prepublication_head() {
+        let cases = &crate::lean_vocab_test::lean_contract_snapshot().interrupt_delivery_cases;
+        for case in cases {
+            let (message, caller, caused) = started("interrupt-delivery-atomic").await;
+            let node = message.admission.node.clone();
+            set_state(
+                &node,
+                &caused.doc_id,
+                if case.planned.is_some() {
+                    "processing"
+                } else {
+                    "completed"
+                },
+            )
+            .await;
+            crate::goal::set_goal(
+                &node,
+                &caused.node_did,
+                &caused.session_id,
+                Some("interrupt goal"),
+                Some(crate::goal::GoalStatus::Active),
+                None,
+            )
+            .await
+            .unwrap();
+            let cause = super::hop_tests::cause(&message, caller.request_hop);
+            let target = SessionMessageTarget {
+                node_did: caused.node_did.clone(),
+                agent_id: caused.agent_id.clone(),
+                session_id: caused.session_id.clone(),
+            };
+            let plan = plan_with_delivery(
+                &node,
+                &cause,
+                &target,
+                RenderedBody {
+                    content: "deliver after interruption".to_owned(),
+                    goal: None,
+                },
+                None,
+                AgentMessageDelivery::Interrupt,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            let replacement = if case.active == Some(2) {
+                let replacement_plan = plan_with_delivery(
+                    &node,
+                    &cause,
+                    &target,
+                    RenderedBody {
+                        content: "replacement active request".to_owned(),
+                        goal: None,
+                    },
+                    None,
+                    AgentMessageDelivery::Queue,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                let receipt =
+                    ConfigAccess::transact_local_write(&node, None, "test.replacement", |txn| {
+                        let (cause, plan) = (&cause, &replacement_plan);
+                        Box::pin(async move { stage_planned_write_in_txn(txn, cause, plan).await })
+                    })
+                    .await
+                    .unwrap();
+                Some(receipt.doc_id)
+            } else {
+                None
+            };
+            set_state(
+                &node,
+                &caused.doc_id,
+                if case.active == Some(1) {
+                    "processing"
+                } else {
+                    "completed"
+                },
+            )
+            .await;
+            if let Some(doc_id) = &replacement {
+                set_state(&node, doc_id, "processing").await;
+            }
+            let receipt =
+                ConfigAccess::transact_local_write(&node, None, "test.interrupt_delivery", |txn| {
+                    let (cause, plan) = (&cause, &plan);
+                    Box::pin(async move { stage_planned_write_in_txn(txn, cause, plan).await })
+                })
+                .await
+                .unwrap();
+            let response = ConfigAccess::local(node.clone()).execute(&format!(
+                r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID interrupt_requested_at }} }}"#,
+                escape_graphql_string(&target.session_id),
+            )).await.unwrap();
+            let rows = response["data"]["AgentRequest"].as_array().unwrap();
+            let old = rows
+                .iter()
+                .find(|row| row["_docID"] == caused.doc_id)
+                .unwrap();
+            let new = rows
+                .iter()
+                .find(|row| row["_docID"] == receipt.doc_id)
+                .unwrap();
+            let second = replacement
+                .as_ref()
+                .map(|doc| rows.iter().find(|row| row["_docID"] == *doc).unwrap());
+            let actual = if old["interrupt_requested_at"].as_str().is_some() {
+                Some(1)
+            } else if second.is_some_and(|row| row["interrupt_requested_at"].as_str().is_some()) {
+                Some(2)
+            } else {
+                None
+            };
+            assert_eq!(actual, case.expected, "{case:?}, rows={rows:?}");
+            let goal =
+                crate::goal::load_canonical_goal(&node, &caused.node_did, &caused.session_id)
+                    .await
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(
+                goal.parsed_status() == Some(crate::goal::GoalStatus::Paused),
+                case.goal_paused,
+                "{case:?}"
+            );
+            assert!(
+                new["interrupt_requested_at"].is_null(),
+                "{case:?}, rows={rows:?}"
+            );
+            node.shutdown().await;
+            std::fs::remove_dir_all(&message.admission.path).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_steer_checks_the_physical_head_at_publication() {
+        let (message, caller, caused) = started("agent-steer-head-change").await;
+        let node = message.admission.node.clone();
+        set_state(&node, &caused.doc_id, "processing").await;
+        let cause = SessionMessageCause {
+            caller_node_did: caller.node_did.clone(),
+            caller_agent_id: caller.agent_id.clone(),
+            caller_session_id: caller.session_id.clone(),
+            caller_requester_did: caller.requester_did.clone(),
+            caller_request_id: caller.request_id.clone(),
+            caller_request_doc_id: caller.doc_id.clone(),
+            caller_hop: caller.request_hop,
+            tool_call_id: "steer-tool".to_owned(),
+            tool_call_doc_id: "steer-tool-doc".to_owned(),
+            correlation: None,
+        };
+        let target = SessionMessageTarget {
+            node_did: caused.node_did.clone(),
+            agent_id: caused.agent_id.clone(),
+            session_id: caused.session_id.clone(),
+        };
+        let make_plan = || async {
+            plan_with_delivery(
+                &node,
+                &cause,
+                &target,
+                RenderedBody {
+                    content: "change course".to_owned(),
+                    goal: None,
+                },
+                None,
+                AgentMessageDelivery::Steer,
+            )
+            .await
+            .unwrap()
+            .unwrap()
+        };
+        let stale = make_plan().await;
+        set_state(&node, &caused.doc_id, "completed").await;
+        let (cause_ref, stale_ref) = (&cause, &stale);
+        let result = ConfigAccess::transact_local_write(
+            &node,
+            None,
+            "test.steer.changed_head",
+            move |txn| {
+                Box::pin(async move { stage_planned_write_in_txn(txn, cause_ref, stale_ref).await })
+            },
+        )
+        .await;
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("changed while the steer was planned"));
+        set_state(&node, &caused.doc_id, "processing").await;
+        let queued = plan_with_delivery(
+            &node,
+            &cause,
+            &target,
+            RenderedBody {
+                content: "queued turn".to_owned(),
+                goal: None,
+            },
+            None,
+            AgentMessageDelivery::Queue,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let (cause_ref, queued_ref) = (&cause, &queued);
+        let queued_receipt = ConfigAccess::transact_local_write(
+            &node,
+            None,
+            "test.steer.queued_predecessor",
+            move |txn| {
+                Box::pin(
+                    async move { stage_planned_write_in_txn(txn, cause_ref, queued_ref).await },
+                )
+            },
+        )
+        .await
+        .unwrap();
+        let current = make_plan().await;
+        let (cause_ref, current_ref) = (&cause, &current);
+        let receipt =
+            ConfigAccess::transact_local_write(&node, None, "test.steer.compatible", move |txn| {
+                Box::pin(
+                    async move { stage_planned_write_in_txn(txn, cause_ref, current_ref).await },
+                )
+            })
+            .await
+            .expect("compatible steer is published");
+        let row = crate::request_binding::load_agent_request_by_doc_id(&node, &receipt.doc_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            row.input.queue.unwrap().delivery,
+            gents_protocol::request_input::QueueDelivery::Steer
+        );
+        let (node_did, session_id) = (&caused.node_did, &caused.session_id);
+        let snapshot = crate::config_client::ConfigAccess::transact_local_readonly(
+            &node,
+            None,
+            "test.steer.predecessor_order",
+            move |txn| {
+                Box::pin(async move {
+                    crate::lifecycle::queue::pending_rows_in_txn(txn, node_did, session_id).await
+                })
+            },
+        )
+        .await
+        .unwrap();
+        assert!(snapshot
+            .iter()
+            .any(|row| row.doc_id.as_deref() == Some(queued_receipt.doc_id.as_str())));
+        let candidate = snapshot
+            .iter()
+            .find(|row| row.doc_id.as_deref() == Some(receipt.doc_id.as_str()))
+            .unwrap();
+        let mut contexts = Vec::new();
+        let mut human = caused.clone();
+        human.requester_did = Some("did:test:human".to_owned());
+        contexts.push(("human requester", human));
+        let mut cwd = caused.clone();
+        cwd.input.cwd = Some("/different-cwd".to_owned());
+        contexts.push(("cwd", cwd));
+        let mut skills = caused.clone();
+        skills
+            .input
+            .selected_skill_ids
+            .push("different-skill".to_owned());
+        contexts.push(("skills", skills));
+        let mut workspace = caused.clone();
+        workspace.workspace_id = Some("different-workspace".to_owned());
+        contexts.push(("workspace", workspace));
+        let mut goal = caused.clone();
+        goal.input.goal_assignment = Some(gents_protocol::request_input::GoalAssignmentInput {
+            goal_id: "different-goal".to_owned(),
+            root_request_doc_id: None,
+        });
+        contexts.push(("goal", goal));
+        let modeled = crate::lean_vocab_test::lean_contract_snapshot()
+            .agent_steer_disposition_cases
+            .iter()
+            .find(|case| case.active && !case.compatible)
+            .unwrap();
+        for case in &crate::lean_vocab_test::lean_contract_snapshot().agent_steer_target_cases {
+            let mut head = caused.clone();
+            if case["planned_head"] != case["active_head"] {
+                head.request_id = "a-later-turn".to_owned();
+            }
+            assert_eq!(
+                crate::lifecycle::queue::steering_compatible(&head, candidate, chrono::Utc::now()),
+                case["expected"].as_bool().unwrap(),
+                "{case}"
+            );
+        }
+        for (name, head) in contexts {
+            let disposition = if crate::lifecycle::queue::steering_compatible(
+                &head,
+                candidate,
+                chrono::Utc::now(),
+            ) {
+                "steer"
+            } else {
+                "refuse"
+            };
+            assert_eq!(disposition, modeled.expected, "{name}");
+        }
+        node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+
+    #[tokio::test]
     async fn only_the_starting_session_may_interrupt() {
         let (message, caller, caused) = started("agent-interrupt-permission").await;
         let node = message.admission.node.clone();
@@ -1399,6 +1977,436 @@ mod agent_tools_tests {
             .await
             .unwrap()
             .is_some());
+        node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn signed_creation_waits_for_its_canonical_parent_evidence() {
+        let message = published_session_message(PublishedAdmissionOptions {
+            name: "delayed-agent-creation-evidence".to_owned(),
+            real_identity: true,
+            await_mode: AwaitMode::Background,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let node = message.admission.node.clone();
+        let caller = crate::request_binding::load_agent_request_by_doc_id(
+            &node,
+            message.admission.tool.request_doc_id().unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let caused = crate::request_binding::load_agent_request_by_doc_id(
+            &node,
+            &message.caused_request_doc_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let access = ConfigAccess::local(node.clone());
+        let call_doc = message.admission.tool.doc_id().unwrap();
+        let set_name = |name: &str| {
+            format!(
+            "mutation {{update_AgentToolCall(docID: \"{}\", input: {{tool_name: \"{}\"}}) {{_docID}}}}",
+            escape_graphql_string(call_doc), escape_graphql_string(name),
+        )
+        };
+        access
+            .write("test.hide_creation_cause", &set_name("agent_message"))
+            .await
+            .unwrap();
+        materialize_session(&node, &caused).await;
+        let target = SessionScope::of_request(&caused);
+        let source = SessionScope::of_request(&caller);
+        let session = crate::session_origin::load_session(
+            &access,
+            &target.session_id,
+            target.requester_did.as_deref(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(session.provenance.unwrap().creation_receipt.is_some());
+        assert!(interrupt_refusal(&node, &source, &target)
+            .await
+            .unwrap()
+            .is_some());
+        access
+            .write(
+                "test.restore_creation_cause",
+                &set_name(crate::toolset::AGENT_NEW_TOOL_NAME),
+            )
+            .await
+            .unwrap();
+        assert!(interrupt_refusal(&node, &source, &target)
+            .await
+            .unwrap()
+            .is_none());
+        let mut forged = caused.input.clone();
+        forged.session_creation =
+            Some(gents_protocol::request_input::SessionCreationIntent::PluginJob);
+        let mutation = format!("mutation($input: JSON) {{update_AgentRequest(docID: \"{}\", input: {{input: $input}}) {{_docID}}}}", escape_graphql_string(&caused.doc_id));
+        let rejected = access
+            .transact_write("test.forge_creation_intent", |txn| {
+                let mutation = &mutation;
+                let forged = &forged;
+                Box::pin(async move {
+                    txn.execute_with_variables(mutation, &serde_json::json!({"input": forged}))
+                        .await
+                })
+            })
+            .await
+            .unwrap_err();
+        assert!(
+            rejected.to_string().contains("immutable field"),
+            "{rejected:#}"
+        );
+        assert!(interrupt_refusal(&node, &source, &target)
+            .await
+            .unwrap()
+            .is_none());
+        node.shutdown().await;
+        std::fs::remove_dir_all(&message.admission.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() {
+        use crate::identity::NodeIdentity;
+        use crate::tool_call_lifecycle::admission_fixture::{
+            materialize_session_message, published_admission_with_owner, test_p2p_config,
+        };
+        use defra_p2p_adapter::P2pDocumentRequest;
+        use std::time::Duration;
+
+        let (mut source, owner) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: "remote-delayed-creation".into(),
+            real_identity: true,
+            p2p: true,
+            await_mode: AwaitMode::Background,
+            tool_name: Some(crate::toolset::AGENT_NEW_TOOL_NAME.into()),
+            start_running: false,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let target_dir = tempfile::tempdir().unwrap();
+        let target_identity =
+            crate::KeyIdentity::load_or_create(target_dir.path().join("target.key"), None).unwrap();
+        let target = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(target_dir.path())
+                .with_node_identity_did(target_identity.did())
+                .with_p2p(test_p2p_config())
+                .build()
+                .await
+                .unwrap(),
+        );
+        crate::ensure_runtime_schemas(&target).await.unwrap();
+        let receipt = materialize_session_message(
+            &source.node,
+            &owner,
+            &mut source.tool,
+            target_identity.did(),
+            "remote work",
+        )
+        .await
+        .unwrap();
+
+        async fn address(node: &EmbeddedNode) -> String {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if let Some(address) = node
+                        .p2p()
+                        .unwrap()
+                        .listen_addresses()
+                        .await
+                        .unwrap()
+                        .into_iter()
+                        .find(|a| a.starts_with("127.0.0.1:") || a.starts_with("[::1]:"))
+                    {
+                        break address;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            })
+            .await
+            .expect("P2P loopback address")
+        }
+        let source_address = address(&source.node).await;
+        let target_address = address(&target).await;
+        let mut source_connections = source.node.subscribe(&[events::EventName::PeerConnection]);
+        let mut target_connections = target.subscribe(&[events::EventName::PeerConnection]);
+        source
+            .node
+            .p2p()
+            .unwrap()
+            .connect_peer(&target_address)
+            .await
+            .unwrap();
+        for (node, connections) in [
+            (&source.node, &mut source_connections),
+            (&target, &mut target_connections),
+        ] {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if !node
+                        .p2p()
+                        .unwrap()
+                        .connected_peers()
+                        .await
+                        .unwrap()
+                        .is_empty()
+                    {
+                        break;
+                    }
+                    connections
+                        .recv()
+                        .await
+                        .expect("peer connection event stream");
+                }
+            })
+            .await
+            .expect("P2P peer connection");
+        }
+        for (node, peer_address) in [(&source.node, &target_address), (&target, &source_address)] {
+            node.p2p()
+                .unwrap()
+                .add_replicator(
+                    vec!["Network".into()],
+                    Some(peer_address),
+                    Default::default(),
+                    Vec::new(),
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+        let peer = target.p2p().unwrap().local_peer_id().await.unwrap();
+        async fn push(
+            source: &EmbeddedNode,
+            target: &Arc<EmbeddedNode>,
+            peer: &str,
+            collection: &str,
+            docs: &[String],
+        ) {
+            if docs.is_empty() {
+                return;
+            }
+            source
+                .p2p()
+                .unwrap()
+                .push_documents_to_peer(
+                    peer,
+                    docs.iter()
+                        .map(|doc_id| P2pDocumentRequest {
+                            collection: collection.into(),
+                            doc_id: doc_id.clone(),
+                        })
+                        .collect(),
+                )
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let mut present = true;
+                    for doc in docs {
+                        let query = format!(
+                            "{{{collection}(filter: {{_docID: {{_eq: \"{}\"}}}}) {{_docID}}}}",
+                            escape_graphql_string(doc)
+                        );
+                        let response = ConfigAccess::local(target.clone())
+                            .execute(&query)
+                            .await
+                            .unwrap();
+                        present &= response["data"][collection]
+                            .as_array()
+                            .is_some_and(|rows| rows.len() == 1);
+                    }
+                    if present {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            })
+            .await
+            .expect("exact P2P documents arrive");
+        }
+        push(
+            &source.node,
+            &target,
+            &peer,
+            "AgentRequest",
+            std::slice::from_ref(&receipt.request_doc_id),
+        )
+        .await;
+        let query = format!(
+            "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
+            escape_graphql_string(&receipt.request_doc_id),
+            crate::watcher::AGENT_REQUEST_FIELDS
+        );
+        let response = ConfigAccess::local(target.clone())
+            .execute(&query)
+            .await
+            .unwrap();
+        let row: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
+        let mut child = crate::lifecycle::RequestLifecycle::new_with_node_did(
+            target.clone(),
+            "general",
+            target_identity.did(),
+            row.try_into().unwrap(),
+            60,
+        );
+        assert_eq!(
+            child.claim().await.unwrap(),
+            crate::lifecycle::ClaimOutcome::Claimed
+        );
+        let caller = SessionScope::of_request(owner.request());
+        let child_scope = SessionScope::of_request(child.request());
+        assert!(ConfigAccess::local(target.clone())
+            .execute("{AgentToolCall {_docID}}")
+            .await
+            .unwrap()["data"]["AgentToolCall"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert!(interrupt_refusal(&target, &caller, &child_scope)
+            .await
+            .unwrap()
+            .is_some());
+
+        for collection in [
+            "AgentRequest",
+            "AgentToolCall",
+            "AgentMessage",
+            "AgentOutputSegment",
+        ] {
+            let response = ConfigAccess::local(source.node.clone())
+                .execute(&format!("{{{collection} {{_docID}}}}"))
+                .await
+                .unwrap();
+            let docs: Vec<String> = response["data"][collection]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|row| row["_docID"].as_str().map(str::to_owned))
+                .filter(|doc| doc != &receipt.request_doc_id)
+                .collect();
+            push(&source.node, &target, &peer, collection, &docs).await;
+        }
+        assert!(interrupt_refusal(&target, &caller, &child_scope)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            interrupt_session(&target, &child_scope).await.unwrap(),
+            Some(child.request().request_id.clone())
+        );
+        let observed = ConfigAccess::local(target.clone())
+            .execute(&format!(
+                "{{AgentRequest(docID: \"{}\") {{interrupt_requested_at}}}}",
+                escape_graphql_string(&receipt.request_doc_id),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            observed["data"]["AgentRequest"][0]["interrupt_requested_at"]
+                .as_str()
+                .is_some()
+        );
+        target.shutdown().await;
+        source.node.shutdown().await;
+        std::fs::remove_dir_all(&source.path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn forged_descriptive_provenance_and_altered_creation_receipt_cannot_grant_control() {
+        let (message, caller, caused) = started("agent-interrupt-receipt").await;
+        let node = message.admission.node.clone();
+        let caller_scope = SessionScope::of_request(&caller);
+        let target_scope = SessionScope::of_request(&caused);
+        let access = ConfigAccess::local(node.clone());
+        let session = crate::session_origin::load_session(
+            &access,
+            &target_scope.session_id,
+            target_scope.requester_did.as_deref(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let mut forged = session.provenance.unwrap();
+        assert!(
+            forged.creation_receipt.is_some(),
+            "newly materialized session has a receipt"
+        );
+        forged.creation_receipt.as_mut().unwrap().signature[0] ^= 1;
+        let mutation = format!(
+            r#"mutation($provenance: JSON) {{update_AgentSession(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}, input: {{provenance: $provenance}}) {{_docID}}}}"#,
+            escape_graphql_string(&target_scope.node_did),
+            escape_graphql_string(&target_scope.session_id),
+        );
+        access
+            .transact_write("test.corrupt_session_receipt", |txn| {
+                let mutation = &mutation;
+                let forged = &forged;
+                Box::pin(async move {
+                    txn.execute_with_variables(mutation, &serde_json::json!({"provenance": forged}))
+                        .await
+                })
+            })
+            .await
+            .unwrap();
+        assert!(interrupt_refusal(&node, &caller_scope, &target_scope)
+            .await
+            .unwrap()
+            .is_some());
+
+        let human = "unrelated-human-session";
+        let provenance = gents_protocol::session::SessionProvenance {
+            parent_request_doc_id: Some(caller.doc_id.clone()),
+            opening_request_doc_id: Some(caused.doc_id.clone()),
+            ..Default::default()
+        };
+        let created_at = chrono::Utc::now().to_rfc3339();
+        access.transact_write("test.forged_session_provenance", |txn| {
+            let provenance = &provenance;
+            let caller = &caller;
+            let created_at = &created_at;
+            Box::pin(async move {
+                txn.execute_with_variables(
+                    "mutation($input: AgentSessionMutationInputArg!) {create_AgentSession(input: $input) {_docID}}",
+                    &serde_json::json!({"input": {"node_did": caller.node_did, "session_id": human,
+                        "requester_did": caller.node_did, "agent_id": caller.agent_id,
+                        "created_at": created_at, "provenance": provenance}}),
+                ).await
+            })
+        }).await.unwrap();
+        let human_scope = SessionScope {
+            session_id: human.into(),
+            ..caller_scope.clone()
+        };
+        assert!(interrupt_refusal(&node, &caller_scope, &human_scope)
+            .await
+            .unwrap()
+            .is_some());
+        let lineage = crate::session_origin::lineage(&access, &caller_scope)
+            .await
+            .unwrap();
+        for scope in [&human_scope, &target_scope] {
+            assert!(
+                !lineage.started.iter().any(|link| &link.scope == scope),
+                "{scope:?}: a parent pointer or an altered receipt is not a verified starter"
+            );
+        }
+        assert_eq!(
+            crate::session_origin::started_by(&access, &human_scope)
+                .await
+                .unwrap(),
+            None
+        );
         node.shutdown().await;
         std::fs::remove_dir_all(&message.admission.path).unwrap();
     }
@@ -1439,6 +2447,7 @@ mod agent_tools_tests {
             caller_node_did: caller.node_did.clone(),
             caller_agent_id: "caller-agent".to_owned(),
             caller_session_id: "caller-session".to_owned(),
+            caller_requester_did: None,
             caller_request_id: caller.request_id.clone(),
             caller_request_doc_id: caller.doc_id.clone(),
             caller_hop: caller.request_hop,
@@ -1454,7 +2463,7 @@ mod agent_tools_tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(steering.delivery(), Delivery::Steering);
+        assert_eq!(steering.delivery(), Delivery::Queued);
         let steer = plan(&node, &cause, &target, body(), None, true)
             .await
             .unwrap()
@@ -1525,6 +2534,7 @@ mod agent_tools_tests {
                 caller_node_did: caller.node_did.clone(),
                 caller_agent_id: "caller-agent".to_owned(),
                 caller_session_id: "caller-session".to_owned(),
+                caller_requester_did: None,
                 caller_request_id: caller.request_id.clone(),
                 caller_request_doc_id: caller.doc_id.clone(),
                 caller_hop: caller.request_hop,
@@ -1862,6 +2872,7 @@ mod agent_tools_tests {
             caller_node_did: caller.node_did.clone(),
             caller_agent_id: "caller-agent".to_owned(),
             caller_session_id: "caller-session".to_owned(),
+            caller_requester_did: None,
             caller_request_id: caller.request_id.clone(),
             caller_request_doc_id: caller.doc_id.clone(),
             caller_hop: caller.request_hop,
@@ -1883,12 +2894,12 @@ mod agent_tools_tests {
         .await
         .unwrap()
         .unwrap();
-        assert_eq!(message_plan.delivery(), Delivery::Steering);
+        assert_eq!(message_plan.delivery(), Delivery::Queued);
         let delivered = commit(&node, &cause, &mut send_call, message_plan, true)
             .await
             .unwrap();
         assert_eq!(delivered.session_id, "correlated-worker");
-        assert_eq!(delivered.delivery.as_deref(), Some("steering"));
+        assert_eq!(delivered.delivery.as_deref(), Some("queue"));
         let writer = crate::streaming::DefraStreamWriter::new(
             node.clone(),
             &caller.node_did,
@@ -1912,9 +2923,29 @@ mod agent_tools_tests {
     /// keeps it when a later request reaches the session.
     #[tokio::test]
     async fn caused_session_records_its_opening_request() {
-        let (message, _caller, caused) = started("opening-provenance").await;
+        let (message, caller, caused) = started("opening-provenance").await;
         let node = message.admission.node.clone();
         let access = ConfigAccess::local(node.clone());
+        let signed = access
+            .execute(&format!(
+                "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
+                escape_graphql_string(&caused.doc_id),
+                crate::request_admission::SIGNED_REQUEST_FIELDS,
+            ))
+            .await
+            .unwrap();
+        let mut signed: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(signed["data"]["AgentRequest"][0].clone()).unwrap();
+        crate::request_admission::verify_request_receipt_signature(&signed).unwrap();
+        signed
+            .input
+            .as_mut()
+            .unwrap()
+            .started_by
+            .as_mut()
+            .unwrap()
+            .session_id = "forged".into();
+        assert!(crate::request_admission::verify_request_receipt_signature(&signed).is_err());
         let provenance = || async {
             crate::session_origin::load_session(
                 &access,
@@ -1928,6 +2959,18 @@ mod agent_tools_tests {
             .unwrap()
         };
         let recorded = provenance().await;
+        assert_eq!(
+            crate::session_origin::SessionScope::from(recorded.started_by.as_ref().unwrap()),
+            crate::session_origin::SessionScope::of_request(&caller)
+        );
+        let caller_scope = crate::session_origin::SessionScope::of_request(&caller);
+        let started = crate::session_origin::lineage(&access, &caller_scope)
+            .await
+            .unwrap()
+            .started;
+        assert!(started
+            .iter()
+            .any(|link| link.scope == crate::session_origin::SessionScope::of_request(&caused)));
         assert_eq!(
             recorded.parent_request_doc_id,
             caused.caused_by_parent_request_doc_id
@@ -1952,6 +2995,17 @@ mod agent_tools_tests {
         );
         without_call.caused_by_parent_request_doc_id = None;
         assert!(crate::lifecycle::materialize::created_session_provenance(&without_call).is_none());
+        without_call.caused_by_trigger_id = Some("task-trigger".to_owned());
+        without_call.caused_by_trigger_kind = Some("event".to_owned());
+        assert_eq!(
+            crate::lifecycle::materialize::created_session_provenance(&without_call)
+                .unwrap()
+                .opening_request_doc_id
+                .as_deref(),
+            Some(without_call.doc_id.as_str())
+        );
+        materialize_session(&node, &without_call).await;
+        assert_eq!(provenance().await, recorded);
         node.shutdown().await;
         std::fs::remove_dir_all(&message.admission.path).unwrap();
     }

@@ -91,7 +91,10 @@ async fn dispatch_with_lost_receipt(
         hook.on_tool_call(tool_name, None, call_id, &args),
     )
     .await;
-    assert!(fired, "{operation}: the receipt loss fired");
+    assert!(
+        fired,
+        "{call_id} ({operation}): the receipt loss fired; action={action:?}"
+    );
     let ToolCallHookAction::Skip { reason } = action else {
         panic!("{operation}: the call is answered by its receipt");
     };
@@ -241,5 +244,133 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
         steering["input"]["queue"]["queued_after_request_id"],
         caused_row.request_id.as_str()
     );
+    let (_, explicit) = dispatch_with_lost_receipt(
+        &hook,
+        "explicit-steer-call",
+        crate::toolset::AGENT_MESSAGE_TOOL_NAME,
+        json!({ "session_id": caused_row.session_id, "message": "interrupt the tool boundary", "delivery": "steer" }),
+        "session_message.commit_request",
+    ).await;
+    assert_eq!(explicit["input"]["queue"]["delivery"], "steer");
+    assert_eq!(
+        explicit["input"]["queue"]["queued_after_request_id"],
+        caused_row.request_id.as_str()
+    );
+    let (_, second) = dispatch_with_lost_receipt(
+        &hook,
+        "second-explicit-steer-call",
+        crate::toolset::AGENT_MESSAGE_TOOL_NAME,
+        json!({ "session_id": caused_row.session_id, "message": "and another correction", "delivery": "steer" }),
+        "session_message.commit_request",
+    ).await;
+    assert_eq!(second["input"]["queue"]["delivery"], "steer");
+    let ordered = crate::config_client::ConfigAccess::transact_local_readonly(
+        &node,
+        None,
+        "test.steer_order",
+        |txn| {
+            let did = &did;
+            let session_id = &caused_row.session_id;
+            Box::pin(
+                async move { crate::lifecycle::queue::pending_in_txn(txn, did, session_id).await },
+            )
+        },
+    )
+    .await
+    .unwrap();
+    let ids = ordered
+        .iter()
+        .filter_map(|row| row.doc_id.as_deref())
+        .collect::<Vec<_>>();
+    assert!(
+        ids.iter()
+            .position(|id| *id == explicit["_docID"].as_str().unwrap())
+            .unwrap()
+            < ids
+                .iter()
+                .position(|id| *id == second["_docID"].as_str().unwrap())
+                .unwrap()
+    );
+    let response = node.execute(&format!(
+        r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#,
+        caused_row.doc_id,
+    )).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let mut incompatible = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        "incompatible-head",
+        &did,
+        &did,
+        "general",
+        &caused_row.session_id,
+        "work in another directory",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
+    );
+    incompatible.input.cwd = Some("/different-cwd".to_owned());
+    crate::sign_agent_request_create(&identity, &mut incompatible)
+        .await
+        .unwrap();
+    let created = node
+        .execute(&incompatible.graphql_mutation().unwrap())
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let incompatible_doc = crate::graphql::created_doc_id(
+        &serde_json::json!({"data": created.data.unwrap()}),
+        "AgentRequest",
+    )
+    .unwrap();
+    let response = node.execute(&format!(
+        r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "processing" }}) {{ _docID }} }}"#,
+        incompatible_doc,
+    )).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let args =
+        json!({ "session_id": caused_row.session_id, "message": "bad scope", "delivery": "steer" })
+            .to_string();
+    accept_hook_tool_call(
+        &hook,
+        "incompatible-steer",
+        crate::toolset::AGENT_MESSAGE_TOOL_NAME,
+        &args,
+        None,
+    )
+    .await;
+    let action = hook
+        .on_tool_call(
+            crate::toolset::AGENT_MESSAGE_TOOL_NAME,
+            None,
+            "incompatible-steer",
+            &args,
+        )
+        .await;
+    let ToolCallHookAction::Skip { reason } = action else {
+        panic!("incompatible steer must be refused")
+    };
+    let refusal: serde_json::Value = serde_json::from_str(&reason).unwrap();
+    assert_eq!(
+        refusal["failure_class"], "invalid_tool_arguments",
+        "{reason}"
+    );
+    assert_eq!(refusal["path"], "/delivery", "{reason}");
+    assert_eq!(refusal["retryable"], false, "{reason}");
+    assert!(
+        refusal["message"]
+            .as_str()
+            .unwrap()
+            .contains("delivery=queue"),
+        "{reason}"
+    );
+    let previous = rows(
+        node.as_ref(),
+        &format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
+            steering["_docID"].as_str().unwrap()
+        ),
+        "AgentRequest",
+    )
+    .await;
+    assert_eq!(previous[0]["lifecycle_state"], "pending");
     node.shutdown().await;
 }

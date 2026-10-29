@@ -260,9 +260,22 @@ pub(crate) async fn consume_folded_in_txn(
             .position(|id| id == &consumption.head_doc_id)
             .and_then(|index| order.get(index + 1))
     } else {
-        order.first()
+        None
     };
-    let first = first_id.and_then(|id| rows.iter().find(|row| row.doc_id.as_ref() == Some(id)));
+    let first = if consumption.selected_at_claim {
+        first_id.and_then(|id| rows.iter().find(|row| row.doc_id.as_ref() == Some(id)))
+    } else {
+        let ordered = order
+            .iter()
+            .filter_map(|id| {
+                rows.iter()
+                    .find(|row| row.doc_id.as_ref() == Some(id))
+                    .cloned()
+            })
+            .collect::<Vec<_>>();
+        super::intake::boundary_candidate(&ordered)
+            .and_then(|candidate| rows.iter().find(|row| row.doc_id == candidate.doc_id))
+    };
     let Some(row) = first else {
         return Err(PendingInputChanged.into());
     };

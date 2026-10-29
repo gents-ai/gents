@@ -548,6 +548,7 @@ pub(crate) struct SessionMessageCause {
     pub(crate) caller_node_did: String,
     pub(crate) caller_agent_id: String,
     pub(crate) caller_session_id: String,
+    pub(crate) caller_requester_did: Option<String>,
     pub(crate) caller_request_id: String,
     pub(crate) caller_request_doc_id: String,
     pub(crate) caller_hop: u32,
@@ -650,6 +651,11 @@ pub(crate) async fn build_session_message_request_with_input(
         execution_origin: ExecutionOrigin::Interactive,
         created_at,
     };
+    input.started_by = Some(gents_protocol::session::SessionReference {
+        node_did: cause.caller_node_did.clone(),
+        session_id: cause.caller_session_id.clone(),
+        requester_did: cause.caller_requester_did.clone(),
+    });
     input.selected_skill_ids = prompt_selection.selected_skill_ids;
     input.initial_title = title
         .map(str::trim)
@@ -995,7 +1001,7 @@ async fn labeled_session_rows_in_txn(
 }
 
 /// The provenance a request records on the session its claim or refusal
-/// creates: its calling request and, when it names a calling tool call, the
+/// creates: its calling request and, for a calling tool call or automated trigger, the
 /// request itself as the session's opening request (Lean
 /// `AgentSession.Provenance.openingRequestDoc`, read by
 /// `DurableLineage.openingRequest`). `ensure_session_in_txn` keeps an
@@ -1004,13 +1010,16 @@ async fn labeled_session_rows_in_txn(
 pub(crate) fn created_session_provenance(
     request: &AgentRequest,
 ) -> Option<gents_protocol::session::SessionProvenance> {
-    let parent = request.caused_by_parent_request_doc_id.clone()?;
+    let parent = request.caused_by_parent_request_doc_id.clone();
+    let opening = request.caused_by_parent_tool_call_doc_id.is_some()
+        || request.has_automated_trigger_lineage();
+    if parent.is_none() && !opening {
+        return None;
+    }
     Some(gents_protocol::session::SessionProvenance {
-        parent_request_doc_id: Some(parent),
-        opening_request_doc_id: request
-            .caused_by_parent_tool_call_doc_id
-            .as_ref()
-            .map(|_| request.doc_id.clone()),
+        parent_request_doc_id: parent,
+        started_by: request.input.started_by.clone(),
+        opening_request_doc_id: opening.then(|| request.doc_id.clone()),
         ..Default::default()
     })
 }
@@ -1197,6 +1206,7 @@ mod session_message_tests {
             caller_node_did: PIN_FIXED_DID.to_owned(),
             caller_agent_id: "caller-agent".to_owned(),
             caller_session_id: "caller-session".to_owned(),
+            caller_requester_did: None,
             caller_request_id: "caller-request".to_owned(),
             caller_request_doc_id: "caller-request-doc".to_owned(),
             caller_hop: 0,
@@ -1216,6 +1226,15 @@ mod session_message_tests {
         };
         let carried = build(Some("/work/tree".to_owned())).await.unwrap();
         assert_eq!(carried.input.cwd.as_deref(), Some("/work/tree"));
+        let source = carried.input.started_by.as_ref().unwrap();
+        assert_eq!(source.node_did, cause.caller_node_did);
+        assert_eq!(source.session_id, cause.caller_session_id);
+        assert_eq!(source.requester_did, cause.caller_requester_did);
+        assert_eq!(
+            carried.input.reissued("physical-source").started_by,
+            carried.input.started_by
+        );
+        assert!(carried.input.for_fresh_session().started_by.is_none());
         let unset = build(None).await.unwrap();
         assert_eq!(unset.input.cwd, None);
     }
@@ -1228,6 +1247,7 @@ mod session_message_tests {
             caller_node_did: PIN_FIXED_DID.to_owned(),
             caller_agent_id: format!("{PIN_FIXED_DID}:default"),
             caller_session_id: "sender-s2".to_owned(),
+            caller_requester_did: None,
             caller_request_id: "caller-request".to_owned(),
             caller_request_doc_id: "caller-request-doc".to_owned(),
             caller_hop: 0,

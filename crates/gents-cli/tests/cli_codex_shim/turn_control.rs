@@ -1,5 +1,5 @@
 use super::*;
-use crate::support::mocks::fake_llm::{ChatAction, FakeLlm};
+use crate::support::mocks::fake_llm::{tool_call_sse_with_id, ChatAction, FakeLlm};
 use std::sync::Arc;
 
 fn has_exact_user_text(request: &Value, text: &str) -> bool {
@@ -10,6 +10,22 @@ fn has_exact_user_text(request: &Value, text: &str) -> bool {
                     || message["content"].as_array().is_some_and(|parts| {
                         parts.iter().any(|part| part["text"].as_str() == Some(text))
                     }))
+        })
+    })
+}
+
+/// A prompt delivered to a caused session reaches the provider behind the
+/// runtime's `[message agent:… cause:…]` sender header.
+fn has_session_message_body(request: &Value, body: &str) -> bool {
+    request["messages"].as_array().is_some_and(|messages| {
+        messages.iter().any(|message| {
+            message["role"] == "user"
+                && message["content"].as_str().is_some_and(|content| {
+                    content.starts_with("[message agent:")
+                        && content
+                            .strip_suffix(body)
+                            .is_some_and(|header| header.ends_with("]\n\n"))
+                })
         })
     })
 }
@@ -639,6 +655,56 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
     Ok(())
 }
 
+async fn wait_for_real_caused_request(graphql: &str, parent: &str) -> Result<(String, String)> {
+    let (parent_doc, _, _) = exact_request_binding(graphql, parent).await?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let response = graphql_query(graphql, &format!(
+            r#"{{ AgentRequest(filter: {{caused_by_parent_request_doc_id: {{_eq: "{}"}}}}) {{request_id session_id lifecycle_state admission_signature}} }}"#,
+            escape_graphql_string(&parent_doc),
+        )).await?;
+        for row in response["data"]["AgentRequest"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            if row["lifecycle_state"] == "processing"
+                && row["admission_signature"]
+                    .as_str()
+                    .is_some_and(|signature| !signature.is_empty())
+            {
+                let session = row["session_id"].as_str().context("caused session id")?;
+                let session_rows = graphql_query(graphql, &format!(
+                    r#"{{ AgentSession(filter: {{session_id: {{_eq: "{}"}}}}) {{provenance}} }}"#,
+                    escape_graphql_string(session),
+                )).await?;
+                if session_rows["data"]["AgentSession"]
+                    .as_array()
+                    .is_some_and(|rows| {
+                        rows.iter().any(|row| {
+                            row["provenance"]["parent_request_doc_id"] == parent_doc
+                                && row["provenance"]["creation_receipt"].is_object()
+                        })
+                    })
+                {
+                    return Ok((
+                        row["request_id"]
+                            .as_str()
+                            .context("caused request id")?
+                            .to_owned(),
+                        session.to_owned(),
+                    ));
+                }
+            }
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "signed caused request did not reach processing: {response}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -646,7 +712,35 @@ async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request()
     fs::create_dir_all(&home_dir)?;
 
     let model_name = format!("mock-codex-shim-caused-{}", Uuid::new_v4().simple());
-    let mock_endpoint = MockChatEndpoint::start_hanging(&model_name)?;
+    const PARENT: &str = "start caused work fixture";
+    const CHILD: &str = "start grandchild fixture";
+    const GRANDCHILD: &str = "hold grandchild fixture";
+    let mock_endpoint = FakeLlm::start(
+        &model_name,
+        None,
+        Arc::new(|request| {
+            let has_tool_result = request["messages"]
+                .as_array()
+                .is_some_and(|messages| messages.iter().any(|message| message["role"] == "tool"));
+            if has_session_message_body(request, GRANDCHILD) || has_tool_result {
+                ChatAction::Hang
+            } else if has_session_message_body(request, CHILD) {
+                ChatAction::Sse(tool_call_sse_with_id(
+                    "child-agent-new",
+                    "agent_new",
+                    &json!({"agent":"fixture-child", "prompt":GRANDCHILD}).to_string(),
+                ))
+            } else if has_exact_user_text(request, PARENT) {
+                ChatAction::Sse(tool_call_sse_with_id(
+                    "parent-agent-new",
+                    "agent_new",
+                    &json!({"agent":"fixture-child", "prompt":CHILD}).to_string(),
+                ))
+            } else {
+                ChatAction::Sse(completion_text_sse("fixture session"))
+            }
+        }),
+    )?;
 
     let server_port = allocate_port()?;
     let graphql = graphql_url(server_port);
@@ -660,6 +754,8 @@ async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request()
             &model_name,
             "--inference-url",
             mock_endpoint.endpoint(),
+            "--max-concurrent",
+            "4",
         ],
     )?;
     let node_did = node_did_from_init(&init)?;
@@ -688,6 +784,46 @@ async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request()
         ))
         .await?;
 
+    let agent_id = init["default_agent_id"]
+        .as_str()
+        .context("default agent id")?;
+    let agent = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{ Agent(filter: {{agent_id: {{_eq: "{}"}}}}) {{context_id}} }}"#,
+            escape_graphql_string(agent_id)
+        ),
+    )
+    .await?;
+    let context_id = agent["data"]["Agent"][0]["context_id"]
+        .as_str()
+        .context("agent context")?;
+    let context = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{ AgentContext(filter: {{context_id: {{_eq: "{}"}}}}) {{tools_id}} }}"#,
+            escape_graphql_string(context_id)
+        ),
+    )
+    .await?;
+    let tools_id = context["data"]["AgentContext"][0]["tools_id"]
+        .as_str()
+        .context("agent tools")?;
+    let mutation = format!(
+        r#"mutation {{
+        create_AgentTarget(input: {{target_id: "fixture-child", node_did: "{node}", target_node_did: "{node}", agent_id: "{agent}", name: "fixture-child"}}) {{_docID}}
+        update_Tools(filter: {{node_did: {{_eq: "{node}"}}, tools_id: {{_eq: "{tools}"}}}}, input: {{agents: {{enabled: true, target_ids: ["fixture-child"]}}}}) {{_docID}}
+    }}"#,
+        node = escape_graphql_string(&node_did),
+        agent = escape_graphql_string(agent_id),
+        tools = escape_graphql_string(tools_id)
+    );
+    let configured = graphql_query(&graphql, &mutation).await?;
+    doc_id_from_create(&configured, "add_AgentTarget")
+        .context("creating the caused-work target")?;
+    first_graphql_row(&configured, "update_Tools").context("enabling caused-work tools")?;
+    wait_for_runtime_quiescence(&graphql, &node_did, 2, Duration::from_millis(500)).await?;
+
     let (mut ws, _) = serve
         .capturing(async {
             connect_async(format!("ws://127.0.0.1:{shim_port}/"))
@@ -698,7 +834,7 @@ async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request()
     initialize_config_and_thread(&mut ws, &home_dir).await?;
     let thread_id = start_thread(&mut ws, &home_dir).await?;
 
-    let prompt = format!("start caused work {}", Uuid::new_v4().simple());
+    let prompt = PARENT.to_owned();
     send_client_request(
         &mut ws,
         codex::ClientRequest::TurnStart {
@@ -715,14 +851,13 @@ async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request()
     )
     .await?;
     let _: codex::TurnStartResponse = read_typed_response(&mut ws, request_id(230)).await?;
-    let (parent_request_id, session_id, agent_id) =
-        wait_for_request(&graphql, &node_did, &prompt).await?;
+    let (parent_request_id, session_id, _) = wait_for_request(&graphql, &node_did, &prompt).await?;
     assert_eq!(session_id, thread_id);
 
     let (caused_request_id, caused_thread_id) =
-        seed_caused_running_request(&graphql, &parent_request_id, &agent_id).await?;
+        wait_for_real_caused_request(&graphql, &parent_request_id).await?;
     let (grandchild_request_id, grandchild_thread_id) =
-        seed_caused_running_request(&graphql, &caused_request_id, &agent_id).await?;
+        wait_for_real_caused_request(&graphql, &caused_request_id).await?;
 
     send_client_request(
         &mut ws,
@@ -738,7 +873,7 @@ async fn codex_shim_turn_interrupt_on_caused_thread_interrupts_its_own_request()
     let refused = read_error_response(&mut ws, request_id(232)).await?;
     assert_eq!(
         refused.message,
-        "only the session that started this session may interrupt it"
+        "only the session that started this session or a same-node agent for a Task-triggered session may interrupt it"
     );
 
     send_client_request(
