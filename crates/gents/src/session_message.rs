@@ -2016,7 +2016,7 @@ mod agent_tools_tests {
             .await
             .unwrap();
         assert_eq!(delivered.session_id, "correlated-worker");
-        assert_eq!(delivered.delivery.as_deref(), Some("steering"));
+        assert_eq!(delivered.delivery.as_deref(), Some("queued"));
         let writer = crate::streaming::DefraStreamWriter::new(
             node.clone(),
             &caller.node_did,
