@@ -16,6 +16,7 @@ private def hookJson (h : TaskHook) : String :=
   "{\"hook_id\":" ++ jsonString h.hookId ++
     ",\"phase\":" ++ jsonString (phaseString h.phase) ++
     ",\"command\":" ++ jsonStringArray h.command ++
+    ",\"skip_exit_codes\":" ++ jsonArray (h.skipExitCodes.map toString) ++
     ",\"timeout_secs\":" ++ (h.timeoutSecs.map toString).getD "null" ++
     ",\"effective_timeout_secs\":" ++ toString h.effectiveTimeout ++ "}"
 
@@ -139,7 +140,7 @@ structure RunCase where
   deriving Repr
 
 private def runOf (c : RunCase) : RunResult :=
-  runTask c.hooks
+  runTaskWithSkips c.hooks
     (ownershipCheckedExec (fun h => !c.revoked.contains h.hookId) (scriptedExec c.script))
     c.agent
 
@@ -154,6 +155,21 @@ def runCases : List RunCase :=
     , hooks := fullTask, script := [], agent := .success
     , expectedOutcome := .success, expectedFinalOutcome := .success
     , expectedAgentRan := true }
+  , { name := "configured_before_exit_skips_agent_and_runs_cleanup"
+    , hooks := [{ before "prepare" with skipExitCodes := [10] }, afterFailure "report", cleanup "sweep"]
+    , script := [⟨"prepare", .exited 10⟩], agent := .success
+    , expectedOutcome := .success, expectedFinalOutcome := .success
+    , expectedAgentRan := false }
+  , { name := "configured_skip_still_reports_cleanup_failure"
+    , hooks := [{ before "prepare" with skipExitCodes := [10] }, cleanup "sweep"]
+    , script := [⟨"prepare", .exited 10⟩, failed "sweep"], agent := .success
+    , expectedOutcome := .success, expectedFinalOutcome := .failure (.hook "sweep")
+    , expectedAgentRan := false }
+  , { name := "unconfigured_before_exit_remains_failure"
+    , hooks := [{ before "prepare" with skipExitCodes := [10] }, afterFailure "report", cleanup "sweep"]
+    , script := [⟨"prepare", .exited 11⟩], agent := .success
+    , expectedOutcome := .failure (.hook "prepare"), expectedFinalOutcome := .failure (.hook "prepare")
+    , expectedAgentRan := false }
   , { name := "revoked_between_before_hooks_refuses_the_next_launch"
     , hooks := [before "prepare", before "second", cleanup "sweep"]
     , script := [], revoked := ["second", "sweep"], agent := .success

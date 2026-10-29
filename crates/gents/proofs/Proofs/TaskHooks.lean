@@ -27,6 +27,7 @@ structure TaskHook where
   phase : HookPhase
   command : List String
   timeoutSecs : Option Int := none
+  skipExitCodes : List Int := []
   deriving DecidableEq, Repr
 def defaultHookTimeoutSecs : Nat := 120
 /-- Largest admitted explicit timeout (one day). Admission bounds the timeout
@@ -328,11 +329,13 @@ def runTask (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) : Ru
 before phase: the agent and both ordinary after phases are not run. Cleanup
 retains the same obligations and can still make the final outcome fail. -/
 def runTaskWithSkips (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult)
-    (skipCodes : String → List Int) : RunResult :=
+    : RunResult :=
   let before := runPhase (hooksOfPhase hooks .before) exec
   match before.find? (fun a => !a.result.succeeded) with
   | some attempt =>
-    if beforeDecision (skipCodes attempt.hookId) attempt.result = .skip then
+    let codes := ((hooks.find? (fun h => h.hookId == attempt.hookId)).map
+      TaskHook.skipExitCodes).getD []
+    if beforeDecision codes attempt.result = .skip then
       { beforeAttempted := before,
         finallyAttempted := runFinally (hooksOfPhase hooks .finally) exec }
     else runTask hooks exec agent
@@ -340,14 +343,15 @@ def runTaskWithSkips (hooks : List TaskHook) (exec : HookExec) (agent : AgentRes
 
 theorem configured_skip_omits_agent_and_after_phases
     (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult)
-    (codes : String → List Int) (attempt : HookAttempt)
+    (attempt : HookAttempt)
     (found : (runPhase (hooksOfPhase hooks .before) exec).find?
       (fun a => !a.result.succeeded) = some attempt)
-    (skip : beforeDecision (codes attempt.hookId) attempt.result = .skip) :
-    (runTaskWithSkips hooks exec agent codes).agentResult = none ∧
-    (runTaskWithSkips hooks exec agent codes).afterSuccessAttempted = [] ∧
-    (runTaskWithSkips hooks exec agent codes).afterFailureAttempted = [] ∧
-    (runTaskWithSkips hooks exec agent codes).finallyAttempted =
+    (skip : beforeDecision (((hooks.find? (fun h => h.hookId == attempt.hookId)).map
+      TaskHook.skipExitCodes).getD []) attempt.result = .skip) :
+    (runTaskWithSkips hooks exec agent).agentResult = none ∧
+    (runTaskWithSkips hooks exec agent).afterSuccessAttempted = [] ∧
+    (runTaskWithSkips hooks exec agent).afterFailureAttempted = [] ∧
+    (runTaskWithSkips hooks exec agent).finallyAttempted =
       runFinally (hooksOfPhase hooks .finally) exec := by
   simp [runTaskWithSkips, found, skip]
 
