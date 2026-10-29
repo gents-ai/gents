@@ -324,6 +324,33 @@ def runTask (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) : Ru
         outcome := .failure .agent,
         afterFailureAttempted := runPhase (hooksOfPhase hooks .afterFailure) exec }
 
+/-- A configured skip is a successful terminal decision, not a successful
+before phase: the agent and both ordinary after phases are not run. Cleanup
+retains the same obligations and can still make the final outcome fail. -/
+def runTaskWithSkips (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult)
+    (skipCodes : String → List Int) : RunResult :=
+  let before := runPhase (hooksOfPhase hooks .before) exec
+  match before.find? (fun a => !a.result.succeeded) with
+  | some attempt =>
+    if beforeDecision (skipCodes attempt.hookId) attempt.result = .skip then
+      { beforeAttempted := before,
+        finallyAttempted := runFinally (hooksOfPhase hooks .finally) exec }
+    else runTask hooks exec agent
+  | none => runTask hooks exec agent
+
+theorem configured_skip_omits_agent_and_after_phases
+    (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult)
+    (codes : String → List Int) (attempt : HookAttempt)
+    (found : (runPhase (hooksOfPhase hooks .before) exec).find?
+      (fun a => !a.result.succeeded) = some attempt)
+    (skip : beforeDecision (codes attempt.hookId) attempt.result = .skip) :
+    (runTaskWithSkips hooks exec agent codes).agentResult = none ∧
+    (runTaskWithSkips hooks exec agent codes).afterSuccessAttempted = [] ∧
+    (runTaskWithSkips hooks exec agent codes).afterFailureAttempted = [] ∧
+    (runTaskWithSkips hooks exec agent codes).finallyAttempted =
+      runFinally (hooksOfPhase hooks .finally) exec := by
+  simp [runTaskWithSkips, found, skip]
+
 theorem runTask_finally_all (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) :
     (runTask hooks exec agent).finallyAttempted.map HookAttempt.hookId =
       (hooksOfPhase hooks .finally).map TaskHook.hookId := by
