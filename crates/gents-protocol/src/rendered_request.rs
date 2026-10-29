@@ -418,6 +418,9 @@ pub struct ContextAccounting {
     pub anchored_input_tokens: Option<usize>,
     pub context_window: usize,
     pub compaction_threshold_basis_points: u64,
+    /// The input that triggers compaction, in the units of
+    /// `estimated_input_tokens`: the threshold of the window, less the output
+    /// the request reserves.
     pub compaction_threshold_tokens: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub configured_max_output_tokens: Option<u64>,
@@ -426,6 +429,42 @@ pub struct ContextAccounting {
     pub compaction_reason: ContextCompactionReason,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pre_compaction_input_tokens: Option<usize>,
+}
+
+impl ContextAccounting {
+    /// `components` in the same units as `estimated_input_tokens`, so a
+    /// meter's segments add up to its total. Each is scaled by the request's
+    /// calibration and anchor; the rounding remainder goes to the largest.
+    pub fn calibrated_components(&self) -> ContextInputComponents {
+        let raw = self.components.estimated_input_tokens();
+        let target = self.estimated_input_tokens;
+        if raw == 0 || raw == target {
+            return self.components.clone();
+        }
+        let scale = |tokens: usize| {
+            usize::try_from(tokens as u128 * target as u128 / raw as u128).unwrap_or(usize::MAX)
+        };
+        let mut scaled = ContextInputComponents {
+            messages: scale(self.components.messages),
+            documents: scale(self.components.documents),
+            tool_schemas: scale(self.components.tool_schemas),
+            additional_parameters: scale(self.components.additional_parameters),
+            output_schema: scale(self.components.output_schema),
+        };
+        let remainder = target.saturating_sub(scaled.estimated_input_tokens());
+        let largest = [
+            &mut scaled.messages,
+            &mut scaled.documents,
+            &mut scaled.tool_schemas,
+            &mut scaled.additional_parameters,
+            &mut scaled.output_schema,
+        ]
+        .into_iter()
+        .max_by_key(|tokens| **tokens)
+        .expect("five components");
+        *largest = largest.saturating_add(remainder);
+        scaled
+    }
 }
 
 /// The request-local inputs that reconstruction must account for explicitly;
@@ -683,5 +722,53 @@ impl ProvenanceManifest {
         self.provider_family = family;
         self.provider_route_path_sha256 = path_sha256;
         self
+    }
+}
+
+#[cfg(test)]
+mod calibrated_components_tests {
+    use super::*;
+
+    fn accounting(components: ContextInputComponents, estimated: usize) -> ContextAccounting {
+        ContextAccounting {
+            accounting_version: 3,
+            turn_index: 0,
+            attempt: 0,
+            estimator: "test".into(),
+            components,
+            estimated_input_tokens: estimated,
+            raw_estimated_input_tokens: None,
+            input_calibration_basis_points: None,
+            anchored_input_tokens: None,
+            context_window: 1_000_000,
+            compaction_threshold_basis_points: 7_500,
+            compaction_threshold_tokens: 750_000,
+            configured_max_output_tokens: None,
+            effective_max_output_tokens: None,
+            compaction_reason: ContextCompactionReason::BelowThreshold,
+            pre_compaction_input_tokens: None,
+        }
+    }
+
+    #[test]
+    fn calibrated_segments_sum_to_the_calibrated_total() {
+        let components = ContextInputComponents {
+            messages: 1_001,
+            documents: 0,
+            tool_schemas: 333,
+            additional_parameters: 7,
+            output_schema: 0,
+        };
+        let scaled = accounting(components.clone(), 2_415).calibrated_components();
+        assert_eq!(scaled.estimated_input_tokens(), 2_415);
+        assert!(
+            scaled.messages > scaled.tool_schemas
+                && scaled.tool_schemas > scaled.additional_parameters
+        );
+        assert_eq!(scaled.documents, 0);
+        assert_eq!(
+            accounting(components.clone(), 1_341).calibrated_components(),
+            components
+        );
     }
 }

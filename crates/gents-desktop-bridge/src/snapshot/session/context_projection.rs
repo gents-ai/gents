@@ -295,6 +295,7 @@ pub fn attach_last_request_context(
         .ok()
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
         .unwrap_or_else(|| "unknown".to_string());
+    let components = accounting.calibrated_components();
     snapshot.context.last_request = Some(SessionRequestContextView {
         request_id,
         call_id,
@@ -314,11 +315,11 @@ pub fn attach_last_request_context(
         compaction_reason: reason,
         pre_compaction_input_tokens: accounting.pre_compaction_input_tokens.map(usize_to_i64),
         components: SessionContextComponentsView {
-            messages: usize_to_i64(accounting.components.messages),
-            documents: usize_to_i64(accounting.components.documents),
-            tool_schemas: usize_to_i64(accounting.components.tool_schemas),
-            additional_parameters: usize_to_i64(accounting.components.additional_parameters),
-            output_schema: usize_to_i64(accounting.components.output_schema),
+            messages: usize_to_i64(components.messages),
+            documents: usize_to_i64(components.documents),
+            tool_schemas: usize_to_i64(components.tool_schemas),
+            additional_parameters: usize_to_i64(components.additional_parameters),
+            output_schema: usize_to_i64(components.output_schema),
         },
     });
 }
