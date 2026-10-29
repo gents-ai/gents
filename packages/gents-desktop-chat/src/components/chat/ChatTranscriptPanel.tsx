@@ -161,7 +161,6 @@ export function ChatTranscriptPanel({
     return -1;
   }, [timelineItems]);
   const pinUser =
-    autoFollowTranscript &&
     !isTerminalTurnState(session?.turnState) &&
     latestUserIndex >= 0;
   const stickyUserItemKey = pinUser

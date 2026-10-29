@@ -152,6 +152,9 @@ test.each([false, true])(
     }
     fireEvent.scroll(panel);
     expect(screen.queryByText("latest user marker")).not.toBeNull();
+    expect(
+      screen.getByText("latest user marker").closest("li")?.className,
+    ).toBe("current-user-turn");
     const appended: RenderedTimelineItem = {
       kind: "assistantMessage",
       itemKey: "appended",
@@ -234,6 +237,9 @@ test.each([false, true])(
       />,
     );
     expect(screen.queryByText("latest user marker")).not.toBeNull();
+    expect(
+      screen.getByText("latest user marker").closest("li")?.className,
+    ).not.toBe("current-user-turn");
     rerender(
       <ChatTranscriptPanel
         selectedSessionId="other"
