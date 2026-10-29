@@ -1,8 +1,9 @@
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use serde_json::{Map, Value};
+use serde_json::{json, Value};
 
 use super::*;
+use crate::wire::RawObject;
 
 fn cc() -> CacheControl {
     CacheControl { ttl: None }
@@ -17,9 +18,7 @@ fn text(t: &str) -> ContentBlock {
 }
 
 fn raw(kind: &str) -> ContentBlock {
-    let mut m = Map::new();
-    m.insert("type".to_owned(), Value::from(kind));
-    ContentBlock::Raw(m)
+    ContentBlock::Raw(RawObject::from_json(&json!({ "type": kind }).to_string()).unwrap())
 }
 
 fn block_of(kind: &str, t: Option<&str>) -> ContentBlock {

@@ -4,12 +4,17 @@
 //! whitespace. `serde_json`'s compact writer escapes strings identically, so a
 //! struct whose fields follow Claude Code's key order, with `skip_serializing_if`
 //! for absent keys, produces the same bytes. Passthrough JSON (tool schemas and
-//! inputs) keeps its insertion order through serde_json's `preserve_order`. The
-//! request is serialized straight to bytes with no intermediate `Value`.
+//! inputs) is held as raw JSON text, and other blocks as ordered raw entries, so
+//! key order never depends on serde_json's map feature. The request is
+//! serialized straight to bytes with no intermediate `Value`.
 
+use std::fmt;
+
+use serde::de::{Deserializer, MapAccess, Visitor};
 use serde::ser::{SerializeMap, Serializer};
-use serde::Serialize;
-use serde_json::{Map, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
+use serde_json::Value;
 
 /// A failure producing the request bytes.
 #[derive(Debug, thiserror::Error)]
@@ -133,14 +138,14 @@ pub enum ToolResultContent {
 }
 
 /// A content block, serialized in the key order Claude Code builds it.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum ContentBlock {
     /// `{type:"text", text, citations?, cache_control?}`.
     Text {
         /// The text.
         text: String,
-        /// Citations, when present.
-        citations: Option<Vec<Value>>,
+        /// The citations JSON array, when present, kept as the caller's bytes.
+        citations: Option<Box<RawValue>>,
         /// The cache marker.
         cache_control: Option<CacheControl>,
     },
@@ -168,8 +173,8 @@ pub enum ContentBlock {
         id: String,
         /// The tool name, sent verbatim.
         name: String,
-        /// The call input, in insertion order.
-        input: Value,
+        /// The call input, kept as the caller's bytes.
+        input: Box<RawValue>,
         /// The cache marker.
         cache_control: Option<CacheControl>,
     },
@@ -197,7 +202,190 @@ pub enum ContentBlock {
         data: String,
     },
     /// Any other block, kept verbatim; a cache marker is appended as the last key.
-    Raw(Map<String, Value>),
+    Raw(RawObject),
+}
+
+/// A JSON object's entries in document order, each value kept as raw text.
+#[derive(Debug, Clone)]
+pub struct RawObject(Vec<(String, Box<RawValue>)>);
+
+struct RawObjectVisitor;
+
+impl<'de> Visitor<'de> for RawObjectVisitor {
+    type Value = RawObject;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a JSON object")
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<RawObject, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut entries: Vec<(String, Box<RawValue>)> =
+            Vec::with_capacity(map.size_hint().unwrap_or(0));
+        while let Some((key, value)) = map.next_entry::<String, Box<RawValue>>()? {
+            // JSON.parse keeps the last value at the first key's position.
+            // vertexia: linear scan, a block has a handful of keys; index the keys if wide objects appear
+            match entries.iter_mut().find(|(k, _)| *k == key) {
+                Some(slot) => slot.1 = value,
+                None => entries.push((key, value)),
+            }
+        }
+        Ok(RawObject(entries))
+    }
+}
+
+impl<'de> Deserialize<'de> for RawObject {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_map(RawObjectVisitor)
+    }
+}
+
+impl Serialize for RawObject {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut m = serializer.serialize_map(Some(self.0.len()))?;
+        for (k, v) in &self.0 {
+            m.serialize_entry(k, v)?;
+        }
+        m.end()
+    }
+}
+
+impl RawObject {
+    /// Parses a JSON object, keeping entry order and each value's bytes.
+    pub fn from_json(text: &str) -> Result<Self, WireError> {
+        Ok(serde_json::from_str(text)?)
+    }
+
+    /// The raw value of a key.
+    pub fn get(&self, key: &str) -> Option<&RawValue> {
+        self.0.iter().find(|(k, _)| k == key).map(|(_, v)| &**v)
+    }
+
+    /// The `type` entry when it is a JSON string without escapes.
+    pub fn kind(&self) -> Option<&str> {
+        serde_json::from_str(self.get("type")?.get()).ok()
+    }
+
+    fn set_cache_control(&mut self, cc: &CacheControl) {
+        // JS `{...block, cache_control}` places the key last.
+        self.0.retain(|(k, _)| k != "cache_control");
+        self.0.push(("cache_control".to_owned(), cc.to_raw()));
+    }
+}
+
+fn raw_eq(a: &RawValue, b: &RawValue) -> bool {
+    a.get() == b.get()
+}
+
+fn raw_opt_eq(a: &Option<Box<RawValue>>, b: &Option<Box<RawValue>>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => raw_eq(a, b),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+impl PartialEq for RawObject {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.len() == other.0.len()
+            && self
+                .0
+                .iter()
+                .zip(&other.0)
+                .all(|((ka, va), (kb, vb))| ka == kb && raw_eq(va, vb))
+    }
+}
+
+impl PartialEq for ContentBlock {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Self::Text {
+                    text: t1,
+                    citations: c1,
+                    cache_control: k1,
+                },
+                Self::Text {
+                    text: t2,
+                    citations: c2,
+                    cache_control: k2,
+                },
+            ) => t1 == t2 && raw_opt_eq(c1, c2) && k1 == k2,
+            (
+                Self::ToolUse {
+                    id: i1,
+                    name: n1,
+                    input: p1,
+                    cache_control: k1,
+                },
+                Self::ToolUse {
+                    id: i2,
+                    name: n2,
+                    input: p2,
+                    cache_control: k2,
+                },
+            ) => i1 == i2 && n1 == n2 && raw_eq(p1, p2) && k1 == k2,
+            (
+                Self::Image {
+                    media_type: m1,
+                    data: d1,
+                    cache_control: k1,
+                },
+                Self::Image {
+                    media_type: m2,
+                    data: d2,
+                    cache_control: k2,
+                },
+            )
+            | (
+                Self::Document {
+                    media_type: m1,
+                    data: d1,
+                    cache_control: k1,
+                },
+                Self::Document {
+                    media_type: m2,
+                    data: d2,
+                    cache_control: k2,
+                },
+            ) => m1 == m2 && d1 == d2 && k1 == k2,
+            (
+                Self::ToolResult {
+                    tool_use_id: i1,
+                    content: c1,
+                    is_error: e1,
+                    cache_control: k1,
+                },
+                Self::ToolResult {
+                    tool_use_id: i2,
+                    content: c2,
+                    is_error: e2,
+                    cache_control: k2,
+                },
+            ) => i1 == i2 && c1 == c2 && e1 == e2 && k1 == k2,
+            (
+                Self::Thinking {
+                    thinking: t1,
+                    signature: s1,
+                },
+                Self::Thinking {
+                    thinking: t2,
+                    signature: s2,
+                },
+            ) => t1 == t2 && s1 == s2,
+            (Self::RedactedThinking { data: d1 }, Self::RedactedThinking { data: d2 }) => d1 == d2,
+            (Self::Raw(a), Self::Raw(b)) => a == b,
+            _ => false,
+        }
+    }
 }
 
 /// The wire `source` object of an image or document block.
@@ -232,7 +420,13 @@ impl ContentBlock {
                 signature,
             } => thinking.len() + signature.len() + 48,
             Self::RedactedThinking { data } => data.len() + 48,
-            Self::Raw(map) => map.len() * 32 + 64,
+            Self::Raw(raw) => {
+                raw.0
+                    .iter()
+                    .map(|(k, v)| k.len() + v.get().len() + 4)
+                    .sum::<usize>()
+                    + 64
+            }
         }
     }
 
@@ -246,7 +440,7 @@ impl ContentBlock {
             Self::ToolResult { .. } => "tool_result",
             Self::Thinking { .. } => "thinking",
             Self::RedactedThinking { .. } => "redacted_thinking",
-            Self::Raw(map) => map.get("type").and_then(Value::as_str).unwrap_or(""),
+            Self::Raw(raw) => raw.kind().unwrap_or(""),
         }
     }
 
@@ -259,11 +453,7 @@ impl ContentBlock {
             | Self::ToolUse { cache_control, .. }
             | Self::ToolResult { cache_control, .. } => *cache_control = Some(cc),
             Self::Thinking { .. } | Self::RedactedThinking { .. } => return false,
-            Self::Raw(map) => {
-                // JS `{...block, cache_control}` places the key last.
-                map.shift_remove("cache_control");
-                map.insert("cache_control".to_owned(), cc.to_value());
-            }
+            Self::Raw(raw) => raw.set_cache_control(&cc),
         }
         true
     }
@@ -277,13 +467,24 @@ impl ContentBlock {
             | Self::ToolUse { cache_control, .. }
             | Self::ToolResult { cache_control, .. } => cache_control.as_ref(),
             Self::Thinking { .. } | Self::RedactedThinking { .. } => None,
-            Self::Raw(map) => match map.get("cache_control")?.get("ttl") {
-                None => Some(&CacheControl::FIVE_MINUTES),
-                Some(ttl) if ttl == "1h" => Some(&CacheControl::ONE_HOUR),
-                Some(_) => Some(&CacheControl::FIVE_MINUTES),
-            },
+            Self::Raw(raw) => {
+                let marker = raw.get("cache_control")?;
+                let one_hour = serde_json::from_str::<RawTtl<'_>>(marker.get())
+                    .is_ok_and(|m| m.ttl == Some("1h"));
+                Some(if one_hour {
+                    &CacheControl::ONE_HOUR
+                } else {
+                    &CacheControl::FIVE_MINUTES
+                })
+            }
         }
     }
+}
+
+#[derive(Deserialize)]
+struct RawTtl<'a> {
+    #[serde(borrow)]
+    ttl: Option<&'a str>,
 }
 
 impl Serialize for ContentBlock {
@@ -380,7 +581,7 @@ impl Serialize for ContentBlock {
                 m.serialize_entry("data", data)?;
                 m.end()
             }
-            Self::Raw(map) => map.serialize(serializer),
+            Self::Raw(raw) => raw.serialize(serializer),
         }
     }
 }
@@ -432,13 +633,17 @@ impl CacheControl {
         self.ttl == Some(CacheTtl::OneHour)
     }
 
-    fn to_value(&self) -> Value {
-        let mut m = Map::with_capacity(2);
-        m.insert("type".to_owned(), "ephemeral".into());
-        if self.one_hour() {
-            m.insert("ttl".to_owned(), "1h".into());
-        }
-        Value::Object(m)
+    fn to_raw(&self) -> Box<RawValue> {
+        RawValue::from_string(
+            if self.one_hour() {
+                r#"{"type":"ephemeral","ttl":"1h"}"#
+            } else {
+                r#"{"type":"ephemeral"}"#
+            }
+            .to_owned(),
+        )
+        // The two literals above are valid JSON.
+        .unwrap_or_else(|_| RawValue::NULL.to_owned())
     }
 }
 
@@ -496,14 +701,22 @@ impl Serialize for SystemBlock {
 /// eager_input_streaming?, defer_loading?, cache_control?, citations?}`; the
 /// optional keys are off by default on first party and are not modeled. Names
 /// are sent verbatim (Claude Code 2.1.311 does not prefix them).
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Tool {
     /// The tool name.
     pub name: String,
     /// The tool description.
     pub description: String,
-    /// The JSON schema, in insertion order.
-    pub input_schema: Value,
+    /// The JSON schema, kept as the caller's bytes.
+    pub input_schema: Box<RawValue>,
+}
+
+impl PartialEq for Tool {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.description == other.description
+            && raw_eq(&self.input_schema, &other.input_schema)
+    }
 }
 
 /// The request metadata.

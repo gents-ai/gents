@@ -109,7 +109,7 @@ fn exchange_body_is_exact() {
         expires_in: None,
         client_id: None,
     };
-    let post = exchange_request(&r);
+    let post = exchange_request(&r).unwrap();
     assert_eq!(post.url, "https://platform.claude.com/v1/oauth/token");
     assert_eq!(post.timeout_ms, 30_000);
     assert_eq!(
@@ -119,7 +119,7 @@ fn exchange_body_is_exact() {
     r.manual = true;
     r.expires_in = Some(31536000);
     assert_eq!(
-        exchange_request(&r).body,
+        exchange_request(&r).unwrap().body,
         r#"{"grant_type":"authorization_code","code":"C","redirect_uri":"https://platform.claude.com/oauth/code/callback","client_id":"9d1c250a-e61b-44d9-88ed-5944d1962f5e","code_verifier":"V","state":"S","expires_in":31536000}"#
     );
 }
@@ -132,7 +132,7 @@ fn refresh_body_is_exact() {
         expires_in: None,
         client_id: None,
     };
-    let post = refresh_request(&r);
+    let post = refresh_request(&r).unwrap();
     assert_eq!(post.timeout_ms, 30_000);
     assert_eq!(
         post.body,
@@ -143,14 +143,14 @@ fn refresh_body_is_exact() {
     r.expires_in = Some(60);
     r.client_id = Some("cid");
     assert_eq!(
-        refresh_request(&r).body,
+        refresh_request(&r).unwrap().body,
         r#"{"grant_type":"refresh_token","refresh_token":"R","client_id":"cid","scope":"user:inference","expires_in":60}"#
     );
 }
 
 #[test]
 fn revoke_body_is_exact() {
-    let post = revoke_request("R", None);
+    let post = revoke_request("R", None).unwrap();
     assert_eq!(
         post.url,
         "https://platform.claude.com/v1/oauth/token/revoke"
@@ -265,7 +265,8 @@ fn debug_output_redacts_secrets() {
         manual: false,
         expires_in: None,
         client_id: None,
-    });
+    })
+    .unwrap();
     let pair = pkce([7; 32]);
     let tokens = parse_token_response(
         br#"{"access_token":"AT-SECRET","refresh_token":"RT-SECRET","expires_in":1,"account":{"uuid":"u","email_address":"me@example.com"}}"#,

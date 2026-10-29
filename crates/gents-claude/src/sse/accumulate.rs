@@ -1,6 +1,11 @@
 //! The message accumulator: folds typed stream events into the final message,
-//! reproducing the Anthropic SDK stream accumulation (event order checks, key
-//! order preserved by in-place updates, tool input parsed at block stop).
+//! reproducing the Anthropic SDK stream accumulation (event order checks, tool
+//! input parsed at block stop).
+//!
+//! The snapshot is a `serde_json::Map` for typed access, not for
+//! re-serialization: without serde_json's `preserve_order` feature its key order
+//! is not the stream's. The exact streamed text of each tool input is kept
+//! beside it and read through [`Message::tool_input_raw`].
 //!
 //! Unlike the SDK, a tool block's `input` is not best-effort parsed while its
 //! JSON is still streaming; it keeps the `content_block_start` value until
@@ -58,7 +63,7 @@ fn set_or_remove(target: &mut Map<String, Value>, key: &str, value: Option<&Valu
             target.insert(key.to_owned(), v.clone());
         }
         None => {
-            target.shift_remove(key);
+            target.remove(key);
         }
     }
 }
@@ -177,7 +182,10 @@ impl MessageAccumulator {
     /// Ends the stream, returning the message if `message_stop` was applied.
     pub fn finish(self) -> Result<Message, AccumulateError> {
         match self.message {
-            Some(map) if self.stopped => Ok(Message { map }),
+            Some(map) if self.stopped => Ok(Message {
+                map,
+                tool_inputs: self.partial,
+            }),
             _ => Err(AccumulateError::IncompleteStream),
         }
     }
@@ -290,10 +298,12 @@ pub struct Usage {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Message {
     map: Map<String, Value>,
+    // Accumulated `partial_json` per content block; empty for non-streamed inputs.
+    tool_inputs: Vec<String>,
 }
 
 impl Message {
-    /// The message as a JSON object, key order as the SDK produces it.
+    /// The message as a JSON object for typed access; its key order is not the stream's.
     pub fn as_map(&self) -> &Map<String, Value> {
         &self.map
     }
@@ -301,6 +311,15 @@ impl Message {
     /// Consumes the message into its JSON object.
     pub fn into_map(self) -> Map<String, Value> {
         self.map
+    }
+
+    /// The exact streamed JSON text of a tool block's input, or `None` when the
+    /// input came only from `content_block_start`.
+    pub fn tool_input_raw(&self, index: usize) -> Option<&str> {
+        self.tool_inputs
+            .get(index)
+            .map(String::as_str)
+            .filter(|t| !t.is_empty())
     }
 
     fn str_field(&self, key: &str) -> Option<&str> {

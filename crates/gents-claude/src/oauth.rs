@@ -6,8 +6,8 @@ use std::fmt;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use url::Url;
 
@@ -62,6 +62,9 @@ pub enum OAuthError {
     /// An endpoint URL did not parse.
     #[error("the OAuth endpoint URL is invalid")]
     InvalidUrl,
+    /// A request body could not be encoded as JSON.
+    #[error("the OAuth request could not be encoded")]
+    Encode,
     /// The token response is not the expected JSON; names the failing category.
     #[error("the token response is malformed ({0})")]
     Malformed(&'static str),
@@ -230,41 +233,63 @@ pub struct ExchangeRequest<'a> {
     pub client_id: Option<&'a str>,
 }
 
-fn post(url: &str, body: Map<String, Value>, timeout_ms: u64) -> JsonPost {
-    JsonPost {
+fn post<T>(url: &str, body: &T, timeout_ms: u64) -> Result<JsonPost, OAuthError>
+where
+    T: Serialize,
+{
+    Ok(JsonPost {
         url: url.to_owned(),
-        // A map of strings and integers always serializes.
-        body: Value::Object(body).to_string(),
+        body: serde_json::to_string(body).map_err(|_| OAuthError::Encode)?,
         timeout_ms,
-    }
+    })
 }
 
-fn object<const N: usize>(entries: [(&str, Value); N]) -> Map<String, Value> {
-    entries
-        .into_iter()
-        .map(|(k, v)| (k.to_owned(), v))
-        .collect()
+#[derive(Serialize)]
+struct ExchangeBody<'a> {
+    grant_type: &'static str,
+    code: &'a str,
+    redirect_uri: &'a str,
+    client_id: &'a str,
+    code_verifier: &'a str,
+    state: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_in: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct RefreshBody<'a> {
+    grant_type: &'static str,
+    refresh_token: &'a str,
+    client_id: &'a str,
+    scope: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_in: Option<u64>,
+}
+
+#[derive(Serialize)]
+struct RevokeBody<'a> {
+    token: &'a str,
+    token_type_hint: &'static str,
+    client_id: &'a str,
 }
 
 /// The token exchange POST.
-pub fn exchange_request(request: &ExchangeRequest<'_>) -> JsonPost {
+pub fn exchange_request(request: &ExchangeRequest<'_>) -> Result<JsonPost, OAuthError> {
     let redirect = if request.manual {
         MANUAL_REDIRECT_URL.to_owned()
     } else {
         format!("http://localhost:{}/callback", request.port)
     };
-    let mut body = object([
-        ("grant_type", json!("authorization_code")),
-        ("code", json!(request.code)),
-        ("redirect_uri", json!(redirect)),
-        ("client_id", json!(request.client_id.unwrap_or(CLIENT_ID))),
-        ("code_verifier", json!(request.code_verifier)),
-        ("state", json!(request.state)),
-    ]);
-    if let Some(seconds) = request.expires_in {
-        body.insert("expires_in".into(), json!(seconds));
-    }
-    post(TOKEN_URL, body, EXCHANGE_TIMEOUT_MS)
+    let body = ExchangeBody {
+        grant_type: "authorization_code",
+        code: request.code,
+        redirect_uri: &redirect,
+        client_id: request.client_id.unwrap_or(CLIENT_ID),
+        code_verifier: request.code_verifier,
+        state: request.state,
+        expires_in: request.expires_in,
+    };
+    post(TOKEN_URL, &body, EXCHANGE_TIMEOUT_MS)
 }
 
 /// Inputs of the refresh call (`Lse`).
@@ -281,32 +306,33 @@ pub struct RefreshRequest<'a> {
 }
 
 /// The refresh POST.
-pub fn refresh_request(request: &RefreshRequest<'_>) -> JsonPost {
+pub fn refresh_request(request: &RefreshRequest<'_>) -> Result<JsonPost, OAuthError> {
     let scope = if request.scopes.is_empty() {
         REFRESH_SCOPES.join(" ")
     } else {
         request.scopes.join(" ")
     };
-    let mut body = object([
-        ("grant_type", json!("refresh_token")),
-        ("refresh_token", json!(request.refresh_token)),
-        ("client_id", json!(request.client_id.unwrap_or(CLIENT_ID))),
-        ("scope", json!(scope)),
-    ]);
-    if let Some(seconds) = request.expires_in {
-        body.insert("expires_in".into(), json!(seconds));
-    }
-    post(TOKEN_URL, body, EXCHANGE_TIMEOUT_MS)
+    let body = RefreshBody {
+        grant_type: "refresh_token",
+        refresh_token: request.refresh_token,
+        client_id: request.client_id.unwrap_or(CLIENT_ID),
+        scope: &scope,
+        expires_in: request.expires_in,
+    };
+    post(TOKEN_URL, &body, EXCHANGE_TIMEOUT_MS)
 }
 
 /// The revoke POST (`i3r`).
-pub fn revoke_request(refresh_token: &str, client_id: Option<&str>) -> JsonPost {
-    let body = object([
-        ("token", json!(refresh_token)),
-        ("token_type_hint", json!("refresh_token")),
-        ("client_id", json!(client_id.unwrap_or(CLIENT_ID))),
-    ]);
-    post(&format!("{TOKEN_URL}/revoke"), body, REVOKE_TIMEOUT_MS)
+pub fn revoke_request(
+    refresh_token: &str,
+    client_id: Option<&str>,
+) -> Result<JsonPost, OAuthError> {
+    let body = RevokeBody {
+        token: refresh_token,
+        token_type_hint: "refresh_token",
+        client_id: client_id.unwrap_or(CLIENT_ID),
+    };
+    post(&format!("{TOKEN_URL}/revoke"), &body, REVOKE_TIMEOUT_MS)
 }
 
 /// The account a token was issued to.

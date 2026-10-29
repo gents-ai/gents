@@ -390,10 +390,13 @@ fn realistic_stream_pins_exact_json() {
         stop_event(),
     ];
     let msg = run(&events).unwrap();
-    assert_eq!(
-        serde_json::to_string(msg.as_map()).unwrap(),
-        r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-x","content":[{"type":"thinking","thinking":"Hmm","signature":"sig"},{"type":"text","text":"Hello"},{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"ls"}}],"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":10,"cache_creation_input_tokens":5,"cache_read_input_tokens":7,"output_tokens":42}}"#
-    );
+    assert_eq!(msg.content()[0]["thinking"], "Hmm");
+    assert_eq!(msg.content()[0]["signature"], "sig");
+    assert_eq!(msg.content()[1]["text"], "Hello");
+    assert_eq!(msg.content()[2]["input"], json!({"command": "ls"}));
+    assert_eq!(msg.tool_input_raw(2), Some(r#"{"command":"ls"}"#));
+    assert_eq!(msg.tool_input_raw(1), None);
+    assert_eq!(msg.tool_input_raw(9), None);
     assert_eq!(msg.id(), Some("msg_1"));
     assert_eq!(msg.model(), Some("claude-x"));
     assert_eq!(msg.stop_reason(), Some("tool_use"));
@@ -409,6 +412,30 @@ fn realistic_stream_pins_exact_json() {
         (Some(10), Some(42), Some(7), Some(5))
     );
     assert_eq!(usage.raw.len(), 4);
+}
+
+#[test]
+fn tool_input_raw_keeps_the_models_key_order() {
+    let msg = run(&[
+        start_event(),
+        block_start(
+            0,
+            json!({"type":"tool_use","id":"toolu_1","name":"Bash","input":{}}),
+        ),
+        block_delta(
+            0,
+            json!({"type":"input_json_delta","partial_json":"{\"z\":1,"}),
+        ),
+        block_delta(
+            0,
+            json!({"type":"input_json_delta","partial_json":"\"a\": 2}"}),
+        ),
+        block_stop(0),
+        stop_event(),
+    ])
+    .unwrap();
+    assert_eq!(msg.tool_input_raw(0), Some("{\"z\":1,\"a\": 2}"));
+    assert_eq!(msg.content()[0]["input"], json!({"z": 1, "a": 2}));
 }
 
 #[test]

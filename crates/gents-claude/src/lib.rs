@@ -11,7 +11,7 @@
 //! (`PromptAssembly.ClaudeMap`, `ClaudeAttribution`, `ClaudeCache`,
 //! `AccountRotation`, `CompletionRetry`) and bound by their generated
 //! conformance cases. The default build performs no I/O and compiles for
-//! `wasm32-wasip1`.
+//! `wasm32-wasip1`; the `transport` feature adds the native HTTP/1.1 client.
 
 pub mod attribution;
 pub mod betas;
@@ -20,10 +20,14 @@ pub mod catalog;
 pub mod headers;
 pub mod metadata;
 pub mod oauth;
+pub mod pool;
 pub mod profile;
 pub mod ratelimit;
+pub mod request;
 pub mod retry;
 pub mod rotation;
 pub mod sse;
 pub mod system;
+#[cfg(feature = "transport")]
+pub mod transport;
 pub mod wire;

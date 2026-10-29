@@ -1,6 +1,10 @@
-use serde_json::{json, Map, Value};
+use serde_json::json;
 
 use super::*;
+
+fn raw(text: &str) -> Box<RawValue> {
+    RawValue::from_string(text.to_owned()).unwrap()
+}
 
 fn marked() -> Option<CacheControl> {
     Some(CacheControl { ttl: None })
@@ -92,7 +96,7 @@ fn tool_round_bytes() {
                 ContentBlock::ToolUse {
                     id: "toolu_1".to_owned(),
                     name: "Bash".to_owned(),
-                    input: json!({"z": 1, "a": {"y": [1, 2], "b": null}}),
+                    input: raw(r#"{"z":1,"a":{"y":[1,2],"b":null}}"#),
                     cache_control: None,
                 },
             ]),
@@ -150,22 +154,89 @@ fn tool_result_key_order_and_block_body() {
 
 #[test]
 fn raw_block_appends_cache_control_last() {
-    let mut map = Map::new();
-    map.insert("type".to_owned(), json!("server_tool_use"));
-    map.insert("id".to_owned(), json!("srvtoolu_1"));
-    map.insert(
-        "cache_control".to_owned(),
-        json!({"type": "ephemeral", "ttl": "1h"}),
+    let mut block = ContentBlock::Raw(
+        RawObject::from_json(
+            r#"{"type":"server_tool_use","id":"srvtoolu_1","cache_control":{"type":"ephemeral","ttl":"1h"},"name":"web_search"}"#,
+        )
+        .unwrap(),
     );
-    map.insert("name".to_owned(), json!("web_search"));
-    let mut block = ContentBlock::Raw(map);
     assert_eq!(block.kind(), "server_tool_use");
+    assert_eq!(
+        block.cache_control(),
+        Some(&CacheControl::for_ttl(CacheTtl::OneHour))
+    );
     assert!(block.set_cache_control(CacheControl { ttl: None }));
     assert_eq!(
         serde_json::to_string(&block).unwrap(),
         r#"{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","cache_control":{"type":"ephemeral"}}"#
     );
     assert_eq!(block.cache_control(), Some(&CacheControl { ttl: None }));
+    assert!(block.set_cache_control(CacheControl::for_ttl(CacheTtl::OneHour)));
+    assert_eq!(
+        block.cache_control(),
+        Some(&CacheControl::for_ttl(CacheTtl::OneHour))
+    );
+}
+
+#[test]
+fn raw_object_keeps_order_and_value_bytes() {
+    let text = r#"{"z":1,"type":"x","a":{"y":[1, 2],"b":null},"m":1.50}"#;
+    let raw = RawObject::from_json(text).unwrap();
+    assert_eq!(
+        serde_json::to_string(&raw).unwrap(),
+        r#"{"z":1,"type":"x","a":{"y":[1, 2],"b":null},"m":1.50}"#
+    );
+    assert_eq!(raw.kind(), Some("x"));
+    assert_eq!(raw.get("m").map(RawValue::get), Some("1.50"));
+    assert!(raw.get("nope").is_none());
+}
+
+#[test]
+fn raw_object_duplicate_key_keeps_last_value_at_first_position() {
+    let raw = RawObject::from_json(r#"{"a":1,"b":2,"a":3}"#).unwrap();
+    assert_eq!(serde_json::to_string(&raw).unwrap(), r#"{"a":3,"b":2}"#);
+}
+
+#[test]
+fn raw_object_rejects_non_objects() {
+    for text in ["[1]", "\"s\"", "1", "null", "{", ""] {
+        assert!(RawObject::from_json(text).is_err(), "{text}");
+    }
+}
+
+#[test]
+fn raw_object_without_string_type_has_no_kind() {
+    assert_eq!(RawObject::from_json(r#"{"type":1}"#).unwrap().kind(), None);
+    assert_eq!(RawObject::from_json("{}").unwrap().kind(), None);
+}
+
+#[test]
+fn passthrough_json_keeps_key_order() {
+    let input = raw(r#"{"z":1,"a":2}"#);
+    let tool_use = ContentBlock::ToolUse {
+        id: "t".to_owned(),
+        name: "n".to_owned(),
+        input: input.clone(),
+        cache_control: None,
+    };
+    assert_eq!(
+        serde_json::to_string(&tool_use).unwrap(),
+        r#"{"type":"tool_use","id":"t","name":"n","input":{"z":1,"a":2}}"#
+    );
+    let tool = Tool {
+        name: "n".to_owned(),
+        description: "d".to_owned(),
+        input_schema: input,
+    };
+    assert_eq!(
+        serde_json::to_string(&tool).unwrap(),
+        r#"{"name":"n","description":"d","input_schema":{"z":1,"a":2}}"#
+    );
+    let block = ContentBlock::Raw(RawObject::from_json(r#"{"z":1,"type":"q","a":2}"#).unwrap());
+    assert_eq!(
+        serde_json::to_string(&block).unwrap(),
+        r#"{"z":1,"type":"q","a":2}"#
+    );
 }
 
 #[test]
@@ -212,10 +283,9 @@ fn thinking_modes_bytes() {
 
 #[test]
 fn tool_schema_keeps_insertion_order() {
-    let schema: Value = serde_json::from_str(
+    let schema = raw(
         r#"{"type":"object","properties":{"zeta":{"type":"string"},"alpha":{"type":"integer"}},"required":["zeta"],"additionalProperties":false}"#,
-    )
-    .unwrap();
+    );
     let tool = Tool {
         name: "Read".to_owned(),
         description: "d".to_owned(),
@@ -249,12 +319,12 @@ fn media_blocks_and_optional_keys() {
     );
     let cited = ContentBlock::Text {
         text: "t".to_owned(),
-        citations: Some(vec![json!({"a": 1})]),
+        citations: Some(raw(r#"[{"z":1,"a":2}]"#)),
         cache_control: None,
     };
     assert_eq!(
         serde_json::to_string(&cited).unwrap(),
-        r#"{"type":"text","text":"t","citations":[{"a":1}]}"#
+        r#"{"type":"text","text":"t","citations":[{"z":1,"a":2}]}"#
     );
 }
 
