@@ -513,7 +513,7 @@ pub struct TimelineSessionRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RunTimelineEvent {
-    Request(TimelineRequestEvent),
+    Request(Box<TimelineRequestEvent>),
     RenderedRequest(TimelineRenderedRequestEvent),
     InferenceCall(TimelineInferenceCallEvent),
     Compaction(TimelineCompactionEvent),
@@ -1187,7 +1187,7 @@ fn request_completed(request: &TimelineRequestRow) -> bool {
 }
 
 fn push_request_event(events: &mut Vec<RunTimelineEvent>, request: &TimelineRequestRow) {
-    events.push(RunTimelineEvent::Request(TimelineRequestEvent {
+    events.push(RunTimelineEvent::Request(Box::new(TimelineRequestEvent {
         request_id: request.request_id.clone(),
         parent_request_id: request.caused_by_parent_request_id.clone(),
         parent_tool_call_id: request.caused_by_parent_tool_call_id.clone(),
@@ -1208,7 +1208,7 @@ fn push_request_event(events: &mut Vec<RunTimelineEvent>, request: &TimelineRequ
         execution_origin: request.execution_origin.clone(),
         timestamp: request.created_at.clone(),
         retry_summary: request.retry_summary.clone(),
-    }));
+    })));
 }
 
 pub fn rendered_request_event(row: &TimelineRenderedRequestRow) -> TimelineRenderedRequestEvent {

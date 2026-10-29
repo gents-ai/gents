@@ -81,14 +81,19 @@ async fn backend_check(
     let observation =
         crate::shared::load_backend_observation(access, &backend.node_did, &backend.backend_id)
             .await?;
+    let oauth = matches!(backend.auth, BackendAuth::NodeOAuth { .. });
+    let probe_status = observation.probe_status.as_deref().unwrap_or("unknown");
+    let offline_unprobed =
+        matches!(access, ConfigAccess::Local(_)) && probe_status == "unknown" && !oauth;
     anyhow::ensure!(
-        gents::document_configured_from_fields(
-            backend.enabled,
-            observation.probe_status.as_deref().unwrap_or("unknown")
-        ),
+        if offline_unprobed {
+            backend.enabled
+        } else {
+            gents::document_configured_from_fields(backend.enabled, probe_status)
+        },
         "backend is disabled or has no healthy probe observation"
     );
-    if matches!(backend.auth, BackendAuth::NodeOAuth { .. }) {
+    if oauth {
         return Ok(json!({"probe_status": observation.probe_status,
             "note": OAUTH_CREDENTIAL_DISCOVERY_NOTE, "discovered_models": []}));
     }
@@ -139,6 +144,85 @@ const OAUTH_CREDENTIAL_DISCOVERY_NOTE: &str =
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn enabled_backend_is_diagnosed_by_discovery_without_runtime_probe() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = Arc::new(AtomicUsize::new(0));
+        let app = axum::Router::new().route(
+            "/v1/models",
+            axum::routing::get({
+                let calls = calls.clone();
+                move || {
+                    let calls = calls.clone();
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        axum::Json(json!({"data":[{"id":"local-model"}]}))
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let node = Arc::new(
+            crate::shared::test_support::node_builder()
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let backend: InferenceBackend = serde_json::from_value(json!({
+            "node_did":"did:key:owner", "backend_id":"offline-backend", "name":"Local",
+            "provider_kind":"OpenAiCompatible", "endpoint":format!("http://{address}/v1"),
+            "auth":{"kind":"unauthenticated"}, "enabled":true,
+        }))
+        .unwrap();
+        let mut stored = serde_json::to_value(&backend).unwrap();
+        stored["probe_status"] = json!("unknown");
+        let input = gents_protocol::graphql::graphql_input_literal(&stored).unwrap();
+        let access = ConfigAccess::local(node.clone());
+        access
+            .write(
+                "test.diagnose.backend",
+                &format!("mutation {{ create_InferenceBackend(input: {input}) {{_docID}} }}"),
+            )
+            .await
+            .unwrap();
+        let report = backend_check(&access, &backend, &BTreeSet::from(["local-model"]))
+            .await
+            .unwrap();
+        assert_eq!(report["probe_status"], "unknown");
+        assert_eq!(report["discovered_models"], json!(["local-model"]));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let observed = crate::shared::load_backend_observation(
+            &access,
+            &backend.node_did,
+            &backend.backend_id,
+        )
+        .await
+        .unwrap();
+        assert_eq!(observed.probe_status.as_deref(), Some("unknown"));
+        let mut disabled = backend.clone();
+        disabled.enabled = false;
+        assert!(backend_check(&access, &disabled, &BTreeSet::new())
+            .await
+            .is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        server.abort();
+        let _ = server.await;
+        assert!(
+            backend_check(&access, &backend, &BTreeSet::from(["local-model"]))
+                .await
+                .is_err()
+        );
+        access.write("test.diagnose.unhealthy", r#"mutation { update_InferenceBackend(filter: {backend_id: {_eq: "offline-backend"}}, input: {probe_status: "unhealthy"}) {_docID} }"#).await.unwrap();
+        let error = backend_check(&access, &backend, &BTreeSet::new())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("no healthy probe observation"));
+        node.shutdown().await;
+    }
 
     #[tokio::test]
     async fn oauth_backend_uses_exact_owner_observation_without_discovery() {

@@ -114,10 +114,27 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
         .spawn()
         .context("spawning gents config apply through transaction proxy")?;
 
-    let staged_permit = tokio::time::timeout(TRANSACTION_STAGE_DEADLINE, mutation_staged.acquire())
-        .await
-        .context("config apply did not stage a transactional mutation")?
-        .context("transaction proxy closed before staging a mutation")?;
+    let staged_permit = match tokio::time::timeout(
+        TRANSACTION_STAGE_DEADLINE,
+        mutation_staged.acquire(),
+    )
+    .await
+    {
+        Ok(result) => result.context("transaction proxy closed before staging a mutation")?,
+        Err(elapsed) => {
+            if cli.try_wait()?.is_none() {
+                cli.kill().context("stopping unstaged config apply")?;
+            }
+            let output = cli
+                .wait_with_output()
+                .context("capturing unstaged config apply")?;
+            return Err(anyhow!(
+                "config apply did not stage a transactional mutation: {elapsed}\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            ));
+        }
+    };
     staged_permit.forget();
     if let Some(status) = cli
         .try_wait()
@@ -216,6 +233,8 @@ async fn forward_and_stall_transactional_mutation(
             })
             .is_some_and(|query| query.trim_start().starts_with("mutation"));
     let target = format!("{}{}", state.target_origin, uri);
+    let mut headers = headers;
+    headers.remove(axum::http::header::HOST);
     let upstream = match state
         .client
         .request(method, target)

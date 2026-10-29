@@ -312,11 +312,7 @@ export function appendRunnerArg(args: string[], flag: string, value?: string | n
 
 export function normalizePeerStatusUrl(serverAddress: string) {
   const trimmed = serverAddress.trim();
-  const url = new URL(
-    trimmed.startsWith("http://") || trimmed.startsWith("https://")
-      ? trimmed
-      : `http://${trimmed}`,
-  );
+  const url = new URL(/^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`);
   const path = url.pathname.replace(/\/+$/, "");
   if (path === "" || path === "/" || path === "/api/v0" || path === "/api/v0/graphql") {
     url.pathname = "/status";

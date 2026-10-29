@@ -1061,10 +1061,53 @@ async fn goal_held_task_defers_while_job_runs() -> Result<()> {
             assert_eq!(children.len(), 1, "{children:?}");
             break first.clone();
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "no delivery request after the job ended"
-        );
+        if std::time::Instant::now() >= deadline {
+            let state = graphql_query(
+                &g,
+                r#"{
+                    AgentRequest(limit: 100) { _docID request_id session_id lifecycle_state failure_reason caused_by_parent_request_id caused_by_parent_request_doc_id }
+                    AgentToolCall(limit: 100) { _docID request_id request_doc_id session_id tool_name tool_call_id lifecycle_state status await_mode tool_failure_class completion_notification_delivered_at }
+                    AgentMessage(limit: 100) { _docID session_id request_doc_id message_key sequence role }
+                    Goal(limit: 10) { session_id status assignment_root_request_doc_id continuation_sequence last_failure }
+                }"#,
+            )
+            .await;
+            let warnings = served._serve.captured_output().map(|(stdout, stderr)| {
+                let lines: Vec<_> = stdout
+                    .lines()
+                    .chain(stderr.lines())
+                    .filter(|line| line.contains("WARN") || line.contains("ERROR"))
+                    .collect();
+                lines[lines.len().saturating_sub(40)..]
+                    .iter()
+                    .map(|line| line.chars().take(1000).collect::<String>())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            });
+            let probe_home = served.home.clone();
+            let probe_address = watch_address.lock().unwrap().clone();
+            let probe_graphql = g.clone();
+            let probe = tokio::task::spawn_blocking(move || {
+                let node_home = probe_home.join(".gents");
+                let node_home = node_home.to_string_lossy();
+                run_cli_json(
+                    &probe_home,
+                    &[
+                        "job",
+                        "show",
+                        &probe_address,
+                        "--home",
+                        &node_home,
+                        "--graphql",
+                        &probe_graphql,
+                        "--output",
+                        "json",
+                    ],
+                )
+            })
+            .await;
+            panic!("no delivery request after the job ended; durable state: {state:?}; server warnings: {warnings:?}; job show: {probe:?}");
+        }
         tokio::time::sleep(Duration::from_millis(500)).await;
     };
     assert!(delivery["caused_by_trigger_kind"].is_null(), "{delivery}");

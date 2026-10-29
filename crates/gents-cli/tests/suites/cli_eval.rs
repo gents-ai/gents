@@ -21,17 +21,19 @@ fn eval_run_help_and_a_missing_definition_refuses_before_any_run_directory_exist
     }
 
     run_init_json(&home_dir, &[])?;
-    let pack = "mailbox";
-    let cell = format!("baseline={pack}:monitor");
+    let fixture = fixture_pack_dir("dependee_fixture");
+    let fixture_parent = fixture.parent().context("fixture pack directory")?;
+    let cell = "baseline=./dependee_fixture:fixture-dependee";
     let output = std::process::Command::new(cli_bin())
         .env("HOME", &home_dir)
         .env("RUST_LOG", "error")
+        .current_dir(fixture_parent)
         .args([
             "eval",
             "run",
             "missing-def",
             "--cell",
-            &cell,
+            cell,
             "--profile",
             "baseline=local",
             "--run-id",
