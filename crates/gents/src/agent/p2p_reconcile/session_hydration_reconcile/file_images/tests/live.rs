@@ -1101,3 +1101,12 @@ async fn independent_enrolled_reader_preserves_author_and_revoked_image_refusal_
     )
     .await?
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn independent_reader_revoked_after_delivery_requires_fresh_authorized_retry() -> Result<()> {
+    tokio::time::timeout(
+        Duration::from_secs(120),
+        exercise_revocation(PauseAt::Delivered, true, true),
+    )
+    .await?
+}
