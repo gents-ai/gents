@@ -6,7 +6,6 @@
     {
       "stage_id": "configure",
       "prompt": "I keep spare parts for a repair shop. Please set up Part records: sku (text), label (text), quantity (whole number), reorder (true/false). A SKU identifies one part, so don't allow duplicate SKUs. Give yourself tools limited to adding parts and looking them up by SKU; I'll send the first entries next.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "schema",
@@ -44,7 +43,6 @@
     {
       "stage_id": "use",
       "prompt": "Add SKU WASH-8, label '8 mm washers', quantity 24, reorder false; and SKU SEAL-2, label 'pump seals', quantity 3, reorder true. Then look up SEAL-2 and tell me its label and quantity.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",

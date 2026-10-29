@@ -1030,7 +1030,6 @@
     {
       "stage_id": "access",
       "prompt": "I keep application records in Shipment. Enable your general read access only to Shipment, and general create/update/delete access only to Shipment if your native tools support it. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -1051,7 +1050,6 @@
     {
       "stage_id": "read",
       "prompt": "How many queued shipments go to Oslo? Give the exact total across the collection. Then give the second page of five, ordered by priority ascending, including each reference and priority. Do not change any records.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "final_message_matches",

@@ -6,7 +6,6 @@
     {
       "stage_id": "configure",
       "prompt": "Create an assistant named Ledger for checking records. Give it its own instructions and tool permissions, appropriate for its role: read and summarize local records. It must not modify files or run shell commands. Use our existing model settings. Keep your own role and permissions unchanged.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "crew_spec_match",
@@ -222,7 +221,6 @@
     {
       "stage_id": "edit_prompt",
       "prompt": "One change for Ledger: require it to cite the file path for every finding. Update its existing instructions and keep the same permissions.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "crew_spec_match",

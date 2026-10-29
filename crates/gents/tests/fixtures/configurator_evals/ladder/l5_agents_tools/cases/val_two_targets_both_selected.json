@@ -6,7 +6,6 @@
     {
       "stage_id": "configure-two",
       "prompt": "Create two assistants using our current model: Researcher for finding facts, and Reviewer for checking conclusions. Make both available for you to delegate to.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -128,7 +127,6 @@
     {
       "stage_id": "delegate-to-beta",
       "prompt": "Ask Reviewer to reply with exactly BETA-777 and report its reply when it arrives.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",

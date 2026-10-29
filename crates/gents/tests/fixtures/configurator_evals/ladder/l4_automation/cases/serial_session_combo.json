@@ -23,7 +23,6 @@
     {
       "stage_id": "configure",
       "prompt": "Whenever a new ComboNote record arrives, handle its message yourself and acknowledge it. Process one at a time and keep the rest queued. Keep the app's standard run record so I can see whether each run succeeded or failed. Continue the work in our existing conversation eval-serial-session-combo-destination. The ComboNote records already have a message field. Set this up now; I will send records later.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -192,7 +191,6 @@
           "handoff_id": "serial-session-combo-1"
         }
       },
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "captured_fields_match",

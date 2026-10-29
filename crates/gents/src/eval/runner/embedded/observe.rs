@@ -80,13 +80,14 @@ pub struct RequestEvidence {
 }
 
 /// Read `AgentRequest { lifecycle_state session_id }` on each request change
-/// until the request is terminal or the deadline-and-grace window ends.
+/// until the request is terminal or the deadline-and-grace window ends; an
+/// absent deadline waits for the request's own terminal state.
 /// Terminal evidence requires a durable terminal state; interrupt intent and
 /// an expired grace leave `terminal_state` absent.
 pub async fn await_terminal(
     node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
-    deadline: Duration,
+    deadline: Option<Duration>,
     grace: Duration,
 ) -> Result<TerminalObservation> {
     await_terminal_with(node, request_id, deadline, grace, &NoHook).await
@@ -95,7 +96,7 @@ pub async fn await_terminal(
 pub async fn await_terminal_with(
     node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
-    deadline: Duration,
+    deadline: Option<Duration>,
     grace: Duration,
     hook: &dyn ObservationHook,
 ) -> Result<TerminalObservation> {
@@ -132,14 +133,21 @@ pub async fn await_terminal_with(
         }
         let elapsed = started.elapsed();
         hook.on_tick(elapsed).await;
-        if !interrupted_on_deadline && elapsed >= deadline {
+        if !interrupted_on_deadline && deadline.is_some_and(|deadline| elapsed >= deadline) {
             hook.on_interrupt_requested().await;
             crate::interrupt::interrupt_request(node, request_id)
                 .await
                 .context("interrupt request after evaluation deadline")?;
             interrupted_on_deadline = true;
         }
-        if interrupted_on_deadline && elapsed >= deadline.saturating_add(grace) {
+        let boundary = deadline.map(|deadline| {
+            if interrupted_on_deadline {
+                deadline.saturating_add(grace)
+            } else {
+                deadline
+            }
+        });
+        if interrupted_on_deadline && boundary.is_some_and(|boundary| elapsed >= boundary) {
             return Ok(TerminalObservation {
                 terminal_state,
                 session_id,
@@ -147,14 +155,18 @@ pub async fn await_terminal_with(
                 elapsed: started.elapsed(),
             });
         }
-        let boundary = if interrupted_on_deadline {
-            deadline.saturating_add(grace)
-        } else {
-            deadline
-        };
-        let remaining = boundary.saturating_sub(started.elapsed());
-        if let Ok(None) = tokio::time::timeout(remaining, changes.recv()).await {
-            tokio::time::sleep(remaining).await;
+        match boundary {
+            Some(boundary) => {
+                let remaining = boundary.saturating_sub(started.elapsed());
+                if let Ok(None) = tokio::time::timeout(remaining, changes.recv()).await {
+                    tokio::time::sleep(remaining).await;
+                }
+            }
+            None => {
+                if changes.recv().await.is_none() {
+                    anyhow::bail!("the request change stream closed before {request_id} ended");
+                }
+            }
         }
     }
 }
@@ -701,7 +713,7 @@ mod tests {
         let observed = await_terminal(
             &home.node,
             request_id,
-            Duration::from_secs(5),
+            Some(Duration::from_secs(5)),
             Duration::from_secs(1),
         )
         .await
@@ -778,7 +790,7 @@ mod tests {
                 .unwrap();
             let request_id = format!("req-unsettled-{state}");
             insert_request(&home, &request_id, state).await;
-            let observed = await_terminal(&home.node, &request_id, Duration::ZERO, Duration::ZERO)
+            let observed = await_terminal(&home.node, &request_id, Some(Duration::ZERO), Duration::ZERO)
                 .await
                 .unwrap();
             let stored = poll_request(&home.node, &request_id)
@@ -804,7 +816,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn await_terminal_wakes_on_the_request_change_before_its_deadline() {
+    async fn await_terminal_without_a_deadline_waits_for_the_request_change() {
         let home = EmbeddedHome::create_temp("observe-change").await.unwrap();
         let writer = async {
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -815,7 +827,7 @@ mod tests {
                 await_terminal(
                     &home.node,
                     "req-later",
-                    Duration::from_secs(60),
+                    None,
                     Duration::ZERO,
                 ),
                 writer,
@@ -838,7 +850,7 @@ mod tests {
         let observed = await_terminal(
             &home.node,
             "req-stuck",
-            Duration::from_millis(200),
+            Some(Duration::from_millis(200)),
             Duration::from_millis(300),
         )
         .await
@@ -884,7 +896,7 @@ mod tests {
         let observed = await_terminal_with(
             &home.node,
             "req-stuck",
-            Duration::from_millis(200),
+            Some(Duration::from_millis(200)),
             Duration::from_millis(300),
             &hook,
         )

@@ -11,7 +11,6 @@
     {
       "stage_id": "discover",
       "prompt": "I want a reviewer to handle overnight review jobs, without changing your settings. Check our model and limits and explain how you would arrange that. The job records are already available; do not start work or change anything yet.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",
@@ -138,7 +137,6 @@
     {
       "stage_id": "configure",
       "prompt": "Create Nightly Reviewer using the current model, with medium thinking effort, 25 turns, 120,000 total tokens, and 20 minutes per request. Whenever a new NightlyJob record arrives, have it review the job text. Leave your own settings alone; I will supply jobs later.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",
@@ -317,7 +315,6 @@
           "job": "nightly-digest"
         }
       },
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "captured_rows_count",

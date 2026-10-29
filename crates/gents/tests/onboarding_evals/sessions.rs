@@ -21,14 +21,14 @@ fn session_investigation_eval_pack_validates_all_splits_and_shipped_checks() {
     .unwrap();
     let definition = &config.eval_definitions[0];
     definition.validate().unwrap();
-    assert_eq!(definition.comparability_version, 6);
+    assert_eq!(definition.comparability_version, 7);
     let registry = CheckRegistry::builtin();
     for split in [EvalSplit::Train, EvalSplit::Validation, EvalSplit::HeldOut] {
         assert!(definition.cases.iter().any(|case| case.split == split));
     }
     for case in &definition.cases {
         for stage in &case.stages {
-            assert!(stage.deadline_secs <= 600);
+            assert_eq!(stage.deadline_secs, None);
             for check in &stage.checks {
                 assert!(
                     registry.get(&check.check).is_some(),

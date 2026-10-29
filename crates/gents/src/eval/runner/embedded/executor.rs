@@ -47,6 +47,10 @@ use crate::{Collection, ConfigAccess, DocumentRuntimeOptions, RuntimeSnapshotObs
 const GRACE: Duration = Duration::from_secs(30);
 
 const POLL: Duration = Duration::from_millis(250);
+/// How long a seed stage without its own deadline waits for a trigger to fire
+/// a request. No request exists yet, so no turn is bounded by it; a subject
+/// that never configured the trigger would otherwise hold the trial forever.
+const SEED_FIRE_WINDOW: Duration = Duration::from_secs(600);
 const LIVE_EVERY: Duration = Duration::from_secs(5);
 
 pub struct EmbeddedExecutor {
@@ -891,7 +895,8 @@ impl ObservedStage {
 enum StageSubmission {
     Submitted {
         request_id: String,
-        remaining: Duration,
+        /// Absent, the stage waits for the request's own terminal state.
+        remaining: Option<Duration>,
     },
     Failed(OutcomeKind),
 }
@@ -901,7 +906,7 @@ async fn observe_stage_terminal(
     cancel: &CancellationToken,
     runtime: &RunningRuntime,
     request_id: &str,
-    remaining: Duration,
+    remaining: Option<Duration>,
 ) -> (Result<TerminalObservation>, bool) {
     let watch_started = std::time::Instant::now();
     let stopped;
@@ -946,7 +951,7 @@ async fn submit_and_observe(
     ready: &watch::Receiver<Reconciled>,
 ) -> ObservedStage {
     let stage_started = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let deadline = Duration::from_secs(stage.deadline_secs);
+    let deadline = stage.deadline_secs.map(Duration::from_secs);
     let started = Instant::now();
     let submit = async {
         match &stage.seed {
@@ -1011,7 +1016,7 @@ async fn submit_and_observe(
 
     let settling = stage.settle && !stopped && !runtime.handle.is_finished() && observed.is_some();
     if settling {
-        let budget = deadline.saturating_sub(started.elapsed());
+        let budget = remaining_of(deadline, started);
         tokio::select! {
             biased;
             () = cancel.cancelled() => {}
@@ -1111,7 +1116,7 @@ async fn continue_until_done(
     home: &EmbeddedHome,
     locator: &TrialLocator,
     stage: &StageSpec,
-    deadline: Duration,
+    deadline: Option<Duration>,
     started: Instant,
 ) -> (u32, bool) {
     let Some(continuation) = &stage.continuation else {
@@ -1155,8 +1160,8 @@ async fn continue_until_done(
                 return (prods, true);
             }
         }
-        let remaining = deadline.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
+        let remaining = remaining_of(deadline, started);
+        if remaining.is_some_and(|remaining| remaining.is_zero()) {
             break;
         }
         let request_id = uuid::Uuid::new_v4().to_string();
@@ -1177,7 +1182,7 @@ async fn continue_until_done(
             () = cancel.cancelled() => break,
             _ = await_terminal(&home.node, &request_id, remaining, GRACE) => {}
         }
-        let remaining = deadline.saturating_sub(started.elapsed());
+        let remaining = remaining_of(deadline, started);
         tokio::select! {
             biased;
             () = cancel.cancelled() => break,
@@ -1194,7 +1199,13 @@ const SETTLE_QUIET: Duration = Duration::from_secs(60);
 
 const SETTLE_POLL: Duration = Duration::from_secs(2);
 
-async fn settle_home(node: &EmbeddedNode, budget: Duration) -> Result<bool> {
+/// What is left of an opt-in stage deadline; absent means unbounded.
+fn remaining_of(deadline: Option<Duration>, started: Instant) -> Option<Duration> {
+    deadline.map(|deadline| deadline.saturating_sub(started.elapsed()))
+}
+
+/// Absent `budget` waits until the home is quiet.
+async fn settle_home(node: &EmbeddedNode, budget: Option<Duration>) -> Result<bool> {
     let started = Instant::now();
     let mut quiet: Option<(Instant, usize)> = None;
     loop {
@@ -1208,10 +1219,11 @@ async fn settle_home(node: &EmbeddedNode, budget: Duration) -> Result<bool> {
         if quiet.is_some_and(|(since, _)| now.duration_since(since) >= SETTLE_QUIET) {
             return Ok(true);
         }
-        if started.elapsed() >= budget {
+        let left = remaining_of(budget, started);
+        if left.is_some_and(|left| left.is_zero()) {
             return Ok(false);
         }
-        tokio::time::sleep(SETTLE_POLL.min(budget.saturating_sub(started.elapsed()))).await;
+        tokio::time::sleep(left.map_or(SETTLE_POLL, |left| SETTLE_POLL.min(left))).await;
     }
 }
 async fn request_counts(node: &EmbeddedNode) -> Result<(usize, usize)> {
@@ -1390,7 +1402,7 @@ async fn interrupt_and_settle(
     crate::interrupt::interrupt_request(node, request_id)
         .await
         .context("interrupting a cancelled stage")?;
-    await_terminal(node, request_id, Duration::ZERO, GRACE).await
+    await_terminal(node, request_id, Some(Duration::ZERO), GRACE).await
 }
 
 async fn submit_stage(
@@ -1431,7 +1443,7 @@ async fn seed_and_await_fire(
     home: &EmbeddedHome,
     ready: &watch::Receiver<Reconciled>,
     seed: &FixtureDocument,
-    deadline: Duration,
+    deadline: Option<Duration>,
     trial_id: &str,
     stage_id: &str,
 ) -> Result<StageSubmission> {
@@ -1461,7 +1473,7 @@ async fn seed_and_await_fire(
         if let Some(request_id) = fired_request(&home.node, &doc_id).await? {
             return Ok(StageSubmission::Submitted {
                 request_id,
-                remaining: deadline.saturating_sub(started.elapsed()),
+                remaining: remaining_of(deadline, started),
             });
         }
         if let Some(kind) = trigger_failure(
@@ -1476,9 +1488,10 @@ async fn seed_and_await_fire(
         {
             return resolve_seed_failure(&home.node, &doc_id, kind, deadline, started).await;
         }
+        let fire_window = deadline.unwrap_or(SEED_FIRE_WINDOW);
         anyhow::ensure!(
-            started.elapsed() < deadline,
-            "no trigger fired a request within {deadline:?} of seeding {}",
+            started.elapsed() < fire_window,
+            "no trigger fired a request within {fire_window:?} of seeding {}",
             seed.collection
         );
         tokio::time::sleep(POLL).await;
@@ -1489,13 +1502,13 @@ async fn resolve_seed_failure(
     node: &EmbeddedNode,
     doc_id: &str,
     kind: OutcomeKind,
-    deadline: Duration,
+    deadline: Option<Duration>,
     started: Instant,
 ) -> Result<StageSubmission> {
     Ok(match fired_request(node, doc_id).await? {
         Some(request_id) => StageSubmission::Submitted {
             request_id,
-            remaining: deadline.saturating_sub(started.elapsed()),
+            remaining: remaining_of(deadline, started),
         },
         None => StageSubmission::Failed(kind),
     })
@@ -1892,7 +1905,7 @@ mod tests {
                 &home,
                 &ready,
                 &seed,
-                Duration::from_secs(2),
+                Some(Duration::from_secs(2)),
                 "trial",
                 "stage",
             );
@@ -2460,7 +2473,7 @@ mod tests {
                 collection: "NoSuchItem".into(),
                 document: json!({}),
             }),
-            deadline_secs: 120,
+            deadline_secs: None,
             settle: false,
             continuation: None,
             review_previous: false,
@@ -2872,7 +2885,7 @@ mod tests {
                         &cancel,
                         &runtime,
                         &request_id,
-                        Duration::from_secs(120),
+                        None,
                     ),
                 )
                 .await
@@ -3165,7 +3178,7 @@ mod tests {
             stage_id: "only".to_string(),
             prompt: "hello".to_string(),
             seed: None,
-            deadline_secs: 1,
+            deadline_secs: Some(1),
             settle: false,
             continuation: None,
             review_previous: false,
@@ -3235,7 +3248,7 @@ mod tests {
             stage_id: "only".to_string(),
             prompt: "hello".to_string(),
             seed: None,
-            deadline_secs: 600,
+            deadline_secs: None,
             settle: false,
             continuation: None,
             review_previous: false,
@@ -3386,7 +3399,7 @@ mod tests {
                 collection: "EvalSeed".into(),
                 document: json!({"payload": {}}),
             }),
-            deadline_secs: 600,
+            deadline_secs: None,
             settle: false,
             continuation: None,
             review_previous: false,
@@ -3677,7 +3690,7 @@ mod tests {
             &home.node,
             &doc_id,
             failure,
-            Duration::from_secs(600),
+            Some(Duration::from_secs(600)),
             Instant::now(),
         )
         .await
@@ -3691,7 +3704,7 @@ mod tests {
             panic!("the committed request must take precedence: {resolved:?}");
         };
         assert_eq!(request_id, "fired");
-        assert!(!remaining.is_zero());
+        assert!(remaining.is_some_and(|remaining| !remaining.is_zero()));
     }
 
     #[tokio::test]
@@ -3757,7 +3770,7 @@ mod tests {
             &CancellationToken::new(),
             &runtime,
             request_id,
-            Duration::from_secs(600),
+            None,
         )
         .await;
         tokio::time::resume();

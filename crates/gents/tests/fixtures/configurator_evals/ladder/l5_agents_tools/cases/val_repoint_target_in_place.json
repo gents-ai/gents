@@ -6,7 +6,6 @@
     {
       "stage_id": "initial-config",
       "prompt": "I want you to be able to delegate work to another conversation running your same role and settings. Make that available under the name helper; reuse your existing role. Set this up without sending a message yet.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -127,7 +126,6 @@
     {
       "stage_id": "repoint",
       "prompt": "Change helper to use a new Specialist assistant with its own instructions for focused research, using our current model. Update the existing helper connection; keep just one. Set this up without sending a message yet.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -255,7 +253,6 @@
     {
       "stage_id": "delegate-after-repoint",
       "prompt": "Ask Specialist to reply with exactly REP-555 and report its reply when it arrives.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",

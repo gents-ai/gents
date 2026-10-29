@@ -6,7 +6,6 @@
     {
       "stage_id": "configure",
       "prompt": "Set up a small inbox for notices. A ReceiptNote has batch and text, both strings supplied by the caller. Give yourself only a tool to add a note using those two inputs. Whenever a note arrives, handle it yourself: acknowledge its text and keep the app\u2019s standard record of whether that handling succeeded or failed. Independent notes may run independently. Handle internal bookkeeping in the configuration; callers should provide only batch and text. Set up the storage and automation now, but do not add a note yet.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -290,7 +289,6 @@
     },
     {
       "stage_id": "write_and_handle",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "captured_rows_count",

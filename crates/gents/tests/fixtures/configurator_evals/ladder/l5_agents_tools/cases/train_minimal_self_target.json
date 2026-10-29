@@ -6,7 +6,6 @@
     {
       "stage_id": "configure",
       "prompt": "Create a research-helper assistant for short research questions, using our current model. Make it available for you to delegate to. Set this up now; we will try it next.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -127,7 +126,6 @@
     {
       "stage_id": "delegate",
       "prompt": "Ask Research Helper to reply with exactly TRAIN-111 and report its reply when it arrives.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -284,7 +282,6 @@
     {
       "stage_id": "follow_up",
       "prompt": "Ask the same helper to reply with exactly FOLLOW-222. Keep using that conversation and report its reply when it arrives.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",

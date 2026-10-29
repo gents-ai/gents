@@ -6,7 +6,6 @@
     {
       "stage_id": "configure",
       "prompt": "Please prepare a Spanish-language knowledge base. ManualPage has code, heading and content, all text. Codes are unique. Heading and content should each support BM25 word search using Spanish stemming. I'll hook up the search interface separately.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "schema",

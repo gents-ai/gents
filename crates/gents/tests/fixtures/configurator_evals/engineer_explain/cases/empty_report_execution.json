@@ -77,7 +77,6 @@
     {
       "stage_id": "access",
       "prompt": "Enable your general read access only to DeliveryAudit. Keep shell execution off and leave all other permissions alone. Inspect the available fields before preparing reports.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -98,7 +97,6 @@
     {
       "stage_id": "plan",
       "prompt": "The delivered-shipment report is empty. Show its plan on DeliveryAudit using reference and status, with a five-row limit, without executing the report. Leave records and schema unchanged.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_result_matches",
@@ -320,7 +318,6 @@
     {
       "stage_id": "execute",
       "prompt": "Now execute that bounded delivered-shipment report with the five-row limit and show the actual work metrics. Confirm whether any records matched. Leave records and schema unchanged.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "final_message_matches",
