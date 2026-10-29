@@ -15,10 +15,14 @@ use crate::Collection;
 
 mod dependencies;
 mod documents;
+pub(crate) use documents::sdl_paths;
+mod removal;
 pub use documents::{
-    document_pack_schema_paths, install_prepared_document_pack, plugin_data_unique_keys,
+    apply_prepared_dependency_schemas, document_pack_schema_paths, install_documents_with_plugins,
+    install_prepared_document_graph, install_prepared_document_pack, plugin_data_unique_keys,
     prepare_document_pack_install, PreparedDependency, PreparedDocumentPackInstall,
 };
+pub use removal::ensure_plugins_unreferenced;
 const RECORD: &str = "PackInstallation";
 const HISTORY_LIMIT: usize = 32;
 
@@ -216,7 +220,7 @@ async fn live_digests<'a>(
 fn edited_error(coordinate: &str, edited: &[String]) -> anyhow::Error {
     anyhow::anyhow!(
         "{} of {coordinate}'s documents were edited since it was installed: {}; \
-         choose --overwrite to replace them or --keep to leave them",
+         use the operator CLI `gents pack install`, `gents pack update`, or `gents pack remove` with --overwrite or --keep to decide how to handle them; the agent pack command does not accept these flags",
         edited.len(),
         edited.join(", ")
     )
@@ -461,13 +465,74 @@ pub(crate) async fn install_in_txn(
     Ok(report)
 }
 
+pub(crate) async fn validate_plugin_replacements_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    packs: &[PackIdentity],
+) -> Result<()> {
+    if let Some(conflict) = plugin_replacement_conflict_in_txn(txn, owner, packs).await? {
+        anyhow::bail!(conflict);
+    }
+    Ok(())
+}
+
+async fn plugin_replacement_conflict_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    packs: &[PackIdentity],
+) -> Result<Option<String>> {
+    let mut replacements = BTreeMap::new();
+    for pack in packs {
+        let (namespace, _) = crate::pack_registry::split_pack_coordinate(&pack.coordinate);
+        for plugin in &pack.plugins {
+            let coordinate = format!("{namespace}/{}", plugin.name);
+            if let Some(previous) = replacements.insert(coordinate.clone(), plugin.digest.clone()) {
+                anyhow::ensure!(
+                    previous == plugin.digest,
+                    "pack graph replaces {coordinate} with conflicting digests"
+                );
+            }
+        }
+    }
+    removal::ensure_replaced_plugins_match(txn, owner, &replacements).await
+}
+
+/// Local publication is restored only when the transaction owner proves no
+/// attempt committed; otherwise the published artifacts remain available.
+#[derive(Debug, thiserror::Error)]
+pub enum PluginStoreChangeError {
+    #[error("{0}")]
+    PinConflict(String),
+    #[error(transparent)]
+    Rejected(anyhow::Error),
+    #[error(transparent)]
+    Unconfirmed(#[from] anyhow::Error),
+}
+
+impl From<crate::config_client::ConfigClientError> for PluginStoreChangeError {
+    fn from(error: crate::config_client::ConfigClientError) -> Self {
+        Self::Unconfirmed(error.into())
+    }
+}
+
+impl crate::config_client::TransactionFailure for PluginStoreChangeError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
+        match self {
+            Self::PinConflict(_) => None,
+            Self::Rejected(error) | Self::Unconfirmed(error) => {
+                crate::config_client::TransactionFailure::config_client_error(error)
+            }
+        }
+    }
+}
+
 pub async fn record_plugin_store_change(
     access: &ConfigAccess,
     owner: &str,
     home: &Path,
     coordinate: &str,
     installed: Option<&PackIdentity>,
-) -> Result<()> {
+) -> std::result::Result<(), PluginStoreChangeError> {
     record_plugin_store_change_as(access, owner, None, home, coordinate, installed).await
 }
 
@@ -479,10 +544,10 @@ pub async fn record_plugin_store_change_as(
     home: &Path,
     coordinate: &str,
     installed: Option<&PackIdentity>,
-) -> Result<()> {
-    match access {
+) -> std::result::Result<(), PluginStoreChangeError> {
+    let result = match access {
         ConfigAccess::Local(local) => {
-            ConfigAccess::transact_local_write(
+            ConfigAccess::transact_local_write_with_finality(
                 local.node(),
                 identity,
                 "pack.record_plugin_store",
@@ -496,12 +561,27 @@ pub async fn record_plugin_store_change_as(
         }
         ConfigAccess::Graphql(_) => {
             access
-                .transact_write("pack.record_plugin_store", |txn| {
+                .transact_write_with_finality("pack.record_plugin_store", |txn| {
                     Box::pin(async move {
                         write_plugin_record(txn, owner, home, coordinate, installed).await
                     })
                 })
                 .await
+        }
+    };
+    result.map_err(|failure| classify_plugin_store_failure(failure.error, failure.unconfirmed))
+}
+
+fn classify_plugin_store_failure(
+    error: PluginStoreChangeError,
+    unconfirmed: bool,
+) -> PluginStoreChangeError {
+    if unconfirmed {
+        PluginStoreChangeError::Unconfirmed(error.into())
+    } else {
+        match error {
+            PluginStoreChangeError::Unconfirmed(error) => PluginStoreChangeError::Rejected(error),
+            other => other,
         }
     }
 }
@@ -512,7 +592,14 @@ async fn write_plugin_record(
     home: &Path,
     coordinate: &str,
     installed: Option<&PackIdentity>,
-) -> Result<()> {
+) -> std::result::Result<(), PluginStoreChangeError> {
+    if let Some(pack) = installed {
+        if let Some(conflict) =
+            plugin_replacement_conflict_in_txn(txn, owner, std::slice::from_ref(pack)).await?
+        {
+            return Err(PluginStoreChangeError::PinConflict(conflict));
+        }
+    }
     let current_home = super::read_home_install(home, coordinate)?;
     let current_identity = current_home.map(|record| PackIdentity {
         coordinate: record.coordinate,
@@ -532,13 +619,16 @@ async fn write_plugin_record(
     let own = prior.doc_id.is_none() || prior.plugin_store;
     match installed {
         Some(pack) if own => {
-            return write_record_in_txn(txn, owner, pack, &prior, documents, false, true).await
+            return write_record_in_txn(txn, owner, pack, &prior, documents, false, true)
+                .await
+                .map_err(Into::into)
         }
         None if prior.doc_id.is_none() => return Ok(()),
         None if own && !retained => {
             return remove_record_in_txn(txn, owner, coordinate, &prior, DriftPolicy::Refuse)
                 .await
-                .map(|_| ());
+                .map(|_| ())
+                .map_err(Into::into);
         }
         _ => {}
     }
@@ -566,6 +656,7 @@ async fn write_plugin_record(
         plugin_store,
     )
     .await
+    .map_err(Into::into)
 }
 
 fn is_plugin_store_row(row: &Value) -> bool {
@@ -693,6 +784,19 @@ pub async fn remove_pack(
                     remove_record_in_txn(txn, owner, coordinate, &record, policy).await?;
                 report.dependencies =
                     dependencies::release_in_txn(txn, owner, coordinate, policy).await?;
+                let released = std::iter::once(&report)
+                    .chain(&report.dependencies)
+                    .flat_map(|removed| {
+                        let (namespace, _) =
+                            crate::pack_registry::split_pack_coordinate(&removed.pack);
+                        removed
+                            .documents
+                            .plugins
+                            .iter()
+                            .map(move |plugin| format!("{namespace}/{}", plugin.name))
+                    })
+                    .collect();
+                ensure_plugins_unreferenced(txn, owner, &released).await?;
                 Ok(report)
             })
         })

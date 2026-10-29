@@ -1,8 +1,47 @@
 use std::sync::Arc;
 
 use super::*;
+use crate::pack::InstalledVia;
 
 const OWNER: &str = "did:key:zPackInstallOwner";
+
+#[test]
+fn edited_pack_error_identifies_the_operator_cli() {
+    let error = edited_error("acme/demo", &["Tools/t1".to_owned()]).to_string();
+    assert!(error.contains("Tools/t1"));
+    assert!(error.contains("operator CLI `gents pack install`"));
+    assert!(error.contains("--overwrite"));
+    assert!(error.contains("--keep"));
+    assert!(error.contains("agent pack command does not accept these flags"));
+}
+
+#[test]
+fn document_ux_install_admission_matches_lean() {
+    let raw = gents_lean_contract::run_prepared_generator(
+        &gents_lean_contract::proofs_dir().unwrap(),
+        "Proofs.Conformance.DocumentPackUx:olean",
+        "Proofs/Conformance/DocumentPackUx.lean",
+    )
+    .unwrap();
+    let cases: Vec<serde_json::Value> = serde_json::from_str(&raw).unwrap();
+    assert_eq!(cases.len(), 8);
+    for case in cases {
+        let via = if case["operator"].as_bool().unwrap() {
+            InstalledVia::Operator
+        } else {
+            InstalledVia::SelfConfig
+        };
+        assert_eq!(
+            documents::document_ux_install_allowed(
+                case["hasUx"].as_bool().unwrap(),
+                case["home"].as_bool().unwrap(),
+                via
+            ),
+            case["allowed"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
+}
 
 async fn access() -> ConfigAccess {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
@@ -277,6 +316,61 @@ async fn a_document_the_new_version_drops_is_removed_and_history_is_kept() {
     let row = &record["data"]["PackInstallation"][0];
     assert_eq!(row["version"], "2");
     assert_eq!(row["history"], json!([identity("1").digest]));
+}
+
+#[tokio::test]
+async fn plugin_store_notification_lost_commit_receipt_is_unconfirmed() {
+    let home = tempfile::tempdir().unwrap();
+    let (node, access) = dependency_fixture().await;
+    let pack = identity("1");
+    let (result, fired) =
+        crate::config_client::ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
+            Some("pack.record_plugin_store"),
+            record_plugin_store_change(&access, OWNER, home.path(), &pack.coordinate, Some(&pack)),
+        )
+        .await;
+    assert!(fired);
+    assert!(
+        matches!(&result, Err(PluginStoreChangeError::Unconfirmed(_))),
+        "{result:?}"
+    );
+    let rows = access
+        .execute("{PackInstallation {coordinate plugin_store}}")
+        .await
+        .unwrap();
+    assert_eq!(
+        rows["data"]["PackInstallation"][0]["coordinate"],
+        pack.coordinate
+    );
+    assert_eq!(rows["data"]["PackInstallation"][0]["plugin_store"], true);
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn pin_rejection_after_unknown_commit_preserves_unconfirmed_outcome() {
+    let cases = tokio::task::spawn_blocking(|| {
+        crate::lean_vocab_test::lean_contract_snapshot()
+            .pack_finality_cases
+            .clone()
+    })
+    .await
+    .unwrap();
+    for events in [&["no_commit"][..], &["unknown_commit", "no_commit"][..]] {
+        let modeled = cases
+            .iter()
+            .find(|case| case["attempts"] == json!(events))
+            .unwrap()["unconfirmed"]
+            .as_bool()
+            .unwrap();
+        let result = classify_plugin_store_failure(
+            PluginStoreChangeError::PinConflict("pin conflict".into()),
+            modeled,
+        );
+        assert_eq!(
+            matches!(result, PluginStoreChangeError::Unconfirmed(_)),
+            modeled
+        );
+    }
 }
 
 #[tokio::test]
@@ -684,6 +778,7 @@ async fn install_dependee(access: &ConfigAccess, explicit: bool) {
         &requested,
         &[],
         crate::pack::InstalledVia::Operator,
+        None,
         None,
         &|_| None,
     )
@@ -1357,6 +1452,68 @@ fn documents_archive_shipping(files: &[(&str, &str)]) -> crate::pack_archive::Pa
     crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
 }
 
+#[tokio::test]
+async fn operator_installs_document_pack_ux_with_its_data_plugin() {
+    let (_guard, root) = crate::test_support::fixture_pack_copy("job_plugin_fixture", &json!({}));
+    let path = root.join("manifest.json");
+    let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    std::fs::create_dir_all(root.join("ux/board")).unwrap();
+    std::fs::write(root.join("ux/board/plugin.js"), "export default {};").unwrap();
+    manifest["assets"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("ux/board/plugin.js"));
+    manifest["ux"] = json!([{
+        "name": "board", "description": "A board page", "entry": "ux/board/plugin.js",
+        "contributes": { "areas": ["nav"], "directives": [] }
+    }]);
+    std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let (bytes, _) = crate::pack_archive::pack_dir(&root).unwrap();
+    let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    install_prepared_document_pack(
+        &access().await,
+        OWNER,
+        &archive,
+        &[],
+        &prepared(),
+        Some(home.path()),
+        true,
+        InstalledVia::Operator,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+
+    let record = recorded(home.path(), &archive);
+    assert_eq!(record.kind, crate::pack::PackKind::Documents);
+    assert!(record
+        .plugins
+        .iter()
+        .any(|plugin| plugin.name == "job_fixture"));
+    let listing = crate::ux_plugin::find(home.path(), "fixture/job_plugin_fixture/board").unwrap();
+    assert_eq!(listing.pack.as_deref(), Some("fixture/job_plugin_fixture"));
+    assert!(std::path::Path::new(&listing.file).is_file());
+    let plugin = crate::plugin::store::read_record(home.path(), "fixture", "job_fixture").unwrap();
+    assert!(plugin.data_collection_fields.contains_key("FixtureNote"));
+    assert!(
+        documents::require_installed_dependency_ux(archive.manifest(), archive.digest(), None)
+            .is_err()
+    );
+    assert!(documents::require_installed_dependency_ux(
+        archive.manifest(),
+        "other-digest",
+        Some(home.path())
+    )
+    .is_err());
+    documents::require_installed_dependency_ux(
+        archive.manifest(),
+        archive.digest(),
+        Some(home.path()),
+    )
+    .unwrap();
+}
+
 fn recorded(
     home: &Path,
     archive: &crate::pack_archive::PackArchive,
@@ -1469,6 +1626,16 @@ async fn pack_job_block_is_refused_on_a_self_config_install() {
         .unwrap();
     let access = ConfigAccess::local(node);
     let requested = Default::default();
+    let home = tempfile::tempdir().unwrap();
+    let declaration = plugin_pack_manifest("engine", "plugins", &["runner"])
+        .metadata
+        .plugins
+        .remove(0);
+    let record: crate::plugin::store::InstalledPlugin = serde_json::from_value(json!({
+        "namespace": "acme", "name": "runner", "version": "1.0.0",
+        "digest": format!("sha256:{}", "a".repeat(64)), "language": "rust", "declaration": declaration,
+    })).unwrap();
+    crate::plugin::store::write_record(home.path(), &record).unwrap();
     let prepare = |via| {
         prepare_document_pack_install(
             &access,
@@ -1478,6 +1645,7 @@ async fn pack_job_block_is_refused_on_a_self_config_install() {
             &requested,
             &[],
             via,
+            Some(home.path()),
             None,
             &|_| None,
         )
@@ -1521,9 +1689,7 @@ fn engine_style_pack_job_block_installs() {
 
 /// `dependent_fixture` rewired to depend on `dependee_fixture`, and
 /// `dependee_fixture` with the plugin `echo` when `dependee_plugin`; both
-/// packed the way an install reads them. With `broken_dependent_plugin` the
-/// dependent also ships an `echo` whose artifact is not a plugin, so its
-/// install fails at its own plugin step, after its dependency installed.
+/// Packed as an install reads them; a broken dependent plugin rejects the graph.
 fn documents_dependency_pair(
     dependee_plugin: bool,
     broken_dependent_plugin: bool,
@@ -1631,6 +1797,7 @@ async fn try_install_dependent_with_dependee(
         &[dependee],
         crate::pack::InstalledVia::Operator,
         plugin_home,
+        None,
         &|_| None,
     )
     .await
@@ -1675,7 +1842,7 @@ async fn a_documents_dependency_installs_non_explicitly_before_its_dependent() {
 }
 
 #[tokio::test]
-async fn a_failing_dependent_leaves_its_documents_dependency_installed() {
+async fn a_failing_dependent_does_not_publish_its_documents_dependency() {
     let (_node, access) = dependency_fixture().await;
     let (_guards, dependee, dependent) = documents_dependency_pair(false, true);
     let home = tempfile::tempdir().unwrap();
@@ -1687,10 +1854,7 @@ async fn a_failing_dependent_leaves_its_documents_dependency_installed() {
         .execute("{ PackInstallation { coordinate explicit } }")
         .await
         .unwrap();
-    assert_eq!(
-        rows["data"]["PackInstallation"],
-        json!([{"coordinate": "fixture/dependee_fixture", "explicit": false}])
-    );
+    assert_eq!(rows["data"]["PackInstallation"], json!([]));
 }
 
 #[tokio::test]
@@ -1712,7 +1876,7 @@ async fn a_documents_dependency_plugin_installs_before_the_dependent_documents()
 }
 
 #[tokio::test]
-async fn a_documents_dependency_plugin_outlives_a_failing_dependent() {
+async fn a_failing_dependent_does_not_publish_dependency_plugin() {
     let (_node, access) = dependency_fixture().await;
     let (_guards, dependee, dependent) = documents_dependency_pair(true, true);
     let home = tempfile::tempdir().unwrap();
@@ -1720,10 +1884,12 @@ async fn a_documents_dependency_plugin_outlives_a_failing_dependent() {
         .await
         .unwrap_err();
 
-    let record = crate::plugin::store::read_record(home.path(), "fixture", "echo").unwrap();
-    assert_eq!(
-        record.owner_pack_coordinate.as_deref(),
-        Some("fixture/dependee_fixture")
+    assert!(crate::plugin::store::read_record(home.path(), "fixture", "echo").is_err());
+    assert!(
+        read_installed_pack(&access, OWNER, "fixture/dependee_fixture")
+            .await
+            .unwrap()
+            .is_none()
     );
     let dependent = read_installed_pack(&access, OWNER, "fixture/dependent_fixture")
         .await
@@ -1794,6 +1960,7 @@ async fn refused_dependency(dependee_plugin: bool, change: &dyn Fn(&mut Value)) 
         &BTreeMap::from([("worker".to_owned(), "glm:inference".to_owned())]),
         &[&dependee],
         crate::pack::InstalledVia::Operator,
+        None,
         None,
         &|_| None,
     )
@@ -1890,6 +2057,7 @@ async fn prepare_naming_plugin(
         &[],
         crate::pack::InstalledVia::Operator,
         plugin_home,
+        None,
         &|_| None,
     )
     .await
@@ -1909,6 +2077,119 @@ async fn an_install_naming_an_unresolved_plugin_is_refused_before_writing() {
             && error.contains("gents pack install"),
         "{error}"
     );
+}
+
+#[tokio::test]
+async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_plugin_free_pack() {
+    use crate::identity::NodeIdentity;
+
+    let root = tempfile::tempdir().unwrap();
+    let key = root.path().join("remote-install.key");
+    let identity =
+        tokio::task::spawn_blocking(move || crate::KeyIdentity::load_or_create(key, None))
+            .await
+            .unwrap()
+            .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/api/v0/graphql", listener.local_addr().unwrap());
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_node_identity_did(identity.did())
+            .with_node_acp_enabled()
+            .with_http(defra_node::HttpConfig::with_listener(listener.into_std().unwrap()).unwrap())
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    crate::document_config::ensure_node(&node, identity.did())
+        .await
+        .unwrap();
+    let access = ConfigAccess::graphql_as(endpoint, identity.did());
+    let (_guard, directory) =
+        crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
+    let manifest_path = directory.join("manifest.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest.as_object_mut().unwrap().remove("schemas");
+    manifest.as_object_mut().unwrap().remove("inference_slots");
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let (bytes, _) = crate::pack_archive::pack_dir(&directory).unwrap();
+    let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+    let config = |plugin: Option<&str>| -> PackConfig {
+        serde_json::from_value(json!({
+            "node": {"node_did": identity.did()},
+            "tools": [{"tools_id": "remote-tools", "node_did": identity.did(),
+                "integrations": {"plugins": plugin.map(|name| vec![json!({"plugin": name})])}}],
+        }))
+        .unwrap()
+    };
+    async fn prepare_remote(
+        access: &ConfigAccess,
+        owner: &str,
+        archive: &crate::pack_archive::PackArchive,
+        config: &PackConfig,
+    ) -> Result<PreparedDocumentPackInstall> {
+        prepare_document_pack_install(
+            access,
+            owner,
+            archive.manifest(),
+            config,
+            &crate::pack::PackInferenceBindings::new(),
+            &[],
+            crate::pack::InstalledVia::Operator,
+            None,
+            Some(archive),
+            &|_| None,
+        )
+        .await
+    }
+    let error = match prepare_remote(
+        &access,
+        identity.did(),
+        &archive,
+        &config(Some("acme/web_search")),
+    )
+    .await
+    {
+        Ok(_) => panic!("remote plugin reference must be refused"),
+        Err(error) => format!("{error:#}"),
+    };
+    assert!(
+        error.contains("acme/web_search") && error.contains("without --graphql"),
+        "{error}"
+    );
+    assert!(tools_ids(&access).await.is_empty());
+    assert!(list_installed_packs(&access, identity.did())
+        .await
+        .unwrap()
+        .is_empty());
+
+    let prepared = prepare_remote(&access, identity.did(), &archive, &config(None))
+        .await
+        .unwrap();
+    install_prepared_document_pack(
+        &access,
+        identity.did(),
+        &archive,
+        &[],
+        &prepared,
+        None,
+        false,
+        crate::pack::InstalledVia::Operator,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    assert_eq!(tools_ids(&access).await, vec!["remote-tools"]);
+    assert_eq!(
+        list_installed_packs(&access, identity.did())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    node.shutdown().await;
 }
 
 #[tokio::test]
@@ -1942,11 +2223,13 @@ fn a_plugin_a_declared_dependency_ships_resolves() {
     super::documents::ensure_plugin_references_resolve(
         &[(&manifest, &config), (&dependency, &dependency_config)],
         Some(home.path()),
+        &BTreeMap::new(),
     )
     .unwrap();
     assert!(super::documents::ensure_plugin_references_resolve(
         &[(&manifest, &config)],
         Some(home.path()),
+        &BTreeMap::new(),
     )
     .is_err());
 }
@@ -1961,6 +2244,7 @@ fn a_documents_dependency_naming_an_unresolved_plugin_is_refused() {
     let error = super::documents::ensure_plugin_references_resolve(
         &[(&manifest, &config), (&dependency, &dependency_config)],
         Some(home.path()),
+        &BTreeMap::new(),
     )
     .unwrap_err()
     .to_string();
@@ -1970,8 +2254,8 @@ fn a_documents_dependency_naming_an_unresolved_plugin_is_refused() {
     );
 }
 
-#[test]
-fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
+#[tokio::test]
+async fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
     fn names(value: &Value) -> Vec<&str> {
         value
             .as_array()
@@ -1989,9 +2273,13 @@ fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
         }))
         .unwrap()
     }
-    let cases = crate::lean_vocab_test::lean_plugin_reference_cases();
-    assert_eq!(cases.len(), 9);
-    for case in cases {
+    let cases = tokio::task::spawn_blocking(|| {
+        crate::lean_vocab_test::lean_plugin_reference_cases().to_vec()
+    })
+    .await
+    .unwrap();
+    assert_eq!(cases.len(), 14);
+    for case in &cases {
         let home = tempfile::tempdir().unwrap();
         let root = plugin_pack_manifest("workflow", "documents", &names(&case["root_ships"]));
         let dependency =
@@ -1999,7 +2287,8 @@ fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
         let references = case["references"].as_array().unwrap();
         assert!((1..=2).contains(&references.len()));
         let root_config = config(&references[0]);
-        let dependency_config = config(references.get(1).unwrap_or(&json!([])));
+        let mut dependency_config = config(references.get(1).unwrap_or(&json!([])));
+        dependency_config.tools[0].tools_id = "dependency-tools".into();
         for plugin in names(&case["installed"]) {
             let record: crate::plugin::store::InstalledPlugin = serde_json::from_value(json!({
                 "namespace": "acme", "name": plugin, "version": "1.0.0",
@@ -2010,12 +2299,1138 @@ fn generated_plugin_reference_cases_validate_prepared_pack_resources() {
         }
         let result = super::documents::ensure_plugin_references_resolve(
             &[(&root, &root_config), (&dependency, &dependency_config)],
-            Some(home.path()),
+            case["local"].as_bool().unwrap().then_some(home.path()),
+            &BTreeMap::new(),
         );
         assert_eq!(
             result.is_ok(),
             case["accepted"].as_bool().unwrap(),
             "{case}: {result:?}"
         );
+        let (_node, access) = dependency_fixture().await;
+        let references = references
+            .iter()
+            .flat_map(|group| group.as_array().unwrap())
+            .collect::<Vec<_>>();
+        let config: PackConfig = serde_json::from_value(json!({
+            "node": {"node_did": OWNER},
+            "agents": references.iter().enumerate().map(|(index, _)| json!({
+                "agent_id": format!("reference-{index}"), "node_did": OWNER,
+                "context_id": format!("context-{index}"), "inference_profile_id": "glm:inference"
+            })).collect::<Vec<_>>(),
+            "contexts": references.iter().enumerate().map(|(index, _)| json!({
+                "context_id": format!("context-{index}"), "node_did": OWNER,
+                "tools_id": format!("tools-{index}")
+            })).collect::<Vec<_>>(),
+            "tools": references.iter().enumerate().map(|(index, plugin)| json!({
+                "tools_id": format!("tools-{index}"), "node_did": OWNER,
+                "integrations": {"plugins": [{"plugin": plugin}]}
+            })).collect::<Vec<_>>(),
+        }))
+        .unwrap();
+        install(&access, "1", &config, DriftPolicy::Refuse)
+            .await
+            .unwrap();
+        let removed = case["root_ships"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(case["dependency_ships"].as_array().unwrap())
+            .map(|value| value.as_str().unwrap().to_owned())
+            .collect();
+        let removal = super::ensure_plugins_unreferenced(&access, OWNER, &removed).await;
+        assert_eq!(
+            removal.is_ok(),
+            case["removal_accepted"].as_bool().unwrap(),
+            "{case}: {removal:?}"
+        );
     }
+}
+
+#[tokio::test]
+async fn removing_a_plugin_pack_refuses_surviving_agents_and_rolls_back_documents() {
+    let (_node, access) = dependency_fixture().await;
+    install(
+        &access,
+        "1",
+        &config(&[("owned", "Owned")]),
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+    access.write("test.surviving_plugin_user", r#"mutation {
+        create_Tools(input: {tools_id: "surviving-tools", node_did: "did:key:zPackInstallOwner", integrations: {plugins: [{plugin: "acme/echo"}]}}) {_docID}
+        create_AgentContext(input: {context_id: "surviving-context", node_did: "did:key:zPackInstallOwner", tools_id: "surviving-tools"}) {_docID}
+        create_Agent(input: {agent_id: "surviving-agent", node_did: "did:key:zPackInstallOwner", context_id: "surviving-context", inference_profile_id: "glm:inference"}) {_docID}
+    }"#).await.unwrap();
+    let before = tools_ids(&access).await;
+    let error = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("acme/echo"), "{error:#}");
+    assert!(error.to_string().contains("surviving-agent"), "{error:#}");
+    assert_eq!(tools_ids(&access).await, before);
+    assert!(read_installed_pack(&access, OWNER, "acme/demo")
+        .await
+        .unwrap()
+        .is_some());
+    access
+        .write(
+            "test.remove_plugin_user",
+            r#"mutation {
+        delete_Agent(filter: {agent_id: {_eq: "surviving-agent"}}) {_docID}
+    }"#,
+        )
+        .await
+        .unwrap();
+    remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    let retained = before
+        .into_iter()
+        .filter(|id| id != "owned")
+        .collect::<Vec<_>>();
+    assert_eq!(tools_ids(&access).await, retained);
+}
+
+#[tokio::test]
+async fn removing_agents_with_their_plugin_pack_does_not_block_removal() {
+    let (_node, access) = dependency_fixture().await;
+    let retained_tools = tools_ids(&access).await;
+    let mut config = config_naming_plugin("acme/echo");
+    config.contexts = vec![serde_json::from_value(json!({
+        "context_id": "owned-context", "node_did": OWNER, "tools_id": "web_persona:tools"
+    }))
+    .unwrap()];
+    config.agents = vec![serde_json::from_value(json!({
+        "agent_id": "owned-agent", "node_did": OWNER, "context_id": "owned-context", "inference_profile_id": "glm:inference"
+    })).unwrap()];
+    install(&access, "1", &config, DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    assert_eq!(tools_ids(&access).await, retained_tools);
+}
+
+#[tokio::test]
+async fn plugin_removal_does_not_treat_dangling_scope_as_no_references() {
+    let access = access().await;
+    let removed = BTreeSet::from(["acme/echo".to_owned()]);
+    access.write("test.dangling_plugin_scope", r#"mutation {
+        create_Agent(input: {agent_id: "dangling", node_did: "did:key:zPackInstallOwner", context_id: "missing", inference_profile_id: "profile"}) {_docID}
+    }"#).await.unwrap();
+    let missing_context = ensure_plugins_unreferenced(&access, OWNER, &removed)
+        .await
+        .unwrap_err();
+    assert!(missing_context.to_string().contains("missing context"));
+    access.write("test.dangling_plugin_tools", r#"mutation {
+        create_AgentContext(input: {context_id: "missing", node_did: "did:key:zPackInstallOwner", tools_id: "absent"}) {_docID}
+    }"#).await.unwrap();
+    let missing_tools = ensure_plugins_unreferenced(&access, OWNER, &removed)
+        .await
+        .unwrap_err();
+    assert!(missing_tools.to_string().contains("missing Tools"));
+    access.write("test.no_plugin_scope", r#"mutation {
+        update_AgentContext(filter: {context_id: {_eq: "missing"}}, input: {tools_id: null}) {_docID}
+    }"#).await.unwrap();
+    ensure_plugins_unreferenced(&access, OWNER, &removed)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn pinned_plugin_references_match_executable_model_before_install_or_update() {
+    let cases = tokio::task::spawn_blocking(|| {
+        crate::lean_vocab_test::lean_contract_snapshot()
+            .plugin_pin_cases
+            .clone()
+    })
+    .await
+    .unwrap();
+    assert_eq!(cases.len(), 5);
+    let bytes = crate::plugin::tests::build_plugin_afb(&crate::plugin::tests::constant_output_wat(
+        br#"{"ok":true}"#,
+    ));
+    let digest = format!(
+        "sha256:{}",
+        crate::plugin::store::content_digest_hex(&bytes)
+    );
+    let other = format!("sha256:{}", "b".repeat(64));
+    for case in cases {
+        let home = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let shipped = case["source"] == "shipped";
+        let manifest = plugin_pack_manifest(
+            "pin_fixture",
+            "documents",
+            if shipped { &["web_search"] } else { &[] },
+        );
+        std::fs::write(
+            dir.path().join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("README.md"), "fixture").unwrap();
+        std::fs::write(dir.path().join("config.json"), "{}").unwrap();
+        if shipped {
+            std::fs::create_dir_all(dir.path().join("plugins")).unwrap();
+            std::fs::write(dir.path().join("plugins/web_search.afb"), &bytes).unwrap();
+        } else {
+            let record: crate::plugin::store::InstalledPlugin = serde_json::from_value(json!({
+                "namespace": "acme", "name": "web_search", "version": "1.0.0",
+                "digest": digest, "language": "rust",
+                "declaration": plugin_pack_manifest("web", "plugins", &["web_search"]).metadata.plugins[0],
+            })).unwrap();
+            crate::plugin::store::write_record(home.path(), &record).unwrap();
+        }
+        let (packed, _) = crate::pack_archive::pack_dir(dir.path()).unwrap();
+        let archive = crate::pack_archive::PackArchive::from_bytes(&packed).unwrap();
+        let mut config = config_naming_plugin("acme/web_search");
+        let plugin = &mut config.tools[0]
+            .integrations
+            .as_mut()
+            .unwrap()
+            .plugins
+            .as_mut()
+            .unwrap()[0];
+        plugin.digest = case["pin"].as_str().map(|pin| {
+            if pin == "a" {
+                digest.clone()
+            } else {
+                other.clone()
+            }
+        });
+        let (node, access) = dependency_fixture().await;
+        let previous: PackConfig = serde_json::from_value(json!({
+            "node": {"node_did": OWNER}, "tools": [{"tools_id": "existing", "node_did": OWNER}]
+        }))
+        .unwrap();
+        let identity = PackIdentity::new(archive.manifest(), archive.digest(), Vec::new());
+        assert_eq!(case["actual"], "a");
+        for update in [false, true] {
+            if update {
+                super::super::install_pack_documents(
+                    &access,
+                    OWNER,
+                    &identity,
+                    &previous,
+                    DriftPolicy::Refuse,
+                )
+                .await
+                .unwrap();
+            }
+            let before = access
+                .execute(
+                    "{Tools {tools_id integrations} PackInstallation {coordinate version digest}}",
+                )
+                .await
+                .unwrap();
+            let result = prepare_document_pack_install(
+                &access,
+                OWNER,
+                archive.manifest(),
+                &config,
+                &crate::pack::PackInferenceBindings::new(),
+                &[],
+                crate::pack::InstalledVia::Operator,
+                Some(home.path()),
+                Some(&archive),
+                &|_| None,
+            )
+            .await;
+            assert_eq!(
+                result.is_ok(),
+                case["accepted"].as_bool().unwrap(),
+                "{case}, update={update}: {}",
+                result.err().map(|e| e.to_string()).unwrap_or_default()
+            );
+            if !case["accepted"].as_bool().unwrap() {
+                let after = access.execute("{Tools {tools_id integrations} PackInstallation {coordinate version digest}}").await.unwrap();
+                assert_eq!(
+                    after, before,
+                    "refused pin cannot change installed documents (update={update})"
+                );
+            }
+        }
+        node.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn failed_transaction_begin_restores_the_previous_plugin_record() {
+    let home = tempfile::tempdir().unwrap();
+    let (node, access) = dependency_fixture().await;
+    let manifest = plugin_pack_manifest("begin_failure", "documents", &["web_search"]);
+    let old = crate::plugin::tests::build_plugin_afb(&crate::plugin::tests::constant_output_wat(
+        br#"{"version":1}"#,
+    ));
+    let new = crate::plugin::tests::build_plugin_afb(&crate::plugin::tests::constant_output_wat(
+        br#"{"version":2}"#,
+    ));
+    let config: PackConfig = serde_json::from_value(json!({"node": {"node_did": OWNER}})).unwrap();
+    let bindings = crate::pack::PackInferenceBindings::new();
+    let assets = |bytes| BTreeMap::from([("plugins/web_search.afb".to_owned(), bytes)]);
+    super::documents::install_documents_with_plugins(
+        &access,
+        OWNER,
+        &manifest,
+        &format!("sha256:{}", "1".repeat(64)),
+        &config,
+        DriftPolicy::Refuse,
+        Some(home.path()),
+        assets(old),
+        false,
+        &bindings,
+        Vec::new(),
+        true,
+    )
+    .await
+    .unwrap();
+    let before = crate::plugin::store::read_record(home.path(), "acme", "web_search").unwrap();
+    let cases = tokio::task::spawn_blocking(|| {
+        crate::lean_vocab_test::lean_contract_snapshot()
+            .pack_finality_cases
+            .clone()
+    })
+    .await
+    .unwrap();
+    let expected = cases
+        .iter()
+        .find(|case| case["attempts"] == json!(["no_commit"]))
+        .unwrap()["unconfirmed"]
+        .as_bool()
+        .unwrap();
+    node.shutdown().await;
+    let error = super::documents::install_documents_with_plugins(
+        &access,
+        OWNER,
+        &manifest,
+        &format!("sha256:{}", "2".repeat(64)),
+        &config,
+        DriftPolicy::Refuse,
+        Some(home.path()),
+        assets(new),
+        false,
+        &bindings,
+        Vec::new(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(!expected);
+    assert!(
+        format!("{error:#}").contains("transaction was rejected"),
+        "{error:#}"
+    );
+    assert_eq!(
+        crate::plugin::store::read_record(home.path(), "acme", "web_search").unwrap(),
+        before
+    );
+}
+
+#[tokio::test]
+async fn plugin_update_rolls_back_files_when_surviving_pin_rejects_and_accepts_updated_pin() {
+    let home = tempfile::tempdir().unwrap();
+    let (node, access) = dependency_fixture().await;
+    let manifest = plugin_pack_manifest("pin_fixture", "documents", &["web_search"]);
+    let old_bytes = crate::plugin::tests::build_plugin_afb(
+        &crate::plugin::tests::constant_output_wat(br#"{"version":1}"#),
+    );
+    let new_bytes = crate::plugin::tests::build_plugin_afb(
+        &crate::plugin::tests::constant_output_wat(br#"{"version":2}"#),
+    );
+    let old_digest = format!(
+        "sha256:{}",
+        crate::plugin::store::content_digest_hex(&old_bytes)
+    );
+    let new_digest = format!(
+        "sha256:{}",
+        crate::plugin::store::content_digest_hex(&new_bytes)
+    );
+    let empty: PackConfig = serde_json::from_value(json!({"node": {"node_did": OWNER}})).unwrap();
+    let assets = |bytes: Vec<u8>| BTreeMap::from([("plugins/web_search.afb".to_owned(), bytes)]);
+    let bindings = crate::pack::PackInferenceBindings::new();
+    let initial = super::documents::install_documents_with_plugins(
+        &access,
+        OWNER,
+        &manifest,
+        &format!("sha256:{}", "1".repeat(64)),
+        &empty,
+        DriftPolicy::Refuse,
+        Some(home.path()),
+        assets(old_bytes),
+        false,
+        &bindings,
+        Vec::new(),
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(initial.1[0].digest, old_digest);
+    let external: PackConfig = serde_json::from_value(json!({
+        "node": {"node_did": OWNER},
+        "agents": [{"agent_id": "survivor", "node_did": OWNER, "context_id": "survivor-context", "inference_profile_id": "glm:inference"}],
+        "contexts": [{"context_id": "survivor-context", "node_did": OWNER, "tools_id": "survivor-tools"}],
+        "tools": [{"tools_id": "survivor-tools", "node_did": OWNER,
+            "integrations": {"plugins": [{"plugin": "acme/web_search", "digest": old_digest}]}}],
+    })).unwrap();
+    install(&access, "1", &external, DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    let before = crate::plugin::store::read_record(home.path(), "acme", "web_search").unwrap();
+    let before_docs = access
+        .execute(
+            "{Agent {agent_id} Tools {tools_id integrations} PackInstallation {coordinate digest}}",
+        )
+        .await
+        .unwrap();
+    let cases = tokio::task::spawn_blocking(|| {
+        crate::lean_vocab_test::lean_contract_snapshot()
+            .plugin_pin_cases
+            .clone()
+    })
+    .await
+    .unwrap();
+    let model = |name: &str| {
+        cases.iter().find(|case| case["name"] == name).unwrap()["accepted"]
+            .as_bool()
+            .unwrap()
+    };
+    let rejected = super::documents::install_documents_with_plugins(
+        &access,
+        OWNER,
+        &manifest,
+        &format!("sha256:{}", "2".repeat(64)),
+        &empty,
+        DriftPolicy::Refuse,
+        Some(home.path()),
+        assets(new_bytes.clone()),
+        false,
+        &bindings,
+        Vec::new(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(format!("{rejected:#}").contains("survivor"), "{rejected:#}");
+    assert_eq!(
+        crate::plugin::store::read_record(home.path(), "acme", "web_search").unwrap(),
+        before
+    );
+    assert_eq!(access.execute("{Agent {agent_id} Tools {tools_id integrations} PackInstallation {coordinate digest}}").await.unwrap(), before_docs);
+    let updated: PackConfig = serde_json::from_value(json!({
+        "node": {"node_did": OWNER},
+        "tools": [{"tools_id": "survivor-tools", "node_did": OWNER,
+            "integrations": {"plugins": [{"plugin": "acme/web_search", "digest": new_digest}]}}],
+    }))
+    .unwrap();
+    let updated = super::super::provenance::stamp_pack_origin(&manifest, &updated).unwrap();
+    let accepted = super::documents::install_documents_with_plugins(
+        &access,
+        OWNER,
+        &manifest,
+        &format!("sha256:{}", "2".repeat(64)),
+        &updated,
+        DriftPolicy::Overwrite,
+        Some(home.path()),
+        assets(new_bytes),
+        false,
+        &bindings,
+        Vec::new(),
+        true,
+    )
+    .await;
+    assert_eq!(accepted.is_ok(), model("installed_match"), "{accepted:?}");
+    accepted.unwrap();
+    assert_eq!(
+        crate::plugin::store::read_record(home.path(), "acme", "web_search")
+            .unwrap()
+            .digest,
+        new_digest
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn cancelling_pack_install_caller_does_not_cancel_owned_commit() {
+    let home = tempfile::tempdir().unwrap();
+    let (node, access) = dependency_fixture().await;
+    let manifest = plugin_pack_manifest("cancelled_caller", "documents", &["web_search"]);
+    let bytes = crate::plugin::tests::build_plugin_afb(&crate::plugin::tests::constant_output_wat(
+        br#"{"ok":true}"#,
+    ));
+    let expected = format!(
+        "sha256:{}",
+        crate::plugin::store::content_digest_hex(&bytes)
+    );
+    let config: PackConfig = serde_json::from_value(json!({"node": {"node_did": OWNER}})).unwrap();
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let completed = Arc::new(tokio::sync::Notify::new());
+    *super::documents::INSTALLATION_PAUSE.lock().unwrap() =
+        Some(super::documents::InstallationPause {
+            coordinate: "acme/cancelled_caller".into(),
+            reached: reached.clone(),
+            release: release.clone(),
+            completed: completed.clone(),
+        });
+    let home_path = home.path().to_owned();
+    let child_access = access.clone();
+    let caller = tokio::spawn(async move {
+        super::documents::install_documents_with_plugins(
+            &child_access,
+            OWNER,
+            &manifest,
+            &format!("sha256:{}", "3".repeat(64)),
+            &config,
+            DriftPolicy::Refuse,
+            Some(&home_path),
+            BTreeMap::from([("plugins/web_search.afb".to_owned(), bytes)]),
+            false,
+            &crate::pack::PackInferenceBindings::new(),
+            Vec::new(),
+            true,
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), reached.notified())
+        .await
+        .expect("plugin publication did not reach the transaction gate");
+    caller.abort();
+    assert!(caller.await.unwrap_err().is_cancelled());
+    release.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(10), completed.notified())
+        .await
+        .expect("owned installation did not complete");
+    assert_eq!(
+        crate::plugin::store::read_record(home.path(), "acme", "web_search")
+            .unwrap()
+            .digest,
+        expected
+    );
+    assert!(
+        super::read_installed_pack(&access, OWNER, "acme/cancelled_caller")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn dependency_and_root_pin_update_commit_as_one_graph() {
+    use super::documents::{install_document_graph, DocumentPackStage};
+    let home = tempfile::tempdir().unwrap();
+    let (node, access) = dependency_fixture().await;
+    let dependency = plugin_pack_manifest("pin_dependency", "documents", &["web_search"]);
+    let root = plugin_pack_manifest("demo", "documents", &[]);
+    let old_bytes = crate::plugin::tests::build_plugin_afb(
+        &crate::plugin::tests::constant_output_wat(br#"{"version":1}"#),
+    );
+    let new_bytes = crate::plugin::tests::build_plugin_afb(
+        &crate::plugin::tests::constant_output_wat(br#"{"version":2}"#),
+    );
+    let old_digest = format!(
+        "sha256:{}",
+        crate::plugin::store::content_digest_hex(&old_bytes)
+    );
+    let new_digest = format!(
+        "sha256:{}",
+        crate::plugin::store::content_digest_hex(&new_bytes)
+    );
+    let empty: PackConfig = serde_json::from_value(json!({"node": {"node_did": OWNER}})).unwrap();
+    let root_config = |pin: &str| {
+        let config = serde_json::from_value::<PackConfig>(json!({
+        "node": {"node_did": OWNER},
+        "agents": [{"agent_id":"graph-agent", "node_did":OWNER,"context_id":"graph-context","inference_profile_id":"glm:inference"}],
+        "contexts": [{"context_id":"graph-context", "node_did":OWNER,"tools_id":"graph-tools"}],
+        "tools": [{"tools_id":"graph-tools", "node_did":OWNER,"integrations":{"plugins":[{"plugin":"acme/web_search","digest":pin}]}}]
+    })).unwrap();
+        super::super::provenance::stamp_pack_origin(&root, &config).unwrap()
+    };
+    let stage = |manifest: &crate::pack::PackManifest,
+                 digest: &str,
+                 config: PackConfig,
+                 bytes: Option<Vec<u8>>,
+                 dependencies: Vec<String>| DocumentPackStage {
+        manifest: manifest.clone(),
+        digest: format!("sha256:{}", digest.repeat(64)),
+        config,
+        assets: bytes
+            .map(|bytes| BTreeMap::from([("plugins/web_search.afb".to_owned(), bytes)]))
+            .unwrap_or_default(),
+        bindings: Default::default(),
+        dependencies,
+        explicit: true,
+    };
+    let initial = vec![
+        stage(&dependency, "1", empty.clone(), Some(old_bytes), vec![]),
+        stage(
+            &root,
+            "1",
+            root_config(&old_digest),
+            None,
+            vec!["acme/pin_dependency".into()],
+        ),
+    ];
+    install_document_graph(
+        &access,
+        OWNER,
+        initial,
+        DriftPolicy::Refuse,
+        Some(home.path()),
+        false,
+    )
+    .await
+    .unwrap();
+    let replacement = vec![
+        stage(&dependency, "2", empty, Some(new_bytes), vec![]),
+        stage(
+            &root,
+            "2",
+            root_config(&new_digest),
+            None,
+            vec!["acme/pin_dependency".into()],
+        ),
+    ];
+    install_document_graph(
+        &access,
+        OWNER,
+        replacement,
+        DriftPolicy::Refuse,
+        Some(home.path()),
+        false,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        crate::plugin::store::read_record(home.path(), "acme", "web_search")
+            .unwrap()
+            .digest,
+        new_digest
+    );
+    let rows = access
+        .execute("{Tools(filter: {tools_id: {_eq: \"graph-tools\"}}) {integrations}}")
+        .await
+        .unwrap();
+    assert_eq!(
+        rows["data"]["Tools"][0]["integrations"]["plugins"][0]["digest"],
+        new_digest
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
+    let home = tempfile::tempdir().unwrap();
+    let (node, access) = dependency_fixture().await;
+    let (_source, _, old_archive) = crate::pack::plugin_lifecycle::tests::fixture("1.0.0", false);
+    crate::pack::plugin_lifecycle::install(
+        home.path(),
+        &old_archive,
+        false,
+        None,
+        &BTreeMap::new(),
+        |_| async { Ok(()) },
+    )
+    .await
+    .unwrap();
+    let old = crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
+    let (updated_dir, _, _) = crate::pack::plugin_lifecycle::tests::fixture("2.0.0", false);
+    std::fs::write(
+        updated_dir.path().join("source/plugins/native_echo.afb"),
+        crate::plugin::tests::build_plugin_afb(&crate::plugin::tests::constant_output_wat(
+            br#"{"changed":true}"#,
+        )),
+    )
+    .unwrap();
+    let (packed, _) = crate::pack_archive::pack_dir(&updated_dir.path().join("source")).unwrap();
+    let updated = crate::pack_archive::PackArchive::from_bytes(&packed).unwrap();
+    crate::pack::plugin_lifecycle::install(
+        home.path(),
+        &updated,
+        false,
+        None,
+        &BTreeMap::new(),
+        |_| async { Ok(()) },
+    )
+    .await
+    .unwrap();
+    let current = crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
+    assert_ne!(old.digest, current.digest);
+    let config: PackConfig = serde_json::from_value(json!({
+        "node": {"node_did":OWNER},
+        "tools": [{"tools_id":"stale-pin", "node_did":OWNER,"integrations":{"plugins":[{"plugin":"fixture/native_echo","digest":old.digest}]}}]
+    })).unwrap();
+    let manifest = plugin_pack_manifest("stale_pin", "documents", &[]);
+    let cases = tokio::task::spawn_blocking(|| {
+        crate::lean_vocab_test::lean_contract_snapshot()
+            .plugin_pin_cases
+            .clone()
+    })
+    .await
+    .unwrap();
+    let expected = cases
+        .iter()
+        .find(|case| case["name"] == "installed_mismatch")
+        .unwrap()["accepted"]
+        .as_bool()
+        .unwrap();
+    let result = super::documents::install_documents_with_plugins(
+        &access,
+        OWNER,
+        &manifest,
+        &format!("sha256:{}", "4".repeat(64)),
+        &config,
+        DriftPolicy::Refuse,
+        Some(home.path()),
+        BTreeMap::new(),
+        false,
+        &BTreeMap::new(),
+        Vec::new(),
+        true,
+    )
+    .await;
+    assert_eq!(result.is_ok(), expected, "{result:?}");
+    assert_eq!(
+        crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap(),
+        current
+    );
+    let rows = access
+        .execute("{Tools(filter:{tools_id:{_eq:\"stale-pin\"}}){tools_id}}")
+        .await
+        .unwrap();
+    assert!(rows["data"]["Tools"].as_array().unwrap().is_empty());
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn installed_plugin_pin_stays_locked_through_document_commit() {
+    let home = tempfile::tempdir().unwrap();
+    let (node, access) = dependency_fixture().await;
+    let (_source, _, old_archive) = crate::pack::plugin_lifecycle::tests::fixture("1.0.0", false);
+    crate::pack::plugin_lifecycle::install(
+        home.path(),
+        &old_archive,
+        false,
+        None,
+        &BTreeMap::new(),
+        |_| async { Ok(()) },
+    )
+    .await
+    .unwrap();
+    let old = crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
+    let manifest = plugin_pack_manifest("installed_pin", "documents", &[]);
+    let config: PackConfig = serde_json::from_value(json!({
+        "node": {"node_did": OWNER},
+        "agents": [{"agent_id":"pin-agent", "node_did":OWNER,"context_id":"pin-context","inference_profile_id":"glm:inference"}],
+        "contexts": [{"context_id":"pin-context", "node_did":OWNER,"tools_id":"pin-tools"}],
+        "tools": [{"tools_id":"pin-tools", "node_did":OWNER,"integrations":{"plugins":[{"plugin":"fixture/native_echo","digest":old.digest}]}}]
+    })).unwrap();
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let completed = Arc::new(tokio::sync::Notify::new());
+    *super::documents::INSTALLATION_PAUSE.lock().unwrap() =
+        Some(super::documents::InstallationPause {
+            coordinate: "acme/installed_pin".into(),
+            reached: reached.clone(),
+            release: release.clone(),
+            completed,
+        });
+    let access_for_install = access.clone();
+    let home_for_install = home.path().to_owned();
+    let installer = tokio::spawn(async move {
+        super::documents::install_documents_with_plugins(
+            &access_for_install,
+            OWNER,
+            &manifest,
+            &format!("sha256:{}", "3".repeat(64)),
+            &config,
+            DriftPolicy::Refuse,
+            Some(&home_for_install),
+            BTreeMap::new(),
+            false,
+            &BTreeMap::new(),
+            Vec::new(),
+            true,
+        )
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(20), reached.notified())
+        .await
+        .unwrap();
+    let (updated_dir, _, _) = crate::pack::plugin_lifecycle::tests::fixture("2.0.0", false);
+    std::fs::write(
+        updated_dir.path().join("source/plugins/native_echo.afb"),
+        crate::plugin::tests::build_plugin_afb(&crate::plugin::tests::constant_output_wat(
+            br#"{"changed":true}"#,
+        )),
+    )
+    .unwrap();
+    let (packed, _) = crate::pack_archive::pack_dir(&updated_dir.path().join("source")).unwrap();
+    let updated = crate::pack_archive::PackArchive::from_bytes(&packed).unwrap();
+    let notify_access = access.clone();
+    let notify_home = home.path().to_owned();
+    let update = crate::pack::plugin_lifecycle::install(
+        home.path(),
+        &updated,
+        false,
+        None,
+        &BTreeMap::new(),
+        move |identity| async move {
+            super::record_plugin_store_change(
+                &notify_access,
+                OWNER,
+                &notify_home,
+                &identity.coordinate,
+                Some(&identity),
+            )
+            .await
+        },
+    )
+    .await;
+    assert!(
+        update.is_err(),
+        "concurrent update must not change the locked store"
+    );
+    assert_eq!(
+        crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap(),
+        old
+    );
+    release.notify_one();
+    installer.await.unwrap().unwrap();
+    let notify_access = access.clone();
+    let notify_home = home.path().to_owned();
+    let after_commit = crate::pack::plugin_lifecycle::install(
+        home.path(),
+        &updated,
+        false,
+        None,
+        &BTreeMap::new(),
+        move |identity| async move {
+            super::record_plugin_store_change(
+                &notify_access,
+                OWNER,
+                &notify_home,
+                &identity.coordinate,
+                Some(&identity),
+            )
+            .await
+        },
+    )
+    .await;
+    assert!(
+        after_commit.is_err(),
+        "the committed pin must reject the later update"
+    );
+    assert_eq!(
+        crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap(),
+        old
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
+    let home = tempfile::tempdir().unwrap();
+    let (node, access) = dependency_fixture().await;
+    let (_source, _, old_archive) = crate::pack::plugin_lifecycle::tests::fixture("1.0.0", false);
+    let (old_home, _) = crate::pack::plugin_lifecycle::install(
+        home.path(),
+        &old_archive,
+        false,
+        None,
+        &BTreeMap::new(),
+        |_| async { Ok(()) },
+    )
+    .await
+    .unwrap();
+    let old = crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
+    let external: PackConfig = serde_json::from_value(json!({
+        "node": {"node_did": OWNER},
+        "agents": [{"agent_id":"standalone-survivor", "node_did": OWNER, "context_id":"standalone-context", "inference_profile_id":"glm:inference"}],
+        "contexts": [{"context_id":"standalone-context", "node_did":OWNER,"tools_id":"standalone-tools"}],
+        "tools": [{"tools_id":"standalone-tools", "node_did":OWNER, "integrations":{"plugins":[{"plugin":"fixture/native_echo","digest":old.digest}]}}]
+    })).unwrap();
+    install(&access, "1", &external, DriftPolicy::Refuse)
+        .await
+        .unwrap();
+    let (updated_dir, _, _) = crate::pack::plugin_lifecycle::tests::fixture("2.0.0", false);
+    let changed = crate::plugin::tests::build_plugin_afb(
+        &crate::plugin::tests::constant_output_wat(br#"{"changed":true}"#),
+    );
+    std::fs::write(
+        updated_dir.path().join("source/plugins/native_echo.afb"),
+        changed,
+    )
+    .unwrap();
+    let (packed, _) = crate::pack_archive::pack_dir(&updated_dir.path().join("source")).unwrap();
+    let updated = crate::pack_archive::PackArchive::from_bytes(&packed).unwrap();
+    let notify_access = access.clone();
+    let notify_home = home.path().to_owned();
+    let error = crate::pack::plugin_lifecycle::install(
+        home.path(),
+        &updated,
+        false,
+        None,
+        &BTreeMap::new(),
+        move |identity| async move {
+            super::record_plugin_store_change(
+                &notify_access,
+                OWNER,
+                &notify_home,
+                &identity.coordinate,
+                Some(&identity),
+            )
+            .await
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("standalone-survivor"),
+        "{error:#}"
+    );
+    assert_eq!(
+        crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap(),
+        old
+    );
+    assert_eq!(
+        crate::pack::read_home_install(home.path(), "fixture/native_echo_pack")
+            .unwrap()
+            .unwrap(),
+        old_home
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn dependency_schema_is_published_before_root_schema_rejection() {
+    let (node, access) = dependency_fixture().await;
+    let (guards, _, _) = documents_dependency_pair(false, false);
+    let dependency_root = guards[0].path().join("dependee_fixture");
+    let root = guards[1].path().join("dependent_fixture");
+    for (dir, filename, schema) in [
+        (
+            &dependency_root,
+            "dependency.graphql",
+            "type PackSchemaDependency { name: String }",
+        ),
+        (
+            &root,
+            "root.graphql",
+            "type PackSchemaRoot { dependency: PackSchemaDependency }",
+        ),
+    ] {
+        std::fs::create_dir_all(dir.join("schemas")).unwrap();
+        std::fs::write(dir.join("schemas").join(filename), schema).unwrap();
+        let path = dir.join("manifest.json");
+        let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        manifest["assets"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(format!("schemas/{filename}")));
+        std::fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    }
+    let archive = |dir: &std::path::Path| {
+        let (bytes, _) = crate::pack_archive::pack_dir(dir).unwrap();
+        crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+    };
+    let dependency = archive(&dependency_root);
+    let dependent = archive(&root);
+    let error = try_install_dependent_with_dependee(&access, &dependency, &dependent, None)
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("PackSchemaDependency"),
+        "{error:#}"
+    );
+    let result = access
+        .execute("{PackSchemaDependency {_docID}}")
+        .await
+        .unwrap();
+    assert!(result["data"]["PackSchemaDependency"].is_array());
+    std::fs::write(
+        root.join("schemas/root.graphql"),
+        "type PackSchemaRoot { name: String }",
+    )
+    .unwrap();
+    let corrected = archive(&root);
+    install_dependent_with_dependee(&access, &dependency, &corrected, None).await;
+    let result = access
+        .execute("{PackSchemaDependency {_docID} PackSchemaRoot {_docID}}")
+        .await
+        .unwrap();
+    assert!(result["data"]["PackSchemaDependency"].is_array());
+    assert!(result["data"]["PackSchemaRoot"].is_array());
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn definitive_document_drift_rejection_restores_previously_pinned_plugin() {
+    let home = tempfile::tempdir().unwrap();
+    let (node, access) = dependency_fixture().await;
+    let manifest = plugin_pack_manifest("drift_fixture", "documents", &["web_search"]);
+    let old_bytes = crate::plugin::tests::build_plugin_afb(
+        &crate::plugin::tests::constant_output_wat(br#"{"v":1}"#),
+    );
+    let new_bytes = crate::plugin::tests::build_plugin_afb(
+        &crate::plugin::tests::constant_output_wat(br#"{"v":2}"#),
+    );
+    let pin = format!(
+        "sha256:{}",
+        crate::plugin::store::content_digest_hex(&old_bytes)
+    );
+    let config: PackConfig = serde_json::from_value(json!({
+        "node": {"node_did": OWNER},
+        "agents": [{"agent_id":"drift-agent", "node_did":OWNER,"context_id":"drift-context","inference_profile_id":"glm:inference"}],
+        "contexts": [{"context_id":"drift-context", "node_did":OWNER,"tools_id":"drift-tools"}],
+        "tools": [{"tools_id":"drift-tools", "node_did":OWNER,"display_name":"original",
+            "integrations":{"plugins":[{"plugin":"acme/web_search","digest":pin}]}}]
+    })).unwrap();
+    let assets = |bytes| BTreeMap::from([("plugins/web_search.afb".to_owned(), bytes)]);
+    let bindings = crate::pack::PackInferenceBindings::new();
+    super::documents::install_documents_with_plugins(
+        &access,
+        OWNER,
+        &manifest,
+        &format!("sha256:{}", "1".repeat(64)),
+        &config,
+        DriftPolicy::Refuse,
+        Some(home.path()),
+        assets(old_bytes),
+        false,
+        &bindings,
+        Vec::new(),
+        true,
+    )
+    .await
+    .unwrap();
+    edit_tools(&access, "drift-tools", "operator edit").await;
+    let before = crate::plugin::store::read_record(home.path(), "acme", "web_search").unwrap();
+    let docs = access.execute("{Tools(filter: {tools_id: {_eq: \"drift-tools\"}}) {display_name integrations} PackInstallation {coordinate digest}}").await.unwrap();
+    let error = super::documents::install_documents_with_plugins(
+        &access,
+        OWNER,
+        &manifest,
+        &format!("sha256:{}", "2".repeat(64)),
+        &config,
+        DriftPolicy::Refuse,
+        Some(home.path()),
+        assets(new_bytes),
+        false,
+        &bindings,
+        Vec::new(),
+        true,
+    )
+    .await
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("drift"), "{error:#}");
+    assert_eq!(
+        crate::plugin::store::read_record(home.path(), "acme", "web_search").unwrap(),
+        before
+    );
+    assert_eq!(access.execute("{Tools(filter: {tools_id: {_eq: \"drift-tools\"}}) {display_name integrations} PackInstallation {coordinate digest}}").await.unwrap(), docs);
+    node.shutdown().await;
+}
+
+#[test]
+fn staging_ignores_schema_patches_but_collects_sdl_and_plugin_assets() {
+    let mut manifest = plugin_pack_manifest("staging_patch", "documents", &["web_search"]);
+    manifest.metadata.assets.extend([
+        "schemas/base.graphql".to_owned(),
+        "schemas/add-field.patch.json".to_owned(),
+        "schemas/other.json-patch".to_owned(),
+    ]);
+    let paths = crate::plugin::install::stage_asset_paths(&manifest).unwrap();
+    assert!(paths.contains("schemas/base.graphql"));
+    assert!(paths.contains("plugins/web_search.afb"));
+    assert!(!paths.contains("schemas/add-field.patch.json"));
+    assert!(!paths.contains("schemas/other.json-patch"));
+    assert!(crate::pack::document_pack_schema_paths(&manifest).is_err());
+}
+
+#[tokio::test]
+async fn committed_ack_timeout_retains_staged_plugin_records() {
+    let home = tempfile::tempdir().unwrap();
+    let manifest = plugin_pack_manifest("ack_timeout", "documents", &["web_search"]);
+    let bytes = tokio::task::spawn_blocking(|| {
+        crate::plugin::tests::build_plugin_afb(&crate::plugin::tests::constant_output_wat(
+            br#"{"version":2}"#,
+        ))
+    })
+    .await
+    .unwrap();
+    let expected_digest = format!(
+        "sha256:{}",
+        crate::plugin::store::content_digest_hex(&bytes)
+    );
+    let stage = crate::plugin::install::stage_pack_graph(
+        home.path(),
+        vec![crate::plugin::install::PluginStageInput {
+            manifest,
+            digest: format!("sha256:{}", "2".repeat(64)),
+            assets: BTreeMap::from([("plugins/web_search.afb".to_owned(), bytes)]),
+            bindings: BTreeMap::new(),
+        }],
+        false,
+        OWNER,
+    )
+    .await
+    .unwrap();
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let access = ConfigAccess::local(node.clone());
+    access
+        .add_collection("type AckProbe { value: String }")
+        .await
+        .unwrap();
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let mut write = Box::pin(
+        crate::config_client::ConfigApplyTxn::with_embedded_commit_ack_pause(
+            reached.clone(),
+            access.transact_write_with_finality("test.pack.ack_timeout", |txn| {
+                Box::pin(async move {
+                    txn.execute(
+                        "mutation { create_AckProbe(input: {value: \"committed\"}) { _docID } }",
+                    )
+                    .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            }),
+        ),
+    );
+    tokio::select! {
+        () = reached.notified() => {},
+        result = &mut write => panic!("commit did not reach acknowledgement pause: {result:?}"),
+    }
+    tokio::time::pause();
+    tokio::time::advance(crate::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT).await;
+    tokio::time::resume();
+    let error = write.await.unwrap_err();
+    let cases = tokio::task::spawn_blocking(|| {
+        crate::lean_vocab_test::lean_contract_snapshot()
+            .pack_finality_cases
+            .clone()
+    })
+    .await
+    .unwrap();
+    let expected = cases
+        .iter()
+        .find(|case| case["attempts"] == json!(["unknown_commit"]))
+        .unwrap()["unconfirmed"]
+        .as_bool()
+        .unwrap();
+    assert_eq!(error.unconfirmed, expected);
+    stage.finish(error.unconfirmed).await.unwrap();
+    assert_eq!(
+        crate::plugin::store::read_record(home.path(), "acme", "web_search")
+            .unwrap()
+            .digest,
+        expected_digest
+    );
+    let rows = access.execute("{ AckProbe { value } }").await.unwrap();
+    assert_eq!(rows["data"]["AckProbe"], json!([{"value":"committed"}]));
+    node.shutdown().await;
 }

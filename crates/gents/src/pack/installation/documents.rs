@@ -14,7 +14,7 @@ use super::super::{
 };
 use super::{DriftPolicy, InstallReport, InstalledPackPlugin, PackIdentity};
 
-fn sdl_paths(manifest: &super::super::PackManifest) -> std::collections::BTreeSet<&str> {
+pub(crate) fn sdl_paths(manifest: &super::super::PackManifest) -> std::collections::BTreeSet<&str> {
     let mut paths: std::collections::BTreeSet<&str> = manifest
         .metadata
         .assets
@@ -159,6 +159,33 @@ pub struct PreparedDocumentPackInstall {
     pub dependencies: Vec<PreparedDependency>,
 }
 
+pub(super) fn document_ux_install_allowed(
+    has_ux: bool,
+    has_home: bool,
+    installed_via: InstalledVia,
+) -> bool {
+    !has_ux || (has_home && installed_via == InstalledVia::Operator)
+}
+
+pub(super) fn require_installed_dependency_ux(
+    manifest: &super::super::PackManifest,
+    digest: &str,
+    home: Option<&Path>,
+) -> Result<()> {
+    if manifest.metadata.ux.is_empty() {
+        return Ok(());
+    }
+    let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
+    let home = home.context(
+        "a dependency with UX must first be installed by the operator in the node's local home",
+    )?;
+    let record = super::super::read_home_install(home, &coordinate)?
+        .context("a dependency with UX must first be installed by the operator")?;
+    anyhow::ensure!(record.digest == digest && record.installed_via == Some(InstalledVia::Operator),
+        "dependency {coordinate} with UX must first be installed explicitly by the operator at the same digest");
+    Ok(())
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "install inputs and policies supplied by each install entry point"
@@ -172,9 +199,25 @@ pub async fn prepare_document_pack_install(
     dependencies: &[&PackArchive],
     installed_via: InstalledVia,
     plugin_home: Option<&Path>,
+    root_archive: Option<&PackArchive>,
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<PreparedDocumentPackInstall> {
+    if let Some(archive) = root_archive {
+        anyhow::ensure!(
+            serde_json::to_value(archive.manifest())? == serde_json::to_value(manifest)?,
+            "prepared pack manifest does not match the archive"
+        );
+    }
+    anyhow::ensure!(
+        document_ux_install_allowed(
+            !manifest.metadata.ux.is_empty(),
+            plugin_home.is_some(),
+            installed_via
+        ),
+        "document packs with UX require an operator install with the node's local home"
+    );
     for dependency in dependencies {
+        require_installed_dependency_ux(dependency.manifest(), dependency.digest(), plugin_home)?;
         let dependency = dependency.manifest();
         anyhow::ensure!(
             matches!(
@@ -300,6 +343,48 @@ pub async fn prepare_document_pack_install(
             installed_via,
         )?;
     }
+    let mut shipped_digests = BTreeMap::new();
+    let pinned = std::iter::once(&config)
+        .chain(
+            prepared_dependencies
+                .iter()
+                .map(|dependency| &dependency.config),
+        )
+        .flat_map(|config| &config.tools)
+        .flat_map(|tools| {
+            tools
+                .integrations
+                .as_ref()
+                .and_then(|i| i.plugins.as_ref())
+                .into_iter()
+                .flatten()
+        })
+        .filter(|reference| reference.digest.is_some())
+        .map(|reference| reference.plugin.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for (shipper, archive) in std::iter::once((manifest, root_archive)).chain(
+        dependencies
+            .iter()
+            .map(|archive| (archive.manifest(), Some(*archive))),
+    ) {
+        for plugin in &shipper.metadata.plugins {
+            let coordinate = format!("{}/{}", shipper.metadata.namespace, plugin.name);
+            if pinned.contains(coordinate.as_str()) {
+                let archive =
+                    archive.context("a pinned shipped plugin requires its pack archive")?;
+                let digest = format!(
+                    "sha256:{}",
+                    crate::plugin::store::content_digest_hex(archive.asset(&plugin.artifact)?)
+                );
+                if let Some(previous) = shipped_digests.insert(coordinate.clone(), digest.clone()) {
+                    anyhow::ensure!(
+                        previous == digest,
+                        "pack graph ships conflicting artifacts for plugin {coordinate}"
+                    );
+                }
+            }
+        }
+    }
     ensure_plugin_references_resolve(
         &std::iter::once((manifest, &config))
             .chain(
@@ -309,6 +394,7 @@ pub async fn prepare_document_pack_install(
             )
             .collect::<Vec<_>>(),
         plugin_home,
+        &shipped_digests,
     )?;
     Ok(PreparedDocumentPackInstall {
         config,
@@ -318,20 +404,16 @@ pub async fn prepare_document_pack_install(
     })
 }
 
-/// Refuses Tools naming a plugin that no pack in `packs` (the root first, then
-/// its dependencies) ships and that the node's plugin store lacks, since
-/// startup cannot build that agent's tools. `plugin_home` is `None` when that
-/// store is not visible to this installer (a remote GraphQL install);
-/// references outside these packs are then left to startup, which reports the
-/// agent unavailable.
+/// Refuses unresolved Tools references before any pack writes. A missing
+/// `plugin_home` cannot establish remote file availability: GraphQL installation
+/// records are not a plugin inventory and this interface cannot publish bytes
+/// to that host. Only plugin-free content can be prepared without a local home.
 pub(super) fn ensure_plugin_references_resolve(
     packs: &[(&super::super::PackManifest, &PackConfig)],
     plugin_home: Option<&Path>,
+    shipped_digests: &BTreeMap<String, String>,
 ) -> Result<()> {
-    let Some(home) = plugin_home else {
-        return Ok(());
-    };
-    let root = &packs[0].0.name;
+    let root = format!("{}/{}", packs[0].0.metadata.namespace, packs[0].0.name);
     let shipped = packs
         .iter()
         .flat_map(|(shipper, _)| {
@@ -350,12 +432,30 @@ pub(super) fn ensure_plugin_references_resolve(
                 .and_then(|integrations| integrations.plugins.as_deref())
                 .unwrap_or_default();
             for reference in references {
+                let home = plugin_home.with_context(|| format!(
+                    "pack {} Tools {:?} names plugin {}; remote GraphQL installation cannot verify plugin files on the node; run `gents pack install {} --home <node-home>` on that node without --graphql",
+                    manifest.name, tools.tools_id, reference.plugin, root
+                ))?;
                 if shipped.contains(&reference.plugin) {
+                    if let Some(pin) = &reference.digest {
+                        let actual = shipped_digests.get(&reference.plugin).with_context(|| {
+                            format!("cannot verify shipped plugin {} digest", reference.plugin)
+                        })?;
+                        anyhow::ensure!(pin == actual,
+                            "pack {} Tools {:?} pins plugin {} to {}, but the shipped artifact is {}; update the pin or the pack",
+                            manifest.name, tools.tools_id, reference.plugin, pin, actual);
+                    }
                     continue;
                 }
                 let (namespace, name) = crate::plugin::store::parse_coordinate(&reference.plugin)?;
                 match crate::plugin::store::read_record(home, namespace, name) {
-                    Ok(_) => {}
+                    Ok(record) => {
+                        if let Some(pin) = &reference.digest {
+                            anyhow::ensure!(pin == &record.digest,
+                                "pack {} Tools {:?} pins plugin {} to {}, but the installed artifact is {}; install the matching plugin or update the pin",
+                                manifest.name, tools.tools_id, reference.plugin, pin, record.digest);
+                        }
+                    }
                     Err(error) if crate::plugin::store::is_not_found(&error) => anyhow::bail!(
                         "pack {} Tools {:?} names plugin {}, which neither the pack nor its dependencies ship and this node has not installed; install the pack that ships {} first (`gents pack install <namespace>/<pack>`), or declare that pack as a dependency of {}",
                         manifest.name,
@@ -371,6 +471,13 @@ pub(super) fn ensure_plugin_references_resolve(
                     }
                 }
             }
+        }
+    }
+    if plugin_home.is_none() {
+        if let Some(plugin) = shipped.first() {
+            anyhow::bail!(
+                "pack {root} ships plugin {plugin}; remote GraphQL installation cannot publish plugin files on the node; run `gents pack install {root} --home <node-home>` on that node without --graphql"
+            );
         }
     }
     Ok(())
@@ -391,6 +498,17 @@ pub async fn install_prepared_document_pack(
     installed_via: InstalledVia,
     policy: DriftPolicy,
 ) -> Result<InstallReport> {
+    anyhow::ensure!(
+        document_ux_install_allowed(
+            !archive.manifest().metadata.ux.is_empty(),
+            plugin_home.is_some(),
+            installed_via
+        ),
+        "document packs with UX require an operator install with the node's local home"
+    );
+    for dependency in &prepared.dependencies {
+        require_installed_dependency_ux(&dependency.manifest, &dependency.digest, plugin_home)?;
+    }
     for plugin in &archive.manifest().metadata.plugins {
         plugin_data_unique_keys(archive.manifest(), plugin, &|path| archive.asset(path))?;
     }
@@ -441,6 +559,7 @@ pub async fn install_prepared_document_pack(
             leases.push(lease);
         }
     }
+    apply_prepared_dependency_schemas(access, prepared).await?;
     let mut schemas = Vec::new();
     for path in document_pack_schema_paths(archive.manifest())? {
         let sdl = std::str::from_utf8(archive.asset(path)?)?;
@@ -448,46 +567,6 @@ pub async fn install_prepared_document_pack(
             path,
             crate::config_client::preview_schema_install(access, sdl).await?,
         ));
-    }
-    for PreparedDependency {
-        config,
-        inference,
-        schemas,
-        manifest,
-        digest,
-        assets,
-        ..
-    } in &prepared.dependencies
-    {
-        for (path, plan) in schemas {
-            crate::config_client::apply_schema_install(
-                access,
-                std::str::from_utf8(&assets[path])?,
-                &plan.artifact_digest,
-            )
-            .await?;
-        }
-        let plugins = install_plugins(
-            owner,
-            plugin_home,
-            manifest,
-            digest,
-            &inference.bindings,
-            &|path| {
-                assets
-                    .get(path)
-                    .map(Vec::as_slice)
-                    .with_context(|| format!("dependency asset {path} was not prepared"))
-            },
-            grant_authority,
-        )?;
-        let identity = PackIdentity {
-            explicit: false,
-            ..PackIdentity::new(manifest, digest, plugins)
-        };
-        super::super::install_pack_documents(access, owner, &identity, config, policy)
-            .await
-            .context("document pack installation failed after local pack plugins were published; the plugins remain installed")?;
     }
     for (path, plan) in schemas {
         crate::config_client::apply_schema_install(
@@ -497,25 +576,42 @@ pub async fn install_prepared_document_pack(
         )
         .await?;
     }
-    let plugins = install_plugins(
-        owner,
-        plugin_home,
-        archive.manifest(),
-        archive.digest(),
-        &prepared.inference.bindings,
-        &|path| archive.asset(path),
-        grant_authority,
-    )?;
-    let mut identity = PackIdentity::new(archive.manifest(), archive.digest(), plugins);
-    identity.dependencies = prepared
+    let dependency_coordinates = prepared
         .dependencies
         .iter()
         .map(|dependency| dependency.coordinate.clone())
-        .collect();
-    let report =
-        super::super::install_pack_documents(access, owner, &identity, &prepared.config, policy)
-            .await
-            .context("document pack installation failed after local pack plugins were published; the plugins remain installed")?;
+        .collect::<Vec<_>>();
+    let (report, plugins) = install_prepared_document_graph(
+        access,
+        owner,
+        archive,
+        prepared,
+        policy,
+        plugin_home,
+        grant_authority,
+        true,
+    )
+    .await?;
+    let root_coordinate = format!(
+        "{}/{}",
+        archive.manifest().metadata.namespace,
+        archive.manifest().name
+    );
+    let mut identity = PackIdentity::new(
+        archive.manifest(),
+        archive.digest(),
+        plugins
+            .iter()
+            .filter(|plugin| {
+                plugin.owner_pack_coordinate.as_deref() == Some(root_coordinate.as_str())
+            })
+            .map(|plugin| InstalledPackPlugin {
+                name: plugin.name.clone(),
+                digest: plugin.digest.clone(),
+            })
+            .collect(),
+    );
+    identity.dependencies = dependency_coordinates;
     if let Some(home) = plugin_home {
         record_home_install(
             home,
@@ -561,34 +657,309 @@ pub(super) fn record_home_install(
     )
 }
 
-fn install_plugins<'a>(
+#[cfg(test)]
+#[derive(Clone)]
+pub(super) struct InstallationPause {
+    pub coordinate: String,
+    pub reached: std::sync::Arc<tokio::sync::Notify>,
+    pub release: std::sync::Arc<tokio::sync::Notify>,
+    pub completed: std::sync::Arc<tokio::sync::Notify>,
+}
+
+#[cfg(test)]
+pub(super) static INSTALLATION_PAUSE: std::sync::Mutex<Option<InstallationPause>> =
+    std::sync::Mutex::new(None);
+
+pub async fn apply_prepared_dependency_schemas(
+    access: &ConfigAccess,
+    prepared: &PreparedDocumentPackInstall,
+) -> Result<()> {
+    for dependency in &prepared.dependencies {
+        for (path, plan) in &dependency.schemas {
+            crate::config_client::apply_schema_install(
+                access,
+                std::str::from_utf8(&dependency.assets[path])?,
+                &plan.artifact_digest,
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "prepared graph installation inputs"
+)]
+pub async fn install_prepared_document_graph(
+    access: &ConfigAccess,
     owner: &str,
+    archive: &PackArchive,
+    prepared: &PreparedDocumentPackInstall,
+    policy: DriftPolicy,
     home: Option<&Path>,
+    consent: bool,
+    explicit: bool,
+) -> Result<(InstallReport, Vec<crate::plugin::store::InstalledPlugin>)> {
+    let mut stages = Vec::new();
+    for dependency in &prepared.dependencies {
+        stages.push(DocumentPackStage {
+            manifest: dependency.manifest.clone(),
+            digest: dependency.digest.clone(),
+            config: dependency.config.clone(),
+            assets: dependency.assets.clone(),
+            bindings: dependency.inference.bindings.clone(),
+            dependencies: Vec::new(),
+            explicit: false,
+        });
+    }
+    let mut assets = BTreeMap::new();
+    for path in crate::plugin::install::stage_asset_paths(archive.manifest())? {
+        assets.insert(path.to_owned(), archive.asset(path)?.to_vec());
+    }
+    stages.push(DocumentPackStage {
+        manifest: archive.manifest().clone(),
+        digest: archive.digest().to_owned(),
+        config: prepared.config.clone(),
+        assets,
+        bindings: prepared.inference.bindings.clone(),
+        dependencies: prepared
+            .dependencies
+            .iter()
+            .map(|d| d.coordinate.clone())
+            .collect(),
+        explicit,
+    });
+    let (mut reports, plugins) =
+        install_document_graph(access, owner, stages, policy, home, consent).await?;
+    Ok((
+        reports.pop().context("pack graph has no root report")?,
+        plugins,
+    ))
+}
+
+#[derive(Clone)]
+pub(super) struct DocumentPackStage {
+    pub(super) manifest: super::super::PackManifest,
+    pub(super) digest: String,
+    pub(super) config: PackConfig,
+    pub(super) assets: BTreeMap<String, Vec<u8>>,
+    pub(super) bindings: PackInferenceBindings,
+    pub(super) dependencies: Vec<String>,
+    pub(super) explicit: bool,
+}
+
+pub(super) async fn install_document_graph(
+    access: &ConfigAccess,
+    owner: &str,
+    stages: Vec<DocumentPackStage>,
+    policy: DriftPolicy,
+    home: Option<&Path>,
+    consent: bool,
+) -> Result<(
+    Vec<InstallReport>,
+    Vec<crate::plugin::store::InstalledPlugin>,
+)> {
+    let access = access.clone();
+    let owner = owner.to_owned();
+    let home = home.map(Path::to_owned);
+    tokio::spawn(async move {
+        let documents = stages
+            .iter()
+            .map(|stage| super::installable_documents(&stage.config))
+            .collect::<Result<Vec<_>>>()?;
+        let input = stages
+            .iter()
+            .filter(|stage| !stage.manifest.metadata.plugins.is_empty())
+            .map(|stage| crate::plugin::install::PluginStageInput {
+                manifest: stage.manifest.clone(),
+                digest: stage.digest.clone(),
+                assets: stage.assets.clone(),
+                bindings: stage.bindings.clone(),
+            })
+            .collect::<Vec<_>>();
+        let has_references = stages.iter().any(|stage| {
+            stage.config.tools.iter().any(|tools| {
+                tools
+                    .integrations
+                    .as_ref()
+                    .and_then(|integrations| integrations.plugins.as_ref())
+                    .is_some_and(|references| !references.is_empty())
+            })
+        });
+        let plugin_stage = if input.is_empty() && !has_references {
+            None
+        } else {
+            Some(
+                crate::plugin::install::stage_pack_graph(
+                    home.as_deref()
+                        .context("pack plugins require the node's local plugin home")?,
+                    input,
+                    consent,
+                    &owner,
+                )
+                .await?,
+            )
+        };
+        #[cfg(test)]
+        let pause = {
+            let mut slot = INSTALLATION_PAUSE.lock().unwrap();
+            if slot.as_ref().is_some_and(|pause| {
+                stages.iter().any(|stage| {
+                    pause.coordinate
+                        == format!(
+                            "{}/{}",
+                            stage.manifest.metadata.namespace, stage.manifest.name
+                        )
+                })
+            }) {
+                slot.take()
+            } else {
+                None
+            }
+        };
+        #[cfg(test)]
+        if let Some(pause) = &pause {
+            pause.reached.notify_one();
+            pause.release.notified().await;
+        }
+        let plugins = plugin_stage
+            .as_ref()
+            .map(|stage| stage.installed.clone())
+            .unwrap_or_default();
+        let reference_packs = stages
+            .iter()
+            .rev()
+            .map(|stage| (stage.manifest.clone(), stage.config.clone()))
+            .collect::<Vec<_>>();
+        let identities = stages
+            .iter()
+            .map(|stage| {
+                let coordinate = format!(
+                    "{}/{}",
+                    stage.manifest.metadata.namespace, stage.manifest.name
+                );
+                let mut identity = PackIdentity::new(
+                    &stage.manifest,
+                    &stage.digest,
+                    plugins
+                        .iter()
+                        .filter(|plugin| {
+                            plugin.owner_pack_coordinate.as_deref() == Some(coordinate.as_str())
+                        })
+                        .map(|plugin| InstalledPackPlugin {
+                            name: plugin.name.clone(),
+                            digest: plugin.digest.clone(),
+                        })
+                        .collect(),
+                );
+                identity.dependencies = stage.dependencies.clone();
+                identity.explicit = stage.explicit;
+                identity
+            })
+            .collect::<Vec<_>>();
+        let result = access
+            .transact_write_with_finality("pack.document_graph.install", |txn| {
+                let documents = documents.clone();
+                let identities = &identities;
+                let owner = &owner;
+                let reference_packs = reference_packs.clone();
+                let home = home.clone();
+                let plugins = plugins.clone();
+                Box::pin(async move {
+                    tokio::task::spawn_blocking(move || {
+                        let packs = reference_packs
+                            .iter()
+                            .map(|(manifest, config)| (manifest, config))
+                            .collect::<Vec<_>>();
+                        let digests = plugins
+                            .iter()
+                            .map(|plugin| {
+                                (
+                                    format!("{}/{}", plugin.namespace, plugin.name),
+                                    plugin.digest.clone(),
+                                )
+                            })
+                            .collect();
+                        ensure_plugin_references_resolve(&packs, home.as_deref(), &digests)
+                    })
+                    .await??;
+                    let mut reports = Vec::new();
+                    for (identity, documents) in identities.iter().zip(documents) {
+                        reports.push(
+                            super::install_in_txn(txn, owner, identity, documents, policy).await?,
+                        );
+                    }
+                    super::validate_plugin_replacements_in_txn(txn, owner, identities).await?;
+                    Ok::<_, anyhow::Error>(reports)
+                })
+            })
+            .await;
+        let rejected = result
+            .as_ref()
+            .err()
+            .is_some_and(|error| !error.unconfirmed);
+        if let Some(stage) = plugin_stage {
+            if let Err(cleanup) = stage.finish(!rejected).await {
+                return Err(match result {
+                    Err(failure) => failure
+                        .error
+                        .context(format!("plugin store cleanup failed: {cleanup:#}")),
+                    Ok(_) => cleanup
+                        .context("plugin store cleanup failed after committed pack transaction"),
+                });
+            }
+        }
+        #[cfg(test)]
+        if let Some(pause) = &pause {
+            pause.completed.notify_one();
+        }
+        result
+            .map_err(|error| error.error)
+            .map(|reports| (reports, plugins))
+            .with_context(|| {
+                if rejected {
+                    "pack document transaction was rejected; local plugin records were restored"
+                } else {
+                    "pack document outcome was not confirmed; local plugins remain published"
+                }
+            })
+    })
+    .await
+    .context("owned pack installation task failed")?
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the document and plugin owners share an installation outcome"
+)]
+pub async fn install_documents_with_plugins(
+    access: &ConfigAccess,
+    owner: &str,
     manifest: &super::super::PackManifest,
     digest: &str,
+    config: &PackConfig,
+    policy: DriftPolicy,
+    home: Option<&Path>,
+    assets: BTreeMap<String, Vec<u8>>,
+    consent: bool,
     bindings: &PackInferenceBindings,
-    asset: &dyn Fn(&str) -> Result<&'a [u8]>,
-    grant_authority: bool,
-) -> Result<Vec<InstalledPackPlugin>> {
-    if manifest.metadata.plugins.is_empty() {
-        return Ok(Vec::new());
-    }
-    let home = home.context("pack plugins require the node's local plugin home")?;
-    let plugins = crate::plugin::install::install_pack_plugins_with_bindings(
-        home,
-        manifest,
-        digest,
-        asset,
-        grant_authority,
-        Some(owner),
-        bindings,
-        |_| Ok(()),
-    )?;
-    Ok(plugins
-        .iter()
-        .map(|p| InstalledPackPlugin {
-            name: p.name.clone(),
-            digest: p.digest.clone(),
-        })
-        .collect())
+    dependencies: Vec<String>,
+    explicit: bool,
+) -> Result<(InstallReport, Vec<crate::plugin::store::InstalledPlugin>)> {
+    let stage = DocumentPackStage {
+        manifest: manifest.clone(),
+        digest: digest.into(),
+        config: config.clone(),
+        assets,
+        bindings: bindings.clone(),
+        dependencies,
+        explicit,
+    };
+    let (mut reports, plugins) =
+        install_document_graph(access, owner, vec![stage], policy, home, consent).await?;
+    Ok((
+        reports.pop().context("pack graph has no root report")?,
+        plugins,
+    ))
 }

@@ -18,6 +18,8 @@ pub const FORMAT_VERSION: u32 = 1;
 pub const MEDIA_TYPE: &str = "application/vnd.gents.pack";
 pub const EXTENSION: &str = "pack";
 pub const HEADER_ENTRY: &str = "pack.json";
+/// The untrusted first archive entry is buffered before parsing, including by
+/// header-only readers, so it has its own allocation bound.
 const MAX_HEADER_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

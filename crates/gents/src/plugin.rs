@@ -10,16 +10,27 @@ use crate::pack::{BindAccess, PackPlugin};
 
 const DEFAULT_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 
+/// Bounds guest memory even when a pack requests a larger resource budget.
 pub const MAX_DECLARED_MEMORY_MIB: u32 = 4096;
+/// Bounds the time a guest may hold runtime resources for one invocation.
 pub const MAX_DECLARED_WALL_CLOCK_SECS: u32 = 900;
+/// The compiled WASI runner's stdout capture holds at most 4 MiB.
 pub const MAX_DECLARED_OUTPUT_MIB: u32 = 4;
 
+/// Afterburner's compiled WASI stdout pipe has this capacity; its limit must
+/// stay aligned with the largest accepted plugin result.
 const STDOUT_CAPTURE_PIPE_BYTES: usize = MAX_DECLARED_OUTPUT_MIB as usize * 1024 * 1024;
 
+/// An overflowing WASI write can trap before the capture is exactly full. A
+/// near-full capture is only a heuristic for classifying the trap as bad output:
+/// the guest may have trapped for a different reason.
 const STDOUT_CAPTURE_TRAP_MARGIN_BYTES: usize = 64 * 1024;
 
+/// Bounds guest diagnostics retained in a plugin result.
 const MAX_STDERR_BYTES: usize = 64 * 1024;
 
+/// Per-invocation defaults can be raised by a pack's plugin declarations within
+/// the host ceilings; they do not grant filesystem or network authority.
 #[derive(Debug, Clone, Copy)]
 pub struct PluginBudget {
     /// Per-VM execution limit. An embedded JS invocation has its own meter;
@@ -83,6 +94,8 @@ impl PluginBudget {
     }
 }
 
+/// Interpreted artifacts with a startup floor need an allowance beyond the
+/// ordinary call budget to instantiate before guest code can run.
 const INTERPRETER_BOOT_ALLOWANCE: std::time::Duration = std::time::Duration::from_secs(60);
 
 impl Default for PluginBudget {

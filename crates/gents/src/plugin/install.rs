@@ -156,8 +156,11 @@ pub fn install_pack_plugins_with_bindings<'a>(
         publish_local(&installed)?;
         Ok(installed)
     })();
-    if result.is_err() {
-        rollback_pack_plugin_records(home, &previous);
+    if let Err(error) = result {
+        rollback_pack_plugin_records(home, &previous).with_context(|| {
+            format!("restoring plugin records after installation failed: {error:#}")
+        })?;
+        return Err(error);
     }
     result
 }
@@ -314,22 +317,157 @@ fn snapshot_pack_plugin_records(
 fn rollback_pack_plugin_records(
     home: &Path,
     previous: &[(String, String, Option<InstalledPlugin>)],
-) {
+) -> Result<()> {
     for (namespace, name, record) in previous {
-        let result = match record {
+        match record {
             Some(record) => store::write_record(home, record),
             None => match store::read_record(home, namespace, name) {
                 Ok(_) => store::remove_record(home, namespace, name).map(|_| ()),
-                Err(_) => Ok(()),
+                Err(error) if store::is_not_found(&error) => Ok(()),
+                Err(error) => Err(error),
             },
-        };
-        if let Err(error) = result {
-            tracing::error!(
-                namespace,
-                name,
-                error = %error,
-                "failed to roll back a plugin record after a failed pack install",
-            );
+        }
+        .with_context(|| format!("restoring plugin {namespace}/{name}"))?;
+    }
+    Ok(())
+}
+
+struct StagedPluginRecords {
+    home: std::path::PathBuf,
+    _lock: store::StoreGuard,
+    previous: Vec<(String, String, Option<InstalledPlugin>)>,
+}
+
+pub(crate) struct StagedPluginInstall {
+    records: Option<StagedPluginRecords>,
+    cleanup: crate::drop_cleanup::DropCleanup,
+    pub(crate) installed: Vec<InstalledPlugin>,
+}
+
+impl StagedPluginInstall {
+    pub(crate) async fn finish(mut self, committed: bool) -> Result<()> {
+        let records = self.records.take();
+        tokio::task::spawn_blocking(move || {
+            if let Some(records) = records {
+                if !committed {
+                    rollback_pack_plugin_records(&records.home, &records.previous)?;
+                }
+            }
+            Ok(())
+        })
+        .await?
+    }
+}
+
+impl Drop for StagedPluginInstall {
+    fn drop(&mut self) {
+        if let Some(records) = self.records.take() {
+            self.cleanup.spawn(async move {
+                let _ = tokio::task::spawn_blocking(move || {
+                    if let Err(error) = rollback_pack_plugin_records(&records.home, &records.previous) {
+                        tracing::error!(%error, "failed to restore plugin records after cancellation");
+                    }
+                })
+                .await;
+            });
         }
     }
+}
+
+pub(crate) fn stage_asset_paths(
+    manifest: &PackManifest,
+) -> Result<std::collections::BTreeSet<&str>> {
+    let mut paths = crate::pack::sdl_paths(manifest);
+    for plugin in &manifest.metadata.plugins {
+        paths.insert(plugin.artifact.as_str());
+        paths.extend(plugin.instructions.as_deref());
+    }
+    Ok(paths)
+}
+
+#[derive(Clone)]
+pub(crate) struct PluginStageInput {
+    pub(crate) manifest: PackManifest,
+    pub(crate) digest: String,
+    pub(crate) assets: BTreeMap<String, Vec<u8>>,
+    pub(crate) bindings: BTreeMap<String, String>,
+}
+
+pub(crate) async fn stage_pack_graph(
+    home: &Path,
+    inputs: Vec<PluginStageInput>,
+    consent: bool,
+    owner: &str,
+) -> Result<StagedPluginInstall> {
+    anyhow::ensure!(
+        !owner.is_empty() || inputs.iter().all(|input| input.bindings.is_empty()),
+        "plugin slot bindings require an owner"
+    );
+    let cleanup = crate::drop_cleanup::DropCleanup::current();
+    let home = home.to_owned();
+    let owner = owner.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let lock = store::try_lock_store(&home)?;
+        store::list_records(&home)?;
+        let mut previous = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for input in &inputs {
+            for record in snapshot_pack_plugin_records(&home, &input.manifest)? {
+                anyhow::ensure!(
+                    seen.insert((record.0.clone(), record.1.clone())),
+                    "pack graph names plugin {}/{} more than once",
+                    record.0,
+                    record.1
+                );
+                previous.push(record);
+            }
+        }
+        let result = (|| {
+            let mut installed = Vec::new();
+            for input in inputs {
+                installed.extend(install_pack_plugins_locked(
+                    &lock,
+                    &home,
+                    &input.manifest,
+                    &input.digest,
+                    |path| {
+                        input
+                            .assets
+                            .get(path)
+                            .map(Vec::as_slice)
+                            .with_context(|| format!("missing pack asset {path}"))
+                    },
+                    consent,
+                )?);
+                if !input.bindings.is_empty() {
+                    bind_plugin_slots_locked(
+                        &lock,
+                        &home,
+                        &input.manifest,
+                        &owner,
+                        &input.bindings,
+                    )?;
+                }
+            }
+            Ok(installed)
+        })();
+        match result {
+            Ok(installed) => Ok(StagedPluginInstall {
+                records: Some(StagedPluginRecords {
+                    home,
+                    _lock: lock,
+                    previous,
+                }),
+                cleanup,
+                installed,
+            }),
+            Err(error) => {
+                rollback_pack_plugin_records(&home, &previous).with_context(|| {
+                    format!("restoring plugin records after installation failed: {error:#}")
+                })?;
+                Err(error)
+            }
+        }
+    })
+    .await?
 }

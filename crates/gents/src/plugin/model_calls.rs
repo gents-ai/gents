@@ -21,6 +21,9 @@ pub const MAX_ANSWER_BYTES_PER_CALL: usize = 32 * 1024 * 1024;
 pub const DEFAULT_MAX_TOKENS: u64 = 8192;
 pub const DEAD_ENDPOINT_ROUNDS: u32 = 2;
 const DEFAULT_CONNECT_TIMEOUT_SECS: i64 = 10;
+/// Bound one host-side model exchange independently of the guest's remaining
+/// wall-clock budget, so a stalled endpoint cannot occupy its permit for the
+/// entire guest lifetime.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

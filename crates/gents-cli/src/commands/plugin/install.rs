@@ -24,52 +24,39 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         !manifest.metadata.plugins.is_empty(),
         "{namespace}/{name} carries no plugins; install the whole pack with gents pack install"
     );
-    let installed = gents::plugin::install::install_pack_plugins(
+    let notification_scope = crate::commands::pack::plugin_notification_scope(&home).await?;
+    let notify_scope = notification_scope.clone();
+    let notify_home = home.clone();
+    let result = gents::pack::plugin_lifecycle::install_plugin(
         &home,
-        manifest,
-        &pack.digest,
-        |path| pack.archive.asset(path),
+        &pack.archive,
         args.grant_authority,
-    )?;
-    let identity = gents::pack::PackIdentity::new(
-        manifest,
-        &pack.digest,
-        installed
-            .iter()
-            .map(|plugin| gents::pack::InstalledPackPlugin {
-                name: plugin.name.clone(),
-                digest: plugin.digest.clone(),
-            })
-            .collect(),
-    );
-    let coordinate = format!("{namespace}/{name}");
-    let record = gents::pack::HomePackInstall {
-        coordinate: coordinate.clone(),
-        version: manifest.version.clone(),
-        digest: pack.digest.clone(),
-        kind: manifest.metadata.kind.clone(),
-        assets: gents::pack::materialize::cache_root(
-            std::path::Path::new(""),
-            namespace,
-            name,
-            &pack.digest,
-        )?
-        .to_string_lossy()
-        .into_owned(),
-        dependency_assets: Vec::new(),
-        plugins: identity.plugins.clone(),
-        ux: manifest.metadata.ux.clone(),
-        installed_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        installed_via: Some(gents::pack::InstalledVia::Operator),
-    };
-    gents::pack::record_after_install(&home, record, gents::pack::InstalledVia::Operator, true)?;
-    crate::commands::pack::record_plugin_store_change(&home, &coordinate, Some(&identity))
-        .await
-        .context("the plugins were installed locally, but their node notification was not confirmed; retry to reconcile")?;
+        move |identity| async move {
+            if let Some((access, owner)) = notify_scope {
+                gents::pack::record_plugin_store_change(
+                    &access,
+                    &owner,
+                    &notify_home,
+                    &identity.coordinate,
+                    Some(&identity),
+                )
+                .await
+            } else {
+                Ok(())
+            }
+        },
+    )
+    .await;
+    if let Some((access, _)) = &notification_scope {
+        if let Some(node) = access.local_node() {
+            node.shutdown().await;
+        }
+    }
+    let (record, installed) = result?;
 
     crate::print_json(&json!({
         "pack": format!("{namespace}/{name}"),
-        "version": manifest.version,
+        "version": record.version,
         "plugins": installed,
         "home": home,
     }))
