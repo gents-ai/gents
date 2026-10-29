@@ -9,7 +9,10 @@ use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
 #[tokio::test]
 async fn desktop_process_control_uses_hosted_operator_bearer_and_handles_statuses() {
     let server = MockServer::start().await;
-    let redirect_target = MockServer::start().await;
+    // Pooled servers reuse addresses across tests, so a stray request meant for
+    // another test's recycled server would be indistinguishable from a followed
+    // redirect.
+    let redirect_target = MockServer::builder().start().await;
     let directory = tempfile::tempdir().unwrap();
     let paths = DesktopPaths::from_root(directory.path().join("desktop"));
     paths.ensure_root_dirs().await.unwrap();
@@ -127,11 +130,15 @@ async fn desktop_process_control_uses_hosted_operator_bearer_and_handles_statuse
             .unwrap_err(),
         "redirect refused"
     );
-    assert!(redirect_target
-        .received_requests()
-        .await
-        .unwrap()
-        .is_empty());
+    let followed = redirect_target.received_requests().await.unwrap();
+    assert!(
+        followed.is_empty(),
+        "process control followed a redirect: {:?}",
+        followed
+            .iter()
+            .map(|request| format!("{} {}", request.method, request.url))
+            .collect::<Vec<_>>()
+    );
     for request in server
         .received_requests()
         .await
