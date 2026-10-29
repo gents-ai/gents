@@ -137,6 +137,37 @@ theorem CommandResult.toState_terminal (r : CommandResult) (s : ManagedExecState
   | interrupted => simp [CommandResult.toState] at h
 def CommandResult.succeeded : CommandResult → Bool
   | .exited 0 => true | _ => false
+
+/-- A before-hook may explicitly stop the agent without reporting failure.
+Only configured nonzero exit codes have this meaning; process interruption,
+timeout, launch failure and all other nonzero exits retain their normal outcome. -/
+inductive BeforeDecision where | proceed | skip | failure | interrupted
+  deriving DecidableEq, Repr
+
+def beforeDecision (skipExitCodes : List Int) (result : CommandResult) : BeforeDecision :=
+  match result with
+  | .exited 0 => .proceed
+  | .exited code => if code ∈ skipExitCodes then .skip else .failure
+  | .interrupted => .interrupted
+  | .launchFailed | .timedOut => .failure
+
+theorem beforeDecision_zero_always_proceeds (codes : List Int) :
+    beforeDecision codes (.exited 0) = .proceed := by rfl
+
+theorem beforeDecision_skip_requires_configured_nonzero (codes : List Int) (code : Int)
+    (h : beforeDecision codes (.exited code) = .skip) :
+    code ≠ 0 ∧ code ∈ codes := by
+  by_cases hz : code = 0
+  · subst code; simp [beforeDecision] at h
+  · simp [beforeDecision, hz] at h
+    exact ⟨hz, h⟩
+
+theorem beforeDecision_interruption_never_skips (codes : List Int) :
+    beforeDecision codes .interrupted = .interrupted := by rfl
+
+example : beforeDecision [10] (.exited 10) = .skip := by decide
+example : beforeDecision [10] (.exited 1) = .failure := by decide
+example : beforeDecision [10] .timedOut = .failure := by decide
 /-- Observations for one execution attempt, not a promise that host commands
 are repeatable. Cwd/env, launch, capture, timeout, and process termination stay
 with the existing host owner; this function does not implement host execution. -/
