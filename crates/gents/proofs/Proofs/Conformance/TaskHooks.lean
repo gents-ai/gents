@@ -189,7 +189,7 @@ def runCases : List RunCase :=
     , expectedOutcome := .success, expectedFinalOutcome := .success
     , expectedAgentRan := true }
   , { name := "skip_configuration_does_not_hide_timeout"
-    , hooks := [{ before "prepare" with skipExitCodes := [10] }, afterFailure "report", cleanup "sweep"]
+    , hooks := [{ before "prepare" (some 3) with skipExitCodes := [10] }, afterFailure "report", cleanup "sweep"]
     , script := [⟨"prepare", .timedOut⟩], agent := .success
     , expectedOutcome := .failure (.hook "prepare"), expectedFinalOutcome := .failure (.hook "prepare")
     , expectedAgentRan := false }
