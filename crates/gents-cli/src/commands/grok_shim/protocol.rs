@@ -5,8 +5,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
+/// Reject oversized peer frames before allocating their declared payload.
 pub const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024;
 
+/// The wire length prefix is a big-endian `u32` on both read and write.
 pub const FRAME_PREFIX_BYTES: usize = 4;
 
 pub const LEADER_PROTOCOL_VERSION: u32 = 1;

@@ -95,6 +95,8 @@ pub(crate) async fn dispatch(command: P2pCommand) -> Result<()> {
     }
 }
 
+/// P2P administration and probes must eventually report an unavailable runtime
+/// endpoint instead of leaving an interactive command waiting indefinitely.
 pub(crate) fn p2p_http_client() -> Result<reqwest::Client> {
     use std::sync::OnceLock;
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();

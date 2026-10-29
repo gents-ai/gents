@@ -10,6 +10,8 @@ use crate::config_writes::ConfigAccess;
 
 pub(crate) use gents::config_client::{graphql_api_base, graphql_diagnostic_hint, post_graphql};
 
+/// Availability probing is a single bounded request so a stale endpoint does
+/// not indefinitely delay the caller's choice of access path.
 pub(crate) async fn graphql_endpoint_available(graphql: &str) -> bool {
     shared_graphql_endpoint_available(
         graphql,

@@ -1013,3 +1013,148 @@ async fn wait_for_readiness_revision(core: &ClientCore, agent: &str, expected: &
         sleep(Duration::from_millis(100)).await;
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn inference_activity_enforces_enrollment_and_exact_request_access() -> Result<()> {
+    let _guard = enrollment_e2e_lock().lock().await;
+    let gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let provider_gate = gate.clone();
+    let model = FakeLlm::start(
+        "activity-contract",
+        None,
+        Arc::new(move |request| {
+            if streaming::latest_user_text(request).as_deref()
+                == Some("activity authorization request")
+            {
+                ChatAction::WaitThenSse(
+                    provider_gate.clone(),
+                    completion_text_sse("activity reply"),
+                )
+            } else {
+                ChatAction::Sse(completion_text_sse("activity title"))
+            }
+        }),
+    )?;
+    let temp = tempfile::tempdir()?;
+    let runtime_home = temp.path().join("runtime");
+    fs::create_dir_all(&runtime_home)?;
+    let home = runtime_home.to_str().context("runtime home UTF-8")?;
+    let init = run_init_json(
+        &runtime_home,
+        &[
+            "--home",
+            home,
+            "--node-name",
+            "activity-contract",
+            "--model-name",
+            "activity-contract",
+            "--inference-url",
+            model.endpoint(),
+        ],
+    )?;
+    let node_did = node_did_from_init(&init)?;
+    let agent = default_agent_id_for_node(&node_did);
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let (mut server, _) =
+        spawn_server_with_ready_json(&runtime_home, port, &["--home", home], &[])?;
+    wait_for_port(port, &mut server)?;
+    server.capturing(async {
+        wait_for_runtime_ready(&graphql, &node_did, ENROLL_BUDGET).await.context("activity runtime readiness")?;
+        let enroll = |path: std::path::PathBuf| {
+            let graphql = graphql.clone();
+            let node_did = node_did.clone();
+            let runtime_home = runtime_home.clone();
+            async move {
+                let core = Arc::new(ClientCore::start_with_paths_and_options(
+                    DesktopPaths::from_root(path), ClientCoreOptions::local_only(),
+                ).await?);
+                core.set_selected_node_did(Some(node_did.clone()));
+                let (status, _) = wait_for_enrollment_token(&format!("http://127.0.0.1:{port}")).await?;
+                let pending = core.request_status_enrollment_with_label(&status, Some("activity test")).await?;
+                wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await.context("publishing activity enrollment request")?;
+                let home = runtime_home.to_str().context("runtime home UTF-8")?;
+                run_cli_json(&runtime_home, &["p2p", "enrollment", "approve", &pending.request_id, "--home", home])?;
+                wait_for_chat_ready_enrollment(&core, &node_did).await.context("activity enrollment approval projection")?;
+                wait_for_client_node_readiness(&core, &node_did).await.context("activity client readiness")?;
+                Ok::<_, anyhow::Error>((core, pending.request_id))
+            }
+        };
+        let (owner, enrollment) = enroll(temp.path().join("owner")).await.context("enrolling activity owner")?;
+        let (other, _) = enroll(temp.path().join("other")).await.context("enrolling second activity observer")?;
+        let session = Uuid::new_v4().to_string();
+        let prompt = "activity authorization request";
+        owner.submit_request(&session, &node_did, prompt, Some(&agent)).await?;
+        let (request, _, _) = wait_for_runtime_agent_request(&graphql, owner.node(), &node_did, prompt).await?;
+        let generation = timeout(TURN_BUDGET, async {
+            loop {
+                let query = format!(r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 1) {{ lifecycle_state execution_generation }} }}"#, escape_graphql_string(&request));
+                let response = graphql_query(&graphql, &query).await?;
+                if let Ok(row) = first_graphql_row(&response, "AgentRequest") {
+                    if row["lifecycle_state"] == "processing" {
+                        if let Some(generation) = row["execution_generation"].as_str() { return Ok::<_, anyhow::Error>(generation.to_owned()); }
+                    }
+                }
+                sleep(Duration::from_millis(50)).await;
+            }
+        }).await.context("waiting for activity request generation")??;
+        let key = gents::inference_observation::InferenceKey {
+            node: node_did.clone(), session: session.clone(), request: request.clone(), generation,
+        };
+        let url = format!("http://127.0.0.1:{port}{}", gents::inference_observation::INFERENCE_ACTIVITY_PATH);
+        let http = reqwest::Client::new();
+        let call = |did: String, key: gents::inference_observation::InferenceKey| {
+            let endpoint = gents::config_client::GraphqlEndpoint::as_principal(&graphql, &did);
+            let request = endpoint.authorize(http.post(&url)).unwrap().json(&key);
+            async move { request.send().await }
+        };
+        let allowed = timeout(TURN_BUDGET, async {
+            loop {
+                let response = call(owner.node_identity().did().to_owned(), key.clone()).await?;
+                if response.status().is_success() { return Ok::<_, anyhow::Error>(response); }
+                anyhow::ensure!(response.status() == reqwest::StatusCode::NOT_FOUND, "authorized activity failed: {}", response.status());
+                sleep(Duration::from_millis(50)).await;
+            }
+        }).await.context("waiting for authorized activity observation")??;
+        let observed: Value = allowed.json().await?;
+        anyhow::ensure!(observed["request"] == request && observed["generation"] == key.generation, "activity target changed");
+        let operator = support::identity_from_init(&init)?;
+        let operator_response = call(gents::NodeIdentity::did(&operator).to_owned(), key.clone()).await?;
+        anyhow::ensure!(operator_response.status().is_success(),
+            "runtime operator could not observe enrolled request activity: {}", operator_response.status());
+        let contract: Value = gents_lean_contract::load_contract_snapshot()?;
+        let expected_waiting = &contract["inference_observation_cases"][1]["expected"][0];
+        timeout(Duration::from_secs(7), async {
+            loop {
+                let response = call(owner.node_identity().did().to_owned(), key.clone()).await?;
+                anyhow::ensure!(response.status().is_success(), "silent activity became unavailable");
+                let observation: Value = response.json().await?;
+                if &observation["activity"] == expected_waiting { return Ok::<_, anyhow::Error>(()); }
+                sleep(Duration::from_millis(100)).await;
+            }
+        }).await.context("waiting for silent provider observation")??;
+        let denied = call(other.node_identity().did().to_owned(), key.clone()).await?;
+        anyhow::ensure!(denied.status() == reqwest::StatusCode::NOT_FOUND, "another enrolled identity read private activity: {}", denied.status());
+        let mut cross_session = key.clone();
+        cross_session.session = Uuid::new_v4().to_string();
+        let denied = call(owner.node_identity().did().to_owned(), cross_session).await?;
+        anyhow::ensure!(denied.status() == reqwest::StatusCode::NOT_FOUND, "cross-session activity was visible");
+        gate.add_permits(1);
+        wait_for_complete_agent_response(&graphql, &request, &session, TURN_BUDGET).await?;
+        let terminal = call(owner.node_identity().did().to_owned(), key.clone()).await?;
+        anyhow::ensure!(terminal.status() == reqwest::StatusCode::NOT_FOUND, "terminal activity remained visible");
+        run_cli_json(&runtime_home, &["p2p", "enrollment", "revoke", &enrollment, "--home", home])?;
+        let revoked = timeout(ENROLL_BUDGET, async {
+            loop {
+                let response = call(owner.node_identity().did().to_owned(), key.clone()).await?;
+                if response.status() == reqwest::StatusCode::FORBIDDEN { return Ok::<_, anyhow::Error>(()); }
+                anyhow::ensure!(response.status() == reqwest::StatusCode::NOT_FOUND, "unexpected revoke response: {}", response.status());
+                sleep(Duration::from_millis(100)).await;
+            }
+        }).await;
+        owner.shutdown().await?;
+        other.shutdown().await?;
+        revoked??;
+        Ok::<_, anyhow::Error>(())
+    }).await
+}

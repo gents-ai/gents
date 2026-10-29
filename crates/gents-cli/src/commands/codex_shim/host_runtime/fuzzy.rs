@@ -12,7 +12,9 @@ use crate::commands::codex_shim::{
 use super::paths::{classify_io_error, resolve_runtime_path};
 use super::HostRuntimeError;
 
+/// Bounds the response sent for each interactive search update.
 const MAX_FUZZY_RESULTS: usize = 100;
+/// Bounds filesystem traversal and candidate collection across all roots.
 const MAX_FUZZY_WALK_ENTRIES: usize = 25_000;
 
 pub(in crate::commands::codex_shim) async fn fuzzy_file_search(

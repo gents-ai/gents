@@ -164,6 +164,12 @@ pub(crate) fn runtime_contract_router(
     };
 
     let operator_routes = Router::new()
+        .route(
+            "/packs/install",
+            post(crate::http::pack_install::install_handler).layer(
+                axum::extract::DefaultBodyLimit::max(crate::http::pack_install::MAX_BODY),
+            ),
+        )
         .route("/metrics", get(metrics_handler))
         .route("/healthz", get(healthz_handler))
         .route("/activation", get(activation_handler))
@@ -190,6 +196,14 @@ pub(crate) fn runtime_contract_router(
         .route(
             gents_protocol::job::JOB_CONTROL_PATH,
             post(crate::http::job_control::job_control_handler),
+        )
+        .route(
+            gents_protocol::process_control::PROCESS_CONTROL_PATH,
+            post(crate::http::process_control::process_control_handler),
+        )
+        .route(
+            gents::inference_observation::INFERENCE_ACTIVITY_PATH,
+            post(crate::http::inference_activity::read),
         )
         .route("/enrollment/decisions", post(enrollment_decision_handler))
         .route("/enrollment/pending", post(enrollment_pending_handler))
@@ -711,6 +725,10 @@ async fn append_status_contracts(state: &RuntimeHttpState, body: &mut Value) {
             json!(gents_protocol::request_input::REQUEST_INPUT_CONTRACT_VERSION),
         );
         map.insert(
+            gents_protocol::session_input_edit::STATUS_AUTHORED_QUEUE_EDIT_FIELD.to_owned(),
+            json!(gents_protocol::session_input_edit::AUTHORED_QUEUE_EDIT_VERSION),
+        );
+        map.insert(
             gents_protocol::mailbox_question::STATUS_QUESTION_CONTRACT_FIELD.to_owned(),
             json!(gents_protocol::mailbox_question::MAILBOX_QUESTION_VERSION),
         );
@@ -920,6 +938,9 @@ async fn mcp_pool_handler(State(state): State<RuntimeHttpState>) -> Response {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    mod process_control_acceptance;
+
     use std::time::Instant;
 
     use gents_protocol::row::{
@@ -962,9 +983,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn job_control_authenticates_the_owning_operator_before_runtime_access() {
+    async fn inference_activity_requires_authenticated_identity() {
+        let app = Router::new()
+            .route(
+                gents::inference_observation::INFERENCE_ACTIVITY_PATH,
+                post(crate::http::inference_activity::read),
+            )
+            .with_state(state());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        }));
+        let response = reqwest::Client::new()
+            .post(format!("http://{address}{}", gents::inference_observation::INFERENCE_ACTIVITY_PATH))
+            .json(&json!({"node":"node", "session":"session", "request":"request", "generation":"generation"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL).unwrap(),
+            "no-store"
+        );
+    }
+
+    #[tokio::test]
+    async fn background_control_authenticates_the_owning_operator_before_runtime_access() {
         use gents_desktop_core::client::{DesktopPaths, PrincipalIdentity};
         use gents_protocol::job::{JobControlKind, OperatorJobControlRequest, JOB_CONTROL_PATH};
+        use gents_protocol::process_control::{
+            OperatorProcessControlRequest, PROCESS_CONTROL_PATH,
+        };
         let temp = tempfile::tempdir().unwrap();
         let owner_paths = DesktopPaths::from_root(temp.path().join("owner"));
         owner_paths.ensure_root_dirs().await.unwrap();
@@ -983,6 +1033,10 @@ mod tests {
                 JOB_CONTROL_PATH,
                 post(crate::http::job_control::job_control_handler),
             )
+            .route(
+                PROCESS_CONTROL_PATH,
+                post(crate::http::process_control::process_control_handler),
+            )
             .with_state(state);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -990,44 +1044,55 @@ mod tests {
             axum::serve(listener, app).await.unwrap();
         }));
         let client = reqwest::Client::new();
-        let url = format!("http://{address}{JOB_CONTROL_PATH}");
         let graphql = format!("http://{address}/api/v0/graphql");
         let command = OperatorJobControlRequest {
             node_did: owner.did().into(),
             tool_call_doc_id: "physical-job".into(),
             action: JobControlKind::Stop,
         };
-        let response = client.post(&url).json(&command).send().await.unwrap();
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        let endpoint = GraphqlEndpoint::as_principal(&graphql, foreign.did());
-        let response = endpoint
-            .authorize(client.post(&url))
-            .unwrap()
-            .json(&command)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        let endpoint = GraphqlEndpoint::as_principal(&graphql, owner.did());
-        let mut other = command.clone();
-        other.node_did = foreign.did().into();
-        let response = endpoint
-            .authorize(client.post(&url))
-            .unwrap()
-            .json(&other)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        let response = endpoint
-            .authorize(client.post(&url))
-            .unwrap()
-            .json(&command)
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let process = OperatorProcessControlRequest {
+            node_did: owner.did().into(),
+            session_id: "session".into(),
+            tool_call_id: "native".into(),
+            tool_call_doc_id: "physical-native".into(),
+        };
+        for (path, command) in [
+            (JOB_CONTROL_PATH, serde_json::to_value(command).unwrap()),
+            (PROCESS_CONTROL_PATH, serde_json::to_value(process).unwrap()),
+        ] {
+            let url = format!("http://{address}{path}");
+            let response = client.post(&url).json(&command).send().await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let endpoint = GraphqlEndpoint::as_principal(&graphql, foreign.did());
+            let response = endpoint
+                .authorize(client.post(&url))
+                .unwrap()
+                .json(&command)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            let endpoint = GraphqlEndpoint::as_principal(&graphql, owner.did());
+            let mut other = command.clone();
+            other["nodeDid"] = serde_json::json!(foreign.did());
+            let response = endpoint
+                .authorize(client.post(&url))
+                .unwrap()
+                .json(&other)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+            let response = endpoint
+                .authorize(client.post(&url))
+                .unwrap()
+                .json(&command)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        }
         drop(server);
     }
 

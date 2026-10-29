@@ -168,6 +168,8 @@ async fn detect_local_server() -> Option<(String, String)> {
     None
 }
 
+/// Discovery probes optional local endpoints before prompting; an absent or
+/// unresponsive endpoint must not hold the interactive setup indefinitely.
 async fn probe_models(base: &str) -> Option<String> {
     let response = reqwest::Client::new()
         .get(format!("{base}/models"))

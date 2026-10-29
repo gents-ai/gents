@@ -10,6 +10,8 @@ pub(crate) async fn dispatch(command: FleetCommand) -> Result<()> {
     }
 }
 
+/// A fleet snapshot comes from a live runtime endpoint; bound the wait when
+/// that endpoint is unavailable or does not respond.
 async fn fleet_slots(args: FleetSlotsArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let url = runtime_fleet_slots_url(graphql.url())?;

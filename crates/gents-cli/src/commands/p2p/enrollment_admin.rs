@@ -48,6 +48,8 @@ pub(super) async fn decide_enrollment(
     print_json(&body)
 }
 
+/// A live runtime receives the signed decision; bound waiting on its endpoint
+/// so an unavailable server cannot leave the command pending indefinitely.
 pub(crate) async fn submit_enrollment_decision(
     home: &std::path::Path,
     graphql: &str,
@@ -120,6 +122,7 @@ pub struct EnrollmentDecisionRejected {
     pub code: Option<gents_protocol::enrollment::EnrollmentDecisionRefusalCode>,
 }
 
+/// Pending enrollment discovery uses a bounded wait on the live runtime.
 pub(super) async fn pending_enrollments(args: P2pAccessArgs) -> Result<()> {
     let identity = resolve_home_identity(args.home.as_deref())
         .context("loading operator identity for pending enrollments")?;

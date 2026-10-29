@@ -10,6 +10,8 @@ use crate::commands::codex_shim::{ShimState, JSONRPC_INTERNAL_ERROR};
 use super::paths::resolve_runtime_cwd;
 use super::HostRuntimeError;
 
+/// Git is an external process; dropping a timed-out command kills the child so
+/// an unresponsive repository operation cannot retain the shim request.
 const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(in crate::commands::codex_shim) async fn git_diff_to_remote(

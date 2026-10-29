@@ -76,12 +76,25 @@ impl std::fmt::Display for JavyMissing {
 
 impl std::error::Error for JavyMissing {}
 
+#[derive(Debug, thiserror::Error)]
+pub enum PromotionError {
+    #[error(transparent)]
+    Refused(#[from] PromoteRefusal),
+    #[error("the run's handle is not a pack name; pass --name: {0}")]
+    NameRequired(PromoteRefusal),
+    #[error(transparent)]
+    Javy(#[from] JavyMissing),
+    #[error(transparent)]
+    Operation(#[from] anyhow::Error),
+}
+
 /// The refusal code of a promotion that was refused rather than failed.
-pub fn refusal_code(error: &anyhow::Error) -> Option<&'static str> {
-    error
-        .downcast_ref::<PromoteRefusal>()
-        .map(PromoteRefusal::code)
-        .or_else(|| error.downcast_ref::<JavyMissing>().map(JavyMissing::code))
+pub fn refusal_code(error: &PromotionError) -> Option<&'static str> {
+    match error {
+        PromotionError::Refused(error) | PromotionError::NameRequired(error) => Some(error.code()),
+        PromotionError::Javy(error) => Some(error.code()),
+        PromotionError::Operation(_) => None,
+    }
 }
 
 /// The run's handle as the tool name, when it is a pack name.
@@ -154,7 +167,7 @@ pub async fn promote(
     name: Option<&str>,
     agent: Option<&str>,
     report: &mut dyn FnMut(PromoteStep),
-) -> Result<PromoteReport> {
+) -> Result<PromoteReport, PromotionError> {
     report(PromoteStep::Javy);
     let javy = javy_version()?;
 
@@ -163,9 +176,9 @@ pub async fn promote(
     let run = load_dynamic_run(access, JobKey::RowDocId(view.row_doc_id)).await?;
     let name = match name {
         Some(name) => name.to_owned(),
-        None => default_name(&run.view.handle)
-            .ok_or_else(|| PromoteRefusal::BadName(run.view.handle.clone()))
-            .context("the run's handle is not a pack name; pass --name")?,
+        None => default_name(&run.view.handle).ok_or_else(|| {
+            PromotionError::NameRequired(PromoteRefusal::BadName(run.view.handle.clone()))
+        })?,
     };
     validate_name(home, &name)?;
     let agent = agent.map_or_else(|| run.caller_agent_id.clone(), str::to_owned);
@@ -192,7 +205,9 @@ pub async fn promote(
     // The step-0 fixture runs the script under wasmtime, which blocks.
     let pack = {
         let (dir, name, run) = (dir.clone(), name.clone(), run.clone());
-        tokio::task::spawn_blocking(move || generate_pack(&dir, &name, &run)).await?
+        tokio::task::spawn_blocking(move || generate_pack(&dir, &name, &run))
+            .await
+            .map_err(anyhow::Error::from)?
     }
     .context("promote generate failed")?;
 
@@ -204,13 +219,19 @@ pub async fn promote(
         .await
         .context("promote test failed")?;
     if !matches!(cases.as_slice(), [only] if only.passed > 0 && only.failures.is_empty()) {
-        anyhow::bail!("promote test failed: {}", serde_json::to_string(&cases)?);
+        return Err(anyhow::anyhow!(
+            "promote test failed: {}",
+            serde_json::to_string(&cases).map_err(anyhow::Error::from)?
+        )
+        .into());
     }
 
     report(PromoteStep::Check);
     let checked = check_dir(&dir).await;
     if !checked.problems.is_empty() {
-        anyhow::bail!("promote check failed: {}", checked.problems.join("; "));
+        return Err(
+            anyhow::anyhow!("promote check failed: {}", checked.problems.join("; ")).into(),
+        );
     }
 
     report(PromoteStep::Install);
@@ -357,7 +378,9 @@ mod tests {
         }
         let error = result.expect_err("a missing javy refuses");
         assert_eq!(refusal_code(&error), Some("promote_javy_missing"));
-        let missing = error.downcast_ref::<JavyMissing>().expect("a JavyMissing");
+        let PromotionError::Javy(missing) = error else {
+            panic!("expected a missing Javy refusal")
+        };
         let message = missing.to_string();
         assert!(message.contains("8.1.1"), "{message}");
         assert!(

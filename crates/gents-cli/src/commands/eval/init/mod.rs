@@ -369,9 +369,22 @@ pub(crate) async fn install_pack_slot(
     let manifest = pack.manifest();
     let config = pack_config(pack, owner)?;
     let requested = std::collections::BTreeMap::from([(slot.to_owned(), profile.to_owned())]);
-    let inference =
-        gents::pack::preview_pack_inference_bindings(access, manifest, owner, &requested).await?;
-    let bound = gents::pack::bind_pack_install_config(manifest, &config, &inference.bindings)?;
+    anyhow::ensure!(manifest.metadata.dependencies.is_empty(),
+        "eval author pack dependencies must be installed through `gents pack install` on the runtime host");
+    let prepared = gents::pack::prepare_document_pack_install(
+        access,
+        owner,
+        manifest,
+        &config,
+        &requested,
+        &[],
+        gents::pack::InstalledVia::Operator,
+        None,
+        Some(pack.archive()),
+        &|_| None,
+    )
+    .await?;
+    let bound = prepared.config;
     let identity = gents::pack::PackIdentity::new(manifest, pack.digest(), Vec::new());
     gents::pack::install_pack_documents(
         access,
