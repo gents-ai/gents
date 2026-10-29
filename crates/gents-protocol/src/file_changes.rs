@@ -64,3 +64,55 @@ pub struct FilePermissions {
     pub readonly: bool,
     pub unix_mode: Option<u32>,
 }
+
+/// Stored observations whose bytes live as versions of per-session file
+/// documents rather than inline. Readers resolve them into [`ToolFileChanges`];
+/// version 1 rows keep their inline images.
+pub const STORED_FILE_CHANGES_VERSION: u32 = 2;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredFileChanges {
+    pub version: u32,
+    pub tool_call_doc_id: String,
+    pub changes: Vec<StoredFileChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StoredFileChange {
+    pub root: String,
+    pub path: String,
+    /// The `ToolFileContent` document keyed by this change's session, root and
+    /// path. Absent only when neither side retained bytes.
+    pub content_doc_id: Option<String>,
+    pub before: StoredFileImage,
+    pub after: StoredFileImage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub enum StoredFileImage {
+    Missing,
+    File {
+        content_hash: String,
+        /// Composite commit CID of the content document holding these bytes.
+        version: String,
+        encoding: FileEncoding,
+        permissions: FilePermissions,
+        links: Option<u64>,
+    },
+    Unavailable {
+        reason: ImageFailure,
+    },
+}
+
+/// UTF-8 bytes live in the content document's Text CRDT field; any other bytes
+/// in its Blob field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FileEncoding {
+    Text,
+    Blob,
+}

@@ -367,7 +367,14 @@ def selectedImageCasesJson : String := jsonArray (SessionHydration.ReaderExample
        ("scope", scopeJson tool.scope), ("accepted", boolString tool.accepted), ("terminal", boolString tool.terminal)])),
     ("images", jsonArray (value.images.map fun image => object
       [("doc_id", jsonString image.docId), ("tool_call_doc_id", jsonString image.toolDocId),
-       ("request_doc_id", jsonString image.requestDocId), ("scope", scopeJson image.scope)])),
+       ("request_doc_id", jsonString image.requestDocId), ("scope", scopeJson image.scope),
+       ("contents", jsonArray (image.contents.map fun content => object
+         [("doc_id", jsonString content.docId), ("tool_call_doc_id", jsonString content.toolDocId), ("scope", scopeJson content.scope)]))])),
+    ("delivery_documents", jsonArray (match value.result with
+      | .selected document => match value.images.find? (fun image => image.docId == document) with
+        | some image => (FileImages.deliveryDocuments image).map jsonString
+        | none => []
+      | _ => [])),
     ("expected", match value.result with
       | .rejected => tagged "rejected"
       | .missing => tagged "missing"

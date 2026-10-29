@@ -602,7 +602,10 @@ theorem file_inventory_pages_are_not_ordinary_replication :
 theorem file_images_are_not_ordinary_replication :
     "ToolFileChange" ∉ clientCollections ∧
     "ToolFileChange" ∉ conversationCollections ∧
-    "ToolFileChange" ∉ clientToRuntimeCollections := by
+    "ToolFileChange" ∉ clientToRuntimeCollections ∧
+    "ToolFileContent" ∉ clientCollections ∧
+    "ToolFileContent" ∉ conversationCollections ∧
+    "ToolFileContent" ∉ clientToRuntimeCollections := by
   decide
 
 theorem file_inventory_is_not_ordinary_replication :

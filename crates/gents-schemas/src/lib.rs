@@ -34,7 +34,9 @@ pub const MAILBOX_ITEM: &str = include_str!("../schemas/agent/mailbox_item.graph
 pub const AGENT_TOOL_CALL_NAME: &str = "AgentToolCall";
 pub const AGENT_TOOL_CALL: &str = include_str!("../schemas/agent/agent_tool_call.graphql");
 pub const TOOL_FILE_CHANGE_NAME: &str = "ToolFileChange";
+pub const TOOL_FILE_CONTENT_NAME: &str = "ToolFileContent";
 pub const TOOL_FILE_CHANGE: &str = include_str!("../schemas/agent/tool_file_change.graphql");
+pub const TOOL_FILE_CONTENT: &str = include_str!("../schemas/agent/tool_file_content.graphql");
 pub const TOOL_FILE_INVENTORY_NAME: &str = "ToolFileInventory";
 pub const TOOL_FILE_INVENTORY: &str = include_str!("../schemas/agent/tool_file_inventory.graphql");
 pub const TOOL_FILE_CHANGE_POLICY: &str =
@@ -231,6 +233,7 @@ pub const ALL: &[&str] = &[
     AGENT_MESSAGE,
     AGENT_TOOL_CALL,
     TOOL_FILE_CHANGE,
+    TOOL_FILE_CONTENT,
     TOOL_FILE_INVENTORY,
     COMPACTION_ENTRY,
     RENDERED_REQUEST,
@@ -313,6 +316,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
     TOOL_FILE_CHANGE_NAME,
+    TOOL_FILE_CONTENT_NAME,
     TOOL_FILE_INVENTORY_NAME,
     COMPACTION_ENTRY_NAME,
     RENDERED_REQUEST_NAME,
@@ -380,6 +384,7 @@ pub const EXPLICIT_DELIVERY_COLLECTION_NAMES: &[&str] = &[
     FILE_INVENTORY_REQUEST_NAME,
     FILE_INVENTORY_PAGE_NAME,
     TOOL_FILE_CHANGE_NAME,
+    TOOL_FILE_CONTENT_NAME,
     TOOL_FILE_INVENTORY_NAME,
     FILE_IMAGE_HYDRATION_REQUEST_NAME,
     FILE_INVENTORY_IMAGE_REQUEST_NAME,

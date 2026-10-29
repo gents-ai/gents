@@ -94,6 +94,7 @@ pub async fn ensure_migrations_with_registry(
 
 const FILE_COLLECTION_POLICIES: &[(&str, bool)] = &[
     (gents_protocol::schemas::TOOL_FILE_CHANGE_NAME, true),
+    (gents_protocol::schemas::TOOL_FILE_CONTENT_NAME, true),
     (gents_protocol::schemas::TOOL_FILE_INVENTORY_NAME, true),
     (gents_protocol::schemas::FILE_INVENTORY_REPLY_NAME, false),
     (gents_protocol::schemas::FILE_INVENTORY_PROGRESS_NAME, false),

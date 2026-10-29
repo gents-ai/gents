@@ -120,6 +120,9 @@ pub enum ToolFileChangeRead {
     Retained {
         document_id: String,
         changes: gents_protocol::file_changes::ToolFileChanges,
+        /// File documents holding the retained versions; empty for rows that
+        /// still carry their images inline.
+        contents: Vec<crate::toolset::file_contents::ContentDocument>,
     },
 }
 
@@ -249,11 +252,26 @@ async fn load_tool_file_change_observation_source(
         .filter(|id| !id.is_empty())
         .context("file image observation has no physical identity")?
         .to_owned();
-    let changes =
-        crate::toolset::FileChanges::decode(tool_call_doc_id, row["file_changes"].clone())?;
+    let scope = crate::session_origin::SessionScope {
+        node_did: node_did.to_owned(),
+        session_id: session_id.to_owned(),
+        requester_did: requester_did.map(str::to_owned),
+    };
+    let reader = match source {
+        ReadSource::Access(access) => crate::toolset::file_contents::ContentReader::Access(access),
+        ReadSource::Txn(txn) => crate::toolset::file_contents::ContentReader::Transaction(txn),
+    };
+    let (changes, contents) = crate::toolset::file_contents::decode_observation(
+        reader,
+        &scope,
+        tool_call_doc_id,
+        row["file_changes"].clone(),
+    )
+    .await?;
     Ok(ToolFileChangeRead::Retained {
         document_id,
         changes,
+        contents,
     })
 }
 

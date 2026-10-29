@@ -73,7 +73,7 @@ abbrev Catalog := List Template
 push. Whole-collection subscriptions would bypass the file-review selection
 boundary and eagerly hydrate retained images. -/
 def explicitDeliveryCollections : List String :=
-  ["ToolFileChange", "ToolFileInventory", "FileImageHydrationRequest", "FileInventoryImageRequest",
+  ["ToolFileChange", "ToolFileContent", "ToolFileInventory", "FileImageHydrationRequest", "FileInventoryImageRequest",
    "FileInventoryRequest", "FileInventoryPage"]
 
 def transcriptCollections : List String :=
