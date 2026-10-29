@@ -23,6 +23,8 @@ mod inventory;
 mod scope;
 
 impl ClientCore {
+    /// A remote image demand can remain unanswered even while the peer is
+    /// reachable; bound the observation wait and let the caller retry.
     pub async fn tool_file_changes(
         &self,
         node_did: &str,
@@ -123,8 +125,14 @@ impl ClientCore {
         demand: FileImageDemand,
         inventory_entry: Option<&gents_protocol::file_inventory::FileInventoryEntry>,
     ) -> Result<Option<(String, ToolFileChanges)>> {
-        let mut changes =
-            gents::subscribe_collections(&self.node, [demand.collection_name(), "ToolFileChange"])?;
+        let mut changes = gents::subscribe_collections(
+            &self.node,
+            [
+                demand.collection_name(),
+                gents_protocol::schemas::TOOL_FILE_CHANGE_NAME,
+                gents_protocol::schemas::TOOL_FILE_CONTENT_NAME,
+            ],
+        )?;
         let access = self
             .store_access
             .lock()
@@ -180,6 +188,7 @@ impl ClientCore {
                                     ToolFileChangeRead::Retained {
                                         document_id,
                                         changes,
+                                        ..
                                     } => {
                                         anyhow::ensure!(
                                         &document_id == document,

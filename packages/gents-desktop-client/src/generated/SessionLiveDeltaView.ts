@@ -2,4 +2,4 @@
 import type { SessionLiveTextPatchView } from "./SessionLiveTextPatchView.js";
 import type { SessionProjectionRevisionView } from "./SessionProjectionRevisionView.js";
 
-export type SessionLiveDeltaView = { liveCursor?: string | null, outcome: string, revision: SessionProjectionRevisionView, requestId: string, turnState: string | null, status: string | null, content: SessionLiveTextPatchView | null, reasoning: SessionLiveTextPatchView | null, };
+export type SessionLiveDeltaView = { liveCursor?: string | null, outcome: string, revision: SessionProjectionRevisionView, requestId: string, turnState: string | null, inferenceActivity?: string | null, status: string | null, content: SessionLiveTextPatchView | null, reasoning: SessionLiveTextPatchView | null, };

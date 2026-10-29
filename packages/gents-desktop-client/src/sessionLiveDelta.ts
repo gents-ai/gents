@@ -91,6 +91,7 @@ export function applySessionLiveDelta(
     return {
       ...current,
       turnState: delta.turnState,
+      inferenceActivity: delta.inferenceActivity ?? null,
       projectionRevision: delta.revision,
     };
   }
@@ -124,6 +125,7 @@ export function applySessionLiveDelta(
   return {
     ...current,
     turnState: delta.turnState,
+    inferenceActivity: delta.inferenceActivity ?? null,
     timelineItems,
     projectionRevision: delta.revision,
   };

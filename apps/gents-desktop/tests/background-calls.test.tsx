@@ -8,6 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import type {
   BackgroundedToolView,
   DesktopSessionSnapshot,
@@ -99,6 +100,7 @@ const viewOf = (
   ({
     requestId: "req-1",
     toolCallId,
+    toolCallDocId: `doc-${toolCallId}`,
     toolName: "bash",
     startsSession: false,
     job: false,
@@ -144,6 +146,13 @@ function appWith(
     session: snapshot(...tools),
     selection: { nodeDid: NODE, sessionId: "parent" },
   });
+  const current = app.stores.client.getState().snapshot!;
+  app.stores.client.setState({
+    snapshot: {
+      ...current,
+      client: { ...current.client!, operatorConfigAuthoritativeNodeDids: [NODE] },
+    },
+  });
   return { app, fetchOperationsSnapshot };
 }
 
@@ -158,6 +167,23 @@ const call = (over: Partial<BackgroundCall>): BackgroundCall => ({
 });
 
 describe("background calls", () => {
+  it("keeps calls with the same logical identity separate by physical document", () => {
+    const first = command("shared", "first", { toolCallDocId: "physical-a" });
+    const second = command("shared", "second", { toolCallDocId: "physical-b" });
+    const calls = backgroundCalls(
+      [first, second],
+      [viewOf("shared", { toolCallDocId: "physical-b", status: "second-only" })],
+      new Set(["req-1"]),
+    );
+    expect(calls).toHaveLength(2);
+    expect(new Set(calls.map((call) => call.key)).size).toBe(2);
+    expect(
+      calls.find((call) => call.tool?.toolCallDocId === "physical-a")?.view,
+    ).toBeNull();
+    expect(
+      calls.find((call) => call.tool?.toolCallDocId === "physical-b")?.view?.status,
+    ).toBe("second-only");
+  });
   it("lists the session's backgrounded calls, not its started sessions or other sessions' calls", () => {
     const calls = backgroundCalls(
       [
@@ -493,12 +519,150 @@ describe("the running in background group", () => {
     });
   });
 
-  it("offers no stop for a native process", () => {
-    const { app } = appWith([command("build", "npm run build")]);
+  it("stops only the displayed native invocation", async () => {
+    const processControl = vi
+      .fn()
+      .mockResolvedValue({ cancelled: { live_execution_cancelled: true } });
+    const { app } = appWith(
+      [command("build", "npm run build", { nodeDid: NODE })],
+      [viewOf("build")],
+      { processControl },
+    );
+    render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Stop npm run build" }));
+    expect(processControl).toHaveBeenCalledWith({
+      nodeDid: NODE,
+      sessionId: "parent",
+      toolCallId: "build",
+      toolCallDocId: "doc-build",
+    });
+  });
+
+  it("stops the selected physical twin", async () => {
+    const processControl = vi
+      .fn()
+      .mockResolvedValue({ cancelled: { live_execution_cancelled: true } });
+    const { app } = appWith(
+      [
+        command("shared", "first command", {
+          nodeDid: NODE,
+          itemKey: "a",
+          toolCallDocId: "physical-a",
+        }),
+        command("shared", "second command", {
+          nodeDid: NODE,
+          itemKey: "b",
+          toolCallDocId: "physical-b",
+        }),
+      ],
+      [
+        viewOf("shared", { toolCallDocId: "physical-a" }),
+        viewOf("shared", { toolCallDocId: "physical-b" }),
+      ],
+      { processControl },
+    );
+    render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Stop second command" }));
+    expect(processControl).toHaveBeenCalledWith({
+      nodeDid: NODE,
+      sessionId: "parent",
+      toolCallId: "shared",
+      toolCallDocId: "physical-b",
+    });
+  });
+
+  it("reports an unverified stop without claiming success", async () => {
+    const warning = vi.spyOn(toast, "warning");
+    const success = vi.spyOn(toast, "success");
+    const processControl = vi.fn().mockResolvedValue("unverified");
+    const { app } = appWith(
+      [command("build", "npm run build", { nodeDid: NODE })],
+      [viewOf("build")],
+      { processControl },
+    );
+    render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Stop npm run build" }));
+    await waitFor(() =>
+      expect(warning).toHaveBeenCalledWith(
+        "Could not confirm that npm run build stopped.",
+      ),
+    );
+    expect(success).not.toHaveBeenCalled();
+    warning.mockRestore();
+    success.mockRestore();
+  });
+
+  it("does not offer native Stop without a physical row", () => {
+    const { app } = appWith([
+      command("build", "npm run build", { nodeDid: NODE, toolCallDocId: null }),
+    ]);
     render(<BackgroundSurface placement="dock" sessionId="parent" />, {
       wrapper: withApp(app),
     });
     expect(screen.queryByRole("button", { name: /^Stop/ })).toBeNull();
+  });
+
+  it("hides native Stop on an enrolled-only node", async () => {
+    const processControl = vi.fn();
+    const { app } = appWith(
+      [command("build", "npm run build", { nodeDid: NODE })],
+      [viewOf("build")],
+      { processControl },
+    );
+    render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    expect(
+      await screen.findByRole("button", { name: "Stop npm run build" }),
+    ).toBeVisible();
+    const current = app.stores.client.getState().snapshot!;
+    act(() =>
+      app.stores.client.setState({
+        snapshot: {
+          ...current,
+          client: { ...current.client!, operatorConfigAuthoritativeNodeDids: [] },
+        },
+      }),
+    );
+    expect(screen.queryByRole("button", { name: "Stop npm run build" })).toBeNull();
+    expect(processControl).not.toHaveBeenCalled();
+  });
+
+  it("waits for call classification before offering native Stop", async () => {
+    const { app, fetchOperationsSnapshot } = appWith([
+      command("unknown", "pending call", { nodeDid: NODE, jobState: null }),
+    ]);
+    render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    await waitFor(() => expect(fetchOperationsSnapshot).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Stop pending call" })).toBeNull();
+  });
+
+  it("does not route an unclassified pending job to process control", async () => {
+    const processControl = vi.fn();
+    const controlJob = vi.fn().mockResolvedValue({ Applied: {} });
+    const { app } = appWith(
+      [command("job", "nightly-report", { nodeDid: NODE, jobState: null })],
+      [viewOf("job", { toolName: "report", job: true })],
+      { processControl, jobControl: controlJob },
+    );
+    render(<BackgroundSurface placement="dock" sessionId="parent" />, {
+      wrapper: withApp(app),
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Stop nightly-report" }));
+    expect(controlJob).toHaveBeenCalledWith({
+      nodeDid: NODE,
+      toolCallDocId: "doc-job",
+      action: "stop",
+    });
+    expect(processControl).not.toHaveBeenCalled();
   });
 });
 

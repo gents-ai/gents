@@ -1,11 +1,11 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { bindVisualViewport } from "@gents/shell";
 import App from "./App";
 import { applyChosenTheme } from "./ui/preferences";
+import { sendAppOpened } from "./lib/nativeShell";
 
 applyChosenTheme();
-bindVisualViewport();
+sendAppOpened();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

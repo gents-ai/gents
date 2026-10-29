@@ -1541,6 +1541,38 @@ describe("configuration panels", () => {
     );
   });
 
+  it("preserves and edits the node request-hop limit", async () => {
+    const { api, app } = harness();
+    renderIn(
+      app,
+      <AgentPanel
+        deployment={{
+          ...deployment,
+          nodeConfig: { node_did: deployment.nodeDid, max_request_hop: 4 },
+        }}
+      />,
+    );
+    expect(screen.getByLabelText("Maximum request hop")).toHaveValue("4");
+    const user = await replace("Display name", "Renamed node");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(api.saveNodeConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        document: expect.objectContaining({ max_request_hop: 4 }),
+      }),
+    );
+    await replace("Maximum request hop", "-1");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter a whole number");
+    expect(api.saveNodeConfig).toHaveBeenCalledTimes(1);
+    await replace("Maximum request hop", "0");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(api.saveNodeConfig).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        document: expect.objectContaining({ max_request_hop: 0 }),
+      }),
+    );
+  });
+
   it("validates and saves every behavior-owned setting without changing Setup", async () => {
     const { api, app } = harness();
     renderIn(app, <AgentsPanel deployment={deployment} agentId="ops" />);

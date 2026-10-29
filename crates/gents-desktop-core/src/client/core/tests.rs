@@ -1814,3 +1814,109 @@ async fn send_into_a_node_owned_session_is_refused_before_it_is_written() -> any
     assert_eq!(written(&server.received_requests().await.unwrap()), 1);
     Ok(())
 }
+
+#[tokio::test]
+async fn inference_activity_selects_authenticated_transport_by_peer_authority() {
+    use gents::identity::NodeIdentity as _;
+    use identity::Identity as _;
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    let temp = tempfile::tempdir().unwrap();
+    let mut options = ClientCoreOptions::local_only();
+    options.operator_identity_interaction =
+        crate::local_runtime::OperatorIdentityInteraction::Prevent;
+    let core = ClientCore::start_with_paths_and_options(
+        DesktopPaths::from_root(temp.path().join("client")),
+        options,
+    )
+    .await
+    .unwrap();
+
+    for (case, enrollment, authenticated) in [
+        ("enrolled", true, false),
+        ("local-cold", false, false),
+        ("local-operator", false, true),
+    ] {
+        let home = temp.path().join(case);
+        std::fs::create_dir_all(&home).unwrap();
+        let key_path = home.join("node.key");
+        let did = if authenticated {
+            gents::identity::KeyIdentity::load_or_create(&key_path, None)
+                .unwrap()
+                .did()
+                .to_owned()
+        } else {
+            gents::identity::load_or_create_file_identity(&key_path)
+                .unwrap()
+                .did()
+                .unwrap()
+                .to_string()
+        };
+        let server = MockServer::start().await;
+        let graphql = format!("{}/api/v0/graphql", server.uri());
+        std::fs::write(
+            home.join("runtime.json"),
+            serde_json::json!({
+                "graphql": graphql, "node_name": "Local", "node_did": did, "p2p_transport": "iroh"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut record = PeerRecord::local_standard(case, "iroh://peer", &did, &graphql);
+        if enrollment {
+            record.source = Some("enrollment".to_owned());
+        }
+        record.local_node_home = Some(home.to_string_lossy().into_owned());
+        core.sync_state.upsert_for_test(record).await.unwrap();
+        let operator = core.operator_observation_endpoint(&did).await.unwrap();
+        assert_eq!(operator.is_anonymous(), !authenticated, "{case}");
+        let key = gents::inference_observation::InferenceKey {
+            node: did.clone(),
+            session: case.into(),
+            request: "request".into(),
+            generation: "generation".into(),
+        };
+        Mock::given(method("POST"))
+            .and(path("/inference/activity"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "node": did, "session": case, "request": "request", "generation": "generation",
+                "turn": 1, "attempt": 1, "sequence": 1, "activity": "working"
+            })))
+            .mount(&server)
+            .await;
+        let activity = core.read_inference_activity(&key).await.unwrap();
+        let requests = server.received_requests().await.unwrap();
+        if !enrollment && !authenticated {
+            assert!(
+                requests.is_empty(),
+                "cold local operator must not contact the server"
+            );
+            assert!(activity.is_none());
+        } else {
+            assert_eq!(
+                activity,
+                Some(crate::client::InferenceActivity::Working),
+                "{case}"
+            );
+            assert_eq!(requests.len(), 1, "{case}");
+            let authorization = requests[0]
+                .headers
+                .get("authorization")
+                .unwrap()
+                .to_str()
+                .unwrap();
+            let token = authorization.strip_prefix("Bearer ").unwrap();
+            let signer = identity::from_token(token.as_bytes()).unwrap();
+            let expected = if authenticated {
+                did.as_str()
+            } else {
+                core.node_identity().did()
+            };
+            assert_eq!(signer.did().unwrap().to_string(), expected, "{case}");
+        }
+    }
+    std::sync::Arc::new(core).shutdown().await.unwrap();
+}

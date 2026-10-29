@@ -47,6 +47,7 @@ native-e2e = ["gents-desktop-bridge/native-e2e"]
 
 [dev-dependencies]
 axum = "0.8"
+gents-lean-contract.workspace = true
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 mimalloc.workspace = true

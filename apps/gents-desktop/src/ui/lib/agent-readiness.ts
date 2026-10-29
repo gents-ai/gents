@@ -12,7 +12,8 @@ const READINESS_REASON: Record<string, string> = {
   subscription_not_entitled: "subscription account is not eligible for inference",
   inference_profile_invalid: "inference profile is invalid",
   tool_configuration_invalid: "tool configuration is invalid",
-  tool_surface_unavailable: "tool surface is unavailable",
+  tool_surface_unavailable:
+    "tools are unavailable; check installed plugins and Tools configuration on the node",
   executor_start_failed: "executor failed to start",
 };
 

@@ -23,6 +23,8 @@ import type { SessionGoalView } from "../generated/SessionGoalView.js";
 import type { OauthProvider } from "../transport.js";
 import type { DesktopJobControlRequest } from "../generated/DesktopJobControlRequest.js";
 import type { JobControlOutcome } from "../generated/JobControlOutcome.js";
+import type { OperatorProcessControlRequest } from "../generated/OperatorProcessControlRequest.js";
+import type { ProcessControlOutcome } from "../generated/ProcessControlOutcome.js";
 import type { ConfigComponentsApplyRequest } from "../generated/ConfigComponentsApplyRequest.js";
 import type { ConfigComponentsPatchRequest } from "../generated/ConfigComponentsPatchRequest.js";
 import type { EventSourceSaveRequest } from "../generated/EventSourceSaveRequest.js";
@@ -452,6 +454,9 @@ export type DesktopApiAdapter = {
   ) => Promise<InterruptRequestResult>;
   backgroundTool: (request: DesktopBackgroundToolRequest) => Promise<boolean>;
   jobControl: (request: DesktopJobControlRequest) => Promise<JobControlOutcome>;
+  processControl: (
+    request: OperatorProcessControlRequest,
+  ) => Promise<ProcessControlOutcome>;
   listInstalledPacks: () => Promise<{ packs: InstalledPack[] }>;
   listPackPluginSlots: () => Promise<{
     plugins: PackPluginSlot[];

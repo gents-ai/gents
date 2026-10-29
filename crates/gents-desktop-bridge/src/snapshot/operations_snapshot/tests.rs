@@ -10,6 +10,7 @@ fn row(
     completed_at: Option<&str>,
 ) -> ToolCallRow {
     ToolCallRow {
+        tool_call_doc_id: Some(format!("doc-{tool_call_id}")),
         request_id: "req_a".into(),
         tool_call_id: tool_call_id.into(),
         tool_name: "grep".into(),
@@ -280,6 +281,7 @@ fn wait_status_future_started_at_yields_no_age() {
 #[test]
 fn backgrounded_tools_flag_session_starting_calls() {
     let row = |tool_call_id: &str, tool_name: &str| ToolCallRow {
+        tool_call_doc_id: Some(format!("doc-{tool_call_id}")),
         request_id: "req_a".into(),
         tool_call_id: tool_call_id.into(),
         tool_name: tool_name.into(),
@@ -312,6 +314,7 @@ fn backgrounded_tools_flag_session_starting_calls() {
 #[test]
 fn backgrounded_job_rows_are_marked_job() {
     let row = |tool_call_id: &str, job: bool| ToolCallRow {
+        tool_call_doc_id: Some(format!("doc-{tool_call_id}")),
         request_id: "req_a".into(),
         tool_call_id: tool_call_id.into(),
         tool_name: "workflow".into(),
@@ -332,4 +335,37 @@ fn backgrounded_job_rows_are_marked_job() {
         .map(|t| (t.tool_call_id.as_str(), t.job))
         .collect();
     assert_eq!(jobs, vec![("tc_job", true), ("tc_plain", false)]);
+}
+
+#[test]
+fn physical_twins_do_not_share_logical_liveness() {
+    let mut first = row(
+        "shared",
+        Some("running"),
+        Some("2026-05-20T12:00:00Z"),
+        None,
+    );
+    let mut second = first.clone();
+    first.tool_call_doc_id = Some("physical-a".into());
+    second.tool_call_doc_id = Some("physical-b".into());
+    let liveness = liveness_with(
+        vec![ActiveToolCallView {
+            request_id: "req_a".into(),
+            tool_call_id: "shared".into(),
+            tool_name: "grep".into(),
+            started_at: Some("2026-05-20T12:00:00Z".into()),
+            deadline_at: None,
+            await_mode: Some("background".into()),
+            running_age_ms: 42,
+            deadline_expired: true,
+        }],
+        Vec::new(),
+    );
+    let projected = project_backgrounded_tools(&[first, second], &liveness);
+    assert_eq!(projected.len(), 2);
+    assert_eq!(projected[0].tool_call_doc_id.as_deref(), Some("physical-a"));
+    assert_eq!(projected[1].tool_call_doc_id.as_deref(), Some("physical-b"));
+    assert!(projected
+        .iter()
+        .all(|view| view.age_ms.is_none() && !view.deadline_expired));
 }

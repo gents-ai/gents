@@ -6,7 +6,10 @@ use gents::session::canonical_rows::{
 use gents_protocol::output::MessagePublication;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+/// Bound traversal of fork origins supplied by persisted session headers.
 const MAX_FORK_ORIGIN_DEPTH: usize = 32;
+/// A page fails rather than projecting incomplete canonical dependencies when
+/// their bounded read would exceed this budget.
 const MAX_CANONICAL_DEPENDENCY_ROWS: usize = 2_048;
 
 #[derive(Clone, Copy)]

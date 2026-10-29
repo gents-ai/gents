@@ -158,6 +158,7 @@ export type SessionHeader = Pick<
   | "nodeDid"
   | "agentId"
   | "turnState"
+  | "inferenceActivity"
   | "latestRequestId"
   | "pendingTurn"
   | "queuedTurns"
@@ -173,6 +174,7 @@ export function headerOf(session: DesktopSessionSnapshot | null): SessionHeader 
     nodeDid: session.nodeDid,
     agentId: session.agentId,
     turnState: session.turnState,
+    inferenceActivity: session.inferenceActivity,
     latestRequestId: session.latestRequestId,
     pendingTurn: session.pendingTurn,
     queuedTurns: session.queuedTurns,

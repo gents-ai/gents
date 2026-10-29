@@ -74,3 +74,49 @@ it("keeps text-only live updates on the delta path when provenance is unchanged"
   });
   expect(next?.timelineItems).toBe(current.timelineItems);
 });
+
+it("updates activity on an unchanged live tail and clears it when unavailable", () => {
+  const current = { ...session(), inferenceActivity: "working" };
+  const retry = applySessionLiveDelta(current, {
+    ...unchanged(1),
+    inferenceActivity: "retrying",
+  });
+  expect(retry?.inferenceActivity).toBe("retrying");
+  const unavailable = applySessionLiveDelta(retry!, {
+    ...unchanged(1),
+    inferenceActivity: "unavailable",
+  });
+  expect(unavailable?.inferenceActivity).toBe("unavailable");
+});
+
+it("rejects activity from a different request, terminal turn or stale cursor", () => {
+  const current = { ...session(), inferenceActivity: "working" };
+  for (const stale of [
+    { ...unchanged(1), requestId: "other", inferenceActivity: "retrying" },
+    { ...unchanged(1), turnState: "completed", inferenceActivity: "retrying" },
+    { ...unchanged(1), liveCursor: "older", inferenceActivity: "retrying" },
+    {
+      ...unchanged(1),
+      revision: { storeVersion: 0, provenanceVersion: 1 },
+      inferenceActivity: "retrying",
+    },
+  ]) {
+    expect(applySessionLiveDelta(current, stale)).toBeNull();
+  }
+  expect(current.inferenceActivity).toBe("working");
+});
+
+it("updates activity while appending a streamed segment", () => {
+  const current = { ...session(), inferenceActivity: "retrying" };
+  const next = applySessionLiveDelta(current, {
+    ...unchanged(1),
+    outcome: "delta",
+    inferenceActivity: "working",
+    content: { mode: "append", value: "!", byteLen: 19, hash: "c2d12fb1" },
+    reasoning: { mode: "unchanged", value: "", byteLen: 0, hash: "811c9dc5" },
+  });
+  expect(next?.inferenceActivity).toBe("working");
+  expect(next?.timelineItems[0]).toMatchObject({
+    content: "Streaming response!",
+  });
+});

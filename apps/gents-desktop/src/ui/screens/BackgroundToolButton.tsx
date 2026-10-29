@@ -27,7 +27,12 @@ export function BackgroundToolButton({ tool }: { tool: RenderedToolCallView }) {
             className="ml-1.5"
             onClick={(event) => {
               event.stopPropagation();
-              openBackgroundLog(sessionId, tool.requestId!, tool.toolCallId!);
+              openBackgroundLog(
+                sessionId,
+                tool.requestId!,
+                tool.toolCallId!,
+                tool.toolCallDocId ?? tool.itemKey,
+              );
             }}
           >
             <Terminal />

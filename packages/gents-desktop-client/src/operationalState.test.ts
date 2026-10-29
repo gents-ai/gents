@@ -161,7 +161,10 @@ describe("deployment operational state", () => {
   it("does not let a retained ready entry override an unknown generation", () => {
     const state = projectDeploymentOperationalState(
       deployment({
-        readinessSource: { state: "unknown", reason: "router_generation_stale" },
+        readinessSource: {
+          state: "unknown",
+          reason: "router_generation_stale",
+        },
       }),
     );
 
@@ -299,6 +302,24 @@ describe("deployment operational state", () => {
       layer: "inference",
       kind: "blocked",
       action: "configureInference",
+    });
+  });
+
+  it("shows a safe recovery reason for an unavailable plugin tool surface", () => {
+    const state = projectDeploymentOperationalState(
+      deployment({
+        readinessStatus: {
+          state: "unavailable",
+          agentId: "default",
+          reason: "tool_surface_unavailable",
+        },
+      }),
+    );
+    expect(state.agent).toMatchObject({
+      kind: "blocked",
+      shortLabel: "Unavailable",
+      detail:
+        "Agent “Default” cannot start its tools. Check installed plugins and Tools configuration on its node.",
     });
   });
 

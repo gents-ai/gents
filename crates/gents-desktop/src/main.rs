@@ -130,6 +130,8 @@ fn is_debug_build(binary: &Path) -> bool {
         .any(|component| component.as_os_str() == "debug")
 }
 
+/// The optional development server may not exist; bound the launcher's probe
+/// before choosing whether a debug build can start.
 fn dev_server_reachable() -> bool {
     TcpStream::connect_timeout(
         &"127.0.0.1:1420".parse().expect("valid socket address"),

@@ -1,3 +1,4 @@
+mod product_telemetry;
 #[cfg(target_os = "macos")]
 mod swipe;
 #[cfg(desktop)]
@@ -27,8 +28,9 @@ use std::sync::Arc;
 use tauri::menu::{Menu, MenuItem};
 #[cfg(desktop)]
 use tauri::tray::TrayIconBuilder;
+use tauri::Manager;
 #[cfg(desktop)]
-use tauri::{Emitter, Listener, Manager};
+use tauri::{Emitter, Listener};
 
 pub fn run() {
     install_tracing(TracingConfig {
@@ -73,6 +75,11 @@ pub fn run() {
     let builder = builder.plugin(browser_store_lock());
     let builder = builder
         .setup(move |app| {
+            let telemetry_path = app
+                .path()
+                .app_config_dir()?
+                .join("product-telemetry-consent");
+            app.manage(product_telemetry::ProductTelemetry::new(telemetry_path));
             for config in &initial_windows {
                 gents_desktop_bridge::navigation::restrict_window(
                     tauri::WebviewWindowBuilder::from_config(app.handle(), config)?,
@@ -96,7 +103,16 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let builder = builder.invoke_handler(tauri::generate_handler![
         windows::desktop_window_setup_complete,
-        swipe::swipe_scroll_edges
+        swipe::swipe_scroll_edges,
+        product_telemetry::product_telemetry_app_opened,
+        product_telemetry::product_telemetry_status,
+        product_telemetry::product_telemetry_set_enabled
+    ]);
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        product_telemetry::product_telemetry_app_opened,
+        product_telemetry::product_telemetry_status,
+        product_telemetry::product_telemetry_set_enabled
     ]);
     #[cfg(desktop)]
     let builder = builder.on_window_event(|window, event| {

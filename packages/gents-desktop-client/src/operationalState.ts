@@ -219,7 +219,7 @@ export function nodeReadinessDetail(
     case "tool_configuration_invalid":
       return `Agent “${decision.agentLabel}” has an invalid tool configuration`;
     case "tool_surface_unavailable":
-      return `Agent “${decision.agentLabel}” cannot start its tool surface`;
+      return `Agent “${decision.agentLabel}” cannot start its tools. Check installed plugins and Tools configuration on its node.`;
     case "executor_start_failed":
       return `Agent “${decision.agentLabel}” could not start`;
   }

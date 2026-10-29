@@ -112,6 +112,7 @@ type ProjectionInput = {
     | "sessionId"
     | "nodeDid"
     | "turnState"
+    | "inferenceActivity"
     | "latestRequestId"
     | "pendingTurn"
     | "queuedTurns"
@@ -230,12 +231,61 @@ function chatActivity(status: OperationalStatus): ChatActivityStatus | null {
   };
 }
 
+export function inferenceActivityStatus(
+  activity: string | null | undefined,
+): ChatActivityStatus | null {
+  switch (activity) {
+    case "awaiting_provider":
+      return {
+        kind: "waiting",
+        label: "Waiting for provider…",
+        detail: "The agent is waiting for the provider to respond.",
+        animated: true,
+      };
+    case "working":
+      return {
+        kind: "working",
+        label: "Agent is working…",
+        detail: "The agent is processing the request.",
+        animated: true,
+      };
+    case "waiting":
+      return {
+        kind: "waiting",
+        label: "Waiting…",
+        detail: "The agent is waiting for the provider or a tool.",
+        animated: true,
+      };
+    case "retrying":
+      return {
+        kind: "waiting",
+        label: "Retrying provider…",
+        detail: "The agent is waiting to retry the provider.",
+        animated: true,
+      };
+    case "unavailable":
+      return {
+        kind: "blocked",
+        label: "Activity unavailable",
+        detail: "The runtime could not report this request’s activity.",
+        animated: false,
+      };
+    default:
+      return null;
+  }
+}
+
 function activityStatusFor(
   sendStatus: SendStatus,
   admissionStatus: OperationalStatus | null,
+  inferenceActivity: string | null | undefined,
 ): ChatActivityStatus | null {
   if (sendStatus.kind === "ready") return null;
   if (sendStatus.kind === "queue") {
+    if (sendStatus.turnState !== "waitingForClaim") {
+      const inference = inferenceActivityStatus(inferenceActivity);
+      if (inference) return inference;
+    }
     return sendStatus.turnState === "waitingForClaim"
       ? {
           kind: "waiting",
@@ -494,6 +544,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     activityStatus: activityStatusFor(
       nonEmptyContentSendStatus,
       admissionStatus,
+      input.session?.inferenceActivity,
     ),
     turnState: observedTurnState,
     activeRequestId,

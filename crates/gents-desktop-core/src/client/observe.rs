@@ -25,6 +25,8 @@ pub use projection_store::{
 
 const FETCH_RETRY_DELAY: Duration = Duration::from_millis(10);
 const RESYNC_RETRY_DELAY: Duration = Duration::from_millis(250);
+/// Replace repeated patch failures with a scoped resync rather than keeping
+/// the same documents dirty indefinitely.
 const FETCH_RETRY_LIMIT: u32 = 3;
 const SESSION_HYDRATION_REQUEST: &str = "SessionHydrationRequest";
 

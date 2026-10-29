@@ -354,6 +354,9 @@ pub struct PendingQueueEntryView {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
+    pub selected_skill_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
     pub captured_context: Option<Vec<gents_protocol::request_input::CapturedContext>>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
@@ -706,6 +709,9 @@ pub struct SessionLiveDeltaView {
     pub revision: SessionProjectionRevisionView,
     pub request_id: String,
     pub turn_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub inference_activity: Option<String>,
     pub status: Option<String>,
     pub content: Option<SessionLiveTextPatchView>,
     pub reasoning: Option<SessionLiveTextPatchView>,
@@ -740,6 +746,9 @@ pub struct DesktopSessionSnapshot {
     pub status: Option<String>,
     pub goal: Option<GoalView>,
     pub turn_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub inference_activity: Option<String>,
     pub latest_request_id: Option<String>,
     pub retry_eligibility: RetryEligibilityView,
     pub latest_request_outcome: Option<RequestOutcomeView>,

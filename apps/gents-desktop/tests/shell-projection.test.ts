@@ -67,6 +67,14 @@ describe("the shell view", () => {
     expect(view.getState()).toBe(before);
   });
 
+  it("passes inference activity into the shell without a text change", () => {
+    const stores = shellStores({ selection: { nodeDid: "node", sessionId: "s1" } });
+    writeSession(stores.session, { ...live("Hello"), inferenceActivity: "working" });
+    expect(projectionInputsOf(stores).session?.inferenceActivity).toBe("working");
+    writeSession(stores.session, { ...live("Hello"), inferenceActivity: "retrying" });
+    expect(projectionInputsOf(stores).session?.inferenceActivity).toBe("retrying");
+  });
+
   it("is in step with a write before the writer reads it", () => {
     const stores = shellStores({ selection: { nodeDid: "node", sessionId: "s1" } });
     const view = createShellView(stores);

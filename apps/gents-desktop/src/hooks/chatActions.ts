@@ -17,6 +17,7 @@ import {
 } from "@source-inc/gents-desktop-client";
 import type { ChatWorkflowState } from "@source-inc/gents-desktop-chat";
 import type { DesktopJobControlRequest } from "@source-inc/gents-desktop-client/generated/DesktopJobControlRequest";
+import type { OperatorProcessControlRequest } from "@source-inc/gents-desktop-client/generated/OperatorProcessControlRequest";
 import type { QueueDelivery } from "@source-inc/gents-desktop-client/generated/QueueDelivery";
 import type { SessionForkResult } from "@source-inc/gents-desktop-client/generated/SessionForkResult";
 
@@ -768,6 +769,8 @@ export function createChatActions({
     backgroundTool: (request: Parameters<DesktopApiAdapter["backgroundTool"]>[0]) =>
       api.backgroundTool(request),
     controlJob: (request: DesktopJobControlRequest) => api.jobControl(request),
+    controlProcess: (request: OperatorProcessControlRequest) =>
+      api.processControl(request),
     setChatFolder,
   };
 }

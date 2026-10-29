@@ -255,22 +255,37 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     .await
     .unwrap();
     let server = wiremock::MockServer::start().await;
+    let node_did = core.node_identity().did().to_owned();
+    let runtime_home = home.path().join("runtime");
+    std::fs::create_dir_all(&runtime_home).unwrap();
+    let graphql = format!("{}/api/v0/graphql", server.uri());
+    std::fs::write(
+        runtime_home.join("runtime.json"),
+        serde_json::json!({
+            "graphql": graphql, "node_name": "Live test", "node_did": node_did,
+            "p2p_transport": "iroh"
+        })
+        .to_string(),
+    )
+    .unwrap();
     core.add_local_standard_peer_route_for_test(
         "Live test",
         "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb",
-        "node",
-        &format!("{}/api/v0/graphql", server.uri()),
-        home.path().to_str().unwrap(),
+        &node_did,
+        &graphql,
+        runtime_home.to_str().unwrap(),
     )
     .await
     .unwrap();
     let mut rows = rows();
-    rows.requests[0].requester_did = Some("node".into());
-    rows.output_segments[0].segment.requester_did = Some("node".into());
+    rows.requests[0].node_did = Some(node_did.clone());
+    rows.requests[0].requester_did = Some(node_did.clone());
+    rows.output_segments[0].segment.node_did = node_did.clone();
+    rows.output_segments[0].segment.requester_did = Some(node_did.clone());
     rows.sessions.push(gents_protocol::session::AgentSession {
         session_id: "session".into(),
-        node_did: "node".into(),
-        requester_did: Some("node".into()),
+        node_did: node_did.clone(),
+        requester_did: Some(node_did.clone()),
         agent_id: "default".into(),
         created_at: "2026-10-07T12:00:00Z".into(),
         closed_at: None,
@@ -286,12 +301,13 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     core.store().merge_observer_patch(full.clone());
     let observed = core.store().snapshot();
     assert!(observed.output_segments.is_empty());
-    let cursor = canonical_live_text(&observed, &full, "session", Some("node"), "logical")
+    let cursor = canonical_live_text(&observed, &full, "session", Some(&node_did), "logical")
         .unwrap()
         .cursor;
     rows.requests[0].execution_lease_expires_at = Some("2026-10-07T12:10:00Z".into());
     let mut append = segment(1, " world");
-    append.segment.requester_did = Some("node".into());
+    append.segment.node_did = node_did.clone();
+    append.segment.requester_did = Some(node_did.clone());
     rows.output_segments.push(append);
     let segments: Vec<_> = rows
         .output_segments
@@ -317,10 +333,23 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
         .expect(1)
         .mount(&server)
         .await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/inference/activity"))
+        .and(wiremock::matchers::header_exists("authorization"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "node": node_did, "session": "session", "request": "logical",
+                "generation": "generation", "turn": 0, "attempt": 0,
+                "sequence": 1, "activity": "retrying"
+            })),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
     let result = build_session_live_delta(
         &core,
         "session",
-        Some("node"),
+        Some(&node_did),
         "logical",
         &cursor,
         5,
@@ -331,12 +360,13 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     .await
     .unwrap();
     assert_eq!(result.outcome, "delta");
+    assert_eq!(result.inference_activity.as_deref(), Some("retrying"));
     assert_eq!(result.content.unwrap().value, " world");
     assert_eq!(result.live_cursor.as_deref(), Some(cursor.as_str()));
     let missing = build_session_live_delta(
         &core,
         "session",
-        Some("node"),
+        Some(&node_did),
         "missing",
         &cursor,
         5,
@@ -362,7 +392,7 @@ async fn operator_delta_uses_fresh_rows_with_a_payload_free_observer_and_snapsho
     let terminal = build_session_live_delta(
         &core,
         "session",
-        Some("node"),
+        Some(&node_did),
         "logical",
         &cursor,
         5,

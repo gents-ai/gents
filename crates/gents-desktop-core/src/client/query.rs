@@ -57,7 +57,10 @@ pub use session_transcript::{
 pub(crate) use snapshot_loaders::*;
 
 pub const DEFAULT_SESSION_TRANSCRIPT_PAGE_SIZE: usize = 40;
+/// Bound a page's message read and the work needed to project it.
 pub const MAX_SESSION_TRANSCRIPT_PAGE_SIZE: usize = 80;
+/// Tool calls at a sequence are returned together; exceeding this bounded read
+/// fails instead of returning a partial sequence.
 pub(super) const SESSION_TRANSCRIPT_TOOL_CALL_ROW_BUDGET: usize = 320;
 
 #[derive(Debug)]

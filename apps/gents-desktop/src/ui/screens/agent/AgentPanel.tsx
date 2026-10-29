@@ -1,6 +1,13 @@
 import type { NodeView } from "../../../hooks/fleetStore";
 import { isLocalNode } from "@/lib/firstRun";
-import { DraftActions, RefRow, SwitchRow, TagsRow, TextRow } from "./editors";
+import {
+  DraftActions,
+  NumberRow,
+  RefRow,
+  SwitchRow,
+  TagsRow,
+  TextRow,
+} from "./editors";
 import { useDraft } from "./draft";
 import { Fact, Group, PathFact, Row } from "./rows";
 import { LocalServer } from "./LocalServer";
@@ -25,6 +32,7 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
       displayName: agent.displayName ?? "",
       defaultAgentId: agent.defaultAgentId ?? "",
       enabled: agent.enabled ?? true,
+      maxRequestHop: deployment.nodeConfig?.max_request_hop?.toString() ?? "",
       tags: deployment.nodeConfig?.tags ?? [],
     },
     async (next) => {
@@ -36,6 +44,8 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
           display_name: next.displayName.trim(),
           default_agent_id: next.defaultAgentId,
           enabled: next.enabled,
+          max_request_hop:
+            next.maxRequestHop.trim() === "" ? null : Number(next.maxRequestHop),
           created_at: agent.createdAt,
           created_by: agent.createdBy,
           tags: next.tags.length ? next.tags : null,
@@ -46,6 +56,11 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
       problems: (next) => ({
         displayName: next.displayName.trim() ? undefined : "Display name is required",
         defaultAgentId: next.defaultAgentId ? undefined : "Default agent is required",
+        maxRequestHop:
+          next.maxRequestHop.trim() === "" ||
+          (/^\d+$/.test(next.maxRequestHop) && Number(next.maxRequestHop) <= 2147483647)
+            ? undefined
+            : "Enter a whole number from 0 to 2147483647, or leave blank.",
       }),
     },
   );
@@ -85,6 +100,14 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
           checked={d.draft.enabled}
           onChange={(v) => d.set("enabled", v)}
         />
+        <NumberRow
+          id="agent-max-request-hop"
+          label="Maximum request hop"
+          description="Limits how far requests can be chained. Leave blank for no limit; 0 permits only root requests."
+          value={d.draft.maxRequestHop}
+          onChange={(v) => d.set("maxRequestHop", v)}
+          error={d.problems.maxRequestHop}
+        />
         <TagsRow
           id="agent-tags"
           label="Tags"
@@ -95,7 +118,11 @@ export function AgentPanel({ deployment }: { deployment: NodeView }) {
       </Group>
       <DraftActions
         draft={d}
-        fields={{ displayName: "agent-name", defaultAgentId: "agent-default" }}
+        fields={{
+          displayName: "agent-name",
+          defaultAgentId: "agent-default",
+          maxRequestHop: "agent-max-request-hop",
+        }}
       />
 
       <Group title="Identity">
