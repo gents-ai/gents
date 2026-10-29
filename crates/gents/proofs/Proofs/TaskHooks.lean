@@ -303,7 +303,7 @@ workspace seal and integration, so `afterSuccess` gates the request's terminal
 but never those effects; how hooks relate to workspace integration is an open
 design question, and current workspace behavior is preserved until it is
 decided. Hook time also counts against the request deadline fixed at claim. -/
-def runTask (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) : RunResult :=
+def runTaskBase (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) : RunResult :=
   let before := runPhase (hooksOfPhase hooks .before) exec
   let base : RunResult :=
     { beforeAttempted := before, finallyAttempted := runFinally (hooksOfPhase hooks .finally) exec }
@@ -328,7 +328,7 @@ def runTask (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) : Ru
 /-- A configured skip is a successful terminal decision, not a successful
 before phase: the agent and both ordinary after phases are not run. Cleanup
 retains the same obligations and can still make the final outcome fail. -/
-def runTaskWithSkips (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult)
+def runTask (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult)
     : RunResult :=
   let before := runPhase (hooksOfPhase hooks .before) exec
   match before.find? (fun a => !a.result.succeeded) with
@@ -338,8 +338,8 @@ def runTaskWithSkips (hooks : List TaskHook) (exec : HookExec) (agent : AgentRes
     if beforeDecision codes attempt.result = .skip then
       { beforeAttempted := before,
         finallyAttempted := runFinally (hooksOfPhase hooks .finally) exec }
-    else runTask hooks exec agent
-  | none => runTask hooks exec agent
+    else runTaskBase hooks exec agent
+  | none => runTaskBase hooks exec agent
 
 theorem configured_skip_omits_agent_and_after_phases
     (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult)
@@ -348,54 +348,64 @@ theorem configured_skip_omits_agent_and_after_phases
       (fun a => !a.result.succeeded) = some attempt)
     (skip : beforeDecision (((hooks.find? (fun h => h.hookId == attempt.hookId)).map
       TaskHook.skipExitCodes).getD []) attempt.result = .skip) :
-    (runTaskWithSkips hooks exec agent).agentResult = none ∧
-    (runTaskWithSkips hooks exec agent).afterSuccessAttempted = [] ∧
-    (runTaskWithSkips hooks exec agent).afterFailureAttempted = [] ∧
-    (runTaskWithSkips hooks exec agent).finallyAttempted =
+    (runTask hooks exec agent).agentResult = none ∧
+    (runTask hooks exec agent).afterSuccessAttempted = [] ∧
+    (runTask hooks exec agent).afterFailureAttempted = [] ∧
+    (runTask hooks exec agent).finallyAttempted =
       runFinally (hooksOfPhase hooks .finally) exec := by
-  simp [runTaskWithSkips, found, skip]
+  simp [runTask, found, skip]
+
+theorem runTaskBase_finally_all (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) :
+    (runTaskBase hooks exec agent).finallyAttempted.map HookAttempt.hookId =
+      (hooksOfPhase hooks .finally).map TaskHook.hookId := by
+  cases h : phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) <;>
+    cases agent <;> simp [runTaskBase, h, runFinally_all]
 
 theorem runTask_finally_all (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) :
     (runTask hooks exec agent).finallyAttempted.map HookAttempt.hookId =
       (hooksOfPhase hooks .finally).map TaskHook.hookId := by
-  cases h : phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) <;>
-    cases agent <;> simp [runTask, h, runFinally_all]
+  cases h : (runPhase (hooksOfPhase hooks .before) exec).find?
+      (fun a => !a.result.succeeded) with
+  | none => simp [runTask, h, runTaskBase_finally_all]
+  | some attempt =>
+    simp only [runTask, h]
+    split <;> simp [runTaskBase_finally_all, runFinally_all]
 
-theorem runTask_agent_attempt_iff (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) :
-    (runTask hooks exec agent).agentResult = some agent ↔
+theorem runTaskBase_agent_attempt_iff (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) :
+    (runTaskBase hooks exec agent).agentResult = some agent ↔
       phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) = .success := by
   cases h : phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) <;>
-    cases agent <;> simp [runTask, h]
+    cases agent <;> simp [runTaskBase, h]
 
-theorem runTask_beforeFailure (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult)
+theorem runTaskBase_beforeFailure (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult)
     (error : PrimaryError)
     (hb : phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) = .failure error) :
-    (runTask hooks exec agent).outcome = .failure error ∧
-    (runTask hooks exec agent).agentResult = none ∧
-    (runTask hooks exec agent).afterSuccessAttempted = [] ∧
-    (runTask hooks exec agent).afterFailureAttempted =
-      runPhase (hooksOfPhase hooks .afterFailure) exec := by simp [runTask, hb]
+    (runTaskBase hooks exec agent).outcome = .failure error ∧
+    (runTaskBase hooks exec agent).agentResult = none ∧
+    (runTaskBase hooks exec agent).afterSuccessAttempted = [] ∧
+    (runTaskBase hooks exec agent).afterFailureAttempted =
+      runPhase (hooksOfPhase hooks .afterFailure) exec := by simp [runTaskBase, hb]
 
-theorem runTask_agentSuccess (hooks : List TaskHook) (exec : HookExec)
+theorem runTaskBase_agentSuccess (hooks : List TaskHook) (exec : HookExec)
     (hb : phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) = .success) :
-    (runTask hooks exec .success).afterFailureAttempted = [] ∧
-    (runTask hooks exec .success).afterSuccessAttempted =
-      runPhase (hooksOfPhase hooks .afterSuccess) exec := by simp [runTask, hb]
+    (runTaskBase hooks exec .success).afterFailureAttempted = [] ∧
+    (runTaskBase hooks exec .success).afterSuccessAttempted =
+      runPhase (hooksOfPhase hooks .afterSuccess) exec := by simp [runTaskBase, hb]
 
-theorem runTask_agentFailure (hooks : List TaskHook) (exec : HookExec)
+theorem runTaskBase_agentFailure (hooks : List TaskHook) (exec : HookExec)
     (hb : phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) = .success) :
-    (runTask hooks exec .failure).outcome = .failure .agent ∧
-    (runTask hooks exec .failure).afterSuccessAttempted = [] ∧
-    (runTask hooks exec .failure).afterFailureAttempted =
-      runPhase (hooksOfPhase hooks .afterFailure) exec := by simp [runTask, hb]
+    (runTaskBase hooks exec .failure).outcome = .failure .agent ∧
+    (runTaskBase hooks exec .failure).afterSuccessAttempted = [] ∧
+    (runTaskBase hooks exec .failure).afterFailureAttempted =
+      runPhase (hooksOfPhase hooks .afterFailure) exec := by simp [runTaskBase, hb]
 
-theorem runTask_interrupted (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult)
+theorem runTaskBase_interrupted (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult)
     (hb : phaseOutcome (runPhase (hooksOfPhase hooks .before) exec) = .success)
     (ha : agent = .cancelled ∨ agent = .interrupted) :
-    (runTask hooks exec agent).outcome = .interrupted ∧
-    (runTask hooks exec agent).afterSuccessAttempted = [] ∧
-    (runTask hooks exec agent).afterFailureAttempted = [] := by
-  rcases ha with rfl | rfl <;> simp [runTask, hb]
+    (runTaskBase hooks exec agent).outcome = .interrupted ∧
+    (runTaskBase hooks exec agent).afterSuccessAttempted = [] ∧
+    (runTaskBase hooks exec agent).afterFailureAttempted = [] := by
+  rcases ha with rfl | rfl <;> simp [runTaskBase, hb]
 
 def runOrReject (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) : Option RunResult :=
   (admitHooks hooks).map (fun admitted => runTask admitted exec agent)
@@ -476,22 +486,22 @@ def cleanupOnlyHooks : List TaskHook := [sampleFinally]
 def failExec : HookExec := fun _ => .exited 1
 def okExec : HookExec := fun _ => .exited 0
 theorem sample_before_failure :
-    (runTask sampleHooks failExec .success).outcome =
+    (runTaskBase sampleHooks failExec .success).outcome =
       TaskOutcome.failure (PrimaryError.hook "prepare") ∧
-    (runTask sampleHooks failExec .success).agentResult = none ∧
-    (runTask sampleHooks failExec .success).finallyAttempted.map
+    (runTaskBase sampleHooks failExec .success).agentResult = none ∧
+    (runTaskBase sampleHooks failExec .success).finallyAttempted.map
       HookAttempt.hookId = ["cleanup"] := by
   decide
 theorem sample_cleanup_failure_fails :
-    (runTask cleanupOnlyHooks failExec .success).outcome = .success ∧
-    (runTask cleanupOnlyHooks failExec .success).cleanupErrors = ["cleanup"] ∧
-    (runTask cleanupOnlyHooks failExec .success).finalOutcome =
+    (runTaskBase cleanupOnlyHooks failExec .success).outcome = .success ∧
+    (runTaskBase cleanupOnlyHooks failExec .success).cleanupErrors = ["cleanup"] ∧
+    (runTaskBase cleanupOnlyHooks failExec .success).finalOutcome =
       .failure (PrimaryError.hook "cleanup") := by
   decide
 theorem sample_hook_interrupted :
-    (runTask sampleHooks (fun _ => CommandResult.interrupted) .success).outcome = .interrupted ∧
-    (runTask sampleHooks (fun _ => CommandResult.interrupted) .success).agentResult = none ∧
-    (runTask sampleHooks (fun _ => CommandResult.interrupted) .success).finallyAttempted.map HookAttempt.hookId = ["cleanup"] := by
+    (runTaskBase sampleHooks (fun _ => CommandResult.interrupted) .success).outcome = .interrupted ∧
+    (runTaskBase sampleHooks (fun _ => CommandResult.interrupted) .success).agentResult = none ∧
+    (runTaskBase sampleHooks (fun _ => CommandResult.interrupted) .success).finallyAttempted.map HookAttempt.hookId = ["cleanup"] := by
   decide
 theorem sample_negative_timeout_rejected :
     admitHooks [{ hookId := "h", phase := .before, command := ["x"],
@@ -506,14 +516,14 @@ theorem sample_empty_command_rejected :
     admitHooks [{ sampleBefore with command := [] }] = none := by
   decide
 theorem sample_cleanup_interruption_reported :
-    (runTask cleanupOnlyHooks (fun _ => .interrupted) .success).finalOutcome = .interrupted := by
+    (runTaskBase cleanupOnlyHooks (fun _ => .interrupted) .success).finalOutcome = .interrupted := by
   decide
 theorem sample_cleanup_interruption_preserves_failure :
-    (runTask cleanupOnlyHooks (fun _ => .interrupted) .failure).finalOutcome =
+    (runTaskBase cleanupOnlyHooks (fun _ => .interrupted) .failure).finalOutcome =
       .failure .agent := by
   decide
 theorem sample_first_cleanup_failure_preserved :
-    (runTask [sampleFinally, { sampleFinally with hookId := "second" }]
+    (runTaskBase [sampleFinally, { sampleFinally with hookId := "second" }]
       (fun h => if h.hookId == "cleanup" then .exited 1 else .interrupted) .success).finalOutcome =
       .failure (.hook "cleanup") := by
   decide

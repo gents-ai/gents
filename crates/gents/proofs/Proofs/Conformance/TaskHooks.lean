@@ -140,7 +140,7 @@ structure RunCase where
   deriving Repr
 
 private def runOf (c : RunCase) : RunResult :=
-  runTaskWithSkips c.hooks
+  runTask c.hooks
     (ownershipCheckedExec (fun h => !c.revoked.contains h.hookId) (scriptedExec c.script))
     c.agent
 
