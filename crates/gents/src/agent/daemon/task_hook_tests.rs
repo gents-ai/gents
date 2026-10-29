@@ -798,6 +798,31 @@ async fn refused_worker_ticket_releases_the_bound_workspace_before_work() {
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
+async fn a_skipped_gate_releases_the_bound_workspace() {
+    let harness = Harness::new().await;
+    let placement = tempfile::tempdir().expect("workspace placement directory");
+    install_workspace(&harness, placement.path()).await;
+    harness
+        .install_task(json!([{"hook_id": "gate", "phase": "before",
+        "skip_exit_codes": [10], "command": ["sh", "-c", "exit 10"], "timeout_secs": 30}]))
+        .await;
+    let request = harness.create_request(Lineage::Trigger, true).await;
+    materialize_writer_binding(&harness, &request).await;
+    assert!(workspace_bindings(&harness)
+        .await
+        .iter()
+        .any(crate::workspace::WorkspaceBindingDoc::is_active_read_write));
+    let row = harness.run(request, false).await;
+    assert_eq!(row["lifecycle_state"], "completed", "{row}");
+    assert_eq!(harness.calls(), 0, "{row}");
+    assert!(workspace_bindings(&harness)
+        .await
+        .iter()
+        .all(|binding| !binding.is_active()));
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
 async fn a_failing_before_hook_releases_the_bound_workspace() {
     let harness = Harness::new().await;
     let placement = tempfile::tempdir().expect("workspace placement directory");

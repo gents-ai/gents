@@ -2,6 +2,7 @@ import Proofs.ConfigDefaults
 import Proofs.ManagedExec.State
 import Proofs.Request.State
 import Proofs.Recovery.Sweeps.Requests
+import Proofs.RequestExecutionLease.State
 
 namespace TaskHooks
 /-! # Task hook-phase semantics (spec PR #1430)
@@ -358,6 +359,14 @@ theorem configured_skip_omits_agent_and_after_phases
     (runTask hooks exec agent).finallyAttempted =
       runFinally (hooksOfPhase hooks .finally) exec := by
   simp [runTask, found, skip]
+
+/-- A skipped gate uses the existing begin transition before successful
+terminalization; success cannot be committed directly from a claimed request. -/
+theorem skip_success_requires_processing {Generation : Type}
+    (world : RequestExecutionLease.World Generation) :
+    ¬ RequestExecutionLease.canFinalize { world with request := .claimed } .completed ∧
+      RequestExecutionLease.canFinalize { world with request := .processing } .completed := by
+  simp [RequestExecutionLease.canFinalize]
 
 theorem runTaskBase_finally_all (hooks : List TaskHook) (exec : HookExec) (agent : AgentResult) :
     (runTaskBase hooks exec agent).finallyAttempted.map HookAttempt.hookId =
