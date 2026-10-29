@@ -107,6 +107,27 @@ test.each([false, true])(
       fireEvent.scroll(panel);
       expect(screen.queryByText("latest user marker")).not.toBeNull();
       expect(screen.getByText("older response 0")).toBeTruthy();
+      const olderPage: RenderedTimelineItem[] = Array.from(
+        { length: 10 },
+        (_, index) => ({
+          kind: "assistantMessage" as const,
+          itemKey: `remote-older-${index}`,
+          content: `remote older response ${index}`,
+          reconstruction: { state: "ready" as const },
+        }),
+      );
+      rerender(
+        <ChatTranscriptPanel
+          selectedSessionId="s"
+          session={{
+            ...session,
+            timelineItems: [...olderPage, ...timelineItems],
+          }}
+          activity={null}
+        />,
+      );
+      expect(screen.getByText("remote older response 0")).toBeTruthy();
+      expect(screen.getByText("latest user marker")).toBeTruthy();
       const nextItem: RenderedTimelineItem = {
         kind: "assistantMessage",
         itemKey: "page-stream",
@@ -116,13 +137,17 @@ test.each([false, true])(
       rerender(
         <ChatTranscriptPanel
           selectedSessionId="s"
-          session={{ ...session, timelineItems: [...timelineItems, nextItem] }}
+          session={{
+            ...session,
+            timelineItems: [...olderPage, ...timelineItems, nextItem],
+          }}
           activity={null}
         />,
       );
+      expect(screen.getByText("remote older response 0")).toBeTruthy();
       expect(screen.getByText("older response 0")).toBeTruthy();
       expect(screen.getByText("latest user marker")).toBeTruthy();
-      expect(panel.querySelector('li[aria-setsize="122"]')).not.toBeNull();
+      expect(panel.querySelector('li[aria-setsize="132"]')).not.toBeNull();
       return;
     }
     fireEvent.scroll(panel);
