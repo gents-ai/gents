@@ -190,13 +190,18 @@ impl Tool for AgentMessageTool {
             "type": "string",
             "description": "An agent session you can reach (see agent_session_list), never this conversation's own session."
         });
+        properties["delivery"] = serde_json::json!({
+            "type": "string",
+            "enum": ["queue", "steer", "interrupt"],
+            "description": "Queue for the next turn, steer the current turn at a safe boundary, or interrupt before the next turn. Defaults to queue."
+        });
         properties["interrupt"] = serde_json::json!({
             "type": "boolean",
             "description": "Stop the session's current turn first, then queue the message for a new turn. Allowed only for sessions this conversation started."
         });
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Send a message to an agent session you can reach. An idle session starts a new turn; a busy one queues it as a new request after the current request finishes unless interrupt is set. Returns request_id, delivery (request or steering) and tool_call_id immediately; the result arrives later as a message in this conversation."
+            description: "Send a message to an agent session you can reach. An idle session starts a new turn; a busy one queues it as a new request after the current request finishes unless interrupt is set. Returns request_id, delivery (request, queued or steering) and tool_call_id immediately; the result arrives later as a message in this conversation."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -216,6 +221,8 @@ impl Tool for AgentMessageTool {
         }
         args.body()
             .map_err(|message| invalid_arguments_error(Self::NAME, "/", message))?;
+        args.delivery_mode()
+            .map_err(|message| invalid_arguments_error(Self::NAME, "/delivery", message))?;
         Err(not_yet_executable_error(Self::NAME))
     }
 }

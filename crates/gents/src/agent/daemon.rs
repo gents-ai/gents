@@ -109,6 +109,61 @@ async fn finalize_request_failure(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TargetedSteerClaim {
+    Wait,
+    Reject,
+}
+
+fn targeted_steer_claim(
+    self_target: bool,
+    state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
+) -> TargetedSteerClaim {
+    if self_target || state.is_some_and(|state| state.is_terminal()) {
+        TargetedSteerClaim::Reject
+    } else {
+        TargetedSteerClaim::Wait
+    }
+}
+
+async fn targeted_steer_claim_observation(
+    node: &Arc<defra_node::EmbeddedNode>,
+    request: &AgentRequest,
+) -> anyhow::Result<Option<TargetedSteerClaim>> {
+    let Some(target) = request.input.steer_target_request_doc_id.as_deref() else {
+        return Ok(None);
+    };
+    if target == request.doc_id {
+        return Ok(Some(targeted_steer_claim(true, None)));
+    }
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node.as_ref(),
+        &format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
+            _docID request_id node_did session_id agent_id lifecycle_state
+        }} }}"#,
+            crate::graphql::escape_graphql_string(target)
+        ),
+        "observe the target of a pending agent steer",
+    )
+    .await?;
+    let Some(row) = crate::graphql::first_row::<gents_protocol::row::AgentRequestRow>(
+        &response,
+        "AgentRequest",
+    )?
+    else {
+        return Ok(Some(TargetedSteerClaim::Wait));
+    };
+    if row.doc_id.as_deref() != Some(target)
+        || row.node_did.as_deref() != Some(request.node_did.as_str())
+        || row.session_id.as_deref() != Some(request.session_id.as_str())
+        || row.agent_id.as_deref() != Some(request.agent_id.as_str())
+    {
+        return Ok(Some(TargetedSteerClaim::Reject));
+    }
+    Ok(Some(targeted_steer_claim(false, row.lifecycle_state)))
+}
+
 /// Authenticate the exact durable request immediately before claim so a stale
 /// queued snapshot never reaches provider execution.
 pub(crate) async fn verify_request_at_claim_boundary(
@@ -118,7 +173,30 @@ pub(crate) async fn verify_request_at_claim_boundary(
     request: AgentRequest,
 ) -> Option<AgentRequest> {
     match verifier.verify_fresh(&request, agent_id).await {
-        Ok(verified) => Some(verified),
+        Ok(verified) => match targeted_steer_claim_observation(&node, &verified).await {
+            Ok(None) => Some(verified),
+            Ok(Some(TargetedSteerClaim::Wait)) => None,
+            Ok(Some(TargetedSteerClaim::Reject)) => {
+                let reason =
+                    "the turn targeted by this steer has ended; send a new message to continue";
+                if let Err(error) = crate::request_admission::terminalize_pending_request_rejection(
+                    &node,
+                    &verified.doc_id,
+                    &verified.node_did,
+                    reason,
+                    "terminalize_expired_agent_steer",
+                )
+                .await
+                {
+                    tracing::warn!(request_id = %verified.request_id, %error, "could not reject expired agent steer");
+                }
+                None
+            }
+            Err(error) => {
+                tracing::warn!(request_id = %verified.request_id, %error, "could not observe agent steer target; leaving it pending");
+                None
+            }
+        },
         Err(error) if error.is_denied() => {
             let reason = format!("request admission denied: {error:#}");
             record_current_claim_outcome("admission_denied");
@@ -1319,6 +1397,56 @@ impl OwnedWorkOutcome {
             Self::Observed { observation, .. } => *observation,
             Self::OwnershipLost | Self::DrainFailed(_) => {
                 crate::task_hooks::TaskAgentResult::Interrupted
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod agent_steer_target_tests {
+    use super::{targeted_steer_claim, TargetedSteerClaim};
+    use gents_protocol::request_lifecycle::RequestLifecycleState;
+
+    #[test]
+    fn claim_gate_matches_the_executable_delivery_model() {
+        let json = gents_lean_contract::run_prepared_generator(
+            &gents_lean_contract::proofs_dir().unwrap(),
+            "Proofs.Conformance.AgentMessageDelivery:olean",
+            "Proofs/Conformance/AgentMessageDelivery.lean",
+        )
+        .unwrap();
+        let cases: serde_json::Value = serde_json::from_str(&json).unwrap();
+        for case in cases["targeted_claims"].as_array().unwrap() {
+            let states: &[Option<RequestLifecycleState>] = match case["state"].as_str().unwrap() {
+                "unknown" => &[None],
+                "pending" => &[
+                    Some(RequestLifecycleState::WorkspaceBindingPending),
+                    Some(RequestLifecycleState::Pending),
+                ],
+                "active" => &[
+                    Some(RequestLifecycleState::Claimed),
+                    Some(RequestLifecycleState::Processing),
+                ],
+                "terminal" => &[
+                    Some(RequestLifecycleState::Completed),
+                    Some(RequestLifecycleState::Failed),
+                    Some(RequestLifecycleState::Superseded),
+                    Some(RequestLifecycleState::Dead),
+                    Some(RequestLifecycleState::Interrupted),
+                ],
+                other => panic!("unknown target state {other}"),
+            };
+            let expected = match case["expected"].as_str().unwrap() {
+                "wait" => TargetedSteerClaim::Wait,
+                "reject" => TargetedSteerClaim::Reject,
+                other => panic!("unknown decision {other}"),
+            };
+            for state in states {
+                assert_eq!(
+                    targeted_steer_claim(case["self_target"].as_bool().unwrap(), *state),
+                    expected,
+                    "{case}"
+                );
             }
         }
     }

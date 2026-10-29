@@ -78,18 +78,40 @@ pub(super) async fn settle_rows_after_request_update(
     {
         return Ok(0);
     }
-    let Some(tool_doc_id) = request.caused_by_parent_tool_call_doc_id else {
+    let folded_query = format!(
+        r#"{{ AgentRequest(filter: {{ superseded_by_request_doc_id: {{ _eq: "{}" }},
+            lifecycle_state: {{ _eq: "superseded" }}, failure_reason: {{ _eq: "{}" }} }}) {{
+            request_id caused_by_parent_tool_call_doc_id
+        }} }}"#,
+        escape_graphql_string(request_doc_id),
+        escape_graphql_string(crate::lifecycle::FOLDED_REASON),
+    );
+    let folded = crate::graphql::graphql_with_transaction_retry(
+        node.as_ref(),
+        &folded_query,
+        "load agent inputs consumed by a terminal request",
+    )
+    .await?;
+    let mut tool_doc_ids: Vec<String> =
+        crate::graphql::rows::<AgentRequestRow>(&folded, "AgentRequest")?
+            .into_iter()
+            .filter_map(|row| row.caused_by_parent_tool_call_doc_id)
+            .collect();
+    tool_doc_ids.extend(request.caused_by_parent_tool_call_doc_id);
+    tool_doc_ids.sort();
+    tool_doc_ids.dedup();
+    if tool_doc_ids.is_empty() {
         return Ok(0);
-    };
+    }
+    let ids = crate::graphql::graphql_string_list_literal(tool_doc_ids.iter().map(String::as_str));
     let query = format!(
-        r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }}, {} }}, limit: 1) {{ {SESSION_MESSAGE_ROW_FIELDS} }} }}"#,
-        escape_graphql_string(&tool_doc_id),
+        r#"{{ AgentToolCall(filter: {{ _docID: {{ _in: {ids} }}, {} }}) {{ {SESSION_MESSAGE_ROW_FIELDS} }} }}"#,
         running_session_message_filter(local_did)
     );
     let response = crate::graphql::graphql_with_transaction_retry(
         node.as_ref(),
         &query,
-        "load the session-message row a terminal request names",
+        "load the session-message rows a terminal request names",
     )
     .await?;
     let mut settled = 0;
@@ -231,6 +253,75 @@ pub(crate) async fn turn_assignment_handoff(
     }
 }
 
+async fn consuming_request_for_folded_steer(
+    node: &Arc<EmbeddedNode>,
+    caused: &AgentRequestRow,
+) -> Result<Option<AgentRequestRow>> {
+    let steer = caused
+        .input
+        .as_ref()
+        .and_then(|input| input.queue.as_ref())
+        .is_some_and(|queue| queue.delivery == gents_protocol::request_input::QueueDelivery::Steer);
+    if !steer || caused.lifecycle_state != Some(RequestLifecycleState::Superseded) {
+        return Ok(Some(caused.clone()));
+    }
+    let Some(reason) = caused
+        .failure_reason
+        .as_deref()
+        .filter(|reason| !reason.is_empty())
+    else {
+        return Ok(None);
+    };
+    if reason != crate::lifecycle::FOLDED_REASON {
+        return Ok(Some(caused.clone()));
+    }
+    let Some(head_doc_id) = caused
+        .superseded_by_request_doc_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+    else {
+        return Ok(None);
+    };
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
+            _docID request_id node_did session_id agent_id input lifecycle_state
+            workspace_id workspace_owner_node_did workspace_authority workspace_seal_hash
+        }} }}"#,
+        escape_graphql_string(head_doc_id),
+    );
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "load the consuming request for an agent steer",
+    )
+    .await?;
+    let Some(head) = crate::graphql::first_row::<AgentRequestRow>(&response, "AgentRequest")?
+    else {
+        return Ok(None);
+    };
+    anyhow::ensure!(
+        head.doc_id.as_deref() == Some(head_doc_id)
+            && caused
+                .input
+                .as_ref()
+                .and_then(|input| input.steer_target_request_doc_id.as_deref())
+                == Some(head_doc_id)
+            && head.doc_id != caused.doc_id
+            && head.node_did.is_some()
+            && head.node_did == caused.node_did
+            && head.session_id.is_some()
+            && head.session_id == caused.session_id
+            && head.agent_id.is_some()
+            && head.agent_id == caused.agent_id
+            && caused.workspace_id.is_none()
+            && caused.workspace_owner_node_did.is_none()
+            && caused.workspace_authority.is_none()
+            && caused.workspace_seal_hash.is_none(),
+        "agent steer consuming request does not match its session scope"
+    );
+    Ok(Some(head))
+}
+
 pub(crate) async fn settle_session_message_row(
     node: &Arc<EmbeddedNode>,
     lifecycle: &mut ToolCallLifecycle,
@@ -272,12 +363,15 @@ pub(crate) async fn settle_session_message_row(
             return Ok(true);
         }
     };
-    let caused_doc_id = caused
+    let Some(completion_request) = consuming_request_for_folded_steer(node, &caused).await? else {
+        return Ok(false);
+    };
+    let completion_doc_id = completion_request
         .doc_id
         .as_deref()
-        .context("caused request lacks physical identity")?;
+        .context("completion request lacks physical identity")?;
     let Some(terminal) =
-        crate::background_tools::load_caused_request_terminal(node, caused_doc_id).await?
+        crate::background_tools::load_caused_request_terminal(node, completion_doc_id).await?
     else {
         return Ok(false);
     };
@@ -287,7 +381,7 @@ pub(crate) async fn settle_session_message_row(
     // non-complete handoff. Computing it first lets the reason persist as
     // part of the row's `completionPending:<reason>` settlement record, so
     // the completion redrive can re-render the same evidence.
-    let handoff = turn_assignment_handoff(node, &caused, &terminal).await;
+    let handoff = turn_assignment_handoff(node, &completion_request, &terminal).await;
     let handoff_reason = handoff.reason();
     if !lifecycle
         .settle_session_message(&terminal, handoff_reason)
@@ -425,6 +519,87 @@ mod turn_assignment_tests {
         ] {
             assert!(!reasons.contains(terminal));
         }
+    }
+
+    #[tokio::test]
+    async fn folded_agent_steer_follows_the_matching_consuming_turn() {
+        let PublishedSessionMessage {
+            admission,
+            caused_request_id,
+            caused_request_doc_id,
+        } = crate::tool_call_lifecycle::admission_fixture::published_session_message(
+            crate::tool_call_lifecycle::admission_fixture::PublishedAdmissionOptions {
+                name: "folded-steer-completion".into(),
+                real_identity: true,
+                await_mode: AwaitMode::Background,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("publish consuming request");
+        let node = &admission.node;
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
+            _docID request_id node_did session_id agent_id workspace_id workspace_owner_node_did
+            workspace_authority workspace_seal_hash
+        }} }}"#,
+            escape_graphql_string(&caused_request_doc_id)
+        );
+        let response =
+            crate::graphql::graphql_with_transaction_retry(node, &query, "test consuming request")
+                .await
+                .unwrap();
+        let mut row = response.data.expect("request query data")["AgentRequest"][0].clone();
+        row["_docID"] = serde_json::json!("folded-steer-document");
+        row["request_id"] = serde_json::json!("folded-steer-request");
+        row["lifecycle_state"] = serde_json::json!("superseded");
+        row["failure_reason"] = serde_json::json!(crate::lifecycle::FOLDED_REASON);
+        row["superseded_by_request_doc_id"] = serde_json::json!(caused_request_doc_id);
+        row["input"] = serde_json::json!({
+            "steer_target_request_doc_id": caused_request_doc_id,
+            "queue": {"source": "steering", "policy": "append", "delivery": "steer"}
+        });
+        let caused: AgentRequestRow = serde_json::from_value(row).unwrap();
+        let head = consuming_request_for_folded_steer(node, &caused)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(head.doc_id.as_deref(), Some(caused_request_doc_id.as_str()));
+        assert!(crate::background_tools::load_caused_request_terminal(
+            node,
+            &caused_request_doc_id
+        )
+        .await
+        .unwrap()
+        .is_none());
+        let mut foreign = caused.clone();
+        foreign.session_id = Some("different-session".into());
+        assert!(consuming_request_for_folded_steer(node, &foreign)
+            .await
+            .is_err());
+        let mut stale = caused.clone();
+        stale.input.as_mut().unwrap().steer_target_request_doc_id =
+            Some("another-physical-turn".into());
+        assert!(consuming_request_for_folded_steer(node, &stale)
+            .await
+            .is_err());
+        crate::test_support::install_test_agent(node, &admission.node_did, "general").await;
+        crate::tool_call_lifecycle::admission_fixture::complete_child(
+            node,
+            &caused_request_id,
+            &admission.node_did,
+            "steered work complete",
+        )
+        .await;
+        let terminal =
+            crate::background_tools::load_caused_request_terminal(node, &caused_request_doc_id)
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(terminal.notification_status(), "completed");
+        assert_eq!(terminal.output(), "steered work complete");
+        admission.node.shutdown().await;
+        std::fs::remove_dir_all(admission.path).unwrap();
     }
 
     /// A completed turn must not read as assignment evidence: only a

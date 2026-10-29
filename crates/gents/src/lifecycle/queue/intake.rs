@@ -114,6 +114,61 @@ pub(crate) async fn pending_ids_in_txn(
     Ok(ids)
 }
 
+pub(super) fn steering_requester_allowed(head: &AgentRequest, row: &AgentRequestRow) -> bool {
+    if agent_steer(row) {
+        [
+            row.caused_by_parent_request_id.as_deref(),
+            row.caused_by_parent_request_doc_id.as_deref(),
+            row.caused_by_parent_tool_call_id.as_deref(),
+            row.caused_by_parent_tool_call_doc_id.as_deref(),
+        ]
+        .iter()
+        .all(|id| id.is_some_and(|id| !id.trim().is_empty()))
+    } else {
+        row.requester_did == head.requester_did
+    }
+}
+
+fn agent_steer(row: &AgentRequestRow) -> bool {
+    let Some(input) = row.input.as_ref() else {
+        return false;
+    };
+    input
+        .queue
+        .as_ref()
+        .is_some_and(|queue| queue.source == QueueSource::Steering)
+        && (input.steer_target_request_doc_id.is_some()
+            || row
+                .caused_by_parent_tool_call_id
+                .as_deref()
+                .is_some_and(|id| !id.trim().is_empty())
+            || row
+                .caused_by_parent_tool_call_doc_id
+                .as_deref()
+                .is_some_and(|id| !id.trim().is_empty()))
+}
+
+pub(super) fn steering_context_allowed(head: &AgentRequest, row: &AgentRequestRow) -> bool {
+    let Some(input) = row.input.as_ref() else {
+        return false;
+    };
+    if agent_steer(row) {
+        input.cwd.is_none()
+            && input.selected_skill_ids.is_empty()
+            && row.workspace_id.is_none()
+            && row.workspace_owner_node_did.is_none()
+            && row.workspace_authority.is_none()
+            && row.workspace_seal_hash.is_none()
+    } else {
+        input.cwd == head.input.cwd
+            && input.selected_skill_ids == head.input.selected_skill_ids
+            && row.workspace_id == head.workspace_id
+            && row.workspace_owner_node_did == head.workspace_owner_node_did
+            && row.workspace_authority == head.workspace_authority
+            && row.workspace_seal_hash == head.workspace_seal_hash
+    }
+}
+
 pub(super) fn steering_compatible(
     head: &AgentRequest,
     row: &AgentRequestRow,
@@ -130,8 +185,12 @@ pub(super) fn steering_compatible(
                 && queue.key.is_none()
                 && queue.interrupted_request_id.is_none()
                 && queue.background_completion_wake_version.is_none()
-        }) && input.cwd == head.input.cwd
-            && input.selected_skill_ids == head.input.selected_skill_ids
+        }) && steering_context_allowed(head, row)
+            && if agent_steer(row) {
+                input.steer_target_request_doc_id.as_deref() == Some(head.doc_id.as_str())
+            } else {
+                input.steer_target_request_doc_id.is_none()
+            }
             && input.initial_title.is_none()
             && input.goal_continuation.is_none()
             && super::folding::same_goal_assignment(head, row)
@@ -139,12 +198,8 @@ pub(super) fn steering_compatible(
         && row.execution_origin.as_deref() == Some("interactive")
         && row.node_did.as_deref() == Some(head.node_did.as_str())
         && row.session_id.as_deref() == Some(head.session_id.as_str())
-        && row.requester_did == head.requester_did
+        && steering_requester_allowed(head, row)
         && row.agent_id.as_deref() == Some(head.agent_id.as_str())
-        && row.workspace_id == head.workspace_id
-        && row.workspace_owner_node_did == head.workspace_owner_node_did
-        && row.workspace_authority == head.workspace_authority
-        && row.workspace_seal_hash == head.workspace_seal_hash
         && row.execution_generation.is_none()
         && row.interrupt_requested_at.is_none()
         && row.retry_parent_request.is_none()

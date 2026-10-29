@@ -978,3 +978,134 @@ async fn expired_or_malformed_steering_is_a_modelled_publication_barrier() {
         }
     }
 }
+
+#[tokio::test]
+async fn signed_agent_steer_publishes_and_replays_in_agent_origin_turn() {
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
+    use gents_protocol::request_input::QueueDelivery;
+
+    let db = test_db("agent-steer-publication").await;
+    let session = "agent-steer-publication";
+    crate::session::ensure_session_with_agent_id_and_requester_did(
+        &db.node,
+        session,
+        db.node_did(),
+        TEST_AGENT_ID,
+        Some(db.node_did()),
+    )
+    .await
+    .unwrap();
+    let make = |id: &str, content: &str| {
+        AgentRequestCreate::base(
+            RequestPurpose::Normal,
+            id,
+            db.node_did(),
+            db.node_did(),
+            TEST_AGENT_ID,
+            session,
+            content,
+            "interactive",
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            AgentRequestAdmissionRecord::local_self(db.node_did()),
+        )
+    };
+    let mut head = make("1", "original task");
+    head.request_hop = 1;
+    head.caused_by_parent_request_id = Some("origin-request".into());
+    head.caused_by_parent_request_doc_id = Some("origin-request-doc".into());
+    head.caused_by_parent_tool_call_id = Some("origin-tool".into());
+    head.caused_by_parent_tool_call_doc_id = Some("origin-tool-doc".into());
+    crate::sign_agent_request_create(db.identity.as_ref(), &mut head)
+        .await
+        .unwrap();
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        &db.node,
+        "test.agent_steer.head",
+        &head.graphql_mutation().unwrap(),
+    )
+    .await
+    .unwrap();
+    let head_doc = extract_single_doc_id(&response, "create_AgentRequest").unwrap();
+    let bound = RapidHashMap::from_iter([(1, head_doc.clone())]);
+    let writer = DefraStreamWriter::new(db.node.clone(), db.node_did(), Duration::ZERO);
+    let mut active = claim_head(&db, &bound, 1, &[]).await;
+    active.begin(&writer).await;
+    writer
+        .publish_authored_message(&active.lifecycle, "prompt", &Message::user("original task"))
+        .await
+        .unwrap();
+
+    let mut steer = make("2", "change direction");
+    steer.request_hop = 2;
+    steer.caused_by_parent_request_id = Some("sender-request".into());
+    steer.caused_by_parent_request_doc_id = Some("sender-request-doc".into());
+    steer.caused_by_parent_tool_call_id = Some("sender-call".into());
+    steer.caused_by_parent_tool_call_doc_id = Some("sender-call-doc".into());
+    steer.input.steer_target_request_doc_id = Some(head_doc);
+    steer.input.queue = Some(RequestQueue {
+        delivery: QueueDelivery::Steer,
+        position: None,
+        source: QueueSource::Steering,
+        policy: QueuePolicy::Append,
+        key: None,
+        queued_after_request_id: Some("1".into()),
+        interrupted_request_id: None,
+        background_completion_wake_version: None,
+    });
+    crate::sign_agent_request_create(db.identity.as_ref(), &mut steer)
+        .await
+        .unwrap();
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        &db.node,
+        "test.agent_steer.input",
+        &steer.graphql_mutation().unwrap(),
+    )
+    .await
+    .unwrap();
+    let steer_doc = extract_single_doc_id(&response, "create_AgentRequest").unwrap();
+    let (_owner, authority) = crate::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request_admission::AgentRequestAdmissionVerifier::new(
+        db.node.clone(),
+        db.identity.clone(),
+        authority,
+    );
+    let snapshot =
+        super::super::intake::steering_snapshot(&db.node, active.lifecycle.request(), &verifier)
+            .await
+            .unwrap();
+    assert_eq!(snapshot.inputs.len(), 1);
+    assert_eq!(snapshot.inputs[0].key, folded_input_key(&steer_doc));
+    writer
+        .publish_authored_message(
+            &active.lifecycle,
+            &snapshot.inputs[0].key,
+            &snapshot.inputs[0].message,
+        )
+        .await
+        .unwrap();
+    let rows = fold_rows(&db.node, session).await;
+    let consumed = rows.iter().find(|row| row.doc_id == steer_doc).unwrap();
+    assert_eq!(consumed.lifecycle_state, RequestLifecycleState::Superseded);
+    assert_eq!(
+        consumed.superseded_by_request_doc_id.as_deref(),
+        Some(active.lifecycle.request().doc_id.as_str())
+    );
+    assert_eq!(consumed.failure_reason.as_deref(), Some(FOLDED_REASON));
+    let replay =
+        super::super::folding::load_consumed_folded_inputs(&db.node, active.lifecycle.request())
+            .await
+            .unwrap();
+    assert_eq!(replay.len(), 1);
+    assert_eq!(replay[0].request_doc_id, steer_doc);
+    assert_eq!(
+        replay[0].message().unwrap().rag_text().as_deref(),
+        Some("change direction")
+    );
+    assert_eq!(
+        replay[0].input.steer_target_request_doc_id.as_deref(),
+        Some(active.lifecycle.request().doc_id.as_str())
+    );
+    db.node.shutdown().await;
+}

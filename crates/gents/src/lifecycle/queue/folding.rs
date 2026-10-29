@@ -360,9 +360,6 @@ pub(crate) async fn load_consumed_folded_inputs(
     node: &std::sync::Arc<EmbeddedNode>,
     head: &AgentRequest,
 ) -> Result<Vec<FoldedInput>> {
-    if !heads_user_turn(head) {
-        return Ok(Vec::new());
-    }
     let query = format!(
         r#"{{ AgentRequest(filter: {{
             node_did: {{ _eq: "{}" }},
@@ -370,7 +367,9 @@ pub(crate) async fn load_consumed_folded_inputs(
             superseded_by_request_doc_id: {{ _eq: "{}" }},
             lifecycle_state: {{ _eq: "superseded" }},
             failure_reason: {{ _eq: "{}" }}
-        }}) {{ _docID request_id requester_did content }} }}"#,
+        }}) {{ _docID request_id requester_did content input
+            caused_by_parent_request_id caused_by_parent_request_doc_id
+            caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id }} }}"#,
         escape_graphql_string(&head.node_did),
         escape_graphql_string(&head.session_id),
         escape_graphql_string(&head.doc_id),
@@ -399,8 +398,8 @@ pub(crate) async fn load_consumed_folded_inputs(
                 let mut by_doc = rapidhash::RapidHashMap::default();
                 for row in rows {
                     anyhow::ensure!(
-                        row.requester_did == head.requester_did,
-                        "folded request {} crossed its claimed request's requester",
+                        super::intake::steering_requester_allowed(head, &row),
+                        "folded request {} has an invalid requester or agent lineage",
                         row.request_id
                     );
                     let doc = row

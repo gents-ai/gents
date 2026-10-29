@@ -61,7 +61,7 @@ impl DefraSessionHook {
         }
 
         let create = tool_name == AGENT_NEW_TOOL_NAME;
-        let (target, body, title, interrupt) = if create {
+        let (target, body, title, delivery) = if create {
             let parsed = match serde_json::from_str::<AgentNewArgs>(args) {
                 Ok(parsed) => parsed,
                 Err(error) => refuse!(
@@ -110,7 +110,7 @@ impl DefraSessionHook {
                 },
                 (parsed.prompt, parsed.task),
                 parsed.title,
-                false,
+                crate::session_message::AgentDeliveryMode::Queue,
             )
         } else {
             let parsed = match serde_json::from_str::<AgentMessageArgs>(args) {
@@ -122,6 +122,13 @@ impl DefraSessionHook {
                         "/",
                         format!("invalid agent_message arguments: {error}"),
                     )
+                ),
+            };
+            let delivery = match parsed.delivery_mode() {
+                Ok(mode) => mode,
+                Err(reason) => refuse!(
+                    FailureClass::ArgumentInvalid,
+                    invalid_tool_arguments_payload(tool_name, "/delivery", reason)
                 ),
             };
             let target_session = parsed.session_id.trim().to_owned();
@@ -154,7 +161,7 @@ impl DefraSessionHook {
                     )
                 );
             };
-            if parsed.interrupt {
+            if delivery == crate::session_message::AgentDeliveryMode::Interrupt {
                 if let Some(reason) = crate::session_message::interrupt_refusal(
                     &self.node,
                     &crate::session_origin::SessionScope::of_request(&caller),
@@ -168,12 +175,7 @@ impl DefraSessionHook {
                     );
                 }
             }
-            (
-                target,
-                (parsed.message, parsed.task),
-                None,
-                parsed.interrupt,
-            )
+            (target, (parsed.message, parsed.task), None, delivery)
         };
         let field = if create { "prompt" } else { "message" };
         let body =
@@ -223,7 +225,7 @@ impl DefraSessionHook {
             &target,
             rendered,
             title.as_deref(),
-            interrupt,
+            delivery,
         )
         .await
         {
@@ -283,7 +285,7 @@ impl DefraSessionHook {
         // Stop the target's turn only once the message is durably delivered,
         // so a failed commit never interrupts without delivering. The new
         // request waits behind the interrupted one.
-        if interrupt {
+        if delivery == crate::session_message::AgentDeliveryMode::Interrupt {
             let scope = crate::session_message::target_scope(&caller.node_did, &target);
             if let Err(error) = crate::session_message::interrupt_session(&self.node, &scope).await
             {

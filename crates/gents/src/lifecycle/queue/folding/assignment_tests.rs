@@ -84,5 +84,19 @@ async fn generated_goal_assignments_bound_fold_and_steering() {
             "{}: live steering",
             case["name"]
         );
+        let mut agent_candidate = candidate.clone();
+        agent_candidate.caused_by_parent_request_id = Some("sender-request".into());
+        agent_candidate.caused_by_parent_request_doc_id = Some("sender-request-doc".into());
+        agent_candidate.caused_by_parent_tool_call_id = Some("sender-call".into());
+        agent_candidate.caused_by_parent_tool_call_doc_id = Some("sender-call-doc".into());
+        let input = agent_candidate.input.as_mut().unwrap();
+        input.queue.as_mut().unwrap().source = QueueSource::Steering;
+        input.steer_target_request_doc_id = Some(head.doc_id.clone());
+        assert_eq!(
+            super::super::intake::steering_compatible(&head, &agent_candidate, now),
+            case["expected_steer"].as_bool().unwrap(),
+            "{}: agent steering assignment",
+            case["name"]
+        );
     }
 }

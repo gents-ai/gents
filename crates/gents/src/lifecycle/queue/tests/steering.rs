@@ -1,5 +1,160 @@
+#[test]
+fn agent_steering_scope_matches_generated_delivery_contract() {
+    let json = gents_lean_contract::run_prepared_generator(
+        &gents_lean_contract::proofs_dir().unwrap(),
+        "Proofs.Conformance.AgentMessageDelivery:olean",
+        "Proofs/Conformance/AgentMessageDelivery.lean",
+    )
+    .unwrap();
+    let cases: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let mut head = parent_request("did:test:node", "target");
+    head.requester_did = Some("did:test:human".into());
+    head.input.cwd = Some("/head".into());
+    for case in cases["requesters"].as_array().unwrap() {
+        let agent = case["agent"].as_bool().unwrap();
+        let same = case["same_requester"].as_bool().unwrap();
+        let edge = case["complete_parent_edge"].as_bool().unwrap();
+        let parent = if edge { Some("parent") } else { None };
+        let partial = if agent { Some("parent") } else { parent };
+        let row: AgentRequestRow = serde_json::from_value(serde_json::json!({
+            "request_id": "steer", "requester_did": if same { "did:test:human" } else { "did:test:agent" },
+            "input": {"queue": {"source": if agent { "steering" } else { "user" }, "policy": "append", "delivery": "steer"}},
+            "caused_by_parent_request_id": parent, "caused_by_parent_request_doc_id": parent,
+            "caused_by_parent_tool_call_id": partial, "caused_by_parent_tool_call_doc_id": parent,
+        })).unwrap();
+        assert_eq!(
+            super::super::intake::steering_requester_allowed(&head, &row),
+            case["expected"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
+    let user_continuation: AgentRequestRow = serde_json::from_value(serde_json::json!({
+        "request_id": "user-steer", "requester_did": "did:test:human",
+        "input": {"queue": {"source": "steering", "policy": "append", "delivery": "steer"}},
+        "caused_by_parent_request_id": "request", "caused_by_parent_request_doc_id": "request-doc"
+    }))
+    .unwrap();
+    assert!(super::super::intake::steering_requester_allowed(
+        &head,
+        &user_continuation
+    ));
+    for case in cases["contexts"].as_array().unwrap() {
+        let agent = case["agent"].as_bool().unwrap();
+        let exact = case["exact_context"].as_bool().unwrap();
+        let empty = case["empty_agent_context"].as_bool().unwrap();
+        let cwd = if agent && empty {
+            None
+        } else if !agent && exact {
+            Some("/head")
+        } else {
+            Some("/other")
+        };
+        let row: AgentRequestRow = serde_json::from_value(serde_json::json!({
+            "request_id": "steer", "input": {"cwd": cwd, "queue": {"source": if agent { "steering" } else { "user" }, "policy": "append", "delivery": "steer"}},
+            "caused_by_parent_tool_call_id": if agent { Some("parent") } else { None },
+        })).unwrap();
+        assert_eq!(
+            super::super::intake::steering_context_allowed(&head, &row),
+            case["expected"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
+    for case in cases["targets"].as_array().unwrap() {
+        head.doc_id = case["head"].as_str().unwrap().to_owned();
+        let row: AgentRequestRow = serde_json::from_value(serde_json::json!({
+            "request_id": "steer", "node_did": head.node_did, "session_id": head.session_id,
+            "agent_id": head.agent_id, "requester_did": "did:test:agent", "purpose": "normal",
+            "execution_origin": "interactive",
+            "input": {"steer_target_request_doc_id": case["requested"], "queue": {"source": "steering", "policy": "append", "delivery": "steer"}},
+            "caused_by_parent_request_id": "caller", "caused_by_parent_request_doc_id": "caller-doc",
+            "caused_by_parent_tool_call_id": "call", "caused_by_parent_tool_call_doc_id": "call-doc",
+        })).unwrap();
+        assert_eq!(
+            super::super::intake::steering_compatible(&head, &row, chrono::Utc::now()),
+            case["expected"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
+}
+
 use super::*;
 use crate::lean_vocab_test::LeanQueuedSteeringAction as Action;
+
+#[tokio::test]
+async fn signed_agent_steer_enters_active_turn_with_different_requester() {
+    use gents_protocol::request_input::QueueDelivery;
+    let db = test_db("signed-agent-steer").await;
+    let mut head = parent_request(db.node_did(), "agent-steer-session");
+    head.requester_did = Some("did:test:human".into());
+    head.workspace_id = Some("workspace".into());
+    head.workspace_owner_node_did = Some(db.node_did().into());
+    head.workspace_authority = Some("readOnly".into());
+    head.workspace_seal_hash = Some("sealed".into());
+    head.input.cwd = Some("/workspace/project".into());
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        "agent-steer-request",
+        db.node_did(),
+        db.node_did(),
+        TEST_AGENT_ID,
+        "agent-steer-session",
+        "change course",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(db.node_did()),
+    );
+    create.input.steer_target_request_doc_id = Some(head.doc_id.clone());
+    create.input.queue = Some(RequestQueue {
+        delivery: QueueDelivery::Steer,
+        position: None,
+        source: QueueSource::Steering,
+        policy: QueuePolicy::Append,
+        key: None,
+        queued_after_request_id: Some(head.request_id.clone()),
+        interrupted_request_id: None,
+        background_completion_wake_version: None,
+    });
+    create.request_hop = 1;
+    create.caused_by_parent_request_id = Some("caller-request".into());
+    create.caused_by_parent_request_doc_id = Some("caller-request-doc".into());
+    create.caused_by_parent_tool_call_id = Some("caller-tool".into());
+    create.caused_by_parent_tool_call_doc_id = Some("caller-tool-doc".into());
+    crate::sign_agent_request_create(db.identity.as_ref(), &mut create)
+        .await
+        .unwrap();
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        &db.node,
+        "test.signed_agent_steer",
+        &create.graphql_mutation().unwrap(),
+    )
+    .await
+    .unwrap();
+    let doc = extract_single_doc_id(&response, "create_AgentRequest").unwrap();
+    let (_owner, authority) = crate::agent::p2p_reconcile::enrollment_authority_channel();
+    let verifier = crate::request_admission::AgentRequestAdmissionVerifier::new(
+        db.node.clone(),
+        db.identity.clone(),
+        authority,
+    );
+    let snapshot = super::super::intake::steering_snapshot(&db.node, &head, &verifier)
+        .await
+        .unwrap();
+    assert_eq!(snapshot.inputs.len(), 1);
+    assert_eq!(snapshot.inputs[0].key, folded_input_key(&doc));
+    assert_eq!(
+        snapshot.inputs[0].message.rag_text().as_deref(),
+        Some("change course")
+    );
+    head.doc_id = "later-physical-turn".into();
+    let later = super::super::intake::steering_snapshot(&db.node, &head, &verifier)
+        .await
+        .unwrap();
+    assert!(
+        later.inputs.is_empty(),
+        "a later turn cannot consume the steer"
+    );
+    db.node.shutdown().await;
+}
 
 #[tokio::test]
 async fn steering_admission_keeps_signed_content_queued_without_transcript_publication() {

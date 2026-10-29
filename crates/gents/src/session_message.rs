@@ -48,6 +48,26 @@ pub(crate) struct AgentMessageArgs {
     pub task: Option<TaskBody>,
     #[serde(default)]
     pub interrupt: bool,
+    #[serde(default)]
+    pub delivery: Option<AgentDeliveryMode>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AgentDeliveryMode {
+    Queue,
+    Steer,
+    Interrupt,
+}
+
+impl From<bool> for AgentDeliveryMode {
+    fn from(interrupt: bool) -> Self {
+        if interrupt {
+            Self::Interrupt
+        } else {
+            Self::Queue
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -86,6 +106,17 @@ impl AgentNewArgs {
 }
 
 impl AgentMessageArgs {
+    pub(crate) fn delivery_mode(&self) -> Result<AgentDeliveryMode, &'static str> {
+        match (self.interrupt, self.delivery) {
+            (true, Some(AgentDeliveryMode::Queue | AgentDeliveryMode::Steer)) => {
+                Err("interrupt conflicts with the selected delivery mode")
+            }
+            (true, _) => Ok(AgentDeliveryMode::Interrupt),
+            (false, Some(mode)) => Ok(mode),
+            (false, None) => Ok(AgentDeliveryMode::Queue),
+        }
+    }
+
     pub(crate) fn body(&self) -> Result<MessageBody<'_>, String> {
         message_body("message", self.message.as_ref(), self.task.as_ref())
     }
@@ -94,6 +125,7 @@ impl AgentMessageArgs {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Delivery {
     Request,
+    Queued,
     Steering,
 }
 
@@ -101,6 +133,7 @@ impl Delivery {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Request => "request",
+            Self::Queued => "queued",
             Self::Steering => "steering",
         }
     }
@@ -394,10 +427,15 @@ pub(crate) async fn plan(
     target: &SessionMessageTarget,
     rendered: RenderedBody,
     title: Option<&str>,
-    interrupt: bool,
+    delivery: impl Into<AgentDeliveryMode>,
 ) -> Result<Result<Plan, String>> {
+    let delivery = delivery.into();
+    let interrupt = delivery == AgentDeliveryMode::Interrupt;
     let request_id = uuid::Uuid::new_v4().to_string();
     let local = target.node_did == cause.caller_node_did;
+    if !local && delivery == AgentDeliveryMode::Steer {
+        return Ok(Err("remote steering requires confirmed target support; use queue delivery until the target is compatible".to_owned()));
+    }
     if crate::session::session_is_stopped(
         node,
         &target.node_did,
@@ -435,6 +473,14 @@ pub(crate) async fn plan(
     } else {
         None
     };
+    if delivery == AgentDeliveryMode::Steer
+        && active.is_some()
+        && !crate::skills::prompt_slash_skill_selection(&rendered.content)
+            .selected_skill_ids
+            .is_empty()
+    {
+        return Ok(Err("steering cannot change the active turn's skills; send this message with queue delivery".to_owned()));
+    }
     let own_hop = match &active {
         Some(active) => active.request_hop.max(
             crate::session::load_session_current_hop(node, &target.node_did, &target.session_id)
@@ -482,15 +528,31 @@ pub(crate) async fn plan(
         }
     } else {
         let steering = active.filter(|_| !interrupt);
+        let goal_assignment = if delivery == AgentDeliveryMode::Steer {
+            if let Some(head) = steering.as_ref() {
+                head.input
+                    .goal_assignment
+                    .as_ref()
+                    .map(|reference| reference.continuation(&head.doc_id))
+            } else {
+                target_goal_assignment(node, cause, target).await?
+            }
+        } else {
+            target_goal_assignment(node, cause, target).await?
+        };
         let queue = steering
-            .as_ref()
-            .map(|active| gents_protocol::request_input::RequestQueue {
-                delivery: Default::default(),
+            .is_some()
+            .then(|| gents_protocol::request_input::RequestQueue {
+                delivery: if delivery == AgentDeliveryMode::Steer {
+                    gents_protocol::request_input::QueueDelivery::Steer
+                } else {
+                    gents_protocol::request_input::QueueDelivery::Queue
+                },
                 position: None,
                 source: gents_protocol::request_input::QueueSource::Steering,
                 policy: gents_protocol::request_input::QueuePolicy::Append,
                 key: None,
-                queued_after_request_id: Some(active.request_id.clone()),
+                queued_after_request_id: steering.as_ref().map(|active| active.request_id.clone()),
                 interrupted_request_id: None,
                 background_completion_wake_version: None,
             });
@@ -505,13 +567,19 @@ pub(crate) async fn plan(
                 hop,
                 gents_protocol::request_input::RequestInput {
                     queue,
-                    goal_assignment: target_goal_assignment(node, cause, target).await?,
+                    steer_target_request_doc_id: steering
+                        .as_ref()
+                        .filter(|_| delivery == AgentDeliveryMode::Steer)
+                        .map(|active| active.doc_id.clone()),
+                    goal_assignment,
                     ..Default::default()
                 },
             )
             .await?,
-            delivery: if steering.is_some() {
+            delivery: if steering.is_some() && delivery == AgentDeliveryMode::Steer {
                 Delivery::Steering
+            } else if steering.is_some() {
+                Delivery::Queued
             } else {
                 Delivery::Request
             },
@@ -745,6 +813,8 @@ pub(crate) async fn observe_caused_request(
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
             _docID request_id node_did requester_did session_id lifecycle_state input
+            failure_reason superseded_by_request_doc_id agent_id workspace_id
+            workspace_owner_node_did workspace_authority workspace_seal_hash
             request_hop caused_by_parent_request_doc_id caused_by_parent_tool_call_id
             caused_by_parent_tool_call_doc_id
         }} }}"#,
@@ -1298,6 +1368,29 @@ mod agent_tools_tests {
     };
     use crate::tool_call_lifecycle::AwaitMode;
 
+    #[test]
+    fn agent_message_delivery_defaults_and_legacy_interrupt_are_consistent() {
+        for (delivery, interrupt, expected) in [
+            (None, false, Some(AgentDeliveryMode::Queue)),
+            (Some("queue"), false, Some(AgentDeliveryMode::Queue)),
+            (Some("steer"), false, Some(AgentDeliveryMode::Steer)),
+            (Some("interrupt"), false, Some(AgentDeliveryMode::Interrupt)),
+            (None, true, Some(AgentDeliveryMode::Interrupt)),
+            (Some("interrupt"), true, Some(AgentDeliveryMode::Interrupt)),
+            (Some("queue"), true, None),
+            (Some("steer"), true, None),
+        ] {
+            let args: AgentMessageArgs = serde_json::from_value(serde_json::json!({
+                "session_id": "session", "message": "work", "interrupt": interrupt, "delivery": delivery
+            })).unwrap();
+            assert_eq!(
+                args.delivery_mode().ok(),
+                expected,
+                "{delivery:?}, {interrupt}"
+            );
+        }
+    }
+
     pub(super) async fn started(
         name: &str,
     ) -> (
@@ -1454,7 +1547,42 @@ mod agent_tools_tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(steering.delivery(), Delivery::Steering);
+        assert_eq!(steering.delivery(), Delivery::Queued);
+        let PlannedWrite::Request { create, .. } = &steering.write else {
+            panic!("queued request")
+        };
+        assert_eq!(
+            create.input.queue.as_ref().unwrap().delivery,
+            gents_protocol::request_input::QueueDelivery::Queue
+        );
+        let live_steer = plan(
+            &node,
+            &cause,
+            &target,
+            body(),
+            None,
+            AgentDeliveryMode::Steer,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let PlannedWrite::Request { create, .. } = &live_steer.write else {
+            panic!("steering request")
+        };
+        assert_eq!(
+            create.input.queue.as_ref().unwrap().delivery,
+            gents_protocol::request_input::QueueDelivery::Steer
+        );
+        assert_eq!(
+            create
+                .input
+                .queue
+                .as_ref()
+                .unwrap()
+                .queued_after_request_id
+                .as_deref(),
+            Some(caused.request_id.as_str())
+        );
         let steer = plan(&node, &cause, &target, body(), None, true)
             .await
             .unwrap()
@@ -1883,7 +2011,7 @@ mod agent_tools_tests {
         .await
         .unwrap()
         .unwrap();
-        assert_eq!(message_plan.delivery(), Delivery::Steering);
+        assert_eq!(message_plan.delivery(), Delivery::Queued);
         let delivered = commit(&node, &cause, &mut send_call, message_plan, true)
             .await
             .unwrap();
@@ -1895,6 +2023,50 @@ mod agent_tools_tests {
             std::time::Duration::ZERO,
         );
         worker.begin_owned_execution(&writer).await.unwrap();
+        let mut steer_call = crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request(
+            node.clone(), &mut caller_owner, &caller.node_did, 2, crate::toolset::AGENT_MESSAGE_TOOL_NAME, "steer-trigger-worker",
+            serde_json::json!({"session_id": "correlated-worker", "message": "change direction", "delivery": "steer"}), AwaitMode::Background, false,
+        ).await.unwrap();
+        let steer_cause = SessionMessageCause {
+            tool_call_id: steer_call.tool_call_id().to_owned(),
+            tool_call_doc_id: steer_call.doc_id().unwrap().to_owned(),
+            ..cause.clone()
+        };
+        let steer_plan = plan(
+            &node,
+            &steer_cause,
+            &target,
+            RenderedBody {
+                content: "change direction".to_owned(),
+                goal: None,
+            },
+            None,
+            AgentDeliveryMode::Steer,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(steer_plan.delivery(), Delivery::Steering);
+        let steer = commit(&node, &steer_cause, &mut steer_call, steer_plan, true)
+            .await
+            .unwrap();
+        writer
+            .publish_authored_message(
+                &worker,
+                &crate::lifecycle::queue::folded_input_key(&steer.request_doc_id),
+                &gents_protocol::message::Message::user("change direction"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            crate::background_completion::settle_running_session_message_rows(
+                &node,
+                &caller.node_did
+            )
+            .await
+            .unwrap(),
+            0
+        );
         worker
             .terminalize_owned(
                 crate::lifecycle::RequestTerminalOutcome::Interrupted,
@@ -1903,6 +2075,20 @@ mod agent_tools_tests {
             )
             .await
             .unwrap();
+        crate::background_completion::settle_running_session_message_rows(&node, &caller.node_did)
+            .await
+            .unwrap();
+        let response = ConfigAccess::local(node.clone())
+            .execute(&format!(
+                r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state }} }}"#,
+                escape_graphql_string(steer_call.doc_id().unwrap()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            response["data"]["AgentToolCall"][0]["lifecycle_state"],
+            "cancelled"
+        );
         drop(caller_owner);
         node.shutdown().await;
         std::fs::remove_dir_all(&message.admission.path).unwrap();
