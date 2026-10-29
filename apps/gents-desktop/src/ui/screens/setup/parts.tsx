@@ -39,16 +39,19 @@ export function Frame({
       data-testid="setup-screen"
     >
       <div className="px-8">
-        <div className="mx-auto w-full max-w-xl pt-[10vh] pb-8">{children}</div>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="absolute right-6 bottom-6"
-          aria-label="Toggle theme"
-          onClick={flip}
-        >
-          {theme === "dark" ? <Sun /> : <Moon />}
-        </Button>
+        <div className="mx-auto min-w-0 w-full max-w-xl pt-[10vh] pb-8">
+          {children}
+          <div className="mt-6 flex justify-end">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Toggle theme"
+              onClick={flip}
+            >
+              {theme === "dark" ? <Sun /> : <Moon />}
+            </Button>
+          </div>
+        </div>
       </div>
     </ScrollArea>
   );
@@ -87,7 +90,7 @@ export function Option({
   return (
     <div
       className={cn(
-        "rounded-2xl border bg-raised",
+        "min-w-0 rounded-2xl border bg-raised",
         selected ? "border-brand ring-1 ring-brand" : "border-border/60",
       )}
     >
@@ -122,7 +125,9 @@ export function Option({
         )}
       </button>
       {selected && children ? (
-        <div className="grid gap-3 border-t border-border/60 px-4 py-3">{children}</div>
+        <div className="grid min-w-0 grid-cols-1 gap-3 border-t border-border/60 px-4 py-3">
+          {children}
+        </div>
       ) : null}
     </div>
   );
@@ -181,7 +186,7 @@ export function Field({
 }) {
   if (info && htmlFor) {
     return (
-      <div className="grid gap-1">
+      <div className="grid min-w-0 grid-cols-1 gap-1">
         <span className="flex items-center gap-1.5">
           <label htmlFor={htmlFor} className="text-xs text-muted-foreground">
             {label}
@@ -193,7 +198,7 @@ export function Field({
     );
   }
   return (
-    <label className="grid gap-1">
+    <label className="grid min-w-0 grid-cols-1 gap-1">
       <span className="text-xs text-muted-foreground">{label}</span>
       {children}
     </label>

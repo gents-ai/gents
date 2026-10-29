@@ -55,7 +55,9 @@ describe("generated client observation ordering", () => {
       firstRun: {
         phase: FirstRunPhase;
         snapshotReady: boolean;
-        initConfigAbsent: boolean;
+        initConfigStatus: "absent" | "configured" | "unreadable" | "unknown";
+        localRuntimeAllowed: boolean;
+        remoteConfigured: boolean;
         needsSetup: boolean;
         authoritative: boolean;
         expected: FirstRunPhase;
@@ -78,15 +80,17 @@ describe("generated client observation ordering", () => {
         projectStartupPhaseAfterSnapshot(row.phase, row.running, row.autostartDeclined),
       ).toBe(row.expected);
     }
-    expect(firstRun).toHaveLength(48);
+    expect(firstRun).toHaveLength(384);
     for (const row of firstRun) {
       expect(
         projectFirstRunPhase(
           row.phase,
           row.snapshotReady,
-          row.initConfigAbsent ? "absent" : "configured",
+          row.initConfigStatus === "unknown" ? null : row.initConfigStatus,
           row.needsSetup,
           row.authoritative,
+          row.localRuntimeAllowed,
+          row.remoteConfigured,
         ),
       ).toBe(row.expected);
     }

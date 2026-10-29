@@ -11,13 +11,15 @@ export function SetupScreen({
   nodeDid,
   onCancel,
   provider,
+  localOnly = false,
 }: {
-  onDone: (snapshot: DesktopClientSnapshot) => void;
+  onDone: (snapshot: DesktopClientSnapshot, nodeDid?: string) => void;
   initialStep?: "welcome" | "starting" | "inference";
   purpose?: "onboarding" | "add-backend";
   nodeDid?: string;
   onCancel?: () => void;
   provider?: ProviderId;
+  localOnly?: boolean;
 }) {
   if (purpose === "add-backend")
     return (
@@ -37,6 +39,7 @@ export function SetupScreen({
       nodeDid={nodeDid}
       onCancel={onCancel}
       provider={provider}
+      localOnly={localOnly}
     />
   );
 }

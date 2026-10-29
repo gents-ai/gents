@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { bootstrap, deployment } from "./config-panel-wiring/fixtures";
 import {
+  hasSavedRemote,
   inferenceIsConfigured,
   isLocalNode,
   needsFirstRunSetup,
@@ -21,6 +22,44 @@ describe("first-run inference gate", () => {
 
   it("allows setup for an existing but uninitialized home", () => {
     expect(projectFirstRunPhase("unknown", true, "absent", true, false)).toBe("active");
+  });
+
+  it("reopens a desktop's saved remote setup without a local home", () => {
+    expect(
+      projectFirstRunPhase("unknown", true, "absent", true, false, true, true),
+    ).toBe("done");
+    expect(
+      projectFirstRunPhase("unknown", false, "absent", true, false, true, true),
+    ).toBe("unknown");
+    expect(
+      projectFirstRunPhase("unknown", true, "unreadable", true, false, true, true),
+    ).toBe("unknown");
+    expect(
+      projectFirstRunPhase("active", true, "absent", true, false, true, true),
+    ).toBe("active");
+  });
+
+  it("treats only a persisted non-local enrollment as a saved remote setup", () => {
+    const saved = [{ ...deployment, source: "enrollment" }];
+    expect(
+      hasSavedRemote({
+        bootstrap: { ...bootstrap, initNodeDid: null, savedPeers: saved },
+      }),
+    ).toBe(true);
+    expect(
+      hasSavedRemote({
+        bootstrap: { ...bootstrap, initNodeDid: deployment.nodeDid, savedPeers: saved },
+      }),
+    ).toBe(false);
+    expect(
+      hasSavedRemote({
+        bootstrap: {
+          ...bootstrap,
+          initNodeDid: null,
+          savedPeers: [{ ...deployment, source: "paired-remote" }],
+        },
+      }),
+    ).toBe(false);
   });
 
   it("keeps setup unresolved when an existing init config cannot be decoded", () => {

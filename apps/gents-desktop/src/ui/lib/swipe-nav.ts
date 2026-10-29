@@ -8,6 +8,7 @@ import { listenToWindow, reportSwipeScrollEdges } from "../../lib/nativeShell";
 import { isMacTauriShell } from "../../lib/shellPlatform";
 import type { History } from "./router";
 import { SWIPE_HANDLE_ATTR } from "../app/SwipeHandles";
+import { scrollRoom } from "./scrollRoom";
 
 type SwipeProgress = { amount: number; phase: "moving" | "ended" | "cancelled" };
 
@@ -34,20 +35,6 @@ function hide(el: HTMLElement) {
   el.style.opacity = "";
   el.querySelector<HTMLElement>("[data-swipe-fill]")?.style.removeProperty("opacity");
   delete el.dataset.armed;
-}
-
-export function scrollRoom(start: Element | null): { left: boolean; right: boolean } {
-  let left = false;
-  let right = false;
-  for (let el = start; el && el !== document.documentElement; el = el.parentElement) {
-    if (el.scrollWidth <= el.clientWidth + 1) continue;
-    const overflow = getComputedStyle(el).overflowX;
-    if (overflow !== "auto" && overflow !== "scroll") continue;
-    if (el.scrollLeft > 0) left = true;
-    if (el.scrollLeft + el.clientWidth < el.scrollWidth - 1) right = true;
-    if (left && right) break;
-  }
-  return { left, right };
 }
 
 function reportScrollRoom(): () => void {

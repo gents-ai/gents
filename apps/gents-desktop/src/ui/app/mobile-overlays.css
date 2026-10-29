@@ -1,0 +1,27 @@
+/* iOS keeps the layout viewport behind its keyboard; portaled overlays must
+   use the same visual viewport as the app frame. */
+@media (width < 48rem) {
+  [data-slot="sheet-content"][data-side="left"],
+  [data-slot="sheet-content"][data-side="right"] {
+    top: var(--viewport-top);
+    bottom: auto;
+    height: var(--viewport-height);
+    max-height: var(--viewport-height);
+  }
+
+  [data-slot="sheet-content"][data-side="top"] {
+    top: var(--viewport-top);
+    max-height: var(--viewport-height);
+  }
+
+  [data-slot="sheet-content"][data-side="bottom"] {
+    bottom: calc(100dvh - var(--viewport-top) - var(--viewport-height));
+    max-height: var(--viewport-height);
+  }
+
+  [data-slot="dialog-content"] {
+    top: calc(var(--viewport-top) + var(--viewport-height) / 2);
+    max-height: calc(var(--viewport-height) - 2rem);
+    translate: -50% -50%;
+  }
+}

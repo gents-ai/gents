@@ -33,15 +33,20 @@ def main : IO Unit := do
         ",\"autostartDeclined\":" ++ toString autostartDeclined ++ ",\"expected\":\"" ++
         phaseName (ClientSnapshotObservation.observeStartup phase running autostartDeclined) ++ "\"}"
   let firstRunPhases : List ClientSnapshotObservation.FirstRunPhase := [.unknown, .active, .done]
+  let initStatuses : List (ClientSnapshotObservation.InitConfigStatus × String) :=
+    [(.absent, "absent"), (.configured, "configured"), (.unreadable, "unreadable"), (.unknown, "unknown")]
   let firstRunRows := firstRunPhases.flatMap fun phase =>
     [false, true].flatMap fun snapshotReady =>
-      [false, true].flatMap fun initConfigAbsent =>
+      initStatuses.flatMap fun (initStatus, initName) =>
         [false, true].flatMap fun needsSetup =>
-          [false, true].map fun authoritative =>
-            let expected := ClientSnapshotObservation.observeFirstRun phase snapshotReady initConfigAbsent needsSetup authoritative
-            "{\"phase\":\"" ++ firstRunName phase ++ "\",\"snapshotReady\":" ++ toString snapshotReady ++
-            ",\"initConfigAbsent\":" ++ toString initConfigAbsent ++ ",\"needsSetup\":" ++ toString needsSetup ++
-            ",\"authoritative\":" ++ toString authoritative ++ ",\"expected\":\"" ++ firstRunName expected ++ "\"}"
+          [false, true].flatMap fun authoritative =>
+            [false, true].flatMap fun localRuntimeAllowed =>
+              [false, true].map fun remoteConfigured =>
+                let expected := ClientSnapshotObservation.observeFirstRun phase snapshotReady initStatus needsSetup authoritative localRuntimeAllowed remoteConfigured
+                "{\"phase\":\"" ++ firstRunName phase ++ "\",\"snapshotReady\":" ++ toString snapshotReady ++
+                ",\"initConfigStatus\":\"" ++ initName ++ "\",\"needsSetup\":" ++ toString needsSetup ++
+                ",\"authoritative\":" ++ toString authoritative ++ ",\"localRuntimeAllowed\":" ++ toString localRuntimeAllowed ++
+                ",\"remoteConfigured\":" ++ toString remoteConfigured ++ ",\"expected\":\"" ++ firstRunName expected ++ "\"}"
   IO.println ("{\"fences\":[" ++ String.intercalate "," rows ++
     "],\"startup\":[" ++ String.intercalate "," startupRows ++
     "],\"firstRun\":[" ++ String.intercalate "," firstRunRows ++

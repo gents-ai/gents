@@ -118,6 +118,23 @@ pub fn pending_request_satisfied(
     !has_decision && current_approval && route_applied && requested == current
 }
 
+/// Visibility only: an undecided request expires at its request deadline,
+/// while an approved request remains visible until its exact route applies or
+/// `DurableEnrollmentDocuments::current_approval` stops recognizing its lease.
+pub fn active_request_visible(
+    request_fresh: bool,
+    has_decision: bool,
+    current_approval: bool,
+    route_applied: bool,
+) -> bool {
+    !route_applied
+        && if has_decision {
+            current_approval
+        } else {
+            request_fresh
+        }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EnrollmentDecisionKind {
     Approved,
