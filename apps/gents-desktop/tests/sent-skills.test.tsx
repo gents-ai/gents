@@ -10,6 +10,11 @@ vi.mock("@/hooks/useClient", () => ({
   }),
 }));
 
+vi.mock("../src/ui/hooks/useFleet", () => ({
+  useFleet: (select: (state: unknown) => unknown) =>
+    select({ sessions: {}, nodes: {} }),
+}));
+
 const chips = () =>
   [...document.querySelectorAll('[data-slot="command-chip"]')].map(
     (chip) => chip.textContent,
@@ -36,6 +41,22 @@ describe("a sent message's skills", () => {
     );
     expect(chips()).toEqual(["/review"]);
     expect(container.textContent).toBe("use /review, then ship");
+  });
+
+  it("sit beside the message's session references, each drawn as its own chip", () => {
+    const { container } = render(
+      <SentText
+        content="/review compare with [Lexer work](gents:session/s-1)"
+        skills={["review"]}
+      />,
+    );
+    expect(chips()).toEqual(["/review"]);
+    expect(
+      [...document.querySelectorAll('[data-slot="session-chip"]')].map(
+        (chip) => chip.textContent,
+      ),
+    ).toEqual(["Lexer work"]);
+    expect(container.textContent).toBe("/review compare with Lexer work");
   });
 
   it("leave a message without selected skills as plain text, slash words and all", () => {

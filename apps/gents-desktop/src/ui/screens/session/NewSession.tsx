@@ -1,6 +1,6 @@
 import { cn } from "@gents/ui/lib/utils";
 import { AttachmentTray, useAttachmentDraft } from "./attachments";
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
 import { RichComposer } from "@gents/ui/conversation";
 import { useApp, useView } from "@/app/AppContext";
 import {
@@ -17,6 +17,7 @@ import { agentName } from "../behavior";
 import { SelectedChatFolder } from "../ChatFolderPicker";
 import { AccessSentence } from "../parts";
 import { ReplyingTo } from "../ReplyingTo";
+import { useMentionMenu } from "../useMentionMenu";
 import { useSlashMenu } from "../useSlashMenu";
 import { GoalChip, goalCommand, useGoalMode } from "./goalMode";
 import {
@@ -111,6 +112,11 @@ function NewSessionComposer() {
     [goalCommand(null, false)],
     goalMode.create,
   );
+  const mention = useMentionMenu(deployment?.nodeDid ?? null, null);
+  const chipKinds = useMemo(
+    () => ({ ...slash.chipKinds, ...mention.chipKinds }),
+    [slash.chipKinds, mention.chipKinds],
+  );
   return (
     <div
       data-testid="composer"
@@ -140,8 +146,8 @@ function NewSessionComposer() {
         commands={slash.names}
         composerRef={slash.field}
         commandsAt="word"
-        chipKinds={slash.chipKinds}
-        triggers={goalMode.mode ? undefined : [slash.trigger]}
+        chipKinds={chipKinds}
+        triggers={goalMode.mode ? undefined : [slash.trigger, mention.trigger]}
         onAttach={attachments.pick}
         hasAttachments={attachments.hasAttachments}
         submitDisabled={attachments.pending}

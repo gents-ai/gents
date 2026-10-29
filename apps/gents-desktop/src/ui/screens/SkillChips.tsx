@@ -8,6 +8,8 @@ import {
 } from "@gents/ui/conversation";
 import type { SkillView } from "@source-inc/gents-desktop-client";
 import { useSelectedNode } from "@/hooks/useClient";
+import { navigate } from "@/lib/router";
+import { useSessionChipKind } from "./useMentionMenu";
 
 const folderName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 
@@ -47,7 +49,9 @@ const skillChip = (id: string): ComposerChip => ({
 
 /** A sent message's text with the skills its request selected drawn as
     chips: where the text names one, and before the text for the ones gents
-    took from the opening lines, which it strips. */
+    took from the opening lines, which it strips. Its session references are
+    chips too, each opening its session; other text, links included, stays
+    as written. */
 export function SentText({
   content,
   skills,
@@ -57,6 +61,8 @@ export function SentText({
 }) {
   const node = useSelectedNode();
   const known = node?.skills;
+  const nodeDid = node?.nodeDid ?? null;
+  const session = useSessionChipKind(nodeDid);
   const selected = useMemo(() => [...new Set(skills ?? [])], [skills]);
   const kind = useMemo<ChipKind>(
     () => ({
@@ -72,12 +78,17 @@ export function SentText({
     }),
     [known, selected],
   );
-  if (!selected.length) return content;
-  const parts = parseParts(content, { command: kind });
+  const parts = useMemo(
+    () => parseParts(content, { command: kind, session }),
+    [content, kind, session],
+  );
   const named = new Set(
-    parts.flatMap((part) => (part.type === "chip" ? [part.chip.id] : [])),
+    parts.flatMap((part) =>
+      part.type === "chip" && part.chip.kind === "command" ? [part.chip.id] : [],
+    ),
   );
   const leading = selected.filter((id) => !named.has(id));
+  if (!leading.length && !parts.some((part) => part.type === "chip")) return content;
   return (
     <>
       {leading.map((id) => (
@@ -87,6 +98,20 @@ export function SentText({
       {parts.map((part, i) =>
         part.type === "text" ? (
           part.text
+        ) : part.chip.kind === "session" ? (
+          <Chip
+            key={i}
+            chip={part.chip}
+            kind={session}
+            title={`Open ${part.chip.label}`}
+            onClick={() =>
+              navigate({
+                name: "session",
+                sessionId: part.chip.id,
+                nodeDid: nodeDid ?? undefined,
+              })
+            }
+          />
         ) : (
           <Chip key={i} chip={part.chip} kind={kind} />
         ),
