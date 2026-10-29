@@ -90,6 +90,35 @@ theorem steering_selection_preserves_deferred_order (active : QueueEntry)
               simpa [selectSteeringPastDeferred, queued, eligible, result] using ih
         · simp [selectSteeringPastDeferred, queued, eligible]
 
+theorem steering_selection_preserves_each_order (active : QueueEntry)
+    (admitted : List RequestId) (entries : List QueueEntry) :
+    (selectSteeringPastDeferred active admitted entries).1.Sublist entries ∧
+      (selectSteeringPastDeferred active admitted entries).2.Sublist entries := by
+  induction entries with
+  | nil => simp [selectSteeringPastDeferred]
+  | cons entry rest ih =>
+      by_cases queued : entry.delivery = .queue
+      · cases result : selectSteeringPastDeferred active admitted rest with
+        | mk selected pending =>
+            simp only [result] at ih
+            simp only [selectSteeringPastDeferred, queued, ↓reduceIte, result]
+            exact ⟨ih.1.cons entry, ih.2.cons₂ entry⟩
+      · by_cases eligible : steersInto active entry ∧ entry.requestId ∈ admitted
+        · cases result : selectSteeringPastDeferred active admitted rest with
+          | mk selected pending =>
+              simp only [result] at ih
+              simp only [selectSteeringPastDeferred, queued, eligible, ↓reduceIte, result]
+              exact ⟨ih.1.cons₂ entry, ih.2.cons entry⟩
+        · simp [selectSteeringPastDeferred, queued, eligible]
+
+theorem steering_selection_preserves_created_order (active : QueueEntry)
+    (admitted : List RequestId) (entries : List QueueEntry)
+    (ordered : CreatedOrdered entries) :
+    CreatedOrdered (selectSteeringPastDeferred active admitted entries).1 ∧
+      CreatedOrdered (selectSteeringPastDeferred active admitted entries).2 := by
+  obtain ⟨selected, pending⟩ := steering_selection_preserves_each_order active admitted entries
+  exact ⟨createdOrdered_sublist selected ordered, createdOrdered_sublist pending ordered⟩
+
 /-- The native execution owner supplies the exact active row and generation;
 this operation grants no lease. -/
 def intakeSteering? (target : AgentSession.Scope) (pre : SessionQueueState)
