@@ -19,7 +19,7 @@ import { cn } from "@gents/ui/lib/utils";
 import { shortFolder, type ChangedFile } from "@/lib/turnChanges";
 import { toggleFileList, useFileListOpen } from "./changes";
 import { Hint } from "./Hint";
-import { Counts, FileLabel, fileName } from "./TurnChanges";
+import { FileCounts, FileLabel, fileName } from "./TurnChanges";
 
 /** Moves between a turn's files: previous and next, a menu of them all
     behind where the reader is, and, where the panel is wide enough, the
@@ -91,7 +91,7 @@ export function ChangesPicker({
                   />
                   <FileLabel path={f.path} within={within} />
                 </span>
-                <Counts added={f.added} removed={f.removed} />
+                <FileCounts file={f} />
               </DropdownMenuItem>
             ))}
           </DropdownMenuGroup>
