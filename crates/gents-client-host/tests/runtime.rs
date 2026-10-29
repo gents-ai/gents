@@ -2243,6 +2243,22 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
             &identity,
         )
         .await?;
+        let permissions = editor_review::verify_permission_recovery(
+            &mut client,
+            &mut id,
+            &access,
+            root,
+            &node_home,
+            &client_did,
+            &evidence,
+            &identity,
+        )
+        .await?;
+        tokio::fs::write(
+            root.join("editor-inventory-permissions-canonical.json"),
+            serde_json::to_vec_pretty(&permissions)?,
+        )
+        .await?;
         tokio::fs::write(
             root.join("editor-inventory-canonical.json"),
             serde_json::to_vec_pretty(&evidence)?,

@@ -226,6 +226,10 @@ pub async fn verify_permission_recovery(
     const CACHED_RETRY: &str = "030ee487-7cca-496d-be85-bd35f686f154";
     const BLOCKED_RETRY: &str = "56eba703-e534-43b5-980c-203f37523811";
     const RESTORED_RETRY: &str = "4be6aa69-c87a-44bb-a946-2452ac3a283b";
+    let working_copy = baseline["workingCopyPath"]
+        .as_str()
+        .map_or_else(|| root.join(FILE), std::path::PathBuf::from);
+    let working_copy_before = std::fs::read(&working_copy)?;
     let physical = field(baseline, "physicalTool")?;
     let receipts = review_receipts(access, physical).await?;
     ensure!(receipts.len() == 1, "initial review has multiple demands");
@@ -436,7 +440,7 @@ pub async fn verify_permission_recovery(
         );
     }
     ensure!(
-        std::fs::read_to_string(root.join(FILE))? == LATER,
+        std::fs::read(&working_copy)? == working_copy_before,
         "permission recovery changed the working copy"
     );
     let restored_inventory = inventory
