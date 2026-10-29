@@ -490,6 +490,31 @@ async fn a_failing_before_hook_stops_the_request_before_the_provider() {
 }
 
 #[tokio::test]
+async fn configured_gate_skip_completes_without_provider_or_failure_hooks() {
+    let harness = Harness::new().await;
+    harness
+        .install_task(json!([
+            {"hook_id": "gate", "phase": "before", "skip_exit_codes": [10],
+             "command": ["sh", "-c", "exit 10"], "timeout_secs": 30},
+            {"hook_id": "next", "phase": "before",
+             "command": ["sh", "-c", harness.touch("next")], "timeout_secs": 30},
+            {"hook_id": "report", "phase": "after_failure",
+             "command": ["sh", "-c", harness.touch("report")], "timeout_secs": 30},
+            {"hook_id": "sweep", "phase": "finally",
+             "command": ["sh", "-c", harness.touch("sweep")], "timeout_secs": 30},
+        ]))
+        .await;
+    let request = harness.create_request(Lineage::Trigger, false).await;
+    let row = harness.run(request, false).await;
+    assert_eq!(row["lifecycle_state"], "completed", "{row}");
+    assert_eq!(harness.calls(), 0, "{row}");
+    assert!(reason(&row).is_empty(), "{row}");
+    assert!(!harness.mark("next").exists());
+    assert!(!harness.mark("report").exists());
+    assert!(harness.mark("sweep").exists());
+}
+
+#[tokio::test]
 async fn passing_hooks_leave_a_manual_task_run_completed() {
     let harness = Harness::new().await;
     harness
