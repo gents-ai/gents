@@ -2133,11 +2133,18 @@ mod agent_tools_tests {
         let steer = commit(&node, &steer_cause, &mut steer_call, steer_plan, true)
             .await
             .unwrap();
+        let admitted =
+            crate::request_binding::load_agent_request_by_doc_id(&node, &steer.request_doc_id)
+                .await
+                .unwrap()
+                .unwrap();
+        let authored = admitted.input.authored_message(&admitted.content).unwrap();
+        assert!(authored.rag_text().unwrap().contains("change direction"));
         writer
             .publish_authored_message(
                 &worker,
                 &crate::lifecycle::queue::folded_input_key(&steer.request_doc_id),
-                &gents_protocol::message::Message::user("change direction"),
+                &authored,
             )
             .await
             .unwrap();
