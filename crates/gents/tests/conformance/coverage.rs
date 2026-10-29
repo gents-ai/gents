@@ -659,6 +659,53 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "QueuedSteeringTraceCases".into(),
         ));
     }
+    if !snapshot.agent_steer_disposition_cases.is_empty() {
+        emitted.insert((
+            "agent_steer_disposition_cases".into(),
+            "AgentSteerDispositionCases".into(),
+        ));
+    }
+    assert!(!snapshot.agent_steer_target_cases.is_empty());
+    emitted.insert((
+        "agent_steer_target_cases".into(),
+        "AgentSteerTargetCases".into(),
+    ));
+    if !snapshot.agent_steering_boundary_cases.is_empty() {
+        emitted.insert((
+            "agent_steering_boundary_cases".into(),
+            "AgentSteeringBoundaryCases".into(),
+        ));
+    }
+    if !snapshot.agent_delivery_cases.is_empty() {
+        emitted.insert(("agent_delivery_cases".into(), "AgentDeliveryCases".into()));
+    }
+    if !snapshot.agent_steer_reachability_cases.is_empty() {
+        emitted.insert((
+            "agent_steer_reachability_cases".into(),
+            "AgentSteerReachabilityCases".into(),
+        ));
+    }
+    if !snapshot.interrupt_delivery_cases.is_empty() {
+        emitted.insert((
+            "interrupt_delivery_cases".into(),
+            "InterruptDeliveryCases".into(),
+        ));
+    }
+    if !snapshot.pack_finality_cases.is_empty() {
+        emitted.insert(("pack_finality_cases".into(), "PackFinalityCases".into()));
+    }
+    if !snapshot.agent_folded_binding_cases.is_empty() {
+        emitted.insert((
+            "agent_folded_binding_cases".into(),
+            "AgentFoldedBindingCases".into(),
+        ));
+    }
+    if !snapshot.agent_message_outcome_cases.is_empty() {
+        emitted.insert((
+            "agent_message_outcome_cases".into(),
+            "AgentMessageOutcomeCases".into(),
+        ));
+    }
     if !snapshot.queued_steering_guard_cases.is_empty() {
         emitted.insert((
             "queued_steering_guard_cases".into(),
@@ -995,6 +1042,16 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "operator_job_control_cases".into(),
         "OperatorJobControlCases".into(),
     ));
+    assert!(!snapshot.operator_process_control_cases.is_empty());
+    emitted.insert((
+        "operator_process_control_cases".into(),
+        "OperatorProcessControlCases".into(),
+    ));
+    assert!(!snapshot.process_stop_action_cases.is_empty());
+    emitted.insert((
+        "process_stop_action_cases".into(),
+        "ProcessStopActionCases".into(),
+    ));
     assert!(!snapshot.background_process_identity_cases.is_empty());
     emitted.insert((
         "background_process_identity_cases".into(),
@@ -1295,6 +1352,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "RuntimeServiceReplacementCases".into(),
     ));
     assert!(!snapshot.client_observation_scope_cases.is_empty());
+    assert!(!snapshot.client_telemetry_cases.is_empty());
+    emitted.insert((
+        "client_telemetry_cases".into(),
+        "ClientTelemetryCases".into(),
+    ));
     assert!(!snapshot.client_observation_admission_cases.is_empty());
     emitted.insert((
         "client_observation_admission_cases".into(),
@@ -1303,6 +1365,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     emitted.insert((
         "client_observation_scope_cases".into(),
         "ClientObservationScopeCases".into(),
+    ));
+    assert!(!snapshot.inference_observation_cases.is_empty());
+    emitted.insert((
+        "inference_observation_cases".into(),
+        "InferenceObservationCases".into(),
     ));
     assert!(snapshot.client_data_publication_cases["notice_delivery"].is_object());
     for field in ["publications", "reuse"] {

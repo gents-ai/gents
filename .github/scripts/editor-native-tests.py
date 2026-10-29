@@ -26,7 +26,7 @@ def artifacts(log, root, target):
         if event.get('reason') != 'compiler-artifact' or not event.get('executable'):
             continue
         source = Path(event['target']['src_path']).resolve()
-        package = next((name for name in ('gents-client-host', 'gents-desktop-bridge', 'gents-cli')
+        package = next((name for name in ('gents-client-host', 'gents-desktop-bridge', 'gents-cli', 'gents')
                         if source.is_relative_to((root / 'crates' / name).resolve())), None)
         testing = event.get('profile', {}).get('test')
         name = event['target']['name']
@@ -39,6 +39,8 @@ def artifacts(log, root, target):
             role = 'host'
         elif testing and package == 'gents-desktop-bridge' and 'lib' in kind:
             role = 'bridge'
+        elif testing and package == 'gents' and 'lib' in kind:
+            role = 'process'
         elif testing and package == 'gents-cli' and name == 'port_allocation' and 'test' in kind:
             role = 'cli'
         if role is None:
@@ -46,7 +48,8 @@ def artifacts(log, root, target):
         binary = Path(event['executable']).resolve()
         binary.relative_to(target.resolve())
         found.append({'role': role, 'name': name, 'path': str(binary), 'cwd': str(root / 'crates' / package), 'sha256': digest(binary)})
-    if (sum(item['role'] == 'bridge' for item in found) != 1
+    if (sum(item['role'] == 'process' for item in found) != 1
+            or sum(item['role'] == 'bridge' for item in found) != 1
             or not any(item['role'] == 'host' and item['name'] == 'runtime' for item in found)
             or not any(item['role'] == 'cli' for item in found)
             or sorted(item['name'] for item in found if item['role'] == 'binary') != ['gents', 'gents-client-host']
@@ -72,10 +75,16 @@ def compile_tests(root, manifest, profile='test'):
     targets = [flag for name in ['port_allocation', *transport_targets(root)] for flag in ('--test', name)]
     with log.open('w') as output:
         subprocess.run(['cargo', 'test', '--locked', '-p', 'gents-client-host',
-                        '-p', 'gents-desktop-bridge', '-p', 'gents-cli', '--no-default-features',
+                        '-p', 'gents-desktop-bridge', '-p', 'gents-cli', '-p', 'gents', '--no-default-features',
                         '--features', 'gents-client-host/runtime-e2e', '--profile', profile, '--lib', *targets, '--no-run',
                         '--message-format=json-render-diagnostics', '--timings', '--target-dir', str(root / 'target')], cwd=root, stdout=output, check=True)
     manifest.write_text(json.dumps(artifacts(log, root, root / 'target'), indent=2) + '\n')
+
+
+PROCESS_TESTS = (
+    'managed_exec::tests::managed_exec_deadline_kills_job_object',
+    'managed_exec::tests::managed_exec_cancellation_kills_job_object',
+)
 
 
 def command(item):
@@ -86,7 +95,7 @@ def check_result(item, status, content):
     summary = re.findall(r'test result: ok\. (\d+) passed; 0 failed;', content)
     if status != 0 or len(summary) != 1:
         raise RuntimeError('native transport tests failed')
-    if (item['role'] in ('bridge', 'cli') or item['name'] == 'runtime') and int(summary[0]) == 0:
+    if (item['role'] in ('bridge', 'cli', 'process') or item['name'] == 'runtime') and int(summary[0]) == 0:
         raise RuntimeError('required native transport cases did not execute')
 
 
@@ -106,34 +115,40 @@ def run_tests(manifest, role):
         if digest(Path(item['path'])) != item['sha256']:
             raise ValueError('compiled native transport test artifact changed')
     for item in selected:
-        with tempfile.TemporaryFile(mode='w+') as output:
-            options = {} if os.name == 'nt' else {'start_new_session': True}
-            env = dict(os.environ, CARGO_MANIFEST_DIR=item['cwd'])
-            env['GENTS_NATIVE_TEST_BIN_DIR'] = str(binary_dir)
-            env['PATH'] = str(binary_dir) + os.pathsep + str(Path(item['path']).parent) + os.pathsep + env.get('PATH', '')
-            child = subprocess.Popen(command(item), cwd=item['cwd'], env=env, stdout=output, stderr=subprocess.STDOUT, **options)
-            try:
-                status = child.wait(timeout=900)
-            except subprocess.TimeoutExpired:
-                if os.name == 'nt':
-                    subprocess.run(['taskkill', '/T', '/F', '/PID', str(child.pid)], check=False)
-                else:
-                    try:
-                        os.killpg(child.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                child.wait()
-                raise
-            finally:
-                output.seek(0)
-                content = output.read()
-                print(content, end='', flush=True)
-        check_result(item, status, content)
+        commands = [[item['path'], test, '--exact'] for test in PROCESS_TESTS] if item['role'] == 'process' else [command(item)]
+        for test_command in commands:
+            run_artifact(item, test_command, binary_dir)
+
+
+def run_artifact(item, test_command, binary_dir):
+    with tempfile.TemporaryFile(mode='w+') as output:
+        options = {} if os.name == 'nt' else {'start_new_session': True}
+        env = dict(os.environ, CARGO_MANIFEST_DIR=item['cwd'])
+        env['GENTS_NATIVE_TEST_BIN_DIR'] = str(binary_dir)
+        env['PATH'] = str(binary_dir) + os.pathsep + str(Path(item['path']).parent) + os.pathsep + env.get('PATH', '')
+        child = subprocess.Popen(test_command, cwd=item['cwd'], env=env, stdout=output, stderr=subprocess.STDOUT, **options)
+        try:
+            status = child.wait(timeout=900)
+        except subprocess.TimeoutExpired:
+            if os.name == 'nt':
+                subprocess.run(['taskkill', '/T', '/F', '/PID', str(child.pid)], check=False)
+            else:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            child.wait()
+            raise
+        finally:
+            output.seek(0)
+            content = output.read()
+            print(content, end='', flush=True)
+    check_result(item, status, content)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('phase', choices=('compile', 'host', 'bridge'))
+    parser.add_argument('phase', choices=('compile', 'host', 'bridge', 'process'))
     parser.add_argument('--manifest', type=Path, required=True)
     parser.add_argument('--profile', default='test')
     args = parser.parse_args()

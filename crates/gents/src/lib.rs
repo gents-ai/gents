@@ -48,6 +48,7 @@ pub mod home;
 pub mod hook;
 pub mod identity;
 pub mod inference_http;
+pub mod inference_observation;
 pub mod inference_setup;
 pub mod interrupt;
 #[cfg(test)]

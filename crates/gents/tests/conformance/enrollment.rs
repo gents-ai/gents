@@ -171,6 +171,8 @@ fn generated_causal_hop_cases_match_native_materializer() {
                 &case.caller_session,
                 &case.target_session,
                 case.target_origin_cause.as_deref(),
+                case.same_node,
+                case.task_triggered,
             ),
             case.expected_allowed,
             "{}",

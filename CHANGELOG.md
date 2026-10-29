@@ -22,6 +22,13 @@ source consistency checks, not a separate runtime compatibility version.
   covers every job plugin whose call carries a `script`. `gents job promote`
   hashes the recorded script byte for byte (it used to trim it), so the
   pack's pin, the host's guard and promotion agree.
+- Agents may interrupt sessions they started and same-node sessions opened by a Task trigger.
+- `agent_message` receipts report `delivery` as `request`, `queue` or `steer`.
+  An agent steer enters only the turn it was sent to; if that turn ends first,
+  the message runs as a later turn in queue order.
+- Stopping a background process that has not started yet cancels it before
+  dispatch. The editor client can stop native background processes too.
+
 - `gents job promote <address|tool_call_id> --name <snake_case>` installs a
   finished dynamic workflow run as a tool wired to its agent, so later calls
   run the script as an `installed` job. The generated pack lives at
@@ -247,8 +254,12 @@ source consistency checks, not a separate runtime compatibility version.
   whose Tools, or a documents dependency's Tools, name a plugin that neither
   the pack nor its dependencies ship and the node has not installed. The error
   names the plugin and the Tools document and says to install the pack that
-  ships it or declare it as a dependency. A remote `--graphql` install, which
-  cannot see the node's plugins, leaves that check to startup (#2767).
+  ships it or declare it as a dependency. Remote `--graphql` installs refuse
+  plugin references and plugin-bearing packs because they cannot verify or
+  publish files on the node; install these on the node with `--home` (#2767).
+- Pack and plugin removal refuse to release plugins still selected by surviving
+  agents. Removing an agent with its pack remains supported. Diagnose and the
+  desktop show a safe tool-availability reason with a recovery step (#2767).
 
 ## 0.21.0-rc0 - 2026-10-17
 
