@@ -48,6 +48,28 @@ theorem incompatible_steering_stays_a_barrier (active entry : QueueEntry)
     selectSteeringPastDeferred active admitted (entry :: rest) = ([], entry :: rest) := by
   simp [selectSteeringPastDeferred, notQueued, notEligible]
 
+theorem steering_selection_preserves_entries (active : QueueEntry) (admitted : List RequestId)
+    (entries : List QueueEntry) :
+    ((selectSteeringPastDeferred active admitted entries).1 ++
+      (selectSteeringPastDeferred active admitted entries).2).Perm entries := by
+  induction entries with
+  | nil => simp [selectSteeringPastDeferred]
+  | cons entry rest ih =>
+      by_cases queued : entry.delivery = .queue
+      · cases result : selectSteeringPastDeferred active admitted rest with
+        | mk selected pending =>
+            simp only [result] at ih
+            simp only [selectSteeringPastDeferred, queued, ↓reduceIte, result]
+            exact List.Perm.trans List.perm_middle (List.Perm.cons entry ih)
+      · by_cases eligible : steersInto active entry ∧ entry.requestId ∈ admitted
+        · cases result : selectSteeringPastDeferred active admitted rest with
+          | mk selected pending =>
+              simp only [result] at ih
+              simp only [selectSteeringPastDeferred, queued, eligible, ↓reduceIte, result,
+                List.cons_append]
+              exact List.Perm.cons entry ih
+        · simp [selectSteeringPastDeferred, queued, eligible]
+
 /-- The native execution owner supplies the exact active row and generation;
 this operation grants no lease. -/
 def intakeSteering? (target : AgentSession.Scope) (pre : SessionQueueState)
