@@ -1045,7 +1045,7 @@ where
                         if let Err(error) =
                             crate::workspace::release_writer_binding(&self.node, &request).await
                         {
-                            tracing::warn!(request_id = %request.request_id, error = %error,
+                            tracing::warn!(request_id = %request.request_id, error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
                                 "failed to release writer workspace binding after skipped task gate");
                         }
                     }
