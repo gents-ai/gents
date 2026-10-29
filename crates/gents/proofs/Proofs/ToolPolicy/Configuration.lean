@@ -281,6 +281,8 @@ theorem unconfigured_wait_and_lsp_defaults :
 def pluginResourceConsented (requested previous : Nat) (consent : Bool) : Bool :=
   consent || decide (requested ≤ previous)
 
+/-- A host ceiling bounds per-call resources even if an approved pack
+declaration requests more. -/
 def effectivePluginResource (baseline requested ceiling : Nat) : Nat :=
   min (max baseline requested) ceiling
 

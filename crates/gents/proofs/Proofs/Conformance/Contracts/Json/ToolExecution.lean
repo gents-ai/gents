@@ -62,12 +62,28 @@ def managedExecLivenessCaseJson
 def processStopCaseJson (witness : ProcessStopCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"live_evidence\":" ++ jsonString witness.liveEvidence ++ ","
+    ++ "\"worker_released\":" ++ boolString witness.workerReleased ++ ","
+    ++ "\"settle_completed\":" ++ boolString witness.settleCompleted ++ ","
+    ++ "\"settle_cancelled\":" ++ boolString witness.settleCancelled ++ ","
+    ++ "\"settle_timed_out\":" ++ boolString witness.settleTimedOut ++ ","
+    ++ "\"settle_failed\":" ++ boolString witness.settleFailed ++ ","
+    ++ "\"settle_panicked\":" ++ boolString witness.settlePanicked ++ ","
+    ++ "\"retire_before_commit\":" ++ boolString witness.retireBeforeCommit ++ ","
+    ++ "\"retire_after_commit\":" ++ boolString witness.retireAfterCommit ++ ","
+    ++ "\"preserve_timeout\":" ++ boolString witness.preserveTimeout ++ ","
+    ++ "\"preserve_failure\":" ++ boolString witness.preserveFailure ++ ","
+    ++ "\"pending_failure_beats_cancel\":" ++ boolString witness.pendingFailureBeatsCancel ++ ","
+    ++ "\"pending_failure_resolves\":" ++ boolString witness.pendingFailureResolves ++ ","
+    ++ "\"retained_completion_notified\":" ++ boolString witness.retainedCompletionNotified ++ ","
+    ++ "\"retired_completion_notified\":" ++ boolString witness.retiredCompletionNotified ++ ","
     ++ "\"before\":" ++ jsonString witness.before ++ ","
     ++ "\"after\":" ++ jsonString witness.after ++ ","
     ++ "\"may_terminate\":" ++ boolString witness.mayTerminate ++ ","
     ++ "\"retain_record\":" ++ boolString witness.retainRecord ++ ","
     ++ "\"outcome\":" ++ jsonString witness.outcome ++ ","
-    ++ "\"cancel_reply\":" ++ jsonString witness.cancelReply
+    ++ "\"cancel_reply\":" ++ jsonString witness.cancelReply ++ ","
+    ++ "\"durable_state\":" ++ jsonString witness.durableState
     ++ "}"
 
 def toolPreflightCaseJson (witness : ToolExecution.PreflightCase) : String :=

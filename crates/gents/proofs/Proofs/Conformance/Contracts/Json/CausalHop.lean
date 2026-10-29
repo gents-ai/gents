@@ -140,18 +140,62 @@ def chainCaseJson (c : ChainCase) : String :=
       ++ jsonArray (hops.map (toString ∘ CausalHop.admitHop c.maxRequestHop)) ++ "}"
 
 
+structure CreationCase where
+  name : String
+  signatureValid : Bool
+  scopeMatches : Bool
+  physicalMatches : Bool
+  causeMatches : Bool
+
+def creationCases : List CreationCase :=
+  [ ⟨"valid", true, true, true, true⟩
+  , ⟨"bad_signature", false, true, true, true⟩
+  , ⟨"wrong_scope", true, false, true, true⟩
+  , ⟨"recreated_session", true, true, false, true⟩
+  , ⟨"wrong_cause", true, true, true, false⟩ ]
+
+def creationCaseJson (c : CreationCase) : String :=
+  "{\"name\":" ++ jsonString c.name
+    ++ ",\"signature_valid\":" ++ toString c.signatureValid
+    ++ ",\"scope_matches\":" ++ toString c.scopeMatches
+    ++ ",\"physical_matches\":" ++ toString c.physicalMatches
+    ++ ",\"cause_matches\":" ++ toString c.causeMatches
+    ++ ",\"expected\":" ++ toString (DurableLineage.verifiedCreation
+      c.signatureValid (c.scopeMatches && c.physicalMatches) true c.causeMatches) ++ "}"
+
+def jobCreationCases : List (Bool × Bool × Bool × Bool) :=
+  [(true, true, true, true), (false, true, true, true),
+   (true, false, true, true), (true, true, false, true),
+   (true, true, true, false)]
+
+def jobCreationCaseJson (c : Bool × Bool × Bool × Bool) : String :=
+  let (parent, job, key, spawn) := c
+  "{\"parent\":" ++ toString parent ++ ",\"job\":" ++ toString job
+    ++ ",\"key\":" ++ toString key ++ ",\"spawn\":" ++ toString spawn
+    ++ ",\"expected\":" ++ toString (DurableLineage.verifiedJobCreation parent job key spawn) ++ "}"
+
+def deferredCreationCaseJson (c : Bool × Bool × Bool × Bool) : String :=
+  let (kind, receipt, opening, cause) := c
+  "{\"kind\":" ++ toString kind ++ ",\"receipt\":" ++ toString receipt
+    ++ ",\"opening\":" ++ toString opening ++ ",\"cause\":" ++ toString cause
+    ++ ",\"expected\":" ++ toString (DurableLineage.deferredCreationAllowed kind receipt opening cause) ++ "}"
+
 structure InterruptCase where
   name : String
   callerSession : String
   targetSession : String
   targetOriginCause : Option String
+  sameNode : Bool
+  taskTriggered : Bool
 
 def interruptCases : List InterruptCase :=
-  [ ⟨"spawner_may_interrupt", "caller", "started", some "caller"⟩
-  , ⟨"another_session_started_it", "caller", "started", some "other"⟩
-  , ⟨"target_started_the_caller", "caller", "parent", none⟩
-  , ⟨"messaged_root_session", "caller", "root", none⟩
-  , ⟨"own_session", "caller", "caller", some "caller"⟩ ]
+  [ ⟨"spawner_may_interrupt", "caller", "started", some "caller", true, false⟩
+  , ⟨"another_session_started_it", "caller", "started", some "other", true, false⟩
+  , ⟨"target_started_the_caller", "caller", "parent", none, true, false⟩
+  , ⟨"messaged_root_session", "caller", "root", none, true, false⟩
+  , ⟨"task_trigger", "caller", "root", none, true, true⟩
+  , ⟨"foreign_task_trigger", "caller", "root", none, false, true⟩
+  , ⟨"own_session", "caller", "caller", some "caller", true, true⟩ ]
 
 def interruptCaseJson (c : InterruptCase) : String :=
   "{\"name\":" ++ jsonString c.name
@@ -159,16 +203,18 @@ def interruptCaseJson (c : InterruptCase) : String :=
     ++ ",\"target_session\":" ++ jsonString c.targetSession
     ++ ",\"target_origin_cause\":"
       ++ (match c.targetOriginCause with | some s => jsonString s | none => "null")
+    ++ ",\"same_node\":" ++ toString c.sameNode
+    ++ ",\"task_triggered\":" ++ toString c.taskTriggered
     ++ ",\"expected_allowed\":"
       ++ toString (DurableLineage.interruptAllowed c.callerSession c.targetSession
-        c.targetOriginCause) ++ "}"
+        c.targetOriginCause c.sameNode c.taskTriggered) ++ "}"
 
 
 theorem interrupt_cases_cover_both_verdicts :
     interruptCases.any (fun c => DurableLineage.interruptAllowed c.callerSession
-      c.targetSession c.targetOriginCause) = true ∧
+      c.targetSession c.targetOriginCause c.sameNode c.taskTriggered) = true ∧
     interruptCases.any (fun c => !DurableLineage.interruptAllowed c.callerSession
-      c.targetSession c.targetOriginCause) = true := by
+      c.targetSession c.targetOriginCause c.sameNode c.taskTriggered) = true := by
   native_decide
 
 
@@ -181,14 +227,15 @@ structure WriteCase where
 def writeCases : List WriteCase :=
   [ ⟨"idle_session_gets_a_request_past_its_caller", .request, 5, 1⟩
   , ⟨"idle_session_keeps_its_higher_hop", .request, 0, 1⟩
-  , ⟨"busy_session_is_steered_past_its_caller", .steering, 3, 1⟩
-  , ⟨"busy_session_steering_keeps_its_higher_hop", .steering, 0, 1⟩ ]
+  , ⟨"busy_session_is_queued_past_its_caller", .queued, 3, 1⟩
+  , ⟨"busy_session_queue_keeps_its_higher_hop", .queued, 0, 1⟩
+  , ⟨"busy_session_is_steered_past_its_caller", .steering, 3, 1⟩ ]
 
 def writeCaseJson (c : WriteCase) : String :=
   let write := DurableLineage.sessionMessageWrite c.delivery c.callerHop c.ownHop
   "{\"name\":" ++ jsonString c.name
     ++ ",\"delivery\":" ++ jsonString (match c.delivery with
-        | .request => "request" | .steering => "steering")
+        | .request => "request" | .queued => "queue" | .steering => "steer")
     ++ ",\"caller_hop\":" ++ toString c.callerHop
     ++ ",\"own_hop\":" ++ toString c.ownHop
     ++ ",\"expected_hop\":" ++ toString write.lineage.requestHop
@@ -222,6 +269,9 @@ def contractJson : String :=
     ++ ",\"chain_cases\":" ++ jsonArray (chainCases.map chainCaseJson)
     ++ ",\"call_cases\":" ++ jsonArray (callCases.map callCaseJson)
     ++ ",\"interrupt_cases\":" ++ jsonArray (interruptCases.map interruptCaseJson)
+    ++ ",\"creation_cases\":" ++ jsonArray (creationCases.map creationCaseJson)
+    ++ ",\"job_creation_cases\":" ++ jsonArray (jobCreationCases.map jobCreationCaseJson)
+    ++ ",\"deferred_creation_cases\":" ++ jsonArray (jobCreationCases.map deferredCreationCaseJson)
     ++ ",\"write_cases\":" ++ jsonArray (writeCases.map writeCaseJson)
     ++ ",\"session_target_cases\":" ++ jsonArray (sessionTargetCases.map sessionTargetCaseJson) ++ "}"
 

@@ -1,4 +1,5 @@
 import Proofs.Basic
+import Proofs.Background.ProcessControl
 import Proofs.Scheduling
 import Proofs.RuntimeReconcile.State
 import Proofs.CanonicalOutput.State
@@ -405,12 +406,28 @@ structure ManagedExecLivenessCase where
 
 structure ProcessStopCase where
   name : String
+  liveEvidence : String := ""
+  workerReleased : Bool := false
+  settleCompleted : Bool := false
+  settleCancelled : Bool := false
+  settleTimedOut : Bool := false
+  settleFailed : Bool := false
+  settlePanicked : Bool := false
+  retireBeforeCommit : Bool := Background.ProcessControl.retireStopReceipt false
+  retireAfterCommit : Bool := Background.ProcessControl.retireStopReceipt true
+  preserveTimeout : Bool := Background.ProcessControl.firstTerminalIntent (some .timedOut) .cancelled == .timedOut
+  preserveFailure : Bool := Background.ProcessControl.firstTerminalIntent (some .failed) .cancelled == .failed
+  pendingFailureBeatsCancel : Bool := Background.ProcessControl.observeIntent .failurePending .cancelled == .failurePending
+  pendingFailureResolves : Bool := Background.ProcessControl.observeIntent .failurePending .failed == .decided .failed
+  retainedCompletionNotified : Bool := Background.ProcessControl.ownerCompletionNotified true
+  retiredCompletionNotified : Bool := Background.ProcessControl.ownerCompletionNotified false
   before : String
   after : String
   mayTerminate : Bool
   retainRecord : Bool
   outcome : String
   cancelReply : String
+  durableState : String
   deriving Repr
 
 structure LifecycleTransitionCase where

@@ -245,6 +245,9 @@ inductive Decision where
   | abandonWrapup
   deriving DecidableEq, Repr
 
+/-- Goal infrastructure retries create new requests and have a separate budget
+from provider transport retries. The fixed limit prevents an unattended Goal
+from repeatedly consuming resources when the underlying failure persists. -/
 def decide
     (status : Status)
     (terminal : RequestTerminal)

@@ -88,14 +88,17 @@ theorem control_continuation_is_admissible (depth : Nat) :
   simp [admissible, edgePairsCoherent, pairCoherent, parentShapeCoherent,
     depthCoherent, controlContinuation]
 
+/-- A busy session receives the message either as a queued turn or as a steer
+into its active turn; the receipt names which one the caller chose. -/
 inductive Delivery where
   | request
+  | queued
   | steering
   deriving DecidableEq, Repr
 
-/-- Deliveries carry the full calling edge; a steering continuation is queued
-after the busy session's active request, which orders the queue and is never
-its origin. -/
+/-- Deliveries carry the full calling edge; a queued or steering continuation
+is ordered after the busy session's active request, which orders the queue and
+is never its origin. -/
 structure SessionMessageWrite where
   lineage : RawLineage
   queuedAfterActive : Bool
@@ -109,7 +112,7 @@ def sessionMessageWrite (delivery : Delivery) (callerHop own : Nat) : SessionMes
       , hasParentToolCallDocId := true
       , requestHop := CausalHop.nextHop (.crossSession callerHop) own
       , requestOnlyControl := false }
-  , queuedAfterActive := delivery == .steering }
+  , queuedAfterActive := delivery != .request }
 
 theorem session_message_write_names_its_caller (delivery : Delivery) (callerHop own : Nat) :
     admissible (sessionMessageWrite delivery callerHop own).lineage = true ∧
@@ -124,7 +127,7 @@ def jobSpawnWrite : Nat → Nat → SessionMessageWrite :=
   sessionMessageWrite .request
 
 /-- A plugin job's message to a child session is a session message, delivered
-    as a new request or as a steering continuation like `agent_message`. -/
+    as a new request or as a queued continuation like `agent_message`. -/
 def jobMessageWrite : Delivery → Nat → Nat → SessionMessageWrite :=
   sessionMessageWrite
 
@@ -262,6 +265,20 @@ def openingRequest (rows : List RequestRow) (cause session : String) : Option Re
   match recordedOpening candidates with
   | some doc => candidates.find? (·.docId == doc)
   | none => earliest candidates
+
+/-- Whether a lineage reader lists `session` as started by `cause`. Only the
+    session's node-signed creation receipt names its starter
+    (`AgentSession.observedStarter`), and that receipt binds the opening
+    request recorded at creation; a session with no recorded opening carries
+    no such evidence, so its parent edge alone never lists it. -/
+def listedStart (rows : List RequestRow) (cause session : String) : Bool :=
+  (recordedOpening (rows.filter (isOpeningCandidate cause session))).isSome &&
+    (openingRequest rows cause session).isSome
+
+theorem unrecorded_session_not_listed (rows : List RequestRow) (cause session : String)
+    (h : recordedOpening (rows.filter (isOpeningCandidate cause session)) = none) :
+    listedStart rows cause session = false := by
+  simp [listedStart, h]
 
 private theorem openingRequest_of_unrecorded {rows : List RequestRow} {cause session : String}
     (h : recordedOpening (rows.filter (isOpeningCandidate cause session)) = none) :
@@ -435,26 +452,65 @@ theorem two_job_requests_have_no_single_projection (call : String) (a b : Reques
     singleRequestProjection (jobRows call [a, b]) call = none := by
   simp [singleRequestProjection, callRequests, jobRows]
 
-/-- Interrupt authority binds to the target session's `AgentSession.provenance`,
-written once at creation and never rewritten. -/
+/-- Mutable provenance is an observation; creation authority requires the
+node signature and exact receipt, request and scope bindings. -/
+def verifiedCreation (signatureValid scopeMatches openingMatches causeMatches : Bool) : Bool :=
+  signatureValid && scopeMatches && openingMatches && causeMatches
+
+/-- A job-created opening binds its signed parent and job row to the exact
+chain root, slot, attempt and spawn key. A later message is not a spawn. -/
+def verifiedJobCreation (signedParent jobRow rootSlotAttempt openingSpawn : Bool) : Bool :=
+  signedParent && jobRow && rootSlotAttempt && openingSpawn
+
+theorem job_message_cannot_create_authority (signedParent jobRow rootSlotAttempt : Bool) :
+    verifiedJobCreation signedParent jobRow rootSlotAttempt false = false := by
+  simp [verifiedJobCreation]
+
+theorem exact_job_spawn_creates_authority : verifiedJobCreation true true true true = true := by
+  decide
+
+/-- A source-signed opening kind fixes the creation cause before its parent
+documents replicate. The physical target receipt is issued at creation; later
+visibility of the exact cause permits verification without rewriting it. -/
+def deferredCreationAllowed (signedKind targetReceipt exactOpening causeVisible : Bool) : Bool :=
+  signedKind && targetReceipt && exactOpening && causeVisible
+
+theorem missing_cause_defers_authority (signedKind targetReceipt exactOpening : Bool) :
+    deferredCreationAllowed signedKind targetReceipt exactOpening false = false := by
+  simp [deferredCreationAllowed]
+
+theorem altered_creation_cannot_grant (scopeMatches openingMatches causeMatches : Bool) :
+    verifiedCreation false scopeMatches openingMatches causeMatches = false := by
+  simp [verifiedCreation]
+
+theorem later_trigger_cannot_grant (signatureValid scopeMatches causeMatches : Bool) :
+    verifiedCreation signatureValid scopeMatches false causeMatches = false := by
+  simp [verifiedCreation]
+
+/-- Task-trigger authority requires verified opening-request provenance on the caller's node. -/
 def interruptAllowed (callerSession targetSession : String)
-    (targetOriginCause : Option String) : Bool :=
+    (targetOriginCause : Option String) (sameNode taskTriggered : Bool) : Bool :=
   CausalHop.sendTargetAllowed callerSession targetSession &&
-    targetOriginCause == some callerSession
+    (targetOriginCause == some callerSession || (sameNode && taskTriggered))
 
 theorem non_spawner_interrupt_refused (callerSession targetSession : String)
     (targetOriginCause : Option String)
     (h : targetOriginCause ≠ some callerSession) :
-    interruptAllowed callerSession targetSession targetOriginCause = false := by
+    interruptAllowed callerSession targetSession targetOriginCause false false = false := by
   simp [interruptAllowed, CausalHop.sendTargetAllowed, h]
 
 theorem spawner_may_interrupt (callerSession targetSession : String)
     (h : targetSession ≠ callerSession) :
-    interruptAllowed callerSession targetSession (some callerSession) = true := by
+    interruptAllowed callerSession targetSession (some callerSession) false false = true := by
   simp [interruptAllowed, CausalHop.sendTargetAllowed, Ne.symm h]
 
 theorem root_session_not_interruptible (callerSession targetSession : String) :
-    interruptAllowed callerSession targetSession none = false := by
+    interruptAllowed callerSession targetSession none true false = false := by
   simp [interruptAllowed]
+
+theorem task_trigger_may_interrupt (callerSession targetSession : String)
+    (h : targetSession ≠ callerSession) :
+    interruptAllowed callerSession targetSession none true true = true := by
+  simp [interruptAllowed, CausalHop.sendTargetAllowed, Ne.symm h]
 
 end DurableLineage

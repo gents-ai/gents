@@ -1,4 +1,5 @@
 import Proofs.Conformance.Contracts.Json
+import Proofs.ToolExecution.Parallel
 
 namespace Conformance.Contracts
 

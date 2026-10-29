@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const VERSION: u32 = 1;
+/// Wire and payload bounds for one media message, limiting transport memory and
+/// the amount of audio a host must buffer and process per request.
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_PCM_BYTES: usize = 3 * 1024 * 1024;
 pub const MAX_SECONDS: u32 = 30;

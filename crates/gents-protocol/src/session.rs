@@ -87,8 +87,8 @@ pub enum SessionTitleSource {
 }
 
 /// These origins can coexist: a task runs, and that work can start another
-/// session with `agent_new`. References record actual creation facts; they
-/// neither select configuration nor confer authorization.
+/// session with `agent_new`. Descriptive references do not confer authority;
+/// the creation receipt is evidence only after its node signature and bindings are verified.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -109,6 +109,10 @@ pub struct SessionProvenance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub parent_request_doc_id: Option<String>,
+    /// Signed source scope recorded at creation; not an authorization grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub started_by: Option<SessionReference>,
     /// The request whose claim or refusal created this session through a
     /// calling tool call, recorded once with `parent_request_doc_id` and
     /// never rewritten (Lean `AgentSession.Provenance.openingRequestDoc`).
@@ -118,9 +122,81 @@ pub struct SessionProvenance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub opening_request_doc_id: Option<String>,
+    /// Node-signed evidence that this opening request created this exact session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub creation_receipt: Option<SessionCreationReceipt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub fork: Option<SessionFork>,
+}
+
+/// Complete source scope; an absent requester is exact absence, never a wildcard.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct SessionReference {
+    pub node_did: String,
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub requester_did: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct SessionCreationReceipt {
+    pub node_did: String,
+    pub session_id: String,
+    pub session_doc_id: String,
+    pub requester_did: Option<String>,
+    pub agent_id: String,
+    pub opening_request_doc_id: String,
+    pub cause: SessionCreationCause,
+    pub cause_binding: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub starter: Option<SessionCreationStarter>,
+    pub signature: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct SessionCreationStarter {
+    pub source: SessionReference,
+    pub parent_request_doc_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub enum SessionCreationCause {
+    AgentNew,
+    TaskTrigger,
+    PluginJob,
+}
+
+impl SessionCreationReceipt {
+    pub fn signing_payload(&self) -> Vec<u8> {
+        let base = (
+            "gents-session-creation-v1",
+            &self.node_did,
+            &self.session_id,
+            &self.session_doc_id,
+            &self.requester_did,
+            &self.agent_id,
+            &self.opening_request_doc_id,
+            self.cause,
+            &self.cause_binding,
+        );
+        match &self.starter {
+            Some(starter) => serde_json::to_vec(&(base, "session-starter-v1", starter)),
+            None => serde_json::to_vec(&base),
+        }
+        .expect("session creation receipt fields serialize")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,7 +221,9 @@ fn provenance_is_empty(value: &Option<SessionProvenance>) -> bool {
     value.as_ref().is_none_or(|value| {
         value.task_id.is_none()
             && value.parent_request_doc_id.is_none()
+            && value.started_by.is_none()
             && value.opening_request_doc_id.is_none()
+            && value.creation_receipt.is_none()
             && value.fork.is_none()
     })
 }

@@ -25,13 +25,15 @@ def cases : List Case :=
   , ⟨"other_node", some "client", "other", some authority⟩
   , ⟨"other_profile", some "client", "node", some {authority with profile := "peer"}⟩
   , ⟨"empty_actor", some "", "node", some {authority with candidateDid := ""}⟩
-  , ⟨"empty_node", some "client", "", some {authority with ownerNode := ""}⟩ ]
+  , ⟨"empty_node", some "client", "", some {authority with ownerNode := ""}⟩
+  , ⟨"node_operator", some "node", "node", none⟩
+  , ⟨"foreign_operator", some "other-node", "node", none⟩ ]
 
 def expected (value : Case) : Bool :=
   clientObservationAdmitted value.actor value.node value.current
 
 example : cases.map expected = [true, false, false, false, false, false,
-    false, false, false, false, false] := by native_decide
+    false, false, false, false, false, false, false] := by native_decide
 
 private def authorityJson (value : RequestAuthority) : String :=
   "{\"network_id\":" ++ jsonString value.networkId ++
@@ -47,7 +49,9 @@ private def caseJson (value : Case) : String :=
   ",\"actor\":" ++ (value.actor.map jsonString).getD "null" ++
   ",\"node\":" ++ jsonString value.node ++
   ",\"current\":" ++ (value.current.map authorityJson).getD "null" ++
-  ",\"expected_admitted\":" ++ (if expected value then "true" else "false") ++ "}"
+  ",\"expected_admitted\":" ++ (if expected value then "true" else "false") ++
+  ",\"expected_runtime_admitted\":" ++
+    (if runtimeObservationAdmitted value.actor value.node value.current then "true" else "false") ++ "}"
 
 def casesJson : String := jsonArray (cases.map caseJson)
 

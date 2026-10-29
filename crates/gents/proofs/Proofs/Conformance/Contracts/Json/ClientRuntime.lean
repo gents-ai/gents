@@ -12,6 +12,78 @@ namespace Conformance.Contracts
 
 open Conformance.ContractCases
 
+private def agentDeliveryJson : Option QueuedSteering.AgentDelivery → String
+  | none => "null"
+  | some .queue => jsonString "queue"
+  | some .steer => jsonString "steer"
+  | some .interrupt => jsonString "interrupt"
+
+def agentDeliveryCaseJson (input : Option QueuedSteering.AgentDelivery × Option Bool) : String :=
+  "{\"delivery\":" ++ agentDeliveryJson input.1 ++
+    ",\"interrupt\":" ++ (match input.2 with | none => "null" | some b => boolString b) ++
+    ",\"expected\":" ++ agentDeliveryJson (QueuedSteering.resolveAgentDelivery input.1 input.2) ++ "}"
+
+def interruptDeliveryCaseJson (input : Option Nat × Option Nat) : String :=
+  let number := fun value : Option Nat => match value with | none => "null" | some n => toString n
+  "{\"planned\":" ++ number input.1 ++ ",\"active\":" ++ number input.2 ++ ",\"expected\":" ++
+    number (QueuedSteering.interruptDeliveryTarget input.1 input.2) ++
+    ",\"goal_paused\":" ++ boolString ((QueuedSteering.interruptDeliveryGoal true ⟨.active, 0, false, false⟩).status == .paused) ++ "}"
+
+def agentSteerDispositionCaseJson (input : Bool × Bool) : String :=
+  let result := match QueuedSteering.agentSteerDisposition input.1 input.2 with
+    | .start => "start"
+    | .steer => "steer"
+    | .refuse => "refuse"
+  "{\"active\":" ++ boolString input.1 ++ ",\"compatible\":" ++ boolString input.2 ++
+    ",\"expected\":" ++ jsonString result ++ "}"
+
+private def agentMessageOutcomeJson : QueuedSteering.AgentMessageOutcome → String
+  | .pending => jsonString "pending"
+  | .completed => jsonString "completed"
+  | .failed => jsonString "failed"
+  | .superseded => jsonString "superseded"
+
+def agentMessageOutcomeCaseJson (input : Bool × QueuedSteering.AgentMessageOutcome × QueuedSteering.AgentMessageOutcome) : String :=
+  "{\"folded\":" ++ boolString input.1 ++
+    ",\"caused\":" ++ agentMessageOutcomeJson input.2.1 ++
+    ",\"head\":" ++ agentMessageOutcomeJson input.2.2 ++
+    ",\"expected\":" ++ agentMessageOutcomeJson (QueuedSteering.agentMessageOutcome input.1 input.2.1 input.2.2) ++ "}"
+
+def foldedBindingCaseJson (input : QueuedSteering.FoldedBindingCase) : String :=
+  let caused : QueuedSteering.FoldedScope := ⟨1, 2, some input.causedRequester, input.causedAgent⟩
+  let head : QueuedSteering.FoldedScope := ⟨1, 2, some input.headRequester, input.headAgent⟩
+  "{\"caused_requester\":" ++ toString input.causedRequester ++
+    ",\"head_requester\":" ++ toString input.headRequester ++
+    ",\"caused_agent\":" ++ toString input.causedAgent ++
+    ",\"head_agent\":" ++ toString input.headAgent ++
+    ",\"named_head\":" ++ toString input.namedHead ++
+    ",\"actual_head\":" ++ toString input.actualHead ++
+    ",\"expected\":" ++ boolString (QueuedSteering.foldedBindingValid caused head input.namedHead input.actualHead) ++ "}"
+
+private def boundaryKindJson : QueuedSteering.BoundaryInputKind → String
+  | .queued => jsonString "queued"
+  | .userSteer => jsonString "user_steer"
+  | .agentSteer => jsonString "agent_steer"
+  | .blocked => jsonString "blocked"
+
+def agentSteerTargetCaseJson (input : Nat × Nat) : String :=
+  "{\"planned_head\":" ++ toString input.1 ++ ",\"active_head\":" ++ toString input.2 ++
+    ",\"expected\":" ++ boolString (QueuedSteering.agentSteerTargets input.1 input.2) ++ "}"
+
+def agentSteerReachabilityCaseJson (input : List (Nat × QueuedSteering.BoundaryInputKind × Bool) × Nat) : String :=
+  let entryJson := fun entry => "{\"id\":" ++ toString entry.1 ++
+    ",\"kind\":" ++ boundaryKindJson entry.2.1 ++ ",\"compatible\":" ++ boolString entry.2.2 ++ "}"
+  "{\"inputs\":" ++ jsonArray (input.1.map entryJson) ++ ",\"target\":" ++ toString input.2 ++
+    ",\"expected\":" ++ boolString (QueuedSteering.agentSteerReachable input.2 input.1) ++ "}"
+
+def boundaryCaseJson (inputs : List (Nat × QueuedSteering.BoundaryInputKind)) : String :=
+  let entryJson := fun entry => "{\"id\":" ++ toString entry.1 ++
+    ",\"kind\":" ++ boundaryKindJson entry.2 ++ "}"
+  let expected := match QueuedSteering.boundaryCandidate inputs with
+    | none => "null"
+    | some id => toString id
+  "{\"inputs\":" ++ jsonArray (inputs.map entryJson) ++ ",\"expected\":" ++ expected ++ "}"
+
 def liveOverlayCaseJson (witness : LiveOverlayCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","

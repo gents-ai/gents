@@ -124,3 +124,5 @@ import Proofs.Eval
 import Proofs.Optimization
 
 import Proofs.PluginJob
+
+import Proofs.ToolExecution.Parallel

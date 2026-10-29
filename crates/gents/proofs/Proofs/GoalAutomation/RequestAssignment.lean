@@ -71,7 +71,12 @@ theorem fresh_chat_has_no_inherited_assignment (facts : InputFacts)
 /-- A stale resend keeps its authored payload but starts a fresh session.
 Queue position, Goal continuation facts and assignment references describe
 the original invocation and cannot cross that fresh-session boundary. -/
+inductive CreationIntent where
+  | agentNew | pluginJob
+  deriving DecidableEq, Repr
+
 structure ResubmissionInput where
+  creation : Option CreationIntent
   reference : Option Reference
   queued : Bool
   continuation : Bool
@@ -79,13 +84,14 @@ structure ResubmissionInput where
   deriving DecidableEq, Repr
 
 def freshSessionInput (input : ResubmissionInput) : ResubmissionInput :=
-  { input with reference := none, queued := false, continuation := false }
+  { input with creation := none, reference := none, queued := false, continuation := false }
 
 theorem fresh_resubmission_is_unassigned (input : ResubmissionInput) :
     (freshSessionInput input).reference = none := by rfl
 
 theorem fresh_resubmission_has_no_invocation_lineage (input : ResubmissionInput) :
-    (freshSessionInput input).queued = false ∧
+    (freshSessionInput input).creation = none ∧
+      (freshSessionInput input).queued = false ∧
       (freshSessionInput input).continuation = false := by simp [freshSessionInput]
 
 theorem fresh_resubmission_preserves_authored_payload (input : ResubmissionInput) :

@@ -8,9 +8,12 @@ import Proofs.ClientShell.PresentationAgreement
 import Proofs.ClientShell.Timeline
 import Proofs.ClientShell.Theorems
 import Proofs.ClientShell.ObservationOrdering
+import Proofs.ClientShell.InferenceObservation
 import Proofs.ClientShell.RequestCacheIdentity
 import Proofs.ClientShell.ObservationScope
 import Proofs.ClientShell.Installation
 import Proofs.ClientShell.Voice
 import Proofs.ClientShell.Settings
 import Proofs.ClientShell.InterruptControl
+
+import Proofs.ClientShell.Telemetry

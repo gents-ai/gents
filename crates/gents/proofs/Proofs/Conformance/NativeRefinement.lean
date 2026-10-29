@@ -90,4 +90,34 @@ def operatorControlCasesJson : String :=
       ("expected", toJson (Background.ProcessControl.operatorAtNode executing requested owner actor))])
   (toJson cases).compress
 
+def operatorProcessCasesJson : String :=
+  let cases := do
+    let actor ← [none, some "node", some "foreign"]
+    let requested ← ["node", "foreign"]
+    let owner ← ["node", "foreign"]
+    let requestedId ← ["call", "other"]
+    let requestedDoc ← ["doc", "other"]
+    let background ← [false, true]
+    let native ← [false, true]
+    pure (Json.mkObj [
+      ("executing", toJson "node"),
+      ("owned_id", toJson "call"), ("owned_doc", toJson "doc"),
+      ("actor", toJson actor), ("requested", toJson requested), ("owner", toJson owner),
+      ("requested_id", toJson requestedId), ("requested_doc", toJson requestedDoc),
+      ("background", toJson background), ("native", toJson native),
+      ("expected", toJson (Background.ProcessControl.operatorProcessAuthorized
+        "node" requested owner actor ⟨requestedId, requestedDoc⟩ ⟨"call", "doc"⟩
+        background native))])
+  (toJson cases).compress
+
+def stopActionName : Background.ProcessControl.StopAction → String
+  | .cancelBeforeDispatch => "cancel_before_dispatch"
+  | .stopProcess => "stop_process"
+  | .reportTerminal => "report_terminal"
+
+def processStopActionCasesJson : String :=
+  (toJson (ToolExecution.ToolCallState.all.map fun state =>
+    Json.mkObj [("state", toJson state.toDefraDB),
+      ("expected", toJson (stopActionName (Background.ProcessControl.stopAction state)))])).compress
+
 end Conformance.NativeRefinement
