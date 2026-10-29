@@ -85,6 +85,10 @@ pub trait Tool: Sized + Send + Sync {
         Ok(())
     }
 
+    fn scheduling_footprint(&self, _args: &Self::Args) -> crate::parallel_tools::Footprint {
+        crate::parallel_tools::Footprint::Barrier
+    }
+
     fn into_dyn_error(error: Self::Error) -> ToolError {
         ToolError::ToolCallError(Box::new(error))
     }
@@ -119,6 +123,10 @@ pub trait ToolDyn: Send + Sync {
 
     fn admit(&self, _args: &str) -> Result<(), ToolError> {
         Ok(())
+    }
+
+    fn scheduling_footprint(&self, _args: &str) -> crate::parallel_tools::Footprint {
+        crate::parallel_tools::Footprint::Barrier
     }
 }
 
@@ -186,6 +194,13 @@ where
                 <Self as Tool>::admit(self, &parsed).map_err(<Self as Tool>::into_dyn_error)
             }
             Err(_) => Ok(()),
+        }
+    }
+
+    fn scheduling_footprint(&self, args: &str) -> crate::parallel_tools::Footprint {
+        match parse_tool_args::<<Self as Tool>::Args>(args) {
+            Ok(parsed) => <Self as Tool>::scheduling_footprint(self, &parsed),
+            Err(_) => crate::parallel_tools::Footprint::Barrier,
         }
     }
 }

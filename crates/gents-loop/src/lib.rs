@@ -10,6 +10,7 @@ pub mod live_output;
 pub mod loop_stream;
 pub mod openai_wire;
 pub mod output_obligation;
+pub mod parallel_tools;
 pub mod prompt;
 pub mod provider_activity;
 pub mod provider_audit;

@@ -27,6 +27,37 @@ use crate::lean_vocab_test::{
     lean_command_sandbox_cases, LeanCommandPolicyCase,
 };
 
+#[test]
+fn read_file_scheduling_requires_a_resolved_allowed_file() {
+    use crate::llm::tool::ToolDyn;
+    use gents_loop::parallel_tools::Footprint;
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("inside.txt"), "inside").unwrap();
+    std::fs::write(outside.path().join("outside.txt"), "outside").unwrap();
+    let tool = ReadFileTool::new(
+        ToolContext::new(root.path().to_owned(), false).unwrap(),
+        128,
+    );
+    assert!(matches!(
+        ToolDyn::scheduling_footprint(&tool, r#"{"path":"inside.txt"}"#),
+        Footprint::Read { .. }
+    ));
+    let foreign = serde_json::json!({"path": outside.path().join("outside.txt")}).to_string();
+    assert_eq!(
+        ToolDyn::scheduling_footprint(&tool, &foreign),
+        Footprint::Barrier
+    );
+    assert_eq!(
+        ToolDyn::scheduling_footprint(&tool, r#"{"path":"missing"}"#),
+        Footprint::Barrier
+    );
+    assert_eq!(
+        ToolDyn::scheduling_footprint(&tool, "{"),
+        Footprint::Barrier
+    );
+}
+
 #[tokio::test]
 async fn native_tool_definitions_include_model_facing_defaults_and_constraints() {
     let root = temp_root("gents-tool-definitions");
