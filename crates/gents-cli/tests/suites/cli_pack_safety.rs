@@ -76,7 +76,7 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
         "{error}"
     );
     assert!(
-        error.contains("gents pack install gents/safety --home <node-home>"),
+        error.contains("gents pack install <namespace>/<pack>"),
         "{error}"
     );
     assert_eq!(graphql_query(&graphql, query).await?, before);
@@ -133,7 +133,7 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../gents/tests/fixtures/packs/job_plugin_fixture");
     run_cli_json(&home, &["pack", "install", fixture.to_str().unwrap()])?;
-    let plugin = gents::plugin::store::read_record(&home, "fixture", "job_fixture")?;
+    let plugin = gents::plugin::store::read_record(&home.join(".gents"), "fixture", "job_fixture")?;
     document_pack(
         &root,
         "1.2.0",
