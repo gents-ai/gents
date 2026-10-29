@@ -201,7 +201,12 @@ async fn start_stalling_transaction_proxy(
     let app = Router::new()
         .fallback(any(forward_and_stall_transactional_mutation))
         .with_state(state);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+    // The runtime only serves its bound port, and DefraDB binds the bearer
+    // audience to `Host`, so the proxy shares that port on another loopback.
+    let port = origin
+        .port_or_known_default()
+        .context("GraphQL endpoint port")?;
+    let listener = tokio::net::TcpListener::bind(("::1", port))
         .await
         .context("binding transaction proxy")?;
     let address = listener.local_addr().context("transaction proxy address")?;
@@ -233,8 +238,6 @@ async fn forward_and_stall_transactional_mutation(
             })
             .is_some_and(|query| query.trim_start().starts_with("mutation"));
     let target = format!("{}{}", state.target_origin, uri);
-    let mut headers = headers;
-    headers.remove(axum::http::header::HOST);
     let upstream = match state
         .client
         .request(method, target)

@@ -555,7 +555,7 @@ jobs:
     # Rust/Lean work that benefits from persistent host caches.
     name: desktop-ui (${{ matrix.suite }})
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:

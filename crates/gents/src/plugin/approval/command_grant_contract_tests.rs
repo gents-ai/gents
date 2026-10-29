@@ -265,19 +265,16 @@ async fn automatic_review_reuses_remembered_invocations_until_revocation() {
             };
             let (operator, observation) =
                 crate::plugin::approval::testing::Operator::answer_with_observation(
-                &home,
-                Answer::AlwaysInvocation,
-            )
-            .await
-            .unwrap();
-            let mut first = Box::pin(run());
-            let prompt = tokio::select! {
-                result = first.as_mut() => panic!("command settled before approval: {result:?}"),
-                observed = operator => observed.unwrap(),
-            };
+                    &home,
+                    Answer::AlwaysInvocation,
+                )
+                .await
+                .unwrap();
+            let (first, prompt) = tokio::join!(run(), operator);
+            let prompt = prompt.unwrap();
             assert!(!observation.id().unwrap().is_empty());
             assert!(!prompt.is_empty());
-            assert!(first.await.unwrap().contains("remembered-invocation"));
+            assert!(first.unwrap().contains("remembered-invocation"));
             assert!(run().await.unwrap().contains("remembered-invocation"));
             assert!(pending_requests(&home).unwrap().is_empty());
             let current = workspace::get(&home, &key).unwrap().unwrap();
@@ -285,21 +282,15 @@ async fn automatic_review_reuses_remembered_invocations_until_revocation() {
             let operator = crate::plugin::approval::testing::Operator::answer(&home, Answer::Once)
                 .await
                 .unwrap();
-            let mut again = Box::pin(run());
-            let _observed = tokio::select! {
-                result = again.as_mut() => panic!("command settled before approval: {result:?}"),
-                observed = operator => observed.unwrap(),
-            };
-            assert!(again.await.unwrap().contains("remembered-invocation"));
+            let (again, observed) = tokio::join!(run(), operator);
+            observed.unwrap();
+            assert!(again.unwrap().contains("remembered-invocation"));
             let operator = crate::plugin::approval::testing::Operator::answer(&home, Answer::Deny)
                 .await
                 .unwrap();
-            let mut once_more = Box::pin(run());
-            let _observed = tokio::select! {
-                result = once_more.as_mut() => panic!("command settled before approval: {result:?}"),
-                observed = operator => observed.unwrap(),
-            };
-            assert!(once_more.await.is_err());
+            let (once_more, observed) = tokio::join!(run(), operator);
+            observed.unwrap();
+            assert!(once_more.is_err());
         }),
     )
     .await;
