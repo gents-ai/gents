@@ -3269,7 +3269,7 @@ export function createDesktopUiHarness(
                     requestId,
                     content: "again",
                     selectedSkillIds: [],
-                    lifecycleState: "pending",
+                    lifecycleState: "pending" as const,
                     foldedIntoRequestId: null,
                     origin: null,
                     createdAt: STARTED_AT,

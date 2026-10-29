@@ -476,7 +476,7 @@ pub(super) fn build_session_snapshot_from_store_for_node_with_transcript(
             interrupt_requested_at: normalize_optional(request.interrupt_requested_at.as_deref()),
         };
         let cancel_cause = crate::cause_derivation::derive_request_cause(
-            request.lifecycle_state.map(|state| state.as_str()),
+            request.lifecycle_state,
             &evidence,
             normalize_optional(request.terminalized_at.as_deref()),
         );

@@ -1,4 +1,7 @@
-import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
+import type {
+  RenderedTimelineItem,
+  RequestLifecycleState,
+} from "@source-inc/gents-desktop-client";
 
 const MIN_CPS = 45;
 const MIN_GAP_MS = 40;
@@ -232,7 +235,7 @@ export type LocalTurn = {
   requestId: string;
   content: string;
   selectedSkillIds: string[];
-  lifecycleState: string | null;
+  lifecycleState: RequestLifecycleState | null;
   createdAt: string | null;
 };
 
