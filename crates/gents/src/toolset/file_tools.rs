@@ -367,6 +367,22 @@ impl Tool for ReadFileTool {
     type Args = ReadFileArgs;
     type Output = String;
 
+    fn scheduling_footprint(&self, args: &Self::Args) -> gents_loop::parallel_tools::Footprint {
+        use gents_loop::parallel_tools::Footprint;
+        let path = match self.context.resolve_existing_file(&args.path) {
+            Ok(path) => path,
+            Err(_) => return Footprint::Barrier,
+        };
+        let components: Option<Vec<String>> = path
+            .components()
+            .map(|part| part.as_os_str().to_str().map(str::to_owned))
+            .collect();
+        match components {
+            Some(path) => Footprint::Read { paths: vec![path] },
+            None => Footprint::Barrier,
+        }
+    }
+
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
