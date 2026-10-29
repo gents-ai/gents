@@ -10,4 +10,4 @@ ux: string,
 /**
  * One of that pack's `.afb` plugins.
  */
-name: string, input: JsonValue, };
+name: string, nodeDid?: string, input: JsonValue, };

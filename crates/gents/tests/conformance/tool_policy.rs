@@ -52,6 +52,7 @@ fn invocation(lean: LeanPluginDataInvocation) -> Invocation {
         LeanPluginDataInvocation::ToolCall => Invocation::ToolCall,
         LeanPluginDataInvocation::JobStep => Invocation::JobStep,
         LeanPluginDataInvocation::Callback => Invocation::Callback,
+        LeanPluginDataInvocation::Ux => Invocation::Ux,
     }
 }
 
@@ -119,7 +120,7 @@ fn generated_plugin_data_cases_drive_admit_write() {
     let cases = lean_plugin_data_cases();
     assert_eq!(
         cases.writes.len(),
-        11,
+        13,
         "Lean plugin-data write rows drifted"
     );
     assert_eq!(

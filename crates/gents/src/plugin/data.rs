@@ -21,13 +21,14 @@ pub enum Invocation {
     ToolCall,
     JobStep,
     Callback,
+    Ux,
 }
 
 impl Invocation {
     /// Lean `Stamp.available`.
     pub fn stamp_available(self, stamp: Stamp) -> bool {
         match self {
-            Self::Callback => stamp == Stamp::NodeDid,
+            Self::Callback | Self::Ux => stamp == Stamp::NodeDid,
             Self::ToolCall => !matches!(stamp, Stamp::JobRowDocId | Stamp::ChainRootDocId),
             Self::JobStep => true,
         }
@@ -40,6 +41,7 @@ impl fmt::Display for Invocation {
             Self::ToolCall => "tool",
             Self::JobStep => "job step",
             Self::Callback => "callback",
+            Self::Ux => "ux",
         })
     }
 }
@@ -64,6 +66,9 @@ pub enum StampContext {
     Callback {
         node_did: String,
     },
+    Ux {
+        node_did: String,
+    },
 }
 
 impl StampContext {
@@ -72,6 +77,7 @@ impl StampContext {
             Self::ToolOutput { .. } => Invocation::ToolCall,
             Self::JobStep { .. } => Invocation::JobStep,
             Self::Callback { .. } => Invocation::Callback,
+            Self::Ux { .. } => Invocation::Ux,
         }
     }
 
@@ -84,7 +90,8 @@ impl StampContext {
             (
                 Self::ToolOutput { node_did, .. }
                 | Self::JobStep { node_did, .. }
-                | Self::Callback { node_did },
+                | Self::Callback { node_did }
+                | Self::Ux { node_did },
                 Stamp::NodeDid,
             ) => Some(node_did),
             (
@@ -259,7 +266,7 @@ fn op_name(op: DataOp) -> &'static str {
 ///
 /// Precondition: the caller's transaction is opened as the invoker. Every
 /// caller applies the admitted writes in a transaction opened as the invoking
-/// node's DID, which is why each observation sets `actor_is_invoker: true`.
+/// principal, which is why each observation sets `actor_is_invoker: true`.
 pub fn admit_write(
     grant: &PluginData,
     stamps: &StampContext,
@@ -381,20 +388,33 @@ fn substitute_json(value: &mut Value, host_node_did: &str) {
     }
 }
 
-/// The invoking node a plugin's `data_calls` run for: its DID is both the ACP
-/// actor of the read and the value of `$caller.node_did`.
+/// A node invocation uses that node's DID as its ACP actor. An operator
+/// invocation uses the selected node's operator access; the selected node DID
+/// supplies `$caller.node_did` in both cases.
 #[derive(Clone)]
 pub struct DataCaller {
-    node: Arc<crate::defra_node::EmbeddedNode>,
-    actor: ::identity::Did,
+    access: DataAccess,
     node_did: String,
+}
+
+#[derive(Clone)]
+enum DataAccess {
+    Node(Arc<crate::defra_node::EmbeddedNode>, ::identity::Did),
+    Operator(crate::config_client::ConfigAccess),
 }
 
 impl DataCaller {
     pub fn new(node: Arc<crate::defra_node::EmbeddedNode>, node_did: &str) -> Result<Self> {
         Ok(Self {
-            node,
-            actor: ::identity::Did::new(node_did.to_owned())?,
+            access: DataAccess::Node(node, ::identity::Did::new(node_did.to_owned())?),
+            node_did: node_did.to_owned(),
+        })
+    }
+
+    pub fn operator(access: crate::config_client::ConfigAccess, node_did: &str) -> Result<Self> {
+        ::identity::Did::new(node_did.to_owned())?;
+        Ok(Self {
+            access: DataAccess::Operator(access),
             node_did: node_did.to_owned(),
         })
     }
@@ -523,19 +543,34 @@ impl Session {
             order.as_ref(),
             query.offset.unwrap_or(0),
         )?;
-        let response = crate::config_client::ConfigAccess::transact_local_readonly(
-            &self.caller.node,
-            Some(self.caller.actor.clone()),
-            "plugin_data_calls.query",
-            |txn| {
-                let (filter, text) = (&filter, &text);
-                Box::pin(async move {
-                    crate::defra_query::validate_filter(txn, collection, filter).await?;
-                    Ok::<_, anyhow::Error>(txn.execute(text).await?)
-                })
-            },
-        )
-        .await?;
+        let response = match &self.caller.access {
+            DataAccess::Node(node, actor) => {
+                crate::config_client::ConfigAccess::transact_local_readonly(
+                    node,
+                    Some(actor.clone()),
+                    "plugin_data_calls.query",
+                    |txn| {
+                        let (filter, text) = (&filter, &text);
+                        Box::pin(async move {
+                            crate::defra_query::validate_filter(txn, collection, filter).await?;
+                            Ok::<_, anyhow::Error>(txn.execute(text).await?)
+                        })
+                    },
+                )
+                .await?
+            }
+            DataAccess::Operator(access) => {
+                access
+                    .transact_readonly("plugin_data_calls.query", |txn| {
+                        let (filter, text) = (&filter, &text);
+                        Box::pin(async move {
+                            crate::defra_query::validate_filter(txn, collection, filter).await?;
+                            Ok::<_, anyhow::Error>(txn.execute(text).await?)
+                        })
+                    })
+                    .await?
+            }
+        };
         let mut used = 0;
         // ponytail: rows past the output budget are dropped from the end; the plugin pages with offset.
         Ok(response["data"][collection]

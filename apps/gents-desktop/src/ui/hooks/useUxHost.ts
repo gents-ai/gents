@@ -86,8 +86,8 @@ export function buildUxHost(app: DesktopApp, route: () => Route): UxHost {
       },
     },
     /* through the client's adapter, which sends the fields under `request` */
-    plugin: (listing, name, input) =>
-      app.actions.callPackPlugin({ ux: listing, name, input }).then((r) => r.output),
+    plugin: (listing, name, input, nodeDid) =>
+      app.actions.callPackPlugin({ ux: listing, name, input, nodeDid }).then((r) => r.output),
     data: {
       call: (listing, nodeDid, surface, tool, args) =>
         app.actions.callUxData({ ux: listing, nodeDid, surface, tool, args }),

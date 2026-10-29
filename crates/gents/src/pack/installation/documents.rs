@@ -159,6 +159,33 @@ pub struct PreparedDocumentPackInstall {
     pub dependencies: Vec<PreparedDependency>,
 }
 
+pub(super) fn document_ux_install_allowed(
+    has_ux: bool,
+    has_home: bool,
+    installed_via: InstalledVia,
+) -> bool {
+    !has_ux || (has_home && installed_via == InstalledVia::Operator)
+}
+
+pub(super) fn require_installed_dependency_ux(
+    manifest: &super::super::PackManifest,
+    digest: &str,
+    home: Option<&Path>,
+) -> Result<()> {
+    if manifest.metadata.ux.is_empty() {
+        return Ok(());
+    }
+    let coordinate = format!("{}/{}", manifest.metadata.namespace, manifest.name);
+    let home = home.context(
+        "a dependency with UX must first be installed by the operator in the node's local home",
+    )?;
+    let record = super::super::read_home_install(home, &coordinate)?
+        .context("a dependency with UX must first be installed by the operator")?;
+    anyhow::ensure!(record.digest == digest && record.installed_via == Some(InstalledVia::Operator),
+        "dependency {coordinate} with UX must first be installed explicitly by the operator at the same digest");
+    Ok(())
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "install inputs and policies supplied by each install entry point"
@@ -174,7 +201,16 @@ pub async fn prepare_document_pack_install(
     plugin_home: Option<&Path>,
     environment: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<PreparedDocumentPackInstall> {
+    anyhow::ensure!(
+        document_ux_install_allowed(
+            !manifest.metadata.ux.is_empty(),
+            plugin_home.is_some(),
+            installed_via
+        ),
+        "document packs with UX require an operator install with the node's local home"
+    );
     for dependency in dependencies {
+        require_installed_dependency_ux(dependency.manifest(), dependency.digest(), plugin_home)?;
         let dependency = dependency.manifest();
         anyhow::ensure!(
             matches!(
@@ -391,6 +427,17 @@ pub async fn install_prepared_document_pack(
     installed_via: InstalledVia,
     policy: DriftPolicy,
 ) -> Result<InstallReport> {
+    anyhow::ensure!(
+        document_ux_install_allowed(
+            !archive.manifest().metadata.ux.is_empty(),
+            plugin_home.is_some(),
+            installed_via
+        ),
+        "document packs with UX require an operator install with the node's local home"
+    );
+    for dependency in &prepared.dependencies {
+        require_installed_dependency_ux(&dependency.manifest, &dependency.digest, plugin_home)?;
+    }
     for plugin in &archive.manifest().metadata.plugins {
         plugin_data_unique_keys(archive.manifest(), plugin, &|path| archive.asset(path))?;
     }

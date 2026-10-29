@@ -4,7 +4,7 @@ mod dirs;
 mod install;
 mod run;
 pub(crate) use gents::plugin::store;
-pub use run::call_installed;
+pub use run::{call_installed, call_installed_for_operator};
 
 use anyhow::{Context, Result};
 use serde_json::json;

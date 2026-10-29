@@ -391,19 +391,35 @@ pub fn plugin_call_target(home: &std::path::Path, ux: &str, name: &str) -> Resul
     Ok(coordinate)
 }
 
+pub fn plugin_call_uses_data(home: &std::path::Path, ux: &str, name: &str) -> Result<bool> {
+    let coordinate = plugin_call_target(home, ux, name)?;
+    let (namespace, _) = gents::pack_registry::split_pack_coordinate(&coordinate);
+    Ok(gents::plugin::store::read_record(home, namespace, name)?
+        .data_grant()
+        .is_some())
+}
+
 /// Runs the `.afb` plugin `name` of the pack behind the UX plugin listed as
 /// `ux`, with `input`, for that UX plugin's `ctx.plugin` (see
 /// [`plugin_call_target`]). The call is a person's action in the desktop,
 /// so a folder the input names outside the allowed ones is asked of them
 /// (the plugin access prompt) rather than refused, as an interactive chat's
 /// tool call is.
-pub async fn plugin_call(home: PathBuf, ux: String, name: String, input: Value) -> Result<Value> {
+pub async fn plugin_call(
+    home: PathBuf,
+    ux: String,
+    name: String,
+    input: Value,
+    operator: Option<(gents::ConfigAccess, String)>,
+) -> Result<Value> {
     let coordinate = plugin_call_target(&home, &ux, &name)?;
     let (namespace, _) = gents::pack_registry::split_pack_coordinate(&coordinate);
     tracing::info!(ux = %ux, pack = %coordinate, plugin = %name, "ux plugin call");
     gents::plugin::approval::scope_interactive(
         true,
-        crate::commands::plugin::call_installed(&home, namespace, &name, input),
+        crate::commands::plugin::call_installed_for_operator(
+            &home, namespace, &name, input, operator,
+        ),
     )
     .await
 }
@@ -506,5 +522,15 @@ mod tests {
             plugin_call_target(home.path(), "examples/board_pack/board", "board_store").unwrap(),
             "examples/board_pack"
         );
+        let mut record = gents::pack::read_home_install(home.path(), "examples/board_pack")
+            .unwrap()
+            .unwrap();
+        record.kind = PackKind::Documents;
+        write_home_install(home.path(), &record).unwrap();
+        assert_eq!(
+            plugin_call_target(home.path(), "examples/board_pack/board", "board_store").unwrap(),
+            "examples/board_pack"
+        );
+        assert!(refused("examples/board_pack/board", "other").contains("ships no plugin"));
     }
 }

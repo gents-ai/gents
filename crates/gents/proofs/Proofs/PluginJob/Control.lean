@@ -287,6 +287,7 @@ def resultOffered : ToolPolicy.PluginData.Invocation → Bool
   | .toolCall => true
   | .jobStep => true
   | .callback => false
+  | .ux => false
 
 /-- The scope rule shared by `job_calls.result` and resume validation: the
     caller may manage the owner's background calls, the row belongs to the

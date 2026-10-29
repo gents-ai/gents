@@ -87,6 +87,9 @@ pub struct PluginCallRequest {
     /// One of that pack's `.afb` plugins.
     pub name: String,
     #[serde(default)]
+    #[ts(optional)]
+    pub node_did: Option<String>,
+    #[serde(default)]
     pub input: Value,
 }
 
@@ -96,8 +99,21 @@ pub async fn desktop_plugin_call(
     state: State<'_, DesktopAppState>,
 ) -> Result<Value, BridgeError> {
     let home = home(&state)?;
+    let operator =
+        if packs::plugin_call_uses_data(&home, &request.ux, &request.name).map_err(failed)? {
+            request
+                .node_did
+                .as_ref()
+                .map(|node_did| {
+                    operator_access(&state, node_did).map(|access| (access, node_did.clone()))
+                })
+                .transpose()?
+        } else {
+            None
+        };
     let output =
-        run(move || packs::plugin_call(home, request.ux, request.name, request.input)).await?;
+        run(move || packs::plugin_call(home, request.ux, request.name, request.input, operator))
+            .await?;
     Ok(serde_json::json!({ "output": output }))
 }
 

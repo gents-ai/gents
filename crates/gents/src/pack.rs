@@ -969,15 +969,6 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
         "a plugins pack must declare at least one plugin"
     );
 
-    // Only a pack that installs as a home file record (assets, plugins) is
-    // scanned for UX plugins; a documents pack installs into a
-    // node, where its ux[] would never be listed.
-    anyhow::ensure!(
-        manifest.metadata.ux.is_empty()
-            || matches!(manifest.metadata.kind, PackKind::Assets | PackKind::Plugins),
-        "ux plugins ship in an assets or plugins pack; a {:?} pack is never listed for them",
-        manifest.metadata.kind
-    );
     let mut ux_names = BTreeSet::new();
     for ux in &manifest.metadata.ux {
         ux.validate(&plugin_names)?;
@@ -1692,7 +1683,7 @@ mod tests {
     }
 
     #[test]
-    fn ux_plugins_ship_only_in_a_pack_that_installs_as_a_home_record() {
+    fn document_packs_can_ship_ux_as_declared_assets() {
         let ux = serde_json::to_value(valid_ux()).unwrap();
         let mut manifest = documents_manifest(vec![]);
         manifest.metadata.ux = vec![serde_json::from_value(ux).unwrap()];
@@ -1700,13 +1691,7 @@ mod tests {
             .metadata
             .assets
             .push("ux/board/plugin.js".to_owned());
-        let error = validate_pack_manifest(&manifest).unwrap_err();
-        assert!(
-            format!("{error:#}").contains("assets or plugins pack"),
-            "{error:#}"
-        );
-        manifest.metadata.ux.clear();
-        validate_pack_manifest(&manifest).expect("a documents pack without ux is unchanged");
+        validate_pack_manifest(&manifest).expect("a document pack may include UX assets");
     }
 
     #[test]

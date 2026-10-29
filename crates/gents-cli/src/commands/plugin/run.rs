@@ -50,6 +50,27 @@ pub async fn call_installed(
     name: &str,
     input: serde_json::Value,
 ) -> Result<serde_json::Value> {
+    call_installed_inner(home, namespace, name, input, None, false).await
+}
+
+pub async fn call_installed_for_operator(
+    home: &Path,
+    namespace: &str,
+    name: &str,
+    input: serde_json::Value,
+    operator: Option<(gents::ConfigAccess, String)>,
+) -> Result<serde_json::Value> {
+    call_installed_inner(home, namespace, name, input, operator, true).await
+}
+
+async fn call_installed_inner(
+    home: &Path,
+    namespace: &str,
+    name: &str,
+    input: serde_json::Value,
+    operator: Option<(gents::ConfigAccess, String)>,
+    ux: bool,
+) -> Result<serde_json::Value> {
     let record = store::read_record(home, namespace, name).with_context(|| {
         format!(
             "{namespace}/{name} is not installed under {}",
@@ -62,16 +83,50 @@ pub async fn call_installed(
         executor = executor.with_models(Arc::new(AccessModels(access)));
     }
     let coordinate = format!("{namespace}/{name}");
+    if ux && record.data_grant().is_some() && operator.is_none() {
+        anyhow::bail!("select a node before calling a plugin that uses data");
+    }
     // No tool-effect grant: a call from the desktop or a module producer
     // runs outside any model turn, so the guest has no runtime to call back.
+    let data_caller = operator
+        .as_ref()
+        .map(|(access, node_did)| {
+            gents::plugin::data::DataCaller::operator(access.clone(), node_did)
+        })
+        .transpose()?;
     let call = executor
-        .call_data_bound(&record, input, None, false)
+        .call_data_bound_for(&record, input, None, false, data_caller)
         .await
         .with_context(|| format!("calling plugin {coordinate}"))?;
     if let Some(note) = &call.binding_note {
         tracing::warn!(plugin = %coordinate, "{note}");
     }
-    outcome_output(&coordinate, call.outcome)
+    let mut output = outcome_output(&coordinate, call.outcome)?;
+    if let Some((grant, writes)) = ux.then(|| record.data_grant()).flatten().and_then(|grant| {
+        output
+            .as_object_mut()
+            .and_then(|o| o.remove("writes"))
+            .map(|writes| (grant, writes))
+    }) {
+        let (access, node_did) = operator.context("plugin writes need a selected node")?;
+        let writes: Vec<gents_protocol::job::DataWrite> = serde_json::from_value(writes)
+            .context("plugin writes must be an array of data writes")?;
+        if !writes.is_empty() {
+            let stamps = gents::plugin::data::StampContext::Ux { node_did };
+            access
+                .transact_write("ux_plugin.writes", |txn| {
+                    let (grant, stamps, writes) = (&grant, &stamps, writes.clone());
+                    Box::pin(async move {
+                        gents::application_write::apply_plugin_writes_in_txn(
+                            txn, grant, stamps, writes,
+                        )
+                        .await
+                    })
+                })
+                .await?;
+        }
+    }
+    Ok(output)
 }
 
 async fn run_plugin(
@@ -197,6 +252,60 @@ mod tests {
         .await
         .expect("must run");
         assert_eq!(output, serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn ux_plugin_writes_are_scoped_and_atomic() {
+        let node = Arc::new(
+            gents::defra_node::EmbeddedNode::builder()
+                .build()
+                .await
+                .unwrap(),
+        );
+        node.add_collection("type UxNote { body: String }")
+            .await
+            .unwrap();
+        let access = gents::ConfigAccess::local(node);
+        let bytes = build_echo_plugin();
+        let mut record = sample_record(&bytes);
+        record.declaration.data = Some(gents_protocol::job::PluginDataDeclaration {
+            collections: vec!["UxNote".into()],
+            ops: vec!["insert".into()],
+            stamped: Default::default(),
+        });
+        record
+            .data_collection_fields
+            .insert("UxNote".into(), vec!["body".into()]);
+        let home = tempfile::tempdir().unwrap();
+        store::store_bytes(
+            home.path(),
+            record.digest.strip_prefix("sha256:").unwrap(),
+            &bytes,
+        )
+        .unwrap();
+        store::write_record(home.path(), &record).unwrap();
+        let caller = || Some((access.clone(), "did:key:z6Mknode".to_owned()));
+        let result = call_installed_for_operator(home.path(), "gents", "echo", serde_json::json!({
+            "response": "ok", "writes": [{"op": "insert", "collection": "UxNote", "fields": {"body": "one"}}]
+        }), caller()).await.unwrap();
+        assert_eq!(result["response"], "ok");
+        assert!(result.get("writes").is_none());
+        let refused = call_installed_for_operator(
+            home.path(),
+            "gents",
+            "echo",
+            serde_json::json!({
+                "writes": [
+                    {"op": "insert", "collection": "UxNote", "fields": {"body": "two"}},
+                    {"op": "insert", "collection": "Other", "fields": {"body": "forbidden"}}
+                ]
+            }),
+            caller(),
+        )
+        .await;
+        assert!(refused.is_err());
+        let rows = access.execute("{ UxNote { body } }").await.unwrap();
+        assert_eq!(rows["data"]["UxNote"], serde_json::json!([{"body": "one"}]));
     }
 
     #[tokio::test]

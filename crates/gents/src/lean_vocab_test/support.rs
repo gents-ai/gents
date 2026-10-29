@@ -1156,6 +1156,7 @@ pub(crate) enum LeanPluginDataInvocation {
     ToolCall,
     JobStep,
     Callback,
+    Ux,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]

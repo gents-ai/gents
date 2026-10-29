@@ -1,8 +1,37 @@
 use std::sync::Arc;
 
 use super::*;
+use crate::pack::InstalledVia;
 
 const OWNER: &str = "did:key:zPackInstallOwner";
+
+#[test]
+fn document_ux_install_admission_matches_lean() {
+    let raw = gents_lean_contract::run_prepared_generator(
+        &gents_lean_contract::proofs_dir().unwrap(),
+        "Proofs.Conformance.DocumentPackUx:olean",
+        "Proofs/Conformance/DocumentPackUx.lean",
+    )
+    .unwrap();
+    let cases: Vec<serde_json::Value> = serde_json::from_str(&raw).unwrap();
+    assert_eq!(cases.len(), 8);
+    for case in cases {
+        let via = if case["operator"].as_bool().unwrap() {
+            InstalledVia::Operator
+        } else {
+            InstalledVia::SelfConfig
+        };
+        assert_eq!(
+            documents::document_ux_install_allowed(
+                case["hasUx"].as_bool().unwrap(),
+                case["home"].as_bool().unwrap(),
+                via
+            ),
+            case["allowed"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
+}
 
 async fn access() -> ConfigAccess {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
@@ -1355,6 +1384,68 @@ fn documents_archive_shipping(files: &[(&str, &str)]) -> crate::pack_archive::Pa
     std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     let (bytes, _) = crate::pack_archive::pack_dir(&root).unwrap();
     crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+}
+
+#[tokio::test]
+async fn operator_installs_document_pack_ux_with_its_data_plugin() {
+    let (_guard, root) = crate::test_support::fixture_pack_copy("job_plugin_fixture", &json!({}));
+    let path = root.join("manifest.json");
+    let mut manifest: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    std::fs::create_dir_all(root.join("ux/board")).unwrap();
+    std::fs::write(root.join("ux/board/plugin.js"), "export default {};").unwrap();
+    manifest["assets"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("ux/board/plugin.js"));
+    manifest["ux"] = json!([{
+        "name": "board", "description": "A board page", "entry": "ux/board/plugin.js",
+        "contributes": { "areas": ["nav"], "directives": [] }
+    }]);
+    std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let (bytes, _) = crate::pack_archive::pack_dir(&root).unwrap();
+    let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    install_prepared_document_pack(
+        &access().await,
+        OWNER,
+        &archive,
+        &[],
+        &prepared(),
+        Some(home.path()),
+        true,
+        InstalledVia::Operator,
+        DriftPolicy::Refuse,
+    )
+    .await
+    .unwrap();
+
+    let record = recorded(home.path(), &archive);
+    assert_eq!(record.kind, crate::pack::PackKind::Documents);
+    assert!(record
+        .plugins
+        .iter()
+        .any(|plugin| plugin.name == "job_fixture"));
+    let listing = crate::ux_plugin::find(home.path(), "fixture/job_plugin_fixture/board").unwrap();
+    assert_eq!(listing.pack.as_deref(), Some("fixture/job_plugin_fixture"));
+    assert!(std::path::Path::new(&listing.file).is_file());
+    let plugin = crate::plugin::store::read_record(home.path(), "fixture", "job_fixture").unwrap();
+    assert!(plugin.data_collection_fields.contains_key("FixtureNote"));
+    assert!(
+        documents::require_installed_dependency_ux(archive.manifest(), archive.digest(), None)
+            .is_err()
+    );
+    assert!(documents::require_installed_dependency_ux(
+        archive.manifest(),
+        "other-digest",
+        Some(home.path())
+    )
+    .is_err());
+    documents::require_installed_dependency_ux(
+        archive.manifest(),
+        archive.digest(),
+        Some(home.path()),
+    )
+    .unwrap();
 }
 
 fn recorded(

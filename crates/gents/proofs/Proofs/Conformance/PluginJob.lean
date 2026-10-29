@@ -920,6 +920,7 @@ private def invocationJson : PluginData.Invocation → Json
   | .toolCall => toJson "tool_call"
   | .jobStep => toJson "job_step"
   | .callback => toJson "callback"
+  | .ux => toJson "ux"
 
 private def renderResultOffer (c : String × PluginData.Invocation) : Json :=
   Json.mkObj [("name", toJson c.1), ("kind", toJson "result_offer"),

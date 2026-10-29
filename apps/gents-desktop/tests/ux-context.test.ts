@@ -150,6 +150,21 @@ describe("ux plugin context", () => {
     });
   });
 
+  it("uses the selected node for each pack plugin call", async () => {
+    let nodeDid = "did:key:first";
+    host.shell.selectedDeployment = () => ({ nodeDid }) as never;
+    const plugin = vi.fn(async () => ({}));
+    host.plugin = plugin;
+    const ctx = createUxContext("board", { listing: "ns/pack/board" });
+    await ctx.plugin("store", { op: "read" });
+    nodeDid = "did:key:second";
+    await ctx.plugin("store", { op: "write" });
+    expect(plugin.mock.calls).toEqual([
+      ["ns/pack/board", "store", { op: "read" }, "did:key:first"],
+      ["ns/pack/board", "store", { op: "write" }, "did:key:second"],
+    ]);
+  });
+
   it("offers no raw bridge verb: the host's names are the whole surface", () => {
     const ctx = createUxContext("acme", { onDispose: (d) => collected.push(d) });
     expect("bridge" in ctx).toBe(false);
