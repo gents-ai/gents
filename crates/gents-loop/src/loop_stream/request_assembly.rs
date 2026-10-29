@@ -1389,13 +1389,20 @@ pub(super) fn prepare_dispatch_attempt(
     let estimated_input_tokens =
         completion_request_input_tokens(&request, config.provider_input_counter.as_ref())?;
     let context = config.context_calibration.context(estimated_input_tokens);
-    let input_tokens = context.tokens;
-    clamp_request_output_budget(&mut request, config, input_tokens);
-    ensure_context_can_dispatch(&request, config, input_tokens)?;
+    // The calibrated count triggers compaction and caps output, but only the
+    // raw count can refuse dispatch: the provider's own overflow rejection is
+    // recovered, an overestimate is not.
+    let configured_max_tokens = request.max_tokens;
+    clamp_request_output_budget(&mut request, config, context.tokens);
+    if request.max_tokens == Some(0) {
+        request.max_tokens = configured_max_tokens;
+        clamp_request_output_budget(&mut request, config, estimated_input_tokens);
+    }
+    ensure_context_can_dispatch(&request, config, estimated_input_tokens)?;
     super::aggregate_budget::clamp_request_aggregate_token_budget(
         &mut request,
         aggregate_token_budget,
-        input_tokens,
+        estimated_input_tokens,
     )?;
     let projection =
         completion_request_input_components(&request, config.provider_input_counter.as_ref())?;
@@ -1437,9 +1444,10 @@ pub(super) fn context_accounting_for_request(
         compaction_threshold_basis_points: crate::provider_input::budget::threshold_basis_points(
             config.compaction_threshold,
         ),
-        compaction_threshold_tokens: crate::provider_input::budget::threshold_budget(
+        compaction_threshold_tokens: crate::provider_input::budget::compaction_input_budget(
             config.context_window,
             config.compaction_threshold,
+            crate::provider_input::budget::configured_output_ceiling(config.max_tokens),
         ),
         configured_max_output_tokens: config.max_tokens,
         effective_max_output_tokens: request.max_tokens,
@@ -1941,3 +1949,7 @@ where
     config.context_calibration.invalidate_anchor();
     build_core(model, history, new_messages, tools, config).await
 }
+
+#[cfg(test)]
+#[path = "request_assembly_dispatch_tests.rs"]
+mod dispatch_tests;

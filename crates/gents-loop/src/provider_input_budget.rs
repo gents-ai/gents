@@ -216,8 +216,9 @@ pub struct ContextEstimate {
     /// The anchor's provider count plus the calibrated growth since it, when
     /// a current anchor applies.
     pub anchored: Option<usize>,
-    /// What every decision uses: the larger of `anchored` and `calibrated`,
-    /// so a missing or stale anchor never lowers the count.
+    /// What compaction and the output cap use: the larger of `anchored` and
+    /// `calibrated`, so a missing or stale anchor never lowers the count.
+    /// Dispatch is refused only on `raw`.
     pub tokens: usize,
 }
 
