@@ -16,6 +16,8 @@ use super::edits::{
 use super::encoding::position_for_symbol;
 use super::pool::LspLease;
 
+/// Keep one result bounded before applying the shared output byte limit.
+pub(crate) const MAX_REQUESTED_RESULTS: u32 = 1000;
 pub(crate) const MAX_DIAGNOSTICS: usize = 50;
 pub(crate) const MAX_WORKSPACE_SYMBOLS: usize = 200;
 pub(crate) const MAX_REFERENCES: usize = 50;
@@ -44,6 +46,7 @@ pub struct ActionRequest {
     pub apply: Option<bool>,
     pub payload: Option<String>,
     pub timeout: Option<u32>,
+    pub limit: Option<u32>,
 }
 
 pub async fn dispatch(
@@ -114,7 +117,7 @@ async fn run_file_action(
             client,
             config,
             servers,
-            action,
+            req,
             file,
             request_timeout(req),
         )
@@ -273,7 +276,8 @@ async fn run_file_action(
         let applied = apply_prepared_edits(context, client, &prepared).await?;
         return Ok(format!("Applied edit to {applied} file(s)"));
     }
-    let mut output = truncate_model_output(format_result(context, action, result));
+    let mut output =
+        truncate_model_output(format_result_with_limit(context, action, result, req.limit));
     if matches!(action, LspAction::Diagnostics) {
         if let Some(linter) =
             run_linter_diagnostics(config, servers, &path, request_timeout(req)).await
@@ -304,8 +308,8 @@ async fn workspace_action(
                 )
                 .await
                 .map_err(|err| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?;
-            Ok(truncate_model_output(format_result(
-                context, action, result,
+            Ok(truncate_model_output(format_result_with_limit(
+                context, action, result, req.limit,
             )))
         }
         LspAction::Diagnostics => {
@@ -317,8 +321,8 @@ async fn workspace_action(
                 )
                 .await
             {
-                Ok(result) => Ok(truncate_model_output(format_result(
-                    context, action, result,
+                Ok(result) => Ok(truncate_model_output(format_result_with_limit(
+                    context, action, result, req.limit,
                 ))),
                 Err(_) => Ok(
                     "workspace diagnostics require workspace/diagnostic; pass a file or glob"
@@ -346,8 +350,8 @@ async fn raw_request(
         .request_with_timeout(method, params, request_timeout(req))
         .await
         .map_err(|err| ToolError::reported_failure(FailureClass::ToolReturnedError, err))?;
-    Ok(truncate_model_output(format_result(
-        context, req.action, result,
+    Ok(truncate_model_output(format_result_with_limit(
+        context, req.action, result, None,
     )))
 }
 
@@ -538,7 +542,17 @@ pub(crate) fn truncate_model_output(text: String) -> String {
     .0
 }
 
+#[cfg(test)]
 pub(crate) fn format_result(context: &ToolContext, action: LspAction, result: Value) -> String {
+    format_result_with_limit(context, action, result, None)
+}
+
+pub(crate) fn format_result_with_limit(
+    context: &ToolContext,
+    action: LspAction,
+    result: Value,
+    limit: Option<u32>,
+) -> String {
     if result.is_null() {
         return match action {
             LspAction::Hover => "No hover information".into(),
@@ -552,13 +566,21 @@ pub(crate) fn format_result(context: &ToolContext, action: LspAction, result: Va
     }
     let (redacted, omitted) = redact_structured_uris(context, &result);
     if matches!(action, LspAction::Diagnostics) {
-        return format_diagnostics(&redacted, omitted);
+        return format_diagnostics(
+            &redacted,
+            omitted,
+            limit.map_or(MAX_DIAGNOSTICS, |v| v.min(MAX_REQUESTED_RESULTS) as usize),
+        );
     }
     if let Some(arr) = redacted.as_array() {
         let cap = match action {
             LspAction::Diagnostics => MAX_DIAGNOSTICS,
-            LspAction::Symbols => MAX_WORKSPACE_SYMBOLS,
-            LspAction::References => MAX_REFERENCES,
+            LspAction::Symbols => limit.map_or(MAX_WORKSPACE_SYMBOLS, |v| {
+                v.min(MAX_REQUESTED_RESULTS) as usize
+            }),
+            LspAction::References => {
+                limit.map_or(MAX_REFERENCES, |v| v.min(MAX_REQUESTED_RESULTS) as usize)
+            }
             LspAction::Rename | LspAction::RenameFile => MAX_RENAME_PAIRS,
             _ => usize::MAX,
         };
@@ -717,9 +739,9 @@ fn symbol_kind_name(kind: u64) -> &'static str {
     KINDS.get(kind as usize).copied().unwrap_or("unknown")
 }
 
-fn format_diagnostics(value: &Value, omitted: usize) -> String {
+fn format_diagnostics(value: &Value, omitted: usize, limit: usize) -> String {
     let mut diagnostics = Vec::new();
-    collect_diagnostics(value, None, &mut diagnostics, MAX_DIAGNOSTICS);
+    collect_diagnostics(value, None, &mut diagnostics, limit);
     if diagnostics.is_empty() {
         return if omitted > 0 {
             format!(
@@ -859,10 +881,11 @@ async fn glob_action(
     client: &LspClient,
     config: &super::LspToolConfig,
     servers: &[CatalogServer],
-    action: LspAction,
+    req: &ActionRequest,
     pattern: &str,
     timeout: std::time::Duration,
 ) -> Result<String, ToolError> {
+    let action = req.action;
     if !matches!(action, LspAction::Diagnostics) {
         return Err(arg_invalid("globs are only valid for diagnostics"));
     }
@@ -897,7 +920,10 @@ async fn glob_action(
             )
             .await
             .unwrap_or(Value::Null);
-        let mut section = format!("{display}:\n{}", format_result(context, action, result));
+        let mut section = format!(
+            "{display}:\n{}",
+            format_result_with_limit(context, action, result, req.limit)
+        );
         if let Some(linter) = run_linter_diagnostics(config, servers, &path, timeout).await {
             section = format!("{section}\n{linter}");
         }

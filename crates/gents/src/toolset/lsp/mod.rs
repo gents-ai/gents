@@ -38,8 +38,7 @@ use config::apply_overrides;
 
 pub const LSP_TOOL_NAME: &str = "lsp";
 pub const DEFAULT_ACTION_TIMEOUT_SECS: u64 = 20;
-/// Ceiling on any action timeout: servers needing longer are indexing, not
-/// answering; the call should fail and retry.
+/// Bound the time one language-server action can hold a runtime resource.
 pub const MAX_ACTION_TIMEOUT_SECS: u64 = 300;
 /// Below this a model-requested action cannot finish indexing retries.
 pub const MIN_REQUESTED_ACTION_TIMEOUT_SECS: u64 = 5;
@@ -192,6 +191,8 @@ pub(crate) struct LspArgs {
     payload: Option<String>,
     #[serde(default)]
     timeout: Option<u32>,
+    #[serde(default)]
+    limit: Option<u32>,
 }
 
 impl Tool for LspTool {
@@ -254,6 +255,12 @@ impl Tool for LspTool {
                         "type": "string",
                         "description": "JSON object for action=request. Only allowlisted read methods; every URI field is validated and non-file schemes are rejected."
                     },
+                    "limit": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": actions::MAX_REQUESTED_RESULTS,
+                        "description": "Maximum diagnostics, symbols, or references returned; output may be shortened by the shared tool-result limit."
+                    },
                     "timeout": {
                         "type": "integer",
                         "minimum": MIN_REQUESTED_ACTION_TIMEOUT_SECS.min(self.config.action_timeout.maximum.as_secs()),
@@ -267,6 +274,15 @@ impl Tool for LspTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        if args
+            .limit
+            .is_some_and(|limit| !(1..=actions::MAX_REQUESTED_RESULTS).contains(&limit))
+        {
+            return Err(ToolError::reported_failure(
+                FailureClass::ArgumentInvalid,
+                "limit must be between 1 and 1000".into(),
+            ));
+        }
         if artifact_scope_denied() {
             return Err(ToolError::reported_failure(
                 FailureClass::PolicyDenied,
@@ -395,6 +411,7 @@ impl Tool for LspTool {
                 new_name: args.new_name,
                 apply: args.apply,
                 payload: args.payload,
+                limit: args.limit,
                 timeout: Some(
                     u32::try_from(
                         self.config

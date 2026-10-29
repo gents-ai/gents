@@ -292,6 +292,8 @@ impl McpPool {
         key
     }
 
+    /// Configure idle connection retirement for this host pool. This does not
+    /// set an individual MCP service's connection or call timeout.
     pub fn with_idle_ttl(mut self, ttl: std::time::Duration) -> Self {
         self.idle_ttl = Some(ttl);
         self

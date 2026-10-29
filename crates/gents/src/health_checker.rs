@@ -14,6 +14,8 @@ use gents_protocol::tool_service_health::ToolServiceHealthProjection;
 use crate::graphql::escape_graphql_string;
 use crate::mcp_pool::{resolve_mcp_url, McpPool};
 
+/// Node-local service observation settings; these do not change an agent's
+/// remote-tool call deadlines.
 #[derive(Clone, Debug)]
 pub struct HealthCheckerOptions {
     pub cycle_interval: Duration,

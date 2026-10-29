@@ -7,7 +7,8 @@ use crate::llm::tool::{Tool, ToolDefinition};
 
 use super::query::{self, CollectionScope, DefraQueryParams, MAX_LIMIT};
 
-/// the same bound the `query` tool's `find` holds; deeper pages need a narrower filter
+/// Matches the bound on the `query` tool's `find` operation; deeper pages need
+/// a narrower filter to avoid unbounded database work.
 pub const MAX_OFFSET: u32 = 100_000;
 
 const PLACEHOLDER_TOOL_NAME: &str = "defra_query_bound";

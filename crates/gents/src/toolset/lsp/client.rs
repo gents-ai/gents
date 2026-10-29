@@ -11,8 +11,12 @@ use tokio::sync::{oneshot, Mutex};
 use crate::drop_cleanup::DropCleanup;
 use crate::managed_exec::ManagedProcess;
 
+/// Language servers are subprocesses outside the runtime's trust boundary;
+/// bound each frame before allocating or retaining its payload.
 const MAX_CONTENT_LENGTH: usize = 8 * 1024 * 1024;
 
+/// Bound outstanding replies so a stalled language server cannot retain an
+/// unbounded set of callers.
 const MAX_PENDING: usize = 32;
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
