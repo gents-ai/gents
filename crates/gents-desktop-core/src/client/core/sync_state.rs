@@ -12,7 +12,7 @@ use gents_protocol::peer_schema::{
 };
 use serde_json::Value;
 
-use super::enrollment::EnrollmentAuthorizationGeneration;
+use super::enrollment::reconcile::EnrollmentAuthorizationGeneration;
 use super::{
     p2p_health_materially_changed, ClientPeerStatus, ClientSyncStateSnapshot,
     EnrollmentActivationError, P2PHealth,
