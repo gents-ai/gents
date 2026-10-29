@@ -12,7 +12,7 @@ use gents::plugin::authority::{declared_manifold, describe_manifold};
 use gents::plugin::executor::call_runner;
 use gents::plugin::{BoundDir, PluginBudget, PluginRunner, PluginVerdict};
 
-use super::ScenarioManifest;
+use super::manifest::ScenarioManifest;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
