@@ -193,6 +193,10 @@ pub fn current_capabilities() -> BTreeMap<String, u64> {
             u64::from(crate::request_input::REQUEST_INPUT_CONTRACT_VERSION),
         ),
         (
+            "agent_steer_target",
+            u64::from(crate::request_input::AGENT_STEER_TARGET_VERSION),
+        ),
+        (
             "goal_stop",
             u64::from(crate::goal_control::GOAL_STOP_CONTRACT_VERSION),
         ),
@@ -267,6 +271,10 @@ mod tests {
             observed_at: now.to_rfc3339(),
             signature: vec![0; 64],
         };
+        assert_eq!(
+            receipt.capabilities.get("agent_steer_target"),
+            Some(&u64::from(crate::request_input::AGENT_STEER_TARGET_VERSION))
+        );
         receipt.validate_for(&request, now).unwrap();
         let mut other_request = request.clone();
         other_request.issued_at = (now - Duration::seconds(1)).to_rfc3339();

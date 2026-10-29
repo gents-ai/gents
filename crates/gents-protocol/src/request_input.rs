@@ -34,6 +34,8 @@ type Result<T, E = RequestInputError> = std::result::Result<T, E>;
 
 pub const REQUEST_INPUT_CONTRACT_VERSION: u32 = 3;
 pub const STATUS_INPUT_CONTRACT_FIELD: &str = "request_input_contract_version";
+pub const AGENT_STEER_TARGET_VERSION: u32 = 1;
+pub const STATUS_AGENT_STEER_TARGET_FIELD: &str = "agent_steer_target_version";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
