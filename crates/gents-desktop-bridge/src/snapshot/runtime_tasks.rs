@@ -347,13 +347,35 @@ mod trigger_recent_runs_tests {
     }
 }
 
-/// Starters resolved so far, keyed by the parent request's document ID. A
-/// session's starter is written once and request document IDs are
-/// content-addressed, so an entry never goes stale; a parent no store holds
-/// is not recorded and is asked for again.
+/// What a session's starter verdict depends on apart from its physical row:
+/// its scope, agent and complete provenance, including the node-signed
+/// creation receipt that binds the physical document and starter index.
+type StarterEvidence = (gents::session_origin::SessionScope, String, String);
+
+fn starter_evidence(
+    scope: gents::session_origin::SessionScope,
+    agent_id: &str,
+    provenance: Option<&gents_protocol::session::SessionProvenance>,
+) -> Option<StarterEvidence> {
+    let provenance = provenance?;
+    provenance.creation_receipt.as_ref()?.starter.as_ref()?;
+    Some((
+        scope,
+        agent_id.to_owned(),
+        serde_json::to_string(provenance).ok()?,
+    ))
+}
+
+/// Starter verdicts by the evidence a read row carried when it was verified.
+/// The receipt binds the physical document that read checked, and that row's
+/// starter index columns are immutable, so a verdict is reused only while the
+/// session presents the same evidence; other evidence is read and verified
+/// again.
 #[derive(Default)]
 pub(crate) struct StarterCache(
-    std::sync::Mutex<std::collections::BTreeMap<String, gents::session_origin::SessionScope>>,
+    std::sync::Mutex<
+        std::collections::BTreeMap<StarterEvidence, Option<gents::session_origin::SessionLink>>,
+    >,
 );
 
 pub(super) async fn resolve_summary_starters<'a, R>(
@@ -363,34 +385,54 @@ pub(super) async fn resolve_summary_starters<'a, R>(
 ) where
     R: gents::config_client::ConfigRead + ?Sized,
 {
-    let started = summaries
-        .into_iter()
-        .filter_map(|summary| {
-            let parent = summary.provenance.as_ref()?.parent_request_doc_id.clone()?;
-            Some((summary, parent))
-        })
-        .collect::<Vec<_>>();
+    let mut started = Vec::new();
+    for summary in summaries {
+        let scope = gents::session_origin::SessionScope {
+            node_did: summary.node_did.clone(),
+            session_id: summary.session_id.clone(),
+            requester_did: summary.requester_did.clone(),
+        };
+        let Some(evidence) = starter_evidence(
+            scope,
+            summary.agent_id.as_deref().unwrap_or_default(),
+            summary.provenance.as_ref(),
+        ) else {
+            summary.started_by = None;
+            continue;
+        };
+        started.push((summary, evidence));
+    }
     let missing = {
         let known = cache
             .0
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        started
+        let mut missing = started
             .iter()
-            .map(|(_, parent)| parent.as_str())
-            .filter(|parent| !known.contains_key(*parent))
-            .map(str::to_owned)
-            .collect::<Vec<_>>()
+            .filter(|(_, evidence)| !known.contains_key(evidence))
+            .map(|(_, evidence)| evidence.0.clone())
+            .collect::<Vec<_>>();
+        missing.sort();
+        missing.dedup();
+        missing
     };
     if !missing.is_empty() {
-        match gents::session_origin::request_scopes(access, missing.iter().map(String::as_str))
-            .await
-        {
-            Ok(scopes) => cache
-                .0
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .extend(scopes),
+        match gents::session_origin::verified_recorded_starters(access, &missing).await {
+            Ok(observed) => {
+                let mut known = cache
+                    .0
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                for row in observed {
+                    if let Some(evidence) = starter_evidence(
+                        gents::session_origin::SessionScope::from(&row.session),
+                        &row.session.agent_id,
+                        row.session.provenance.as_ref(),
+                    ) {
+                        known.insert(evidence, row.starter);
+                    }
+                }
+            }
             Err(error) => {
                 tracing::warn!(%error, sessions = missing.len(), "session starters unavailable");
             }
@@ -400,15 +442,14 @@ pub(super) async fn resolve_summary_starters<'a, R>(
         .0
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    for (summary, parent) in started {
-        summary.started_by =
-            known
-                .get(parent.as_str())
-                .map(|scope| super::super::types::LinkedSessionView {
-                    node_did: scope.node_did.clone(),
-                    session_id: scope.session_id.clone(),
-                    requester_did: scope.requester_did.clone(),
-                    cause_request_doc_id: parent.clone(),
-                });
+    for (summary, evidence) in started {
+        summary.started_by = known.get(&evidence).cloned().flatten().map(|link| {
+            super::super::types::LinkedSessionView {
+                node_did: link.scope.node_did,
+                session_id: link.scope.session_id,
+                requester_did: link.scope.requester_did,
+                cause_request_doc_id: link.cause_request_doc_id,
+            }
+        });
     }
 }

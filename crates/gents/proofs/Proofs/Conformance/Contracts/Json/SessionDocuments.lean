@@ -16,6 +16,7 @@ def requestJson (r : AgentSession.RequestFact) : Json := Json.mkObj
 private def provenanceJson (p : AgentSession.Provenance) : Json := Json.mkObj
   [("task_id", toJson p.task),
    ("parent_request_doc_id", toJson p.parentRequestDoc),
+   ("started_by", p.startedBy.map scopeJson |>.getD Json.null),
    ("opening_request_doc_id", toJson p.openingRequestDoc),
    ("fork", p.fork.map (fun f => Json.mkObj
      [("source_session_id", toJson f.sourceSession), ("at_user_turn", toJson f.atUserTurn)])
@@ -254,8 +255,28 @@ private def archiveCases : List Json := do
 
 /-- Header-only fork inputs and computed durable outputs. Payload/tool/segment
 rows remain origin dependencies and are never copied or remapped. -/
+private def starterVerificationCases : List Json :=
+  let source : AgentSession.Scope := ⟨5, 6, some 7⟩
+  let receipt : AgentSession.CreationReceipt :=
+    { scope := Conformance.SessionDocuments.scope, sessionDoc := 8, agent := 3,
+      openingRequestDoc := 9, causalKind := 1, causeBinding := 2,
+      starter := some ⟨source, 11⟩ }
+  [ ("valid", some (5, 6), 8, some source, some 11, true),
+    ("physical", some (5, 6), 9, some source, some 11, true),
+    ("index", some (5, 7), 8, some source, some 11, true),
+    ("source", some (5, 7), 8, some ⟨5, 7, some 7⟩, some 11, true),
+    ("parent", some (5, 6), 8, some source, some 12, true),
+    ("signature", some (5, 6), 8, some source, some 11, false),
+    ("starter_removed", some (5, 6), 8, none, some 11, true),
+    ("starter_removed_parent_rewritten", some (5, 6), 8, none, some 12, true),
+    ("unindexed", none, 8, some source, some 11, true) ].map
+    fun (name, index, physical, recorded, parent, signed) =>
+      Json.mkObj [("name", toJson name), ("accepted", toJson
+        ((AgentSession.observedStarter index (some receipt) physical recorded parent signed).isSome))]
+
 def sessionDocumentsJson : String := (Json.mkObj
-  [("archive", toJson archiveCases),
+  [("starter_verification", toJson starterVerificationCases),
+   ("archive", toJson archiveCases),
    ("document_reference_encoding", toJson "interned collection plus _docID, not raw _docID"),
    ("retry", toJson [
       retryJson "exact_parent" [old] 101,

@@ -1010,6 +1010,7 @@ pub(super) mod tests {
             caller_node_did: lifecycle.request().node_did.clone(),
             caller_agent_id: lifecycle.request().agent_id.clone(),
             caller_session_id: lifecycle.request().session_id.clone(),
+            caller_requester_did: lifecycle.request().requester_did.clone(),
             caller_request_id: lifecycle.request().request_id.clone(),
             caller_request_doc_id: lifecycle.request().doc_id.clone(),
             caller_hop: lifecycle.request().request_hop,
@@ -2018,6 +2019,152 @@ pub(super) mod tests {
                 .is_empty(),
             "the caller's tool rows never replicate to the host"
         );
+
+        // Adapted from Ivan's #3264: a remote interrupting message and its
+        // scoped interrupt commit together on the caller's replica, and the
+        // interrupt reaches the owning host.
+        let active = load_admission_request_by_id(&host, &fresh_request_id).await;
+        exec(
+            &host,
+            &format!(
+                r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "processing" }}) {{ _docID }} }}"#,
+                escape_graphql_string(&active.doc_id)
+            ),
+            "start remote interrupt fixture",
+        )
+        .await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        while crate::interrupt::active_session_request(
+            &coordinator,
+            &active.session_id,
+            &host_did,
+            Some(&coordinator_did),
+        )
+        .await
+        .unwrap()
+        .and_then(|row| row.doc_id)
+            != Some(active.doc_id.clone())
+        {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the active request never replicated to the caller"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        let mut followup =
+            crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request(
+                coordinator.clone(),
+                &mut parent_lifecycle,
+                &coordinator_did,
+                2,
+                crate::toolset::AGENT_MESSAGE_TOOL_NAME,
+                "peer-interrupt-message",
+                serde_json::json!({"session_id": active.session_id, "message": "change direction", "delivery": "interrupt"}),
+                crate::tool_call_lifecycle::AwaitMode::Background,
+                false,
+            )
+            .await
+            .unwrap();
+        let caller = parent_lifecycle.request();
+        let cause = crate::lifecycle::SessionMessageCause {
+            caller_node_did: caller.node_did.clone(),
+            caller_agent_id: caller.agent_id.clone(),
+            caller_session_id: caller.session_id.clone(),
+            caller_requester_did: caller.requester_did.clone(),
+            caller_request_id: caller.request_id.clone(),
+            caller_request_doc_id: caller.doc_id.clone(),
+            caller_hop: caller.request_hop,
+            tool_call_id: followup.tool_call_id().into(),
+            tool_call_doc_id: followup.doc_id().unwrap().into(),
+            correlation: None,
+        };
+        let target = crate::lifecycle::SessionMessageTarget {
+            node_did: host_did.clone(),
+            agent_id: active.agent_id.clone(),
+            session_id: active.session_id.clone(),
+        };
+        let plan = crate::session_message::plan_with_delivery(
+            &coordinator,
+            &cause,
+            &target,
+            crate::session_message::RenderedBody {
+                content: "change direction".into(),
+                goal: None,
+            },
+            None,
+            crate::session_message::AgentMessageDelivery::Interrupt,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let requests_before = collection_values(&coordinator, "AgentRequest", "request_id").await;
+        let aborted: anyhow::Result<()> = crate::config_client::ConfigAccess::transact_local_write(
+            &coordinator,
+            None,
+            "test.abort_remote_message_interrupt",
+            |txn| {
+                let (cause, plan) = (&cause, &plan);
+                Box::pin(async move {
+                    crate::session_message::stage_planned_write_in_txn(txn, cause, plan)
+                        .await
+                        .map_err(anyhow::Error::from)?;
+                    anyhow::bail!("abort staged message and interrupt")
+                })
+            },
+        )
+        .await;
+        assert!(aborted.is_err());
+        assert_eq!(
+            collection_values(&coordinator, "AgentRequest", "request_id").await,
+            requests_before,
+            "an aborted interrupting message publishes no request"
+        );
+        assert!(
+            crate::interrupt::fetch_interrupt_requested_at_by_doc_id(&coordinator, &active.doc_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "an aborted interrupting message interrupts nothing"
+        );
+        let receipt =
+            crate::session_message::commit(&coordinator, &cause, &mut followup, plan, true)
+                .await
+                .unwrap();
+        assert!(crate::interrupt::fetch_interrupt_requested_at_by_doc_id(
+            &coordinator,
+            &active.doc_id
+        )
+        .await
+        .unwrap()
+        .is_some());
+        wait_for_value(&host, "AgentRequest", "request_id", &receipt.request_id).await;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        while crate::interrupt::fetch_interrupt_requested_at_by_doc_id(&host, &active.doc_id)
+            .await
+            .unwrap()
+            .is_none()
+        {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the interrupt never replicated to the host"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        let followup_on_host = load_admission_request_by_id(&host, &receipt.request_id).await;
+        for (doc_id, state) in [
+            (followup_on_host.doc_id.as_str(), "completed"),
+            (active.doc_id.as_str(), "pending"),
+        ] {
+            exec(
+                &host,
+                &format!(
+                    r#"mutation {{ update_AgentRequest(docID: "{}", input: {{ lifecycle_state: "{state}", interrupt_requested_at: null }}) {{ _docID }} }}"#,
+                    escape_graphql_string(doc_id)
+                ),
+                "restore remote interrupt fixture",
+            )
+            .await;
+        }
 
         let behavior = test_agent(host_identity.clone());
         let fresh_calls = Arc::new(AtomicUsize::new(0));

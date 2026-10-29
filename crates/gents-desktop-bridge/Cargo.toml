@@ -75,6 +75,7 @@ libc = "0.2"
 tauri-plugin = { version = "2", features = ["build"], optional = true }
 
 [dev-dependencies]
+crypto.workspace = true
 identity.workspace = true
 syn = { version = "2", features = ["full"] }
 heck = "0.5"

@@ -108,7 +108,7 @@ async fn maps_the_lineage_owner_and_each_call_to_its_caused_request() {
         .iter()
         .find(|call| call.tool_call_id == "tc_peer")
         .unwrap();
-    assert_eq!(peer.caused.node_did, "did:test:other");
+    assert_eq!(peer.caused.node_did, crate::tests::support::OTHER);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

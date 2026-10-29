@@ -1439,6 +1439,9 @@ mod tests {
     use crate::commands::grok_shim::test_fixtures::seed_canonical_assistant_message;
     use gents::graphql::ensure_no_errors;
 
+    /// Child sessions here are started by receipts the fixture key signs.
+    const NODE_DID: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
+
     #[tokio::test]
     async fn chunk_level_identity_recovers_a_partial_row_retry() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1538,14 +1541,14 @@ mod tests {
         session: &str,
         request_id: &str,
     ) -> gents_protocol::row::AgentRequestRow {
-        let result = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{}", session_id: "{}", node_did: "did:test:grok-shim", requester_did: "did:test:grok-shim", agent_id: "test", content: "projection fixture", lifecycle_state: "pending"}}) {{_docID}} }}"#, gents::graphql::escape_graphql_string(request_id), gents::graphql::escape_graphql_string(session))).await;
+        let result = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{purpose: "normal", request_id: "{}", session_id: "{}", node_did: "{NODE_DID}", requester_did: "{NODE_DID}", agent_id: "test", content: "projection fixture", lifecycle_state: "pending"}}) {{_docID}} }}"#, gents::graphql::escape_graphql_string(request_id), gents::graphql::escape_graphql_string(session))).await;
         ensure_no_errors(&result, "seed projection request").unwrap();
         let doc = gents_protocol::graphql::extract_mutation_doc_id(
             &json!({"data":result.data}),
             "AgentRequest",
         )
         .unwrap();
-        serde_json::from_value(json!({"_docID":doc,"request_id":request_id,"node_did":"did:test:grok-shim","requester_did":"did:test:grok-shim","session_id":session})).unwrap()
+        serde_json::from_value(json!({"_docID":doc,"request_id":request_id,"node_did":NODE_DID,"requester_did":NODE_DID,"session_id":session})).unwrap()
     }
 
     async fn seed_tool_call_row(
@@ -1576,8 +1579,8 @@ mod tests {
                     request_id: "{escaped_request}"
                     {request_doc_field}
                     session_id: "{escaped_session}"
-                    node_did: "did:test:grok-shim"
-                    requester_did: "did:test:grok-shim"
+                    node_did: "{NODE_DID}"
+                    requester_did: "{NODE_DID}"
                     tool_call_id: "{escaped_id}"
                     tool_name: "{escaped_name}"
                     lifecycle_state: "completed"
@@ -1725,8 +1728,13 @@ mod tests {
         );
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one fixture row names its parent session, request and tool call"
+    )]
     async fn seed_child_request_row(
         engine: &ProjectionEngine,
+        parent_session_id: &str,
         parent_request_id: &str,
         parent_request_doc_id: &str,
         parent_tool_call_id: &str,
@@ -1740,22 +1748,12 @@ mod tests {
         let escaped_tool_doc = gents::graphql::escape_graphql_string(parent_tool_call_doc_id);
         let escaped_child = gents::graphql::escape_graphql_string(child_request_id);
         let escaped_created = gents::graphql::escape_graphql_string(created_at);
-        crate::commands::grok_shim::test_fixtures::seed_started_session(
-            &engine.node,
-            "did:test:grok-shim",
-            "s-chron-child",
-            Some("did:test:grok-shim"),
-            "test-child",
-            parent_request_doc_id,
-            None,
-        )
-        .await;
         let mutation = format!(
             r#"mutation {{
                 create_AgentRequest(input: {{purpose: "normal", 
                     request_id: "{escaped_child}"
-                    node_did: "did:test:grok-shim"
-                    requester_did: "did:test:grok-shim"
+                    node_did: "{NODE_DID}"
+                    requester_did: "{NODE_DID}"
                     agent_id: "test-child"
                     session_id: "s-chron-child"
                     caused_by_parent_request_id: "{escaped_parent}"
@@ -1779,6 +1777,26 @@ mod tests {
             "seed child request failed: {:?}",
             response.errors
         );
+        let child_doc_id = gents_protocol::graphql::extract_mutation_doc_id(
+            &json!({"data":response.data}),
+            "AgentRequest",
+        )
+        .unwrap();
+        crate::caused_sessions::fixtures::create_started_session(
+            &engine.node,
+            gents_protocol::session::AgentSession {
+                agent_id: "test-child".into(),
+                ..crate::caused_sessions::fixtures::fixture_session(NODE_DID, "s-chron-child")
+            },
+            gents_protocol::session::SessionReference {
+                node_did: NODE_DID.into(),
+                session_id: parent_session_id.into(),
+                requester_did: Some(NODE_DID.into()),
+            },
+            parent_request_doc_id,
+            &child_doc_id,
+        )
+        .await;
     }
 
     fn update_kind(event: &NovelProjectionEvent) -> String {
@@ -1921,6 +1939,7 @@ mod tests {
         .await;
         seed_child_request_row(
             &engine,
+            session_id,
             request_id,
             &parent_doc_id,
             "call-a",

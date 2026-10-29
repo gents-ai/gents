@@ -33,6 +33,7 @@ path = "tests/cli_live_suite.rs"
 required-features = ["live-e2e"]
 
 [dependencies]
+base64.workspace = true
 rapidhash = { workspace = true }
 ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat"] }
 anyhow.workspace = true
@@ -136,6 +137,7 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Syste
 
 [dev-dependencies]
 acp.workspace = true
+crypto.workspace = true
 futures = "0.3"
 gents-lean-contract.workspace = true
 tokio-tungstenite = "0.26.2"

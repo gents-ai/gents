@@ -1046,7 +1046,7 @@ pub(in crate::commands::codex_shim) mod tests {
             node: node.clone(),
             background_execution_registry: gents::BackgroundExecutionRegistry::default(),
             graphql: gents::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1/graphql"),
-            node_did: Arc::from("did:test:notification"),
+            node_did: Arc::from(crate::caused_sessions::fixtures::FIXTURE_DID),
             agent_id: Arc::from("notification"),
             id_counter: Arc::new(AtomicU64::new(1)),
             timeout: Duration::from_secs(5),

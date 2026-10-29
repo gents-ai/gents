@@ -10,6 +10,8 @@ type AgentSession @branchable @index(fields: ["node_did", "session_id"], unique:
     created_at: String @index @immutable
     closed_at: String @index
     title: JSON
+    started_by_node_did: String @index @immutable
+    started_by_session_id: String @index @immutable
     provenance: JSON
     observation: JSON
     tags: [String!]

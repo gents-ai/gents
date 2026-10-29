@@ -2669,9 +2669,8 @@ mod tests {
 
     async fn test_node() -> (tempfile::TempDir, Arc<EmbeddedNode>, String) {
         let tempdir = tempfile::tempdir().expect("tempdir");
-        let identity = gents::KeyIdentity::load_or_create(tempdir.path().join("agent.key"), None)
-            .expect("test signing identity");
-        let node_did = gents::NodeIdentity::did(&identity).to_string();
+        // Started sessions in these fixtures carry receipts the fixture key signs.
+        let node_did = crate::caused_sessions::fixtures::FIXTURE_DID.to_owned();
         let agent_id = gents::default_agent_id_for_node(&node_did);
         let node = Arc::new(
             crate::shared::test_support::node_builder()
@@ -2985,16 +2984,6 @@ mod tests {
         let child = escape_graphql_string(child_request_id);
         let state = escape_graphql_string(lifecycle_state);
         let now = chrono::Utc::now().to_rfc3339();
-        crate::commands::grok_shim::test_fixtures::seed_started_session(
-            node,
-            parent.node_did.as_deref().unwrap(),
-            "session-1-child",
-            parent.node_did.as_deref(),
-            parent.agent_id.as_deref().expect("fixture agent"),
-            parent.doc_id.as_deref().unwrap(),
-            None,
-        )
-        .await;
         let response = node.execute(&format!(r#"mutation {{create_AgentRequest(input: {{
             request_id: "{child}", purpose: "normal", node_did: "{owner}", requester_did: {requester}, agent_id: "{agent}", session_id: "session-1-child",
             caused_by_parent_request_id: "{logical_parent}", caused_by_parent_request_doc_id: "{physical_parent}", caused_by_parent_tool_call_id: "call-1", caused_by_parent_tool_call_doc_id: "{tool}", content: "child work", lifecycle_state: "{state}", created_at: "{now}"
@@ -3005,6 +2994,24 @@ mod tests {
             "AgentRequest",
         )
         .unwrap();
+        crate::caused_sessions::fixtures::create_started_session(
+            node,
+            gents_protocol::session::AgentSession {
+                agent_id: parent.agent_id.clone().expect("fixture agent"),
+                ..crate::caused_sessions::fixtures::fixture_session(
+                    parent.node_did.as_deref().unwrap(),
+                    "session-1-child",
+                )
+            },
+            gents_protocol::session::SessionReference {
+                node_did: parent.node_did.clone().unwrap(),
+                session_id: parent.session_id.clone().unwrap(),
+                requester_did: parent.requester_did.clone(),
+            },
+            parent.doc_id.as_deref().unwrap(),
+            &doc,
+        )
+        .await;
         serde_json::from_value(json!({"_docID":doc,"request_id":child_request_id,"node_did":parent.node_did,"requester_did":parent.node_did,"agent_id":parent.agent_id,"session_id":"session-1-child", "caused_by_parent_request_id":parent.request_id,"caused_by_parent_request_doc_id":parent.doc_id,"caused_by_parent_tool_call_id":"call-1","caused_by_parent_tool_call_doc_id":tool_doc_id})).unwrap()
     }
 
@@ -3709,14 +3716,19 @@ mod tests {
         }
         // The session records its opener: `(created_at, _docID)` alone would
         // tie these two requests on an unfixed document id.
-        crate::commands::grok_shim::test_fixtures::seed_started_session(
+        crate::caused_sessions::fixtures::create_started_session(
             &node,
-            &node_did,
-            "opened",
-            Some(&node_did),
-            &agent_id,
+            gents_protocol::session::AgentSession {
+                agent_id: agent_id.clone(),
+                ..crate::caused_sessions::fixtures::fixture_session(&node_did, "opened")
+            },
+            gents_protocol::session::SessionReference {
+                node_did: node_did.clone(),
+                session_id: "session-1".into(),
+                requester_did: Some(node_did.clone()),
+            },
             &parent_doc,
-            opening_doc.as_deref(),
+            opening_doc.as_deref().unwrap(),
         )
         .await;
         let started = crate::caused_sessions::load_direct_caused_sessions(&node, &parent)

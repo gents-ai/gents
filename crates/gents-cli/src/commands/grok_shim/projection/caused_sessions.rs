@@ -760,7 +760,7 @@ mod tests {
         gents::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .unwrap();
-        let did = "did:test:node";
+        let did = crate::caused_sessions::fixtures::FIXTURE_DID;
         let doc_id =
             crate::caused_sessions::fixtures::seed_one_call_two_sessions(&node, did, "parent")
                 .await;
@@ -779,7 +779,7 @@ mod tests {
         node.shutdown().await;
     }
 
-    const DID: &str = "did:test:node";
+    const DID: &str = crate::caused_sessions::fixtures::FIXTURE_DID;
 
     async fn embedded_node(dir: &tempfile::TempDir) -> Arc<EmbeddedNode> {
         let node = Arc::new(
@@ -837,7 +837,7 @@ mod tests {
             ),
         )
         .await;
-        create(
+        let opening = create(
             node,
             "AgentRequest",
             &format!(
@@ -845,12 +845,21 @@ mod tests {
             ),
         )
         .await;
-        create(
+        let mut child = crate::caused_sessions::fixtures::fixture_session(DID, "child");
+        child.title = Some(gents_protocol::session::SessionTitle {
+            text: "Audit the repo".into(),
+            source: gents_protocol::session::SessionTitleSource::Task,
+        });
+        crate::caused_sessions::fixtures::create_started_session(
             node,
-            "AgentSession",
-            &format!(
-                r#"session_id: "child", node_did: "{DID}", requester_did: "{DID}", agent_id: "worker", created_at: "2026-09-26T00:00:00Z", title: {{ text: "Audit the repo", source: "task" }}, provenance: {{ parent_request_doc_id: "{parent}" }}"#
-            ),
+            child,
+            gents_protocol::session::SessionReference {
+                node_did: DID.into(),
+                session_id: "parent".into(),
+                requester_did: Some(DID.into()),
+            },
+            &parent,
+            &opening,
         )
         .await;
         request(json!({
@@ -1041,6 +1050,7 @@ mod tests {
                 let mut expected: Vec<(String, Option<String>)> = queries
                     .iter()
                     .filter(|query| query["cause_request_doc_id"] == cause)
+                    .filter(|query| query["listed_start"] == true)
                     .filter_map(|query| {
                         let opening = query["expected_opening_doc_id"].as_str()?;
                         let session = query["session_id"].as_str().unwrap();

@@ -1250,6 +1250,11 @@ fn generated_plugin_job_lineage_cases_decode_strictly() {
                     case.name
                 );
             }
+            assert!(
+                !query.listed_start || query.expected_opening_doc_id.is_some(),
+                "{}: a listed start has an opening request",
+                case.name
+            );
         }
     }
 }
