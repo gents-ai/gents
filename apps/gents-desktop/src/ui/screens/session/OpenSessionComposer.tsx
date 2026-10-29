@@ -29,6 +29,8 @@ import {
   presentedComposerSendStatus,
 } from "./composerParts";
 import { ComposerEditContext, lastEditable, useComposerEditing } from "./composerEdit";
+import { sentMessages, useComposerHistory } from "./composerHistory";
+import { selectedIn } from "@/hooks/useSelectedSession";
 import { GoalChip, goalCommand, goalIsEditable, useGoalMode } from "./goalMode";
 import { useComposerSend } from "./useComposerSend";
 import { useFollowUp } from "@/preferences";
@@ -73,6 +75,7 @@ export function OpenSessionComposer({
   );
   const agent = agentOf(deployment, agentId);
   const sessionId = stores.selection.use.sessionId();
+  const nodeDid = stores.selection.use.nodeDid();
   const goalMode = useGoalMode({
     draft,
     setDraft,
@@ -91,6 +94,16 @@ export function OpenSessionComposer({
         ? goalMode.edit(goal.objective ?? "")
         : goalMode.create(),
   );
+  const history = useComposerHistory({
+    field: slash.field,
+    sent: () =>
+      sentMessages(
+        selectedIn(stores.session.getState(), {
+          selectedSessionId: sessionId,
+          selectedNodeDid: nodeDid,
+        })?.timelineItems ?? [],
+      ),
+  });
   const editSlash = useSlashMenu(
     deployment?.skills ?? [],
     deployment?.contexts.find((c) => c.context_id === agent?.contextId),
@@ -112,6 +125,8 @@ export function OpenSessionComposer({
   const covered = blocked && loadingStatus !== null;
   const draftKey = useView((view) => view.draftKey);
   const [field, setField] = useDraftField(drafts, draftKey);
+  const leaveHistory = history.leave;
+  useEffect(() => leaveHistory(), [draftKey, !!editing, leaveHistory]);
   const focusRequested = useStore(drafts, (state) => state.focus === draftKey);
   useEffect(() => {
     if (!focusRequested || blocked) return;
@@ -170,7 +185,8 @@ export function OpenSessionComposer({
     }
     goalMode.onKeyDown(event);
     if (event.defaultPrevented || goalMode.mode) return;
-    if (event.key === "ArrowUp" && draft === "" && !attachments.hasAttachments) {
+    const empty = draft === "" && !attachments.hasAttachments;
+    if (event.key === "ArrowUp" && empty) {
       const last = lastEditable(queue);
       if (last) {
         event.preventDefault();
@@ -178,6 +194,7 @@ export function OpenSessionComposer({
         return;
       }
     }
+    if (history.onKeyDown(event, empty)) return;
     if (
       !event.defaultPrevented &&
       turnRunning &&
@@ -348,6 +365,15 @@ export function OpenSessionComposer({
                 />
               ) : (
                 <>
+                  {history.position && (
+                    <p
+                      role="status"
+                      data-testid="composer-history"
+                      className="px-3 pt-2 text-xs text-muted-foreground"
+                    >
+                      History {history.position.index}/{history.position.total}
+                    </p>
+                  )}
                   <ReplyingTo />
                   {attachments.over && (
                     <p
@@ -366,6 +392,7 @@ export function OpenSessionComposer({
               )
             }
             onKeyDown={onKeyDown}
+            onPartsChange={editing ? undefined : history.onPartsChange}
             fieldRef={textarea}
             commands={editing ? editSlash.names : slash.names}
             composerRef={editing ? editSlash.field : slash.field}
