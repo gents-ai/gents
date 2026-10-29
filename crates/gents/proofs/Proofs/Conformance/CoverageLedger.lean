@@ -123,6 +123,11 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.agentFacing, Surface.runtimeInternal]
     , deferred := []
     }
+  , { feature := "account-rotation"
+    , required := [Surface.runtimeInternal]
+    , deferred := [(Surface.operatorUi,
+        "The rotation pool and each account's limit state surface with the account settings in the CLI and desktop.")]
+    }
   , { feature := "tool-call"
     , required := [Surface.agentFacing, Surface.runtimeInternal]
     , deferred := []
@@ -553,6 +558,21 @@ def caseCoverage : List CoverageEntry :=
       "RequestExecutionObservedCases"
       "lifecycle::execution_lease::tests::generated_recovery_invalidates_real_admitted_renewal_transaction")
       "request-execution-lease" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "account_rotation_cases"
+      "AccountRotationSelectCases"
+      "The Claude account rotation owner binds these when it selects an account for each model call from observed limit state.")
+      "account-rotation" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "account_rotation_cases"
+      "AccountRotationAttemptCases"
+      "The Claude transport binds these when a provider rejection moves one attempt to the next eligible account.")
+      "account-rotation" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "account_rotation_cases"
+      "AccountRotationObserveCases"
+      "The Claude rate-limit header adapter binds these when it folds a response's unified limits into account state.")
+      "account-rotation" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "request_execution_lease_cases"
       "RequestExecutionLeaseCases"
@@ -2430,6 +2450,16 @@ def caseCoverage : List CoverageEntry :=
       "prompt_assembly_cases"
       "PromptAssemblyClaudeBodyCases"
       "conformance::prompt_assembly::generated_claude_body_cases_drive_the_body_builder")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "prompt_assembly_cases"
+      "PromptAssemblyClaudeAttributionCases"
+      "The gents-claude attribution builder binds these: it renders the header from the modeled fields and the native fingerprint.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "prompt_assembly_cases"
+      "PromptAssemblyClaudeCacheCases"
+      "The gents-claude body serializer binds these: user content normalization, the single message breakpoint and the cache TTL.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "prompt_assembly_cases"

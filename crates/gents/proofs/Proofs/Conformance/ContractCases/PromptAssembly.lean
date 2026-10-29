@@ -763,10 +763,12 @@ def promptAssemblyClaudeMapCases : List PromptAssemblyClaudeMapCase :=
 
 structure PromptAssemblyClaudeBodyCase where
   name : String
+  attribution : String
   preamble : Option String
   rows : List String
   tools : List String
   system : List String
+  systemMarked : List Bool
   toolsPresent : Bool
   supportedEfforts : Option (List String) := none
   effort : Option String := none
@@ -777,15 +779,24 @@ private def msgTag : PromptAssembly.ClaudeMap.Msg → String
   | .system t => "system:" ++ t
   | .other tag => "other:" ++ tag
 
+def claudeCaseAttribution : String :=
+  PromptAssembly.ClaudeAttribution.header
+    { version := "2.1.311", fingerprint := "abc", entrypoint := "cli",
+      provider := .firstParty, firstPartyBaseUrl := true }
+
 private def claudeBodyCase (name : String) (preamble : Option String)
     (rows : List PromptAssembly.ClaudeMap.Msg) (tools : List String) :
     PromptAssemblyClaudeBodyCase :=
   let (sys, _) := PromptAssembly.ClaudeMap.splitSystem rows
+  let blocks := PromptAssembly.ClaudeMap.systemBlocks
+    (claudeCaseAttribution :: PromptAssembly.ClaudeMap.cliIdentity :: (preamble.toList ++ sys))
   { name := name
+  , attribution := claudeCaseAttribution
   , preamble := preamble
   , rows := rows.map msgTag
   , tools := tools
-  , system := PromptAssembly.ClaudeMap.systemBlocks preamble sys
+  , system := blocks.map (·.text)
+  , systemMarked := blocks.map (·.marked)
   , toolsPresent := (PromptAssembly.ClaudeMap.toolsField tools).isSome }
 
 def promptAssemblyClaudeBodyCases : List PromptAssemblyClaudeBodyCase :=
@@ -797,6 +808,8 @@ def promptAssemblyClaudeBodyCases : List PromptAssemblyClaudeBodyCase :=
       [.system "workspace context", .other "user"] []
   , claudeBodyCase "empty-tools-omitted" (some "P") [.other "user"] []
   , claudeBodyCase "two-tools-present" none [.other "user"] ["echo", "list_files"]
+  , claudeBodyCase "empty-preamble-and-rows-dropped" (some "")
+      [.system "", .other "user", .system "S1"] []
   ]
   ++ ([none, some "low", some "medium", some "high", some "xhigh", some "max", some "ultra"].map fun effort =>
     { (claudeBodyCase ("effort-" ++ effort.getD "absent") none [.other "user"] []) with
@@ -807,6 +820,101 @@ def promptAssemblyClaudeBodyCases : List PromptAssemblyClaudeBodyCase :=
   ++ [{ (claudeBodyCase "effort-unknown-metadata" none [.other "user"] []) with
         effort := some "high"
         selectedEffort := PromptAssembly.ClaudeMap.selectedEffort none (some "high") }]
+
+structure PromptAssemblyClaudeAttributionCase where
+  name : String
+  fields : PromptAssembly.ClaudeAttribution.Fields
+  header : String
+  deriving Repr
+
+private def attributionCase (name : String) (fields : PromptAssembly.ClaudeAttribution.Fields) :
+    PromptAssemblyClaudeAttributionCase :=
+  { name, fields, header := PromptAssembly.ClaudeAttribution.header fields }
+
+private def firstPartyFields : PromptAssembly.ClaudeAttribution.Fields :=
+  { version := "2.1.311", fingerprint := "7f3", entrypoint := "cli",
+    provider := .firstParty, firstPartyBaseUrl := true }
+
+def promptAssemblyClaudeAttributionCases : List PromptAssemblyClaudeAttributionCase :=
+  [ attributionCase "first_party_minimal" firstPartyFields
+  , attributionCase "first_party_every_field"
+      { firstPartyFields with
+        workload := some "cron", subagent := true,
+        previousRequestId := some "req_011CVz9-Ab_c",
+        promptId := some "0f8e9a3c-1b2d-4c5e-8f90-a1b2c3d4e5f6",
+        turnOrigin := some "user", promptIndex := some 3, turnIndex := some 2,
+        project := some ("claude_proj_01ABCDEFGHJKLMNPQRSTUVWX", "user") }
+  , attributionCase "first_party_invalid_fields_dropped"
+      { firstPartyFields with
+        previousRequestId := some "request_1", promptId := some "not-a-uuid",
+        turnOrigin := some "User", promptIndex := some 0, turnIndex := some 0,
+        project := some ("claude_proj_01ABCDEFGHJKLMNPQRSTUVWX", "team") }
+  , attributionCase "uppercase_prompt_id_accepted"
+      { firstPartyFields with promptId := some "0F8E9A3C-1B2D-4C5E-8F90-A1B2C3D4E5F6" }
+  , attributionCase "request_id_over_36_chars_dropped"
+      { firstPartyFields with previousRequestId := some "req_0123456789012345678901234567890123456" }
+  , attributionCase "index_bounds"
+      { firstPartyFields with promptIndex := some 10000000, turnIndex := some 10000001 }
+  , attributionCase "empty_workload_omitted" { firstPartyFields with workload := some "" }
+  , attributionCase "custom_base_url_keeps_build_fields_only"
+      { firstPartyFields with
+        firstPartyBaseUrl := false, previousRequestId := some "req_abc",
+        gateway := some "env" }
+  , attributionCase "vertex_keeps_cch"
+      { firstPartyFields with provider := .vertex, previousRequestId := some "req_abc" }
+  , attributionCase "bedrock_subagent"
+      { firstPartyFields with provider := .bedrock, entrypoint := "sdk-cli", subagent := true }
+  , attributionCase "gateway_vouched" { firstPartyFields with provider := .gateway, gateway := some "1" }
+  ]
+
+structure PromptAssemblyClaudeCacheCase where
+  name : String
+  caching : Bool
+  skipWrite : Bool
+  subscriber : Bool
+  mainThread : Bool
+  usingOverage : Bool
+  messages : List PromptAssembly.ClaudeCache.Message
+  placed : List PromptAssembly.ClaudeCache.Placed
+  ttl : PromptAssembly.ClaudeCache.Ttl
+  deriving Repr
+
+private def cacheCase (name : String) (messages : List PromptAssembly.ClaudeCache.Message)
+    (caching : Bool := true) (skipWrite : Bool := false) (subscriber : Bool := true)
+    (mainThread : Bool := true) (usingOverage : Bool := false) : PromptAssemblyClaudeCacheCase :=
+  { name, caching, skipWrite, subscriber, mainThread, usingOverage, messages,
+    placed := PromptAssembly.ClaudeCache.place caching skipWrite messages,
+    ttl := PromptAssembly.ClaudeCache.ttl subscriber mainThread usingOverage }
+
+open PromptAssembly.ClaudeCache in
+def promptAssemblyClaudeCacheCases : List PromptAssemblyClaudeCacheCase :=
+  [ cacheCase "user_text_tail_marked" [⟨.user, .str "hi"⟩]
+  , cacheCase "user_blocks_last_marked"
+      [⟨.user, .blocks [.text "a", .other "tool_result"]⟩]
+  , cacheCase "blank_user_text_dropped_everywhere"
+      [⟨.user, .blocks [.text " ", .text "a"]⟩, ⟨.assistant, .str "ok"⟩,
+       ⟨.user, .blocks [.text "\n\t"]⟩]
+  , cacheCase "assistant_thinking_tail_skipped"
+      [⟨.user, .str "q"⟩, ⟨.assistant, .blocks [.text "a", .thinking]⟩]
+  , cacheCase "assistant_tool_use_tail_marked"
+      [⟨.user, .str "q"⟩, ⟨.assistant, .blocks [.thinking, .other "tool_use"]⟩]
+  , cacheCase "assistant_empty_text_tail_skipped"
+      [⟨.user, .str "q"⟩, ⟨.assistant, .blocks [.text ""]⟩]
+  , cacheCase "assistant_whitespace_text_tail_marked"
+      [⟨.user, .str "q"⟩, ⟨.assistant, .blocks [.text " "]⟩]
+  , cacheCase "assistant_fallback_tail_skipped"
+      [⟨.user, .str "q"⟩, ⟨.assistant, .blocks [.text "a", .fallback]⟩]
+  , cacheCase "skip_write_marks_previous"
+      [⟨.user, .str "q"⟩, ⟨.assistant, .blocks [.other "tool_use"]⟩,
+       ⟨.user, .blocks [.other "tool_result"]⟩] (skipWrite := true)
+  , cacheCase "caching_off_marks_nothing" [⟨.user, .str "q"⟩] (caching := false)
+  , cacheCase "empty_user_blocks_unmarked" [⟨.user, .blocks []⟩]
+  , cacheCase "unicode_space_is_blank"
+      [⟨.user, .blocks [.text "\u00A0\u2028", .other "image"]⟩]
+  , cacheCase "subagent_keeps_five_minutes" [⟨.user, .str "q"⟩] (mainThread := false)
+  , cacheCase "overage_keeps_five_minutes" [⟨.user, .str "q"⟩] (usingOverage := true)
+  , cacheCase "api_key_keeps_five_minutes" [⟨.user, .str "q"⟩] (subscriber := false)
+  ]
 
 structure PromptAssemblyClaudeStreamCase where
   name : String

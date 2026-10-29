@@ -9,6 +9,8 @@ import Proofs.PromptAssembly.Budget
 import Proofs.PromptAssembly.AggregateBudget
 import Proofs.PromptAssembly.CurrentInput
 import Proofs.PromptAssembly.ClaudeMap
+import Proofs.PromptAssembly.ClaudeAttribution
+import Proofs.PromptAssembly.ClaudeCache
 import Proofs.PromptAssembly.ReplayFrontier
 import Proofs.PromptAssembly.ServiceTier
 import Proofs.PromptAssembly.CapturedContext

@@ -14,13 +14,14 @@ def baseState
     (transportUsed : Nat := 0)
     (resampleUsed : Nat := 0)
     (repairUsed : Bool := false)
+    (accountUsed : Nat := 0)
     (lastParseError : Option String := none)
     (now : Time := 10)
     (deadline : Option Time := none)
     (attempt : Nat := 0)
     (usageCharged : Nat := 0) : State :=
-  { request, scope, turn, phase, budget, transportUsed, resampleUsed, repairUsed, lastParseError,
-    now, deadline, attempt, usageCharged }
+  { request, scope, turn, phase, budget, transportUsed, resampleUsed, repairUsed, accountUsed,
+    lastParseError, now, deadline, attempt, usageCharged }
 
 structure RetryCase where
   name : String
@@ -106,14 +107,26 @@ def retryCases : List RetryCase :=
       { baseState with
           phase := .retracted .reasoningRejected "invalid thinking signature" 12
           repairUsed := true } .schedule
+  , failureOriginWitness "provider_account_limit_requires_retraction"
+      baseState .providerAccountLimited "account limit reached" 12
+  , witness "account_limit_reissues_on_next_account_without_backoff"
+      { baseState with
+          phase := .retracted .accountLimited "account limit reached" 12
+          budget := { defaultBudget with accountHops := 2 } } .schedule
+  , witness "account_hops_exhausted_is_terminal_for_policy"
+      { baseState with
+          phase := .retracted .accountLimited "account limit reached" 12
+          budget := { defaultBudget with accountHops := 1 }
+          accountUsed := 1 } .schedule
   ]
 
-theorem retryCases_count : retryCases.length = 24 := by decide
+theorem retryCases_count : retryCases.length = 27 := by decide
 
 theorem retry_cases_pin_publication_boundary :
     retryCases.map (fun c => c.post.isSome) =
       [true, false, false, true, true, true, true, true, false, true, false, true, true,
-       true, true, true, true, false, true, true, true, true, true, true] := by
+       true, true, true, true, false, true, true, true, true, true, true, true, true,
+       true] := by
   native_decide
 
 theorem retry_cases_pin_exhaustion_and_single_repair :
@@ -140,7 +153,7 @@ theorem provider_stream_malformed_case_still_enters_retraction :
   native_decide
 
 theorem reasoning_rejection_cases_repair_once :
-    (retryCases.drop 21).map (fun c => c.post.map (·.phase)) =
+    ((retryCases.drop 21).take 3).map (fun c => c.post.map (·.phase)) =
       [some (.retractRequired .reasoningRejected "invalid thinking signature" 12),
        some .repairing, some .exhausted] := by
   native_decide
@@ -151,5 +164,26 @@ theorem reasoning_rejection_never_backs_off (s : State) (error : String) (wake :
     after.phase = .repairing ∨ after.phase = .exhausted := by
   simp only [step?, hphase] at h
   split at h <;> cases h <;> simp
+
+theorem account_limit_cases_rotate_without_budget :
+    (retryCases.drop 24).map (fun c => c.post.map (fun state =>
+      (state.phase, state.transportUsed, state.accountUsed, state.attempt))) =
+      [some (.retractRequired .accountLimited "account limit reached" 12, 0, 0, 0),
+       some (.issuing, 0, 1, 1), some (.exhausted, 0, 1, 0)] := by
+  native_decide
+
+/-- A rotation reissues at once and spends neither transport nor resample
+budget. -/
+theorem account_limit_never_backs_off (s : State) (error : String) (wake : Time)
+    (after : State) (hphase : s.phase = .retracted .accountLimited error wake)
+    (h : step? s .schedule = some after) :
+    (after.phase = .issuing ∧ after.accountUsed = s.accountUsed + 1 ∧
+        s.accountUsed < s.budget.accountHops ∧ after.transportUsed = s.transportUsed ∧
+        after.resampleUsed = s.resampleUsed) ∨
+      after.phase = .exhausted := by
+  simp only [step?, hphase] at h
+  split at h <;> cases h
+  · exact Or.inl ⟨rfl, rfl, by assumption, rfl, rfl⟩
+  · exact Or.inr rfl
 
 end CompletionRetry

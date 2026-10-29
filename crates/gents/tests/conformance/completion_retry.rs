@@ -53,7 +53,7 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
     let cases = lean_completion_retry_cases();
     assert_eq!(
         cases.len(),
-        24,
+        27,
         "Lean should emit the finite CompletionRetry witness set"
     );
     assert_failure_class_bridge_matches_vocabulary();
@@ -89,6 +89,9 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
             "provider_reasoning_rejection_requires_retraction",
             "reasoning_rejection_moves_directly_to_repair",
             "reasoning_rejection_after_repair_is_exhausted",
+            "provider_account_limit_requires_retraction",
+            "account_limit_reissues_on_next_account_without_backoff",
+            "account_hops_exhausted_is_terminal_for_policy",
         ]),
         "CompletionRetry witness names drifted"
     );

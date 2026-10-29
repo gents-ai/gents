@@ -81,6 +81,7 @@ import Proofs.Conformance.Contracts.Json.ReductionEngine
 import Proofs.Conformance.Contracts.Json.CompactionProjectionJoin
 import Proofs.Conformance.Contracts.Json.CompactionCanonicalProjection
 import Proofs.CompletionRetry.Contracts
+import Proofs.AccountRotation.Contracts
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.EventGroups
 import Proofs.Conformance.ClientShell.Contracts
@@ -148,6 +149,10 @@ def snapshotJsonTail : String :=
       ++ promptAssemblyClaudeMapCasesJson ++ ","
     ++ "\"prompt_assembly_claude_body_cases\":"
       ++ promptAssemblyClaudeBodyCasesJson ++ ","
+    ++ "\"prompt_assembly_claude_attribution_cases\":"
+      ++ promptAssemblyClaudeAttributionCasesJson ++ ","
+    ++ "\"prompt_assembly_claude_cache_cases\":"
+      ++ promptAssemblyClaudeCacheCasesJson ++ ","
     ++ "\"claude_output_config_cases\":" ++ Conformance.CompactionCheckpoint.outputCasesJson.compress ++ ","
     ++ "\"checkpoint_fallback_cases\":" ++ Conformance.CompactionCheckpoint.checkpointCasesJson.compress ++ ","
     ++ "\"checkpoint_list_fields\":" ++ Conformance.CompactionCheckpoint.listFieldsJson.compress ++ ","
@@ -580,6 +585,12 @@ def snapshotJson : String :=
       ++ jsonArray (ToolExecution.retryCases.map toolRetryCaseJson) ++ ","
     ++ "\"completion_retry_cases\":"
       ++ CompletionRetry.Contracts.casesJson ++ ","
+    ++ "\"account_rotation_select_cases\":"
+      ++ AccountRotation.Contracts.selectCasesJson ++ ","
+    ++ "\"account_rotation_attempt_cases\":"
+      ++ AccountRotation.Contracts.attemptCasesJson ++ ","
+    ++ "\"account_rotation_observe_cases\":"
+      ++ AccountRotation.Contracts.observeCasesJson ++ ","
     ++ "\"boundaries\":"
       ++ boundariesJson ++ ","
     ++ "\"deviations\":"

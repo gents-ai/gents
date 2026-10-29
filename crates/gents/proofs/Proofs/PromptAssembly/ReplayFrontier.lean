@@ -12,7 +12,10 @@ ordinary items before it.
 External premise (Anthropic preserved thinking, verified 2026-09-25): a thinking
 block's signature binds the ordinary prefix that produced it (system, tool set
 and every earlier message, excluding thinking) plus a chain to the previous
-thinking block. A replay is accepted iff the prefix before each replayed block
+thinking block. The `x-anthropic-billing-header` attribution block is outside
+that prefix: Claude Code 2.1.311 changes it on every request while replaying
+thinking (`ClaudeAttribution`), so the native flattening drops it with the
+other non-prefix fields. A replay is accepted iff the prefix before each replayed block
 equals its producing prefix with a leading run of reasoning removed. Responses
 encrypted reasoning has no such binding; the same rule is applied to it
 conservatively, so one owner decides replay for every wire.

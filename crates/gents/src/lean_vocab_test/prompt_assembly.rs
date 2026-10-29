@@ -149,14 +149,83 @@ pub(crate) struct LeanPromptAssemblyClaudeMapCase {
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanPromptAssemblyClaudeBodyCase {
     pub(crate) name: String,
+    pub(crate) attribution: String,
     pub(crate) preamble: Option<String>,
     pub(crate) rows: Vec<String>,
     pub(crate) tools: Vec<String>,
     pub(crate) system: Vec<String>,
+    pub(crate) system_marked: Vec<bool>,
     pub(crate) tools_present: bool,
     pub(crate) supported_efforts: Option<Vec<String>>,
     pub(crate) effort: Option<String>,
     pub(crate) selected_effort: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeAttributionCase {
+    pub(crate) name: String,
+    pub(crate) version: String,
+    pub(crate) fingerprint: String,
+    pub(crate) entrypoint: String,
+    pub(crate) provider: String,
+    pub(crate) first_party_base_url: bool,
+    pub(crate) workload: Option<String>,
+    pub(crate) subagent: bool,
+    pub(crate) previous_request_id: Option<String>,
+    pub(crate) prompt_id: Option<String>,
+    pub(crate) turn_origin: Option<String>,
+    pub(crate) prompt_index: Option<u64>,
+    pub(crate) turn_index: Option<u64>,
+    pub(crate) gateway: Option<String>,
+    pub(crate) project_id: Option<String>,
+    pub(crate) project_source: Option<String>,
+    pub(crate) header: String,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanClaudeCacheBlock {
+    #[serde(rename = "type")]
+    pub(crate) kind: String,
+    pub(crate) text: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanClaudeCacheContent {
+    pub(crate) text: Option<String>,
+    pub(crate) blocks: Option<Vec<LeanClaudeCacheBlock>>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanClaudeCacheMessage {
+    pub(crate) role: String,
+    pub(crate) content: LeanClaudeCacheContent,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanClaudeCachePlaced {
+    pub(crate) role: String,
+    pub(crate) text: Option<String>,
+    pub(crate) blocks: Option<Vec<LeanClaudeCacheBlock>>,
+    pub(crate) marker: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeCacheCase {
+    pub(crate) name: String,
+    pub(crate) caching: bool,
+    pub(crate) skip_write: bool,
+    pub(crate) subscriber: bool,
+    pub(crate) main_thread: bool,
+    pub(crate) using_overage: bool,
+    pub(crate) messages: Vec<LeanClaudeCacheMessage>,
+    pub(crate) placed: Vec<LeanClaudeCachePlaced>,
+    pub(crate) ttl: String,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]

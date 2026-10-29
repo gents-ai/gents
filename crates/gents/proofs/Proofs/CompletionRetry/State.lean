@@ -10,6 +10,10 @@ inductive FailureClass
   encrypted content it cannot decrypt. Resending the identical body fails
   identically, so this class never resamples. -/
   | reasoningRejected
+  /-- The provider refused this account's quota while the account rotation
+  (`AccountRotation.attempt`) holds another eligible account. The next attempt
+  goes to that account at once: no backoff, no transport budget. -/
+  | accountLimited
   | permanent
   deriving DecidableEq, Repr
 
@@ -24,6 +28,7 @@ inductive FailureOrigin
   local request. This origin applies whether or not a preview item arrived. -/
   | providerStreamMalformed
   | providerReasoningRejected
+  | providerAccountLimited
   deriving DecidableEq, Repr
 
 def FailureOrigin.class : FailureOrigin → FailureClass
@@ -31,11 +36,14 @@ def FailureOrigin.class : FailureOrigin → FailureClass
   | .retryableTransport => .transport
   | .providerStreamMalformed => .transport
   | .providerReasoningRejected => .reasoningRejected
+  | .providerAccountLimited => .accountLimited
 
 structure Budget where
   transportRetries : Nat
   resampleRetries : Nat
   allowRepair : Bool
+  /-- Other eligible accounts when the attempt was issued; one rotation each. -/
+  accountHops : Nat := 0
   deriving DecidableEq, Repr
 
 /-- Retry policy begins before publication. Accepted phases are absorbing
@@ -62,6 +70,7 @@ structure State where
   transportUsed : Nat
   resampleUsed : Nat
   repairUsed : Bool
+  accountUsed : Nat := 0
   lastParseError : Option String
   now : Time
   deadline : Option Time

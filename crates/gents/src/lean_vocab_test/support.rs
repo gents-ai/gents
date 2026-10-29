@@ -365,6 +365,9 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) tool_preflight_cases: Vec<LeanToolPreflightCase>,
     pub(crate) tool_retry_cases: Vec<LeanToolRetryCase>,
     pub(crate) completion_retry_cases: Vec<LeanCompletionRetryCase>,
+    pub(crate) account_rotation_select_cases: Vec<LeanAccountRotationSelectCase>,
+    pub(crate) account_rotation_attempt_cases: Vec<LeanAccountRotationAttemptCase>,
+    pub(crate) account_rotation_observe_cases: Vec<LeanAccountRotationObserveCase>,
     pub(crate) mcp_health_cases: Vec<LeanMcpHealthCase>,
     pub(crate) backend_health_cases: Vec<LeanBackendHealthCase>,
     pub(crate) backend_probe_schedule_cases: Vec<LeanBackendProbeScheduleCase>,
@@ -452,6 +455,9 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) prompt_assembly_retention_cases: Vec<LeanPromptAssemblyRetentionCase>,
     pub(crate) prompt_assembly_claude_map_cases: Vec<LeanPromptAssemblyClaudeMapCase>,
     pub(crate) prompt_assembly_claude_body_cases: Vec<LeanPromptAssemblyClaudeBodyCase>,
+    pub(crate) prompt_assembly_claude_attribution_cases:
+        Vec<LeanPromptAssemblyClaudeAttributionCase>,
+    pub(crate) prompt_assembly_claude_cache_cases: Vec<LeanPromptAssemblyClaudeCacheCase>,
     pub(crate) prompt_assembly_claude_stream_cases: Vec<LeanPromptAssemblyClaudeStreamCase>,
     pub(crate) prompt_assembly_claude_thinking_stream_cases:
         Vec<LeanPromptAssemblyClaudeThinkingStreamCase>,
@@ -2364,6 +2370,8 @@ pub(crate) struct LeanLifecycleTransitionCase {
     pub(crate) boundary: Option<String>,
 }
 
+#[path = "account_rotation.rs"]
+mod account_rotation;
 #[path = "background_transcript.rs"]
 mod background_transcript;
 #[path = "canonical_execution.rs"]
@@ -2419,6 +2427,7 @@ mod tool_policy;
 #[path = "triggers_runtime_apply.rs"]
 mod triggers_runtime_apply;
 
+pub(crate) use account_rotation::*;
 pub(crate) use background_transcript::*;
 pub(crate) use canonical_execution::*;
 pub(crate) use canonical_output::*;
@@ -3450,6 +3459,16 @@ pub(crate) fn lean_prompt_assembly_claude_map_cases() -> &'static [LeanPromptAss
 pub(crate) fn lean_prompt_assembly_claude_body_cases() -> &'static [LeanPromptAssemblyClaudeBodyCase]
 {
     &lean_contract_snapshot().prompt_assembly_claude_body_cases
+}
+
+pub(crate) fn lean_prompt_assembly_claude_attribution_cases(
+) -> &'static [LeanPromptAssemblyClaudeAttributionCase] {
+    &lean_contract_snapshot().prompt_assembly_claude_attribution_cases
+}
+
+pub(crate) fn lean_prompt_assembly_claude_cache_cases(
+) -> &'static [LeanPromptAssemblyClaudeCacheCase] {
+    &lean_contract_snapshot().prompt_assembly_claude_cache_cases
 }
 
 pub(crate) fn lean_prompt_assembly_claude_stream_cases(
