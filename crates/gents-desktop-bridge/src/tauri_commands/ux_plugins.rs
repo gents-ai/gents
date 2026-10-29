@@ -87,9 +87,6 @@ pub struct PluginCallRequest {
     /// One of that pack's `.afb` plugins.
     pub name: String,
     #[serde(default)]
-    #[ts(optional)]
-    pub node_did: Option<String>,
-    #[serde(default)]
     pub input: Value,
 }
 
@@ -101,13 +98,17 @@ pub async fn desktop_plugin_call(
     let home = home(&state)?;
     let operator =
         if packs::plugin_call_uses_data(&home, &request.ux, &request.name).map_err(failed)? {
-            request
-                .node_did
-                .as_ref()
-                .map(|node_did| {
-                    operator_access(&state, node_did).map(|access| (access, node_did.clone()))
-                })
-                .transpose()?
+            let node_did = packs::ux_installing_node(&home).map_err(failed)?;
+            let core = current_core(&state).ok_or_else(|| {
+                BridgeError::new(
+                    BridgeErrorCode::ClientNotRunning,
+                    "the local node that installed this app is not connected",
+                )
+            })?;
+            let access = core
+                .local_home_operator_access(&node_did, &home)
+                .map_err(failed)?;
+            Some((access, node_did))
         } else {
             None
         };

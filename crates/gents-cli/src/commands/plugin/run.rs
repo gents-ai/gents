@@ -84,7 +84,7 @@ async fn call_installed_inner(
     }
     let coordinate = format!("{namespace}/{name}");
     if ux && record.data_grant().is_some() && operator.is_none() {
-        anyhow::bail!("select a node before calling a plugin that uses data");
+        anyhow::bail!("connect the local node that installed this app to use its data");
     }
     // No tool-effect grant: a call from the desktop or a module producer
     // runs outside any model turn, so the guest has no runtime to call back.

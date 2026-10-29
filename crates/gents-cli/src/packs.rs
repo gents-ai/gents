@@ -399,6 +399,18 @@ pub fn plugin_call_uses_data(home: &std::path::Path, ux: &str, name: &str) -> Re
         .is_some())
 }
 
+pub fn ux_installing_node(home: &std::path::Path) -> Result<String> {
+    let config = crate::home_state::read_init_config(home)?.ok_or_else(|| {
+        anyhow::anyhow!("the local node that installed this app is not initialized")
+    })?;
+    let node_did = config.node_did.trim();
+    anyhow::ensure!(
+        !node_did.is_empty(),
+        "the local node that installed this app has no identity"
+    );
+    Ok(node_did.to_owned())
+}
+
 /// Runs the `.afb` plugin `name` of the pack behind the UX plugin listed as
 /// `ux`, with `input`, for that UX plugin's `ctx.plugin` (see
 /// [`plugin_call_target`]). The call is a person's action in the desktop,
@@ -451,6 +463,30 @@ pub async fn ux_data_surfaces(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ux_plugin_data_uses_the_installing_home_node() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(ux_installing_node(home.path()).is_err());
+        crate::home_state::write_init_config(
+            home.path(),
+            &crate::shared::StoredInitConfig {
+                home: home.path().display().to_string(),
+                node_name: "local".into(),
+                node_did: "did:key:local".into(),
+                key_path: None,
+                identity_backend: None,
+                keychain_label: None,
+                secure_enclave_label: None,
+                tool_package: None,
+                tool_ceiling: crate::cli::args::ToolCeilingArg::Readonly,
+                tool_root: None,
+                store_encryption: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(ux_installing_node(home.path()).unwrap(), "did:key:local");
+    }
 
     /// `ctx.plugin` resolves its pack from the caller's own listing: an
     /// unknown listing, a plugin outside a pack and a plugin the pack does

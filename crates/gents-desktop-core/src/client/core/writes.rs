@@ -367,6 +367,33 @@ fn peer_record_owning_node_at(
         .cloned()
 }
 
+fn ux_local_runtime_record<'a>(
+    records: &'a [PeerRecord],
+    node_did: &str,
+    home: &Path,
+) -> Result<&'a PeerRecord> {
+    let record = records
+        .iter()
+        .find(|record| record.node_did == node_did)
+        .context("the local node that installed this app is not connected")?;
+    let recorded_home = record
+        .local_node_home
+        .as_deref()
+        .context("the local node that installed this app is not connected locally")?;
+    let recorded_home = std::fs::canonicalize(recorded_home)
+        .context("the installed app's runtime home is unavailable")?;
+    let home = std::fs::canonicalize(home).context("the installed app's home is unavailable")?;
+    anyhow::ensure!(
+        recorded_home == home,
+        "the app's local node belongs to a different home"
+    );
+    anyhow::ensure!(
+        record.operator_graphql().is_some(),
+        "the local node that installed this app has no operator connection"
+    );
+    Ok(record)
+}
+
 impl ClientCore {
     pub async fn refresh_local_standard_peer(
         &self,
@@ -1784,6 +1811,18 @@ impl ClientCore {
         }
     }
 
+    pub fn local_home_operator_access(
+        &self,
+        node_did: &str,
+        home: &std::path::Path,
+    ) -> Result<ConfigAccess> {
+        let records = self.sync_state.records();
+        let record = ux_local_runtime_record(&records, node_did, home)?;
+        crate::local_runtime::operator_endpoint(record)
+            .map(ConfigAccess::Graphql)
+            .context("the local node that installed this app has no operator connection")
+    }
+
     pub async fn save_agent(&self, row: &gents::AgentDocument) -> Result<()> {
         let access = self.operator_access(&row.node_did)?;
         let result = mutations::upsert_agent_on(&access, row).await;
@@ -3142,6 +3181,23 @@ mod delete_source_tests {
             record.enrollment_authorization_expires_at = Some("2099-09-29T00:00:00Z".into());
         }
         record
+    }
+
+    #[test]
+    fn ux_data_requires_the_installing_local_runtime() {
+        let home = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let mut record = peer_record(Some("local-standard"));
+        record.graphql = Some("http://127.0.0.1:1234/api/v0/graphql".into());
+        assert!(ux_local_runtime_record(&[], &record.node_did, home.path()).is_err());
+        assert!(ux_local_runtime_record(&[record.clone()], &record.node_did, home.path()).is_err());
+        record.local_node_home = Some(other.path().display().to_string());
+        assert!(ux_local_runtime_record(&[record.clone()], &record.node_did, home.path()).is_err());
+        record.local_node_home = Some(home.path().display().to_string());
+        assert!(ux_local_runtime_record(&[record.clone()], "did:key:other", home.path()).is_err());
+        assert!(ux_local_runtime_record(&[record.clone()], &record.node_did, home.path()).is_ok());
+        record.graphql = None;
+        assert!(ux_local_runtime_record(&[record.clone()], &record.node_did, home.path()).is_err());
     }
 
     #[tokio::test(start_paused = true)]

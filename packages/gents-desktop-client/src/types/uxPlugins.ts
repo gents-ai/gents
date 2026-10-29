@@ -31,7 +31,6 @@ export interface PackPluginCallRequest {
   ux: string;
   /** one of that pack's .afb plugins */
   name: string;
-  nodeDid?: string;
   input?: unknown;
 }
 

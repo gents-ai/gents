@@ -65,7 +65,7 @@ export interface UxHost {
   /** run a pack's .afb plugin `name`, keyed by the runtime listing
       (`<ns>/<pack>/<name>`) of the UX plugin calling; the bridge resolves
       the pack from the listing. Absent where no runtime is reachable. */
-  plugin?: (listing: string, name: string, input: unknown, nodeDid?: string) => Promise<unknown>;
+  plugin?: (listing: string, name: string, input: unknown) => Promise<unknown>;
   /** the data door: a declared tool of a declared surface, on the selected
       node, under the calling plugin's listing; the bridge checks all three */
   data?: {
@@ -324,7 +324,7 @@ export function createUxContext(
           new Error(`${pluginId}: ctx.plugin needs a pack; this plugin ships in none`),
         );
       }
-      return h.plugin(options.listing, name, input, h.shell.selectedDeployment()?.nodeDid);
+      return h.plugin(options.listing, name, input);
     },
     send: (content) => host().shell.send(content),
     get shell() {
