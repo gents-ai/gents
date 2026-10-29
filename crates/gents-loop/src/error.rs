@@ -400,6 +400,7 @@ const CONTEXT_OVERFLOW_MARKERS: &[&str] = &[
     "maximum context length",
     "maximum prompt length",
     "exceeds the context window",
+    "exceed context limit",
 ];
 
 /// The token counts a provider's context overflow rejection states, when it
@@ -419,20 +420,43 @@ impl ContextOverflow {
                 .iter()
                 .find_map(|marker| leading_count_after(lower, marker))
         };
+        // Claude reports `input + max_tokens > limit` when the input fits but
+        // the requested output does not.
+        let summed_limit = lower
+            .split_once("exceed context limit:")
+            .and_then(|(_, rest)| leading_count_after(rest, ">"));
         Self {
-            input_tokens: first(&[
-                "prompt is too long:",
-                "resulted in",
-                "request contains",
-                "you requested",
-            ]),
-            limit: first(&[
-                "tokens >",
-                "maximum context length is",
-                "maximum prompt length is",
-            ]),
+            input_tokens: requested_message_tokens(lower).or_else(|| {
+                first(&[
+                    "prompt is too long:",
+                    "exceed context limit:",
+                    "resulted in",
+                    "request contains",
+                    "you requested",
+                ])
+            }),
+            limit: summed_limit.or_else(|| {
+                first(&[
+                    "tokens >",
+                    "maximum context length is",
+                    "maximum prompt length is",
+                ])
+            }),
         }
     }
+}
+
+/// OpenAI's `you requested N tokens (X in the messages, Y in the completion)`
+/// counts the requested completion too; the input is the messages share.
+fn requested_message_tokens(lower: &str) -> Option<u32> {
+    let (_, rest) = lower.split_once("you requested")?;
+    let (_, breakdown) = rest.split_once("tokens (")?;
+    let messages = leading_count_after(breakdown, "")?;
+    let (counted, _) = breakdown.split_once(',')?;
+    counted
+        .trim_end()
+        .ends_with("in the messages")
+        .then_some(messages)
 }
 
 fn leading_count_after(text: &str, marker: &str) -> Option<u32> {
