@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, RwLock as StdRwLock};
+use std::sync::{Arc, Mutex as StdMutex, RwLock as StdRwLock};
 use tokio::sync::watch;
 use tokio::sync::RwLock;
 
@@ -12,7 +12,11 @@ use gents_protocol::peer_schema::{
 };
 use serde_json::Value;
 
-use super::{p2p_health_materially_changed, ClientPeerStatus, ClientSyncStateSnapshot, P2PHealth};
+use super::enrollment::EnrollmentAuthorizationGeneration;
+use super::{
+    p2p_health_materially_changed, ClientPeerStatus, ClientSyncStateSnapshot,
+    EnrollmentActivationError, P2PHealth,
+};
 use crate::client::peer_directory::RemovalCause;
 use crate::client::{PeerDirectory, PeerRecord};
 
@@ -28,6 +32,8 @@ type LastErrorPatch = (Option<String>, Option<String>);
 pub(in crate::client) struct ClientSyncStateOwner {
     tx: watch::Sender<ClientSyncStateSnapshot>,
     directory: Arc<RwLock<PeerDirectory>>,
+    enrollment_observation_generations:
+        Arc<StdMutex<BTreeMap<String, EnrollmentAuthorizationGeneration>>>,
     advertised_enrollment_labels: Arc<StdRwLock<BTreeMap<String, String>>>,
     local_replicated_schema: Arc<tokio::sync::OnceCell<ReplicatedSchema>>,
     schema_observation_sequence: Arc<std::sync::atomic::AtomicU64>,
@@ -77,6 +83,7 @@ impl ClientSyncStateOwner {
             transport,
             database_sync: None,
             database_sync_error: None,
+            enrollment_activation_errors: BTreeMap::new(),
             peer_schema_skew: BTreeMap::new(),
             directory: records,
             peers,
@@ -84,11 +91,98 @@ impl ClientSyncStateOwner {
         Self {
             tx,
             directory,
+            enrollment_observation_generations: Arc::new(StdMutex::new(BTreeMap::new())),
             advertised_enrollment_labels: Arc::new(StdRwLock::new(BTreeMap::new())),
             local_replicated_schema: Arc::new(tokio::sync::OnceCell::new()),
             schema_observation_sequence: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             schema_observation_latest: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
         }
+    }
+
+    pub(super) fn retain_enrollment_activation_errors(
+        &self,
+        current: &BTreeMap<String, EnrollmentAuthorizationGeneration>,
+    ) {
+        let mut observed = self
+            .enrollment_observation_generations
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        observed.clone_from(current);
+        self.tx.send_if_modified(|state| {
+            let before = state.enrollment_activation_errors.len();
+            state
+                .enrollment_activation_errors
+                .retain(|request_id, error| {
+                    current.get(request_id).is_some_and(|generation| {
+                        error.request_digest == generation.request_digest
+                            && error.authorization_sequence == generation.sequence
+                            && error.authorization_expires_at == generation.expires_at
+                    })
+                });
+            state.enrollment_activation_errors.len() != before
+        });
+    }
+
+    pub(super) fn finish_enrollment_activation_errors(
+        &self,
+        generations: &BTreeMap<String, EnrollmentAuthorizationGeneration>,
+        errors: &BTreeMap<String, EnrollmentActivationError>,
+    ) {
+        let current = self
+            .enrollment_observation_generations
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        self.tx.send_if_modified(|state| {
+            let before = state.enrollment_activation_errors.clone();
+            for (request, generation) in generations {
+                if current.get(request) != Some(generation) {
+                    continue;
+                }
+                match errors.get(request) {
+                    Some(error)
+                        if error.request_digest == generation.request_digest
+                            && error.authorization_sequence == generation.sequence
+                            && error.authorization_expires_at == generation.expires_at =>
+                    {
+                        state
+                            .enrollment_activation_errors
+                            .insert(request.clone(), error.clone());
+                    }
+                    None => {
+                        state.enrollment_activation_errors.remove(request);
+                    }
+                    _ => {}
+                }
+            }
+            before != state.enrollment_activation_errors
+        });
+    }
+
+    pub(super) fn project_enrollment_activation(
+        &self,
+        request: &str,
+        generation: &EnrollmentAuthorizationGeneration,
+        approved: bool,
+        route_failure: bool,
+    ) -> Option<&'static str> {
+        let current = self
+            .enrollment_observation_generations
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if !approved || current.get(request) != Some(generation) {
+            return None;
+        }
+        let snapshot = self.tx.borrow();
+        snapshot
+            .enrollment_activation_errors
+            .get(request)
+            .filter(|error| {
+                error.request_digest == generation.request_digest
+                    && error.authorization_sequence == generation.sequence
+                    && error.authorization_expires_at == generation.expires_at
+            })
+            .map(|error| error.stage.as_str())
+            .or_else(|| route_failure.then_some(super::EnrollmentActivationStage::Route.as_str()))
     }
 
     pub(super) fn remember_enrollment_label(&self, server_peer: &str, label: &str) {
@@ -577,8 +671,12 @@ fn observation_generation_matches(previous: &PeerRecord, current: &PeerRecord) -
         && previous.source == current.source
         && previous.pairing_network_id == current.pairing_network_id
         && previous.pairing_template == current.pairing_template
+        && previous.enrollment_request_id == current.enrollment_request_id
         && previous.enrollment_request_digest == current.enrollment_request_digest
+        && previous.enrollment_admin_did == current.enrollment_admin_did
         && previous.enrollment_authorization_sequence == current.enrollment_authorization_sequence
+        && previous.enrollment_authorization_expires_at
+            == current.enrollment_authorization_expires_at
         && previous.graphql == current.graphql
 }
 
@@ -615,6 +713,160 @@ pub(super) fn conservative_status(record: &PeerRecord) -> ClientPeerStatus {
 
 #[cfg(test)]
 mod tests {
+
+    #[tokio::test]
+    async fn generated_activation_traces_drive_the_sync_owner() {
+        use super::super::EnrollmentActivationStage;
+        use super::*;
+        let output = gents_lean_contract::run_prepared_generator(
+            &gents_lean_contract::proofs_dir().unwrap(),
+            "Proofs.Conformance.EnrollmentActivation:olean",
+            "Proofs/Conformance/EnrollmentActivation.lean",
+        )
+        .unwrap();
+        let cases: Vec<Value> = serde_json::from_str(&output).unwrap();
+        assert!(!cases.is_empty());
+        let (_temp, owner) = ClientSyncStateOwner::for_test(Vec::new(), Vec::new()).await;
+        let authority = |value: &Value| -> Option<(String, EnrollmentAuthorizationGeneration)> {
+            (!value.is_null()).then(|| {
+                (
+                    value["request"].as_u64().unwrap().to_string(),
+                    EnrollmentAuthorizationGeneration {
+                        request_digest: value["digest"].as_u64().unwrap().to_string(),
+                        sequence: value["generation"].as_u64().unwrap(),
+                        expires_at: value["expiry"].as_u64().unwrap().to_string(),
+                    },
+                )
+            })
+        };
+        let stage = |value: &Value| -> Option<EnrollmentActivationStage> {
+            value.as_str().map(|name| match name {
+                "authentication" => EnrollmentActivationStage::Authentication,
+                "route" => EnrollmentActivationStage::Route,
+                other => panic!("unexpected stage {other}"),
+            })
+        };
+        let map = |entry: Option<(String, EnrollmentAuthorizationGeneration)>| {
+            entry.into_iter().collect::<BTreeMap<_, _>>()
+        };
+        let errors = |generation: &BTreeMap<String, EnrollmentAuthorizationGeneration>,
+                      stage: Option<EnrollmentActivationStage>| {
+            generation
+                .iter()
+                .filter_map(|(request, generation)| {
+                    stage.map(|stage| {
+                        (
+                            request.clone(),
+                            EnrollmentActivationError {
+                                request_digest: generation.request_digest.clone(),
+                                authorization_sequence: generation.sequence,
+                                authorization_expires_at: generation.expires_at.clone(),
+                                stage,
+                            },
+                        )
+                    })
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        for case in cases {
+            let (requested_id, requested_generation) = authority(&case["requested"]).unwrap();
+            let requested = BTreeMap::from([(requested_id.clone(), requested_generation)]);
+            owner.retain_enrollment_activation_errors(&BTreeMap::new());
+            let initial = map(authority(&case["initial"]));
+            owner.retain_enrollment_activation_errors(&initial);
+            owner.finish_enrollment_activation_errors(
+                &initial,
+                &errors(&initial, stage(&case["prior"])),
+            );
+            let selected = map(authority(&case["selected"]));
+            owner.retain_enrollment_activation_errors(&selected);
+            owner.finish_enrollment_activation_errors(
+                &requested,
+                &errors(&requested, stage(&case["result"])),
+            );
+            let snapshot = owner.snapshot();
+            let stored = selected
+                .keys()
+                .next()
+                .and_then(|request| snapshot.enrollment_activation_errors.get(request))
+                .map(|error| error.stage.as_str());
+            assert_eq!(stored, case["stored"].as_str(), "{case}");
+            let projected = owner.project_enrollment_activation(
+                &requested_id,
+                &requested[&requested_id],
+                case["approved"].as_bool().unwrap(),
+                case["routeObserved"].as_bool().unwrap(),
+            );
+            assert_eq!(projected, case["projected"].as_str(), "{case}");
+        }
+    }
+
+    #[test]
+    fn enrollment_observation_generation_includes_the_entire_authorization() {
+        use super::*;
+        let mut record = PeerRecord::new("peer", "127.0.0.1:1", "did:key:node");
+        record.enrollment_request_id = Some("request".into());
+        record.enrollment_request_digest = Some("digest".into());
+        record.enrollment_admin_did = Some("did:key:admin".into());
+        record.enrollment_authorization_sequence = Some(1);
+        record.enrollment_authorization_expires_at = Some("expiry".into());
+        assert!(observation_generation_matches(&record, &record));
+        let mut changed = record.clone();
+        changed.enrollment_authorization_expires_at = Some("new-expiry".into());
+        assert!(!observation_generation_matches(&record, &changed));
+        changed = record.clone();
+        changed.enrollment_request_id = Some("new-request".into());
+        assert!(!observation_generation_matches(&record, &changed));
+        changed = record.clone();
+        changed.enrollment_admin_did = Some("did:key:other".into());
+        assert!(!observation_generation_matches(&record, &changed));
+    }
+
+    #[tokio::test]
+    async fn enrollment_activation_errors_notify_without_peers_and_expire_with_authority() {
+        use super::*;
+        let (_temp, owner) = ClientSyncStateOwner::for_test(Vec::new(), Vec::new()).await;
+        let mut updates = owner.subscribe();
+        let error = EnrollmentActivationError {
+            request_digest: "digest-one".into(),
+            authorization_sequence: 1,
+            authorization_expires_at: "2030-01-01T00:00:00Z".into(),
+            stage: super::super::EnrollmentActivationStage::Authentication,
+        };
+        let current = BTreeMap::from([(
+            "request".into(),
+            EnrollmentAuthorizationGeneration {
+                request_digest: error.request_digest.clone(),
+                sequence: 1,
+                expires_at: error.authorization_expires_at.clone(),
+            },
+        )]);
+        owner.retain_enrollment_activation_errors(&current);
+        owner.finish_enrollment_activation_errors(
+            &current,
+            &BTreeMap::from([("request".into(), error.clone())]),
+        );
+        assert!(updates.has_changed().unwrap());
+        assert!(updates.borrow_and_update().directory.is_empty());
+        owner.retain_enrollment_activation_errors(&current);
+        assert!(!updates.has_changed().unwrap());
+        let mut newer = current.clone();
+        newer.get_mut("request").unwrap().sequence = 2;
+        owner.retain_enrollment_activation_errors(&newer);
+        assert!(updates.has_changed().unwrap());
+        assert!(updates
+            .borrow_and_update()
+            .enrollment_activation_errors
+            .is_empty());
+        owner.finish_enrollment_activation_errors(
+            &current,
+            &BTreeMap::from([("request".into(), error)]),
+        );
+        assert!(!updates.has_changed().unwrap());
+        owner.retain_enrollment_activation_errors(&BTreeMap::new());
+        assert!(!updates.has_changed().unwrap());
+        assert!(updates.borrow().enrollment_activation_errors.is_empty());
+    }
 
     #[test]
     fn configured_peer_mutation_callers_cannot_bypass_the_owner() {

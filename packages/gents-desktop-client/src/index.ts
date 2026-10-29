@@ -56,3 +56,5 @@ export { PROVIDER_CREDENTIAL_KIND } from "./providerLogin.js";
 export * from "./capturedContext.js";
 
 export { parseMailboxQuestion } from "./mailboxQuestion.js";
+
+export * from "./enrollmentActivation.js";

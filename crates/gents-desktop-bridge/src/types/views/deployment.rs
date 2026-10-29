@@ -488,6 +488,7 @@ pub struct EnrollmentRequestView {
     pub owner_node: String,
     pub state: String,
     pub expires_at: String,
+    pub activation_error: Option<String>,
 }
 
 impl From<gents_desktop_core::client::EnrollmentRequestResult> for EnrollmentRequestView {
@@ -501,6 +502,7 @@ impl From<gents_desktop_core::client::EnrollmentRequestResult> for EnrollmentReq
             owner_node: result.owner_node,
             state: result.state,
             expires_at: result.expires_at,
+            activation_error: result.activation_error,
         }
     }
 }
