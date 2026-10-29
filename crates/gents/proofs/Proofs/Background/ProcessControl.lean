@@ -76,6 +76,85 @@ theorem operator_control_never_crosses_runtime (executing requested owner : Stri
     actor = some executing ∧ requested = executing ∧ owner = executing := by
   simpa [operatorAtNode, Bool.and_eq_true, and_assoc] using allowed
 
+inductive DesktopStopDecision where
+  | refuse
+  | alreadyTerminal
+  | requestStop
+  deriving DecidableEq, Repr
+
+/-- The database authenticates and authorizes the desktop actor before its
+write reaches this decision. A stop names one physical background process.
+Cancellation may have been committed before the process was signalled, so a
+cancelled invocation must still reach the process owner for recovery. -/
+def desktopStop (authorizedActor background : Bool)
+    (requested owned : Invocation) (state : ToolExecution.ToolCallState) : DesktopStopDecision :=
+  if !authorizedActor || !background || !sameInvocation requested owned then .refuse
+  else if state = .pending ∨ state = .running ∨ state = .cancelled then .requestStop
+  else .alreadyTerminal
+
+theorem desktop_stop_requires_authority (background : Bool) (requested owned : Invocation)
+    (state : ToolExecution.ToolCallState) :
+    desktopStop false background requested owned state = .refuse := by
+  simp [desktopStop]
+
+theorem desktop_stop_requires_exact_invocation (authorizedActor background : Bool)
+    (requested owned : Invocation) (state : ToolExecution.ToolCallState)
+    (different : requested ≠ owned) :
+    desktopStop authorizedActor background requested owned state = .refuse := by
+  have h : sameInvocation requested owned = false := by
+    cases same : sameInvocation requested owned with
+    | false => rfl
+    | true => exact False.elim (different (invocation_identity_requires_both requested owned |>.mp same))
+  simp [desktopStop, h]
+
+theorem desktop_stop_preserves_completed (authorizedActor background : Bool)
+    (requested owned : Invocation) :
+    desktopStop authorizedActor background requested owned .completed ≠ .requestStop := by
+  unfold desktopStop
+  split <;> simp
+
+theorem desktop_stop_requests_live_invocation (invocation : Invocation)
+    (state : ToolExecution.ToolCallState) (live : state = .pending ∨ state = .running) :
+    desktopStop true true invocation invocation state = .requestStop := by
+  rcases live with rfl | rfl <;> simp [desktopStop, sameInvocation]
+
+theorem desktop_stop_recovers_cancelled_invocation (invocation : Invocation) :
+    desktopStop true true invocation invocation .cancelled = .requestStop := by
+  simp [desktopStop, sameInvocation]
+
+/-- The process owner rechecks the lifecycle when consuming an accepted
+intent. Completion may win after the desktop's initial observation. -/
+def consumeDesktopStop (state : ToolExecution.ToolCallState) : Bool :=
+  decide (state = .pending ∨ state = .running ∨ state = .cancelled)
+
+theorem desktop_stop_does_not_cancel_a_completed_process :
+    consumeDesktopStop .completed = false := by
+  rfl
+
+theorem desktop_stop_is_consumed_for_running_process :
+    consumeDesktopStop .running = true := by
+  rfl
+
+theorem desktop_stop_recovers_a_persisted_cancellation :
+    consumeDesktopStop .cancelled = true := by
+  rfl
+
+inductive StopIntentPhase where
+  | accepted
+  | settled
+  deriving DecidableEq, Repr
+
+/-- A committed accepted intent remains pending across a runtime restart;
+only a recorded terminal outcome settles it. -/
+def stopNeedsExecution (phase : StopIntentPhase) : Bool :=
+  decide (phase = .accepted)
+
+theorem accepted_stop_is_recovered : stopNeedsExecution .accepted = true := by
+  rfl
+
+theorem settled_stop_is_not_reexecuted : stopNeedsExecution .settled = false := by
+  rfl
+
 inductive WaitBoundary where
   | waitTimeout
   | callerInterrupted
