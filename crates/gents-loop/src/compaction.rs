@@ -195,6 +195,16 @@ impl ReductionAdmission {
         })
     }
 
+    /// Admission after the provider itself rejected the input as over its
+    /// limit: reduction is required whatever the estimate says.
+    pub fn for_provider_overflow(input_tokens: usize, effective_input_budget: usize) -> Self {
+        Self {
+            input_tokens,
+            effective_input_budget,
+            threshold_decision: ThresholdDecision::ReduceEligible,
+        }
+    }
+
     fn decision<C>(self, can_fit: bool, prefix_len: usize, checkpoint: C) -> ReductionDecision<C> {
         reduction_decision(self.threshold_decision, can_fit, prefix_len, checkpoint)
     }

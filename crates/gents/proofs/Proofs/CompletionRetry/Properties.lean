@@ -176,4 +176,48 @@ theorem repair_issue_at_most_once_across_trace {before after later : State}
   apply used_repair_cannot_issue
   exact repair_used_stays_used_across_trace htrace hconsumed.2.1
 
+theorem context_overflow_never_backs_off (s : State) (error : String) (wake : Time)
+    (after : State) (hphase : s.phase = .retracted .contextOverflow error wake)
+    (h : step? s .schedule = some after) :
+    after.phase = .compacting ∨ after.phase = .exhausted := by
+  simp only [step?, hphase] at h
+  split at h <;> cases h <;> simp
+
+theorem compact_issue_consumes_capability {s s' : State}
+    (h : step? s .compactIssue = some s') :
+    s.compactUsed = false ∧ s'.compactUsed = true ∧
+      s'.attempt = s.attempt + 1 := by
+  simp only [step?] at h
+  split at h <;> try contradiction
+  simp only [Option.some.injEq] at h
+  subst s'
+  simp_all
+
+theorem compact_used_never_resets {s s' : State} {action : Action}
+    (hused : s.compactUsed = true)
+    (h : step? s action = some s') : s'.compactUsed = true := by
+  cases action <;> simp only [step?] at h
+  all_goals repeat' first | split at h
+  all_goals try contradiction
+  all_goals simp only [Option.some.injEq] at h
+  all_goals subst s'
+  all_goals simp_all
+
+theorem compact_used_stays_used_across_trace {s s' : State}
+    (htrace : Trace s s') (hused : s.compactUsed = true) :
+    s'.compactUsed = true := by
+  induction htrace with
+  | refl => exact hused
+  | step transition rest ih =>
+      obtain ⟨action, hstep⟩ := transition
+      exact ih (compact_used_never_resets hused hstep)
+
+theorem compact_issue_at_most_once_across_trace {before after later : State}
+    (hcompact : step? before .compactIssue = some after)
+    (htrace : Trace after later) :
+    step? later .compactIssue = none := by
+  have hlater := compact_used_stays_used_across_trace htrace
+    (compact_issue_consumes_capability hcompact).2.1
+  simp [step?, hlater]
+
 end CompletionRetry

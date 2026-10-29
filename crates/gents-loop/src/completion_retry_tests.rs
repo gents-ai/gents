@@ -377,3 +377,38 @@ fn permanent_failure_reason_carries_its_prefix_once() {
         other => panic!("expected Fail, got {other:?}"),
     }
 }
+
+#[test]
+fn context_overflow_compacts_once_then_fails() {
+    let failure = crate::rig_compat::classify_completion_error(
+        &rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
+            crate::error::tests::CLAUDE_PROMPT_TOO_LONG.into(),
+        )),
+    );
+    assert_eq!(failure_class(&failure), FailureClass::ContextOverflow);
+    let mut state = CompletionRetryState::new(CompletionRetryPolicy::scheduled_default());
+    assert_eq!(
+        state.on_pre_stream_failure(&failure, Utc::now(), None),
+        PreStreamDirective::CompactAndRetry {
+            overflow: crate::error::ContextOverflow {
+                input_tokens: Some(1_001_685),
+                limit: Some(1_000_000),
+            },
+        }
+    );
+    assert_eq!(
+        state.retry_count(),
+        0,
+        "a compaction spends no transport budget"
+    );
+    state.mark_compaction_used();
+    match state.on_pre_stream_failure(&failure, Utc::now(), None) {
+        PreStreamDirective::Fail { reason } => assert!(
+            reason.starts_with(
+                "provider context overflow persisted after the one forced compaction: "
+            ),
+            "{reason}"
+        ),
+        other => panic!("expected Fail after the one compaction, got {other:?}"),
+    }
+}

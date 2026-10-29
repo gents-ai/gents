@@ -84,7 +84,7 @@ pub use tool_dispatch::dispatch_tool;
 use provider_idle::{within_provider_idle, ProviderAttemptFailure};
 use request_assembly::{
     build_budgeted_request, context_accounting_for_request, message_values,
-    prepare_dispatch_attempt, repair_and_rebuild_request,
+    prepare_dispatch_attempt, rebuild_after_provider_overflow, repair_and_rebuild_request,
 };
 pub use tool_dispatch::value_to_json_string;
 use turn_threading::{bounded_tool_result, close_streaming_turn};
@@ -248,8 +248,8 @@ where
                 elapsed_ms = preparation_started.elapsed().as_millis() as u64,
                 "prepared provider request before completion dispatch"
             );
-            let compaction_reason = turn_context_decision.reason;
-            let pre_compaction_input_tokens =
+            let mut compaction_reason = turn_context_decision.reason;
+            let mut pre_compaction_input_tokens =
                 turn_context_decision.pre_compaction_input_tokens;
             retain_effective_messages_oracle |= matches!(
                 compaction_reason,
@@ -288,7 +288,7 @@ where
             let mut attempt = 0_u32;
             let mut build_path = AssemblyBuildPath::Budgeted;
             'attempts: loop {
-                let (mut stream, activity, mut audit_receiver, advertised_tools) = loop {
+                let (mut stream, activity, mut audit_receiver, advertised_tools, dispatched_input_tokens) = loop {
                     let prepared_dispatch = prepare_dispatch_attempt(
                         &request,
                         &config,
@@ -344,6 +344,8 @@ where
                         });
                     }
                     let advertised_tools = dispatch_request.tools.clone();
+                    let dispatched_input_tokens =
+                        prepared_dispatch.projection().estimated_input_tokens;
                     match within_provider_idle(
                         crate::provider_input::routing_affinity::scope(routing_affinity.clone(), model.stream(dispatch_request)),
                         config.provider_idle_timeout,
@@ -353,7 +355,13 @@ where
                     .await
                     .and_then(|result| result.map_err(ProviderAttemptFailure::Completion))
                     {
-                        Ok(stream) => break (stream, activity, audit_receiver, advertised_tools),
+                        Ok(stream) => break (
+                            stream,
+                            activity,
+                            audit_receiver,
+                            advertised_tools,
+                            dispatched_input_tokens,
+                        ),
                         Err(failure) => {
                             let failure = failure.classify();
                             let directive =
@@ -413,6 +421,56 @@ where
                                     )
                                     .await?;
                                     build_path = AssemblyBuildPath::Repair;
+                                    retain_effective_messages_oracle = true;
+                                    attempt += 1;
+                                }
+                                PreStreamDirective::CompactAndRetry { overflow } => {
+                                    if config.turn_compactor.is_none() {
+                                        let terminal_reason = provider_overflow_without_compactor(&classified);
+                                        yield LoopStreamItem::AttemptFailed {
+                                            turn: turn_index,
+                                            attempt,
+                                            error: classified,
+                                            will_retry: false,
+                                            backoff: std::time::Duration::ZERO,
+                                        };
+                                        Err(StreamingError::Completion(
+                                            CompletionError::ProviderError(terminal_reason),
+                                        ))?;
+                                        unreachable!("Err(..)? above ends the stream");
+                                    }
+                                    if let Some(hook) = &hook {
+                                        hook.observe_provider(crate::session_hook::ProviderObservation::Retrying {
+                                            turn: turn_index,
+                                            attempt,
+                                        });
+                                    }
+                                    retry.mark_compaction_used();
+                                    yield LoopStreamItem::AttemptFailed {
+                                        turn: turn_index,
+                                        attempt,
+                                        error: classified,
+                                        will_retry: true,
+                                        backoff: std::time::Duration::ZERO,
+                                    };
+                                    let (rebuilt, decision) = rebuild_after_provider_overflow(
+                                        &model,
+                                        &mut history,
+                                        &mut new_messages,
+                                        tools.as_slice(),
+                                        &config,
+                                        &mut replay,
+                                        turn_index,
+                                        &mut reduction_chain_keys,
+                                        &mut active_reduction_keys,
+                                        overflow,
+                                        dispatched_input_tokens,
+                                    )
+                                    .await?;
+                                    request = rebuilt;
+                                    build_path = AssemblyBuildPath::Budgeted;
+                                    compaction_reason = decision.reason;
+                                    pre_compaction_input_tokens = decision.pre_compaction_input_tokens;
                                     retain_effective_messages_oracle = true;
                                     attempt += 1;
                                 }
@@ -605,6 +663,57 @@ where
                                     )
                                     .await?;
                                     build_path = AssemblyBuildPath::Repair;
+                                    retain_effective_messages_oracle = true;
+                                    attempt += 1;
+                                    continue 'attempts;
+                                }
+                                PreStreamDirective::CompactAndRetry { overflow } => {
+                                    if config.turn_compactor.is_none() {
+                                        let terminal_reason = provider_overflow_without_compactor(&classified);
+                                        yield LoopStreamItem::AttemptFailed {
+                                            turn: turn_index,
+                                            attempt,
+                                            error: classified,
+                                            will_retry: false,
+                                            backoff: std::time::Duration::ZERO,
+                                        };
+                                        Err(StreamingError::Completion(
+                                            CompletionError::ProviderError(terminal_reason),
+                                        ))?;
+                                        unreachable!("Err(..)? above ends the stream");
+                                    }
+                                    if let Some(hook) = &hook {
+                                        hook.observe_provider(crate::session_hook::ProviderObservation::Retrying {
+                                            turn: turn_index,
+                                            attempt,
+                                        });
+                                    }
+                                    retry.mark_compaction_used();
+                                    yield LoopStreamItem::AttemptFailed {
+                                        turn: turn_index,
+                                        attempt,
+                                        error: classified,
+                                        will_retry: true,
+                                        backoff: std::time::Duration::ZERO,
+                                    };
+                                    let (rebuilt, decision) = rebuild_after_provider_overflow(
+                                        &model,
+                                        &mut history,
+                                        &mut new_messages,
+                                        tools.as_slice(),
+                                        &config,
+                                        &mut replay,
+                                        turn_index,
+                                        &mut reduction_chain_keys,
+                                        &mut active_reduction_keys,
+                                        overflow,
+                                        dispatched_input_tokens,
+                                    )
+                                    .await?;
+                                    request = rebuilt;
+                                    build_path = AssemblyBuildPath::Budgeted;
+                                    compaction_reason = decision.reason;
+                                    pre_compaction_input_tokens = decision.pre_compaction_input_tokens;
                                     retain_effective_messages_oracle = true;
                                     attempt += 1;
                                     continue 'attempts;
@@ -1345,6 +1454,13 @@ async fn sleep_retry_delay(
             deadline.expect("failed wake guard requires a deadline")
         ),
     )))
+}
+
+fn provider_overflow_without_compactor(classified: &InferenceError) -> String {
+    format!(
+        "provider rejected the request as over its context window and this completion loop \
+         has no per-turn compactor to reduce it: {classified}"
+    )
 }
 
 fn terminal_pre_stream_retry_reason(

@@ -448,4 +448,4 @@ fn leading_count_after(text: &str, marker: &str) -> Option<u32> {
 
 #[cfg(test)]
 #[path = "error_tests.rs"]
-mod tests;
+pub(crate) mod tests;

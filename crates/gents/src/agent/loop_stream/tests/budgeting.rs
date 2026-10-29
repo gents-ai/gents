@@ -1181,3 +1181,156 @@ fn generated_budget_cases_drive_dynamic_output_compaction_trigger() {
         );
     }
 }
+
+/// The live Claude Messages rejection, as the transport renders it.
+const CLAUDE_PROMPT_TOO_LONG: &str = r#"Claude Messages HTTP 400 Bad Request (request-id -) body={"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 1001685 tokens > 1000000 maximum"},"request_id":"req_011CgVVYfxcw64a1gDiAAhYC"}"#;
+
+type AdmittedReduction = Arc<std::sync::Mutex<Vec<(usize, usize)>>>;
+
+/// A 1M-window turn whose bytes/4 estimate (~561k) is below the 0.75
+/// threshold, as in the live failure, with a compactor that records each
+/// admission it receives.
+fn overflow_loop_config(admitted: AdmittedReduction) -> LoopConfig {
+    let mut loop_config = config(0);
+    loop_config.context_window = 1_000_000;
+    loop_config.compaction_threshold = 0.75;
+    loop_config.max_tokens = Some(32_000);
+    loop_config.turn_compactor = Some(Arc::new(move |request: TurnCompactionRequest| {
+        admitted.lock().unwrap().push((
+            request.admission.input_tokens(),
+            request.admission.effective_input_budget(),
+        ));
+        Box::pin(async {
+            Ok(TurnCompactionOutcome::Reduced {
+                messages: vec![TaggedMessage::unassociated(Message::user(
+                    "compacted prompt",
+                ))],
+                reduction_key: "overflow-reduction-1".to_string(),
+            })
+        })
+    }));
+    loop_config
+}
+
+fn live_sized_prompt() -> TaggedMessage {
+    TaggedMessage::unassociated(Message::user("x".repeat(2_244_000)))
+}
+
+#[tokio::test(start_paused = true)]
+async fn provider_context_overflow_compacts_once_and_retries() {
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::FailStream(CompletionError::ProviderError(
+            CLAUDE_PROMPT_TOO_LONG.to_string(),
+        )),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("done".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ]);
+    let admitted = AdmittedReduction::default();
+
+    let collected = collect_scripted_stream(run_loop_stream(
+        model.clone(),
+        None::<crate::hook::DefraSessionHook>,
+        live_sized_prompt(),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        overflow_loop_config(admitted.clone()),
+    ))
+    .await;
+
+    assert_eq!(collected.error, None);
+    assert_eq!(collected.final_text.as_deref(), Some("done"));
+    let admitted = admitted.lock().unwrap().clone();
+    assert_eq!(admitted.len(), 1, "exactly one forced reduction");
+    let (rejected_estimate, estimator_budget) = admitted[0];
+    assert!(
+        rejected_estimate < 750_000,
+        "the rejected request was below the threshold by estimate: {rejected_estimate}"
+    );
+    let ratio = crate::provider_input::budget::observed_input_ratio_basis_points(
+        1_001_685,
+        rejected_estimate,
+    )
+    .unwrap();
+    assert_eq!(
+        estimator_budget,
+        crate::provider_input::budget::estimator_input_budget(750_000, ratio),
+        "the forced budget is the provider limit's threshold scaled by the observed ratio"
+    );
+    assert_eq!(
+        collected
+            .attempts
+            .iter()
+            .map(|attempt| (attempt.attempt, attempt.will_retry, attempt.backoff))
+            .collect::<Vec<_>>(),
+        vec![(0, true, Duration::ZERO)]
+    );
+    let histories = model.seen_histories().await;
+    assert_eq!(histories.len(), 2);
+    assert_eq!(
+        histories[1],
+        vec![Message::user("compacted prompt")],
+        "the retry dispatches the compacted provider input"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn second_provider_context_overflow_fails_after_the_one_compaction() {
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::FailStream(CompletionError::ProviderError(
+            CLAUDE_PROMPT_TOO_LONG.to_string(),
+        )),
+        ScriptedCall::FailStream(CompletionError::ProviderError(
+            CLAUDE_PROMPT_TOO_LONG.to_string(),
+        )),
+    ]);
+    let admitted = AdmittedReduction::default();
+
+    let collected = collect_scripted_stream(run_loop_stream(
+        model.clone(),
+        None::<crate::hook::DefraSessionHook>,
+        live_sized_prompt(),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        overflow_loop_config(admitted.clone()),
+    ))
+    .await;
+
+    let error = collected.error.expect("a second overflow ends the request");
+    assert!(
+        error.contains("provider context overflow persisted after the one forced compaction"),
+        "{error}"
+    );
+    assert_eq!(admitted.lock().unwrap().len(), 1);
+    assert_eq!(model.seen_histories().await.len(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn provider_context_overflow_without_a_compactor_fails_with_its_reason() {
+    let model = ScriptedModel::new_calls(vec![ScriptedCall::FailStream(
+        CompletionError::ProviderError(CLAUDE_PROMPT_TOO_LONG.to_string()),
+    )]);
+    let mut loop_config = overflow_loop_config(AdmittedReduction::default());
+    loop_config.turn_compactor = None;
+
+    let collected = collect_scripted_stream(run_loop_stream(
+        model.clone(),
+        None::<crate::hook::DefraSessionHook>,
+        live_sized_prompt(),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        loop_config,
+    ))
+    .await;
+
+    let error = collected
+        .error
+        .expect("an unreducible overflow ends the request");
+    assert!(
+        error.contains("no per-turn compactor") && error.contains("prompt is too long"),
+        "{error}"
+    );
+    assert_eq!(model.seen_histories().await.len(), 1);
+    assert!(collected.attempts.iter().all(|attempt| !attempt.will_retry));
+}

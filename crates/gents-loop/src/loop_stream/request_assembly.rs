@@ -1527,7 +1527,7 @@ where
         completion_request_input_components(&request, config.provider_input_counter.as_ref())?;
     let before_tokens = projection.estimated_input_tokens;
 
-    let Some(compactor) = config.turn_compactor.as_ref() else {
+    if config.turn_compactor.is_none() {
         return Ok((
             request,
             TurnContextDecision {
@@ -1535,7 +1535,7 @@ where
                 pre_compaction_input_tokens: None,
             },
         ));
-    };
+    }
     let Some(admission) = crate::compaction::ReductionAdmission::for_input(
         before_tokens,
         config.context_window,
@@ -1549,6 +1549,137 @@ where
             },
         ));
     };
+    let effective_input_budget = crate::provider_input::budget::effective_input_budget(
+        config.context_window,
+        config.compaction_threshold,
+    );
+    reduce_and_rebuild(
+        model,
+        history,
+        new_messages,
+        tools,
+        config,
+        replay,
+        turn_index,
+        reduction_chain_keys,
+        active_reduction_keys,
+        admission,
+        effective_input_budget,
+    )
+    .await
+}
+
+/// Rebuild the turn's request after the provider rejected it as over its
+/// context window. The budget is the provider's limit (`overflow.limit`, else
+/// the configured window) less the output reserve, in this estimator's units
+/// scaled by the rejected request's observed provider/estimate ratio, so the
+/// reduced request is measured against what the provider will count.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn rebuild_after_provider_overflow<M>(
+    model: &M,
+    history: &mut Vec<TaggedMessage>,
+    new_messages: &mut Vec<TaggedMessage>,
+    tools: &[Box<dyn ToolDyn>],
+    config: &LoopConfig,
+    replay: &mut LoopReplayInput,
+    turn_index: usize,
+    reduction_chain_keys: &mut Vec<String>,
+    active_reduction_keys: &mut Vec<String>,
+    overflow: crate::error::ContextOverflow,
+    rejected_input_tokens: usize,
+) -> Result<(CompletionRequest, TurnContextDecision), crate::error::LoopStreamError>
+where
+    M: CompletionModel,
+{
+    use crate::provider_input::budget;
+    let provider_limit = overflow
+        .limit
+        .and_then(|limit| usize::try_from(limit).ok())
+        .map_or(config.context_window, |limit| {
+            limit.min(config.context_window)
+        });
+    let observed_input_tokens = overflow.input_tokens.map_or_else(
+        || {
+            u64::try_from(provider_limit)
+                .unwrap_or(u64::MAX)
+                .saturating_add(1)
+        },
+        u64::from,
+    );
+    let ratio =
+        budget::observed_input_ratio_basis_points(observed_input_tokens, rejected_input_tokens)
+            .unwrap_or(budget::UNIT_INPUT_RATIO_BASIS_POINTS);
+    let provider_budget = budget::overflow_input_budget(
+        provider_limit,
+        config.compaction_threshold,
+        budget::configured_output_ceiling(config.max_tokens),
+    );
+    let estimator_budget = budget::estimator_input_budget(provider_budget, ratio);
+    let request =
+        assemble_provider_request(model, history, new_messages, tools, config, replay).await?;
+    let before_tokens =
+        completion_request_input_components(&request, config.provider_input_counter.as_ref())?
+            .estimated_input_tokens;
+    tracing::warn!(
+        target: "gents::agent::loop_stream",
+        turn = turn_index,
+        provider_limit,
+        observed_input_tokens,
+        rejected_input_tokens,
+        ratio_basis_points = ratio,
+        provider_budget,
+        estimator_budget,
+        "provider rejected the request as over its context window; compacting once"
+    );
+    reduce_and_rebuild(
+        model,
+        history,
+        new_messages,
+        tools,
+        config,
+        replay,
+        turn_index,
+        reduction_chain_keys,
+        active_reduction_keys,
+        crate::compaction::ReductionAdmission::for_provider_overflow(
+            before_tokens,
+            estimator_budget,
+        ),
+        estimator_budget,
+    )
+    .await
+}
+
+/// Run the turn compactor under `admission` and rebuild the request; the
+/// rebuilt request must fit `effective_input_budget`, the same budget, in the
+/// same estimator units, that admitted the reduction.
+#[allow(clippy::too_many_arguments)]
+async fn reduce_and_rebuild<M>(
+    model: &M,
+    history: &mut Vec<TaggedMessage>,
+    new_messages: &mut Vec<TaggedMessage>,
+    tools: &[Box<dyn ToolDyn>],
+    config: &LoopConfig,
+    replay: &mut LoopReplayInput,
+    turn_index: usize,
+    reduction_chain_keys: &mut Vec<String>,
+    active_reduction_keys: &mut Vec<String>,
+    admission: crate::compaction::ReductionAdmission,
+    effective_input_budget: usize,
+) -> Result<(CompletionRequest, TurnContextDecision), crate::error::LoopStreamError>
+where
+    M: CompletionModel,
+{
+    let Some(compactor) = config.turn_compactor.as_ref() else {
+        return Err(StreamingError::Completion(CompletionError::RequestError(Box::new(
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "provider input must be reduced but this completion loop has no per-turn compactor",
+            ),
+        )))
+        .into());
+    };
+    let before_tokens = admission.input_tokens();
     let provider_messages = history
         .iter()
         .chain(new_messages.iter())
@@ -1635,10 +1766,6 @@ where
     let rebuilt_projection =
         completion_request_input_components(&rebuilt, config.provider_input_counter.as_ref())?;
     let after_tokens = rebuilt_projection.estimated_input_tokens;
-    let effective_input_budget = crate::provider_input::budget::effective_input_budget(
-        config.context_window,
-        config.compaction_threshold,
-    );
     tracing::info!(
         target: "gents::agent::loop_stream",
         turn = turn_index,
@@ -1656,12 +1783,8 @@ where
         crate::provider_input::budget::configured_output_ceiling(rebuilt.max_tokens),
     );
     if rebuilt_can_dispatch
-        && crate::compaction::ReductionAdmission::for_input(
-            after_tokens,
-            config.context_window,
-            config.compaction_threshold,
-        )
-        .is_some()
+        && crate::provider_input::budget::threshold_decision(after_tokens, effective_input_budget)
+            == crate::provider_input::budget::ThresholdDecision::ReduceEligible
     {
         tracing::warn!(
             estimated_input_tokens = after_tokens,
