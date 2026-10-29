@@ -193,6 +193,11 @@ def runCases : List RunCase :=
     , script := [⟨"prepare", .timedOut⟩], agent := .success
     , expectedOutcome := .failure (.hook "prepare"), expectedFinalOutcome := .failure (.hook "prepare")
     , expectedAgentRan := false }
+  , { name := "skip_configuration_does_not_hide_interruption"
+    , hooks := [{ before "prepare" with skipExitCodes := [10] }, afterFailure "report", cleanup "sweep"]
+    , script := [⟨"prepare", .interrupted⟩], agent := .success
+    , expectedOutcome := .interrupted, expectedFinalOutcome := .interrupted
+    , expectedAgentRan := false }
   , { name := "revoked_between_before_hooks_refuses_the_next_launch"
     , hooks := [before "prepare", before "second", cleanup "sweep"]
     , script := [], revoked := ["second", "sweep"], agent := .success
@@ -376,6 +381,16 @@ def recoveryCases : List RecoveryCase :=
     , started := true, hooks := [before "prepare", afterSuccess "verify",
                                  afterFailure "report", cleanup "sweep"]
     , observed := [⟨"prepare", .exited 0⟩], script := []
+    , expectedRemaining := ["sweep"] }
+  , { name := "observed_skip_before_crash_runs_only_remaining_cleanup"
+    , started := true
+    , hooks := [{ before "prepare" with skipExitCodes := [10] }, afterFailure "report", cleanup "sweep"]
+    , observed := [⟨"prepare", .exited 10⟩], script := []
+    , expectedRemaining := ["sweep"] }
+  , { name := "unknown_gate_outcome_is_not_replayed_after_crash"
+    , started := true
+    , hooks := [{ before "prepare" with skipExitCodes := [10] }, cleanup "sweep"]
+    , observed := [⟨"prepare", .interrupted⟩], script := []
     , expectedRemaining := ["sweep"] }
   , { name := "interrupt_requested_recovery_reports_interruption"
     , interruptRequested := true
