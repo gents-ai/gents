@@ -170,6 +170,21 @@ def runCases : List RunCase :=
     , script := [⟨"prepare", .exited 11⟩], agent := .success
     , expectedOutcome := .failure (.hook "prepare"), expectedFinalOutcome := .failure (.hook "prepare")
     , expectedAgentRan := false }
+  , { name := "skip_stops_remaining_before_hooks"
+    , hooks := [{ before "prepare" with skipExitCodes := [10] }, before "second", cleanup "sweep"]
+    , script := [⟨"prepare", .exited 10⟩], agent := .success
+    , expectedOutcome := .success, expectedFinalOutcome := .success
+    , expectedAgentRan := false }
+  , { name := "zero_exit_proceeds_even_when_listed_as_skip"
+    , hooks := [{ before "prepare" with skipExitCodes := [0] }, cleanup "sweep"]
+    , script := [], agent := .success
+    , expectedOutcome := .success, expectedFinalOutcome := .success
+    , expectedAgentRan := true }
+  , { name := "skip_configuration_does_not_hide_timeout"
+    , hooks := [{ before "prepare" with skipExitCodes := [10] }, afterFailure "report", cleanup "sweep"]
+    , script := [⟨"prepare", .timedOut⟩], agent := .success
+    , expectedOutcome := .failure (.hook "prepare"), expectedFinalOutcome := .failure (.hook "prepare")
+    , expectedAgentRan := false }
   , { name := "revoked_between_before_hooks_refuses_the_next_launch"
     , hooks := [before "prepare", before "second", cleanup "sweep"]
     , script := [], revoked := ["second", "sweep"], agent := .success
