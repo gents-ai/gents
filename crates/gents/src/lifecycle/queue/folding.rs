@@ -260,7 +260,11 @@ pub(crate) async fn consume_folded_in_txn(
             .position(|id| id == &consumption.head_doc_id)
             .and_then(|index| order.get(index + 1))
     } else {
-        order.first()
+        order.iter().find(|id| {
+            rows.iter()
+                .find(|row| row.doc_id.as_ref() == Some(*id))
+                .is_some_and(|row| !super::intake::is_deferred_queue_delivery(row))
+        })
     };
     let first = first_id.and_then(|id| rows.iter().find(|row| row.doc_id.as_ref() == Some(id)));
     let Some(row) = first else {

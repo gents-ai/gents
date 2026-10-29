@@ -71,6 +71,9 @@ pub(crate) async fn steering_snapshot(
     pending_request_doc_ids.sort();
     let mut inputs = Vec::new();
     for row in rows {
+        if is_deferred_queue_delivery(&row) {
+            continue;
+        }
         if !steering_compatible(head, &row, chrono::Utc::now()) {
             break;
         }
@@ -90,6 +93,13 @@ pub(crate) async fn steering_snapshot(
         pending_request_doc_ids,
         inputs,
     })
+}
+
+pub(super) fn is_deferred_queue_delivery(row: &AgentRequestRow) -> bool {
+    row.input
+        .as_ref()
+        .and_then(|input| input.queue.as_ref())
+        .is_some_and(|queue| queue.delivery == QueueDelivery::Queue)
 }
 
 pub(crate) async fn steering_inputs(

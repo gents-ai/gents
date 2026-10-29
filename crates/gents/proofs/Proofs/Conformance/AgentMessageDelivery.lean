@@ -1,5 +1,6 @@
 import Lean
 import Proofs.Request.AgentMessageDelivery
+import Proofs.Session.ManagementCases
 
 open Lean AgentMessageDelivery
 
@@ -70,6 +71,22 @@ def main : IO Unit := do
     ["first", "second"].map fun head =>
       Json.mkObj [("requested", toJson requested), ("head", toJson head),
         ("expected", toJson (targetsHead requested head))]
+  let deferredCases := [
+    ("deferred_then_steer", [SessionQueue.ManagementCases.pending 2 .queue,
+      SessionQueue.ManagementCases.pending 3], [3]),
+    ("steers_around_deferred", [SessionQueue.ManagementCases.pending 2,
+      SessionQueue.ManagementCases.pending 3 .queue, SessionQueue.ManagementCases.pending 4], [2,4]),
+    ("unadmitted_steer_blocks", [SessionQueue.ManagementCases.pending 2 .queue,
+      SessionQueue.ManagementCases.pending 3, SessionQueue.ManagementCases.pending 4], [4])]
+  let deferred := deferredCases.map fun (name, entries, admitted) =>
+    let (selected, pending) := SessionQueue.selectSteeringPastDeferred
+      SessionQueue.ManagementCases.active admitted entries
+    Json.mkObj [("name", toJson name), ("admitted", toJson admitted),
+      ("entries", toJson (entries.map fun (entry : SessionQueue.QueueEntry) => Json.mkObj [
+        ("id", toJson entry.requestId),
+        ("queued", toJson (entry.delivery == SessionQueue.QueueDelivery.queue))])),
+      ("selected", toJson (selected.map fun (entry : SessionQueue.QueueEntry) => entry.requestId)),
+      ("pending", toJson (pending.map fun (entry : SessionQueue.QueueEntry) => entry.requestId))]
   IO.println ((Json.mkObj [("decisions", toJson decisions), ("folded_outcomes", toJson cases),
     ("requesters", toJson requesters), ("contexts", toJson contexts), ("targets", toJson targets),
-    ("targeted_claims", toJson claimStates)]).compress)
+    ("targeted_claims", toJson claimStates), ("deferred", toJson deferred)]).compress)

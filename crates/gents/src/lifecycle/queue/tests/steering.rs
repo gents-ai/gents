@@ -119,6 +119,21 @@ async fn signed_agent_steer_enters_active_turn_with_different_requester() {
     create.caused_by_parent_request_doc_id = Some("caller-request-doc".into());
     create.caused_by_parent_tool_call_id = Some("caller-tool".into());
     create.caused_by_parent_tool_call_doc_id = Some("caller-tool-doc".into());
+    let mut deferred = create.clone();
+    deferred.request_id = "deferred-agent-message".into();
+    deferred.content = "after this turn".into();
+    deferred.input.steer_target_request_doc_id = None;
+    deferred.input.queue.as_mut().unwrap().delivery = QueueDelivery::Queue;
+    crate::sign_agent_request_create(db.identity.as_ref(), &mut deferred)
+        .await
+        .unwrap();
+    crate::config_client::ConfigAccess::write_local_response(
+        &db.node,
+        "test.deferred_agent_message",
+        &deferred.graphql_mutation().unwrap(),
+    )
+    .await
+    .unwrap();
     crate::sign_agent_request_create(db.identity.as_ref(), &mut create)
         .await
         .unwrap();
