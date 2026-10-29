@@ -41,6 +41,8 @@ pub enum ProviderInputError {
     #[error(transparent)]
     Codec(#[from] AssistantCodecError),
     #[error(transparent)]
+    MessagesBody(#[from] crate::claude_messages_body::MessagesBodyError),
+    #[error(transparent)]
     Message(#[from] MessageError),
     #[error("projecting OpenAI Chat Completions request")]
     OpenAiChatProjection(#[source] CompletionError),
@@ -417,7 +419,7 @@ impl ProviderInputCounter {
     pub fn project_body(&self, request: &CompletionRequest) -> Result<Value> {
         if self.profile == ProviderInputProfile::ClaudeMessages {
             return crate::claude_messages_body::build_messages_body(&self.model, request)
-                .map_err(ProviderInputError::Codec);
+                .map_err(ProviderInputError::MessagesBody);
         }
         let mut body = serde_json::json!({
             "model": request.model.clone().unwrap_or_else(|| self.model.clone()),

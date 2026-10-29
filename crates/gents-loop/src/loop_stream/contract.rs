@@ -206,6 +206,9 @@ pub type StructuredOutputValidator = Arc<dyn Fn(&str) -> Result<(), String> + Se
 pub struct StructuredOutputConfig {
     pub(super) schema: schemars::Schema,
     pub(super) validate: StructuredOutputValidator,
+    /// Resamples allowed after invalid output, on top of the retry policy's
+    /// own ladder; `None` leaves the ladder alone.
+    pub(super) max_invalid_retries: Option<u32>,
 }
 
 impl StructuredOutputConfig {
@@ -225,7 +228,16 @@ impl StructuredOutputConfig {
                         )
                     })
             }),
+            max_invalid_retries: None,
         }
+    }
+
+    /// Allow at most `retries` resamples after invalid output. Each resample
+    /// resends the whole request, so a provider that decodes against the
+    /// schema natively gets one more try before the caller's fallback.
+    pub fn with_max_invalid_retries(mut self, retries: u32) -> Self {
+        self.max_invalid_retries = Some(retries);
+        self
     }
 }
 

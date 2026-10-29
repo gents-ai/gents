@@ -589,7 +589,13 @@ where
     M::StreamingResponse: 'static,
     T: DeserializeOwned + schemars::JsonSchema + 'static,
 {
-    config.structured_output = Some(StructuredOutputConfig::for_type::<T>());
+    // The decoded type fixes the schema; the caller's retry cap carries over.
+    let mut structured_output = StructuredOutputConfig::for_type::<T>();
+    structured_output.max_invalid_retries = config
+        .structured_output
+        .as_ref()
+        .and_then(|output| output.max_invalid_retries);
+    config.structured_output = Some(structured_output);
     let raw = run_loop_to_text(model, prompt, history, tools, config).await?;
     serde_json::from_str(&raw).map_err(|error| OneShotError::StructuredDecode {
         type_name: std::any::type_name::<T>(),

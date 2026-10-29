@@ -174,6 +174,7 @@ where
         let aggregate_token_budget = config.aggregate_token_budget.clone();
         let mut current_turn: usize = config.initial_turn_index;
         let mut retry = CompletionRetryState::new(config.retry_policy.clone());
+        let mut structured_output_retries = 0u32;
         let mut retain_effective_messages_oracle =
             config.context_message.is_some()
                 || config.resume_from_history
@@ -1023,7 +1024,24 @@ where
             }
 
             if let Some(error) = structured_output_error {
-                match retry.on_mid_stream_failure(false, Utc::now(), config.deadline) {
+                let capped = config
+                    .structured_output
+                    .as_ref()
+                    .and_then(|output| output.max_invalid_retries)
+                    .filter(|max| structured_output_retries >= *max);
+                let directive = match capped {
+                    Some(max) => MidStreamDirective::Fail {
+                        reason: format!(
+                            "structured-output retry budget exhausted after {max} retr{}",
+                            if max == 1 { "y" } else { "ies" }
+                        ),
+                    },
+                    None => retry.on_mid_stream_failure(false, Utc::now(), config.deadline),
+                };
+                if matches!(directive, MidStreamDirective::RetractAndResample { .. }) {
+                    structured_output_retries += 1;
+                }
+                match directive {
                     MidStreamDirective::RetractAndResample { delay } => {
                         yield LoopStreamItem::TurnRetracted {
                             turn: turn_index,

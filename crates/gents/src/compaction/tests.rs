@@ -2042,6 +2042,7 @@ async fn repeated_malformed_structured_summaries_use_strict_non_guided_fallback(
         requests[4].output_schema.is_none(),
         "the final escape hatch must bypass the failing guided decoder"
     );
+    assert_fallback_keeps_the_system_prefix(&requests[0], &requests[4]);
     assert!(
         requests
             .iter()
@@ -3541,15 +3542,225 @@ async fn summarizer_context_overflow_fails_without_reentering_compaction() {
     .expect("a summarizer overflow ends promptly")
     .expect_err("a summarizer overflow fails the reduction");
 
-    let rendered = format!("{:#}", anyhow::Error::from(error));
     assert!(
-        rendered.contains("context length exceeded") && rendered.contains("prompt is too long"),
-        "{rendered}"
+        matches!(error, CompactionError::SummaryContextOverflow { .. }),
+        "{error:?}"
     );
+    let rendered = format!("{:#}", anyhow::Error::from(error));
+    assert!(rendered.contains("prompt is too long"), "{rendered}");
+    let calls = calls.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        (1..=1 + summary_worthy_messages().len().ilog2() as usize).contains(&calls),
+        "each summary request is one provider call; only halving the chunk repeats it: {calls}"
+    );
+}
+
+/// Fails its first `overflows` summary requests the way Claude rejects an
+/// over-window prompt, then answers like [`SentinelCheckpointModel`].
+#[derive(Clone)]
+struct OverflowingCheckpointModel {
+    inner: SentinelCheckpointModel,
+    overflows: Arc<Mutex<usize>>,
+    rejected: Arc<Mutex<Vec<CompletionRequest>>>,
+}
+
+impl OverflowingCheckpointModel {
+    fn new(overflows: usize) -> Self {
+        Self {
+            inner: SentinelCheckpointModel::default(),
+            overflows: Arc::new(Mutex::new(overflows)),
+            rejected: Arc::default(),
+        }
+    }
+}
+
+#[allow(refining_impl_trait)]
+impl CompletionModel for OverflowingCheckpointModel {
+    type Response = ();
+    type StreamingResponse = ();
+    type Client = ();
+
+    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+        Self::new(0)
+    }
+
+    async fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+        self.inner.completion(request).await
+    }
+
+    async fn stream(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        let overflow = {
+            let mut left = self.overflows.lock().unwrap();
+            let overflow = *left > 0;
+            *left = left.saturating_sub(1);
+            overflow
+        };
+        if overflow {
+            self.rejected.lock().unwrap().push(request);
+            return Err(CompletionError::ProviderError(
+                r#"Claude Messages HTTP 400 Bad Request (request-id -) body={"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 9000 tokens > 6000 maximum"}}"#
+                    .to_string(),
+            ));
+        }
+        self.inner.stream(request).await
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn overflowing_summary_chunk_is_halved_and_retried() {
+    let model = OverflowingCheckpointModel::new(1);
+    let rejected = model.rejected.clone();
+    let accepted = model.inner.requests.clone();
+    let compactor = ProviderReductionEngine::new(Arc::new(model), gate_test_loop_config());
+
+    compactor
+        .reduce(
+            rolling_prefix_messages(),
+            6_000,
+            &ReductionOptions {
+                keep_recent_tokens: 20,
+                mode: ReductionMode::Summarize,
+                summary_max_output_tokens: 512,
+                ..Default::default()
+            },
+            test_reduction_admission(),
+        )
+        .await
+        .expect("the halved chunk fits and the prefix still rolls");
+
+    let rejected = rejected.lock().unwrap().clone();
+    let accepted = accepted.lock().unwrap().clone();
+    assert_eq!(rejected.len(), 1);
+    assert!(!accepted.is_empty());
+    let chunk_messages = |request: &CompletionRequest| request.chat_history.len();
+    assert!(
+        chunk_messages(&accepted[0]) < chunk_messages(&rejected[0]),
+        "the retried chunk ({}) is smaller than the rejected one ({})",
+        chunk_messages(&accepted[0]),
+        chunk_messages(&rejected[0])
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn summary_overflow_ends_once_no_smaller_chunk_exists() {
+    let model = OverflowingCheckpointModel::new(usize::MAX);
+    let rejected = model.rejected.clone();
+    let compactor = ProviderReductionEngine::new(Arc::new(model), gate_test_loop_config());
+
+    let error = compactor
+        .reduce(
+            rolling_prefix_messages(),
+            6_000,
+            &ReductionOptions {
+                keep_recent_tokens: 20,
+                mode: ReductionMode::Summarize,
+                summary_max_output_tokens: 512,
+                ..Default::default()
+            },
+            test_reduction_admission(),
+        )
+        .await
+        .expect_err("a chunk that overflows at every size fails");
+
+    assert!(
+        matches!(error, CompactionError::SummaryContextOverflow { .. }),
+        "{error:?}"
+    );
+    let rejected = rejected.lock().unwrap();
+    assert!(
+        rejected.len() <= 1 + rolling_prefix_messages().len().ilog2() as usize,
+        "halving bounds the attempts: {}",
+        rejected.len()
+    );
+    assert!(rejected
+        .windows(2)
+        .all(|pair| pair[1].chat_history.len() < pair[0].chat_history.len()));
+}
+
+fn claude_summary_config() -> crate::agent::loop_stream::LoopConfig {
+    let mut config = scheduled_origin_config();
+    config.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
+        crate::BackendProviderKind::AnthropicApiKey,
+        crate::OpenAiWireApi::ChatCompletions,
+        "claude-opus-5-5",
+    ));
+    config
+}
+
+#[tokio::test(start_paused = true)]
+async fn claude_guided_summary_retries_once_then_falls_back_with_the_same_system_prefix() {
+    let model = ScriptedSummaryModel::new(vec![
+        ScriptedSummaryModel::malformed_summary_turn(),
+        ScriptedSummaryModel::malformed_summary_turn(),
+        ScriptedSummaryModel::summary_turn(),
+    ]);
+    let calls = model.calls.clone();
+    let requests = model.requests.clone();
+    let compactor = ProviderReductionEngine::new(Arc::new(model), claude_summary_config());
+
+    compactor
+        .reduce(
+            summary_worthy_messages(),
+            6_000,
+            &ReductionOptions {
+                keep_recent_tokens: 50,
+                mode: ReductionMode::Summarize,
+                summary_max_output_tokens: 512,
+                ..Default::default()
+            },
+            test_reduction_admission(),
+        )
+        .await
+        .expect("the strict JSON fallback recovers");
+
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "the summarizer neither retries nor compacts an overflowed summary request"
+        3,
+        "Claude: 1 guided call + 1 guided retry, then the fallback"
+    );
+    let requests = requests.lock().unwrap();
+    assert!(requests[..2]
+        .iter()
+        .all(|request| request.output_schema.is_some()));
+    assert!(requests[2].output_schema.is_none());
+    assert_fallback_keeps_the_system_prefix(&requests[0], &requests[2]);
+}
+
+fn assert_fallback_keeps_the_system_prefix(
+    guided: &CompletionRequest,
+    fallback: &CompletionRequest,
+) {
+    assert_eq!(
+        fallback.preamble, guided.preamble,
+        "the fallback's system prefix is byte-identical to the guided attempt's"
+    );
+    let last_user_text = |request: &CompletionRequest| {
+        serde_json::to_string(&request.chat_history.iter().last().unwrap()).unwrap()
+    };
+    let fallback_instruction =
+        serde_json::to_string(&super::summary::compaction_json_fallback_prompt()).unwrap();
+    let fallback_instruction = fallback_instruction.trim_matches('"');
+    assert!(last_user_text(fallback).contains(fallback_instruction));
+    assert!(!last_user_text(guided).contains(fallback_instruction));
+    let prefix_len = guided.chat_history.len() - 1;
+    let prefix = |request: &CompletionRequest| {
+        request
+            .chat_history
+            .iter()
+            .take(prefix_len)
+            .map(|message| serde_json::to_string(message).unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        prefix(fallback),
+        prefix(guided),
+        "the chunk history before the final prompt is unchanged"
     );
 }
 

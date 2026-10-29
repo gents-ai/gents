@@ -51,13 +51,23 @@ impl CompletionModel for ClaudeCheckpointModel {
             let schema = schemars::schema_for!(summary::ContinuationCheckpoint)
                 .as_value()
                 .to_string();
-            assert!(body["system"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|block| block["text"]
-                    .as_str()
-                    .is_some_and(|text| text.contains(&schema))));
+            let texts = |value: &Value| {
+                let mut texts = Vec::new();
+                collect_texts(value, &mut texts);
+                texts
+            };
+            assert!(
+                texts(body["messages"].as_array().unwrap().last().unwrap())
+                    .iter()
+                    .any(|text| text.contains(&schema)),
+                "the strict JSON instruction rides in the final user message"
+            );
+            assert!(
+                !texts(&body["system"])
+                    .iter()
+                    .any(|text| text.contains(&schema)),
+                "the system prefix stays the guided attempts' prefix"
+            );
             self.fallback.clone()
         };
         self.requests.lock().unwrap().push((guided, body));
@@ -68,6 +78,43 @@ impl CompletionModel for ClaudeCheckpointModel {
                 Ok(RawStreamingChoice::FinalResponse(())),
             ]),
         )))
+    }
+}
+
+/// Where `cache_control` breakpoints sit: "system" or "messages[i]".
+fn cache_control_paths(body: &Value) -> Vec<String> {
+    let mut paths = Vec::new();
+    let marked = |blocks: &Value| {
+        blocks.as_array().is_some_and(|blocks| {
+            blocks
+                .iter()
+                .any(|block| block.get("cache_control").is_some())
+        })
+    };
+    if marked(&body["system"]) {
+        paths.push("system".to_string());
+    }
+    for (index, message) in body["messages"].as_array().unwrap().iter().enumerate() {
+        if marked(&message["content"]) {
+            paths.push(format!("messages[{index}]"));
+        }
+    }
+    paths
+}
+
+fn collect_texts(value: &Value, texts: &mut Vec<String>) {
+    match value {
+        Value::Object(map) => {
+            if let Some(Value::String(text)) = map.get("text") {
+                texts.push(text.clone());
+            }
+            if let Some(Value::String(text)) = map.get("content") {
+                texts.push(text.clone());
+            }
+            map.values().for_each(|value| collect_texts(value, texts));
+        }
+        Value::Array(values) => values.iter().for_each(|value| collect_texts(value, texts)),
+        _ => {}
     }
 }
 
@@ -141,6 +188,52 @@ async fn exercise(reject_guidance: bool) {
                 1,
                 "schema delivery must avoid unnecessary fallback calls"
             );
+        }
+        if reject_guidance {
+            assert_eq!(
+                requests.iter().filter(|(guided, _)| *guided).count(),
+                1 + MAX_CLAUDE_GUIDED_SUMMARY_RETRIES as usize,
+                "Claude gets one guided retry before the fallback"
+            );
+            let body = |guided: bool| {
+                requests
+                    .iter()
+                    .find(|(is_guided, _)| *is_guided == guided)
+                    .map(|(_, body)| body.clone())
+                    .unwrap()
+            };
+            let (guided, fallback) = (body(true), body(false));
+            assert_eq!(
+                fallback["system"], guided["system"],
+                "the fallback's system blocks are byte-identical to the guided attempt's"
+            );
+            assert_eq!(fallback["tools"], guided["tools"]);
+            let messages = |body: &Value| body["messages"].as_array().unwrap().clone();
+            let (guided_messages, fallback_messages) = (messages(&guided), messages(&fallback));
+            assert_eq!(guided_messages.len(), fallback_messages.len());
+            let prefix = guided_messages.len() - 1;
+            assert_eq!(
+                fallback_messages[..prefix],
+                guided_messages[..prefix],
+                "every message before the final instruction, cache_control included, is identical"
+            );
+            assert_ne!(fallback_messages[prefix], guided_messages[prefix]);
+            for body in [&guided, &fallback] {
+                let marked = cache_control_paths(body);
+                assert!(
+                    marked.len() <= 4,
+                    "Anthropic allows four breakpoints: {marked:?}"
+                );
+                assert!(
+                    marked.contains(&format!("messages[{}]", prefix - 1)),
+                    "a breakpoint closes the shared chunk history: {marked:?}"
+                );
+                assert!(
+                    marked.contains(&format!("messages[{prefix}]")),
+                    "{marked:?}"
+                );
+                assert!(marked.contains(&"system".to_string()), "{marked:?}");
+            }
         }
         for (guided, body) in requests.iter() {
             assert_eq!(body["output_config"]["effort"], "high");
