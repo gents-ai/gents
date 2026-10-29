@@ -26,6 +26,7 @@ export type HookDraft = {
   phase: TaskHookPhase;
   command: string;
   timeout: string;
+  skipExitCodes: string;
   stored?: { argv: string[]; line: string } | null;
 };
 
@@ -78,6 +79,7 @@ export const toHookDraft = (h: TaskHook): HookDraft => {
     phase: h.phase,
     command: line,
     timeout: h.timeout_secs == null ? "" : String(h.timeout_secs),
+    skipExitCodes: (h.skip_exit_codes ?? []).join(", "),
     stored: { argv: [...h.command], line },
   };
 };
@@ -101,7 +103,25 @@ export function hooksFromDraft(rows: HookDraft[]): TaskHook[] | string {
       if (!Number.isInteger(timeout_secs) || timeout_secs < 1)
         return `Hook ${hook_id} timeout must be a positive whole number`;
     }
-    out.push({ hook_id, phase: r.phase, command, timeout_secs });
+    const codes = r.skipExitCodes.trim();
+    if (codes && r.phase !== "before")
+      return `Hook ${hook_id} skip codes are only supported before the run`;
+    const skip_exit_codes = codes ? codes.split(",").map((code) => code.trim()) : [];
+    if (
+      skip_exit_codes.some(
+        (code) => !/^\d+$/.test(code) || Number(code) < 1 || Number(code) > 255,
+      )
+    )
+      return `Hook ${hook_id} skip codes must be comma-separated integers from 1 to 255`;
+    out.push({
+      hook_id,
+      phase: r.phase,
+      command,
+      timeout_secs,
+      ...(skip_exit_codes.length
+        ? { skip_exit_codes: skip_exit_codes.map(Number) }
+        : {}),
+    });
   }
   return out;
 }
@@ -130,7 +150,7 @@ export function HooksRows({
         {value.map((h, i) => (
           <div
             key={i}
-            className="grid grid-cols-[8rem_11rem_minmax(0,1fr)_5rem_auto] items-center gap-2 max-md:grid-cols-1"
+            className="grid grid-cols-[8rem_11rem_minmax(0,1fr)_5rem_7rem_auto] items-center gap-2 max-md:grid-cols-1"
           >
             <Input
               id={`${id}-${i}-id`}
@@ -172,6 +192,12 @@ export function HooksRows({
               value={h.timeout}
               onChange={(e) => set(i, { timeout: e.target.value })}
             />
+            <Input
+              aria-label="Skip exit codes"
+              placeholder="e.g. 10, 11"
+              value={h.skipExitCodes}
+              onChange={(e) => set(i, { skipExitCodes: e.target.value })}
+            />
             <Button
               variant="quiet"
               size="icon-sm"
@@ -196,7 +222,13 @@ export function HooksRows({
             onClick={() => {
               onChange([
                 ...value,
-                { hook_id: "", phase: "after_success", command: "", timeout: "" },
+                {
+                  hook_id: "",
+                  phase: "after_success",
+                  command: "",
+                  timeout: "",
+                  skipExitCodes: "",
+                },
               ]);
             }}
           >

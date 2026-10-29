@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { TaskHook } from "@source-inc/gents-desktop-client/generated/TaskHook";
 import {
   formatCommand,
@@ -6,6 +6,8 @@ import {
   splitCommand,
   toHookDraft,
 } from "../src/ui/screens/agent/HooksRows";
+
+vi.mock("../src/lib/nativeShell", () => ({}));
 
 const hook = (command: string[]): TaskHook => ({
   hook_id: "verify",
@@ -27,6 +29,29 @@ const CASES: string[][] = [
 ];
 
 describe("task hook commands", () => {
+  it("preserves configured gate exit codes when editing other hook fields", () => {
+    const gate: TaskHook = {
+      ...hook(["./gate"]),
+      phase: "before",
+      skip_exit_codes: [10, 11],
+    };
+    const draft = toHookDraft(gate);
+    expect(hooksFromDraft([draft])).toEqual([gate]);
+    expect(hooksFromDraft([{ ...draft, command: "./gate --verbose" }])).toEqual([
+      { ...gate, command: ["./gate", "--verbose"] },
+    ]);
+  });
+
+  it("rejects invalid skip codes and codes on non-before hooks", () => {
+    const gate = toHookDraft({ ...hook(["./gate"]), phase: "before" });
+    for (const skipExitCodes of ["0", "256", "1,", "1.5", "-1"]) {
+      expect(hooksFromDraft([{ ...gate, skipExitCodes }])).toMatch(/skip codes/);
+    }
+    expect(
+      hooksFromDraft([{ ...gate, phase: "finally", skipExitCodes: "10" }]),
+    ).toMatch(/only supported before/);
+  });
+
   it("round-trips every argv through its one-line form", () => {
     for (const argv of CASES) {
       expect(splitCommand(formatCommand(argv)), JSON.stringify(argv)).toEqual(argv);
