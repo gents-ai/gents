@@ -558,20 +558,20 @@ def caseCoverage : List CoverageEntry :=
       "RequestExecutionObservedCases"
       "lifecycle::execution_lease::tests::generated_recovery_invalidates_real_admitted_renewal_transaction")
       "request-execution-lease" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
+  , tagged (consumerCoverage
       "account_rotation_cases"
       "AccountRotationSelectCases"
-      "The Claude account rotation owner binds these when it selects an account for each model call from observed limit state.")
+      "gents_claude::rotation::tests::generated_rotation_select_cases_choose_the_account")
       "account-rotation" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
+  , tagged (consumerCoverage
       "account_rotation_cases"
       "AccountRotationAttemptCases"
-      "The Claude transport binds these when a provider rejection moves one attempt to the next eligible account.")
+      "gents_claude::rotation::tests::generated_rotation_attempt_cases_walk_the_pool")
       "account-rotation" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
+  , tagged (consumerCoverage
       "account_rotation_cases"
       "AccountRotationObserveCases"
-      "The Claude rate-limit header adapter binds these when it folds a response's unified limits into account state.")
+      "gents_claude::rotation::tests::generated_rotation_observe_cases_fold_limits")
       "account-rotation" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "request_execution_lease_cases"
@@ -2451,15 +2451,15 @@ def caseCoverage : List CoverageEntry :=
       "PromptAssemblyClaudeBodyCases"
       "conformance::prompt_assembly::generated_claude_body_cases_drive_the_body_builder")
       "prompt-assembly" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
+  , tagged (consumerCoverage
       "prompt_assembly_cases"
       "PromptAssemblyClaudeAttributionCases"
-      "The gents-claude attribution builder binds these: it renders the header from the modeled fields and the native fingerprint.")
+      "gents_claude::attribution::tests::generated_attribution_cases_render_the_header")
       "prompt-assembly" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
+  , tagged (consumerCoverage
       "prompt_assembly_cases"
       "PromptAssemblyClaudeCacheCases"
-      "The gents-claude body serializer binds these: user content normalization, the single message breakpoint and the cache TTL.")
+      "gents_claude::cache::tests::generated_cache_cases_place_the_breakpoint")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "prompt_assembly_cases"
