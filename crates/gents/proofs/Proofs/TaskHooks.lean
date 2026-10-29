@@ -84,8 +84,12 @@ theorem admitted_timeout_positive (h : TaskHook) (ha : hookAdmitted h = true) :
 
 /-- Validate the whole task before execution. IDs identify occurrences across
 all phases, so uniqueness is task-wide rather than per phase. -/
+def skipCodesAdmitted (h : TaskHook) : Bool :=
+  h.skipExitCodes.isEmpty ||
+    (h.phase == .before && h.skipExitCodes.all (fun code => decide (0 < code ∧ code ≤ 255)))
+
 def admitHooks (hs : List TaskHook) : Option (List TaskHook) :=
-  if hs.all hookAdmitted && decide (hs.map TaskHook.hookId).Nodup then some hs else none
+  if hs.all hookAdmitted && hs.all skipCodesAdmitted && decide (hs.map TaskHook.hookId).Nodup then some hs else none
 
 theorem admitHooks_some_valid {hs admitted : List TaskHook}
     (h : admitHooks hs = some admitted) (x : TaskHook) (hx : x ∈ admitted) :
@@ -96,7 +100,7 @@ theorem admitHooks_some_valid {hs admitted : List TaskHook}
     have he := Option.some.inj h
     subst admitted
     simp only [Bool.and_eq_true] at ha
-    exact (List.all_eq_true.mp ha.1) x hx
+    exact (List.all_eq_true.mp ha.1.1) x hx
   · simp at h
 
 theorem admitHooks_unique_ids {hs admitted : List TaskHook}

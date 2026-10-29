@@ -81,6 +81,14 @@ private def cleanup (hookId : String) : TaskHook :=
 
 def admissionCases : List AdmissionCase :=
   [ { name := "no_hooks_admitted", hooks := [], expectedAdmitted := true }
+  , { name := "before_skip_code_admitted"
+    , hooks := [{ before "prepare" with skipExitCodes := [10] }], expectedAdmitted := true }
+  , { name := "zero_skip_code_rejected"
+    , hooks := [{ before "prepare" with skipExitCodes := [0] }], expectedAdmitted := false }
+  , { name := "skip_code_outside_process_exit_range_rejected"
+    , hooks := [{ before "prepare" with skipExitCodes := [256] }], expectedAdmitted := false }
+  , { name := "after_phase_skip_code_rejected"
+    , hooks := [{ afterSuccess "verify" with skipExitCodes := [10] }], expectedAdmitted := false }
   , { name := "default_timeout_admitted"
     , hooks := [before "prepare"], expectedAdmitted := true }
   , { name := "explicit_positive_timeout_admitted"
@@ -175,8 +183,8 @@ def runCases : List RunCase :=
     , script := [⟨"prepare", .exited 10⟩], agent := .success
     , expectedOutcome := .success, expectedFinalOutcome := .success
     , expectedAgentRan := false }
-  , { name := "zero_exit_proceeds_even_when_listed_as_skip"
-    , hooks := [{ before "prepare" with skipExitCodes := [0] }, cleanup "sweep"]
+  , { name := "zero_exit_proceeds_with_skip_configuration"
+    , hooks := [{ before "prepare" with skipExitCodes := [10] }, cleanup "sweep"]
     , script := [], agent := .success
     , expectedOutcome := .success, expectedFinalOutcome := .success
     , expectedAgentRan := true }
