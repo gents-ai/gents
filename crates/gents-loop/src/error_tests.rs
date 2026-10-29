@@ -246,3 +246,104 @@ fn loop_verdicts_classify_from_their_variant_not_their_text() {
     assert!(crate::loop_stream::is_no_visible_output_failure(&verdict));
     assert_eq!(verdict.provider_message(), None);
 }
+
+/// The live Claude Messages rejection, as the transport renders it.
+pub(crate) const CLAUDE_PROMPT_TOO_LONG: &str = r#"Claude Messages HTTP 400 Bad Request (request-id -) body={"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 1001685 tokens > 1000000 maximum"},"request_id":"req_011CgVVYfxcw64a1gDiAAhYC"}"#;
+
+fn provider_error(text: &str) -> rig::agent::StreamingError {
+    rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
+        text.into(),
+    ))
+}
+
+#[test]
+fn claude_prompt_too_long_is_a_context_overflow_with_its_counts() {
+    let classified =
+        crate::rig_compat::classify_completion_error(&provider_error(CLAUDE_PROMPT_TOO_LONG));
+    assert_eq!(
+        classified.report.context_overflow,
+        Some(ContextOverflow {
+            input_tokens: Some(1_001_685),
+            limit: Some(1_000_000),
+        })
+    );
+    match &classified.error {
+        InferenceError::ContextLengthExceeded {
+            reason,
+            input_tokens,
+            limit,
+        } => {
+            assert!(reason.contains("prompt is too long"), "{reason}");
+            assert_eq!((*input_tokens, *limit), (Some(1_001_685), Some(1_000_000)));
+        }
+        other => panic!("expected a context overflow, got {other:?}"),
+    }
+    assert!(!classified.error.is_retryable());
+}
+
+#[test]
+fn openai_and_xai_context_overflows_are_classified_with_their_counts() {
+    for (text, input_tokens, limit) in [
+        (
+            r#"Invalid status code 400 Bad Request with message: {"error":{"message":"This model's maximum context length is 128000 tokens. However, your messages resulted in 130,532 tokens. Please reduce the length of the messages.","type":"invalid_request_error","param":"messages","code":"context_length_exceeded"}}"#,
+            Some(130_532),
+            Some(128_000),
+        ),
+        (
+            "This model's maximum context length is 8192 tokens, however you requested 9000 tokens",
+            Some(9_000),
+            Some(8_192),
+        ),
+        (
+            r#"{"code":"Client specified an invalid argument","error":"This model's maximum prompt length is 131072 but the request contains 145000 tokens."}"#,
+            Some(145_000),
+            Some(131_072),
+        ),
+        (
+            r#"{"error":{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model."}}"#,
+            None,
+            None,
+        ),
+        ("input is too long for the requested model", None, None),
+    ] {
+        let classified = crate::rig_compat::classify_completion_error(&provider_error(text));
+        match &classified.error {
+            InferenceError::ContextLengthExceeded {
+                input_tokens: observed_input,
+                limit: observed_limit,
+                ..
+            } => assert_eq!(
+                (*observed_input, *observed_limit),
+                (input_tokens, limit),
+                "{text}"
+            ),
+            other => panic!("expected a context overflow for {text}, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn payload_too_large_413_is_not_a_context_overflow() {
+    for error in [
+        rig::agent::StreamingError::Completion(rig::completion::CompletionError::HttpError(
+            rig::http_client::Error::InvalidStatusCodeWithMessage(
+                "413".parse().expect("valid status"),
+                r#"{"type":"error","error":{"type":"request_too_large","message":"Request exceeds the maximum allowed number of bytes."}}"#.into(),
+            ),
+        )),
+        provider_error(
+            r#"Claude Messages HTTP 413 Payload Too Large (request-id -) body={"type":"error","error":{"type":"request_too_large","message":"Request exceeds the maximum allowed number of bytes."}}"#,
+        ),
+    ] {
+        let classified = crate::rig_compat::classify_completion_error(&error);
+        assert_eq!(classified.report.context_overflow, None);
+        assert!(
+            !matches!(
+                classified.error,
+                InferenceError::ContextLengthExceeded { .. }
+            ),
+            "{:?}",
+            classified.error
+        );
+    }
+}

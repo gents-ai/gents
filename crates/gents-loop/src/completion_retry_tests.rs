@@ -362,3 +362,18 @@ fn reasoning_rejection_repairs_once_then_fails() {
         PreStreamDirective::Fail { .. }
     ));
 }
+
+#[test]
+fn permanent_failure_reason_carries_its_prefix_once() {
+    let mut state = CompletionRetryState::new(CompletionRetryPolicy::scheduled_default());
+    let error = InferenceError::PermanentFailure {
+        reason: "ProviderError: bad request".to_string(),
+    };
+    match state.on_pre_stream_failure(&classified(&error, "bad request"), Utc::now(), None) {
+        PreStreamDirective::Fail { reason } => assert_eq!(
+            reason,
+            "permanent inference failure: ProviderError: bad request"
+        ),
+        other => panic!("expected Fail, got {other:?}"),
+    }
+}

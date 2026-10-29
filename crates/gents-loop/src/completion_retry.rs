@@ -229,6 +229,7 @@ impl CompletionRetryState {
             FailureClass::Permanent => PreStreamDirective::Fail {
                 reason: match error {
                     InferenceError::UsageLimited(limit) => limit.to_string(),
+                    InferenceError::PermanentFailure { .. } => error.to_string(),
                     _ => format!("permanent inference failure: {error}"),
                 },
             },
