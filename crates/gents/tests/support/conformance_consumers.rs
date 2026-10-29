@@ -884,7 +884,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "client::core::enrollment::tests::generated_pending_request_satisfaction_matches_lean",
             package: "gents-desktop-core",
-            source_path: "crates/gents-desktop-core/src/client/core/enrollment.rs",
+            source_path: "crates/gents-desktop-core/src/client/core/enrollment/tests.rs",
             module_path: "client::core::enrollment::tests",
             function: "generated_pending_request_satisfaction_matches_lean",
         },
