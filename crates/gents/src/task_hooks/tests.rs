@@ -16,6 +16,7 @@ fn phased(
         phase,
         command: command.iter().map(|part| (*part).to_string()).collect(),
         timeout_secs,
+        skip_exit_codes: Vec::new(),
     }
 }
 

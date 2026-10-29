@@ -93,6 +93,7 @@ mod task_hook_vocab {
                 phase: lean_hook_phase(&self.phase),
                 command: self.command.clone(),
                 timeout_secs: self.timeout_secs,
+                skip_exit_codes: self.skip_exit_codes.clone(),
             }
         }
     }

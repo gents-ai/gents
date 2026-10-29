@@ -1,4 +1,4 @@
-use super::Task;
+use super::{Task, TaskHookPhase};
 use crate::template::{
     catalog::{default_catalog, Site},
     check_template_vocabulary, parse_template_for_validation, TemplateError,
@@ -45,6 +45,14 @@ impl Task {
                 hook.timeout_secs
                     .is_none_or(|timeout| (1..=MAX_TASK_HOOK_TIMEOUT_SECS).contains(&timeout)),
                 "task {} hook {:?} timeout_secs must be between 1 and {MAX_TASK_HOOK_TIMEOUT_SECS}",
+                self.task_id,
+                hook.hook_id
+            );
+            ensure!(
+                hook.skip_exit_codes.is_empty()
+                    || (hook.phase == TaskHookPhase::Before
+                        && hook.skip_exit_codes.iter().all(|code| (1..=255).contains(code))),
+                "task {} hook {:?} skip_exit_codes require a before hook and values between 1 and 255",
                 self.task_id,
                 hook.hook_id
             );

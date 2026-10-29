@@ -219,28 +219,40 @@ where
         before_attempted: run_phase(hooks, TaskHookPhase::Before, exec).await,
         ..Default::default()
     };
-    match phase_outcome(&run.before_attempted) {
-        TaskHookOutcome::Interrupted => run.outcome = TaskHookOutcome::Interrupted,
-        TaskHookOutcome::Failure(error) => {
-            run.outcome = TaskHookOutcome::Failure(error);
-            run.after_failure_attempted = run_phase(hooks, TaskHookPhase::AfterFailure, exec).await;
-        }
-        TaskHookOutcome::Success => {
-            let agent = work().await;
-            run.agent_result = Some(agent);
-            match agent {
-                TaskAgentResult::Cancelled | TaskAgentResult::Interrupted => {
-                    run.outcome = TaskHookOutcome::Interrupted
-                }
-                TaskAgentResult::Success => {
-                    let after = run_phase(hooks, TaskHookPhase::AfterSuccess, exec).await;
-                    run.outcome = phase_outcome(&after);
-                    run.after_success_attempted = after;
-                }
-                TaskAgentResult::Failure => {
-                    run.outcome = TaskHookOutcome::Failure(HookPrimaryError::Agent);
-                    run.after_failure_attempted =
-                        run_phase(hooks, TaskHookPhase::AfterFailure, exec).await;
+    let skipped = run
+        .before_attempted
+        .iter()
+        .find(|attempt| !attempt.result.succeeded())
+        .is_some_and(|attempt| {
+            matches!(attempt.result, HookCommandResult::Exited { code: Some(code) }
+                if code != 0 && hooks.iter().find(|hook| hook.hook_id == attempt.hook_id)
+                    .is_some_and(|hook| hook.skip_exit_codes.contains(&code)))
+        });
+    if !skipped {
+        match phase_outcome(&run.before_attempted) {
+            TaskHookOutcome::Interrupted => run.outcome = TaskHookOutcome::Interrupted,
+            TaskHookOutcome::Failure(error) => {
+                run.outcome = TaskHookOutcome::Failure(error);
+                run.after_failure_attempted =
+                    run_phase(hooks, TaskHookPhase::AfterFailure, exec).await;
+            }
+            TaskHookOutcome::Success => {
+                let agent = work().await;
+                run.agent_result = Some(agent);
+                match agent {
+                    TaskAgentResult::Cancelled | TaskAgentResult::Interrupted => {
+                        run.outcome = TaskHookOutcome::Interrupted
+                    }
+                    TaskAgentResult::Success => {
+                        let after = run_phase(hooks, TaskHookPhase::AfterSuccess, exec).await;
+                        run.outcome = phase_outcome(&after);
+                        run.after_success_attempted = after;
+                    }
+                    TaskAgentResult::Failure => {
+                        run.outcome = TaskHookOutcome::Failure(HookPrimaryError::Agent);
+                        run.after_failure_attempted =
+                            run_phase(hooks, TaskHookPhase::AfterFailure, exec).await;
+                    }
                 }
             }
         }

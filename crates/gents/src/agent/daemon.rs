@@ -989,6 +989,7 @@ where
             return Ok(());
         }
 
+        let skipped_before_work = owned_work.is_none();
         let (work_reason, release_writer_binding, interruption_source) = match owned_work {
             None => (None, true, RequestInterruptionSource::TaskHook),
             Some(OwnedWorkOutcome::Interrupted(source)) => (None, false, source),
@@ -1027,13 +1028,34 @@ where
         let terminal = final_outcome.terminal_outcome();
         match final_outcome {
             crate::task_hooks::TaskHookOutcome::Success => {
-                if let Err(error) =
-                    terminalize_request(&mut lifecycle, &stream_writer, terminal, None).await
-                {
-                    record_current_request_outcome("terminalization_failed");
-                    record_current_failure_class(&error);
-                    tracing::error!(request_id = %request.request_id, error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
-                        "failed to atomically terminalize completed request and response");
+                if skipped_before_work {
+                    if let Err(error) = lifecycle.begin_owned_execution(&stream_writer).await {
+                        self.finalize_failure_before_work(
+                            &mut lifecycle,
+                            &stream_writer,
+                            &error.to_string(),
+                            &request,
+                        )
+                        .await;
+                        return Ok(());
+                    }
+                }
+                match terminalize_request(&mut lifecycle, &stream_writer, terminal, None).await {
+                    Ok(true) if skipped_before_work => {
+                        if let Err(error) =
+                            crate::workspace::release_writer_binding(&self.node, &request).await
+                        {
+                            tracing::warn!(request_id = %request.request_id, error = %error,
+                                "failed to release writer workspace binding after skipped task gate");
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        record_current_request_outcome("terminalization_failed");
+                        record_current_failure_class(&error);
+                        tracing::error!(request_id = %request.request_id, error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
+                            "failed to atomically terminalize completed request and response");
+                    }
                 }
             }
             crate::task_hooks::TaskHookOutcome::Failure(_) => {
