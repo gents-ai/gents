@@ -1151,6 +1151,12 @@ impl gents_loop::session_hook::CanonicalSessionHook<crate::streaming::AcceptedTo
 impl gents_loop::session_hook::SessionHook for DefraSessionHook {
     type Error = crate::agent::stream_processor::RuntimeSeamError;
 
+    fn allows_parallel_read(&self, tool_name: &str) -> bool {
+        matches!(tool_name, "read_file" | "list_files" | "glob" | "grep")
+            && !self.job_tools.contains_key(tool_name)
+            && persistence::HookOwnedTool::of(tool_name).is_none()
+    }
+
     async fn run_foreground_tool(
         &self,
         name: &str,

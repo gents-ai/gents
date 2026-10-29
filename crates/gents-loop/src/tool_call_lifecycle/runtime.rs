@@ -370,6 +370,36 @@ where
         .await
 }
 
+/// Retains the admitted request's scope while giving a group of concurrent
+/// calls a child cancellation token. A child stop must not cancel the request.
+pub async fn scope_tool_execution_with_cancellation<F, T>(
+    scope: CurrentToolRuntimeContext,
+    token: CancellationToken,
+    future: F,
+) -> T
+where
+    F: Future<Output = T>,
+{
+    scope_tool_request_identity(
+        scope.requester_did,
+        scope.node_did,
+        scope.agent_id,
+        scope.request_id,
+        scope_request_tool_execution_with_trigger_context(
+            scope.deadline_at,
+            token,
+            scope.workspace_cwd,
+            scope.live_output,
+            scope.session_id,
+            scope.correlation,
+            scope.source_fields,
+            scope.background,
+            future,
+        ),
+    )
+    .await
+}
+
 #[cfg(test)]
 pub async fn scope_background_tool_execution<F, T>(
     deadline_at: Option<DateTime<Utc>>,
@@ -963,6 +993,46 @@ mod tests {
             },
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn child_cancellation_preserves_request_identity_without_stopping_parent() {
+        let parent = CancellationToken::new();
+        let child = parent.child_token();
+        let mut fields = std::collections::BTreeMap::new();
+        fields.insert("trigger".into(), "value".into());
+        scope_tool_request_identity(
+            Some("requester".into()),
+            Some("node".into()),
+            Some("agent".into()),
+            Some("request".into()),
+            scope_request_tool_execution_with_trigger_context(
+                None,
+                parent.clone(),
+                Some(PathBuf::from("/workspace")),
+                None,
+                Some("session".into()),
+                Some("correlation".into()),
+                fields.clone(),
+                false,
+                async {
+                    let original = current_tool_runtime_context().unwrap();
+                    scope_tool_execution_with_cancellation(original, child.clone(), async {
+                        let observed = current_tool_runtime_context().unwrap();
+                        assert_eq!(observed.node_did.as_deref(), Some("node"));
+                        assert_eq!(observed.request_id.as_deref(), Some("request"));
+                        assert_eq!(observed.session_id.as_deref(), Some("session"));
+                        assert_eq!(observed.workspace_cwd, Some(PathBuf::from("/workspace")));
+                        assert_eq!(observed.source_fields, fields);
+                        child.cancel();
+                        assert!(observed.cancellation_token.is_cancelled());
+                    })
+                    .await;
+                },
+            ),
+        )
+        .await;
+        assert!(!parent.is_cancelled());
     }
 
     #[tokio::test]

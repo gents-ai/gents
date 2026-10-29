@@ -33,8 +33,20 @@ def conflicts : Footprint → Footprint → Bool
   | .read _, .read _ => false
   | .read a, .write b | .write a, .read b | .write a, .write b => intersects a b
 
+/-- The current hook boundary authorizes speculative reads only. A hook-owned
+tool or a tool without a complete read footprint is a serial barrier. -/
+def speculativeFootprint (hookAllows : Bool) (footprint : Footprint) : Footprint :=
+  match hookAllows, footprint with
+  | true, .read paths => .read paths
+  | _, _ => .barrier
+
+theorem no_hook_authority_is_a_barrier (footprint : Footprint) :
+    speculativeFootprint false footprint = .barrier := by
+  cases footprint <;> rfl
+
 structure Call where
   id : Nat
+  key : String
   footprint : Footprint
   deriving DecidableEq, Repr
 
@@ -73,8 +85,8 @@ def admitted : List (Call × Decision) → List Call
   | (_, .terminate) :: _ => []
 
 theorem barrier_runs_alone (id : Nat) (rest : List Call) :
-    nextWave ({ id := id, footprint := .barrier } :: rest) =
-      ([{ id := id, footprint := .barrier }], rest) := by
+    nextWave ({ id := id, key := "", footprint := .barrier } :: rest) =
+      ([{ id := id, key := "", footprint := .barrier }], rest) := by
   simp [nextWave]
 
 theorem termination_stops_admission (call : Call) (rest : List (Call × Decision)) :
@@ -116,5 +128,44 @@ theorem stop_leaves_no_running (wave : List Execution) :
 theorem stop_preserves_settled (value : String) : stop (.finished value) = .finished value := by rfl
 
 theorem stop_preserves_failure (reason : String) : stop (.failed reason) = .failed reason := by rfl
+
+/-- A speculative wave cannot repeat the same call: the failure-streak owner
+must observe one outcome before deciding whether to suppress a repeat. The
+wave is bounded by the remaining invalid-call budget, so exhaustion cannot
+occur before an already-started call. -/
+def takeUnique (seen : List String) (remaining : Nat) : List Call → List Call
+  | [] => []
+  | call :: rest =>
+      if remaining == 0 || seen.contains call.key then []
+      else call :: takeUnique (call.key :: seen) (remaining - 1) rest
+
+def budgetedUnique (limit : Nat) (calls : List Call) : List Call :=
+  takeUnique [] limit calls
+
+def executableWave (limit : Nat) (calls : List Call) : List Call :=
+  budgetedUnique limit (nextWave calls).1
+
+theorem take_unique_bounded (calls : List Call) (seen : List String) (limit : Nat) :
+    (takeUnique seen limit calls).length ≤ limit := by
+  induction calls generalizing seen limit with
+  | nil => simp [takeUnique]
+  | cons call rest ih =>
+    cases limit with
+    | zero => simp [takeUnique]
+    | succ limit =>
+      simp only [takeUnique]
+      split
+      · simp
+      · simpa using Nat.succ_le_succ (ih (call.key :: seen) limit)
+
+theorem executable_wave_respects_budget (limit : Nat) (calls : List Call) :
+    (executableWave limit calls).length ≤ limit := by
+  exact take_unique_bounded (nextWave calls).1 [] limit
+
+theorem zero_budget_starts_nothing (calls : List Call) :
+    executableWave 0 calls = [] := by
+  cases h : (nextWave calls).1 with
+  | nil => simp [executableWave, budgetedUnique, takeUnique, h]
+  | cons call rest => simp [executableWave, budgetedUnique, takeUnique, h]
 
 end ToolPolicy.ParallelTools

@@ -45,6 +45,7 @@ mod aggregate_budget;
 mod contract;
 mod invalid_tool_progress;
 mod one_shot;
+mod parallel_dispatch;
 mod provider_idle;
 mod repeated_tool_failure;
 mod request_assembly;
@@ -935,7 +936,45 @@ where
                 replay.required.push(tag.clone());
             }
 
-            for (tool_call, internal_call_id) in pending_calls {
+            let mut pending_calls = std::collections::VecDeque::from(pending_calls);
+            while !pending_calls.is_empty() {
+                if let (Some(hook), Some(scope)) = (hook.as_ref(), current_tool_runtime_context()) {
+                    let count = parallel_dispatch::candidate_wave_len(
+                        &pending_calls, tools.as_slice(), hook.as_ref(), &invalid_tool_progress,
+                        &repeated_tool_failure,
+                    );
+                    if count > 1 {
+                        let calls = pending_calls.drain(..count).collect();
+                        match parallel_dispatch::dispatch_wave(
+                            calls, tools.clone(), hook.clone(),
+                            activity.as_ref().is_some_and(|activity| activity.token_limit_reached()),
+                            provider_profile, &mut invalid_tool_progress, &mut repeated_tool_failure,
+                            scope.cancellation_token.child_token(),
+                        ).await {
+                            parallel_dispatch::WaveResult::Finished(results) => pending_results.extend(results),
+                            parallel_dispatch::WaveResult::Exhausted(results) => {
+                                pending_results.extend(results);
+                                for item in close_streaming_turn(
+                                    &mut new_messages, &mut accumulator, stream.message_id.clone(),
+                                    accepted_source.clone(), pending_results,
+                                ) { yield item; }
+                                Err(StreamingError::Completion(CompletionError::ProviderError(
+                                    invalid_tool_progress.exhaustion_reason(),
+                                )))?;
+                                unreachable!("invalid tool budget exhaustion ends the stream");
+                            }
+                            parallel_dispatch::WaveResult::Terminated(reason) => {
+                                Err(StreamingError::Prompt(Box::new(PromptError::PromptCancelled {
+                                    chat_history: rig_compat::to_rig_messages(&error_chat_history(&history, &new_messages)),
+                                    reason,
+                                })))?;
+                                unreachable!("terminated tool wave ends the stream");
+                            }
+                        }
+                        continue;
+                    }
+                }
+                let (tool_call, internal_call_id) = pending_calls.pop_front().expect("pending call");
                 let tool_name = tool_call.function.name.clone();
                 let tool_args = value_to_json_string(&tool_call.function.arguments);
                 let repeat_decision = repeated_tool_failure.decide(&tool_name, &tool_args);
@@ -1049,48 +1088,16 @@ where
                         };
                         let suppressed =
                             repeat_decision == repeated_tool_failure::RepeatDecision::Suppress;
-                        let effects = hook.as_ref().filter(|_| !suppressed).map(|hook| {
-                            Arc::new(tool_dispatch::EffectDispatcher {
-                                tools: tools.clone(),
-                                hook: hook.clone(),
-                                parent_internal_id: internal_call_id.clone(),
-                                fatal: tokio::sync::Mutex::new(None),
-                            })
-                        });
-                        let execution = if suppressed {
+                        let (execution, effects) = if suppressed {
                             drop(live_output);
-                            crate::session_hook::ForegroundResult::Settled(repeated_tool_failure.suppress())
+                            (crate::session_hook::ForegroundResult::Settled(repeated_tool_failure.suppress()), None)
                         } else {
-                            let execution_tools = tools.clone();
-                            let execution_name = tool_name.clone();
-                            let execution_args = tool_args.clone();
-                            let execution_effects = effects.clone();
-                            let scope = current_tool_runtime_context();
-                            let token_limit = activity.as_ref().is_some_and(|activity| activity.token_limit_reached());
-                            let call: crate::session_hook::ForegroundCall = Box::new(move |token| Box::pin(async move {
-                                let execute = crate::tool_effects::scope(
-                                    execution_effects.map(|value| value as Arc<dyn crate::tool_effects::ToolEffectDispatcher>),
-                                    tool_dispatch::dispatch_provider_tool(
-                                        execution_tools.as_slice(), &execution_name, execution_args,
-                                        live_output, session_id, token_limit,
-                                    ),
-                                );
-                                match scope {
-                                    Some(scope) => crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
-                                        scope.requester_did, scope.node_did, scope.agent_id, scope.request_id,
-                                        crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-                                            scope.deadline_at, token, scope.workspace_cwd, scope.live_output,
-                                            scope.session_id, scope.correlation, scope.source_fields,
-                                            scope.background, execute,
-                                        ),
-                                    ).await,
-                                    None => execute.await,
-                                }
-                            }));
-                            match hook.as_ref() {
-                                Some(hook) => hook.run_foreground_tool(&tool_name, &internal_call_id, call).await,
-                                None => crate::session_hook::ForegroundResult::Settled(call(Default::default()).await),
-                            }
+                            tool_dispatch::execute_foreground(
+                                tools.clone(), hook.clone(), tool_name.clone(), internal_call_id.clone(),
+                                tool_args.clone(), live_output, session_id,
+                                activity.as_ref().is_some_and(|activity| activity.token_limit_reached()),
+                                None,
+                            ).await
                         };
                         let (outcome, already_persisted) = match execution {
                             crate::session_hook::ForegroundResult::Settled(outcome) => (outcome, false),

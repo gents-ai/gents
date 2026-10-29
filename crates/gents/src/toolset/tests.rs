@@ -58,6 +58,36 @@ fn read_file_scheduling_requires_a_resolved_allowed_file() {
     );
 }
 
+#[test]
+fn search_footprints_require_a_trusted_runner_and_allowed_scope() {
+    use gents_loop::parallel_tools::Footprint;
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("inside.txt"), "inside").unwrap();
+    let context = ToolContext::new(root.path().to_owned(), false).unwrap();
+    let footprint = |trusted, path, directory| {
+        super::file_tools::scoped_filesystem_read_footprint(&context, trusted, path, directory)
+    };
+    assert!(matches!(
+        footprint(true, None, true),
+        Footprint::Read { .. }
+    ));
+    assert!(matches!(
+        footprint(true, Some("inside.txt"), false),
+        Footprint::Read { .. }
+    ));
+    assert_eq!(footprint(false, None, true), Footprint::Barrier);
+    assert_eq!(
+        footprint(true, Some("inside.txt"), true),
+        Footprint::Barrier
+    );
+    assert_eq!(footprint(true, Some("missing"), false), Footprint::Barrier);
+    assert_eq!(
+        footprint(true, outside.path().to_str(), false),
+        Footprint::Barrier
+    );
+}
+
 #[tokio::test]
 async fn native_tool_definitions_include_model_facing_defaults_and_constraints() {
     let root = temp_root("gents-tool-definitions");

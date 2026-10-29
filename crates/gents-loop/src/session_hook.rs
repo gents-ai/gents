@@ -31,6 +31,12 @@ where
 pub trait SessionHook: Send + Sync {
     type Error: Into<Box<dyn std::error::Error + Send + Sync>> + Send + Sync + 'static;
 
+    /// True only when the hook's admission for this tool has no independent
+    /// effect and its in-flight lifecycle can be settled after cancellation.
+    fn allows_parallel_read(&self, _tool_name: &str) -> bool {
+        false
+    }
+
     async fn run_foreground_tool(
         &self,
         _name: &str,

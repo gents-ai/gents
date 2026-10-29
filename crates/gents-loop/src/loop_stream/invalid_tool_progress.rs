@@ -28,6 +28,10 @@ impl InvalidToolProgress {
         self.invalid_used >= INVALID_TOOL_CALL_LIMIT
     }
 
+    pub(super) fn remaining(&self) -> usize {
+        usize::from(INVALID_TOOL_CALL_LIMIT.saturating_sub(self.invalid_used))
+    }
+
     pub(super) fn exhaustion_reason(&self) -> String {
         format!(
             "invalid_tool_call_budget_exhausted: limit={}, used={}; repeated invalid arguments, unknown tools, or policy-denied calls exhausted this execution's allowance",

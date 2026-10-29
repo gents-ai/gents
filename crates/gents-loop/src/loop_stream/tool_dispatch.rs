@@ -1,5 +1,79 @@
 use super::*;
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the call carries its existing execution context"
+)]
+pub(super) async fn execute_foreground<H: SessionHook + 'static>(
+    tools: Arc<Vec<Box<dyn ToolDyn>>>,
+    hook: Option<Arc<H>>,
+    name: String,
+    internal_id: String,
+    arguments: String,
+    live_output: Option<crate::live_output::LiveToolOutputWriter>,
+    session_id: Option<String>,
+    token_limit: bool,
+    wave_token: Option<tokio_util::sync::CancellationToken>,
+) -> (
+    crate::session_hook::ForegroundResult,
+    Option<Arc<EffectDispatcher<H>>>,
+) {
+    let effects = hook.as_ref().map(|hook| {
+        Arc::new(EffectDispatcher {
+            tools: tools.clone(),
+            hook: hook.clone(),
+            parent_internal_id: internal_id.clone(),
+            fatal: tokio::sync::Mutex::new(None),
+        })
+    });
+    let execution_name = name.clone();
+    let execution_effects = effects.clone();
+    let scope = current_tool_runtime_context();
+    let wave_scope = scope.clone();
+    let call: crate::session_hook::ForegroundCall = Box::new(move |token| {
+        Box::pin(async move {
+            let execute = crate::tool_effects::scope(
+                execution_effects
+                    .map(|value| value as Arc<dyn crate::tool_effects::ToolEffectDispatcher>),
+                dispatch_provider_tool(
+                    tools.as_slice(),
+                    &execution_name,
+                    arguments,
+                    live_output,
+                    session_id,
+                    token_limit,
+                ),
+            );
+            match scope {
+            Some(scope) => crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
+                scope.requester_did, scope.node_did, scope.agent_id, scope.request_id,
+                crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                    scope.deadline_at, token, scope.workspace_cwd, scope.live_output,
+                    scope.session_id, scope.correlation, scope.source_fields, scope.background, execute,
+                ),
+            ).await,
+            None => execute.await,
+        }
+        })
+    });
+    let execute = async {
+        match hook.as_ref() {
+            Some(hook) => hook.run_foreground_tool(&name, &internal_id, call).await,
+            None => crate::session_hook::ForegroundResult::Settled(call(Default::default()).await),
+        }
+    };
+    let result = match (wave_scope, wave_token) {
+        (Some(scope), Some(token)) => {
+            crate::tool_call_lifecycle::runtime::scope_tool_execution_with_cancellation(
+                scope, token, execute,
+            )
+            .await
+        }
+        _ => execute.await,
+    };
+    (result, effects)
+}
+
 pub(super) struct EffectDispatcher<H> {
     pub(super) tools: Arc<Vec<Box<dyn ToolDyn>>>,
     pub(super) hook: Arc<H>,

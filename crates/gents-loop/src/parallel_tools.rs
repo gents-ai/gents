@@ -12,6 +12,14 @@ pub enum Footprint {
     Barrier,
 }
 
+/// Only a hook-authorized read may currently be launched speculatively.
+pub fn speculative_footprint(hook_allows: bool, footprint: Footprint) -> Footprint {
+    match (hook_allows, footprint) {
+        (true, read @ Footprint::Read { .. }) => read,
+        _ => Footprint::Barrier,
+    }
+}
+
 fn intersects(left: &[Vec<String>], right: &[Vec<String>]) -> bool {
     left.iter().any(|a| {
         right
@@ -47,4 +55,23 @@ pub fn next_wave_len(calls: &[Footprint]) -> usize {
         end += 1;
     }
     end
+}
+
+/// A repeated call must wait for the preceding outcome so the existing
+/// failure-streak owner can decide whether to suppress it. The invalid-call
+/// budget also bounds speculative dispatch.
+pub fn executable_wave_len(
+    calls: &[((String, String), Footprint)],
+    invalid_remaining: usize,
+) -> usize {
+    let footprints: Vec<_> = calls
+        .iter()
+        .map(|(_, footprint)| footprint.clone())
+        .collect();
+    let count = next_wave_len(&footprints).min(invalid_remaining);
+    let mut seen = std::collections::HashSet::new();
+    calls[..count]
+        .iter()
+        .take_while(|(key, _)| seen.insert(key))
+        .count()
 }

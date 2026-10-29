@@ -94,6 +94,11 @@ impl NativeFsRunner {
         Ok(parse_glob_match_paths(&raw, &base))
     }
 
+    pub(super) fn has_builtin_read_only_runner(&self) -> bool {
+        std::env::var(RUNNER_ENV).map_or(true, |path| path.trim().is_empty())
+            && self_runner_binary().is_some()
+    }
+
     pub(super) async fn run(
         &self,
         request: NativeFsRunnerRequest,
