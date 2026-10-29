@@ -191,6 +191,7 @@ fn logging_hook(generated: &LeanTaskHook, log: &Path, code: i64) -> TaskHook {
             ),
         ],
         timeout_secs: generated.timeout_secs,
+        skip_exit_codes: generated.skip_exit_codes.clone(),
     }
 }
 
@@ -403,6 +404,7 @@ fn generated(hook_id: &str, phase: &str) -> LeanTaskHook {
         phase: phase.into(),
         command: Vec::new(),
         timeout_secs: Some(30),
+        skip_exit_codes: Vec::new(),
         effective_timeout_secs: 30,
     }
 }
