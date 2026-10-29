@@ -505,7 +505,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
     )
     .await?;
     let tool_call_doc_id = doc_id_from_create(&tool_create, "add_AgentToolCall")?;
-    graphql_query(
+    let child_create = graphql_query(
         &graphql,
         &format!(
             r#"mutation {{
@@ -532,23 +532,33 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
         ),
     )
     .await?;
-    graphql_query(
+    let child_doc_id = doc_id_from_create(&child_create, "add_AgentRequest")?;
+    create_started_session(
         &graphql,
-        &format!(
-            r#"mutation {{
-                create_AgentSession(input: {{
-                    session_id: "{child_session_id}",
-                    node_did: "{node_did}",
-                    requester_did: "{node_did}",
-                    agent_id: "child-agent",
-                    created_at: "2026-05-20T10:00:03Z",
-                    provenance: {{parent_request_doc_id: "{parent_doc_id}"}}
-                }}) {{ _docID }}
-            }}"#,
-            child_session_id = escape_graphql_string(&child_session_id),
-            node_did = escape_graphql_string(&node_did),
-            parent_doc_id = escape_graphql_string(&parent_doc_id),
-        ),
+        &identity_from_init(&init)?,
+        gents_protocol::session::AgentSession {
+            session_id: child_session_id.clone(),
+            node_did: node_did.clone(),
+            requester_did: Some(node_did.clone()),
+            agent_id: "child-agent".to_owned(),
+            created_at: "2026-05-20T10:00:03Z".to_owned(),
+            closed_at: None,
+            archived_at: None,
+            archive_revision: 0,
+            stopped_at: None,
+            title: None,
+            tags: Vec::new(),
+            provenance: None,
+            observation: None,
+        },
+        gents_protocol::session::SessionReference {
+            node_did: node_did.clone(),
+            session_id: session_id.clone(),
+            requester_did: None,
+        },
+        &parent_doc_id,
+        &child_doc_id,
+        &tool_call_doc_id,
     )
     .await?;
 
@@ -1040,4 +1050,72 @@ async fn pending_message_commands_edit_reorder_and_remove_against_held_provider(
     .await;
     gate.add_permits(1);
     result
+}
+
+/// Write `session` as `agent_new` creation does: the immutable starter index
+/// at create, then the receipt the node signs for the created document.
+async fn create_started_session(
+    graphql: &str,
+    node: &gents::KeyIdentity,
+    session: gents_protocol::session::AgentSession,
+    source: gents_protocol::session::SessionReference,
+    parent_doc_id: &str,
+    opening_doc_id: &str,
+    tool_call_doc_id: &str,
+) -> Result<()> {
+    use gents::NodeIdentity as _;
+    use gents_protocol::session::{
+        SessionCreationCause, SessionCreationReceipt, SessionCreationStarter, SessionProvenance,
+    };
+
+    let mut provenance = SessionProvenance {
+        parent_request_doc_id: Some(parent_doc_id.to_owned()),
+        opening_request_doc_id: Some(opening_doc_id.to_owned()),
+        started_by: Some(source.clone()),
+        ..Default::default()
+    };
+    let mut input = serde_json::to_value(gents_protocol::session::AgentSession {
+        provenance: Some(provenance.clone()),
+        ..session.clone()
+    })?;
+    input["started_by_node_did"] = source.node_did.clone().into();
+    input["started_by_session_id"] = source.session_id.clone().into();
+    let created = graphql_query(
+        graphql,
+        &format!(
+            "mutation {{ create_AgentSession(input: {}) {{ _docID }} }}",
+            gents_protocol::graphql::graphql_input_literal(&input)?
+        ),
+    )
+    .await?;
+    let session_doc_id = doc_id_from_create(&created, "add_AgentSession")?;
+    let mut receipt = SessionCreationReceipt {
+        node_did: session.node_did,
+        session_id: session.session_id,
+        session_doc_id: session_doc_id.clone(),
+        requester_did: session.requester_did,
+        agent_id: session.agent_id,
+        opening_request_doc_id: opening_doc_id.to_owned(),
+        cause: SessionCreationCause::AgentNew,
+        cause_binding: tool_call_doc_id.to_owned(),
+        starter: Some(SessionCreationStarter {
+            source,
+            parent_request_doc_id: parent_doc_id.to_owned(),
+        }),
+        signature: Vec::new(),
+    };
+    receipt.signature = node.sign(&receipt.signing_payload()).await?;
+    provenance.creation_receipt = Some(receipt);
+    graphql_query(
+        graphql,
+        &format!(
+            r#"mutation {{ update_AgentSession(docID: "{}", input: {}) {{ _docID }} }}"#,
+            escape_graphql_string(&session_doc_id),
+            gents_protocol::graphql::graphql_input_literal(
+                &serde_json::json!({ "provenance": provenance })
+            )?
+        ),
+    )
+    .await?;
+    Ok(())
 }
