@@ -60,7 +60,7 @@ jobs:
 
   desktop-live-smoke:
     runs-on: [self-hosted, macOS, ARM64, studio]
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
         with:
@@ -85,6 +85,11 @@ jobs:
 
       - name: Build desktop packages
         run: npm run build:packages
+
+      - name: Build live bridge runner
+        run: |
+          cargo build -p gents-desktop-tauri --bin bridge_runner
+          echo "GENTS_TAURI_LIVE_RUNNER_BINARY=$CARGO_TARGET_DIR/debug/bridge_runner" >> "$GITHUB_ENV"
 
       - name: Run live desktop chat smoke
         working-directory: apps/gents-desktop
@@ -116,7 +121,7 @@ jobs:
 
   desktop-live-browser-smoke:
     runs-on: [self-hosted, macOS, ARM64, studio]
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
         with:
@@ -141,6 +146,11 @@ jobs:
 
       - name: Build desktop packages
         run: npm run build:packages
+
+      - name: Build live bridge runner
+        run: |
+          cargo build -p gents-desktop-tauri --bin bridge_runner
+          echo "GENTS_TAURI_LIVE_RUNNER_BINARY=$CARGO_TARGET_DIR/debug/bridge_runner" >> "$GITHUB_ENV"
 
       - name: Install Playwright browser
         working-directory: apps/gents-desktop
