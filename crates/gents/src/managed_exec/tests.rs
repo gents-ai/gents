@@ -657,7 +657,55 @@ async fn generated_process_stop_cases_drive_host_owner() {
             .unwrap_or_else(|| panic!("unknown Lean process observation {name}"))
     };
     let cases = crate::lean_vocab_test::lean_process_stop_cases();
-    assert_eq!(cases.len(), 9);
+    assert_eq!(cases.len(), 15);
+    for case in cases.iter().filter(|case| !case.live_evidence.is_empty()) {
+        let evidence = match case.live_evidence.as_str() {
+            "never_spawned" => ownership::LiveProcessEvidence::NeverSpawned,
+            "spawned_unverified" => ownership::LiveProcessEvidence::SpawnedUnverified,
+            "exited" => ownership::LiveProcessEvidence::Exited,
+            other => panic!("unknown live process evidence {other}"),
+        };
+        assert_eq!(
+            ownership::retire_stop_receipt(false),
+            case.retire_before_commit
+        );
+        assert_eq!(
+            ownership::retire_stop_receipt(true),
+            case.retire_after_commit
+        );
+        for (intent, expected) in [
+            (
+                ownership::NativeTerminalIntent::Completed,
+                case.settle_completed,
+            ),
+            (
+                ownership::NativeTerminalIntent::Cancelled,
+                case.settle_cancelled,
+            ),
+            (
+                ownership::NativeTerminalIntent::TimedOut,
+                case.settle_timed_out,
+            ),
+            (ownership::NativeTerminalIntent::Failed, case.settle_failed),
+            (
+                ownership::NativeTerminalIntent::Panicked,
+                case.settle_panicked,
+            ),
+        ] {
+            assert_eq!(
+                ownership::may_settle_native(intent, evidence),
+                expected,
+                "{} {intent:?}",
+                case.name
+            );
+        }
+        assert_eq!(
+            ownership::settle_live_cancel(case.worker_released, evidence).as_str(),
+            case.outcome,
+            "{}",
+            case.name
+        );
+    }
     for case in cases {
         let before = observation(&case.before);
         let after = observation(&case.after);

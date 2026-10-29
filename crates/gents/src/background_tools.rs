@@ -58,6 +58,8 @@ pub(crate) struct BackgroundToolArgs {
 /// Default wait when neither the call nor the Tools group sets one; the
 /// timeout reports the process as still running without cancelling it.
 pub(crate) const DEFAULT_WAIT_PROCESS_TIMEOUT_SECS: u64 = 30;
+/// Bound one foreground wait even when the background work continues; the
+/// Tools group can set a lower maximum without stopping that work.
 pub(crate) const MAX_WAIT_PROCESS_TIMEOUT_SECS: u64 = 600;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -528,7 +530,11 @@ fn list_projection_matches(filter: ListStatusFilter, projection: &WaitStatusProj
 }
 
 pub use final_output::load_caused_request_terminal;
-pub(crate) use final_output::{caused_request_terminals_in_txn, load_caused_request_terminals};
+#[cfg(test)]
+pub(crate) use final_output::select_folded_outcome;
+pub(crate) use final_output::{
+    caused_request_terminals_in_txn, load_caused_request_terminals, load_session_message_terminal,
+};
 
 fn render_assistant_message_text(message: &Message) -> Result<String> {
     let Message::Assistant { content, .. } = message else {

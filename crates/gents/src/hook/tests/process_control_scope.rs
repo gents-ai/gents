@@ -785,6 +785,67 @@ mod job_control {
     }
 
     #[tokio::test]
+    async fn model_cancel_keeps_running_when_native_stop_is_unverified() {
+        let expected = crate::lean_vocab_test::lean_process_stop_cases()
+            .iter()
+            .find(|case| case.live_evidence == "spawned_unverified" && case.worker_released)
+            .unwrap();
+        let hook = JobHook::new().await;
+        let lifecycle = {
+            let mut fixtures = hook_execution_fixtures().lock().await;
+            let fixture = fixtures
+                .get_mut(&hook_execution_fixture_key(&hook.owner, &hook.request_id))
+                .unwrap();
+            let turn = fixture.turn;
+            fixture.turn += 1;
+            publish_accepted_on_claimed_request(
+                hook.node.clone(),
+                &mut fixture.lifecycle,
+                &hook.owner.node_did,
+                turn,
+                "bash",
+                "unverified-native",
+                json!({}),
+                AwaitMode::Background,
+                true,
+            )
+            .await
+            .unwrap()
+        };
+        let doc = lifecycle.doc_id().unwrap().to_owned();
+        let token = tokio_util::sync::CancellationToken::new();
+        let reservation = hook
+            .executions
+            .reserve("unverified-native".into(), doc, token.clone())
+            .unwrap();
+        let owner = hook.owner.clone();
+        let mut control = tokio::spawn(async move {
+            invoke(
+                &owner,
+                "model-unverified",
+                "cancel_process",
+                r#"{"tool_call_id":"unverified-native"}"#,
+            )
+            .await
+        });
+        tokio::select! {
+            result = &mut control => panic!("model control ended before cancellation: {result:?}"),
+            _ = token.cancelled() => {}
+        }
+        tokio::time::pause();
+        tokio::time::advance(std::time::Duration::from_secs(10)).await;
+        tokio::time::resume();
+        let result = control.await.unwrap();
+        assert_eq!(result["status"], "unverified");
+        assert_eq!(
+            hook.stored("unverified-native").await["lifecycle_state"],
+            expected.durable_state
+        );
+        drop(reservation);
+        hook.finish().await;
+    }
+
+    #[tokio::test]
     async fn job_control_stop_is_applied_with_killed_children() {
         let hook = JobHook::new().await;
         let row = hook.job_row("job-stop").await;

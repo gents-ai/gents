@@ -151,13 +151,13 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+acp.workspace = true
 proc-macro2 = { version = "1", features = ["span-locations"] }
 oxc_allocator = "=0.127.0"
 oxc_ast = "=0.127.0"
 oxc_ast_visit = "=0.127.0"
 oxc_parser = "=0.127.0"
 oxc_span = "=0.127.0"
-acp.workspace = true
 axum = "0.8"
 db.workspace = true
 defra-node.workspace = true
@@ -170,3 +170,6 @@ gents-lean-contract.workspace = true
 gents-callback-fixture-create-workspace = { path = "../gents-callbacks/fixture_create_workspace" }
 syn = { version = "2", features = ["full", "visit"] }
 wat = "1.254"
+
+[build-dependencies]
+cc = "1"

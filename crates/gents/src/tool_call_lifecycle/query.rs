@@ -7,7 +7,7 @@ pub use result::{
 };
 pub(crate) use result::{
     load_tool_call_arguments_in_txn, load_tool_call_read, load_tool_call_read_in_txn,
-    load_tool_file_change_observation_in_txn,
+    load_tool_file_change_observation_in_txn, CanonicalToolCallRead,
 };
 
 use std::sync::Arc;

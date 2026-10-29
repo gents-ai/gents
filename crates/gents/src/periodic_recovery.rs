@@ -175,12 +175,16 @@ pub async fn run_periodic_recovery_sweeps(
 fn reconcile_terminal_parent_owned_tools<'a>(
     node: &'a std::sync::Arc<EmbeddedNode>,
     node_did: &'a str,
-    _background_executions: &'a crate::hook::BackgroundExecutionRegistry,
+    background_executions: &'a crate::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
-        ToolCallLifecycle::reconcile_terminal_parent_owned_tools(node, node_did)
-            .await
-            .map(PeriodicRecoverySweepOutcome::TerminalParentTools)
+        ToolCallLifecycle::reconcile_terminal_parent_owned_tools_with_executions(
+            node,
+            node_did,
+            background_executions,
+        )
+        .await
+        .map(PeriodicRecoverySweepOutcome::TerminalParentTools)
     })
 }
 

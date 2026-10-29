@@ -3,6 +3,131 @@ use crate::identity::NodeIdentity;
 
 #[cfg(unix)]
 #[tokio::test]
+async fn cancelling_while_approval_waits_never_requires_a_process_record() {
+    use crate::plugin::approval::workspace;
+    if !crate::toolset::workspace_write_sandbox_enforced() {
+        return;
+    }
+    let expected = crate::lean_vocab_test::lean_process_stop_cases()
+        .iter()
+        .find(|case| case.live_evidence == "never_spawned" && case.worker_released)
+        .unwrap();
+    let mut harness = admission_harness(|_, root| {
+        BackgroundToolRegistry::from_tools(
+            vec![crate::toolset::write_capable_bash_for_test(root)],
+            &["bash_unrestricted".into()],
+        )
+    })
+    .await;
+    let executions = BackgroundExecutionRegistry::default();
+    harness.hook = harness
+        .hook
+        .with_background_execution_registry(executions.clone());
+    let root = harness.root.path().canonicalize().unwrap();
+    let key = workspace::WorkspaceKey::canonical(
+        &harness.hook.node_did,
+        &harness.hook.node_did,
+        "general",
+        &root,
+    )
+    .unwrap();
+    let selection = workspace::ReviewTaskSelection {
+        task_id: "review-cancel".into(),
+        policy_digest: "fixture-policy".into(),
+    };
+    workspace::save_mode(
+        harness._dir.path(),
+        &key,
+        0,
+        workspace::Mode::AutoReview,
+        Some(&selection),
+    )
+    .unwrap();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let signal = entered.clone();
+    let context = workspace::for_request(
+        Some(harness._dir.path()),
+        &key.node_did,
+        Some(&key.requester_did),
+        &key.agent_id,
+        Some(&root),
+    )
+    .unwrap()
+    .unwrap()
+    .with_reviewer(Arc::new(move |_| {
+        let signal = signal.clone();
+        Box::pin(async move {
+            signal.notify_one();
+            std::future::pending().await
+        })
+    }));
+    let args = json!({"tool_name":"bash_unrestricted", "args":{"command":"/bin/sh", "args":["-c", "exit 0"]}}).to_string();
+    accept_hook_tool_call(&harness.hook, "approval-stop", "spawn_process", &args, None).await;
+    let action = workspace::scope(
+        Some(context),
+        harness
+            .hook
+            .on_tool_call("spawn_process", None, "approval-stop", &args),
+    )
+    .await;
+    let ToolCallHookAction::Skip { reason } = action else {
+        panic!("{action:?}")
+    };
+    let receipt: serde_json::Value = serde_json::from_str(&reason).unwrap();
+    let child = receipt["tool_call_id"].as_str().unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(60), entered.notified())
+        .await
+        .expect("approval was not reached");
+    let session = harness.hook.session_id().await.unwrap();
+    let row = fetch_tool_call_row(&harness.node, &session, child).await;
+    let request = gents_protocol::process_control::OperatorProcessControlRequest {
+        node_did: key.node_did.clone(),
+        session_id: session.clone(),
+        tool_call_id: child.to_owned(),
+        tool_call_doc_id: row["_docID"].as_str().unwrap().to_owned(),
+    };
+    let outcome = crate::tool_control::operator_process_control(
+        harness.node.clone(),
+        &executions,
+        Some(&key.node_did),
+        &request,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        crate::tool_control::CancelBackgroundToolCallOutcome::Cancelled {
+            live_execution_cancelled: true
+        } | crate::tool_control::CancelBackgroundToolCallOutcome::AlreadyTerminal { .. }
+    ));
+    let row = fetch_tool_call_row(&harness.node, &session, child).await;
+    assert_eq!(row["lifecycle_state"], expected.durable_state);
+    assert!(executions
+        .process_record(child, &request.tool_call_doc_id)
+        .is_none());
+    crate::tool_call_lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
+        &harness.node,
+        &key.node_did,
+        &executions,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        fetch_tool_call_row(&harness.node, &session, child).await["lifecycle_state"],
+        expected.durable_state
+    );
+    hook_execution_fixtures()
+        .lock()
+        .await
+        .remove(&hook_execution_fixture_key(
+            &harness.hook,
+            &harness.request_id,
+        ));
+    harness.node.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn background_commands_keep_workspace_consent_after_dispatch() {
     use crate::plugin::approval::workspace;
 

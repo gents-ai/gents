@@ -29,6 +29,68 @@ pub async fn load_caused_request_terminal(
     .await
 }
 
+pub(crate) fn select_folded_outcome(
+    folded: bool,
+    caused: Option<CausedRequestTerminal>,
+    head: Option<CausedRequestTerminal>,
+) -> Option<CausedRequestTerminal> {
+    if folded && matches!(caused.as_ref(), Some(CausedRequestTerminal::Superseded)) {
+        head
+    } else {
+        caused
+    }
+}
+
+pub(crate) async fn load_session_message_terminal(
+    node: &std::sync::Arc<EmbeddedNode>,
+    caused_doc_id: &str,
+) -> Result<Option<CausedRequestTerminal>> {
+    ConfigAccess::transact_local_readonly(node, None, "background.session_message_terminal", |txn| {
+        Box::pin(async move {
+            let response = txn.execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
+                    _docID request_id node_did requester_did session_id agent_id lifecycle_state failure_reason superseded_by_request superseded_by_request_doc_id
+                }} }}"#,
+                crate::graphql::escape_graphql_string(caused_doc_id),
+            )).await?;
+            let rows: Vec<AgentRequestRow> = query_rows(&response, "AgentRequest")?;
+            let Some(caused) = rows.first() else { return Ok(None); };
+            anyhow::ensure!(rows.len() == 1, "caused request physical identity is ambiguous");
+            anyhow::ensure!(
+                caused.node_did.as_deref().is_some_and(|value| !value.is_empty())
+                    && caused.session_id.as_deref().is_some_and(|value| !value.is_empty())
+                    && caused.agent_id.as_deref().is_some_and(|value| !value.is_empty()),
+                "caused request lacks its session scope"
+            );
+            let folded = caused.lifecycle_state == Some(RequestLifecycleState::Superseded)
+                && caused.failure_reason.as_deref() == Some(crate::lifecycle::FOLDED_REASON);
+            let mut ids = vec![caused_doc_id.to_owned()];
+            if folded {
+                let head = caused.superseded_by_request_doc_id.as_deref()
+                    .context("folded request lacks its physical head")?;
+                anyhow::ensure!(head != caused_doc_id, "folded request references itself");
+                let response = txn.execute(&format!(
+                    r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID request_id node_did requester_did session_id agent_id }} }}"#,
+                    crate::graphql::escape_graphql_string(head),
+                )).await?;
+                let heads: Vec<AgentRequestRow> = query_rows(&response, "AgentRequest")?;
+                if heads.is_empty() { return Ok(None); }
+                anyhow::ensure!(heads.len() == 1 && heads[0].node_did == caused.node_did
+                    && heads[0].session_id == caused.session_id
+                    && heads[0].requester_did == caused.requester_did
+                    && heads[0].agent_id == caused.agent_id
+                    && caused.superseded_by_request.as_deref() == Some(heads[0].request_id.as_str()),
+                    "folded request head is outside its session scope");
+                ids.push(head.to_owned());
+            }
+            let mut outcomes = caused_request_terminals_in_txn(txn, &ids).await?;
+            let caused_outcome = outcomes.remove(caused_doc_id);
+            let head_outcome = ids.get(1).and_then(|id| outcomes.remove(id));
+            Ok(select_folded_outcome(folded, caused_outcome, head_outcome))
+        })
+    }).await
+}
+
 /// The durable terminals of many caused requests: one request query and one
 /// header query, whatever the count. A request that is live or whose terminal
 /// selection has not replicated is absent from the result.

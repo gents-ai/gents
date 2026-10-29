@@ -106,11 +106,46 @@ impl BackgroundToolRegistry {
 }
 
 #[derive(Clone)]
+enum RetainedStopReceipt {
+    Cancel(CancelCause, String),
+    Timeout,
+    Failure(crate::tool_call_lifecycle::ToolOutcome),
+    FailurePending,
+}
+
+impl RetainedStopReceipt {
+    fn from_outcome(outcome: &crate::tool_call_lifecycle::ToolOutcome) -> Self {
+        match outcome {
+            crate::tool_call_lifecycle::ToolOutcome::Cancelled => {
+                Self::Cancel(CancelCause::Interrupted, "request interrupted".to_owned())
+            }
+            crate::tool_call_lifecycle::ToolOutcome::TimedOut { .. } => Self::Timeout,
+            crate::tool_call_lifecycle::ToolOutcome::Failed { .. } => {
+                Self::Failure(outcome.clone())
+            }
+            crate::tool_call_lifecycle::ToolOutcome::Completed(_) => {
+                unreachable!("completion does not abandon a native future")
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
 struct BackgroundExecution {
     tool_call_id: String,
     cancellation_token: CancellationToken,
     completion_tx: watch::Sender<bool>,
+    worker_release_tx: watch::Sender<bool>,
     tool_call_doc_id: String,
+    process_evidence: Arc<crate::managed_exec::ownership::LiveProcessEvidenceOwner>,
+    process_identity:
+        Arc<std::sync::Mutex<Option<crate::managed_exec::ownership::ProcessIdentity>>>,
+    cancellation_reason: Arc<std::sync::Mutex<Option<String>>>,
+    recovery_lifecycle: Arc<std::sync::Mutex<Option<ToolCallLifecycle>>>,
+    retained: Arc<std::sync::atomic::AtomicBool>,
+    handoff_pending: Arc<std::sync::atomic::AtomicBool>,
+    requested_stop: Arc<std::sync::Mutex<Option<RetainedStopReceipt>>>,
+    confirmed_stop: Arc<std::sync::Mutex<Option<RetainedStopReceipt>>>,
     _service_work: Arc<crate::runtime_service::RuntimeServiceWork>,
 }
 
@@ -147,13 +182,25 @@ pub struct BackgroundExecutionRegistry {
     inner: Arc<std::sync::Mutex<RapidHashMap<String, BackgroundExecution>>>,
     live_outputs: BackgroundLiveOutputState,
     process_records: crate::managed_exec::ownership::ProcessRecordStore,
+    #[cfg(windows)]
+    failed_jobs: Arc<
+        std::sync::Mutex<RapidHashMap<String, (String, Arc<crate::managed_exec::FailedJobOwner>)>>,
+    >,
     task_hook_records: crate::task_hooks::TaskHookRecordStore,
     service_admission: crate::runtime_service::RuntimeServiceAdmission,
+    #[cfg(test)]
+    stop_release_observer: Option<Arc<tokio::sync::Notify>>,
 }
 
-const LIVE_STOP_RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+pub(crate) const LIVE_STOP_RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
 impl BackgroundExecutionRegistry {
+    #[cfg(test)]
+    pub(crate) fn with_stop_release_observer(mut self, observer: Arc<tokio::sync::Notify>) -> Self {
+        self.stop_release_observer = Some(observer);
+        self
+    }
+
     pub(crate) fn service_admission(&self) -> &crate::runtime_service::RuntimeServiceAdmission {
         &self.service_admission
     }
@@ -181,9 +228,36 @@ impl BackgroundExecutionRegistry {
         tool_call_doc_id: &str,
     ) -> crate::managed_exec::ownership::ProcessRecorder {
         let store = self.process_records.clone();
+        #[cfg(windows)]
+        let failed_jobs = self.failed_jobs.clone();
+        #[cfg(windows)]
+        let release_failed_jobs = self.failed_jobs.clone();
+        #[cfg(windows)]
+        let release_failed_doc = tool_call_doc_id.to_owned();
+        #[cfg(windows)]
+        let failed_job_call = tool_call_id.to_owned();
+        #[cfg(windows)]
+        let failed_job_doc = tool_call_doc_id.to_owned();
         let tool_call_id = tool_call_id.to_owned();
         let tool_call_doc_id = tool_call_doc_id.to_owned();
-        crate::managed_exec::ownership::ProcessRecorder::new(move |identity| {
+        let execution = self
+            .lock_executions()
+            .get(&tool_call_doc_id)
+            .filter(|execution| execution.tool_call_id == tool_call_id)
+            .cloned();
+        let evidence = execution
+            .as_ref()
+            .map(|execution| execution.process_evidence.clone());
+        let identity_owner = execution
+            .as_ref()
+            .map(|execution| execution.process_identity.clone());
+        let failure_owner = execution.map(|execution| execution.requested_stop);
+        let recorder = crate::managed_exec::ownership::ProcessRecorder::new(move |identity| {
+            if let Some(owner) = &identity_owner {
+                *owner
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(identity.clone());
+            }
             let record = crate::managed_exec::ownership::ProcessRecord {
                 tool_call_id: tool_call_id.clone(),
                 tool_call_doc_id: tool_call_doc_id.clone(),
@@ -196,7 +270,36 @@ impl BackgroundExecutionRegistry {
                     "failed to record background process ownership; a runtime restart will settle it as lost"
                 );
             }
-        })
+        });
+        let recorder = recorder.with_failure_decision(move || {
+            if let Some(owner) = &failure_owner {
+                let mut first = owner
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if first.is_none() {
+                    *first = Some(RetainedStopReceipt::FailurePending);
+                }
+            }
+        });
+        #[cfg(windows)]
+        let recorder = recorder.with_failed_job_owner(
+            move |owner| {
+                failed_jobs
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(failed_job_doc.clone(), (failed_job_call.clone(), owner));
+            },
+            move || {
+                release_failed_jobs
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&release_failed_doc);
+            },
+        );
+        match evidence {
+            Some(evidence) => recorder.with_evidence(evidence),
+            None => recorder,
+        }
     }
 
     pub(crate) fn process_record(
@@ -212,6 +315,207 @@ impl BackgroundExecutionRegistry {
                         && record.tool_call_doc_id == tool_call_doc_id
                 })
             })
+            .or_else(|| {
+                let execution = self
+                    .lock_executions()
+                    .get(tool_call_doc_id)
+                    .filter(|execution| execution.tool_call_id == tool_call_id)
+                    .cloned()?;
+                let identity = execution
+                    .process_identity
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()?;
+                Some(crate::managed_exec::ownership::ProcessRecord {
+                    tool_call_id: tool_call_id.to_owned(),
+                    tool_call_doc_id: tool_call_doc_id.to_owned(),
+                    identity,
+                })
+            })
+    }
+
+    pub(crate) fn live_process_evidence(
+        &self,
+        tool_call_id: &str,
+        tool_call_doc_id: &str,
+    ) -> crate::managed_exec::ownership::LiveProcessEvidence {
+        self.lock_executions()
+            .get(tool_call_doc_id)
+            .filter(|execution| execution.tool_call_id == tool_call_id)
+            .map(|execution| execution.process_evidence.get())
+            .unwrap_or(crate::managed_exec::ownership::LiveProcessEvidence::SpawnedUnverified)
+    }
+
+    fn live_process_evidence_owner(
+        &self,
+        tool_call_id: &str,
+        tool_call_doc_id: &str,
+    ) -> Option<Arc<crate::managed_exec::ownership::LiveProcessEvidenceOwner>> {
+        self.lock_executions()
+            .get(tool_call_doc_id)
+            .filter(|execution| execution.tool_call_id == tool_call_id)
+            .map(|execution| execution.process_evidence.clone())
+    }
+
+    async fn process_exit_confirmed(&self, tool_call_id: &str, tool_call_doc_id: &str) -> bool {
+        if let Some(record) = self.process_record(tool_call_id, tool_call_doc_id) {
+            matches!(
+                record
+                    .identity
+                    .await_signalled_group_exit(crate::managed_exec::ownership::KILL_GRACE)
+                    .await,
+                crate::managed_exec::ownership::ProcessObservation::Exited
+            )
+        } else {
+            self.live_process_evidence(tool_call_id, tool_call_doc_id)
+                != crate::managed_exec::ownership::LiveProcessEvidence::SpawnedUnverified
+        }
+    }
+
+    pub(crate) fn set_cancellation_reason(
+        &self,
+        tool_call_id: &str,
+        tool_call_doc_id: &str,
+        reason: &str,
+        deadline_expired: bool,
+    ) {
+        self.set_stop_receipt(
+            tool_call_id,
+            tool_call_doc_id,
+            if deadline_expired {
+                RetainedStopReceipt::Timeout
+            } else {
+                RetainedStopReceipt::Cancel(CancelCause::UserCancelled, reason.to_owned())
+            },
+        );
+        if let Some(execution) = self
+            .lock_executions()
+            .get(tool_call_doc_id)
+            .filter(|execution| execution.tool_call_id == tool_call_id)
+        {
+            *execution
+                .cancellation_reason
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(reason.to_owned());
+        }
+    }
+
+    fn set_stop_receipt(&self, call: &str, doc: &str, receipt: RetainedStopReceipt) {
+        if let Some(execution) = self
+            .lock_executions()
+            .get(doc)
+            .filter(|entry| entry.tool_call_id == call)
+        {
+            let mut first = execution
+                .requested_stop
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if first.is_none()
+                || (matches!(first.as_ref(), Some(RetainedStopReceipt::FailurePending))
+                    && matches!(&receipt, RetainedStopReceipt::Failure(_)))
+            {
+                *first = Some(receipt.clone());
+            }
+            drop(first);
+            if matches!(&receipt, RetainedStopReceipt::Failure(_)) {
+                let mut confirmed = execution
+                    .confirmed_stop
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if matches!(
+                    confirmed.as_ref(),
+                    Some(RetainedStopReceipt::FailurePending)
+                ) {
+                    *confirmed = Some(receipt);
+                }
+            }
+        }
+    }
+
+    fn remember_confirmed_stop(&self, execution: &BackgroundExecution) {
+        let receipt = execution
+            .requested_stop
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .unwrap_or_else(|| {
+                RetainedStopReceipt::Cancel(
+                    CancelCause::Interrupted,
+                    "request interrupted".to_owned(),
+                )
+            });
+        let mut slot = execution
+            .confirmed_stop
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if slot.is_none() {
+            *slot = Some(receipt);
+        }
+    }
+
+    fn finalize_pending_failure(
+        &self,
+        call: &str,
+        doc: &str,
+    ) -> Option<crate::tool_call_lifecycle::ToolOutcome> {
+        if !self.has_pending_failure(call, doc) {
+            return None;
+        }
+        let outcome = crate::tool_call_lifecycle::ToolOutcome::tool_returned_error(
+            "native process failed during cleanup",
+        );
+        self.set_stop_receipt(call, doc, RetainedStopReceipt::Failure(outcome.clone()));
+        Some(outcome)
+    }
+
+    pub(crate) fn has_pending_failure(&self, call: &str, doc: &str) -> bool {
+        self.lock_executions()
+            .get(doc)
+            .filter(|entry| entry.tool_call_id == call)
+            .is_some_and(|entry| {
+                matches!(
+                    entry
+                        .requested_stop
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .as_ref(),
+                    Some(RetainedStopReceipt::FailurePending)
+                )
+            })
+    }
+
+    pub(crate) fn retire_confirmed_stop(
+        &self,
+        tool_call_id: &str,
+        doc: &str,
+        terminal_committed: bool,
+    ) {
+        let retire = self.lock_executions().get(doc).is_some_and(|execution| {
+            execution.tool_call_id == tool_call_id
+                && execution.retained.load(std::sync::atomic::Ordering::SeqCst)
+                && execution
+                    .confirmed_stop
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .is_some()
+        });
+        if retire && crate::managed_exec::ownership::retire_stop_receipt(terminal_committed) {
+            self.remove_now(doc);
+        }
+    }
+
+    pub(crate) fn cancellation_reason(&self, tool_call_id: &str, tool_call_doc_id: &str) -> String {
+        self.lock_executions()
+            .get(tool_call_doc_id)
+            .filter(|execution| execution.tool_call_id == tool_call_id)
+            .and_then(|execution| {
+                execution
+                    .cancellation_reason
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+            })
+            .unwrap_or_else(|| "explicit_cancel".to_owned())
     }
 
     pub(crate) fn process_record_list(&self) -> Vec<crate::managed_exec::ownership::ProcessRecord> {
@@ -274,6 +578,50 @@ impl BackgroundExecutionRegistry {
         tool_call_id: &str,
         tool_call_doc_id: &str,
     ) -> crate::managed_exec::ProcessStopOutcome {
+        self.stop_execution_inner(tool_call_id, tool_call_doc_id, false)
+            .await
+    }
+
+    pub(crate) async fn stop_native_process(
+        &self,
+        tool_call_id: &str,
+        tool_call_doc_id: &str,
+    ) -> crate::managed_exec::ProcessStopOutcome {
+        self.stop_execution_inner(tool_call_id, tool_call_doc_id, true)
+            .await
+    }
+
+    #[cfg(windows)]
+    async fn stop_failed_job(&self, tool_call_id: &str, tool_call_doc_id: &str) -> Option<bool> {
+        let owner = self
+            .failed_jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(tool_call_doc_id)
+            .filter(|(id, _)| id == tool_call_id)
+            .map(|(_, owner)| owner.clone())?;
+        let confirmed = owner.stop_and_confirm().await;
+        if confirmed {
+            let mut jobs = self
+                .failed_jobs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if jobs
+                .get(tool_call_doc_id)
+                .is_some_and(|(_, current)| Arc::ptr_eq(current, &owner))
+            {
+                jobs.remove(tool_call_doc_id);
+            }
+        }
+        Some(confirmed)
+    }
+
+    async fn stop_execution_inner(
+        &self,
+        tool_call_id: &str,
+        tool_call_doc_id: &str,
+        require_record: bool,
+    ) -> crate::managed_exec::ProcessStopOutcome {
         use crate::managed_exec::ownership::ProcessObservation;
         use crate::managed_exec::ProcessStopOutcome;
         let record = self.process_record(tool_call_id, tool_call_doc_id);
@@ -283,7 +631,7 @@ impl BackgroundExecutionRegistry {
             .filter(|execution| execution.tool_call_id == tool_call_id)
             .cloned();
         if let Some(execution) = execution {
-            let completion_rx = execution.completion_tx.subscribe();
+            let completion_rx = execution.worker_release_tx.subscribe();
             execution.cancellation_token.cancel();
             let released = tokio::time::timeout(
                 LIVE_STOP_RELEASE_WAIT,
@@ -291,17 +639,79 @@ impl BackgroundExecutionRegistry {
             )
             .await
             .is_ok();
-            let after = if !released {
-                ProcessObservation::Running
-            } else if let Some(record) = record {
-                record
+            #[cfg(test)]
+            if let Some(observer) = &self.stop_release_observer {
+                observer.notify_one();
+            }
+            #[cfg(windows)]
+            if let Some(confirmed) = self.stop_failed_job(tool_call_id, tool_call_doc_id).await {
+                if confirmed {
+                    execution.process_evidence.exited();
+                }
+                return if released && confirmed {
+                    if execution.retained.load(std::sync::atomic::Ordering::SeqCst) {
+                        self.remember_confirmed_stop(&execution);
+                    }
+                    ProcessStopOutcome::Stopped
+                } else {
+                    ProcessStopOutcome::StillRunning
+                };
+            }
+            if released && execution.retained.load(std::sync::atomic::Ordering::SeqCst) {
+                if execution
+                    .confirmed_stop
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .is_some()
+                {
+                    return ProcessStopOutcome::Stopped;
+                }
+                if let Some(record) = self.process_record(tool_call_id, tool_call_doc_id) {
+                    let (before, after) = record.identity.stop().await;
+                    let result = ProcessStopOutcome::from_observations(before, after);
+                    if matches!(
+                        result,
+                        ProcessStopOutcome::Stopped | ProcessStopOutcome::AlreadyExited
+                    ) {
+                        execution.process_evidence.exited();
+                        self.remember_confirmed_stop(&execution);
+                    }
+                    return result;
+                }
+            }
+            let evidence = if !released {
+                crate::managed_exec::ownership::LiveProcessEvidence::SpawnedUnverified
+            } else if let Some(record) = self.process_record(tool_call_id, tool_call_doc_id) {
+                match record
                     .identity
                     .await_signalled_group_exit(crate::managed_exec::ownership::KILL_GRACE)
                     .await
+                {
+                    ProcessObservation::Exited => {
+                        crate::managed_exec::ownership::LiveProcessEvidence::Exited
+                    }
+                    _ => crate::managed_exec::ownership::LiveProcessEvidence::SpawnedUnverified,
+                }
+            } else if require_record {
+                execution.process_evidence.get()
             } else {
-                ProcessObservation::Exited
+                crate::managed_exec::ownership::LiveProcessEvidence::Exited
             };
-            return ProcessStopOutcome::from_observations(ProcessObservation::Running, after);
+            let outcome = crate::managed_exec::ownership::settle_live_cancel(released, evidence);
+            if outcome == ProcessStopOutcome::Stopped
+                && execution.retained.load(std::sync::atomic::Ordering::SeqCst)
+            {
+                self.remember_confirmed_stop(&execution);
+            }
+            return outcome;
+        }
+        #[cfg(windows)]
+        if let Some(confirmed) = self.stop_failed_job(tool_call_id, tool_call_doc_id).await {
+            return if confirmed {
+                ProcessStopOutcome::Stopped
+            } else {
+                ProcessStopOutcome::StillRunning
+            };
         }
         let Some(record) = record else {
             return ProcessStopOutcome::NotOwned;
@@ -349,6 +759,7 @@ impl BackgroundExecutionRegistry {
     ) -> anyhow::Result<BackgroundExecutionReservation> {
         let service_work = Arc::new(self.service_admission.admit()?);
         let (completion_tx, _) = watch::channel(false);
+        let (worker_release_tx, _) = watch::channel(false);
         let mut executions = self.lock_executions();
         anyhow::ensure!(
             !executions.contains_key(&tool_call_doc_id),
@@ -360,7 +771,16 @@ impl BackgroundExecutionRegistry {
                 tool_call_id,
                 cancellation_token,
                 completion_tx,
+                worker_release_tx,
                 tool_call_doc_id: tool_call_doc_id.clone(),
+                process_evidence: Default::default(),
+                process_identity: Default::default(),
+                cancellation_reason: Default::default(),
+                recovery_lifecycle: Default::default(),
+                retained: Default::default(),
+                handoff_pending: Default::default(),
+                requested_stop: Default::default(),
+                confirmed_stop: Default::default(),
                 _service_work: service_work.clone(),
             },
         );
@@ -398,6 +818,262 @@ impl BackgroundExecutionRegistry {
             .collect()
     }
 
+    fn retain_confirmed_worker(
+        &self,
+        lifecycle: ToolCallLifecycle,
+        reservation: BackgroundExecutionReservation,
+        receipt: RetainedStopReceipt,
+    ) {
+        let call = lifecycle.tool_call_id().to_owned();
+        let doc = lifecycle
+            .doc_id()
+            .expect("owned physical invocation")
+            .to_owned();
+        self.set_stop_receipt(&call, &doc, receipt);
+        reservation.retain_stopped_worker(lifecycle, false);
+        let entry = self.lock_executions().get(&doc).cloned();
+        if let Some(entry) = entry {
+            entry.process_evidence.exited();
+            self.remember_confirmed_stop(&entry);
+        }
+    }
+
+    async fn retain_terminal_settlement(
+        &self,
+        mut lifecycle: ToolCallLifecycle,
+        reservation: BackgroundExecutionReservation,
+        receipt: RetainedStopReceipt,
+        confirmed: bool,
+    ) {
+        let call = lifecycle.tool_call_id().to_owned();
+        let doc = lifecycle
+            .doc_id()
+            .expect("owned physical invocation")
+            .to_owned();
+        self.set_stop_receipt(&call, &doc, receipt);
+        reservation.retain_stopped_worker(lifecycle.clone(), false);
+        if confirmed {
+            let entry = self.lock_executions().get(&doc).cloned();
+            if let Some(entry) = entry {
+                entry.process_evidence.exited();
+                self.remember_confirmed_stop(&entry);
+            }
+            if let Err(error) = self.settle_retained_stop(&mut lifecycle).await {
+                tracing::warn!(tool_call_doc_id = %doc, %error, "confirmed process stop settlement remains pending");
+            }
+        }
+    }
+
+    pub(crate) async fn settle_retained_stop(
+        &self,
+        lifecycle: &mut ToolCallLifecycle,
+    ) -> anyhow::Result<bool> {
+        let Some(doc) = lifecycle.doc_id().map(str::to_owned) else {
+            return Ok(false);
+        };
+        let entry = self
+            .lock_executions()
+            .get(&doc)
+            .filter(|entry| entry.tool_call_id == lifecycle.tool_call_id())
+            .cloned();
+        let Some(entry) = entry else {
+            return Ok(false);
+        };
+        let receipt = entry
+            .confirmed_stop
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let Some(receipt) = receipt else {
+            return Ok(false);
+        };
+        if matches!(receipt, RetainedStopReceipt::FailurePending) {
+            return Ok(false);
+        }
+        let attempt: anyhow::Result<bool> = async { Ok(match &receipt {
+            RetainedStopReceipt::FailurePending => unreachable!("pending failure is not settled"),
+            RetainedStopReceipt::Cancel(cause, reason) => {
+                lifecycle.cancel_during_run_owned(*cause, reason).await?
+            }
+            RetainedStopReceipt::Timeout => lifecycle.timeout().await?,
+            RetainedStopReceipt::Failure(outcome) => match outcome {
+                crate::tool_call_lifecycle::ToolOutcome::Failed {
+                    denial: Some(denial),
+                    ..
+                } => {
+                    lifecycle
+                        .fail_with_command_denial(outcome.model_facing_text(), denial)
+                        .await?
+                }
+                crate::tool_call_lifecycle::ToolOutcome::Failed { class, .. } => {
+                    let presentation = match self
+                        .live_outputs
+                        .registry
+                        .prepared_presentation(&doc, outcome.model_facing_text())
+                        .await
+                    {
+                        Ok(presentation) => presentation,
+                        Err(error) => {
+                            tracing::warn!(tool_call_doc_id = %doc, %error, "failed to resolve failed background tool presentation");
+                            None
+                        }
+                    };
+                    lifecycle
+                        .fail_owned(outcome.model_facing_text(), *class, presentation)
+                        .await?
+                }
+                _ => unreachable!("failure receipt must carry a failed outcome"),
+            },
+        }) }.await;
+        let won = match attempt {
+            Ok(won) => won,
+            Err(error) => {
+                let fresh = ToolCallLifecycle::load_by_doc_id(
+                    lifecycle.node().clone(),
+                    &doc,
+                    lifecycle.node_did(),
+                    lifecycle.session_id(),
+                    lifecycle.requester_did(),
+                )
+                .await?;
+                match fresh {
+                    Some(fresh) if fresh.is_terminal() => {
+                        *lifecycle = fresh;
+                        false
+                    }
+                    _ => return Err(error),
+                }
+            }
+        };
+        if lifecycle.is_terminal() {
+            if won && lifecycle.await_mode() == crate::tool_call_lifecycle::AwaitMode::Background {
+                let notification = async {
+                    let calling_request_id = lifecycle.calling_request_id().await?;
+                    let (status, output, reason) = match &receipt {
+                        RetainedStopReceipt::FailurePending => {
+                            unreachable!("pending failure is not settled")
+                        }
+                        RetainedStopReceipt::Cancel(_, reason) => {
+                            ("cancelled", String::new(), Some(reason.as_str()))
+                        }
+                        RetainedStopReceipt::Timeout => {
+                            ("failed", String::new(), Some("deadline_exceeded"))
+                        }
+                        RetainedStopReceipt::Failure(_) => {
+                            let request_doc = lifecycle.request_doc_id().ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "settled tool invocation lacks its physical request"
+                                )
+                            })?;
+                            let raw = crate::background_tools::canonical_tool_output(
+                                lifecycle.node().as_ref(),
+                                &doc,
+                                request_doc,
+                                lifecycle.session_id(),
+                                lifecycle.node_did(),
+                                lifecycle.requester_did(),
+                            )
+                            .await?;
+                            ("failed", raw, Some("tool_failed"))
+                        }
+                    };
+                    crate::background_completion::append_background_tool_completion(
+                        lifecycle.node(),
+                        lifecycle.session_id(),
+                        &calling_request_id,
+                        &doc,
+                        lifecycle.tool_name(),
+                        status,
+                        &output,
+                        reason,
+                        crate::lifecycle::RequestHopCause::Continuation,
+                    )
+                    .await
+                }
+                .await;
+                if let Err(error) = notification {
+                    tracing::warn!(tool_call_doc_id = %doc, %error, "failed to append recovered background completion");
+                }
+            }
+            self.live_outputs.remove(&doc).await;
+            self.retire_confirmed_stop(lifecycle.tool_call_id(), &doc, true);
+        }
+        Ok(true)
+    }
+
+    pub(crate) async fn recover_retained_foreground(&self) {
+        let pending = self
+            .lock_executions()
+            .values()
+            .filter_map(|execution| {
+                let lifecycle = execution
+                    .recovery_lifecycle
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()?;
+                Some((
+                    execution.tool_call_doc_id.clone(),
+                    execution.clone(),
+                    lifecycle,
+                ))
+            })
+            .collect::<Vec<_>>();
+        for (doc, execution, mut lifecycle) in pending {
+            if execution
+                .confirmed_stop
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none()
+            {
+                let observed_exit = self
+                    .process_record(lifecycle.tool_call_id(), &doc)
+                    .is_some_and(|record| {
+                        record.identity.observe()
+                            == crate::managed_exec::ownership::ProcessObservation::Exited
+                    });
+                #[cfg(windows)]
+                let observed_exit = observed_exit
+                    || self.stop_failed_job(lifecycle.tool_call_id(), &doc).await == Some(true);
+                if observed_exit {
+                    execution.process_evidence.exited();
+                    self.remember_confirmed_stop(&execution);
+                }
+            }
+            let stop = execution
+                .confirmed_stop
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            if stop.is_some() {
+                if let Err(error) = self.settle_retained_stop(&mut lifecycle).await {
+                    tracing::warn!(tool_call_doc_id = %doc, %error, "confirmed process stop settlement remains pending");
+                }
+                continue;
+            }
+            if !execution
+                .handoff_pending
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                continue;
+            }
+            let receipt = serde_json::json!({"tool_call_id": lifecycle.tool_call_id(), "status": "running", "await_mode": "background", "message": "Process exit could not be confirmed; the call remains available for control."}).to_string();
+            match lifecycle.background_with_recovery_receipt(&receipt).await {
+                Ok(()) => {
+                    *execution
+                        .recovery_lifecycle
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lifecycle);
+                    execution
+                        .handoff_pending
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                }
+                Err(error) => {
+                    tracing::warn!(tool_call_doc_id = %doc, %error, "retained foreground process handoff remains pending")
+                }
+            }
+        }
+    }
+
     pub async fn wait_for_completion(&self, tool_call_id: &str) {
         let receivers = self
             .lock_executions()
@@ -420,6 +1096,7 @@ impl BackgroundExecutionRegistry {
 
     fn remove_now(&self, tool_call_doc_id: &str) {
         if let Some(execution) = self.lock_executions().remove(tool_call_doc_id) {
+            execution.worker_release_tx.send_replace(true);
             execution.completion_tx.send_replace(true);
         }
     }
@@ -444,6 +1121,32 @@ pub(crate) struct BackgroundExecutionReservation {
 }
 
 impl BackgroundExecutionReservation {
+    fn retain_for_recovery(self, lifecycle: ToolCallLifecycle) {
+        self.retain_stopped_worker(lifecycle, true);
+    }
+
+    fn retain_stopped_worker(mut self, lifecycle: ToolCallLifecycle, handoff_pending: bool) {
+        if let Some(execution) = self
+            .registry
+            .lock_executions()
+            .get(&self.tool_call_doc_id)
+            .cloned()
+        {
+            *execution
+                .recovery_lifecycle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(lifecycle);
+            execution
+                .handoff_pending
+                .store(handoff_pending, std::sync::atomic::Ordering::SeqCst);
+            execution
+                .retained
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            execution.worker_release_tx.send_replace(true);
+            self.armed = false;
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn disarm(mut self) {
         self.armed = false;
@@ -532,6 +1235,9 @@ pub struct DefraSessionHook {
     counters: Arc<HookCounters>,
     state: Arc<Mutex<SessionState>>,
     in_flight_lifecycles: Arc<Mutex<RapidHashMap<String, ToolCallLifecycle>>>,
+    foreground_process_evidence: Arc<
+        Mutex<RapidHashMap<String, Arc<crate::managed_exec::ownership::LiveProcessEvidenceOwner>>>,
+    >,
     accepted_tool_calls: Arc<Mutex<RapidHashMap<String, crate::streaming::AcceptedToolCall>>>,
     effect_tool_calls: Arc<Mutex<RapidHashMap<String, (ToolCallLifecycle, String)>>>,
     effect_lifecycles: Arc<Mutex<RapidHashMap<String, ToolCallLifecycle>>>,
@@ -547,6 +1253,8 @@ pub struct DefraSessionHook {
     pub(crate) job_driver: Option<Arc<crate::plugin_job::driver::JobDriver>>,
     output_obligation_gate: Option<crate::agent::output_obligation::OutputObligationGate>,
     steering_input_source: Option<Arc<SteeringInputSource>>,
+    inference_observation:
+        Option<std::sync::Weak<crate::inference_observation::InferenceObservationGuard>>,
 }
 
 struct SteeringInputSource {
@@ -561,6 +1269,14 @@ enum PolicyDecision {
 }
 
 impl DefraSessionHook {
+    pub(crate) fn with_inference_observation(
+        mut self,
+        observation: Option<Arc<crate::inference_observation::InferenceObservationGuard>>,
+    ) -> Self {
+        self.inference_observation = observation.as_ref().map(Arc::downgrade);
+        self
+    }
+
     pub(crate) fn with_steering_inputs(
         mut self,
         request: crate::watcher::AgentRequest,
@@ -704,6 +1420,7 @@ impl DefraSessionHook {
                 tool_result_identities: RapidHashMap::new(),
             })),
             in_flight_lifecycles: Arc::new(Mutex::new(RapidHashMap::new())),
+            foreground_process_evidence: Arc::new(Mutex::new(RapidHashMap::new())),
             accepted_tool_calls: Arc::new(Mutex::new(RapidHashMap::new())),
             effect_tool_calls: Arc::new(Mutex::new(RapidHashMap::new())),
             effect_lifecycles: Arc::new(Mutex::new(RapidHashMap::new())),
@@ -718,6 +1435,7 @@ impl DefraSessionHook {
             job_driver: None,
             output_obligation_gate: None,
             steering_input_source: None,
+            inference_observation: None,
         }
     }
 
@@ -753,6 +1471,7 @@ impl DefraSessionHook {
                 tool_result_identities: RapidHashMap::new(),
             })),
             in_flight_lifecycles: Arc::new(Mutex::new(RapidHashMap::new())),
+            foreground_process_evidence: Arc::new(Mutex::new(RapidHashMap::new())),
             accepted_tool_calls: Arc::new(Mutex::new(RapidHashMap::new())),
             effect_tool_calls: Arc::new(Mutex::new(RapidHashMap::new())),
             effect_lifecycles: Arc::new(Mutex::new(RapidHashMap::new())),
@@ -767,6 +1486,7 @@ impl DefraSessionHook {
             job_driver: None,
             output_obligation_gate: None,
             steering_input_source: None,
+            inference_observation: None,
         })
     }
 
@@ -987,6 +1707,49 @@ impl DefraSessionHook {
         self.background_live_outputs.remove(tool_call_id).await;
     }
 
+    async fn foreground_stop_confirmed(
+        &self,
+        lifecycle: &ToolCallLifecycle,
+        receipt: RetainedStopReceipt,
+    ) -> bool {
+        if !crate::toolset::is_bash_tool_name(lifecycle.tool_name()) {
+            return true;
+        }
+        let Some(doc) = lifecycle.doc_id() else {
+            return false;
+        };
+        let evidence = self
+            .foreground_process_evidence
+            .lock()
+            .await
+            .get(doc)
+            .cloned();
+        let Some(evidence) = evidence else {
+            return true;
+        };
+        self.background_executions
+            .set_stop_receipt(lifecycle.tool_call_id(), doc, receipt);
+        match self
+            .background_executions
+            .stop_native_process(lifecycle.tool_call_id(), doc)
+            .await
+        {
+            crate::managed_exec::ProcessStopOutcome::Stopped
+            | crate::managed_exec::ProcessStopOutcome::AlreadyExited => true,
+            crate::managed_exec::ProcessStopOutcome::StillRunning => false,
+            crate::managed_exec::ProcessStopOutcome::NotOwned => !matches!(
+                evidence.get(),
+                crate::managed_exec::ownership::LiveProcessEvidence::SpawnedUnverified
+            ),
+        }
+    }
+
+    async fn forget_foreground_evidence(&self, lifecycle: &ToolCallLifecycle) {
+        if let Some(doc) = lifecycle.doc_id() {
+            self.foreground_process_evidence.lock().await.remove(doc);
+        }
+    }
+
     pub(crate) async fn timeout_expired_tool_calls(&self) -> anyhow::Result<usize> {
         let lifecycles = {
             let now = Utc::now();
@@ -999,13 +1762,47 @@ impl DefraSessionHook {
 
             expired_ids
                 .into_iter()
-                .filter_map(|id| map.remove(&id))
+                .filter_map(|id| map.remove(&id).map(|lifecycle| (id, lifecycle)))
                 .collect::<Vec<_>>()
         };
 
-        let count = lifecycles.len();
-        for mut lifecycle in lifecycles {
-            let _ = lifecycle.timeout().await?;
+        let mut count = 0;
+        for (id, mut lifecycle) in lifecycles {
+            if !self
+                .foreground_stop_confirmed(&lifecycle, RetainedStopReceipt::Timeout)
+                .await
+            {
+                let still_foreground = match lifecycle.doc_id() {
+                    Some(doc) => self
+                        .foreground_process_evidence
+                        .lock()
+                        .await
+                        .contains_key(doc),
+                    None => true,
+                };
+                if still_foreground {
+                    self.in_flight_lifecycles.lock().await.insert(id, lifecycle);
+                }
+                continue;
+            }
+            if !self
+                .background_executions
+                .settle_retained_stop(&mut lifecycle)
+                .await?
+            {
+                let _ = lifecycle.timeout().await?;
+            }
+            if lifecycle.is_terminal() {
+                if let Some(doc) = lifecycle.doc_id() {
+                    self.background_executions.retire_confirmed_stop(
+                        lifecycle.tool_call_id(),
+                        doc,
+                        true,
+                    );
+                }
+            }
+            self.forget_foreground_evidence(&lifecycle).await;
+            count += 1;
         }
         let effects = self
             .effect_lifecycles
@@ -1030,23 +1827,73 @@ impl DefraSessionHook {
     pub async fn cancel_in_flight_tool_calls(&self) -> anyhow::Result<usize> {
         let lifecycles = {
             let mut map = self.in_flight_lifecycles.lock().await;
-            map.drain()
-                .map(|(_, lifecycle)| lifecycle)
-                .collect::<Vec<_>>()
+            map.drain().collect::<Vec<_>>()
         };
 
         let mut cancelled = 0;
         let mut first_error = None;
-        for mut lifecycle in lifecycles {
-            let applied = match lifecycle.interrupt_disposition() {
-                InterruptDisposition::Cancel if lifecycle.is_running() => lifecycle
-                    .cancel_during_run(CancelCause::Interrupted)
+        for (id, mut lifecycle) in lifecycles {
+            if lifecycle.is_running()
+                && matches!(
+                    lifecycle.interrupt_disposition(),
+                    InterruptDisposition::Cancel
+                )
+                && !self
+                    .foreground_stop_confirmed(
+                        &lifecycle,
+                        RetainedStopReceipt::Cancel(
+                            CancelCause::Interrupted,
+                            "request interrupted".to_owned(),
+                        ),
+                    )
                     .await
-                    .map(|won| cancelled += usize::from(won)),
+            {
+                let still_foreground = match lifecycle.doc_id() {
+                    Some(doc) => self
+                        .foreground_process_evidence
+                        .lock()
+                        .await
+                        .contains_key(doc),
+                    None => true,
+                };
+                if still_foreground {
+                    self.in_flight_lifecycles.lock().await.insert(id, lifecycle);
+                }
+                continue;
+            }
+            let applied = match lifecycle.interrupt_disposition() {
+                InterruptDisposition::Cancel if lifecycle.is_running() => {
+                    match self
+                        .background_executions
+                        .settle_retained_stop(&mut lifecycle)
+                        .await
+                    {
+                        Ok(true) => {
+                            cancelled += usize::from(lifecycle.is_cancelled());
+                            Ok(())
+                        }
+                        Ok(false) => lifecycle
+                            .cancel_during_run(CancelCause::Interrupted)
+                            .await
+                            .map(|won| cancelled += usize::from(won)),
+                        Err(error) => Err(error),
+                    }
+                }
                 InterruptDisposition::Cancel | InterruptDisposition::Retain => Ok(()),
             };
             if let Err(error) = applied {
                 first_error.get_or_insert(error);
+            } else {
+                if lifecycle.is_terminal() {
+                    if let Some(doc) = lifecycle.doc_id() {
+                        self.background_executions.retire_confirmed_stop(
+                            lifecycle.tool_call_id(),
+                            doc,
+                            true,
+                        );
+                    }
+                }
+                self.forget_foreground_evidence(&lifecycle).await;
             }
         }
         let effects = self
@@ -1150,6 +1997,15 @@ impl gents_loop::session_hook::CanonicalSessionHook<crate::streaming::AcceptedTo
 #[async_trait::async_trait]
 impl gents_loop::session_hook::SessionHook for DefraSessionHook {
     type Error = crate::agent::stream_processor::RuntimeSeamError;
+    fn observe_provider(&self, observation: gents_loop::session_hook::ProviderObservation) {
+        if let Some(owner) = self
+            .inference_observation
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+        {
+            owner.observe(observation);
+        }
+    }
 
     async fn run_foreground_tool(
         &self,
@@ -1157,6 +2013,11 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         internal_id: &str,
         call: gents_loop::session_hook::ForegroundCall,
     ) -> gents_loop::session_hook::ForegroundResult {
+        let _activity = self
+            .inference_observation
+            .as_ref()
+            .and_then(std::sync::Weak::upgrade)
+            .map(|owner| owner.begin_tool(internal_id));
         self.run_backgroundable_foreground(name, internal_id, call)
             .await
     }

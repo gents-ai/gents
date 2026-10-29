@@ -27,8 +27,11 @@ pub(crate) use records::{recover_task_hook_records, TaskHookRecord, TaskHookReco
 
 pub(crate) const DEFAULT_TASK_HOOK_TIMEOUT_SECS: u64 = 120;
 
+/// Bounds each captured hook process stream before building the attempt detail.
 const HOOK_OUTPUT_BYTE_CAP: usize = 64 * 1024;
 
+/// A failure reason carries only a tail of hook output so request failure
+/// summaries do not grow with the full captured output.
 const FAILURE_REASON_OUTPUT_CAP: usize = 4 * 1024;
 
 pub(crate) fn effective_timeout_secs(hook: &TaskHook) -> u64 {

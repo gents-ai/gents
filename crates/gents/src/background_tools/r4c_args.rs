@@ -6,7 +6,10 @@ const MAX_LIST_LIMIT: u32 = 50;
 
 pub(crate) const CHARS_PER_TOKEN_ESTIMATE: u32 = 4;
 const DEFAULT_READ_PROCESS_MAX_TOKENS: u32 = 4096;
+/// Bound a single returned page's context and allocation; retained output is
+/// fetched in later pages instead of widening this ceiling.
 const MAX_READ_PROCESS_MAX_TOKENS: u32 = 65536;
+/// Keep each page large enough to advance its byte offset.
 const MIN_READ_PROCESS_MAX_TOKENS: u32 = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -36,6 +39,8 @@ impl ListBackgroundToolsArgs {
     }
 }
 
+/// The caller selects a budget for each page through `max_tokens`; this is
+/// independent of the process output retention capacity.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ReadToolOutputArgs {
     pub(crate) tool_call_id: String,

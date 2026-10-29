@@ -88,10 +88,8 @@ impl Drop for ManagedChild {
     }
 }
 
-pub(super) async fn terminate_process_group<F>(pgid: Option<i32>, wait: &mut F) -> KillReport
-where
-    F: std::future::Future<Output = std::io::Result<std::process::ExitStatus>> + Unpin,
-{
+pub(super) async fn terminate_process_group(child: &mut ManagedChild) -> KillReport {
+    let pgid = child.pgid();
     let mut report = KillReport {
         pid: pgid,
         term_signal_sent: false,
@@ -101,16 +99,15 @@ where
 
     if let Some(pgid) = pgid {
         report.term_signal_sent = signal_process_group(pgid, libc::SIGTERM).is_ok();
-    }
-    if tokio::time::timeout(TERM_GRACE, &mut *wait).await.is_ok() {
-        report.reaped = true;
-        return report;
-    }
-
-    if let Some(pgid) = pgid {
+        // Keep the leader waitable until the whole group has received KILL.
+        // Reaping it first permits its process-group ID to be reused.
+        tokio::time::sleep(TERM_GRACE).await;
         report.kill_signal_sent = signal_process_group(pgid, libc::SIGKILL).is_ok();
     }
-    if tokio::time::timeout(KILL_GRACE, &mut *wait).await.is_ok() {
+    if matches!(
+        tokio::time::timeout(KILL_GRACE, child.inner.wait()).await,
+        Ok(Ok(_))
+    ) {
         report.reaped = true;
     }
     report
@@ -126,5 +123,44 @@ fn signal_process_group(pgid: i32, signal: i32) -> std::io::Result<()> {
         Ok(())
     } else {
         Err(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    #[tokio::test]
+    async fn leader_term_exit_does_not_leave_term_ignoring_child() {
+        let mut command = tokio::process::Command::new("/bin/sh");
+        command.args(["-c", "trap 'exit 0' TERM; (trap '' TERM; printf 'ready\\n'; while :; do sleep 60; done) & wait"])
+            .process_group(0)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        let mut child = ManagedChild::new(command.spawn().unwrap());
+        let identity =
+            crate::managed_exec::ownership::ProcessIdentity::of_live(child.pgid().unwrap())
+                .unwrap();
+        let stdout = child.inner.stdout.take().unwrap();
+        let mut line = String::new();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            BufReader::new(stdout).read_line(&mut line),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(line, "ready\n");
+        let report = terminate_process_group(&mut child).await;
+        child.mark_finished(report.reaped);
+        assert!(report.term_signal_sent && report.kill_signal_sent && report.reaped);
+        assert_eq!(
+            identity
+                .await_signalled_group_exit(crate::managed_exec::ownership::KILL_GRACE)
+                .await,
+            crate::managed_exec::ownership::ProcessObservation::Exited
+        );
     }
 }

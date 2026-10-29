@@ -47,3 +47,6 @@ impl ManagedExecState {
         }
     }
 }
+
+#[cfg(windows)]
+pub(crate) use process::FailedJobOwner;

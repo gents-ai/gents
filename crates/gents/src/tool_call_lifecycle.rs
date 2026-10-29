@@ -140,6 +140,7 @@ pub(crate) use delivery::publish_background_receipt_in_txn;
 pub(crate) mod file_inventory;
 mod file_review_access;
 pub(crate) mod query;
+pub use crate::toolset::file_contents::ContentDocument;
 pub(crate) use file_review_access::grant_source_file_read;
 pub use file_review_access::VerifiedFileImageReceipt;
 pub(crate) use query::load_tool_file_change_observation_in_txn;
@@ -165,6 +166,8 @@ mod background_hook_conformance;
 pub(crate) mod completion_owner_conformance;
 #[cfg(test)]
 mod composed_conformance;
+#[cfg(test)]
+mod operator_control_race_tests;
 #[cfg(test)]
 mod recovery_closeout_conformance;
 #[cfg(test)]
@@ -551,6 +554,10 @@ impl ToolCallLifecycle {
         }
     }
 
+    pub(crate) fn node(&self) -> &std::sync::Arc<defra_node::EmbeddedNode> {
+        &self.node
+    }
+
     pub(crate) fn await_mode(&self) -> AwaitMode {
         self.await_mode
     }
@@ -569,6 +576,27 @@ impl ToolCallLifecycle {
 
     pub(crate) fn request_id(&self) -> &str {
         &self.request_id
+    }
+
+    pub(crate) async fn calling_request_id(&self) -> anyhow::Result<String> {
+        if !self.request_id.trim().is_empty() {
+            return Ok(self.request_id.clone());
+        }
+        let doc_id = self
+            .request_doc_id
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("tool invocation lacks its calling request document"))?;
+        let request = crate::request_binding::load_agent_request_by_doc_id(&self.node, doc_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("tool invocation's calling request disappeared"))?;
+        anyhow::ensure!(
+            request.node_did == self.node_did
+                && request.session_id == self.session_id
+                && request.requester_did == self.requester_did
+                && !request.request_id.trim().is_empty(),
+            "tool invocation's calling request scope is inconsistent"
+        );
+        Ok(request.request_id)
     }
 
     pub(crate) fn session_id(&self) -> &str {

@@ -132,7 +132,8 @@ impl super::ToolCallLifecycle {
         node_did: &str,
         executions: &crate::hook::BackgroundExecutionRegistry,
     ) -> Result<ToolCallRecoveryReport> {
-        let tool_calls_recovered = recover_stuck_running_tool_calls(node, node_did).await?
+        let tool_calls_recovered = recover_stuck_running_tool_calls(node, node_did, executions)
+            .await?
             + Self::reconcile_orphaned_background_tools(node, node_did, executions)
                 .await?
                 .tool_calls_terminalized;
@@ -151,6 +152,19 @@ impl super::ToolCallLifecycle {
         node: &std::sync::Arc<EmbeddedNode>,
         node_did: &str,
     ) -> Result<TerminalParentToolReport> {
+        Self::reconcile_terminal_parent_owned_tools_with_executions(
+            node,
+            node_did,
+            &crate::hook::BackgroundExecutionRegistry::default(),
+        )
+        .await
+    }
+
+    pub(crate) async fn reconcile_terminal_parent_owned_tools_with_executions(
+        node: &std::sync::Arc<EmbeddedNode>,
+        node_did: &str,
+        executions: &crate::hook::BackgroundExecutionRegistry,
+    ) -> Result<TerminalParentToolReport> {
         let rows = load_running_tool_call_rows_for_agent(node, node_did).await?;
         let mut report = TerminalParentToolReport::default();
         let mut parent_cache: rapidhash::RapidHashMap<String, Option<AgentRequestRow>> =
@@ -160,7 +174,9 @@ impl super::ToolCallLifecycle {
             if row.node_did.as_deref() != Some(node_did) {
                 continue;
             }
-            if await_mode(&row) == AwaitMode::Background {
+            if await_mode(&row) == AwaitMode::Background
+                || executions.contains(&row.tool_call_id, &row.doc_id).await
+            {
                 continue;
             }
 
@@ -236,6 +252,7 @@ impl super::ToolCallLifecycle {
         node_did: &str,
         executions: &crate::hook::BackgroundExecutionRegistry,
     ) -> Result<OrphanedBackgroundToolReport> {
+        executions.recover_retained_foreground().await;
         let rows = load_running_tool_call_rows_for_agent(node, node_did).await?;
         let mut report = OrphanedBackgroundToolReport::default();
         let mut running_background = rapidhash::RapidHashSet::default();
@@ -287,9 +304,15 @@ impl super::ToolCallLifecycle {
             let deadline_at = parse_datetime(row.deadline_at.as_deref());
 
             if registered && session_stopped {
-                let process = executions
-                    .stop_execution(&row.tool_call_id, &row.doc_id)
-                    .await;
+                let process = if crate::toolset::is_bash_tool_name(&row.tool_name) {
+                    executions
+                        .stop_native_process(&row.tool_call_id, &row.doc_id)
+                        .await
+                } else {
+                    executions
+                        .stop_execution(&row.tool_call_id, &row.doc_id)
+                        .await
+                };
                 let Some(cause) = classify_registered_session_stop(process) else {
                     tracing::info!(
                         doc_id = %row.doc_id,
@@ -298,6 +321,22 @@ impl super::ToolCallLifecycle {
                     );
                     continue;
                 };
+                if crate::toolset::is_bash_tool_name(&row.tool_name) {
+                    if let Some(mut retained) = ToolCallLifecycle::load_by_doc_id(
+                        node.clone(),
+                        &row.doc_id,
+                        node_did,
+                        &row.session_id,
+                        row.requester_did.as_deref(),
+                    )
+                    .await?
+                    {
+                        if executions.settle_retained_stop(&mut retained).await? {
+                            report.tool_calls_terminalized += usize::from(retained.is_terminal());
+                            continue;
+                        }
+                    }
+                }
                 let updated =
                     match recover_tool_call_row(node, &row, deadline_at, cause, true).await {
                         Ok(updated) => updated,
@@ -322,30 +361,48 @@ impl super::ToolCallLifecycle {
 
             if registered {
                 let cause = RecoveryOutcome::TaskDeleted;
-                let updated =
-                    match recover_tool_call_row(node, &row, deadline_at, cause, true).await {
-                        Ok(updated) => updated,
-                        Err(error) => {
-                            tracing::warn!(
-                                doc_id = %row.doc_id,
-                                tool_call_id = %row.tool_call_id,
-                                error = %error,
-                                "failed to cancel background tool after owner stop"
-                            );
+                let process = if crate::toolset::is_bash_tool_name(&row.tool_name) {
+                    executions
+                        .stop_native_process(&row.tool_call_id, &row.doc_id)
+                        .await
+                } else {
+                    executions
+                        .stop_execution(&row.tool_call_id, &row.doc_id)
+                        .await
+                };
+                if !matches!(
+                    process,
+                    crate::managed_exec::ProcessStopOutcome::Stopped
+                        | crate::managed_exec::ProcessStopOutcome::AlreadyExited
+                ) {
+                    tracing::warn!(doc_id = %row.doc_id, tool_call_id = %row.tool_call_id, process = process.as_str(), "background process was not observed to stop");
+                    continue;
+                }
+                if crate::toolset::is_bash_tool_name(&row.tool_name) {
+                    if let Some(mut retained) = ToolCallLifecycle::load_by_doc_id(
+                        node.clone(),
+                        &row.doc_id,
+                        node_did,
+                        &row.session_id,
+                        row.requester_did.as_deref(),
+                    )
+                    .await?
+                    {
+                        if executions.settle_retained_stop(&mut retained).await? {
+                            report.tool_calls_terminalized += usize::from(retained.is_terminal());
                             continue;
                         }
-                    };
-                let process = executions
-                    .stop_execution(&row.tool_call_id, &row.doc_id)
-                    .await;
-                if process != crate::managed_exec::ProcessStopOutcome::Stopped {
-                    tracing::warn!(
-                        doc_id = %row.doc_id,
-                        tool_call_id = %row.tool_call_id,
-                        process = process.as_str(),
-                        "background process was not observed to stop"
-                    );
+                    }
                 }
+                let updated = match recover_tool_call_row(node, &row, deadline_at, cause, true)
+                    .await
+                {
+                    Ok(updated) => updated,
+                    Err(error) => {
+                        tracing::warn!(doc_id = %row.doc_id, tool_call_id = %row.tool_call_id, %error, "failed to cancel background tool after owner stop");
+                        continue;
+                    }
+                };
                 if updated {
                     append_recovered_background_tool_completion(node, &row, cause).await;
                     report.tool_calls_terminalized += 1;
@@ -451,7 +508,7 @@ impl super::ToolCallLifecycle {
         executions: &crate::hook::BackgroundExecutionRegistry,
         cause: CancelCause,
         completion_reason: &str,
-    ) -> Result<(crate::managed_exec::ProcessStopOutcome, bool)> {
+    ) -> Result<(crate::managed_exec::ProcessStopOutcome, bool, bool)> {
         use crate::managed_exec::ProcessStopOutcome;
         let doc_id = lifecycle
             .doc_id()
@@ -459,8 +516,15 @@ impl super::ToolCallLifecycle {
             .to_owned();
         let tool_call_id = lifecycle.tool_call_id().to_owned();
         let process = executions.stop_execution(&tool_call_id, &doc_id).await;
+        if matches!(
+            process,
+            ProcessStopOutcome::Stopped | ProcessStopOutcome::AlreadyExited
+        ) && executions.settle_retained_stop(lifecycle).await?
+        {
+            return Ok((process, lifecycle.is_terminal(), true));
+        }
         let (won, status, reason) = match process {
-            ProcessStopOutcome::StillRunning => return Ok((process, false)),
+            ProcessStopOutcome::StillRunning => return Ok((process, false, false)),
             ProcessStopOutcome::Stopped => (
                 lifecycle
                     .cancel_during_run_owned(cause, completion_reason)
@@ -484,19 +548,23 @@ impl super::ToolCallLifecycle {
         };
         executions.forget_process_record(&tool_call_id, &doc_id);
         if won {
-            if let Err(error) = crate::background_completion::append_background_tool_completion(
-                node,
-                lifecycle.session_id(),
-                lifecycle.request_id(),
-                &doc_id,
-                lifecycle.tool_name(),
-                status,
-                "",
-                Some(reason),
-                crate::lifecycle::RequestHopCause::Continuation,
-            )
-            .await
-            {
+            let notification = async {
+                let request_id = lifecycle.calling_request_id().await?;
+                crate::background_completion::append_background_tool_completion(
+                    node,
+                    lifecycle.session_id(),
+                    &request_id,
+                    &doc_id,
+                    lifecycle.tool_name(),
+                    status,
+                    "",
+                    Some(reason),
+                    crate::lifecycle::RequestHopCause::Continuation,
+                )
+                .await
+            }
+            .await;
+            if let Err(error) = notification {
                 tracing::warn!(
                     tool_call_id,
                     error = %error,
@@ -504,7 +572,7 @@ impl super::ToolCallLifecycle {
                 );
             }
         }
-        Ok((process, won))
+        Ok((process, won, false))
     }
 
     /// Persisted `status=completionPending:<reason>` advances to
@@ -847,6 +915,7 @@ mod tests {
 async fn recover_stuck_running_tool_calls(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
+    executions: &crate::hook::BackgroundExecutionRegistry,
 ) -> Result<usize> {
     let rows = load_running_tool_call_rows_for_agent(node, node_did).await?;
 
@@ -854,7 +923,10 @@ async fn recover_stuck_running_tool_calls(
     for row in rows {
         // Background rows have their own owners: native processes the
         // orphan sweep, session-message rows the session-message sweep.
-        if row.node_did.as_deref() != Some(node_did) || await_mode(&row) == AwaitMode::Background {
+        if row.node_did.as_deref() != Some(node_did)
+            || await_mode(&row) == AwaitMode::Background
+            || executions.contains(&row.tool_call_id, &row.doc_id).await
+        {
             continue;
         }
 
