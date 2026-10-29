@@ -515,6 +515,25 @@ async fn configured_gate_skip_completes_without_provider_or_failure_hooks() {
 }
 
 #[tokio::test]
+async fn cleanup_failure_after_a_gate_skip_fails_the_request() {
+    let harness = Harness::new().await;
+    harness
+        .install_task(json!([
+            {"hook_id": "gate", "phase": "before", "skip_exit_codes": [10],
+             "command": ["sh", "-c", "exit 10"], "timeout_secs": 30},
+            {"hook_id": "sweep", "phase": "finally",
+             "command": ["sh", "-c", "echo cleanup-broke >&2; exit 1"], "timeout_secs": 30},
+        ]))
+        .await;
+    let request = harness.create_request(Lineage::Trigger, false).await;
+    let row = harness.run(request, false).await;
+    assert_eq!(row["lifecycle_state"], "failed", "{row}");
+    assert_eq!(harness.calls(), 0, "{row}");
+    assert!(reason(&row).contains("sweep"), "{row}");
+    assert!(reason(&row).contains("cleanup-broke"), "{row}");
+}
+
+#[tokio::test]
 async fn passing_hooks_leave_a_manual_task_run_completed() {
     let harness = Harness::new().await;
     harness
