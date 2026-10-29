@@ -6,6 +6,8 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+## 1.0.0-rc0 - 2026-10-29
+
 - A job plugin may declare `host_imports: ["run_script"]`. The host then
   links `gents::run_script` and `gents::read_result` into its artifact and,
   when the plugin asks, evaluates the call's own `script` in the embedded
