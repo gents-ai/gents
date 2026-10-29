@@ -3857,3 +3857,63 @@ fn summary_reserve_is_the_summary_calls_output_cap() {
         "a small window caps the summary output at a quarter of it"
     );
 }
+
+fn mixed_turn_messages() -> Vec<Message> {
+    let mut messages = (0..30)
+        .map(|index| {
+            text_msg(
+                if index % 2 == 0 { "user" } else { "assistant" },
+                &format!(
+                    "turn-{index}: {}",
+                    "y".repeat(if index % 3 == 0 { 4_000 } else { 400 })
+                ),
+            )
+        })
+        .collect::<Vec<_>>();
+    messages.push(text_msg("user", "retained current prompt"));
+    messages
+}
+
+/// The recovery band end to end: with the keep-recent budget the loop takes
+/// from `retention_target`, the reduced request (fixed layers, checkpoint and
+/// retained tail) lands within four fifths of the budget, provided the latest
+/// turn fits the target and the checkpoint stays within its reserve.
+#[tokio::test]
+async fn reduced_request_lands_within_the_recovery_band() {
+    let counter = gate_test_loop_config().provider_input_counter;
+    let fixed_raw = 1_000;
+    // Budgets as a share of each history's whole request, in basis points.
+    for (name, messages, budget_share) in [
+        ("uniform turns", rolling_prefix_messages(), 6_000),
+        ("mixed turns", mixed_turn_messages(), 6_000),
+        ("mixed turns, roomy budget", mixed_turn_messages(), 9_000),
+    ] {
+        let total_raw = counter.estimate_message_request(&messages).unwrap() + fixed_raw;
+        let budget = total_raw * budget_share / 10_000;
+        let admission = ReductionAdmission::required(total_raw, budget);
+        let engine = ProviderReductionEngine::new(
+            Arc::new(SentinelCheckpointModel::default()),
+            gate_test_loop_config(),
+        );
+        let options = |keep_recent_tokens| ReductionOptions {
+            keep_recent_tokens,
+            mode: ReductionMode::Summarize,
+            summary_max_output_tokens: 512,
+            ..Default::default()
+        };
+        let target = engine
+            .retention_target(usize::MAX, &messages, admission, &options(0), 1_000_000)
+            .unwrap();
+        let result = engine
+            .reduce(messages, 1_000_000, &options(target), admission)
+            .await
+            .unwrap();
+        required_reduction(&result);
+        let band = crate::provider_input::budget::recovery_band_budget(budget);
+        assert!(
+            fixed_raw + result.compacted_token_estimate <= band,
+            "{name}: reduced request {} + fixed {fixed_raw} exceeds the band {band}",
+            result.compacted_token_estimate
+        );
+    }
+}
