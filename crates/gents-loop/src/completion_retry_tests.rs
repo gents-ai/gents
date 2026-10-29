@@ -411,4 +411,12 @@ fn context_overflow_compacts_once_then_fails() {
         ),
         other => panic!("expected Fail after the one compaction, got {other:?}"),
     }
+    state.on_turn_accepted();
+    assert!(
+        matches!(
+            state.on_pre_stream_failure(&failure, Utc::now(), None),
+            PreStreamDirective::CompactAndRetry { .. }
+        ),
+        "the next completion may compact once again"
+    );
 }

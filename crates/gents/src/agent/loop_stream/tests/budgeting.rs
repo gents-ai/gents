@@ -1436,6 +1436,85 @@ async fn second_provider_context_overflow_fails_after_the_one_compaction() {
     assert_eq!(model.seen_histories().await.len(), 2);
 }
 
+fn echo_call(id: &str) -> ScriptedCall {
+    ScriptedCall::Turn(vec![
+        RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+            id.to_string(),
+            "echo".to_string(),
+            serde_json::json!({}),
+        )),
+        RawStreamingChoice::FinalResponse(()),
+    ])
+}
+
+/// The one forced compaction is per completion: a later turn of the same
+/// request that overflows again compacts again, while a second overflow
+/// within one turn still ends the request.
+#[tokio::test(start_paused = true)]
+async fn each_completion_turn_may_compact_once_after_an_overflow() {
+    let overflow =
+        || ScriptedCall::FailStream(CompletionError::ProviderError(CLAUDE_PROMPT_TOO_LONG.into()));
+    let model = ScriptedModel::new_calls(vec![
+        overflow(),
+        echo_call("call-1"),
+        echo_call("call-2"),
+        overflow(),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("done".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ]);
+    let admitted = AdmittedReduction::default();
+    let mut loop_config = overflow_loop_config(admitted.clone());
+    loop_config.max_turns = 4;
+    let keys = Arc::new(AtomicUsize::new(0));
+    loop_config.turn_compactor = Some(Arc::new({
+        let admitted = admitted.clone();
+        move |request: TurnCompactionRequest| {
+            admitted.lock().unwrap().push((
+                request.admission.input_tokens(),
+                request.admission.effective_input_budget(),
+            ));
+            let key = keys.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                Ok(TurnCompactionOutcome::Reduced {
+                    messages: vec![TaggedMessage::unassociated(Message::user(
+                        "compacted prompt",
+                    ))],
+                    reduction_key: format!("overflow-reduction-{key}"),
+                })
+            })
+        }
+    }));
+
+    let collected = collect_scripted_stream(run_loop_stream(
+        model.clone(),
+        None::<crate::hook::DefraSessionHook>,
+        live_sized_prompt(),
+        Vec::new(),
+        Arc::new(vec![echo_tool()]),
+        loop_config,
+    ))
+    .await;
+
+    assert_eq!(collected.error, None);
+    assert_eq!(collected.final_text.as_deref(), Some("done"));
+    assert_eq!(
+        admitted.lock().unwrap().len(),
+        2,
+        "turn 1 and turn 3 each compact once"
+    );
+    assert_eq!(
+        collected
+            .attempts
+            .iter()
+            .map(|attempt| (attempt.turn, attempt.will_retry))
+            .collect::<Vec<_>>(),
+        vec![(0, true), (2, true)]
+    );
+    assert_eq!(model.seen_histories().await.len(), 5);
+}
+
 #[tokio::test(start_paused = true)]
 async fn provider_context_overflow_without_a_compactor_fails_with_its_reason() {
     let model = ScriptedModel::new_calls(vec![ScriptedCall::FailStream(

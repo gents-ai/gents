@@ -426,34 +426,26 @@ where
                                     attempt += 1;
                                 }
                                 PreStreamDirective::CompactAndRetry { overflow } => {
-                                    if config.turn_compactor.is_none() {
-                                        let terminal_reason = provider_overflow_without_compactor(&classified);
-                                        yield LoopStreamItem::AttemptFailed {
-                                            turn: turn_index,
-                                            attempt,
-                                            error: classified,
-                                            will_retry: false,
-                                            backoff: std::time::Duration::ZERO,
-                                        };
-                                        Err(StreamingError::Completion(
-                                            CompletionError::ProviderError(terminal_reason),
-                                        ))?;
-                                        unreachable!("Err(..)? above ends the stream");
-                                    }
-                                    if let Some(hook) = &hook {
+                                    let planned = plan_overflow_compaction(&config, &mut retry, &classified);
+                                    if let (Ok(()), Some(hook)) = (&planned, &hook) {
                                         hook.observe_provider(crate::session_hook::ProviderObservation::Retrying {
                                             turn: turn_index,
                                             attempt,
                                         });
                                     }
-                                    retry.mark_compaction_used();
                                     yield LoopStreamItem::AttemptFailed {
                                         turn: turn_index,
                                         attempt,
                                         error: classified,
-                                        will_retry: true,
+                                        will_retry: planned.is_ok(),
                                         backoff: std::time::Duration::ZERO,
                                     };
+                                    if let Err(terminal_reason) = planned {
+                                        Err(StreamingError::Completion(
+                                            CompletionError::ProviderError(terminal_reason),
+                                        ))?;
+                                        unreachable!("Err(..)? above ends the stream");
+                                    }
                                     let (rebuilt, decision) = rebuild_after_provider_overflow(
                                         &model,
                                         &mut history,
@@ -672,34 +664,26 @@ where
                                     continue 'attempts;
                                 }
                                 PreStreamDirective::CompactAndRetry { overflow } => {
-                                    if config.turn_compactor.is_none() {
-                                        let terminal_reason = provider_overflow_without_compactor(&classified);
-                                        yield LoopStreamItem::AttemptFailed {
-                                            turn: turn_index,
-                                            attempt,
-                                            error: classified,
-                                            will_retry: false,
-                                            backoff: std::time::Duration::ZERO,
-                                        };
-                                        Err(StreamingError::Completion(
-                                            CompletionError::ProviderError(terminal_reason),
-                                        ))?;
-                                        unreachable!("Err(..)? above ends the stream");
-                                    }
-                                    if let Some(hook) = &hook {
+                                    let planned = plan_overflow_compaction(&config, &mut retry, &classified);
+                                    if let (Ok(()), Some(hook)) = (&planned, &hook) {
                                         hook.observe_provider(crate::session_hook::ProviderObservation::Retrying {
                                             turn: turn_index,
                                             attempt,
                                         });
                                     }
-                                    retry.mark_compaction_used();
                                     yield LoopStreamItem::AttemptFailed {
                                         turn: turn_index,
                                         attempt,
                                         error: classified,
-                                        will_retry: true,
+                                        will_retry: planned.is_ok(),
                                         backoff: std::time::Duration::ZERO,
                                     };
+                                    if let Err(terminal_reason) = planned {
+                                        Err(StreamingError::Completion(
+                                            CompletionError::ProviderError(terminal_reason),
+                                        ))?;
+                                        unreachable!("Err(..)? above ends the stream");
+                                    }
                                     let (rebuilt, decision) = rebuild_after_provider_overflow(
                                         &model,
                                         &mut history,
@@ -1088,6 +1072,7 @@ where
             if let Some(anchor) = completed_anchor.take() {
                 config.context_calibration.anchor_accepted(anchor);
             }
+            retry.on_turn_accepted();
             if let Message::Assistant { id, .. } = &mut accepted_message {
                 *id = stream.message_id.clone();
             }
@@ -1493,11 +1478,21 @@ async fn sleep_retry_delay(
     )))
 }
 
-fn provider_overflow_without_compactor(classified: &InferenceError) -> String {
-    format!(
-        "provider rejected the request as over its context window and this completion loop \
-         has no per-turn compactor to reduce it: {classified}"
-    )
+/// The forced reduction a provider overflow asks for: spent from `retry`
+/// when this loop can reduce, else the request's terminal reason.
+fn plan_overflow_compaction(
+    config: &LoopConfig,
+    retry: &mut CompletionRetryState,
+    classified: &InferenceError,
+) -> Result<(), String> {
+    if config.turn_compactor.is_none() {
+        return Err(format!(
+            "provider rejected the request as over its context window and this completion loop \
+             has no per-turn compactor to reduce it: {classified}"
+        ));
+    }
+    retry.mark_compaction_used();
+    Ok(())
 }
 
 fn terminal_pre_stream_retry_reason(

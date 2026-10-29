@@ -235,6 +235,13 @@ impl CompletionRetryState {
         self.compaction_used = true;
     }
 
+    /// The forced overflow reduction is one-shot per completion
+    /// (`CompletionRetry.State.compactUsed`): an accepted turn ends that
+    /// completion, so the next turn of the same request may compact again.
+    pub fn on_turn_accepted(&mut self) {
+        self.compaction_used = false;
+    }
+
     pub fn on_pre_stream_failure(
         &mut self,
         failure: &ClassifiedFailure,
