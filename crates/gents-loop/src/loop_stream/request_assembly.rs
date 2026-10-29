@@ -1402,7 +1402,7 @@ pub(super) fn prepare_dispatch_attempt(
     super::aggregate_budget::clamp_request_aggregate_token_budget(
         &mut request,
         aggregate_token_budget,
-        estimated_input_tokens,
+        &context,
     )?;
     let projection =
         completion_request_input_components(&request, config.provider_input_counter.as_ref())?;
