@@ -15,6 +15,7 @@
       "CompletionRetry.Action.wake",
       "CompletionRetry.Action.acceptedToolFailure",
       "CompletionRetry.Action.repairIssue",
+      "CompletionRetry.Action.compactIssue",
       "CompletionRetry.Action.recordUsage"
     ],
     "generated_groups": ["completion_retry_cases"],

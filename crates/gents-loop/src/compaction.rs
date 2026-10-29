@@ -12,6 +12,10 @@ use serde::{Deserialize, Serialize};
 use crate::provider_input::ProviderInputProfile;
 
 pub const DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS: usize = 32_768;
+/// Guided resamples a Claude summary chunk gets before the strict JSON
+/// fallback.
+pub const MAX_CLAUDE_GUIDED_SUMMARY_RETRIES: u32 = 1;
+
 pub const MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS: usize = 32_768;
 pub const DEFAULT_COMPACTION_SUMMARY_FILE_LIST_MAX: usize = 100;
 pub const MAX_COMPACTION_SUMMARY_FILE_LIST_MAX: usize = 1_000;
@@ -102,6 +106,12 @@ pub enum CompactionError {
     },
     #[error("compaction_provider_failure: guided structured output failed: {guided}; non-guided JSON fallback failed: {fallback}")]
     FallbackProviderFailure { guided: String, fallback: String },
+    /// The provider rejected a summary request as over its context window.
+    #[error("compaction_provider_failure: summary request exceeded the provider's context window: {diagnostic}")]
+    SummaryContextOverflow {
+        overflow: crate::error::ContextOverflow,
+        diagnostic: String,
+    },
     #[error("guided compaction exhausted the request token budget")]
     GuidedBudgetExhausted(#[source] crate::loop_stream::OneShotError),
     #[error("non-guided compaction fallback exhausted the request token budget")]
@@ -155,6 +165,11 @@ pub struct ReductionOptions {
     pub deadline: Option<chrono::DateTime<chrono::Utc>>,
     pub aggregate_token_budget: Option<crate::loop_stream::AggregateTokenBudget>,
     pub sampling_seed: Option<i64>,
+    /// The requesting session's provider-input calibration for its own model.
+    /// An engine whose summary requests go to that same model sizes its
+    /// summary chunks with it; an engine summarizing with another model keeps
+    /// its own calibration.
+    pub context_calibration: Option<crate::provider_input::budget::ContextCalibration>,
 }
 
 impl Default for ReductionOptions {
@@ -169,10 +184,17 @@ impl Default for ReductionOptions {
             deadline: None,
             aggregate_token_budget: None,
             sampling_seed: None,
+            context_calibration: None,
         }
     }
 }
 
+/// Why a reduction may run, in estimator units (the provider-input
+/// estimator's raw count, before calibration). Both fields are in the same
+/// units as `ProviderInputCounter::estimate_message_request`, so the
+/// compactor can subtract and compare them with its own estimates; callers
+/// convert provider-token budgets with `ContextCalibration::estimator_budget`
+/// and anchored counts with `ContextCalibration::estimator_units`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ReductionAdmission {
     input_tokens: usize,
@@ -181,18 +203,41 @@ pub struct ReductionAdmission {
 }
 
 impl ReductionAdmission {
-    pub fn for_input(input_tokens: usize, context_window: usize, threshold: f64) -> Option<Self> {
-        let effective_input_budget =
-            crate::provider_input::budget::effective_input_budget(context_window, threshold);
+    /// The compaction trigger: admission when `context` exceeds
+    /// `provider_budget` (provider tokens). The admission is in estimator
+    /// units: the raw count, unless the anchor is what put the request over
+    /// budget. Modelled by `PromptAssembly.ContextCalibration.State.admission`.
+    pub fn for_context(
+        context: crate::provider_input::budget::ContextEstimate,
+        provider_budget: usize,
+    ) -> Option<Self> {
+        use crate::provider_input::budget;
         matches!(
-            threshold_decision(input_tokens, effective_input_budget),
+            threshold_decision(context.tokens, provider_budget),
             ThresholdDecision::ReduceEligible
         )
-        .then_some(Self {
+        .then(|| {
+            Self::required(
+                if context.tokens > context.calibrated {
+                    budget::estimator_input_units(context.tokens, context.ratio_basis_points)
+                        .max(context.raw)
+                } else {
+                    context.raw
+                },
+                budget::estimator_input_budget(provider_budget, context.ratio_basis_points),
+            )
+        })
+    }
+
+    /// Admission when the caller has already decided reduction is required:
+    /// the provider rejected the input as over its limit, or the anchored
+    /// provider count is over budget where the raw estimate is not.
+    pub fn required(input_tokens: usize, effective_input_budget: usize) -> Self {
+        Self {
             input_tokens,
             effective_input_budget,
             threshold_decision: ThresholdDecision::ReduceEligible,
-        })
+        }
     }
 
     fn decision<C>(self, can_fit: bool, prefix_len: usize, checkpoint: C) -> ReductionDecision<C> {
@@ -443,11 +488,17 @@ impl ExactReduction<'_> {
 type Result<T, E = CompactionError> = std::result::Result<T, E>;
 
 pub trait ReductionEngine: Send + Sync {
+    /// The retained tail's budget for reducing `messages` under `admission`
+    /// with `options` against `context_window`, the same arguments `reduce`
+    /// gets: the recovery band less the fixed layers and the checkpoint's
+    /// reserve.
     fn retention_target(
         &self,
         configured_keep_recent: usize,
         messages: &[Message],
         admission: ReductionAdmission,
+        options: &ReductionOptions,
+        context_window: usize,
     ) -> Result<usize>;
     fn reduce<'a>(
         &'a self,
@@ -498,11 +549,42 @@ where
         self
     }
 
+    /// The context window summary requests are sized against: this engine's
+    /// own when it summarizes with another model, else the source's.
+    fn summary_context_window(&self, source_context_window: usize) -> usize {
+        if self.source_input_counter.is_some() {
+            self.config.context_window
+        } else {
+            source_context_window
+        }
+    }
+
+    /// The `max_tokens` each summary call of a reduction gets.
+    fn summary_max_output_tokens(
+        &self,
+        options: &ReductionOptions,
+        summary_context_window: usize,
+    ) -> usize {
+        summary_output_ceiling(
+            options
+                .summary_max_output_tokens
+                .clamp(1, MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS)
+                .min(self.summary_output_limit.unwrap_or(usize::MAX)),
+            summary_context_window,
+        )
+    }
+
+    /// The checkpoint's reserve is the summary call's output cap, in output
+    /// tokens. Counted as estimator units it is conservative: replayed as
+    /// input, a summary of that many provider tokens estimates at most that
+    /// many (the ratio is at least one).
     pub fn retention_target(
         &self,
         configured_keep_recent: usize,
         compactable_messages: &[Message],
         admission: ReductionAdmission,
+        options: &ReductionOptions,
+        context_window: usize,
     ) -> Result<usize, CompactionError> {
         let compactable_input_tokens = self
             .source_input_counter
@@ -517,6 +599,7 @@ where
             configured_keep_recent,
             admission.effective_input_budget(),
             fixed_input_tokens,
+            self.summary_max_output_tokens(options, self.summary_context_window(context_window)),
         ))
     }
 
@@ -526,6 +609,15 @@ where
     ) -> Self {
         self.now = now;
         self
+    }
+
+    /// Whether this engine's summary requests are counted by the same
+    /// estimator and model as the history it reduces.
+    fn summarizes_with_source_model(&self) -> bool {
+        self.source_input_counter.as_ref().is_none_or(|source| {
+            source.profile() == self.config.provider_input_counter.profile()
+                && source.model() == self.config.provider_input_counter.model()
+        })
     }
 }
 
@@ -538,8 +630,17 @@ where
         configured: usize,
         messages: &[Message],
         admission: ReductionAdmission,
+        options: &ReductionOptions,
+        context_window: usize,
     ) -> Result<usize> {
-        ProviderReductionEngine::retention_target(self, configured, messages, admission)
+        ProviderReductionEngine::retention_target(
+            self,
+            configured,
+            messages,
+            admission,
+            options,
+            context_window,
+        )
     }
 
     fn reduce<'a>(
@@ -554,11 +655,7 @@ where
                 .source_input_counter
                 .as_deref()
                 .unwrap_or(self.config.provider_input_counter.as_ref());
-            let context_window = if self.source_input_counter.is_some() {
-                self.config.context_window
-            } else {
-                source_context_window
-            };
+            let context_window = self.summary_context_window(source_context_window);
             let original_token_estimate = counter
                 .estimate_message_request(&messages)
                 .map_err(CompactionError::ProjectOriginal)?;
@@ -608,15 +705,24 @@ where
             summary_config.preamble = Some(compaction_prompt().to_string());
             summary_config.context_message = None;
             summary_config.tool_choice = None;
+            // The summarizer never compacts. A provider overflow of a summary
+            // request ends this reduction instead of re-entering the
+            // compactor, so the forced overflow reduction cannot recurse.
             summary_config.turn_compactor = None;
+            // Summary chunks are sized against the provider's count: the
+            // session's ratio when the summarizer is the session's model, else
+            // this engine's own. Never an anchor: a summary chunk is not a
+            // continuation of the anchored call, and the copy keeps summary
+            // usage out of the session's and the engine's calibration.
+            summary_config.context_calibration = options
+                .context_calibration
+                .as_ref()
+                .filter(|_| self.summarizes_with_source_model())
+                .unwrap_or(&self.config.context_calibration)
+                .ratio_only();
             summary_config.replay = crate::loop_stream::LoopReplayInput::default();
             summary_config.max_turns = 0;
-            let configured_summary_max_output_tokens = options
-                .summary_max_output_tokens
-                .clamp(1, MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS)
-                .min(self.summary_output_limit.unwrap_or(usize::MAX));
-            let summary_max_output_tokens =
-                summary_output_ceiling(configured_summary_max_output_tokens, context_window);
+            let summary_max_output_tokens = self.summary_max_output_tokens(options, context_window);
             summary_config.max_tokens = Some(summary_max_output_tokens as u64);
             summary_config.aggregate_token_budget = options.aggregate_token_budget.clone();
             summary_config.additional_params = merge_optional_params(
@@ -629,10 +735,30 @@ where
                 (Some(from_options), Some(from_config)) => Some(from_options.min(from_config)),
                 (from_options, from_config) => from_options.or(from_config),
             };
-            summary_config.structured_output =
-                Some(crate::loop_stream::StructuredOutputConfig::for_type::<
-                    ContinuationCheckpoint,
-                >());
+            let structured_output =
+                crate::loop_stream::StructuredOutputConfig::for_type::<ContinuationCheckpoint>();
+            // Claude decodes against the schema natively; each guided retry
+            // resends the whole chunk, so one retry, then the fallback.
+            let claude = self.config.provider_input_counter.profile()
+                == crate::provider_input::ProviderInputProfile::ClaudeMessages;
+            summary_config.structured_output = Some(if claude {
+                structured_output.with_max_invalid_retries(MAX_CLAUDE_GUIDED_SUMMARY_RETRIES)
+            } else {
+                structured_output
+            });
+            if claude {
+                // Every attempt on a chunk, guided or fallback, writes and
+                // reads a cache entry at the end of the chunk history, before
+                // the final instruction that differs between them.
+                let mut params = summary_config
+                    .additional_params
+                    .take()
+                    .filter(serde_json::Value::is_object)
+                    .unwrap_or_else(|| serde_json::json!({}));
+                params[crate::claude_messages_body::CACHE_PREFIX_BREAKPOINT_PARAM] =
+                    serde_json::Value::Bool(true);
+                summary_config.additional_params = Some(params);
+            }
 
             let FileActivity {
                 files_read,
@@ -649,33 +775,71 @@ where
                     return Err(CompactionError::Reduction(ReductionError::DeadlineElapsed));
                 }
                 let remaining = &old_messages[consumed..];
-                let (chunk_len, chunk_input_tokens) = largest_fitting_summary_chunk(
-                    self.model.as_ref(),
-                    remaining,
-                    rolling_summary.as_deref(),
-                    &summary_config,
-                    options,
-                    consumed,
-                    context_window,
-                )
-                .await?;
-                let pair_closed = history::pair_safe_boundaries(remaining).contains(&chunk_len);
                 let configured_output = configured_output_ceiling(summary_config.max_tokens);
-                let chunk = pretruncate_tool_results(
-                    remaining[..chunk_len].to_vec(),
-                    options.tool_result_max_chars,
-                );
-                let prior_checkpoint = rolling_summary.as_ref().and_then(|summary| {
-                    crate::prompt::compaction_summary_message(std::slice::from_ref(summary))
-                });
-                let prepared_history = rolling_step_input(prior_checkpoint, chunk);
-                let checkpoint = summarize_checkpoint(
-                    self.model.as_ref(),
-                    prepared_history,
-                    summary_config.clone(),
-                    self.now.clone(),
-                )
-                .await?;
+                let mut max_chunk_messages = remaining.len();
+                let (chunk_len, chunk_input_tokens, checkpoint) = loop {
+                    let (chunk_len, chunk_input_tokens) = largest_fitting_summary_chunk(
+                        self.model.as_ref(),
+                        remaining,
+                        max_chunk_messages,
+                        rolling_summary.as_deref(),
+                        &summary_config,
+                        options,
+                        consumed,
+                        context_window,
+                    )
+                    .await?;
+                    let chunk = pretruncate_tool_results(
+                        remaining[..chunk_len].to_vec(),
+                        options.tool_result_max_chars,
+                    );
+                    let prior_checkpoint = rolling_summary.as_ref().and_then(|summary| {
+                        crate::prompt::compaction_summary_message(std::slice::from_ref(summary))
+                    });
+                    let prepared_history = rolling_step_input(prior_checkpoint, chunk);
+                    match summarize_checkpoint(
+                        self.model.as_ref(),
+                        prepared_history,
+                        summary_config.clone(),
+                        self.now.clone(),
+                    )
+                    .await
+                    {
+                        Ok(checkpoint) => break (chunk_len, chunk_input_tokens, checkpoint),
+                        // The provider counted the chunk over its limit even
+                        // though the calibrated estimate fit: learn its count,
+                        // then halve the chunk. Halving strictly shrinks the
+                        // cap, so this ends once no pair-safe boundary fits.
+                        Err(CompactionError::SummaryContextOverflow {
+                            overflow,
+                            diagnostic,
+                        }) if history::pair_safe_boundaries(remaining)
+                            .iter()
+                            .any(|boundary| *boundary <= chunk_len / 2) =>
+                        {
+                            if let Some(observed) = overflow.input_tokens {
+                                summary_config.context_calibration.observe(
+                                    u64::from(observed),
+                                    summary_config
+                                        .context_calibration
+                                        .estimator_units(chunk_input_tokens),
+                                );
+                            }
+                            tracing::warn!(
+                                chunk_start = consumed,
+                                chunk_len,
+                                chunk_input_tokens,
+                                provider_input_tokens = overflow.input_tokens,
+                                provider_limit = overflow.limit,
+                                error = %diagnostic,
+                                "summary chunk overflowed the provider's context window; halving it"
+                            );
+                            max_chunk_messages = chunk_len / 2;
+                        }
+                        Err(error) => return Err(error),
+                    }
+                };
+                let pair_closed = history::pair_safe_boundaries(remaining).contains(&chunk_len);
                 consumed = consumed
                     .checked_add(chunk_len)
                     .ok_or(CompactionError::Reduction(
@@ -761,9 +925,13 @@ where
     }
 }
 
+/// The longest pair-safe prefix of `remaining`, at most `max_messages` long,
+/// whose summary request fits the calibrated input budget.
+#[allow(clippy::too_many_arguments)]
 async fn largest_fitting_summary_chunk<M>(
     model: &M,
     remaining: &[Message],
+    max_messages: usize,
     prior_summary: Option<&str>,
     summary_config: &crate::loop_stream::LoopConfig,
     options: &ReductionOptions,
@@ -773,7 +941,13 @@ async fn largest_fitting_summary_chunk<M>(
 where
     M: ProviderModel,
 {
-    let boundaries = history::pair_safe_boundaries(remaining);
+    let mut boundaries = history::pair_safe_boundaries(remaining);
+    let all_boundaries = boundaries.len();
+    boundaries.retain(|boundary| *boundary <= max_messages);
+    if boundaries.is_empty() && all_boundaries > 0 {
+        boundaries = history::pair_safe_boundaries(remaining);
+        boundaries.truncate(1);
+    }
     let configured_output = configured_output_ceiling(summary_config.max_tokens);
     let input_budget = rolling_summary_input_budget(context_window, configured_output);
     let Some(&first_boundary) = boundaries.first() else {
@@ -884,6 +1058,7 @@ where
     summary_config
         .provider_input_counter
         .estimate_request(&request)
+        .map(|estimate| summary_config.context_calibration.calibrated(estimate))
         .map_err(CompactionError::ProjectSummaryRequest)
 }
 
@@ -925,14 +1100,16 @@ where
                 ));
             fallback_config.retry_policy =
                 crate::completion_retry::CompletionRetryPolicy::no_retry();
-            fallback_config.preamble = Some(format!(
-                "{}\n\n{}",
-                compaction_prompt(),
-                compaction_json_fallback_prompt()
-            ));
+            // The system prefix stays byte-identical to the guided attempts so
+            // the provider's prompt cache still covers the chunk; the strict
+            // JSON instruction rides in the final user message instead.
             let raw = crate::loop_stream::run_loop_to_text(
                 model.clone(),
-                Message::user(compaction_request_prompt()),
+                Message::user(format!(
+                    "{}\n\n{}",
+                    compaction_request_prompt(),
+                    compaction_json_fallback_prompt()
+                )),
                 prepared_history,
                 std::sync::Arc::new(Vec::new()),
                 fallback_config,
@@ -960,6 +1137,22 @@ where
         Err(error) => {
             if error.aggregate_token_budget_exhaustion().is_some() {
                 return Err(CompactionError::GuidedBudgetExhausted(error));
+            }
+            if let Some(crate::error::InferenceError::ContextLengthExceeded {
+                input_tokens,
+                limit,
+                ..
+            }) = error
+                .loop_stream_error()
+                .map(crate::error::LoopStreamError::classify)
+            {
+                return Err(CompactionError::SummaryContextOverflow {
+                    overflow: crate::error::ContextOverflow {
+                        input_tokens,
+                        limit,
+                    },
+                    diagnostic: bounded_error_diagnostic(&ErrorChain(&error).to_string()),
+                });
             }
             let deadline_context = if deadline_elapsed(summary_config.deadline, now.as_ref()) {
                 "compaction deadline elapsed after "

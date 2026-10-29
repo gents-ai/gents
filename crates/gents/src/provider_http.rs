@@ -36,6 +36,9 @@ impl ProviderHttpClient {
     }
 }
 
+/// Every transport error here is a reqwest error, mapped as
+/// `instance_error(error.without_url())`: a provider URL can carry a key in
+/// its query, and this error's text reaches failure reasons and logs.
 fn instance_error<E>(error: E) -> http_client::Error
 where
     E: std::error::Error + Send + Sync + 'static,
@@ -83,7 +86,10 @@ impl HttpClientExt for ProviderHttpClient {
             .body(body);
         let usage = self.usage.clone();
         async move {
-            let response = request.send().await.map_err(instance_error)?;
+            let response = request
+                .send()
+                .await
+                .map_err(|error| instance_error(error.without_url()))?;
             let status = response.status();
             if !status.is_success() {
                 let headers = response.headers().clone();
@@ -97,7 +103,10 @@ impl HttpClientExt for ProviderHttpClient {
                 *headers = response.headers().clone();
             }
             let body: LazyBody<U> = Box::pin(async move {
-                let bytes = response.bytes().await.map_err(instance_error)?;
+                let bytes = response
+                    .bytes()
+                    .await
+                    .map_err(|error| instance_error(error.without_url()))?;
                 Ok(U::from(bytes))
             });
             builder.body(body).map_err(http_client::Error::Protocol)
@@ -134,9 +143,9 @@ impl HttpClientExt for ProviderHttpClient {
         let usage = self.usage.clone();
         async move {
             let response = client
-                .execute(request.map_err(instance_error)?)
+                .execute(request.map_err(|error| instance_error(error.without_url()))?)
                 .await
-                .map_err(instance_error)?;
+                .map_err(|error| instance_error(error.without_url()))?;
             let status = response.status();
             if !status.is_success() {
                 let headers = response.headers().clone();
@@ -155,7 +164,7 @@ impl HttpClientExt for ProviderHttpClient {
             let stream: http_client::sse::BoxedStream = Box::pin(
                 response
                     .bytes_stream()
-                    .map(|chunk| chunk.map_err(instance_error)),
+                    .map(|chunk| chunk.map_err(|error| instance_error(error.without_url()))),
             );
             builder.body(stream).map_err(http_client::Error::Protocol)
         }

@@ -106,14 +106,24 @@ def retryCases : List RetryCase :=
       { baseState with
           phase := .retracted .reasoningRejected "invalid thinking signature" 12
           repairUsed := true } .schedule
+  , witness "context_overflow_moves_directly_to_compaction"
+      { baseState with phase := .retracted .contextOverflow "prompt is too long" 12 }
+      .schedule
+  , witness "compact_issue_consumes_its_only_capability"
+      { baseState with phase := .compacting } .compactIssue
+  , witness "context_overflow_after_compaction_is_exhausted"
+      { baseState with
+          phase := .retracted .contextOverflow "prompt is too long" 12
+          compactUsed := true } .schedule
   ]
 
-theorem retryCases_count : retryCases.length = 24 := by decide
+theorem retryCases_count : retryCases.length = 27 := by decide
 
 theorem retry_cases_pin_publication_boundary :
     retryCases.map (fun c => c.post.isSome) =
       [true, false, false, true, true, true, true, true, false, true, false, true, true,
-       true, true, true, true, false, true, true, true, true, true, true] := by
+       true, true, true, true, false, true, true, true, true, true, true, true, true,
+       true] := by
   native_decide
 
 theorem retry_cases_pin_exhaustion_and_single_repair :
@@ -140,9 +150,15 @@ theorem provider_stream_malformed_case_still_enters_retraction :
   native_decide
 
 theorem reasoning_rejection_cases_repair_once :
-    (retryCases.drop 21).map (fun c => c.post.map (·.phase)) =
+    ((retryCases.drop 21).take 3).map (fun c => c.post.map (·.phase)) =
       [some (.retractRequired .reasoningRejected "invalid thinking signature" 12),
        some .repairing, some .exhausted] := by
+  native_decide
+
+theorem context_overflow_cases_compact_once :
+    (retryCases.drop 24).map (fun c => c.post.map (fun state =>
+      (state.phase, state.compactUsed, state.attempt))) =
+      [some (.compacting, false, 0), some (.issuing, true, 1), some (.exhausted, true, 0)] := by
   native_decide
 
 theorem reasoning_rejection_never_backs_off (s : State) (error : String) (wake : Time)

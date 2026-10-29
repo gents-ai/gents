@@ -7,12 +7,13 @@ namespace CompletionRetry.Contracts
 open Conformance.Contracts
 
 def failureClassVocabulary : List String :=
-  ["transport", "parse_bad_request", "reasoning_rejected", "permanent"]
+  ["transport", "parse_bad_request", "reasoning_rejected", "context_overflow", "permanent"]
 
 def failureClassName : FailureClass → String
   | .transport => "transport"
   | .parseBadRequest => "parse_bad_request"
   | .reasoningRejected => "reasoning_rejected"
+  | .contextOverflow => "context_overflow"
   | .permanent => "permanent"
 
 def failureOriginName : FailureOrigin → String
@@ -28,6 +29,7 @@ def phaseName : Phase → String
   | .retracted .. => "retracted"
   | .backingOff _ => "backing_off"
   | .repairing => "repairing"
+  | .compacting => "compacting"
   | .accepted _ => "accepted"
   | .acceptedToolFailed _ => "accepted_tool_failed"
   | .exhausted => "exhausted"
@@ -42,6 +44,7 @@ def actionName : Action → String
   | .accept _ => "accept_and_publish"
   | .acceptedToolFailure => "accepted_tool_failure"
   | .repairIssue => "repair_issue"
+  | .compactIssue => "compact_issue"
   | .recordUsage _ => "record_usage"
 
 def boolJson (value : Bool) : String := if value then "true" else "false"

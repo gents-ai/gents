@@ -79,6 +79,14 @@ pub struct TaskHook {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub timeout_secs: Option<i64>,
+    /// Nonzero exit codes that stop a before hook without starting the agent.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<i64>>", optional = nullable))]
+    pub skip_exit_codes: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

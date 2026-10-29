@@ -150,6 +150,7 @@ structure PromptAssemblyBudgetCase where
   promptTokens : Nat
   requestTokens : Nat
   effectiveInputBudget : Nat
+  compactionInputBudget : Nat
   effectiveOutputTokens : Nat
   shouldCompact : Bool
   providerSafe : Bool
@@ -163,10 +164,33 @@ structure PromptAssemblyTurnBudgetCase where
   thresholdBasisPoints : Nat
   configuredThresholdBudget : Nat
   effectiveInputBudget : Nat
+  compactionInputBudget : Nat
   turnInputTokens : List Nat
   turnOutputTokens : List Nat
   turnShouldCompact : List Bool
   turnCanDispatch : List Bool
+  deriving Repr
+
+/-- One compaction-trigger witness: the calibration state, a raw estimate
+and the budget inputs, with the trigger's decision derived by
+`ContextCalibration.State.admission`. -/
+structure PromptAssemblyCompactionTriggerCase where
+  name : String
+  contextWindow : Nat
+  maxOutputTokens : Nat
+  thresholdBasisPoints : Nat
+  priorBasisPoints : Nat
+  seededObservations : List Nat
+  observed : List (Nat × Nat)
+  anchor : Option PromptAssembly.ContextCalibration.Anchor
+  invalidate : Bool
+  rawInputTokens : Nat
+  ratioBasisPoints : Nat
+  calibratedTokens : Nat
+  anchoredTokens : Option Nat
+  contextTokens : Nat
+  compactionInputBudget : Nat
+  admission : Option PromptAssembly.ContextCalibration.Admission
   deriving Repr
 
 structure PromptAssemblyRetentionCase where
@@ -586,6 +610,11 @@ private def budgetWitnesses : List BudgetWitness :=
     , promptTokens := 58001, requestTokens := 0 }
   ]
 
+/-- A provider profile with no prior and no observations: one provider token
+per estimated token, unanchored. -/
+private def unitCalibration : PromptAssembly.ContextCalibration.State :=
+  PromptAssembly.ContextCalibration.seed PromptAssembly.ContextCalibration.unitRatio []
+
 private def budgetCase (witness : BudgetWitness) : PromptAssemblyBudgetCase :=
   let configured := PromptAssembly.Budget.configuredThresholdBudget
     witness.contextWindow witness.thresholdBasisPoints
@@ -603,8 +632,10 @@ private def budgetCase (witness : BudgetWitness) : PromptAssemblyBudgetCase :=
   , requestTokens := witness.requestTokens
   , effectiveInputBudget := effective
   , effectiveOutputTokens := outputTokens
-  , shouldCompact := decide (PromptAssembly.Budget.ExceedsInputBudget
-      witness.promptTokens witness.requestTokens configured witness.contextWindow)
+  , compactionInputBudget := PromptAssembly.Budget.compactionInputBudget
+      witness.contextWindow witness.thresholdBasisPoints witness.maxOutputTokens
+  , shouldCompact := (unitCalibration.admission inputTokens witness.contextWindow
+      witness.thresholdBasisPoints witness.maxOutputTokens).isSome
   , providerSafe := decide
       (inputTokens + outputTokens ≤ witness.contextWindow)
   , canDispatch := decide (PromptAssembly.Budget.CanDispatch inputTokens
@@ -655,19 +686,114 @@ private def turnBudgetCase
   , thresholdBasisPoints := witness.thresholdBasisPoints
   , configuredThresholdBudget := configured
   , effectiveInputBudget := effective
+  , compactionInputBudget := PromptAssembly.Budget.compactionInputBudget
+      witness.contextWindow witness.thresholdBasisPoints witness.maxOutputTokens
   , turnInputTokens := witness.turnInputTokens
   , turnOutputTokens := witness.turnInputTokens.map fun inputTokens =>
       PromptAssembly.Budget.effectiveOutputBudget inputTokens witness.contextWindow
         witness.maxOutputTokens
   , turnShouldCompact := witness.turnInputTokens.map fun inputTokens =>
-      decide (PromptAssembly.Budget.ExceedsInputBudget inputTokens 0 configured
-        witness.contextWindow)
+      (unitCalibration.admission inputTokens witness.contextWindow
+        witness.thresholdBasisPoints witness.maxOutputTokens).isSome
   , turnCanDispatch := witness.turnInputTokens.map fun inputTokens =>
       decide (PromptAssembly.Budget.CanDispatch inputTokens witness.contextWindow
         witness.maxOutputTokens) }
 
 def promptAssemblyTurnBudgetCases : List PromptAssemblyTurnBudgetCase :=
   turnBudgetWitnesses.map turnBudgetCase
+
+private structure TriggerWitness where
+  name : String
+  contextWindow : Nat := 1000000
+  maxOutputTokens : Nat := 32000
+  thresholdBasisPoints : Nat := 7500
+  priorBasisPoints : Nat := 10000
+  seededObservations : List Nat := []
+  /-- Provider counts observed after seeding, as (provider, estimate). -/
+  observed : List (Nat × Nat) := []
+  anchor : Option PromptAssembly.ContextCalibration.Anchor := none
+  invalidate : Bool := false
+  rawInputTokens : Nat
+
+private def triggerWitnesses : List TriggerWitness :=
+  [ { name := "unit-prior-below-budget", rawInputTokens := 700000 }
+  , { name := "unit-prior-at-budget", rawInputTokens := 750000 }
+  , { name := "unit-prior-one-over-budget", rawInputTokens := 750001 }
+  , { name := "claude-prior-live-overflow", priorBasisPoints := 18000
+    , rawInputTokens := 561000 }
+  , { name := "claude-prior-below-budget", priorBasisPoints := 18000
+    , rawInputTokens := 416666 }
+  , { name := "prior-clamped-high", priorBasisPoints := 90000
+    , rawInputTokens := 200000 }
+  , { name := "prior-clamped-low", priorBasisPoints := 1, rawInputTokens := 750001 }
+  , { name := "observation-raises-at-once", observed := [(160000, 100000)]
+    , rawInputTokens := 500000 }
+  , { name := "lower-observation-keeps-the-window-max"
+    , seededObservations := [17000], observed := [(110000, 100000)]
+    , rawInputTokens := 450000 }
+  , { name := "high-observation-ages-out-after-the-window"
+    , seededObservations := [30000, 11000, 11000, 11000, 11000, 11000, 11000, 11000]
+    , observed := [(110000, 100000)], rawInputTokens := 650000 }
+  , { name := "unusable-observation-ignored", observed := [(0, 100000), (100000, 0)]
+    , rawInputTokens := 700000 }
+  , { name := "malformed-usage-clamped", observed := [(1000000, 1)]
+    , rawInputTokens := 100000 }
+  , { name := "anchor-puts-the-request-over"
+    , priorBasisPoints := 12000
+    , anchor := some { input := 740000, output := 4000, estimated := 600000 }
+    , rawInputTokens := 610000 }
+  , { name := "anchor-counts-the-response-once"
+    , anchor := some { input := 700000, output := 20000, estimated := 600000 }
+    , rawInputTokens := 620000 }
+  , { name := "anchor-below-calibrated-floor"
+    , priorBasisPoints := 30000
+    , anchor := some { input := 100000, output := 0, estimated := 60000 }
+    , rawInputTokens := 260000 }
+  , { name := "reduced-request-drops-the-anchor"
+    , anchor := some { input := 900000, output := 0, estimated := 600000 }
+    , rawInputTokens := 400000 }
+  , { name := "invalidated-anchor-is-calibrated-only"
+    , anchor := some { input := 900000, output := 0, estimated := 600000 }
+    , invalidate := true, rawInputTokens := 610000 }
+  , { name := "output-reserve-binds-below-threshold"
+    , contextWindow := 200000, maxOutputTokens := 32000, thresholdBasisPoints := 9500
+    , rawInputTokens := 168001 }
+  , { name := "unbounded-output-reserves-a-quarter"
+    , contextWindow := 128000, maxOutputTokens := 1000000000, thresholdBasisPoints := 10000
+    , rawInputTokens := 96001 }
+  , { name := "provider-limit-window", contextWindow := 1000, maxOutputTokens := 100
+    , thresholdBasisPoints := 7500, priorBasisPoints := 20000, rawInputTokens := 376 }
+  ]
+
+open PromptAssembly.ContextCalibration in
+private def triggerCase (witness : TriggerWitness) : PromptAssemblyCompactionTriggerCase :=
+  let seeded := { seed witness.priorBasisPoints witness.seededObservations with
+    anchor := witness.anchor }
+  let observedState := witness.observed.foldl
+    (fun state (provider, estimate) => state.observe provider estimate) seeded
+  let state := if witness.invalidate then observedState.invalidate else observedState
+  { name := witness.name
+  , contextWindow := witness.contextWindow
+  , maxOutputTokens := witness.maxOutputTokens
+  , thresholdBasisPoints := witness.thresholdBasisPoints
+  , priorBasisPoints := witness.priorBasisPoints
+  , seededObservations := witness.seededObservations
+  , observed := witness.observed
+  , anchor := witness.anchor
+  , invalidate := witness.invalidate
+  , rawInputTokens := witness.rawInputTokens
+  , ratioBasisPoints := state.ratio
+  , calibratedTokens := calibrated witness.rawInputTokens state.ratio
+  , anchoredTokens := state.anchor.bind fun anchor =>
+      anchored anchor witness.rawInputTokens state.ratio
+  , contextTokens := state.tokens witness.rawInputTokens
+  , compactionInputBudget := PromptAssembly.Budget.compactionInputBudget
+      witness.contextWindow witness.thresholdBasisPoints witness.maxOutputTokens
+  , admission := state.admission witness.rawInputTokens witness.contextWindow
+      witness.thresholdBasisPoints witness.maxOutputTokens }
+
+def promptAssemblyCompactionTriggerCases : List PromptAssemblyCompactionTriggerCase :=
+  triggerWitnesses.map triggerCase
 
 private structure RetentionWitness where
   name : String
@@ -683,12 +809,12 @@ private def retentionWitnesses : List RetentionWitness :=
     , effectiveInputBudget := 1, fixedInput := 0, summaryMaxOutput := 1 }
   , { name := "configured-cap-wins", configuredKeepRecent := 2
     , effectiveInputBudget := 100, fixedInput := 0, summaryMaxOutput := 2 }
-  , { name := "quarter-boundary-minus-one", configuredKeepRecent := 100
-    , effectiveInputBudget := 3, fixedInput := 0, summaryMaxOutput := 1 }
-  , { name := "quarter-boundary-exact", configuredKeepRecent := 100
-    , effectiveInputBudget := 4, fixedInput := 0, summaryMaxOutput := 4 }
-  , { name := "quarter-boundary-one-over", configuredKeepRecent := 100
+  , { name := "fifth-boundary-minus-one", configuredKeepRecent := 100
+    , effectiveInputBudget := 4, fixedInput := 0, summaryMaxOutput := 1 }
+  , { name := "fifth-boundary-exact", configuredKeepRecent := 100
     , effectiveInputBudget := 5, fixedInput := 0, summaryMaxOutput := 5 }
+  , { name := "fifth-boundary-one-over", configuredKeepRecent := 100
+    , effectiveInputBudget := 6, fixedInput := 0, summaryMaxOutput := 6 }
   , { name := "fixed-input-leaves-one", configuredKeepRecent := 100
     , effectiveInputBudget := 100, fixedInput := 99, summaryMaxOutput := 25 }
   , { name := "fixed-input-consumes-capacity", configuredKeepRecent := 100
@@ -701,8 +827,12 @@ private def retentionWitnesses : List RetentionWitness :=
     , effectiveInputBudget := 200000, fixedInput := 58000, summaryMaxOutput := 200000 }
   , { name := "small-context-large-summary-ceiling", configuredKeepRecent := 20
     , effectiveInputBudget := 2000, fixedInput := 0, summaryMaxOutput := 32768 }
-  , { name := "summary-ceiling-smaller-than-quarter", configuredKeepRecent := 20
+  , { name := "summary-ceiling-smaller-than-fifth", configuredKeepRecent := 20
     , effectiveInputBudget := 6000, fixedInput := 0, summaryMaxOutput := 512 }
+  , { name := "recovery-band-750k-budget", configuredKeepRecent := 1000000
+    , effectiveInputBudget := 750000, fixedInput := 50000, summaryMaxOutput := 32000 }
+  , { name := "summary-reserve-exhausts-band", configuredKeepRecent := 1000000
+    , effectiveInputBudget := 1000, fixedInput := 500, summaryMaxOutput := 300 }
   ]
 
 private def retentionCase (witness : RetentionWitness) : PromptAssemblyRetentionCase :=
@@ -715,6 +845,7 @@ private def retentionCase (witness : RetentionWitness) : PromptAssemblyRetention
   , availableInput := witness.effectiveInputBudget - witness.fixedInput
   , retentionTarget := PromptAssembly.Budget.compactionRetentionTarget
       witness.configuredKeepRecent witness.effectiveInputBudget witness.fixedInput
+      summaryOutput
   , summaryMaxOutput := witness.summaryMaxOutput
   , effectiveSummaryOutput := summaryOutput
   , rollingSummaryInputBudget := PromptAssembly.Budget.rollingSummaryInputBudget

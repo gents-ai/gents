@@ -18,4 +18,8 @@ command: Array<string>,
 /**
  * Per-command timeout in seconds; absent uses 120, explicit 1..=86400.
  */
-timeout_secs?: number | null, };
+timeout_secs?: number | null,
+/**
+ * Nonzero exit codes that stop a before hook without starting the agent.
+ */
+skip_exit_codes?: Array<number> | null, };

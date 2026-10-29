@@ -2153,8 +2153,16 @@ async fn serialized_input_threshold_equality_and_one_over_select_actual_compacti
         effective_input_budget(CONTEXT_WINDOW, one_over_threshold),
         measured - 1
     );
-    assert!(ReductionAdmission::for_input(measured, CONTEXT_WINDOW, equal_threshold).is_none());
-    assert!(ReductionAdmission::for_input(measured, CONTEXT_WINDOW, one_over_threshold).is_some());
+    assert!(ReductionAdmission::for_context(
+        gents_loop::provider_input::budget::ContextCalibration::default().context(measured),
+        effective_input_budget(CONTEXT_WINDOW, equal_threshold),
+    )
+    .is_none());
+    assert!(ReductionAdmission::for_context(
+        gents_loop::provider_input::budget::ContextCalibration::default().context(measured),
+        effective_input_budget(CONTEXT_WINDOW, one_over_threshold),
+    )
+    .is_some());
 
     let equal = run_serialized_threshold_probe("threshold-equal", equal_threshold).await;
     assert_eq!(

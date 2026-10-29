@@ -172,15 +172,21 @@ impl AggregateTokenLedger {
 pub(super) fn clamp_request_aggregate_token_budget(
     request: &mut CompletionRequest,
     budget: Option<&AggregateTokenBudget>,
-    estimated_input_tokens: usize,
+    context: &crate::provider_input::budget::ContextEstimate,
 ) -> Result<(), crate::error::LoopStreamError> {
     let Some(budget) = budget else {
         return Ok(());
     };
     let ledger = budget.snapshot()?;
-    let input_tokens = u64::try_from(estimated_input_tokens).unwrap_or(u64::MAX);
+    // Only the raw estimate refuses; the calibrated count reserves the
+    // output cap so the request cannot overrun the budget it was granted.
+    let input_tokens = u64::try_from(context.raw).unwrap_or(u64::MAX);
+    let reserved_input = u64::try_from(context.tokens).unwrap_or(u64::MAX);
     let configured_max = request.max_tokens.unwrap_or(u64::MAX);
-    let effective_max = ledger.effective_output_tokens(input_tokens, configured_max);
+    let effective_max = match ledger.effective_output_tokens(reserved_input, configured_max) {
+        0 => ledger.effective_output_tokens(input_tokens, configured_max),
+        reserved => reserved,
+    };
     if !ledger.can_dispatch(input_tokens, configured_max) {
         return Err(crate::rig_compat::loop_verdict_error(
             crate::error::LoopVerdict::AggregateTokenBudgetExhausted,

@@ -277,6 +277,7 @@ pub(crate) fn test_loop_config() -> LoopConfig {
         resume_from_history: false,
         context_window: 128_000,
         compaction_threshold: 0.75,
+        context_calibration: Default::default(),
         retry_policy: crate::completion_retry::CompletionRetryPolicy::interactive_default(),
         provider_idle_timeout: None,
         deadline: None,

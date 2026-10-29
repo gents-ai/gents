@@ -172,6 +172,7 @@ def promptAssemblyBudgetCaseJson (witness : PromptAssemblyBudgetCase) : String :
     ++ "\"prompt_tokens\":" ++ toString witness.promptTokens ++ ","
     ++ "\"request_tokens\":" ++ toString witness.requestTokens ++ ","
     ++ "\"effective_input_budget\":" ++ toString witness.effectiveInputBudget ++ ","
+    ++ "\"compaction_input_budget\":" ++ toString witness.compactionInputBudget ++ ","
     ++ "\"effective_output_tokens\":" ++ toString witness.effectiveOutputTokens ++ ","
     ++ "\"should_compact\":" ++ boolString witness.shouldCompact ++ ","
     ++ "\"provider_safe\":" ++ boolString witness.providerSafe ++ ","
@@ -191,6 +192,7 @@ def promptAssemblyTurnBudgetCaseJson
     ++ "\"configured_threshold_budget\":"
       ++ toString witness.configuredThresholdBudget ++ ","
     ++ "\"effective_input_budget\":" ++ toString witness.effectiveInputBudget ++ ","
+    ++ "\"compaction_input_budget\":" ++ toString witness.compactionInputBudget ++ ","
     ++ "\"turn_input_tokens\":"
       ++ jsonArray (witness.turnInputTokens.map toString) ++ ","
     ++ "\"turn_output_tokens\":"
@@ -203,6 +205,43 @@ def promptAssemblyTurnBudgetCaseJson
 
 def promptAssemblyTurnBudgetCasesJson : String :=
   jsonArray (promptAssemblyTurnBudgetCases.map promptAssemblyTurnBudgetCaseJson)
+
+private def natOptionJson : Option Nat → String
+  | some value => toString value
+  | none => "null"
+
+def promptAssemblyCompactionTriggerCaseJson
+    (witness : PromptAssemblyCompactionTriggerCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"context_window\":" ++ toString witness.contextWindow ++ ","
+    ++ "\"max_output_tokens\":" ++ toString witness.maxOutputTokens ++ ","
+    ++ "\"threshold_basis_points\":" ++ toString witness.thresholdBasisPoints ++ ","
+    ++ "\"prior_basis_points\":" ++ toString witness.priorBasisPoints ++ ","
+    ++ "\"seeded_observations\":"
+      ++ jsonArray (witness.seededObservations.map toString) ++ ","
+    ++ "\"observed\":" ++ jsonArray (witness.observed.map fun (provider, estimate) =>
+      "[" ++ toString provider ++ "," ++ toString estimate ++ "]") ++ ","
+    ++ "\"anchor\":" ++ (match witness.anchor with
+      | some anchor => "{\"input_tokens\":" ++ toString anchor.input
+          ++ ",\"output_tokens\":" ++ toString anchor.output
+          ++ ",\"estimated_input_tokens\":" ++ toString anchor.estimated ++ "}"
+      | none => "null") ++ ","
+    ++ "\"invalidate\":" ++ boolString witness.invalidate ++ ","
+    ++ "\"raw_input_tokens\":" ++ toString witness.rawInputTokens ++ ","
+    ++ "\"ratio_basis_points\":" ++ toString witness.ratioBasisPoints ++ ","
+    ++ "\"calibrated_tokens\":" ++ toString witness.calibratedTokens ++ ","
+    ++ "\"anchored_tokens\":" ++ natOptionJson witness.anchoredTokens ++ ","
+    ++ "\"context_tokens\":" ++ toString witness.contextTokens ++ ","
+    ++ "\"compaction_input_budget\":" ++ toString witness.compactionInputBudget ++ ","
+    ++ "\"admission\":" ++ (match witness.admission with
+      | some admission => "{\"input_tokens\":" ++ toString admission.inputTokens
+          ++ ",\"input_budget\":" ++ toString admission.inputBudget ++ "}"
+      | none => "null")
+    ++ "}"
+
+def promptAssemblyCompactionTriggerCasesJson : String :=
+  jsonArray (promptAssemblyCompactionTriggerCases.map promptAssemblyCompactionTriggerCaseJson)
 
 def promptAssemblyRetentionCaseJson
     (witness : PromptAssemblyRetentionCase) : String :=

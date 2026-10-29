@@ -22,6 +22,9 @@ inductive Action where
   retry is accepted under preserved thinking, and the accepted turn's capture
   (without the removed reasoning) becomes the replay frontier. -/
   | repairIssue
+  /-- The one forced reduction after a context overflow: the provider input is
+  rebuilt under the provider's limit and issued again. -/
+  | compactIssue
   /-- Observe usage already accounted by the InferenceCall owner. The native
   accounting bridge supplies completeness and replay idempotency. -/
   | recordUsage (tokens : Nat)
@@ -67,6 +70,9 @@ def step? (s : State) : Action → Option State
           if s.budget.allowRepair ∧ ¬ s.repairUsed then
             some { s with phase := .repairing, lastParseError := some error }
           else some { s with phase := .exhausted }
+      | .retracted .contextOverflow _ _ =>
+          if ¬ s.compactUsed then some { s with phase := .compacting }
+          else some { s with phase := .exhausted }
       | .retracted .permanent _ _ => some { s with phase := .failedPermanent }
       | _ => none
   | .wake observedAt =>
@@ -85,6 +91,10 @@ def step? (s : State) : Action → Option State
   | .repairIssue =>
       if s.phase = .repairing ∧ ¬ s.repairUsed then
         some { s with phase := .issuing, repairUsed := true, attempt := s.attempt + 1 }
+      else none
+  | .compactIssue =>
+      if s.phase = .compacting ∧ ¬ s.compactUsed then
+        some { s with phase := .issuing, compactUsed := true, attempt := s.attempt + 1 }
       else none
   | .recordUsage tokens =>
       some { s with usageCharged := s.usageCharged + tokens }

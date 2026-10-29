@@ -84,7 +84,7 @@ pub use tool_dispatch::dispatch_tool;
 use provider_idle::{within_provider_idle, ProviderAttemptFailure};
 use request_assembly::{
     build_budgeted_request, context_accounting_for_request, message_values,
-    prepare_dispatch_attempt, repair_and_rebuild_request,
+    prepare_dispatch_attempt, rebuild_after_provider_overflow, repair_and_rebuild_request,
 };
 pub use tool_dispatch::value_to_json_string;
 use turn_threading::{bounded_tool_result, close_streaming_turn};
@@ -174,6 +174,7 @@ where
         let aggregate_token_budget = config.aggregate_token_budget.clone();
         let mut current_turn: usize = config.initial_turn_index;
         let mut retry = CompletionRetryState::new(config.retry_policy.clone());
+        let mut structured_output_retries = 0u32;
         let mut retain_effective_messages_oracle =
             config.context_message.is_some()
                 || config.resume_from_history
@@ -248,8 +249,8 @@ where
                 elapsed_ms = preparation_started.elapsed().as_millis() as u64,
                 "prepared provider request before completion dispatch"
             );
-            let compaction_reason = turn_context_decision.reason;
-            let pre_compaction_input_tokens =
+            let mut compaction_reason = turn_context_decision.reason;
+            let mut pre_compaction_input_tokens =
                 turn_context_decision.pre_compaction_input_tokens;
             retain_effective_messages_oracle |= matches!(
                 compaction_reason,
@@ -288,7 +289,7 @@ where
             let mut attempt = 0_u32;
             let mut build_path = AssemblyBuildPath::Budgeted;
             'attempts: loop {
-                let (mut stream, activity, mut audit_receiver, advertised_tools) = loop {
+                let (mut stream, activity, mut audit_receiver, advertised_tools, dispatched_input_tokens) = loop {
                     let prepared_dispatch = prepare_dispatch_attempt(
                         &request,
                         &config,
@@ -344,6 +345,8 @@ where
                         });
                     }
                     let advertised_tools = dispatch_request.tools.clone();
+                    let dispatched_input_tokens =
+                        prepared_dispatch.projection().estimated_input_tokens;
                     match within_provider_idle(
                         crate::provider_input::routing_affinity::scope(routing_affinity.clone(), model.stream(dispatch_request)),
                         config.provider_idle_timeout,
@@ -353,7 +356,13 @@ where
                     .await
                     .and_then(|result| result.map_err(ProviderAttemptFailure::Completion))
                     {
-                        Ok(stream) => break (stream, activity, audit_receiver, advertised_tools),
+                        Ok(stream) => break (
+                            stream,
+                            activity,
+                            audit_receiver,
+                            advertised_tools,
+                            dispatched_input_tokens,
+                        ),
                         Err(failure) => {
                             let failure = failure.classify();
                             let directive =
@@ -416,6 +425,48 @@ where
                                     retain_effective_messages_oracle = true;
                                     attempt += 1;
                                 }
+                                PreStreamDirective::CompactAndRetry { overflow } => {
+                                    let planned = plan_overflow_compaction(&config, &mut retry, &classified);
+                                    if let (Ok(()), Some(hook)) = (&planned, &hook) {
+                                        hook.observe_provider(crate::session_hook::ProviderObservation::Retrying {
+                                            turn: turn_index,
+                                            attempt,
+                                        });
+                                    }
+                                    yield LoopStreamItem::AttemptFailed {
+                                        turn: turn_index,
+                                        attempt,
+                                        error: classified,
+                                        will_retry: planned.is_ok(),
+                                        backoff: std::time::Duration::ZERO,
+                                    };
+                                    if let Err(terminal_reason) = planned {
+                                        Err(StreamingError::Completion(
+                                            CompletionError::ProviderError(terminal_reason),
+                                        ))?;
+                                        unreachable!("Err(..)? above ends the stream");
+                                    }
+                                    let (rebuilt, decision) = rebuild_after_provider_overflow(
+                                        &model,
+                                        &mut history,
+                                        &mut new_messages,
+                                        tools.as_slice(),
+                                        &config,
+                                        &mut replay,
+                                        turn_index,
+                                        &mut reduction_chain_keys,
+                                        &mut active_reduction_keys,
+                                        overflow,
+                                        dispatched_input_tokens,
+                                    )
+                                    .await?;
+                                    request = rebuilt;
+                                    build_path = AssemblyBuildPath::Budgeted;
+                                    compaction_reason = decision.reason;
+                                    pre_compaction_input_tokens = decision.pre_compaction_input_tokens;
+                                    retain_effective_messages_oracle = true;
+                                    attempt += 1;
+                                }
                                 PreStreamDirective::Fail { reason } => {
                                     let terminal_reason =
                                         terminal_pre_stream_retry_reason(&classified, attempt, reason);
@@ -466,6 +517,9 @@ where
             let mut turn_text = String::new();
             let mut saw_stream_item = false;
             let mut saw_final_usage_event = false;
+            // The attempt's provider count; it anchors later requests only
+            // once the turn is accepted into the transcript.
+            let mut completed_anchor = None;
             let mut aggregate_budget_exhausted = false;
             let mut aggregate_usage_failure = None::<String>;
 
@@ -609,6 +663,49 @@ where
                                     attempt += 1;
                                     continue 'attempts;
                                 }
+                                PreStreamDirective::CompactAndRetry { overflow } => {
+                                    let planned = plan_overflow_compaction(&config, &mut retry, &classified);
+                                    if let (Ok(()), Some(hook)) = (&planned, &hook) {
+                                        hook.observe_provider(crate::session_hook::ProviderObservation::Retrying {
+                                            turn: turn_index,
+                                            attempt,
+                                        });
+                                    }
+                                    yield LoopStreamItem::AttemptFailed {
+                                        turn: turn_index,
+                                        attempt,
+                                        error: classified,
+                                        will_retry: planned.is_ok(),
+                                        backoff: std::time::Duration::ZERO,
+                                    };
+                                    if let Err(terminal_reason) = planned {
+                                        Err(StreamingError::Completion(
+                                            CompletionError::ProviderError(terminal_reason),
+                                        ))?;
+                                        unreachable!("Err(..)? above ends the stream");
+                                    }
+                                    let (rebuilt, decision) = rebuild_after_provider_overflow(
+                                        &model,
+                                        &mut history,
+                                        &mut new_messages,
+                                        tools.as_slice(),
+                                        &config,
+                                        &mut replay,
+                                        turn_index,
+                                        &mut reduction_chain_keys,
+                                        &mut active_reduction_keys,
+                                        overflow,
+                                        dispatched_input_tokens,
+                                    )
+                                    .await?;
+                                    request = rebuilt;
+                                    build_path = AssemblyBuildPath::Budgeted;
+                                    compaction_reason = decision.reason;
+                                    pre_compaction_input_tokens = decision.pre_compaction_input_tokens;
+                                    retain_effective_messages_oracle = true;
+                                    attempt += 1;
+                                    continue 'attempts;
+                                }
                                 PreStreamDirective::Fail { reason } => {
                                     let terminal_reason = terminal_pre_stream_retry_reason(
                                         &classified,
@@ -740,6 +837,19 @@ where
                     StreamedAssistantContent::Final(raw) => {
                         saw_final_usage_event = true;
                         let usage = raw.token_usage();
+                        if let Some((observed, output)) = usage.as_ref().and_then(|usage| {
+                            crate::provider_usage::contract_usage_input_tokens(usage)
+                                .map(|input| (input, usage.output_tokens))
+                        }) {
+                            config
+                                .context_calibration
+                                .observe(observed, dispatched_input_tokens);
+                            completed_anchor = Some(crate::provider_input::budget::ContextAnchor {
+                                input_tokens: observed,
+                                output_tokens: output,
+                                estimated_input_tokens: dispatched_input_tokens,
+                            });
+                        }
                         if let Some(budget) = aggregate_token_budget.as_ref() {
                             let (charge, ledger) = budget.charge_reported(usage)?;
                             match charge {
@@ -898,7 +1008,24 @@ where
             }
 
             if let Some(error) = structured_output_error {
-                match retry.on_mid_stream_failure(false, Utc::now(), config.deadline) {
+                let capped = config
+                    .structured_output
+                    .as_ref()
+                    .and_then(|output| output.max_invalid_retries)
+                    .filter(|max| structured_output_retries >= *max);
+                let directive = match capped {
+                    Some(max) => MidStreamDirective::Fail {
+                        reason: format!(
+                            "structured-output retry budget exhausted after {max} retr{}",
+                            if max == 1 { "y" } else { "ies" }
+                        ),
+                    },
+                    None => retry.on_mid_stream_failure(false, Utc::now(), config.deadline),
+                };
+                if matches!(directive, MidStreamDirective::RetractAndResample { .. }) {
+                    structured_output_retries += 1;
+                }
+                match directive {
                     MidStreamDirective::RetractAndResample { delay } => {
                         yield LoopStreamItem::TurnRetracted {
                             turn: turn_index,
@@ -942,6 +1069,10 @@ where
                     "provider completed without an acceptable native message".to_string(),
                 ))
             })?;
+            if let Some(anchor) = completed_anchor.take() {
+                config.context_calibration.anchor_accepted(anchor);
+            }
+            retry.on_turn_accepted();
             if let Message::Assistant { id, .. } = &mut accepted_message {
                 *id = stream.message_id.clone();
             }
@@ -1345,6 +1476,23 @@ async fn sleep_retry_delay(
             deadline.expect("failed wake guard requires a deadline")
         ),
     )))
+}
+
+/// The forced reduction a provider overflow asks for: spent from `retry`
+/// when this loop can reduce, else the request's terminal reason.
+fn plan_overflow_compaction(
+    config: &LoopConfig,
+    retry: &mut CompletionRetryState,
+    classified: &InferenceError,
+) -> Result<(), String> {
+    if config.turn_compactor.is_none() {
+        return Err(format!(
+            "provider rejected the request as over its context window and this completion loop \
+             has no per-turn compactor to reduce it: {classified}"
+        ));
+    }
+    retry.mark_compaction_used();
+    Ok(())
 }
 
 fn terminal_pre_stream_retry_reason(

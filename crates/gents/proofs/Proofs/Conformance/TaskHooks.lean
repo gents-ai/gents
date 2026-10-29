@@ -16,6 +16,7 @@ private def hookJson (h : TaskHook) : String :=
   "{\"hook_id\":" ++ jsonString h.hookId ++
     ",\"phase\":" ++ jsonString (phaseString h.phase) ++
     ",\"command\":" ++ jsonStringArray h.command ++
+    ",\"skip_exit_codes\":" ++ jsonArray (h.skipExitCodes.map toString) ++
     ",\"timeout_secs\":" ++ (h.timeoutSecs.map toString).getD "null" ++
     ",\"effective_timeout_secs\":" ++ toString h.effectiveTimeout ++ "}"
 
@@ -80,6 +81,14 @@ private def cleanup (hookId : String) : TaskHook :=
 
 def admissionCases : List AdmissionCase :=
   [ { name := "no_hooks_admitted", hooks := [], expectedAdmitted := true }
+  , { name := "before_skip_code_admitted"
+    , hooks := [{ before "prepare" with skipExitCodes := [10] }], expectedAdmitted := true }
+  , { name := "zero_skip_code_rejected"
+    , hooks := [{ before "prepare" with skipExitCodes := [0] }], expectedAdmitted := false }
+  , { name := "skip_code_outside_process_exit_range_rejected"
+    , hooks := [{ before "prepare" with skipExitCodes := [256] }], expectedAdmitted := false }
+  , { name := "after_phase_skip_code_rejected"
+    , hooks := [{ afterSuccess "verify" with skipExitCodes := [10] }], expectedAdmitted := false }
   , { name := "default_timeout_admitted"
     , hooks := [before "prepare"], expectedAdmitted := true }
   , { name := "explicit_positive_timeout_admitted"
@@ -154,6 +163,41 @@ def runCases : List RunCase :=
     , hooks := fullTask, script := [], agent := .success
     , expectedOutcome := .success, expectedFinalOutcome := .success
     , expectedAgentRan := true }
+  , { name := "configured_before_exit_skips_agent_and_runs_cleanup"
+    , hooks := [{ before "prepare" with skipExitCodes := [10] }, afterFailure "report", cleanup "sweep"]
+    , script := [⟨"prepare", .exited 10⟩], agent := .success
+    , expectedOutcome := .success, expectedFinalOutcome := .success
+    , expectedAgentRan := false }
+  , { name := "configured_skip_still_reports_cleanup_failure"
+    , hooks := [{ before "prepare" with skipExitCodes := [10] }, cleanup "sweep"]
+    , script := [⟨"prepare", .exited 10⟩, failed "sweep"], agent := .success
+    , expectedOutcome := .success, expectedFinalOutcome := .failure (.hook "sweep")
+    , expectedAgentRan := false }
+  , { name := "unconfigured_before_exit_remains_failure"
+    , hooks := [{ before "prepare" with skipExitCodes := [10] }, afterFailure "report", cleanup "sweep"]
+    , script := [⟨"prepare", .exited 11⟩], agent := .success
+    , expectedOutcome := .failure (.hook "prepare"), expectedFinalOutcome := .failure (.hook "prepare")
+    , expectedAgentRan := false }
+  , { name := "skip_stops_remaining_before_hooks"
+    , hooks := [{ before "prepare" with skipExitCodes := [10] }, before "second", cleanup "sweep"]
+    , script := [⟨"prepare", .exited 10⟩], agent := .success
+    , expectedOutcome := .success, expectedFinalOutcome := .success
+    , expectedAgentRan := false }
+  , { name := "zero_exit_proceeds_with_skip_configuration"
+    , hooks := [{ before "prepare" with skipExitCodes := [10] }, cleanup "sweep"]
+    , script := [], agent := .success
+    , expectedOutcome := .success, expectedFinalOutcome := .success
+    , expectedAgentRan := true }
+  , { name := "skip_configuration_does_not_hide_timeout"
+    , hooks := [{ before "prepare" (some 3) with skipExitCodes := [10] }, afterFailure "report", cleanup "sweep"]
+    , script := [⟨"prepare", .timedOut⟩], agent := .success
+    , expectedOutcome := .failure (.hook "prepare"), expectedFinalOutcome := .failure (.hook "prepare")
+    , expectedAgentRan := false }
+  , { name := "skip_configuration_does_not_hide_interruption"
+    , hooks := [{ before "prepare" with skipExitCodes := [10] }, afterFailure "report", cleanup "sweep"]
+    , script := [⟨"prepare", .interrupted⟩], agent := .success
+    , expectedOutcome := .interrupted, expectedFinalOutcome := .interrupted
+    , expectedAgentRan := false }
   , { name := "revoked_between_before_hooks_refuses_the_next_launch"
     , hooks := [before "prepare", before "second", cleanup "sweep"]
     , script := [], revoked := ["second", "sweep"], agent := .success
@@ -337,6 +381,16 @@ def recoveryCases : List RecoveryCase :=
     , started := true, hooks := [before "prepare", afterSuccess "verify",
                                  afterFailure "report", cleanup "sweep"]
     , observed := [⟨"prepare", .exited 0⟩], script := []
+    , expectedRemaining := ["sweep"] }
+  , { name := "observed_skip_before_crash_runs_only_remaining_cleanup"
+    , started := true
+    , hooks := [{ before "prepare" with skipExitCodes := [10] }, afterFailure "report", cleanup "sweep"]
+    , observed := [⟨"prepare", .exited 10⟩], script := []
+    , expectedRemaining := ["sweep"] }
+  , { name := "unknown_gate_outcome_is_not_replayed_after_crash"
+    , started := true
+    , hooks := [{ before "prepare" with skipExitCodes := [10] }, cleanup "sweep"]
+    , observed := [⟨"prepare", .interrupted⟩], script := []
     , expectedRemaining := ["sweep"] }
   , { name := "interrupt_requested_recovery_reports_interruption"
     , interruptRequested := true
