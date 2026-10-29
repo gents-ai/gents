@@ -1012,6 +1012,13 @@ enum CommitCleanup {
 struct CommitFailure {
     error: ConfigClientError,
     cleanup: CommitCleanup,
+    definitely_not_committed: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct TransactionFinalityError<E> {
+    pub(crate) error: E,
+    pub(crate) unconfirmed: bool,
 }
 
 /// Replay policy for idempotent transactions (stable identities, durable-state-guarded updates).
@@ -1763,6 +1770,45 @@ impl<'a> ConfigApplyTxn<'a> {
         })
     }
 
+    /// Check exact document visibility for a delegated actor in this node-owned
+    /// transaction; native document ACP and pending registrations stay bound to it.
+    pub async fn document_visibility_as(
+        &self,
+        actor: identity::Did,
+        collection: &str,
+        doc_ids: &[String],
+    ) -> Result<Vec<query::owners::DocumentOwnerObservation>> {
+        crate::graphql::validate_collection_identifier(collection)?;
+        let TxnBackend::Embedded {
+            node,
+            handle,
+            native_operations,
+            ..
+        } = &self.backend
+        else {
+            return Err(super::ConfigClientError::OwnerObservationRequiresEmbedded);
+        };
+        let node = Arc::clone(node);
+        let handle = handle.clone();
+        let collection = collection.to_owned();
+        let doc_ids = doc_ids.to_vec();
+        execute_owned_native(
+            async move {
+                node.observe_document_visibility_in_txn(&handle, &collection, &doc_ids, actor)
+                    .await
+            },
+            Arc::clone(native_operations),
+            self.operation,
+        )
+        .await?
+        .map_err(|error| match error {
+            query::error::QueryError::TransactionConflict(_) => {
+                retry::transaction_conflict(ConflictSource::TypedError)
+            }
+            error => retry::transaction_storage_failure(error.into()),
+        })
+    }
+
     pub async fn collection_version(&self, collection: &str) -> Result<Option<Value>> {
         crate::graphql::validate_collection_identifier(collection)?;
         match &self.backend {
@@ -1859,10 +1905,12 @@ impl<'a> ConfigApplyTxn<'a> {
                     graphql::TxnCommitError::CleanupRequired(error) => CommitFailure {
                         error,
                         cleanup: CommitCleanup::Required,
+                        definitely_not_committed: false,
                     },
                     graphql::TxnCommitError::TransactionConsumed(error) => CommitFailure {
                         error,
                         cleanup: CommitCleanup::NotNeeded,
+                        definitely_not_committed: false,
                     },
                 }),
             TxnBackend::Embedded { node, handle, .. } => {
@@ -1872,6 +1920,7 @@ impl<'a> ConfigApplyTxn<'a> {
                             ConfigClientError::CommitAfterAbandonedOperation,
                         ),
                         cleanup: CommitCleanup::Required,
+                        definitely_not_committed: true,
                     });
                 }
                 if let TxnBackend::Embedded {
@@ -1913,6 +1962,7 @@ impl<'a> ConfigApplyTxn<'a> {
                             EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
                         ),
                         cleanup: CommitCleanup::Required,
+                        definitely_not_committed: false,
                     }),
                     Ok(Ok(())) => {
                         #[cfg(test)]
@@ -1922,6 +1972,7 @@ impl<'a> ConfigApplyTxn<'a> {
                                     ConfigClientError::InjectedReceiptLoss,
                                 ),
                                 cleanup: CommitCleanup::NotNeeded,
+                                definitely_not_committed: false,
                             });
                         }
                         Ok(())
@@ -1932,11 +1983,13 @@ impl<'a> ConfigApplyTxn<'a> {
                             Err(CommitFailure {
                                 error: retry::transaction_conflict(ConflictSource::TypedError),
                                 cleanup: CommitCleanup::NotNeeded,
+                                definitely_not_committed: true,
                             })
                         } else {
                             Err(CommitFailure {
                                 error: ConfigClientError::CommitTransaction { source: error },
                                 cleanup: CommitCleanup::NotNeeded,
+                                definitely_not_committed: false,
                             })
                         }
                     }
@@ -2312,8 +2365,27 @@ fn transact_owned<'a, T, E, F, B>(
     operation: &'static str,
     backend: WriteBackend,
     mode: TransactionMode,
+    begin: B,
+    callback: F,
+) -> BoxFuture<'a, Result<TransactionOutcome<T>, E>>
+where
+    T: Send + 'a,
+    E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+    F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
+    B: FnMut(WriteOperation, Arc<AtomicBool>) -> BoxFuture<'a, Result<ConfigApplyTxn<'a>>>
+        + Send
+        + 'a,
+{
+    transact_owned_with_finality(operation, backend, mode, begin, callback, None)
+}
+
+fn transact_owned_with_finality<'a, T, E, F, B>(
+    operation: &'static str,
+    backend: WriteBackend,
+    mode: TransactionMode,
     mut begin: B,
     callback: F,
+    unconfirmed: Option<Arc<AtomicBool>>,
 ) -> BoxFuture<'a, Result<TransactionOutcome<T>, E>>
 where
     T: Send + 'a,
@@ -2404,7 +2476,11 @@ where
                             });
                             return Ok(TransactionOutcome::Committed(value));
                         }
-                        Err(CommitFailure { error, cleanup }) => {
+                        Err(CommitFailure {
+                            error,
+                            cleanup,
+                            definitely_not_committed,
+                        }) => {
                             let rollback = match cleanup {
                                 CommitCleanup::NotNeeded => {
                                     txn.disarm_rollback();
@@ -2415,6 +2491,24 @@ where
                                 }
                                 CommitCleanup::Required => RollbackStatus::Scheduled,
                             };
+                            // Embedded finish consumes the transaction before commit starts;
+                            // a successful discard proves commit did not take it. HTTP discard
+                            // cannot establish that a commit response was not lost.
+                            let discarded_before_commit = matches!(
+                                (backend, cleanup, rollback),
+                                (
+                                    WriteBackend::Embedded,
+                                    CommitCleanup::Required,
+                                    RollbackStatus::Succeeded
+                                )
+                            );
+                            if let (false, false, Some(unconfirmed)) = (
+                                definitely_not_committed,
+                                discarded_before_commit,
+                                &unconfirmed,
+                            ) {
+                                unconfirmed.store(true, Ordering::Release);
+                            }
                             Err(TransactionAttemptFailure {
                                 retry_generic: mode.retries_generic_errors()
                                     && !crate::graphql::is_storage_full(&error),
@@ -2897,6 +2991,36 @@ impl ConfigAccess {
         .map(expect_committed)
     }
 
+    pub(crate) async fn transact_write_with_finality<'a, T, E, F>(
+        &'a self,
+        operation: &'static str,
+        callback: F,
+    ) -> std::result::Result<T, TransactionFinalityError<E>>
+    where
+        T: Send + 'a,
+        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
+    {
+        let unconfirmed = Arc::new(AtomicBool::new(false));
+        let result = transact_owned_with_finality(
+            operation,
+            backend_for_access(self),
+            TransactionMode::ConflictRetry,
+            move |operation, rollback| {
+                Box::pin(async move { self.begin_apply_txn(operation, rollback).await })
+            },
+            callback,
+            Some(unconfirmed.clone()),
+        )
+        .await;
+        result
+            .map(expect_committed)
+            .map_err(|error| TransactionFinalityError {
+                error,
+                unconfirmed: unconfirmed.load(Ordering::Acquire),
+            })
+    }
+
     /// Query-only transaction; DefraDB enforces read-only mode on both transports
     /// and embedded access avoids the mutation gate.
     pub async fn transact_readonly<'a, T, E, F>(
@@ -3013,6 +3137,47 @@ impl ConfigAccess {
         )
         .await
         .map(expect_committed)
+    }
+
+    pub(crate) async fn transact_local_write_with_finality<'a, T, E, F>(
+        node: &'a Arc<EmbeddedNode>,
+        identity: Option<Did>,
+        operation: &'static str,
+        callback: F,
+    ) -> std::result::Result<T, TransactionFinalityError<E>>
+    where
+        T: Send + 'a,
+        E: TransactionFailure + From<ConfigClientError> + Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T, E>> + Send + 'a,
+    {
+        let unconfirmed = Arc::new(AtomicBool::new(false));
+        let result = transact_owned_with_finality(
+            operation,
+            WriteBackend::Embedded,
+            TransactionMode::ConflictRetry,
+            move |operation, rollback| {
+                let identity = identity.clone();
+                Box::pin(async move {
+                    ConfigApplyTxn::begin_local_owned(
+                        node,
+                        identity,
+                        operation,
+                        rollback,
+                        EmbeddedTransactionPurpose::Mutation,
+                    )
+                    .await
+                })
+            },
+            callback,
+            Some(unconfirmed.clone()),
+        )
+        .await;
+        result
+            .map(expect_committed)
+            .map_err(|error| TransactionFinalityError {
+                error,
+                unconfirmed: unconfirmed.load(Ordering::Acquire),
+            })
     }
 
     /// Native snapshot reads retain the supplied ACP DID without taking the mutation gate.

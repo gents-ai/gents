@@ -307,6 +307,38 @@ impl From<crate::identity::IdentityError> for ConfigClientError {
 }
 
 impl ConfigClientError {
+    /// The HTTP transport source held by this typed access error, if any.
+    pub fn transport_error(&self) -> Option<&reqwest::Error> {
+        match self {
+            Self::Http(source)
+            | Self::HttpClientBuild(source)
+            | Self::ReadTxBegin(source)
+            | Self::ReadTxCommit(source)
+            | Self::ReadTxDiscard(source)
+            | Self::PostSchema { source, .. }
+            | Self::ReadSchemaResponse { source, .. }
+            | Self::FetchCollectionVersions { source, .. }
+            | Self::DecodeCollectionVersions { source, .. }
+            | Self::SchemaOperation { source, .. }
+            | Self::PostMutation { source, .. }
+            | Self::ReadMutationResponse { source, .. }
+            | Self::DecodeMutationResponse { source, .. }
+            | Self::PostTxBegin { source, .. }
+            | Self::PostTxGraphql { source, .. }
+            | Self::ReadTxGraphql { source, .. }
+            | Self::DecodeTxGraphql { source, .. }
+            | Self::PostTxCommit { source, .. }
+            | Self::PostTxDiscard { source, .. } => Some(source),
+            Self::Protocol(error) => error.transport_error(),
+            Self::StorageFailure(source) | Self::HttpQuery { source, .. } => {
+                source.transport_error()
+            }
+            Self::Response(crate::graphql::GraphqlResponseError::Access(source)) => {
+                source.transport_error()
+            }
+            _ => None,
+        }
+    }
     /// The access error this one carries: a GraphQL response owner forwarding
     /// an access failure adds no meaning of its own, so classification looks
     /// through it.

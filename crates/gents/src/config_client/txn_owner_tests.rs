@@ -33,6 +33,67 @@ fn transaction_id(txn: &ConfigApplyTxn<'_>) -> String {
 }
 
 #[tokio::test]
+async fn tracked_transaction_finality_distinguishes_rejection_from_lost_receipt() {
+    let cases = tokio::task::spawn_blocking(|| {
+        crate::lean_vocab_test::lean_contract_snapshot()
+            .pack_finality_cases
+            .clone()
+    })
+    .await
+    .unwrap();
+    let expected = |events: &[&str]| {
+        let case = cases
+            .iter()
+            .find(|case| case["attempts"] == serde_json::json!(events))
+            .unwrap();
+        case["unconfirmed"].as_bool().unwrap()
+    };
+    let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
+    let access = ConfigAccess::local(node.clone());
+    let rejected = access
+        .transact_write_with_finality("test.finality.callback", |_txn| {
+            Box::pin(async { Err::<(), anyhow::Error>(anyhow::anyhow!("reject callback")) })
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(rejected.unconfirmed, expected(&["no_commit"]));
+    let (lost, fired) = ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
+        Some("test.finality.receipt"),
+        access.transact_write_with_finality("test.finality.receipt", |_txn| {
+            Box::pin(async { Ok::<(), anyhow::Error>(()) })
+        }),
+    )
+    .await;
+    assert!(fired);
+    assert_eq!(lost.unwrap_err().unconfirmed, expected(&["unknown_commit"]));
+    node.shutdown().await;
+
+    let (endpoint, _state, server) = fake_transaction_server(FirstCommit::Conflict).await;
+    let access = ConfigAccess::graphql(endpoint);
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let observed = attempts.clone();
+    let error = access
+        .transact_write_with_finality("test.finality.retry", move |_txn| {
+            let attempt = observed.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                if attempt == 0 {
+                    Ok::<(), TestError>(())
+                } else {
+                    Err("second attempt rejected".into())
+                }
+            })
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        error.unconfirmed,
+        expected(&["unknown_commit", "no_commit"])
+    );
+    server.abort();
+}
+
+#[tokio::test]
 async fn http_transaction_cursors_keep_all_pages() {
     let root = tempfile::tempdir().unwrap();
     let key = root.path().join("cursor.key");
