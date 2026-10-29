@@ -5,8 +5,12 @@ use crate::live_output::LiveToolOutputWriter;
 use crate::tool_call_lifecycle::ToolOutcome;
 use crate::{HookAction, ToolCallHookAction};
 
+pub type NativeCleanupCheck = std::sync::Arc<dyn Fn(Option<&ToolOutcome>) -> bool + Send + Sync>;
 pub type ForegroundCall = Box<
-    dyn FnOnce(tokio_util::sync::CancellationToken) -> crate::tool::BoxFuture<'static, ToolOutcome>
+    dyn FnOnce(
+            tokio_util::sync::CancellationToken,
+            Option<NativeCleanupCheck>,
+        ) -> crate::tool::BoxFuture<'static, ToolOutcome>
         + Send,
 >;
 
@@ -14,6 +18,20 @@ pub enum ForegroundResult {
     Settled(ToolOutcome),
     /// The same execution continues under the durable background owner.
     Backgrounded(String),
+}
+
+/// Ephemeral provider state; no provider error text crosses this interface.
+#[derive(Clone, Debug)]
+pub enum ProviderObservation {
+    Attempt {
+        turn: usize,
+        attempt: u32,
+        activity: Option<std::sync::Arc<crate::provider_activity::ProviderActivity>>,
+    },
+    Retrying {
+        turn: usize,
+        attempt: u32,
+    },
 }
 
 #[async_trait]
@@ -30,6 +48,7 @@ where
 #[async_trait]
 pub trait SessionHook: Send + Sync {
     type Error: Into<Box<dyn std::error::Error + Send + Sync>> + Send + Sync + 'static;
+    fn observe_provider(&self, _observation: ProviderObservation) {}
 
     async fn run_foreground_tool(
         &self,
@@ -40,7 +59,7 @@ pub trait SessionHook: Send + Sync {
         let token = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
             .map(|scope| scope.cancellation_token)
             .unwrap_or_default();
-        ForegroundResult::Settled(call(token).await)
+        ForegroundResult::Settled(call(token, None).await)
     }
 
     /// Bind canonical arguments and the physical parent before exposing the

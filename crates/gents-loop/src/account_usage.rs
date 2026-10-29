@@ -4,8 +4,11 @@ use serde_json::Value;
 
 use crate::provider_limit::{epoch_seconds, parse_rfc3339};
 
+/// Usage observations become stale before they disappear so a last-known value
+/// can remain visible without being presented as current.
 pub const STALE_AFTER: Duration = Duration::minutes(15);
 pub const LAST_KNOWN_FOR: Duration = Duration::minutes(60);
+/// Throttles repeat reads triggered by opening usage details.
 pub const READ_SKIP_WINDOW: Duration = Duration::minutes(5);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

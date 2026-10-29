@@ -23,6 +23,9 @@ use gents_protocol::message::{
 };
 use gents_protocol::output::OutputSource;
 use rig::agent::StreamingError;
+use rig::completion::message::ToolCall as RigToolCall;
+#[cfg(test)]
+use rig::completion::message::ToolFunction as RigToolFunction;
 use rig::completion::{
     CompletionError, CompletionModel, CompletionRequest, GetTokenUsage, PromptError,
 };
@@ -45,6 +48,7 @@ mod aggregate_budget;
 mod contract;
 mod invalid_tool_progress;
 mod one_shot;
+mod parallel;
 mod provider_idle;
 mod repeated_tool_failure;
 mod request_assembly;
@@ -332,6 +336,13 @@ where
 
                     let activity =
                         crate::rendered_request::scope::attempt_activity(turn_index, attempt);
+                    if let Some(hook) = &hook {
+                        hook.observe_provider(crate::session_hook::ProviderObservation::Attempt {
+                            turn: turn_index,
+                            attempt,
+                            activity: activity.clone(),
+                        });
+                    }
                     let advertised_tools = dispatch_request.tools.clone();
                     match within_provider_idle(
                         crate::provider_input::routing_affinity::scope(routing_affinity.clone(), model.stream(dispatch_request)),
@@ -369,10 +380,22 @@ where
                                         error = %error_text,
                                         "retrying completion after transient failure"
                                     );
+                                    if let Some(hook) = &hook {
+                                        hook.observe_provider(crate::session_hook::ProviderObservation::Retrying {
+                                            turn: turn_index,
+                                            attempt,
+                                        });
+                                    }
                                     sleep_retry_delay(delay, config.deadline).await?;
                                     attempt += 1;
                                 }
                                 PreStreamDirective::Repair => {
+                                    if let Some(hook) = &hook {
+                                        hook.observe_provider(crate::session_hook::ProviderObservation::Retrying {
+                                            turn: turn_index,
+                                            attempt,
+                                        });
+                                    }
                                     retry.mark_repair_used();
                                     yield LoopStreamItem::AttemptFailed {
                                         turn: turn_index,
@@ -548,11 +571,23 @@ where
                                         error = %error_text,
                                         "retrying completion after first stream item failed"
                                     );
+                                    if let Some(hook) = &hook {
+                                        hook.observe_provider(crate::session_hook::ProviderObservation::Retrying {
+                                            turn: turn_index,
+                                            attempt,
+                                        });
+                                    }
                                     sleep_retry_delay(delay, config.deadline).await?;
                                     attempt += 1;
                                     continue 'attempts;
                                 }
                                 PreStreamDirective::Repair => {
+                                    if let Some(hook) = &hook {
+                                        hook.observe_provider(crate::session_hook::ProviderObservation::Retrying {
+                                            turn: turn_index,
+                                            attempt,
+                                        });
+                                    }
                                     retry.mark_repair_used();
                                     yield LoopStreamItem::AttemptFailed {
                                         turn: turn_index,
@@ -621,7 +656,13 @@ where
                                     error = %error_text,
                                     "retracting partial completion turn after mid-stream failure"
                                 );
-                                sleep_retry_delay(delay, config.deadline).await?;
+                                if let Some(hook) = &hook {
+                                        hook.observe_provider(crate::session_hook::ProviderObservation::Retrying {
+                                            turn: turn_index,
+                                            attempt,
+                                        });
+                                    }
+                                    sleep_retry_delay(delay, config.deadline).await?;
                                 attempt += 1;
                                 continue 'attempts;
                             }
@@ -827,7 +868,13 @@ where
                             delay_ms = delay.as_millis() as u64,
                             "retracting completion turn with no visible output"
                         );
-                        sleep_retry_delay(delay, config.deadline).await?;
+                        if let Some(hook) = &hook {
+                                        hook.observe_provider(crate::session_hook::ProviderObservation::Retrying {
+                                            turn: turn_index,
+                                            attempt,
+                                        });
+                                    }
+                                    sleep_retry_delay(delay, config.deadline).await?;
                         attempt += 1;
                         continue 'attempts;
                     }
@@ -865,7 +912,13 @@ where
                             error = %error,
                             "retracting completion turn after structured-output validation failure"
                         );
-                        sleep_retry_delay(delay, config.deadline).await?;
+                        if let Some(hook) = &hook {
+                                        hook.observe_provider(crate::session_hook::ProviderObservation::Retrying {
+                                            turn: turn_index,
+                                            attempt,
+                                        });
+                                    }
+                                    sleep_retry_delay(delay, config.deadline).await?;
                         attempt += 1;
                         continue 'attempts;
                     }
@@ -935,7 +988,53 @@ where
                 replay.required.push(tag.clone());
             }
 
-            for (tool_call, internal_call_id) in pending_calls {
+            let tool_scope = current_tool_runtime_context();
+            let mut pending_calls: std::collections::VecDeque<_> = pending_calls.into();
+            while let Some((first_call, _)) = pending_calls.front() {
+                let first_args = value_to_json_string(&first_call.function.arguments);
+                let first_decision = repeated_tool_failure.decide(&first_call.function.name, &first_args);
+                let candidates: Vec<_> = pending_calls.iter().take(invalid_tool_progress.remaining().min(4)).map(|(call, _)| {
+                    let name = call.function.name.as_str();
+                    let args = value_to_json_string(&call.function.arguments);
+                    let read = tools.iter().find(|tool| tool.name() == name)
+                        .is_some_and(|tool| tool.footprint(&args) == crate::tool::ToolFootprint::Read)
+                        && admit_tool(tools.as_slice(), name, &args).is_none();
+                    (name, args, read)
+                }).collect();
+                let batch_len = if first_decision == repeated_tool_failure::RepeatDecision::Dispatch {
+                    parallel::read_prefix(candidates.iter().map(|(name, args, read)| (*name, args.as_str(), *read)), invalid_tool_progress.remaining().min(4))
+                } else { 0 };
+                if batch_len > 1 {
+                    let batch = (0..batch_len).map(|_| pending_calls.pop_front().expect("batch prefix exists")).collect();
+                    let (results, termination) = parallel::run_batch(batch, tools.clone(), hook.clone(), tool_scope.clone(), activity.as_ref().is_some_and(|activity| activity.token_limit_reached())).await;
+                    if let Some(reason) = termination {
+                        Err(StreamingError::Prompt(Box::new(PromptError::PromptCancelled {
+                            chat_history: rig_compat::to_rig_messages(&error_chat_history(&history, &new_messages)),
+                            reason,
+                        })))?;
+                    }
+                    for result in results {
+                        let name = &result.call.function.name;
+                        let bounded = if let Some(reason) = result.skipped {
+                            repeated_tool_failure.reset();
+                            ToolResultContent::from_tool_output(reason)
+                        } else {
+                            let outcome = result.outcome.expect("accepted call has a terminal outcome");
+                            invalid_tool_progress.record(&outcome);
+                            let command_envelope = tools.iter().find(|tool| tool.name() == *name).is_some_and(|tool| tool.emits_command_envelope());
+                            repeated_tool_failure.record_dispatched(name, &result.args, &outcome, command_envelope);
+                            bounded_tool_result(provider_profile, name, outcome.model_facing_text())
+                        };
+                        pending_results.push((rig_compat::from_rig_tool_call(&result.call), result.internal_id, bounded));
+                    }
+                    if invalid_tool_progress.exhausted() {
+                        for item in close_streaming_turn(&mut new_messages, &mut accumulator, stream.message_id.clone(), accepted_source.clone(), pending_results) { yield item; }
+                        Err(StreamingError::Completion(CompletionError::ProviderError(invalid_tool_progress.exhaustion_reason())))?;
+                        unreachable!("invalid tool budget exhaustion ends the stream");
+                    }
+                    continue;
+                }
+                let (tool_call, internal_call_id) = pending_calls.pop_front().expect("front exists");
                 let tool_name = tool_call.function.name.clone();
                 let tool_args = value_to_json_string(&tool_call.function.arguments);
                 let repeat_decision = repeated_tool_failure.decide(&tool_name, &tool_args);
@@ -1061,35 +1160,15 @@ where
                             drop(live_output);
                             crate::session_hook::ForegroundResult::Settled(repeated_tool_failure.suppress())
                         } else {
-                            let execution_tools = tools.clone();
-                            let execution_name = tool_name.clone();
-                            let execution_args = tool_args.clone();
-                            let execution_effects = effects.clone();
-                            let scope = current_tool_runtime_context();
-                            let token_limit = activity.as_ref().is_some_and(|activity| activity.token_limit_reached());
-                            let call: crate::session_hook::ForegroundCall = Box::new(move |token| Box::pin(async move {
-                                let execute = crate::tool_effects::scope(
-                                    execution_effects.map(|value| value as Arc<dyn crate::tool_effects::ToolEffectDispatcher>),
-                                    tool_dispatch::dispatch_provider_tool(
-                                        execution_tools.as_slice(), &execution_name, execution_args,
-                                        live_output, session_id, token_limit,
-                                    ),
-                                );
-                                match scope {
-                                    Some(scope) => crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
-                                        scope.requester_did, scope.node_did, scope.agent_id, scope.request_id,
-                                        crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
-                                            scope.deadline_at, token, scope.workspace_cwd, scope.live_output,
-                                            scope.session_id, scope.correlation, scope.source_fields,
-                                            scope.background, execute,
-                                        ),
-                                    ).await,
-                                    None => execute.await,
-                                }
-                            }));
+                            let call = tool_dispatch::foreground_call(tool_dispatch::ForegroundExecution {
+                                tools: tools.clone(), name: tool_name.clone(), args: tool_args.clone(),
+                                live_output, session_id, effects: effects.clone(), scope: tool_scope.clone(),
+                                token_limit: activity.as_ref().is_some_and(|activity| activity.token_limit_reached()),
+                                batch_token: None,
+                            });
                             match hook.as_ref() {
                                 Some(hook) => hook.run_foreground_tool(&tool_name, &internal_call_id, call).await,
-                                None => crate::session_hook::ForegroundResult::Settled(call(Default::default()).await),
+                                None => crate::session_hook::ForegroundResult::Settled(call(Default::default(), None).await),
                             }
                         };
                         let (outcome, already_persisted) = match execution {
@@ -1097,15 +1176,10 @@ where
                             crate::session_hook::ForegroundResult::Backgrounded(receipt) => (ToolOutcome::Completed(receipt), true),
                         };
                         if let Some(hook) = hook.as_ref().filter(|_| !already_persisted) {
-                            let result_action = match effects.as_ref() {
-                                Some(effects) => effects.settle_parent_result(
-                                    &tool_name, tool_call.call_id.clone(), &tool_args, &outcome,
-                                ).await,
-                                None => hook.on_tool_result(
-                                    &tool_name, tool_call.call_id.clone(), &internal_call_id,
-                                    &tool_args, &outcome,
-                                ).await,
-                            };
+                            let result_action = tool_dispatch::settle_foreground(
+                                hook.as_ref(), effects.as_ref(), &tool_name, tool_call.call_id.clone(),
+                                &internal_call_id, &tool_args, &outcome,
+                            ).await;
                             if let HookAction::Terminate { reason } = result_action {
                                 Err(StreamingError::Prompt(Box::new(
                                     PromptError::PromptCancelled {

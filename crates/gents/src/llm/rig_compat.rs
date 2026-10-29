@@ -1,7 +1,7 @@
 pub use gents_loop::rig_compat::*;
 
 use async_stream::try_stream;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use rig::client::CompletionClient;
 use rig::completion::{
     CompletionError, CompletionModel, CompletionRequest, CompletionResponse, GetTokenUsage, Usage,
@@ -124,7 +124,7 @@ where
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
         let (stream, permit) = self
-            .admit(true, self.inner.stream(request))
+            .admit(true, self.inner.stream(request).boxed())
             .await
             .map_err(admitted_call_error)?;
         let separate = self.separate_reasoning;

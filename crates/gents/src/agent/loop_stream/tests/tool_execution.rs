@@ -1619,3 +1619,378 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
         node.shutdown().await;
     }
 }
+
+struct ParallelReadProbe {
+    gate: Arc<tokio::sync::Barrier>,
+    second_finished: Arc<tokio::sync::Notify>,
+    fail_first: bool,
+}
+
+impl ToolDyn for ParallelReadProbe {
+    fn name(&self) -> String {
+        "parallel_read_probe".into()
+    }
+    fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
+        Box::pin(async {
+            ToolDefinition {
+                name: "parallel_read_probe".into(),
+                description: String::new(),
+                parameters: serde_json::json!({"type":"object"}),
+            }
+        })
+    }
+    fn footprint(&self, _: &str) -> gents_loop::tool::ToolFootprint {
+        gents_loop::tool::ToolFootprint::Read
+    }
+    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move {
+            self.gate.wait().await;
+            if args.contains("first") {
+                self.second_finished.notified().await;
+                if self.fail_first {
+                    return Err(ToolError::ReportedFailure {
+                        class: crate::tool_call_lifecycle::FailureClass::External,
+                        text: "first read failed".into(),
+                    });
+                }
+                Ok("first result".into())
+            } else {
+                self.second_finished.notify_one();
+                Ok("second result".into())
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn independent_reads_overlap_and_results_keep_call_order() {
+    for fail_first in [false, true] {
+        assert_overlapping_reads_keep_call_order(fail_first).await;
+    }
+}
+
+async fn assert_overlapping_reads_keep_call_order(fail_first: bool) {
+    let model = ScriptedModel::new_turns(vec![
+        vec![
+            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                "first".into(),
+                "parallel_read_probe".into(),
+                serde_json::json!({"value":"first"}),
+            )),
+            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                "second".into(),
+                "parallel_read_probe".into(),
+                serde_json::json!({"value":"second"}),
+            )),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+        vec![
+            RawStreamingChoice::Message("done".into()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ]);
+    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(ParallelReadProbe {
+        gate: Arc::new(tokio::sync::Barrier::new(2)),
+        second_finished: Arc::new(tokio::sync::Notify::new()),
+        fail_first,
+    })];
+    let stream = run_loop_stream(
+        model.clone(),
+        None::<gents_loop::session_hook::NoopSessionHook>,
+        TaggedMessage::unassociated(Message::user("read")),
+        Vec::new(),
+        Arc::new(tools),
+        config(4),
+    );
+    futures::pin_mut!(stream);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(item) = stream.next().await {
+            item.expect("loop succeeds");
+        }
+    })
+    .await
+    .expect("both calls must reach the gate");
+    let histories = model.seen_histories().await;
+    let results: Vec<_> = histories[1]
+        .iter()
+        .flat_map(|message| match message {
+            Message::User { content } => content
+                .iter()
+                .filter_map(|part| match part {
+                    UserContent::ToolResult(result) => Some(result.content.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            _ => Vec::new(),
+        })
+        .collect();
+    assert_eq!(results.len(), 2);
+    if fail_first {
+        let failure = serde_json::to_string(&results[0]).unwrap();
+        assert!(failure.contains("first read failed"), "{failure}");
+    } else {
+        assert_eq!(
+            results[0],
+            ToolResultContent::from_tool_output("first result")
+        );
+    }
+    assert_eq!(
+        results[1],
+        ToolResultContent::from_tool_output("second result")
+    );
+}
+
+#[tokio::test]
+async fn parallel_native_reads_publish_distinct_bound_unchanged_receipts() {
+    let identity_dir = tempfile::tempdir().unwrap();
+    let identity: Arc<dyn crate::NodeIdentity> = Arc::new(
+        crate::KeyIdentity::load_or_create(identity_dir.path().join("native-read.key"), None)
+            .unwrap(),
+    );
+    let (node, hook, writer, mut lifecycle) = owned_test_hook_with_identity(identity.clone()).await;
+    assert_eq!(node.node_identity_did(), Some(identity.did()));
+    assert_eq!(lifecycle.request().node_did, identity.did());
+    let root = tempfile::tempdir().unwrap();
+    tokio::fs::write(root.path().join("a.txt"), "alpha")
+        .await
+        .unwrap();
+    tokio::fs::write(root.path().join("b.txt"), "beta")
+        .await
+        .unwrap();
+    let tools = crate::toolset::ToolSet::builder()
+        .read_root(root.path())
+        .read_file()
+        .build()
+        .build_native_tools()
+        .unwrap();
+    let model = ScriptedModel::new_turns(vec![
+        vec![
+            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                "read-a".into(),
+                "read_file".into(),
+                serde_json::json!({"path":"a.txt"}),
+            )),
+            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                "read-b".into(),
+                "read_file".into(),
+                serde_json::json!({"path":"b.txt"}),
+            )),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+        vec![
+            RawStreamingChoice::Message("done".into()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ]);
+    let stream = run_loop_stream(
+        model,
+        Some(hook.clone()),
+        TaggedMessage::unassociated(Message::user("read both")),
+        Vec::new(),
+        Arc::new(tools),
+        owned_config(4),
+    );
+    let collected = collect_owned_scripted_stream(
+        stream,
+        &hook,
+        &writer,
+        &mut lifecycle,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    )
+    .await;
+    assert!(collected.error.is_none(), "{:?}", collected.error);
+    let rows = crate::ConfigAccess::local(node.clone()).execute("{ AgentToolCall { _docID tool_name lifecycle_state } ToolFileInventory { tool_call_doc_id request_doc_id verified_unchanged } }").await.unwrap();
+    let calls: Vec<_> = rows["data"]["AgentToolCall"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["tool_name"] == "read_file")
+        .collect();
+    let receipts = rows["data"]["ToolFileInventory"].as_array().unwrap();
+    assert_eq!(calls.len(), 2);
+    for call in calls {
+        assert_eq!(call["lifecycle_state"], "completed");
+        let matches: Vec<_> = receipts
+            .iter()
+            .filter(|receipt| receipt["tool_call_doc_id"] == call["_docID"])
+            .collect();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0]["request_doc_id"], lifecycle.request().doc_id);
+        assert_eq!(matches[0]["verified_unchanged"], true);
+    }
+    node.shutdown().await;
+}
+
+struct SerialReadMeasurement(Box<dyn ToolDyn>);
+impl ToolDyn for SerialReadMeasurement {
+    fn name(&self) -> String {
+        self.0.name()
+    }
+    fn definition<'a>(&'a self, prompt: String) -> BoxFuture<'a, ToolDefinition> {
+        self.0.definition(prompt)
+    }
+    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        self.0.call(args)
+    }
+    fn call_with_receipt<'a>(
+        &'a self,
+        args: String,
+    ) -> BoxFuture<'a, gents_loop::tool::ToolDispatchResult> {
+        self.0.call_with_receipt(args)
+    }
+    fn admit(&self, args: &str) -> Result<(), ToolError> {
+        self.0.admit(args)
+    }
+}
+
+#[tokio::test]
+#[ignore = "manual matched multi-read timing"]
+async fn measure_parallel_native_read_turns() {
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+    let root = tempfile::tempdir().unwrap();
+    for index in 0..8 {
+        tokio::fs::write(
+            root.path().join(format!("{index}.txt")),
+            vec![b'x'; 1024 * 1024],
+        )
+        .await
+        .unwrap();
+    }
+    let mut totals = [Duration::ZERO; 2];
+    for round in 0..10 {
+        for parallel in [round % 2 == 0, round % 2 != 0] {
+            let native = crate::toolset::ToolSet::builder()
+                .read_root(root.path())
+                .read_file()
+                .build()
+                .build_native_tools()
+                .unwrap()
+                .pop()
+                .unwrap();
+            let tool: Box<dyn ToolDyn> = if parallel {
+                native
+            } else {
+                Box::new(SerialReadMeasurement(native))
+            };
+            let mut turn: Vec<_> = (0..8)
+                .map(|index| {
+                    RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                        format!("call-{index}"),
+                        "read_file".into(),
+                        serde_json::json!({"path":format!("{index}.txt"), "max_chars":256}),
+                    ))
+                })
+                .collect();
+            turn.push(RawStreamingChoice::FinalResponse(()));
+            let model = ScriptedModel::new_turns(vec![
+                turn,
+                vec![
+                    RawStreamingChoice::Message("done".into()),
+                    RawStreamingChoice::FinalResponse(()),
+                ],
+            ])
+            .without_capture();
+            let started = std::time::Instant::now();
+            let stream = run_loop_stream(
+                model,
+                None::<gents_loop::session_hook::NoopSessionHook>,
+                TaggedMessage::unassociated(Message::user("read")),
+                Vec::new(),
+                Arc::new(vec![tool]),
+                config(4),
+            );
+            futures::pin_mut!(stream);
+            while let Some(item) = stream.next().await {
+                item.expect("measurement turn succeeds");
+            }
+            totals[usize::from(parallel)] += started.elapsed();
+        }
+    }
+    tracing::info!(revision = %option_env!("GENTS_BENCH_REVISION").unwrap_or("unspecified"), calls_per_turn = 8, bytes_per_file = 1024 * 1024, turns_per_mode = 10, serial_us = u64::try_from(totals[0].as_micros()).unwrap_or(u64::MAX), parallel_us = u64::try_from(totals[1].as_micros()).unwrap_or(u64::MAX), "matched native read turn measurement");
+}
+
+struct ReadWriteBarrierProbe {
+    events: Arc<Mutex<Vec<String>>>,
+    active: Arc<AtomicUsize>,
+}
+impl ToolDyn for ReadWriteBarrierProbe {
+    fn name(&self) -> String {
+        "read_write_barrier_probe".into()
+    }
+    fn definition<'a>(&'a self, _: String) -> BoxFuture<'a, ToolDefinition> {
+        Box::pin(async {
+            ToolDefinition {
+                name: "read_write_barrier_probe".into(),
+                description: String::new(),
+                parameters: serde_json::json!({"type":"object"}),
+            }
+        })
+    }
+    fn footprint(&self, args: &str) -> gents_loop::tool::ToolFootprint {
+        if args.contains("write") {
+            gents_loop::tool::ToolFootprint::Barrier
+        } else {
+            gents_loop::tool::ToolFootprint::Read
+        }
+    }
+    fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+        Box::pin(async move {
+            let value: serde_json::Value = serde_json::from_str(&args).unwrap();
+            let name = value["action"].as_str().unwrap();
+            if name == "write" {
+                assert_eq!(
+                    self.active.load(Ordering::SeqCst),
+                    0,
+                    "write must wait for preceding reads"
+                );
+                self.events.lock().await.push(name.into());
+            } else {
+                self.active.fetch_add(1, Ordering::SeqCst);
+                self.events.lock().await.push(name.into());
+                tokio::task::yield_now().await;
+                self.active.fetch_sub(1, Ordering::SeqCst);
+            }
+            Ok(name.into())
+        })
+    }
+}
+
+#[tokio::test]
+async fn effectful_call_is_a_barrier_between_reads() {
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let tool: Box<dyn ToolDyn> = Box::new(ReadWriteBarrierProbe {
+        events: events.clone(),
+        active: Arc::new(AtomicUsize::new(0)),
+    });
+    let mut turn: Vec<_> = ["before", "write", "after"]
+        .into_iter()
+        .map(|action| {
+            RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                action.into(),
+                "read_write_barrier_probe".into(),
+                serde_json::json!({"action":action}),
+            ))
+        })
+        .collect();
+    turn.push(RawStreamingChoice::FinalResponse(()));
+    let model = ScriptedModel::new_turns(vec![
+        turn,
+        vec![
+            RawStreamingChoice::Message("done".into()),
+            RawStreamingChoice::FinalResponse(()),
+        ],
+    ]);
+    let stream = run_loop_stream(
+        model,
+        None::<gents_loop::session_hook::NoopSessionHook>,
+        TaggedMessage::unassociated(Message::user("read and write")),
+        Vec::new(),
+        Arc::new(vec![tool]),
+        config(4),
+    );
+    futures::pin_mut!(stream);
+    while let Some(item) = stream.next().await {
+        item.expect("loop succeeds");
+    }
+    assert_eq!(&*events.lock().await, &["before", "write", "after"]);
+}

@@ -12,6 +12,8 @@ use crate::provider_audit::{
     ProviderAuditObservation, ProviderAuditReceiver, ProviderAuditSender,
 };
 
+/// Bounds pending observations for one attempt; reserving slots applies
+/// backpressure to the provider stream instead of dropping audit evidence.
 const AUDIT_CHANNEL_CAPACITY: usize = 32;
 
 struct AttemptAuditChannel {

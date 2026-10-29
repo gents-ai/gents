@@ -6,6 +6,8 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 pub type ProviderAuditReceiver = Arc<Mutex<mpsc::Receiver<ProviderAuditObservation>>>;
+/// A Claude SSE dispatch reserves these slots before producing its audit events;
+/// excess events fail the stream instead of silently dropping audit evidence.
 pub const MAX_AUDIT_EVENTS_PER_SSE: usize = 3;
 
 pub fn drain_ready(receiver: &ProviderAuditReceiver) -> Vec<ProviderAuditObservation> {

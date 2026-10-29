@@ -562,7 +562,15 @@ where
             Arc::new(|_| Box::pin(async { Ok(()) })),
         )
     });
-    crate::rendered_request::scope::scope_request(scope, async move {
+    let deadline = lifecycle.claimed_deadline_at();
+    let request = lifecycle.request();
+    let session_id = request.session_id.clone();
+    let requester_did = request.requester_did.clone();
+    let node_did = request.node_did.clone();
+    let agent_id = request.agent_id.clone();
+    let request_id = request.request_id.clone();
+    let inherited = crate::tool_call_lifecycle::runtime::current_tool_runtime_context().is_some();
+    let collection = crate::rendered_request::scope::scope_request(scope, async move {
         futures::pin_mut!(stream);
         let doc_id = lifecycle.request().doc_id.clone();
         let mut processor = crate::agent::stream_processor::StreamProcessor::new(
@@ -602,8 +610,26 @@ where
             }
         }
         collected
-    })
-    .await
+    });
+    if inherited {
+        collection.await
+    } else {
+        crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
+            requester_did,
+            Some(node_did),
+            Some(agent_id),
+            Some(request_id),
+            crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
+                deadline,
+                tokio_util::sync::CancellationToken::new(),
+                None,
+                None,
+                Some(session_id),
+                collection,
+            ),
+        )
+        .await
+    }
 }
 
 pub(super) async fn owned_test_hook() -> (

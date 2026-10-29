@@ -36,6 +36,9 @@ pub struct TruncationLimits {
     pub max_bytes: usize,
 }
 
+/// Bound the combined text sent to providers and retained across turns so one
+/// tool result cannot consume unbounded context or transcript storage. This
+/// remains independent of each tool's own capture budget.
 impl Default for TruncationLimits {
     fn default() -> Self {
         Self {
@@ -46,7 +49,8 @@ impl Default for TruncationLimits {
 }
 
 /// Capacity of one live tool-output ring buffer (stdout, stderr, and the
-/// combined stream each get their own).
+/// combined stream each get their own). The fixed capacity bounds retained
+/// output while a command runs independently of a reader.
 pub const LIVE_STREAM_CAPACITY_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone)]

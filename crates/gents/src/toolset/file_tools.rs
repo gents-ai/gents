@@ -1,4 +1,5 @@
 pub(crate) mod change_capture;
+pub(crate) mod file_contents;
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -285,6 +286,10 @@ impl Tool for ListFilesTool {
     type Args = ListFilesArgs;
     type Output = String;
 
+    fn footprint(&self, _args: &ListFilesArgs) -> crate::llm::tool::ToolFootprint {
+        crate::llm::tool::ToolFootprint::Read
+    }
+
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
@@ -366,6 +371,10 @@ impl Tool for ReadFileTool {
     type Error = ToolError;
     type Args = ReadFileArgs;
     type Output = String;
+
+    fn footprint(&self, _args: &ReadFileArgs) -> crate::llm::tool::ToolFootprint {
+        crate::llm::tool::ToolFootprint::Read
+    }
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
@@ -465,6 +474,10 @@ impl Tool for GlobTool {
     type Args = GlobArgs;
     type Output = String;
 
+    fn footprint(&self, _args: &GlobArgs) -> crate::llm::tool::ToolFootprint {
+        crate::llm::tool::ToolFootprint::Read
+    }
+
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
@@ -543,6 +556,10 @@ impl Tool for GrepTool {
     type Error = ToolError;
     type Args = GrepArgs;
     type Output = String;
+
+    fn footprint(&self, _args: &GrepArgs) -> crate::llm::tool::ToolFootprint {
+        crate::llm::tool::ToolFootprint::Read
+    }
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
