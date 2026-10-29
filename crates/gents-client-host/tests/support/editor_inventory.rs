@@ -28,7 +28,11 @@ const PARTIAL_UNKNOWN_CALL: &str = "inventory-same-request-unobserved";
 const PARTIAL_WRITE_CALL: &str = "inventory-partial-write";
 
 fn file(index: usize) -> String {
-    format!("inventory/file-{index:03}.txt")
+    match index {
+        0 => "inventory/first/shared.txt".to_owned(),
+        64 => "inventory/second/shared.txt".to_owned(),
+        _ => format!("inventory/file-{index:03}.txt"),
+    }
 }
 fn before(index: usize) -> String {
     format!("Original recorded file {index}\r\nretained original tail {index}\n")
@@ -47,7 +51,11 @@ pub async fn prepare(root: &Path) -> Result<()> {
     tokio::fs::create_dir_all(root.join("inventory")).await?;
     let mut files = Vec::new();
     for index in 0..=COUNT + 2 {
-        tokio::fs::write(root.join(file(index)), before(index)).await?;
+        let path = root.join(file(index));
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(path, before(index)).await?;
         files.push(json!({
             "file":file(index), "before":before(index), "after":after(index), "later":later(index),
             "beforeMarker":format!("Original recorded file {index}"),
