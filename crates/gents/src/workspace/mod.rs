@@ -30,13 +30,16 @@ pub use documents::{
     MemoryWorkspaceDocuments, ProvisioningObservation, WorkspaceBindingDoc, WorkspaceDocuments,
     WorkspacePlacementDoc, WorkspaceReceiptDoc,
 };
+pub use executor::cleanup::{execute_cleanup_workspace_plan, CleanupWorkspaceOutcome};
+pub use executor::create::execute_create_workspace_plan;
+pub use executor::freeze::execute_freeze_workspace_base_plan;
+pub use executor::integrate::{
+    execute_integrate_workspace_plan, finalize_integrate_trunk, IntegrateWorkspaceOutcome,
+};
+pub use executor::seal::{execute_seal_workspace_plan, SealWorkspaceOutcome};
 pub use executor::{
-    execute_cleanup_workspace_plan, execute_create_workspace_plan,
-    execute_freeze_workspace_base_plan, execute_integrate_workspace_plan,
-    execute_seal_workspace_plan, finalize_integrate_trunk, workspace_host_path,
-    CleanupWorkspaceOutcome, CreateWorkspaceOutcome, HostExecuteError, HostExecutorContext,
-    IntegrateWorkspaceOutcome, LogicalWorkspaceIdentity, RepositoryPlacementRef,
-    SealWorkspaceOutcome,
+    workspace_host_path, CreateWorkspaceOutcome, HostExecuteError, HostExecutorContext,
+    LogicalWorkspaceIdentity, RepositoryPlacementRef,
 };
 pub use instructions::{
     instruction_body_for_request, instruction_context_section, live_instruction_context_section,
