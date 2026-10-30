@@ -1,6 +1,18 @@
 import type { ReactNode } from "react";
-import { Bot, Clock, Play, Timer, Workflow, Zap } from "lucide-react";
+import {
+  Bot,
+  Clock,
+  FileText,
+  Play,
+  SquareTerminal,
+  TextSelect,
+  Timer,
+  TriangleAlert,
+  Workflow,
+  Zap,
+} from "lucide-react";
 import type {
+  CapturedContext,
   RenderedTimelineItem,
   RequestOriginView,
 } from "@source-inc/gents-desktop-client";
@@ -92,7 +104,69 @@ function OriginIcon({ origin }: { origin: RequestOriginView }) {
   }
 }
 
-function unavailableReason(reconstruction: Reconstruction | undefined) {
+const fileName = (uri: string) => {
+  const last = uri.split(/[\\/]/).filter(Boolean).pop() ?? uri;
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
+};
+
+/* positions are zero-based; people count lines from one */
+const lines = ({ range }: CapturedContext) => {
+  if (!range) return "";
+  const [from, to] = [range.start.line + 1, range.end.line + 1];
+  return from === to ? `:${from}` : `:${from}–${to}`;
+};
+
+const CONTEXT_ICON = {
+  selection: TextSelect,
+  file: FileText,
+  diagnostics: TriangleAlert,
+  terminal: SquareTerminal,
+} as const;
+
+/** The context an input captured, such as an editor selection or a
+    terminal's output: what each is, with its text on hover. */
+export function SentContext({
+  items,
+}: {
+  items: readonly CapturedContext[] | null | undefined;
+}) {
+  if (!items?.length) return null;
+  return (
+    <span
+      className="mt-1.5 flex flex-wrap gap-1.5 first:mt-0"
+      data-testid="sent-context"
+    >
+      {items.map((item, index) => {
+        const Icon = CONTEXT_ICON[item.kind];
+        const label =
+          item.kind === "terminal"
+            ? (item.terminalName ?? "Terminal")
+            : item.uri
+              ? `${fileName(item.uri)}${lines(item)}`
+              : item.kind;
+        return (
+          <span
+            key={index}
+            title={[item.uri ?? item.terminalName, item.content.slice(0, 400)]
+              .filter(Boolean)
+              .join("\n\n")}
+            className="inline-flex max-w-full items-center gap-1 rounded-md border border-border/60 px-1.5 py-0.5 text-xs text-muted-foreground"
+          >
+            <Icon className="size-3.5 shrink-0" />
+            <span className="min-w-0 truncate">{label}</span>
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+/** why an input's text can't be shown, when its reconstruction isn't ready */
+export function unavailableReason(reconstruction: Reconstruction | undefined) {
   switch (reconstruction?.state) {
     case "loading":
       return "Still syncing this input.";

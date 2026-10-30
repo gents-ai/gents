@@ -54,6 +54,8 @@ import {
   AutomatedInput,
   UserInputWithState,
   pendingInputState,
+  SentContext,
+  unavailableReason,
 } from "./TranscriptInputs";
 import { type ParentWork } from "./parentWork";
 import { useEditInBranch } from "./session/editInBranch";
@@ -102,6 +104,53 @@ function copyActions(text: string | null | undefined) {
   ];
 }
 
+type PersonInput = Extract<
+  RenderedTimelineItem,
+  { kind: "userMessage" | "pendingUserTurn" }
+>;
+
+/* the bridge sends an input whose text this device can't read without it,
+   with the reason */
+const unavailableOf = (item: PersonInput) =>
+  item.kind === "userMessage" ? unavailableReason(item.reconstruction) : null;
+
+/** A person's input: its text, skills and captured context, or why its
+    text can't be shown. */
+function InputText({ item }: { item: PersonInput }) {
+  const unavailable = unavailableOf(item);
+  if (unavailable)
+    return (
+      <span className="text-muted-foreground" data-testid="user-input-unavailable">
+        {unavailable}
+      </span>
+    );
+  return (
+    <>
+      {item.content?.trim() || item.selectedSkillIds?.length ? (
+        <SentText content={item.content ?? ""} skills={item.selectedSkillIds} />
+      ) : null}
+      <SentContext items={item.capturedContext} />
+    </>
+  );
+}
+
+/* an input of only attachments: they show below, and a bubble would hold
+   nothing; while it waits, a line says what it carries, under its state */
+const onlyAttachments = (item: PersonInput) =>
+  !unavailableOf(item) &&
+  !item.content?.trim() &&
+  !item.selectedSkillIds?.length &&
+  !item.capturedContext?.length;
+
+function AttachmentsOnly({ item }: { item: PersonInput }) {
+  const count = item.attachments?.length ?? 0;
+  return (
+    <span className="text-muted-foreground">
+      {count} {count === 1 ? "attachment" : "attachments"}
+    </span>
+  );
+}
+
 const ParentContext = createContext<ParentWork | null>(null);
 
 function OwnInput({
@@ -112,15 +161,20 @@ function OwnInput({
   state: string | null;
 }) {
   const branch = useEditInBranch(item.kind === "userMessage" ? item : null);
+  const bare = onlyAttachments(item);
   return (
     <div>
-      <UserInputWithState
-        content={
-          <SentText content={item.content ?? ""} skills={item.selectedSkillIds} />
-        }
-        state={state}
-        actions={[...copyActions(item.content), ...(branch ? [branch] : [])]}
-      />
+      {bare && !state ? null : (
+        <UserInputWithState
+          content={bare ? <AttachmentsOnly item={item} /> : <InputText item={item} />}
+          state={state}
+          actions={
+            unavailableOf(item) || bare
+              ? false
+              : [...copyActions(item.content), ...(branch ? [branch] : [])]
+          }
+        />
+      )}
       <SentAttachments
         items={item.attachments}
         requestId={item.requestId}
@@ -218,9 +272,13 @@ const TranscriptItem = memo(function TranscriptItem({
       if (!sender) return <OwnInput item={item} state={state} />;
       const message = (
         <div>
-          <UserMessage actions={copyActions(item.content)}>
-            <SentText content={item.content ?? ""} skills={item.selectedSkillIds} />
-          </UserMessage>
+          {!onlyAttachments(item) && (
+            <UserMessage
+              actions={unavailableOf(item) ? false : copyActions(item.content)}
+            >
+              <InputText item={item} />
+            </UserMessage>
+          )}
           <SentAttachments
             items={item.attachments}
             requestId={item.requestId}
