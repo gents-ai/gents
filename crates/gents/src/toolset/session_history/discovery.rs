@@ -323,7 +323,7 @@ async fn execute(
         if action == "get" {
             let details = if args.details {
                 let value = txn
-                    .execute(&super::session_investigation_scoped_query(
+                    .execute(&super::investigation::session_investigation_scoped_query(
                         agent,
                         id,
                         Some(requester),
@@ -342,7 +342,7 @@ async fn execute(
                         child_requests: vec![],
                     }
                 } else {
-                    let query = super::session_investigation_calls_scoped_query(
+                    let query = super::investigation::session_investigation_calls_scoped_query(
                         agent,
                         &docs,
                         Some(requester),
@@ -350,7 +350,7 @@ async fn execute(
                     let value = txn.execute(&query).await?;
                     super::decode(value.get("data"), "session investigation calls")?
                 };
-                Some(super::build_session_investigation(
+                Some(super::investigation::build_session_investigation(
                     agent, id, envelope, calls,
                 )?)
             } else {
