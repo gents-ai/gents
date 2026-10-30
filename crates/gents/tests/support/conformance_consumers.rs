@@ -1073,7 +1073,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "agent::p2p_reconcile::embedded_impl::tests::explicit_file_image_push_keeps_unselected_images_and_collection_interest_local",
             package: "gents",
-            source_path: "crates/gents/src/agent/p2p_reconcile/embedded_impl.rs",
+            source_path: "crates/gents/src/agent/p2p_reconcile/embedded_impl/tests.rs",
             module_path: "agent::p2p_reconcile::embedded_impl::tests",
             function: "explicit_file_image_push_keeps_unselected_images_and_collection_interest_local",
         },

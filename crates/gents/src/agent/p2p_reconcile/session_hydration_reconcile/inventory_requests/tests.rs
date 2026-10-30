@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent::p2p_reconcile::embedded_impl::tests::{
+use crate::agent::p2p_reconcile::embedded_impl::tests::fixtures::{
     authorize_enrollment_peer, runtime_http_test_node, wait_for_active_peer, wait_for_peer_info,
 };
 use crate::agent::p2p_reconcile::{
