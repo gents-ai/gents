@@ -743,6 +743,7 @@ async fn codex_affinity_survives_retry_tool_continuation_and_nested_compaction()
                     "compacted prompt",
                 ))],
                 reduction_key: "affinity-compaction".into(),
+                commit: TurnReductionCommit::new(|| async { Ok(()) }),
             })
         })
     }));
