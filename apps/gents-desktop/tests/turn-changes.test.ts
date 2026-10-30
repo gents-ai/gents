@@ -10,6 +10,7 @@ import { fileId, preferFile, queued } from "../src/lib/fileReads";
 import { patchText } from "@/lib/filePatch";
 import { recordedDiff } from "../src/lib/recordedFiles";
 import {
+  netCounts,
   relativeTo,
   sameChangedFiles,
   sharedFolder,
@@ -91,6 +92,21 @@ describe("turn changes", () => {
     expect(changes.get("a7")!.map((f) => f.path)).toEqual(["src/d.rs"]);
   });
 
+  it("knows a turn begun before the loaded rows is not whole", () => {
+    const entries = groupTranscript([
+      group(2, edit("src/a.rs")),
+      said(3),
+      person(4),
+      group(5, edit("src/b.rs")),
+      said(6),
+    ]);
+    const changes = turnChanges(entries, new Set(["a3", "a6"]), false);
+    expect(changes.get("a3")!.map((f) => f.whole)).toEqual([false]);
+    expect(changes.get("a6")!.map((f) => f.whole)).toEqual([true]);
+    expect(netCounts(changes.get("a3")![0]!)).toBeNull();
+    expect(netCounts(changes.get("a6")![0]!)).toEqual({ added: 1, removed: 0 });
+  });
+
   it("gives a turn without a final reply no changes", () => {
     const entries = groupTranscript([person(1), group(2, edit("src/a.rs"))]);
     expect(turnChanges(entries, new Set()).size).toBe(0);
@@ -161,6 +177,7 @@ const fileOf = (...calls: string[]) => ({
     added: 0,
     removed: 0,
   })),
+  whole: true,
 });
 
 describe("recorded diff", () => {
