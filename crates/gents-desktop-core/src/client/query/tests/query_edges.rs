@@ -328,7 +328,7 @@ fn full_and_scoped_snapshots_preserve_observation_owners() {
             "schedules": [], "skills": [], "inference_profiles": [],
             "inference_sampling": [], "inference_execution": [],
             "tool_service_registries": [], "event_sources": [], "agent_targets": [],
-            "datastore_tool_surfaces": [], "chain_key_bindings": [],
+            "datastore_tool_surfaces": [],
             "triggers": [
                 {
                     "node_did": "did:alpha", "trigger_id": "shared-trigger", "task_id": "task-alpha",
@@ -451,7 +451,7 @@ fn malformed_default_backend_keeps_operator_config_authority_unresolved() {
         "inference_execution": [], "tasks": [], "schedules": [], "triggers": [],
         "skills": [], "compactions": [], "tool_service_registries": [],
         "event_sources": [], "agent_targets": [], "datastore_tool_surfaces": [],
-        "chain_key_bindings": [], "sessions": [], "requests": [],
+        "sessions": [], "requests": [],
         "inference_backends": [{
             "node_did": "did:alpha", "backend_id": "b", "name": "backend",
             "provider_kind": "OpenAiCompatible", "openai_wire_api": "chat_completions",
@@ -715,7 +715,6 @@ fn doc_patch_support_excludes_pairing_control_collections() {
         "EventSource",
         "AgentTarget",
         "DatastoreToolSurface",
-        "ChainKeyBinding",
     ] {
         assert!(supports_doc_patch_collection(collection), "{collection}");
     }

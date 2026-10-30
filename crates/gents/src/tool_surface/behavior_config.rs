@@ -40,8 +40,6 @@ pub struct AgentToolSurfaceConfig {
     write_tools: Vec<WriteToolDecl>,
     query_tools: Vec<QueryToolDecl>,
     surface_of_tool: std::collections::BTreeMap<String, String>,
-    eth_queries: Vec<crate::eth::ResolvedEthQuery>,
-    eth_calls: Vec<crate::eth::ResolvedEthCall>,
     plugin_tools: Vec<crate::document_config::PluginToolRef>,
     self_config: super::SelfConfigToolConfig,
     agent_policy: ToolPolicySurface,
@@ -88,8 +86,6 @@ impl AgentToolSurfaceConfig {
             write_tools: Vec::new(),
             query_tools: Vec::new(),
             surface_of_tool: Default::default(),
-            eth_queries: Vec::new(),
-            eth_calls: Vec::new(),
             plugin_tools: Vec::new(),
             self_config: super::SelfConfigToolConfig::default(),
             agent_policy: agent_policy.clone(),
@@ -124,45 +120,32 @@ impl AgentToolSurfaceConfig {
         ceiling: &ToolCeiling,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
-        Self::from_tools_document_with_surfaces(agent_name, tools, &[], &[], ceiling, custom_tools)
+        Self::from_tools_document_with_surfaces(agent_name, tools, &[], ceiling, custom_tools)
     }
 
     pub fn from_tools_document_with_surfaces(
         agent_name: &str,
         tools: &crate::document_config::Tools,
         surfaces: &[crate::document_config::DatastoreToolSurfaceDocument],
-        eth_tools: &[crate::document_config::EthToolDocument],
         ceiling: &ToolCeiling,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
-        Self::from_tools_documents(
-            agent_name,
-            tools,
-            surfaces,
-            eth_tools,
-            &[],
-            ceiling,
-            custom_tools,
-        )
+        Self::from_tools_documents(agent_name, tools, surfaces, &[], ceiling, custom_tools)
     }
 
     pub fn from_tools_documents(
         agent_name: &str,
         tools: &crate::document_config::Tools,
         surfaces: &[crate::document_config::DatastoreToolSurfaceDocument],
-        eth_tools: &[crate::document_config::EthToolDocument],
         targets: &[crate::document_config::AgentTargetDocument],
         ceiling: &ToolCeiling,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
         let merged = crate::document_config::merge_datastore_tool_surfaces(tools, surfaces)?;
-        let expanded = crate::agent::document_view::expand_eth_tools_from_docs(tools, eth_tools)?;
         let mut resolved = ResolvedToolSelection::from_document(tools)?;
         resolved.write_tools = merged.write_tools;
         resolved.query_tools = merged.query_tools;
         resolved.surface_of_tool = merged.surface_of_tool;
-        resolved.eth_queries = expanded.queries;
-        resolved.eth_calls = expanded.calls;
         Self::from_selection_with_agent_tools(
             agent_name,
             resolved,
@@ -236,8 +219,6 @@ impl AgentToolSurfaceConfig {
             enable_pack_install,
             enable_lsp: _,
             lsp_config,
-            eth_queries,
-            eth_calls,
             plugin_tools,
         } = selection;
         let file_tools = downgrade_file_tools(agent_name, requested_file_tools, static_policy.file);
@@ -366,8 +347,6 @@ impl AgentToolSurfaceConfig {
             write_tools: static_policy.write_decls_for_runtime(&write_tools),
             query_tools: static_policy.query_decls_for_runtime(&query_tools),
             surface_of_tool,
-            eth_queries,
-            eth_calls,
             plugin_tools: plugin_tools
                 .into_iter()
                 .filter(|plugin| {
@@ -551,29 +530,6 @@ impl AgentToolSurfaceConfig {
             write_tools: effective_policy.write_decls_for_runtime(&self.write_tools),
             query_tools: effective_policy.query_decls_for_runtime(&self.query_tools),
             surface_of_tool: self.surface_of_tool.clone(),
-            eth_queries: if effective_policy.eth_query_methods.is_deny_all() {
-                Vec::new()
-            } else {
-                self.eth_queries
-                    .iter()
-                    .cloned()
-                    .filter_map(|mut query| {
-                        query
-                            .methods
-                            .retain(|method| effective_policy.eth_query_methods.permits(method));
-                        (!query.methods.is_empty()).then_some(query)
-                    })
-                    .collect()
-            },
-            eth_calls: if effective_policy.eth_call_tools.is_deny_all() {
-                Vec::new()
-            } else {
-                self.eth_calls
-                    .iter()
-                    .filter(|call| effective_policy.eth_call_tools.permits(&call.tool_name))
-                    .cloned()
-                    .collect()
-            },
             plugin_tools: self
                 .plugin_tools
                 .iter()

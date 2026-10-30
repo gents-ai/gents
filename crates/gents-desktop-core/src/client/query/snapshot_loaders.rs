@@ -51,7 +51,6 @@ pub(crate) fn snapshot_query(node_did: Option<&str>) -> Result<String> {
       event_sources: EventSource{args} {{ {EVENT_SOURCE_FIELDS} }}
       agent_targets: {AGENT_TARGET_NAME}{args} {{ {AGENT_TARGET_FIELDS} }}
       datastore_tool_surfaces: DatastoreToolSurface{args} {{ {DATASTORE_TOOL_SURFACE_FIELDS} }}
-      chain_key_bindings: ChainKeyBinding{args} {{ {CHAIN_KEY_BINDING_FIELDS} }}
     }}"))
 }
 
@@ -126,8 +125,6 @@ pub(super) fn snapshot_rows_with_requests(
     let agent_targets: Vec<AgentTargetDocument> = rows!(AgentTargetDocument, "agent_targets");
     let datastore_tool_surfaces: Vec<DatastoreToolSurfaceDocument> =
         rows!(DatastoreToolSurfaceDocument, "datastore_tool_surfaces");
-    let chain_key_bindings: Vec<ChainKeyBindingDocument> =
-        rows!(ChainKeyBindingDocument, "chain_key_bindings");
     let source = |len| scope(len);
     let session_source_node_dids = source(sessions.len());
     let task_source_node_dids = source(tasks.len());
@@ -143,7 +140,6 @@ pub(super) fn snapshot_rows_with_requests(
     let event_source_source_node_dids = source(event_sources.len());
     let agent_target_source_node_dids = source(agent_targets.len());
     let datastore_tool_surface_source_node_dids = source(datastore_tool_surfaces.len());
-    let chain_key_binding_source_node_dids = source(chain_key_bindings.len());
     Ok(ClientStore::from_rows(ClientStoreRows {
         nodes: rows!(Node, "nodes"),
         agents: rows!(Agent, "agents"),
@@ -190,8 +186,6 @@ pub(super) fn snapshot_rows_with_requests(
         agent_target_source_node_dids,
         datastore_tool_surfaces,
         datastore_tool_surface_source_node_dids,
-        chain_key_bindings,
-        chain_key_binding_source_node_dids,
         ..ClientStoreRows::default()
     }))
 }
@@ -777,7 +771,6 @@ async fn load_operator_config_scoped(
             event_sources: EventSource({did_filter}) {{ {EVENT_SOURCE_FIELDS} }}
             agent_targets: {AGENT_TARGET_NAME}({did_filter}) {{ {AGENT_TARGET_FIELDS} }}
             datastore_tool_surfaces: DatastoreToolSurface({did_filter}) {{ {DATASTORE_TOOL_SURFACE_FIELDS} }}
-            chain_key_bindings: ChainKeyBinding({did_filter}) {{ {CHAIN_KEY_BINDING_FIELDS} }}
             sessions: {AGENT_SESSION_NAME}({did_filter}) {{ {AGENT_SESSION_FIELDS} }}
             requests: {AGENT_REQUEST_NAME}{request_args} {{ {AGENT_REQUEST_FIELDS} }}"
         ),
@@ -877,7 +870,6 @@ fn operator_config_store_from_data_with_requests(
         event_sources: parse_query_rows(data, "event_sources")?,
         agent_targets: parse_query_rows(data, "agent_targets")?,
         datastore_tool_surfaces: parse_query_rows(data, "datastore_tool_surfaces")?,
-        chain_key_bindings: parse_query_rows(data, "chain_key_bindings")?,
         sessions: parse_query_rows(data, "sessions")?,
         requests,
         ..common

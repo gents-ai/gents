@@ -89,26 +89,7 @@ fn compare_manifests(
             if *kind != collection {
                 continue;
             }
-            let mut effective = value.clone();
-            if collection == Collection::ChainKeyBinding {
-                if let Some(retained) = live_docs.get(&(collection, id.clone())) {
-                    gents::document_config::preserve_chain_key_binding_update_fields(
-                        &mut effective,
-                    )?;
-                    let mut merged = retained
-                        .as_object()
-                        .context("retained binding is not an object")?
-                        .clone();
-                    merged.extend(
-                        effective
-                            .as_object()
-                            .context("binding replacement is not an object")?
-                            .clone(),
-                    );
-                    effective = Value::Object(merged);
-                }
-            }
-            desired_rows.push((id.clone(), effective));
+            desired_rows.push((id.clone(), value.clone()));
         }
         let live_rows = live_docs
             .iter()

@@ -245,67 +245,6 @@ pub(crate) struct GoalSetArgs {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum ChainCommand {
-    #[command(about = "Create, list, show, and revoke chain keys")]
-    Key {
-        #[command(subcommand)]
-        command: ChainKeyCommand,
-    },
-    #[command(about = "Run an allowlisted eth_* JSON-RPC read against an EthTool endpoint")]
-    Query(ChainQueryArgs),
-}
-
-#[derive(clap::Args)]
-pub(crate) struct ChainQueryArgs {
-    #[arg(long, help = "EthTool.tool_id")]
-    pub(crate) tool_id: String,
-    #[arg(help = "JSON-RPC method, e.g. eth_blockNumber")]
-    pub(crate) method: String,
-    #[arg(
-        value_name = "PARAMS_JSON",
-        help = "JSON array of RPC params. Default: []"
-    )]
-    pub(crate) params: Option<String>,
-    #[command(flatten)]
-    pub(crate) access: ChainKeyAccessArgs,
-}
-
-#[derive(Subcommand)]
-pub(crate) enum ChainKeyCommand {
-    #[command(about = "Generate a secp256k1 chain key in the OS keyring")]
-    Generate(ChainKeyGenerateArgs),
-    #[command(about = "List chain-key bindings for the local node")]
-    List(ChainKeyAccessArgs),
-    #[command(about = "Show one chain-key binding (never prints key material)")]
-    Show(ChainKeyShowArgs),
-    #[command(about = "Revoke a binding and delete the keyring secret")]
-    Revoke(ChainKeyShowArgs),
-}
-
-#[derive(clap::Args)]
-pub(crate) struct ChainKeyAccessArgs {
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long, help = "GraphQL endpoint for a running runtime")]
-    pub(crate) graphql: Option<String>,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct ChainKeyGenerateArgs {
-    #[command(flatten)]
-    pub(crate) access: ChainKeyAccessArgs,
-    #[arg(long, help = "Stable binding id. Default: a UUID.")]
-    pub(crate) name: Option<String>,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct ChainKeyShowArgs {
-    pub(crate) binding_id: String,
-    #[command(flatten)]
-    pub(crate) access: ChainKeyAccessArgs,
-}
-
-#[derive(Subcommand)]
 pub(crate) enum MailboxCommand {
     #[command(about = "List open mailbox items for the local node")]
     List(MailboxListArgs),

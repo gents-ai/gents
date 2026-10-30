@@ -107,7 +107,6 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
                     &agent.agent_id,
                     tools,
                     &bundle.config.datastore_tool_surfaces,
-                    &bundle.config.eth_tools,
                     &bundle.config.agent_targets,
                     tool_ceiling,
                     Vec::new(),
@@ -116,7 +115,6 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
                 AgentToolSurfaceConfig::from_tools_documents(
                     &agent.agent_id,
                     &gents::document_config::Tools::default(),
-                    &[],
                     &[],
                     &[],
                     tool_ceiling,

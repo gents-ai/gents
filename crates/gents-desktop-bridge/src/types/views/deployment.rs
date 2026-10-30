@@ -153,9 +153,9 @@ pub struct AgentEnvironmentView {
 }
 
 pub use gents::document_config::{
-    Agent, AgentContext, AgentTargetDocument, ChainKeyBindingDocument, CompactionConfig,
-    DatastoreToolSurfaceDocument, EventSource, InferenceExecution, InferenceProfile,
-    InferenceSampling, Node, Schedule, ToolServiceRegistry, Tools, Trigger,
+    Agent, AgentContext, AgentTargetDocument, CompactionConfig, DatastoreToolSurfaceDocument,
+    EventSource, InferenceExecution, InferenceProfile, InferenceSampling, Node, Schedule,
+    ToolServiceRegistry, Tools, Trigger,
 };
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -406,7 +406,6 @@ pub struct DeploymentView {
     pub tool_service_registries: Vec<ToolServiceRegistry>,
     pub agent_targets: Vec<AgentTargetDocument>,
     pub datastore_tool_surfaces: Vec<DatastoreToolSurfaceDocument>,
-    pub chain_key_bindings: Vec<ChainKeyBindingDocument>,
     pub skills: Vec<SkillView>,
     pub tasks: Vec<TaskView>,
     pub schedules: Vec<Schedule>,

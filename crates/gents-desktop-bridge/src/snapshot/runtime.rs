@@ -148,13 +148,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 .cloned()
                 .collect::<Vec<_>>();
             datastore_tool_surfaces.sort_by(|left, right| left.surface_id.cmp(&right.surface_id));
-            let mut chain_key_bindings = store
-                .chain_key_bindings
-                .iter()
-                .filter(|row| row.node_did == peer.node_did)
-                .cloned()
-                .collect::<Vec<_>>();
-            chain_key_bindings.sort_by(|left, right| left.binding_id.cmp(&right.binding_id));
 
             let mut skills = store
                 .skills
@@ -388,7 +381,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 tool_service_registries,
                 agent_targets,
                 datastore_tool_surfaces,
-                chain_key_bindings,
                 skills,
                 tasks,
                 schedules,
