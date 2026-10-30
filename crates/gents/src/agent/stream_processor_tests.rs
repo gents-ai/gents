@@ -11,10 +11,10 @@ use gents_loop::provider_input::ProviderInputProfile;
 use super::*;
 use crate::ensure_runtime_schemas;
 use crate::hook::FailurePolicy;
-use crate::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
-use crate::streaming::DefraStreamWriter;
+use crate::request::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
+use crate::request::streaming::DefraStreamWriter;
+use crate::request::watcher::AgentRequest;
 use crate::test_support::first_content;
-use crate::watcher::AgentRequest;
 
 #[path = "stream_cadence_tests.rs"]
 mod cadence;
@@ -461,10 +461,10 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
         "did:test:test",
         request,
         30,
-        crate::lifecycle::ExecutionOrigin::Interactive,
+        crate::request::lifecycle::ExecutionOrigin::Interactive,
         "test-backend",
     );
-    let stream_writer = crate::streaming::DefraStreamWriter::new(
+    let stream_writer = crate::request::streaming::DefraStreamWriter::new(
         node.clone(),
         "did:test:test",
         Duration::from_secs(60),
@@ -1259,7 +1259,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         )
         .await
         .unwrap();
-    crate::lifecycle::queue::persist_background_completion_with_message(
+    crate::request::lifecycle::queue::persist_background_completion_with_message(
         &node,
         &notification_request,
         "<tool-notification status=\"completed\" />",
@@ -2020,7 +2020,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
 #[test]
 fn coalesced_reasoning_fragments_encode_as_one_native_stream() {
     use crate::inference::llm::message::ReasoningContent;
-    use crate::streaming::native_encoding::encode_native_message;
+    use crate::request::streaming::native_encoding::encode_native_message;
 
     let mut accumulator = AssistantTurnAccumulator::default();
     for _ in 0..128 {

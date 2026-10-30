@@ -35,14 +35,14 @@ use crate::lean_vocab_test::{
     LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation, LeanCanonicalSource,
     LeanPayloadKind, LeanTerminalSelection,
 };
-use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::prompt::LayeredPromptBuilder;
+use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+use crate::request::watcher::{AgentRequest, DefraWatcher};
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::runtime_status::RuntimeStatusHandle;
 use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
 use crate::tool_surface::AgentToolSurfaceConfig;
-use crate::watcher::{AgentRequest, DefraWatcher};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct ReviewUsage {
@@ -1255,7 +1255,7 @@ impl TitleFixture {
             .unwrap();
         let parent_doc_id = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
         let mut parent =
-            crate::request_admission::load_request_for_admission_test(&node, &parent_doc_id)
+            crate::request::admission::load_request_for_admission_test(&node, &parent_doc_id)
                 .await
                 .unwrap();
         let session = gents_protocol::session::AgentSession {
@@ -1290,7 +1290,7 @@ impl TitleFixture {
                 &parent.node_did,
                 parent.clone(),
                 agent_config.deadline_duration.as_secs(),
-                crate::lifecycle::ExecutionOrigin::Interactive,
+                crate::request::lifecycle::ExecutionOrigin::Interactive,
                 agent_config.backend_id.clone().unwrap_or_default(),
             );
             lifecycle.set_configured_max_total_tokens(parent_limit);
@@ -1298,7 +1298,7 @@ impl TitleFixture {
                 lifecycle.claim_with_identity().await.unwrap(),
                 ClaimOutcome::Claimed
             );
-            let writer = crate::streaming::DefraStreamWriter::new(
+            let writer = crate::request::streaming::DefraStreamWriter::new(
                 node.clone(),
                 &parent.node_did,
                 Duration::ZERO,
@@ -1306,7 +1306,7 @@ impl TitleFixture {
             lifecycle.begin_owned_execution(&writer).await.unwrap();
             parent = lifecycle.request().clone();
         }
-        let title = crate::lifecycle::materialize::write_pending_auxiliary_request(
+        let title = crate::request::lifecycle::materialize::write_pending_auxiliary_request(
             &node,
             &parent,
             purpose,
@@ -1338,7 +1338,7 @@ impl TitleFixture {
             provider_family: None,
             model: Arc::new(model),
             service_admission: Default::default(),
-            verifier: crate::request_admission::AgentRequestAdmissionVerifier::new(
+            verifier: crate::request::admission::AgentRequestAdmissionVerifier::new(
                 self.node.clone(),
                 self.identity.clone(),
                 crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -1352,7 +1352,7 @@ impl TitleFixture {
     }
 
     async fn terminalize_parent(&self) {
-        crate::request_admission::terminalize_pending_request_rejection(
+        crate::request::admission::terminalize_pending_request_rejection(
             &self.node,
             &self.parent.doc_id,
             &self.parent.node_did,
@@ -1373,20 +1373,20 @@ impl TitleFixture {
     }
 
     async fn interrupt_parent(&self) {
-        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_execution_binding(
+        let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
             self.node.clone(),
             &self.agent_config.agent_id,
             &self.parent.node_did,
             self.parent.clone(),
             self.agent_config.deadline_duration.as_secs(),
-            crate::lifecycle::ExecutionOrigin::Interactive,
+            crate::request::lifecycle::ExecutionOrigin::Interactive,
             self.agent_config.backend_id.clone().unwrap_or_default(),
         );
         assert_eq!(
             lifecycle.claim_with_identity().await.unwrap(),
-            crate::lifecycle::ClaimOutcome::Claimed
+            crate::request::lifecycle::ClaimOutcome::Claimed
         );
-        crate::interrupt::interrupt_request_by_doc_id(
+        crate::request::interrupt::interrupt_request_by_doc_id(
             &self.node,
             &self.parent.doc_id,
             &self.parent.node_did,
@@ -1397,13 +1397,13 @@ impl TitleFixture {
         assert_eq!(
             lifecycle
                 .terminalize_owned(
-                    crate::lifecycle::RequestTerminalOutcome::Interrupted,
+                    crate::request::lifecycle::RequestTerminalOutcome::Interrupted,
                     gents_protocol::output::TerminalOutput::NoMessage,
                     None,
                 )
                 .await
                 .unwrap(),
-            crate::lifecycle::TerminalizeResult::Won
+            crate::request::lifecycle::TerminalizeResult::Won
         );
         let doc = crate::graphql::escape_graphql_string(&self.parent.doc_id);
         let response = ConfigAccess::local(self.node.clone())
@@ -2005,7 +2005,7 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
         let mut fixture = TitleFixture::new().await;
         fixture.terminalize_parent().await;
         if !preexisting {
-            crate::request_admission::terminalize_pending_request_rejection(
+            crate::request::admission::terminalize_pending_request_rejection(
                 &fixture.node,
                 &fixture.title.doc_id,
                 &fixture.title.node_did,
@@ -2085,7 +2085,7 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
             startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
             runtime_status: status.clone(),
             slot_generation: 1,
-            request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
+            request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
                 fixture.node.clone(),
                 fixture.identity.clone(),
                 crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -2132,7 +2132,7 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
                     .filter_map(|row| row["_docID"].as_str())
                     .find(|doc_id| *doc_id != old_doc_id);
                 if let Some(doc_id) = next {
-                    fixture.title = crate::request_admission::load_request_for_admission_test(
+                    fixture.title = crate::request::admission::load_request_for_admission_test(
                         &fixture.node,
                         doc_id,
                     )
@@ -2279,7 +2279,7 @@ async fn start_owned_title_daemon(
         startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
         runtime_status: status,
         slot_generation: 1,
-        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
+        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
             fixture.node.clone(),
             fixture.identity.clone(),
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -2451,7 +2451,7 @@ async fn owned_title_interrupt_drains_buffered_reasoning_before_terminal() {
         fixture.terminal_row().await.0,
         RequestLifecycleState::Processing
     );
-    crate::interrupt::interrupt_request_by_doc_id(
+    crate::request::interrupt::interrupt_request_by_doc_id(
         &fixture.node,
         &fixture.title.doc_id,
         &fixture.title.node_did,

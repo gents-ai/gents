@@ -259,7 +259,7 @@ async fn create_runtime_request_inner(
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(node_did),
     );
     create.input = input;
-    create.max_retries = i64::from(gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES);
+    create.max_retries = i64::from(gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES);
     create.valid_until = valid_until.map(str::to_string);
     create.caused_by_source_doc_id = caused_by_source_doc_id.map(str::to_string);
     gents::sign_agent_request_create_as_registered_target(&mut create)

@@ -10,11 +10,11 @@ use tokio_util::task::AbortOnDropHandle;
 use crate::agent::worker_capacity::WorkerCapacity;
 use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::resolved::ResolvedAgent;
+use crate::request::watcher::AgentRequest;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::startup_readiness::{BuildOutcome, BuildStanding};
 use crate::tool_surface::ToolSurface;
-use crate::watcher::AgentRequest;
 
 use rapidhash::{HashMapExt, RapidHashMap};
 

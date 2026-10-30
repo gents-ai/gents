@@ -1,7 +1,7 @@
 use super::*;
 use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
-use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
+use crate::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
 use gents_protocol::request_input::GoalAssignmentInput;
@@ -48,14 +48,14 @@ async fn stored(node: &Arc<EmbeddedNode>, request_id: &str) -> AgentRequestRow {
         .execute(&format!(
             r#"{{AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{{}}}}}"#,
             escape_graphql_string(request_id),
-            crate::request_admission::SIGNED_REQUEST_FIELDS
+            crate::request::admission::SIGNED_REQUEST_FIELDS
         ))
         .await
         .unwrap();
     let rows = response["data"]["AgentRequest"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
     let row: AgentRequestRow = serde_json::from_value(rows[0].clone()).unwrap();
-    crate::request_admission::verify_request_receipt_signature(&row).unwrap();
+    crate::request::admission::verify_request_receipt_signature(&row).unwrap();
     row
 }
 
@@ -138,12 +138,12 @@ async fn deliver(
         attempt: None,
         created_at: "2026-10-21T00:00:00Z".into(),
     };
-    let mut spec = crate::lifecycle::materialize::pending_agent_request_spec(
+    let mut spec = crate::request::lifecycle::materialize::pending_agent_request_spec(
         PIN_FIXED_DID,
         "agent",
         "Delivery work",
-        crate::lifecycle::ExecutionOrigin::Interactive,
-        crate::lifecycle::TriggerLineage {
+        crate::request::lifecycle::ExecutionOrigin::Interactive,
+        crate::request::lifecycle::TriggerLineage {
             trigger_kind: Some("manual".into()),
             ..Default::default()
         },
@@ -156,9 +156,9 @@ async fn deliver(
         None,
     )?;
     spec.input.goal_assignment = captured;
-    let create = crate::lifecycle::build_signed_request(
+    let create = crate::request::lifecycle::build_signed_request(
         spec,
-        crate::lifecycle::RequestSigner::RegisteredTarget,
+        crate::request::lifecycle::RequestSigner::RegisteredTarget,
     )
     .await?;
     let prepared = crate::triggers::engine::durable::PreparedFire {
@@ -166,7 +166,7 @@ async fn deliver(
         target_existing: case["existing"] == true,
         replace_prior: false,
     };
-    let admitted = crate::lifecycle::write_trigger_delivery(
+    let admitted = crate::request::lifecycle::write_trigger_delivery(
         node,
         identity::Did::new(PIN_FIXED_DID).unwrap(),
         &prepared,

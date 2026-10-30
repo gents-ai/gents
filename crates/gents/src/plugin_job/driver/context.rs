@@ -52,7 +52,7 @@ pub(in crate::plugin_job) async fn step_context_for(
     lifecycle: &ToolCallLifecycle,
 ) -> Result<(StepContext, Option<InstalledPlugin>)> {
     let caller = &input.caller;
-    let (_, tools, targets) = crate::request_admission::load_request_context_in_txn(
+    let (_, tools, targets) = crate::request::admission::load_request_context_in_txn(
         txn,
         &caller.node_did,
         &caller.agent_id,

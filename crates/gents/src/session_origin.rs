@@ -356,7 +356,7 @@ pub async fn task_triggered_opening(access: &ConfigAccess, scope: &SessionScope)
         &format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(opening),
-            crate::request_admission::SIGNED_REQUEST_FIELDS,
+            crate::request::admission::SIGNED_REQUEST_FIELDS,
         ),
         "AgentRequest",
     )
@@ -388,7 +388,7 @@ pub async fn task_triggered_opening(access: &ConfigAccess, scope: &SessionScope)
             request.caused_by_trigger_kind.as_deref(),
             Some("event" | "schedule")
         )
-        || crate::request_admission::verify_request_receipt_signature(&request).is_err()
+        || crate::request::admission::verify_request_receipt_signature(&request).is_err()
     {
         return Ok(false);
     }
@@ -722,7 +722,7 @@ pub(crate) async fn verified_starter_in_txn(
         .execute(&format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(opening),
-            crate::request_admission::SIGNED_REQUEST_FIELDS,
+            crate::request::admission::SIGNED_REQUEST_FIELDS,
         ))
         .await?;
     let Some([row]) = response["data"]["AgentRequest"]
@@ -748,7 +748,7 @@ pub(crate) async fn verified_starter_in_txn(
             .and_then(|input| input.started_by.as_ref())
             != Some(source)
         || source.session_id.is_empty()
-        || crate::request_admission::verify_request_receipt_signature(&request).is_err()
+        || crate::request::admission::verify_request_receipt_signature(&request).is_err()
     {
         return Ok(None);
     }
@@ -773,7 +773,7 @@ pub(crate) async fn issue_creation_receipt_in_txn(
         .execute(&format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(opening),
-            crate::request_admission::SIGNED_REQUEST_FIELDS,
+            crate::request::admission::SIGNED_REQUEST_FIELDS,
         ))
         .await?;
     let Some(rows) = response["data"]["AgentRequest"].as_array() else {
@@ -789,7 +789,7 @@ pub(crate) async fn issue_creation_receipt_in_txn(
         || request.session_id.as_deref() != Some(session_id)
         || request.requester_did.as_deref() != requester_did
         || request.agent_id.as_deref() != Some(agent_id)
-        || crate::request_admission::verify_request_receipt_signature(&request).is_err()
+        || crate::request::admission::verify_request_receipt_signature(&request).is_err()
     {
         return Ok(None);
     }
@@ -933,7 +933,7 @@ pub async fn verified_agent_new_creation(
         &format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(&receipt.opening_request_doc_id),
-            crate::request_admission::SIGNED_REQUEST_FIELDS,
+            crate::request::admission::SIGNED_REQUEST_FIELDS,
         ),
         "AgentRequest",
     )
@@ -950,7 +950,7 @@ pub async fn verified_agent_new_creation(
         || request.agent_id.as_deref() != Some(session.agent_id.as_str())
         || request.requester_did.as_deref() != Some(caller.node_did.as_str())
         || request.admission_signer_did.as_deref() != Some(caller.node_did.as_str())
-        || crate::request_admission::verify_request_receipt_signature(&request).is_err()
+        || crate::request::admission::verify_request_receipt_signature(&request).is_err()
     {
         return Ok(false);
     }
@@ -990,7 +990,7 @@ pub async fn verified_agent_new_creation(
         &format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(parent_doc),
-            crate::request_admission::SIGNED_REQUEST_FIELDS,
+            crate::request::admission::SIGNED_REQUEST_FIELDS,
         ),
         "AgentRequest",
     )
@@ -1005,7 +1005,7 @@ pub async fn verified_agent_new_creation(
         || parent.session_id.as_deref() != Some(caller.session_id.as_str())
         || parent.requester_did != caller.requester_did
         || request.caused_by_parent_request_id.as_deref() != Some(parent.request_id.as_str())
-        || crate::request_admission::verify_request_receipt_signature(&parent).is_err()
+        || crate::request::admission::verify_request_receipt_signature(&parent).is_err()
     {
         return Ok(false);
     }
@@ -1113,7 +1113,7 @@ where
         &format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(parent_doc),
-            crate::request_admission::SIGNED_REQUEST_FIELDS,
+            crate::request::admission::SIGNED_REQUEST_FIELDS,
         ),
         "AgentRequest",
     )
@@ -1131,7 +1131,7 @@ where
     if request.requester_did.as_deref() != Some(node)
         || request.admission_signer_did.as_deref() != Some(node)
         || request.caused_by_parent_request_id.as_deref() != Some(parent.request_id.as_str())
-        || crate::request_admission::verify_request_receipt_signature(&parent).is_err()
+        || crate::request::admission::verify_request_receipt_signature(&parent).is_err()
     {
         return Ok(None);
     }
@@ -1189,7 +1189,7 @@ async fn agent_new_binding_in_txn(
         &format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}, limit: 2) {{{}}}}}",
             escape_graphql_string(parent_doc),
-            crate::request_admission::SIGNED_REQUEST_FIELDS,
+            crate::request::admission::SIGNED_REQUEST_FIELDS,
         ),
         "AgentRequest",
     )
@@ -1207,7 +1207,7 @@ async fn agent_new_binding_in_txn(
     if request.requester_did.as_deref() != Some(node)
         || request.admission_signer_did.as_deref() != Some(node)
         || request.caused_by_parent_request_id.as_deref() != Some(parent.request_id.as_str())
-        || crate::request_admission::verify_request_receipt_signature(&parent).is_err()
+        || crate::request::admission::verify_request_receipt_signature(&parent).is_err()
     {
         return Ok(None);
     }

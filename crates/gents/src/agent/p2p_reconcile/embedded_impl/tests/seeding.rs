@@ -97,13 +97,15 @@ pub(super) async fn seed_agent_target_return_artifacts(
     let response = node.execute(&format!(
         r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "pending" }}) {{ {} }} }}"#,
         escape_graphql_string(&request_id),
-        crate::watcher::AGENT_REQUEST_FIELDS,
+        crate::request::watcher::AGENT_REQUEST_FIELDS,
     )).await;
-    let request =
-        crate::watcher::agent_request_from_mutation_response(&response, "update_AgentRequest")
-            .expect("decode routed request")
-            .expect("routed request");
-    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
+    let request = crate::request::watcher::agent_request_from_mutation_response(
+        &response,
+        "update_AgentRequest",
+    )
+    .expect("decode routed request")
+    .expect("routed request");
+    let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         Arc::clone(node),
         "default",
         node_did,
@@ -112,9 +114,9 @@ pub(super) async fn seed_agent_target_return_artifacts(
     );
     assert_eq!(
         lifecycle.claim().await.expect("claim routed request"),
-        crate::lifecycle::ClaimOutcome::Claimed
+        crate::request::lifecycle::ClaimOutcome::Claimed
     );
-    let writer = crate::streaming::DefraStreamWriter::new(
+    let writer = crate::request::streaming::DefraStreamWriter::new(
         Arc::clone(node),
         node_did,
         Duration::from_secs(60),
@@ -145,7 +147,7 @@ pub(super) async fn seed_agent_target_return_artifacts(
         .expect("publish routed child result turn");
     lifecycle
         .terminalize_owned(
-            crate::lifecycle::RequestTerminalOutcome::Completed,
+            crate::request::lifecycle::RequestTerminalOutcome::Completed,
             gents_protocol::output::TerminalOutput::Message {
                 message_doc_id: published.message_doc_id.clone(),
             },

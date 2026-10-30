@@ -160,7 +160,7 @@ pub(in crate::hook::persistence) async fn finish_background_execution(
                             BACKGROUND_TIMEOUT_NOTIFICATION.0,
                             "",
                             Some(BACKGROUND_TIMEOUT_NOTIFICATION.1),
-                            crate::lifecycle::RequestHopCause::Continuation,
+                            crate::request::lifecycle::RequestHopCause::Continuation,
                         )
                         .await
                     })
@@ -198,7 +198,7 @@ pub(in crate::hook::persistence) async fn finish_background_execution(
                             "cancelled",
                             "",
                             Some(&cancel_reason),
-                            crate::lifecycle::RequestHopCause::Continuation,
+                            crate::request::lifecycle::RequestHopCause::Continuation,
                         )
                         .await
                     })
@@ -273,7 +273,7 @@ pub(in crate::hook::persistence) async fn finish_background_execution(
                             "completed",
                             &notification_result,
                             None,
-                            crate::lifecycle::RequestHopCause::Continuation,
+                            crate::request::lifecycle::RequestHopCause::Continuation,
                         )
                         .await
                     })
@@ -352,7 +352,7 @@ pub(in crate::hook::persistence) async fn finish_background_execution(
                             "failed",
                             &notification_result,
                             Some("tool_failed"),
-                            crate::lifecycle::RequestHopCause::Continuation,
+                            crate::request::lifecycle::RequestHopCause::Continuation,
                         )
                         .await
                     })
@@ -391,7 +391,7 @@ pub(in crate::hook::persistence) async fn finish_background_execution(
                         "failed",
                         &reason,
                         Some("tool_panicked"),
-                        crate::lifecycle::RequestHopCause::Continuation,
+                        crate::request::lifecycle::RequestHopCause::Continuation,
                     )
                     .await
                 })

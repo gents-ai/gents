@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use super::{AgentDaemon, AuxiliaryResult, AuxiliaryTask};
 use crate::agent::loop_stream::AggregateTokenBudget;
 use crate::inference::admission::{self, CallKind};
-use crate::watcher::AgentRequest;
+use crate::request::watcher::AgentRequest;
 
 #[cfg(test)]
 mod context_tests;
@@ -126,7 +126,7 @@ where
                         );
                         let node = worker.node.clone();
                         let request =
-                            crate::lifecycle::materialize::write_pending_auxiliary_request(
+                            crate::request::lifecycle::materialize::write_pending_auxiliary_request(
                                 &node,
                                 &parent,
                                 gents_protocol::request_admission::RequestPurpose::AccessReview,
@@ -283,7 +283,7 @@ where
         parent: &AgentRequest,
         execution: Option<ReviewExecution>,
         mut shutdown: watch::Receiver<bool>,
-        interrupt: &mut watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
+        interrupt: &mut watch::Receiver<Option<crate::request::interrupt::InterruptIntent>>,
     ) -> Result<AuxiliaryResult> {
         let execution = execution.context("access review has no active caller")?;
         anyhow::ensure!(

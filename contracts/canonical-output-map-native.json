@@ -57,8 +57,8 @@
       "generated_groups": ["request_execution_lease_cases", "request_execution_lease_trace_cases"],
       "fixture_status": "concrete_inputs",
       "native_owner_paths": [
-        "crates/gents/src/lifecycle/execution_lease.rs",
-        "crates/gents/src/request_admission.rs"
+        "crates/gents/src/request/lifecycle/execution_lease.rs",
+        "crates/gents/src/request/admission.rs"
       ],
       "consumer_paths": [
         "crates/gents/src/lean_vocab_test/request_execution_lease.rs",
@@ -174,12 +174,12 @@
       "native_owner_paths": [
         "crates/gents/src/config_client/txn.rs",
         "crates/gents/src/defra_write/mod.rs",
-        "crates/gents/src/lifecycle/execution_lease.rs"
+        "crates/gents/src/request/lifecycle/execution_lease.rs"
       ],
       "consumer_paths": [
         "crates/gents/src/config_client/txn_owner_tests.rs",
         "crates/gents/src/defra_write/tests.rs",
-        "crates/gents/src/streaming/canonical_tests.rs"
+        "crates/gents/src/request/streaming/canonical_tests.rs"
       ],
       "native_status": "pending",
       "required_cases": [
@@ -197,9 +197,9 @@
       "fixture_status": "not_exported",
       "native_owner_paths": [
         "crates/gents/src/graphql.rs",
-        "crates/gents/src/streaming.rs",
-        "crates/gents/src/lifecycle/execution_lease.rs",
-        "crates/gents/src/request_admission.rs"
+        "crates/gents/src/request/streaming.rs",
+        "crates/gents/src/request/lifecycle/execution_lease.rs",
+        "crates/gents/src/request/admission.rs"
       ],
       "consumer_paths": ["crates/gents/src/agent/daemon/execution_lease_regression_tests.rs"],
       "native_status": "pending",
@@ -216,8 +216,8 @@
       "constructors": [],
       "generated_groups": [],
       "fixture_status": "not_exported",
-      "native_owner_paths": ["crates/gents/src/lifecycle/execution_lease.rs"],
-      "consumer_paths": ["crates/gents/src/lifecycle/execution_lease/tests.rs"],
+      "native_owner_paths": ["crates/gents/src/request/lifecycle/execution_lease.rs"],
+      "consumer_paths": ["crates/gents/src/request/lifecycle/execution_lease/tests.rs"],
       "native_status": "pending",
       "required_cases": [
         "block provider and tool reads while an independent bounded-cadence timer renews",

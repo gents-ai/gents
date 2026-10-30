@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
+use gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
 use gents::NodeIdentity as _;
 use gents_protocol::request_admission::AgentRequestCreate;
 use serde::Deserialize;

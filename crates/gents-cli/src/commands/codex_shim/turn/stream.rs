@@ -1212,7 +1212,7 @@ async fn announce_consumed_inputs(
         escape_graphql_string(state.local_requester_did()),
         escape_graphql_string(&current.session_id),
         escape_graphql_string(&current.request_doc_id),
-        escape_graphql_string(gents::lifecycle::FOLDED_REASON)
+        escape_graphql_string(gents::request::lifecycle::FOLDED_REASON)
     );
     let response = query_node_json(state.node.as_ref(), &query).await?;
     let rows = response
@@ -1230,7 +1230,7 @@ async fn announce_consumed_inputs(
         if announced.contains(doc) {
             continue;
         }
-        let (_, key) = gents::lifecycle::input_message_owner(&row)
+        let (_, key) = gents::request::lifecycle::input_message_owner(&row)
             .context("consumed input lacks authored owner")?;
         let query = format!(
             r#"{{ AgentMessage(filter: {{ message_key: {{_eq:"{}"}}, node_did: {{_eq:"{}"}}, requester_did: {{_eq:"{}"}}, session_id: {{_eq:"{}"}}, request_doc_id: {{_eq:"{}"}} }}) {{ {} }} }}"#,

@@ -1910,7 +1910,7 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
         &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
             crate::graphql::escape_graphql_string(&doc_id),
-            crate::watcher::AGENT_REQUEST_FIELDS,
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
         ),
         "load compaction capture fixture",
     )
@@ -1920,7 +1920,7 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
         crate::graphql::first_row(&loaded, "AgentRequest")
             .unwrap()
             .unwrap();
-    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
+    let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
         identity.did(),
@@ -1929,9 +1929,9 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
     );
     assert_eq!(
         lifecycle.claim().await.unwrap(),
-        crate::lifecycle::ClaimOutcome::Claimed
+        crate::request::lifecycle::ClaimOutcome::Claimed
     );
-    let writer = crate::streaming::DefraStreamWriter::new(
+    let writer = crate::request::streaming::DefraStreamWriter::new(
         node.clone(),
         identity.did(),
         std::time::Duration::from_millis(1),
@@ -2800,14 +2800,14 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         assert!(!created.has_errors(), "{:#?}", created.errors);
         let row = node.execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-            crate::watcher::AGENT_REQUEST_FIELDS,
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
         ))
         .await;
         let row: gents_protocol::row::AgentRequestRow =
             crate::graphql::first_row(&row, "AgentRequest")
                 .unwrap()
                 .unwrap();
-        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
+        let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
             node.clone(),
             "general",
             &node_did,
@@ -2816,11 +2816,11 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         );
         assert_eq!(
             lifecycle.claim().await.unwrap(),
-            crate::lifecycle::ClaimOutcome::Claimed
+            crate::request::lifecycle::ClaimOutcome::Claimed
         );
         lifecycle
     };
-    let writer = crate::streaming::DefraStreamWriter::new(
+    let writer = crate::request::streaming::DefraStreamWriter::new(
         node.clone(),
         node_did,
         std::time::Duration::from_millis(1),

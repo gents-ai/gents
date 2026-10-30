@@ -293,7 +293,7 @@ pub(crate) async fn agent_session_list(
             if !matches_trigger(&access, &session, &filter).await? {
                 continue;
             }
-            let active = crate::interrupt::active_session_request(
+            let active = crate::request::interrupt::active_session_request(
                 node,
                 &scope.session_id,
                 &scope.node_did,

@@ -12,8 +12,8 @@ use crate::completion_factory::build_admitted_model;
 use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
 use crate::inference::admission::AdmissionRegistry;
 use crate::prompt::LayeredPromptBuilder;
+use crate::request::watcher::AgentRequest;
 use crate::tool_surface::{self, ToolRuntimeContext, ToolSurface};
-use crate::watcher::AgentRequest;
 
 #[derive(Clone)]
 pub(super) struct RuntimeContext {
@@ -223,7 +223,7 @@ impl RuntimeContext {
             self.admission_registry.clone(),
             agent_config.as_ref(),
         ));
-        let request_admission = crate::request_admission::AgentRequestAdmissionVerifier::new(
+        let request_admission = crate::request::admission::AgentRequestAdmissionVerifier::new(
             self.node.clone(),
             agent_config.node_identity().clone(),
             self.enrollment_authority.clone(),

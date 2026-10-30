@@ -5,12 +5,12 @@ use anyhow::{anyhow, Context, Result};
 use tokio::sync::{watch, OwnedRwLockReadGuard, RwLock};
 
 use crate::agent::RuntimeSnapshotObserver;
-use crate::lifecycle::{ExecutionOrigin, RequestLifecycle};
+use crate::request::lifecycle::{ExecutionOrigin, RequestLifecycle};
+use crate::request::watcher::{AgentRequest, DefraWatcher, Watcher};
 use crate::runtime_snapshot::{
     effective_agent_admission, ActiveRuntimeSnapshot, EffectiveAgentAdmission,
 };
 use crate::runtime_status::RuntimeStatusHandle;
-use crate::watcher::{AgentRequest, DefraWatcher, Watcher};
 
 use super::context::AgentResolution;
 
@@ -483,7 +483,7 @@ pub(super) async fn fail_routed_request(
             Ok(origin) => origin,
             Err(error) => {
                 let reason = format!("request admission denied: {error:#}");
-                return crate::request_admission::terminalize_pending_request_rejection(
+                return crate::request::admission::terminalize_pending_request_rejection(
                     &node,
                     &request.doc_id,
                     node_did,

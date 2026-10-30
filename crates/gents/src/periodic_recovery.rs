@@ -3,7 +3,7 @@ use defra_node::EmbeddedNode;
 
 use crate::inference::admission::{InferenceCall, InferenceCallRecoveryReport};
 use crate::inference::llm::tool::BoxFuture;
-use crate::lifecycle::{RequestLifecycle, TerminalRepairReport};
+use crate::request::lifecycle::{RequestLifecycle, TerminalRepairReport};
 use crate::tool_call_lifecycle::{
     BackgroundCompletionSideEffectReport, OrphanedBackgroundToolReport, TerminalParentToolReport,
     ToolCallLifecycle,
@@ -258,7 +258,7 @@ fn recover_task_hook_records<'a>(
     background_executions: &'a crate::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
-        crate::task_hooks::recover_task_hook_records(
+        crate::request::task_hooks::recover_task_hook_records(
             node,
             node_did,
             background_executions.task_hook_records(),

@@ -33,7 +33,7 @@ fn authorize_goal_submission_commit(
 
 fn resolve_ambiguous_goal_submission_commit(
     commit_error: anyhow::Error,
-    recovery: Result<Option<crate::lifecycle::materialize::EnqueuedAgentRequest>>,
+    recovery: Result<Option<crate::request::lifecycle::materialize::EnqueuedAgentRequest>>,
 ) -> Result<GoalBackedRequestDisposition> {
     match recovery {
         Ok(Some(_)) => Ok(GoalBackedRequestDisposition::Idempotent),
@@ -216,7 +216,7 @@ pub(crate) async fn stage_goal_backed_request_in_txn(
     objective: &str,
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<crate::lifecycle::EnqueuedAgentRequest> {
+) -> Result<crate::request::lifecycle::EnqueuedAgentRequest> {
     stage_goal_backed_request_with_identity_in_txn(
         txn,
         node_did,
@@ -237,7 +237,7 @@ pub(crate) async fn stage_goal_backed_request_with_identity_in_txn(
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
     identity: Option<&GoalCreationIdentity>,
-) -> Result<crate::lifecycle::EnqueuedAgentRequest> {
+) -> Result<crate::request::lifecycle::EnqueuedAgentRequest> {
     stage_goal_backed_request(
         txn,
         node_did,
@@ -267,7 +267,7 @@ pub(crate) async fn stage_goal_backed_request_with_identity_in_txn(
         rows.len() == 1,
         "staged goal request is missing or ambiguous"
     );
-    Ok(crate::lifecycle::EnqueuedAgentRequest {
+    Ok(crate::request::lifecycle::EnqueuedAgentRequest {
         doc_id: rows[0]["_docID"]
             .as_str()
             .context("staged goal request lacks _docID")?
@@ -285,7 +285,7 @@ pub async fn submit_goal_backed_request_local(
     objective: &str,
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<crate::lifecycle::EnqueuedAgentRequest> {
+) -> Result<crate::request::lifecycle::EnqueuedAgentRequest> {
     let staged = crate::config_client::ConfigAccess::transact_local_write(
         node,
         Some(actor),

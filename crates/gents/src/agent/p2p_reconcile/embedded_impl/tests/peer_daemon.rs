@@ -106,7 +106,7 @@ pub(super) fn behavior_daemon(
         startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
         runtime_status,
         slot_generation: 1,
-        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
+        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
             node,
             behavior.node_identity().clone(),
             authority,
@@ -117,8 +117,8 @@ pub(super) fn behavior_daemon(
 
 pub(super) async fn seed_peer_session_message(
     node: &Arc<EmbeddedNode>,
-    lifecycle: &crate::lifecycle::RequestLifecycle,
-    writer: &crate::streaming::DefraStreamWriter,
+    lifecycle: &crate::request::lifecycle::RequestLifecycle,
+    writer: &crate::request::streaming::DefraStreamWriter,
     host_did: &str,
     tool_call_id: &str,
     prompt: &str,
@@ -161,7 +161,7 @@ pub(super) async fn seed_peer_session_message(
         AwaitMode::Background,
     )
     .expect("adopt accepted agent_new");
-    let cause = crate::lifecycle::SessionMessageCause {
+    let cause = crate::request::lifecycle::SessionMessageCause {
         caller_node_did: lifecycle.request().node_did.clone(),
         caller_agent_id: lifecycle.request().agent_id.clone(),
         caller_session_id: lifecycle.request().session_id.clone(),
@@ -173,7 +173,7 @@ pub(super) async fn seed_peer_session_message(
         tool_call_doc_id: row.doc_id().unwrap().to_owned(),
         correlation: None,
     };
-    let target = crate::lifecycle::SessionMessageTarget {
+    let target = crate::request::lifecycle::SessionMessageTarget {
         node_did: host_did.to_owned(),
         agent_id: "behavior-1".to_owned(),
         session_id: uuid::Uuid::new_v4().to_string(),
@@ -201,7 +201,7 @@ pub(super) async fn seed_peer_session_message(
 pub(super) async fn load_admission_request_by_id(
     node: &EmbeddedNode,
     request_id: &str,
-) -> crate::watcher::AgentRequest {
+) -> crate::request::watcher::AgentRequest {
     let response = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID }} }}"#,
@@ -217,7 +217,7 @@ pub(super) async fn load_admission_request_by_id(
         .and_then(|row| row.get("_docID"))
         .and_then(serde_json::Value::as_str)
         .expect("child doc id");
-    crate::request_admission::load_request_for_admission_test(node, doc_id)
+    crate::request::admission::load_request_for_admission_test(node, doc_id)
         .await
         .expect("load child")
 }

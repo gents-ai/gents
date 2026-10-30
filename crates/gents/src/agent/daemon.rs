@@ -42,15 +42,15 @@ use crate::hook::FailurePolicy;
 use crate::inference::compaction::{ReductionEngine, ReductionOptions};
 use crate::inference::resolved::ResolvedAgent;
 use crate::prompt::LayeredPromptBuilder;
+use crate::request::watcher::AgentRequest;
 use crate::runtime_trace::{record_current_claim_outcome, record_current_request_outcome};
-use crate::watcher::AgentRequest;
 
 /// Task hooks and workspace write/integration effects must finish before their
 /// request terminalizes; only requests without such effects may finish inside
 /// the steering gate.
 fn permits_natural_finish(request: &AgentRequest, task_owned: bool) -> bool {
     !task_owned
-        && crate::lifecycle::queue::heads_user_turn(request)
+        && crate::request::lifecycle::queue::heads_user_turn(request)
         && (request
             .workspace_id
             .as_deref()
@@ -65,7 +65,7 @@ fn permits_natural_finish(request: &AgentRequest, task_owned: bool) -> bool {
 /// Authenticate the exact durable request immediately before claim so a stale
 /// queued snapshot never reaches provider execution.
 pub(crate) async fn verify_request_at_claim_boundary(
-    verifier: &crate::request_admission::AgentRequestAdmissionVerifier,
+    verifier: &crate::request::admission::AgentRequestAdmissionVerifier,
     node: Arc<defra_node::EmbeddedNode>,
     agent_id: &str,
     request: AgentRequest,
@@ -77,7 +77,7 @@ pub(crate) async fn verify_request_at_claim_boundary(
             record_current_claim_outcome("admission_denied");
             record_current_request_outcome("admission_denied");
             if let Err(persist_error) =
-                crate::request_admission::terminalize_pending_request_rejection(
+                crate::request::admission::terminalize_pending_request_rejection(
                     &node,
                     &request.doc_id,
                     &request.node_did,
@@ -137,7 +137,7 @@ where
     slot_generation: u64,
     operator_tool_root: Option<PathBuf>,
     approval_home: Option<PathBuf>,
-    request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
+    request_admission: crate::request::admission::AgentRequestAdmissionVerifier,
     auxiliary_tasks: auxiliary_tasks::AuxiliaryTasks,
     root_execution_guard: Option<crate::tool_surface::RootExecutionGuard>,
 }
@@ -198,5 +198,5 @@ where
     pub(super) startup_barrier: Arc<StartupBarrier>,
     pub(super) runtime_status: crate::runtime_status::RuntimeStatusHandle,
     pub(super) slot_generation: u64,
-    pub(super) request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
+    pub(super) request_admission: crate::request::admission::AgentRequestAdmissionVerifier,
 }

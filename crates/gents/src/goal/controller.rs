@@ -159,7 +159,7 @@ pub async fn claim_retry_continuation(
 
 pub(crate) async fn fence_goal_continuation_claim_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    request: &crate::watcher::AgentRequest,
+    request: &crate::request::watcher::AgentRequest,
     now: &str,
 ) -> Result<bool> {
     if request.caused_by_trigger_kind.as_deref() != Some(GOAL_TRIGGER_KIND) {

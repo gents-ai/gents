@@ -479,7 +479,7 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
         retain_fork_fixture_capture(&node, &origin_tool, "selected.rs").await;
         request_owner
             .terminalize_owned(
-                crate::lifecycle::RequestTerminalOutcome::Failed,
+                crate::request::lifecycle::RequestTerminalOutcome::Failed,
                 gents_protocol::output::TerminalOutput::Message {
                     message_doc_id: origin_tool.accepted_header_doc_id().unwrap().to_owned(),
                 },
@@ -583,7 +583,7 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
         retain_fork_fixture_capture(&node, &later_tool, "selected.rs").await;
         later_request
             .terminalize_owned(
-                crate::lifecycle::RequestTerminalOutcome::Failed,
+                crate::request::lifecycle::RequestTerminalOutcome::Failed,
                 gents_protocol::output::TerminalOutput::Message {
                     message_doc_id: later_tool.accepted_header_doc_id().unwrap().to_owned(),
                 },
@@ -845,7 +845,7 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
             "completed",
             "first retained output",
             None,
-            crate::lifecycle::RequestHopCause::Continuation,
+            crate::request::lifecycle::RequestHopCause::Continuation,
         )
         .await
         .unwrap();

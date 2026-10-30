@@ -13,7 +13,7 @@ use crate::eval::runner::embedded::home::{EmbeddedHome, RUNTIME_READY_TIMEOUT};
 use crate::eval::runner::executor::{FixtureDocument, StageSpec, TrialLocator};
 use crate::eval::OutcomeKind;
 use crate::graphql::graphql_with_transaction_retry;
-use crate::lifecycle::{
+use crate::request::lifecycle::{
     build_signed_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
 };
 use crate::ConfigAccess;

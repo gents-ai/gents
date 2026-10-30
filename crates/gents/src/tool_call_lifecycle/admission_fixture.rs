@@ -2,9 +2,9 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use defra_node::EmbeddedNode;
 
-use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
+use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+use crate::request::streaming::DefraStreamWriter;
 use crate::store::identity::NodeIdentity;
-use crate::streaming::DefraStreamWriter;
 use crate::tool_call_lifecycle::{AwaitMode, ToolCallLifecycle};
 
 pub struct PublishedAdmissionOptions {
@@ -172,7 +172,7 @@ pub(crate) async fn complete_child(
     let child_id_escaped = crate::graphql::escape_graphql_string(child_id);
     let response = node.execute(&format!(
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{child_id_escaped}" }} }}) {{ {} }} }}"#,
-        crate::watcher::AGENT_REQUEST_FIELDS,
+        crate::request::watcher::AGENT_REQUEST_FIELDS,
     )).await;
     let row: gents_protocol::row::AgentRequestRow =
         crate::graphql::first_row(&response, "AgentRequest")
@@ -210,7 +210,7 @@ pub(crate) async fn complete_child(
         .unwrap();
     let terminal = request
         .terminalize_owned(
-            crate::lifecycle::RequestTerminalOutcome::Completed,
+            crate::request::lifecycle::RequestTerminalOutcome::Completed,
             gents_protocol::output::TerminalOutput::Message {
                 message_doc_id: published.message_doc_id,
             },
@@ -218,7 +218,7 @@ pub(crate) async fn complete_child(
         )
         .await
         .unwrap();
-    assert_eq!(terminal, crate::lifecycle::TerminalizeResult::Won);
+    assert_eq!(terminal, crate::request::lifecycle::TerminalizeResult::Won);
 }
 
 pub(crate) async fn ensure_fixture_session(
@@ -272,7 +272,7 @@ pub async fn claimed_request(
     let row = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-            crate::watcher::AGENT_REQUEST_FIELDS,
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
         ))
         .await;
     let row: gents_protocol::row::AgentRequestRow = crate::graphql::first_row(&row, "AgentRequest")
@@ -368,7 +368,7 @@ pub(crate) async fn claimed_signed_request_create(
     let row = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-            crate::watcher::AGENT_REQUEST_FIELDS,
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
         ))
         .await;
     let row: gents_protocol::row::AgentRequestRow = crate::graphql::first_row(&row, "AgentRequest")
@@ -424,7 +424,7 @@ async fn claimed_paired_client_request(
     let row = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-            crate::watcher::AGENT_REQUEST_FIELDS,
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
         ))
         .await;
     let row: gents_protocol::row::AgentRequestRow = crate::graphql::first_row(&row, "AgentRequest")
@@ -633,7 +633,7 @@ pub(crate) async fn materialize_session_message(
     prompt: &str,
 ) -> anyhow::Result<crate::session_message::SessionMessageReceipt> {
     let caller = request.request();
-    let cause = crate::lifecycle::SessionMessageCause {
+    let cause = crate::request::lifecycle::SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
         caller_agent_id: caller.agent_id.clone(),
         caller_session_id: caller.session_id.clone(),
@@ -648,7 +648,7 @@ pub(crate) async fn materialize_session_message(
             .to_owned(),
         correlation: None,
     };
-    let target = crate::lifecycle::SessionMessageTarget {
+    let target = crate::request::lifecycle::SessionMessageTarget {
         node_did: target_node_did.to_owned(),
         agent_id: "general".to_owned(),
         session_id: uuid::Uuid::new_v4().to_string(),

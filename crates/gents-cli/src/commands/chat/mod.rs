@@ -157,7 +157,7 @@ async fn submit_chat_turn_with_goal(
     verbose: bool,
 ) -> Result<RequestOutputEnvelope> {
     let existing_tool_calls = load_existing_tool_call_keys(graphql, session_id).await?;
-    let input = gents::lifecycle::prepare_user_message_input(
+    let input = gents::request::lifecycle::prepare_user_message_input(
         &gents::ConfigAccess::Graphql(graphql.clone()),
         node_did,
         session_id,
@@ -221,7 +221,7 @@ async fn submit_chat_turn_json(
     timeout_secs: u64,
     poll_secs: u64,
 ) -> Result<Value> {
-    let input = gents::lifecycle::prepare_user_message_input(
+    let input = gents::request::lifecycle::prepare_user_message_input(
         &gents::ConfigAccess::Graphql(graphql.clone()),
         node_did,
         session_id,

@@ -427,7 +427,7 @@ fn queued_and_folded_observations_retain_the_active_owners_trigger() {
             observed.lifecycle_state = Some(RequestLifecycleState::Superseded);
             observed.superseded_by_request = Some("owner".into());
             observed.superseded_by_request_doc_id = Some("doc-owner".into());
-            observed.failure_reason = Some(gents::lifecycle::FOLDED_REASON.into());
+            observed.failure_reason = Some(gents::request::lifecycle::FOLDED_REASON.into());
         }
         let mut header = session();
         header.observation = Some(SessionObservation {

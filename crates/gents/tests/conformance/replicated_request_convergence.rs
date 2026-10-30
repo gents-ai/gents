@@ -148,7 +148,7 @@ async fn create_owned_request_with_times_and_requester(
                 {execution_fields}
             }}) {{ _docID }}
         }}"#,
-        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = node.execute(&mutation).await;
     assert!(
@@ -219,7 +219,7 @@ async fn create_queue_request(
                 request_hop: 0
             }}) {{ _docID }}
         }}"#,
-        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = node.execute(&mutation).await;
     assert!(

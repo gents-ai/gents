@@ -42,12 +42,12 @@ use crate::hook::persistence::{
     count_live_backgrounded_rows_in, MAX_BACKGROUNDED_TOOLS_PER_PARENT,
 };
 use crate::hook::DefraSessionHook;
-use crate::lifecycle::SessionMessageCause;
 use crate::plugin::data::DataCaller;
 use crate::plugin::data::StampContext;
 use crate::plugin::job_calls::JobCaller;
 use crate::plugin::store::InstalledPlugin;
 use crate::plugin::PluginVerdict;
+use crate::request::lifecycle::SessionMessageCause;
 use crate::tool_call_lifecycle::delivery::PluginToolWrites;
 use crate::tool_call_lifecycle::plugin_receipt::decide;
 use crate::tool_call_lifecycle::PluginJobTerminal;
@@ -190,7 +190,7 @@ pub async fn run_step0(
     }
     let row = read_step_row(&access, &row_doc_id).await?;
     let max_hop =
-        crate::request_admission::max_request_hop(runtime.node.as_ref(), &caller.node_did).await?;
+        crate::request::admission::max_request_hop(runtime.node.as_ref(), &caller.node_did).await?;
     let mut ctx = step0_context(runtime, binding, &installed, &input, lifecycle, max_hop)?;
     ctx.control_targets = control_targets(&access, coordinate, &output).await?;
     if let Err(refusal) = admit_step(&ctx, &row, &output) {

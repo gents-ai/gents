@@ -281,7 +281,7 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
 
                 let completion = lifecycle
                     .terminalize_owned(
-                        crate::lifecycle::RequestTerminalOutcome::Completed,
+                        crate::request::lifecycle::RequestTerminalOutcome::Completed,
                         writer.terminal_output(&lifecycle.request().doc_id).await,
                         None,
                     )
@@ -1001,12 +1001,12 @@ async fn completed_terminalization_scans_request_output_once_for_many_tools() {
     assert_eq!(collected.tool_results.len(), TOOL_TURNS);
     let selection = writer.terminal_output(&lifecycle.request().doc_id).await;
     let (result, scans) = crate::session::count_request_output_scans(lifecycle.terminalize_owned(
-        crate::lifecycle::RequestTerminalOutcome::Completed,
+        crate::request::lifecycle::RequestTerminalOutcome::Completed,
         selection,
         None,
     ))
     .await;
-    assert_eq!(result.unwrap(), crate::lifecycle::TerminalizeResult::Won);
+    assert_eq!(result.unwrap(), crate::request::lifecycle::TerminalizeResult::Won);
     assert_eq!(scans, 1, "request output scanned once per accepted tool");
     node.shutdown().await;
 }
@@ -1125,17 +1125,17 @@ async fn terminalization_with_principal_output(
     }
     let selection = writer.terminal_output(&request_doc_id).await;
     let started = std::time::Instant::now();
-    let result = crate::lifecycle::terminalize_owned_at(
+    let result = crate::request::lifecycle::terminalize_owned_at(
         &node,
         &request_doc_id,
         &generation,
-        crate::lifecycle::RequestTerminalOutcome::Completed,
+        crate::request::lifecycle::RequestTerminalOutcome::Completed,
         selection,
         finished_at,
     )
     .await;
     let elapsed = started.elapsed();
-    assert_eq!(result.unwrap(), crate::lifecycle::TerminalizeResult::Won);
+    assert_eq!(result.unwrap(), crate::request::lifecycle::TerminalizeResult::Won);
     drop(lifecycle);
     eprintln!(
         "terminalization turns={turns} bytes={output_bytes} noise={noise} segments={} messages={} terminalize_ms={}",

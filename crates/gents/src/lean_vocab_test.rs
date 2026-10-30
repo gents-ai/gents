@@ -8,7 +8,7 @@ pub(crate) async fn native_queue_image(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     node_did: &str,
     session_id: &str,
-    selection: &[crate::lifecycle::queue::FoldedInput],
+    selection: &[crate::request::lifecycle::queue::FoldedInput],
 ) -> QueueImage {
     use gents_protocol::request_lifecycle::RequestLifecycleState;
     #[derive(serde::Deserialize)]
@@ -45,14 +45,15 @@ pub(crate) async fn native_queue_image(
         .map(|folded| folded.request_id.clone())
         .filter(|id| state(id) == Some(RequestLifecycleState::Pending))
         .collect::<Vec<_>>();
-    let pending = crate::lifecycle::pending_user_queue(&access, node_did, session_id, node_did)
-        .await
-        .unwrap()
-        .entries
-        .into_iter()
-        .map(|entry| entry.request_id)
-        .filter(|id| !folding.contains(id))
-        .collect::<Vec<_>>();
+    let pending =
+        crate::request::lifecycle::pending_user_queue(&access, node_did, session_id, node_did)
+            .await
+            .unwrap()
+            .entries
+            .into_iter()
+            .map(|entry| entry.request_id)
+            .filter(|id| !folding.contains(id))
+            .collect::<Vec<_>>();
     let terminal = rows
         .iter()
         .filter(|row| row.lifecycle_state.is_terminal())
@@ -99,8 +100,8 @@ mod task_hook_vocab {
     }
 
     impl LeanCommandResult {
-        pub(crate) fn to_native(&self) -> crate::task_hooks::HookCommandResult {
-            use crate::task_hooks::HookCommandResult;
+        pub(crate) fn to_native(&self) -> crate::request::task_hooks::HookCommandResult {
+            use crate::request::task_hooks::HookCommandResult;
             match self {
                 Self::Exited { code } => HookCommandResult::Exited { code: Some(*code) },
                 Self::LaunchFailed => HookCommandResult::LaunchFailed,

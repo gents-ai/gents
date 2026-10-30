@@ -237,7 +237,7 @@ pub(crate) async fn load_session_goal_usage(
     let response = txn.execute(&format!(
         r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}, purpose: {{ _in: ["normal", "access-review"] }} }}) {{ {} }} }}"#,
         escape_graphql_string(node_did), escape_graphql_string(session_id),
-        crate::request_admission::SIGNED_REQUEST_RECEIPT_FIELDS,
+        crate::request::admission::SIGNED_REQUEST_RECEIPT_FIELDS,
     )).await?;
     let requests: Vec<AgentRequestRow> = serde_json::from_value(
         response
@@ -264,7 +264,7 @@ pub(crate) async fn load_session_goal_usage(
             let parent = by_doc
                 .get(parent_doc)
                 .context("goal review has no same-session parent")?;
-            crate::request_admission::verify_historical_auxiliary_receipt(request, parent)?;
+            crate::request::admission::verify_historical_auxiliary_receipt(request, parent)?;
         }
         request_ids.insert(
             nonempty(request.doc_id.as_deref(), "goal physical request")?.to_owned(),
@@ -311,7 +311,7 @@ pub async fn load_parent_inclusive_audit_usage(
 
 pub(crate) async fn load_parent_inclusive_budget_usage(
     node: &EmbeddedNode,
-    request: &crate::watcher::AgentRequest,
+    request: &crate::request::watcher::AgentRequest,
 ) -> Result<u64> {
     let scope = AgentRequestRow {
         doc_id: Some(request.doc_id.clone()),
@@ -343,7 +343,7 @@ async fn load_parent_catalog(
         node,
         &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{parent_doc}" }} }}, limit: 2) {{ {} }} }}"#,
-            crate::request_admission::SIGNED_REQUEST_FIELDS
+            crate::request::admission::SIGNED_REQUEST_FIELDS
         ),
         "load audit usage parent receipt",
     )
@@ -364,13 +364,13 @@ async fn load_parent_catalog(
             && parent.purpose == Some(RequestPurpose::Normal),
         "audit usage parent crossed its exact normal request scope"
     );
-    crate::request_admission::verify_request_receipt_signature(parent)?;
+    crate::request::admission::verify_request_receipt_signature(parent)?;
 
     let response = graphql_with_transaction_retry(
         node,
         &format!(
             r#"{{ AgentRequest(filter: {{ caused_by_parent_request_doc_id: {{ _eq: "{parent_doc}" }}, purpose: {{ _in: ["title-audit", "access-review"] }} }}) {{ {} }} }}"#,
-            crate::request_admission::SIGNED_REQUEST_FIELDS
+            crate::request::admission::SIGNED_REQUEST_FIELDS
         ),
         "load auxiliary audit usage receipts",
     )
@@ -379,7 +379,7 @@ async fn load_parent_catalog(
     let mut request_ids = BTreeMap::new();
     request_ids.insert(parent_doc_id.to_owned(), parent_id.to_owned());
     for request in &auxiliaries {
-        crate::request_admission::verify_historical_auxiliary_receipt(request, parent)?;
+        crate::request::admission::verify_historical_auxiliary_receipt(request, parent)?;
         let request_doc = nonempty(request.doc_id.as_deref(), "auxiliary physical request")?;
         anyhow::ensure!(
             request_ids

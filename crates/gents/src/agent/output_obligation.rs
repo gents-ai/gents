@@ -72,7 +72,7 @@ impl OutputObligationGate {
 
     pub(crate) async fn for_request(
         node: Arc<EmbeddedNode>,
-        request: &crate::watcher::AgentRequest,
+        request: &crate::request::watcher::AgentRequest,
         configured: &[(String, crate::documents::WriteToolOutputObligation)],
     ) -> Result<Option<Self>> {
         if configured.is_empty() {
@@ -86,7 +86,7 @@ impl OutputObligationGate {
                     session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                 escape_graphql_string(&request.node_did),
                 escape_graphql_string(&request.session_id),
-                crate::request_admission::SIGNED_REQUEST_FIELDS,
+                crate::request::admission::SIGNED_REQUEST_FIELDS,
             );
             let response = graphql_with_transaction_retry(
                 &node,
@@ -108,7 +108,7 @@ impl OutputObligationGate {
                 &request.doc_id,
                 &rows,
             )?;
-            triggered = crate::watcher::AgentRequest::try_from(members.entry.clone())?
+            triggered = crate::request::watcher::AgentRequest::try_from(members.entry.clone())?
                 .has_automated_trigger_lineage();
             request_doc_ids = members.member_doc_ids;
         }
@@ -172,7 +172,7 @@ impl OutputObligationGate {
                 "completed output write lacks exact request membership"
             );
             if !requests.contains_key(&row.request_doc_id) {
-                let request = crate::request_binding::load_agent_request_by_doc_id(
+                let request = crate::request::binding::load_agent_request_by_doc_id(
                     &self.node,
                     &row.request_doc_id,
                 )

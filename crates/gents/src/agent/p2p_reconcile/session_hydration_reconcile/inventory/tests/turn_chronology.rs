@@ -1,5 +1,7 @@
 use super::*;
-use crate::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
+use crate::request::lifecycle::{
+    ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
+};
 use crate::store::identity::NodeIdentity;
 use crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request;
 use gents_protocol::output::TerminalOutput;
@@ -34,7 +36,7 @@ async fn pending_request(
     .await
     .unwrap();
     let doc_id = crate::graphql::created_doc_id(&created, "AgentRequest").unwrap();
-    let request = crate::request_admission::load_request_for_admission_test(node, &doc_id)
+    let request = crate::request::admission::load_request_for_admission_test(node, &doc_id)
         .await
         .unwrap();
     RequestLifecycle::new_with_node_did(node.clone(), "general", signer.did(), request, 60)
@@ -45,7 +47,7 @@ async fn finish_request(
     request: &mut RequestLifecycle,
     outcome: RequestTerminalOutcome,
 ) {
-    let writer = crate::streaming::DefraStreamWriter::new(
+    let writer = crate::request::streaming::DefraStreamWriter::new(
         node.clone(),
         &request.request().node_did,
         std::time::Duration::ZERO,
@@ -123,7 +125,7 @@ async fn check_turn_chronology(retry: bool) {
     let mut queued = if retry {
         None
     } else {
-        create.input = crate::lifecycle::queue::prepare_user_message_input(
+        create.input = crate::request::lifecycle::queue::prepare_user_message_input(
             &ConfigAccess::local(node.clone()),
             &fixture.node_did,
             &original.session_id,

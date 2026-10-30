@@ -76,7 +76,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
     let rows = access
         .execute(&format!(
             "{{AgentRequest {{{}}}}}",
-            crate::request_admission::SIGNED_REQUEST_FIELDS
+            crate::request::admission::SIGNED_REQUEST_FIELDS
         ))
         .await
         .unwrap();
@@ -104,7 +104,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
                     &request.agent_id,
                     request.requester_did.as_deref(),
                     None,
-                    crate::lifecycle::materialize::created_session_provenance(&request),
+                    crate::request::lifecycle::materialize::created_session_provenance(&request),
                     &request.created_at,
                 )
                 .await
@@ -245,7 +245,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
                     &request.agent_id,
                     Some("did:wrong:requester"),
                     None,
-                    crate::lifecycle::materialize::created_session_provenance(&request),
+                    crate::request::lifecycle::materialize::created_session_provenance(&request),
                     &request.created_at,
                 )
                 .await
@@ -296,13 +296,13 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
     let forged_rows = access
         .execute(&format!(
         "{{AgentRequest(filter: {{request_id: {{_eq: \"forged-authority-request\"}}}}) {{{}}}}}",
-        crate::request_admission::SIGNED_REQUEST_FIELDS,
+        crate::request::admission::SIGNED_REQUEST_FIELDS,
     ))
         .await
         .unwrap();
     let forged_row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(forged_rows["data"]["AgentRequest"][0].clone()).unwrap();
-    assert!(crate::request_admission::verify_request_receipt_signature(&forged_row).is_err());
+    assert!(crate::request::admission::verify_request_receipt_signature(&forged_row).is_err());
     let forged_request = crate::AgentRequest::try_from(forged_row).unwrap();
     let forged_scope = crate::session_origin::SessionScope::of_request(&forged_request);
     access.write("test.forged_fire", &format!(
@@ -689,7 +689,7 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
     assert_eq!(publish().await.unwrap(), prepared.receipt.request_id);
     let query = format!(
         "{{AgentRequest {{{}}} TriggerFire {{_docID goal_id request_id}}}}",
-        crate::request_admission::SIGNED_REQUEST_FIELDS
+        crate::request::admission::SIGNED_REQUEST_FIELDS
     );
     let admitted = access.execute(&query).await.unwrap();
     let existing_scope = crate::session_origin::SessionScope {
@@ -1511,7 +1511,7 @@ async fn claimed_trigger_request(
     node: &Arc<defra_node::EmbeddedNode>,
     request_id: &str,
     node_did: &str,
-) -> crate::lifecycle::RequestLifecycle {
+) -> crate::request::lifecycle::RequestLifecycle {
     create_request(
         node,
         request_id,
@@ -1526,7 +1526,7 @@ async fn claimed_trigger_request(
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
             escape_graphql_string(request_id),
-            crate::watcher::AGENT_REQUEST_FIELDS,
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
         ))
         .await;
     assert!(!result.has_errors(), "{:?}", result.errors);
@@ -1534,7 +1534,7 @@ async fn claimed_trigger_request(
         crate::graphql::first_row(&result, "AgentRequest")
             .unwrap()
             .unwrap();
-    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
+    let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
         node_did,
@@ -1543,7 +1543,7 @@ async fn claimed_trigger_request(
     );
     assert_eq!(
         lifecycle.claim().await.unwrap(),
-        crate::lifecycle::ClaimOutcome::Claimed
+        crate::request::lifecycle::ClaimOutcome::Claimed
     );
     lifecycle
 }
@@ -1612,7 +1612,7 @@ async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically
     for state in ["claimed", "processing"] {
         let request_id = format!("live-{state}");
         let mut lifecycle = claimed_trigger_request(&node, &request_id, node_did).await;
-        let writer = crate::streaming::DefraStreamWriter::new(
+        let writer = crate::request::streaming::DefraStreamWriter::new(
             node.clone(),
             node_did,
             std::time::Duration::ZERO,
@@ -1932,7 +1932,7 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
                 &node,
                 &format!(
                     "{{ AgentRequest {{ {} }} }}",
-                    crate::watcher::AGENT_REQUEST_FIELDS
+                    crate::request::watcher::AGENT_REQUEST_FIELDS
                 ),
                 "test.scheduled_claim_rows",
             )
@@ -1951,14 +1951,14 @@ async fn scheduled_target_admission_is_atomic_and_recovers_same_occurrence() {
                     .find(|row| row.request_id == request_id)
                     .unwrap()
                     .clone();
-                let request = crate::watcher::AgentRequest::try_from(row).unwrap();
+                let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
                 let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
                     node.clone(),
                     "general",
                     &owner,
                     request,
                     60,
-                    crate::lifecycle::ExecutionOrigin::Scheduled,
+                    crate::request::lifecycle::ExecutionOrigin::Scheduled,
                     "test-backend",
                 );
                 let now = chrono::Utc::now();

@@ -5,7 +5,7 @@ use crate::config_client::{
 };
 use crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 use crate::inference::auth::credential::{preset_account_backend, store_sign_in};
-use crate::request_admission::verify_runtime_local_control_receipt;
+use crate::request::admission::verify_runtime_local_control_receipt;
 use crate::store::identity::KeyIdentity;
 use crate::Collection;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
@@ -28,7 +28,7 @@ pub(crate) struct Fixture {
     pub node: Arc<EmbeddedNode>,
     pub identity: Arc<KeyIdentity>,
     pub goal: GoalDocument,
-    pub parent: crate::watcher::AgentRequest,
+    pub parent: crate::request::watcher::AgentRequest,
     _temp: tempfile::TempDir,
 }
 impl Fixture {
@@ -110,7 +110,7 @@ impl Fixture {
             execute(&node, &format!(r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{PARENT}" }} }}, input: {{ lifecycle_state: "completed" }}) {{ _docID }} }}"#)).await;
         }
         let rows = request_rows(&node).await;
-        let parent = crate::watcher::AgentRequest::try_from(
+        let parent = crate::request::watcher::AgentRequest::try_from(
             rows.into_iter().find(|r| r.request_id == PARENT).unwrap(),
         )
         .unwrap();

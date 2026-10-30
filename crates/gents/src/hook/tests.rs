@@ -54,8 +54,8 @@ mod r4c_read_tool_output;
 mod plugin_job_dispatch;
 
 struct HookExecutionFixture {
-    lifecycle: crate::lifecycle::RequestLifecycle,
-    writer: crate::streaming::DefraStreamWriter,
+    lifecycle: crate::request::lifecycle::RequestLifecycle,
+    writer: crate::request::streaming::DefraStreamWriter,
     turn: usize,
 }
 
@@ -636,11 +636,11 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                 .terminal_output(&fixture.lifecycle.request().doc_id)
                 .await;
             let outcome = match case.parent_outcome.as_str() {
-                "failed" => crate::lifecycle::RequestTerminalOutcome::Failed,
+                "failed" => crate::request::lifecycle::RequestTerminalOutcome::Failed,
                 other => panic!("unsupported modeled parent outcome {other}"),
             };
             let completion_outcome = match case.completion_probe_outcome.as_str() {
-                "completed" => crate::lifecycle::RequestTerminalOutcome::Completed,
+                "completed" => crate::request::lifecycle::RequestTerminalOutcome::Completed,
                 other => panic!("unsupported modeled completion probe {other}"),
             };
             assert!(
@@ -664,8 +664,8 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
             assert_eq!(completion.is_ok(), case.completion_probe_accepted);
             let native_in_flight = completion.as_ref().err().is_some_and(|rejection| {
                 matches!(
-                    rejection.downcast_ref::<crate::lifecycle::ToolAccountingRejection>(),
-                    Some(crate::lifecycle::ToolAccountingRejection::ForegroundRunning)
+                    rejection.downcast_ref::<crate::request::lifecycle::ToolAccountingRejection>(),
+                    Some(crate::request::lifecycle::ToolAccountingRejection::ForegroundRunning)
                 )
             });
             assert_eq!(
@@ -685,7 +685,10 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                 .terminalize_owned(outcome, selection, Some("dispatch observation failed"))
                 .await
                 .unwrap();
-            assert_eq!(terminalized, crate::lifecycle::TerminalizeResult::Won);
+            assert_eq!(
+                terminalized,
+                crate::request::lifecycle::TerminalizeResult::Won
+            );
             let document =
                 crate::graphql::escape_graphql_string(&fixture.lifecycle.request().doc_id);
             let observed = crate::ConfigAccess::local(node.clone()).execute(&format!(
@@ -984,7 +987,7 @@ async fn create_interruptible_request_with_fields(
                 max_retries: {max_retries}
             }}) {{ _docID }}
         }}"#,
-        max_retries = crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = crate::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = node.execute(&mutation).await;
     assert!(
@@ -1094,14 +1097,14 @@ async fn bind_interruptible_request_with_requester(
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
             crate::graphql::escape_graphql_string(&doc_id),
-            crate::watcher::AGENT_REQUEST_FIELDS
+            crate::request::watcher::AGENT_REQUEST_FIELDS
         ))
         .await;
     let row: gents_protocol::row::AgentRequestRow =
         crate::graphql::first_row(&loaded, "AgentRequest")
             .unwrap()
             .unwrap();
-    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
+    let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         hook.node.clone(),
         "general",
         &hook.node_did,
@@ -1110,7 +1113,7 @@ async fn bind_interruptible_request_with_requester(
     );
     assert_eq!(
         lifecycle.claim().await.unwrap(),
-        crate::lifecycle::ClaimOutcome::Claimed
+        crate::request::lifecycle::ClaimOutcome::Claimed
     );
     bind_claimed_hook_request(hook, lifecycle, deadline_at).await;
 }
@@ -1137,12 +1140,12 @@ async fn bind_signed_hook_request(
 
 async fn bind_claimed_hook_request(
     hook: &DefraSessionHook,
-    mut lifecycle: crate::lifecycle::RequestLifecycle,
+    mut lifecycle: crate::request::lifecycle::RequestLifecycle,
     deadline_at: chrono::DateTime<chrono::Utc>,
 ) {
     let request_id = lifecycle.request().request_id.clone();
     let requester_did = lifecycle.request().requester_did.clone();
-    let writer = crate::streaming::DefraStreamWriter::new(
+    let writer = crate::request::streaming::DefraStreamWriter::new(
         hook.node.clone(),
         &hook.node_did,
         std::time::Duration::ZERO,
@@ -2923,7 +2926,7 @@ async fn interrupt_cancels_native_tools_and_keeps_children_running() {
     assert_eq!(bridge_row["await_mode"], "background");
     assert!(bridge_row["cancel_cause"].is_null());
     assert!(
-        crate::interrupt::fetch_interrupt_requested_at(&node, child_request_id)
+        crate::request::interrupt::fetch_interrupt_requested_at(&node, child_request_id)
             .await
             .unwrap()
             .is_none(),

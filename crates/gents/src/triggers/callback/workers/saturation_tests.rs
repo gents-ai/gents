@@ -20,7 +20,7 @@ use crate::plugin::tests::executor::{asking_plugin_wat, installed_plugin};
 use crate::triggers::callback::documents::{load_callback, load_invocation, CallbackInvocationDoc};
 use crate::UpdateSubscriptionSource;
 
-const OWNER: &str = crate::lifecycle::test_support::PIN_FIXED_DID;
+const OWNER: &str = crate::request::lifecycle::test_support::PIN_FIXED_DID;
 const CALLBACK: &str = "saturation";
 const WAIT: Duration = Duration::from_secs(10);
 const SCENARIO_LIMIT: Duration = Duration::from_secs(20);
@@ -195,7 +195,8 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
         &asking_plugin_wat("http_calls", "http_results", &canned, false),
         None,
     );
-    let _identity = crate::lifecycle::test_support::pin_fixed_signing_identity(home.path());
+    let _identity =
+        crate::request::lifecycle::test_support::pin_fixed_signing_identity(home.path());
     plugin.declaration.manifold = Some(json!({
         "fs": "None", "net": {"OutboundHttp": [format!("http://{address}")]},
         "env": "None", "crypto": false, "child_process": false

@@ -186,7 +186,7 @@ pub struct BackgroundExecutionRegistry {
     failed_jobs: Arc<
         std::sync::Mutex<RapidHashMap<String, (String, Arc<crate::managed_exec::FailedJobOwner>)>>,
     >,
-    task_hook_records: crate::task_hooks::TaskHookRecordStore,
+    task_hook_records: crate::request::task_hooks::TaskHookRecordStore,
     service_admission: crate::runtime_service::RuntimeServiceAdmission,
     #[cfg(test)]
     stop_release_observer: Option<Arc<tokio::sync::Notify>>,
@@ -214,11 +214,11 @@ impl BackgroundExecutionRegistry {
     }
 
     pub fn with_task_hook_records(mut self, dir: PathBuf) -> Self {
-        self.task_hook_records = crate::task_hooks::TaskHookRecordStore::durable(dir);
+        self.task_hook_records = crate::request::task_hooks::TaskHookRecordStore::durable(dir);
         self
     }
 
-    pub(crate) fn task_hook_records(&self) -> &crate::task_hooks::TaskHookRecordStore {
+    pub(crate) fn task_hook_records(&self) -> &crate::request::task_hooks::TaskHookRecordStore {
         &self.task_hook_records
     }
 
@@ -986,7 +986,7 @@ impl BackgroundExecutionRegistry {
                         status,
                         &output,
                         reason,
-                        crate::lifecycle::RequestHopCause::Continuation,
+                        crate::request::lifecycle::RequestHopCause::Continuation,
                     )
                     .await
                 }
@@ -1238,7 +1238,8 @@ pub struct DefraSessionHook {
     foreground_process_evidence: Arc<
         Mutex<RapidHashMap<String, Arc<crate::managed_exec::ownership::LiveProcessEvidenceOwner>>>,
     >,
-    accepted_tool_calls: Arc<Mutex<RapidHashMap<String, crate::streaming::AcceptedToolCall>>>,
+    accepted_tool_calls:
+        Arc<Mutex<RapidHashMap<String, crate::request::streaming::AcceptedToolCall>>>,
     effect_tool_calls: Arc<Mutex<RapidHashMap<String, (ToolCallLifecycle, String)>>>,
     effect_lifecycles: Arc<Mutex<RapidHashMap<String, ToolCallLifecycle>>>,
     background_tool_registry: BackgroundToolRegistry,
@@ -1258,8 +1259,8 @@ pub struct DefraSessionHook {
 }
 
 struct SteeringInputSource {
-    request: crate::watcher::AgentRequest,
-    verifier: crate::request_admission::AgentRequestAdmissionVerifier,
+    request: crate::request::watcher::AgentRequest,
+    verifier: crate::request::admission::AgentRequestAdmissionVerifier,
     natural_finish_allowed: bool,
 }
 
@@ -1279,8 +1280,8 @@ impl DefraSessionHook {
 
     pub(crate) fn with_steering_inputs(
         mut self,
-        request: crate::watcher::AgentRequest,
-        verifier: crate::request_admission::AgentRequestAdmissionVerifier,
+        request: crate::request::watcher::AgentRequest,
+        verifier: crate::request::admission::AgentRequestAdmissionVerifier,
         natural_finish_allowed: bool,
     ) -> Self {
         self.steering_input_source = Some(Arc::new(SteeringInputSource {
@@ -1292,7 +1293,7 @@ impl DefraSessionHook {
     }
     pub(crate) async fn adopt_accepted_tool_calls(
         &self,
-        calls: Vec<(String, crate::streaming::AcceptedToolCall)>,
+        calls: Vec<(String, crate::request::streaming::AcceptedToolCall)>,
     ) -> anyhow::Result<()> {
         let mut pending = self.accepted_tool_calls.lock().await;
         for (internal_id, call) in calls {
@@ -1654,7 +1655,7 @@ impl DefraSessionHook {
     }
 
     async fn request_doc_id_for_request(&self, request_id: &str) -> anyhow::Result<Option<String>> {
-        crate::request_binding::resolve_request_doc_id(self.node.as_ref(), request_id).await
+        crate::request::binding::resolve_request_doc_id(self.node.as_ref(), request_id).await
     }
 
     pub(crate) async fn register_stream_tool_call_identity(
@@ -1972,7 +1973,7 @@ impl DefraSessionHook {
 impl DefraSessionHook {
     async fn ensure_steering_before_deadline(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
-            crate::lifecycle::RequestLifecycle::input_publication_before_deadline(
+            crate::request::lifecycle::RequestLifecycle::input_publication_before_deadline(
                 Utc::now(),
                 self.state.lock().await.request_deadline_at,
             ),
@@ -1983,12 +1984,12 @@ impl DefraSessionHook {
 }
 
 #[async_trait::async_trait]
-impl gents_loop::session_hook::CanonicalSessionHook<crate::streaming::AcceptedToolCall>
+impl gents_loop::session_hook::CanonicalSessionHook<crate::request::streaming::AcceptedToolCall>
     for DefraSessionHook
 {
     async fn adopt_accepted_tool_calls(
         &self,
-        calls: Vec<(String, crate::streaming::AcceptedToolCall)>,
+        calls: Vec<(String, crate::request::streaming::AcceptedToolCall)>,
     ) -> Result<(), Self::Error> {
         Ok(DefraSessionHook::adopt_accepted_tool_calls(self, calls).await?)
     }
@@ -2153,10 +2154,12 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
             return Ok(Vec::new());
         };
         self.ensure_steering_before_deadline().await?;
-        Ok(
-            crate::lifecycle::queue::steering_inputs(&self.node, &source.request, &source.verifier)
-                .await?,
+        Ok(crate::request::lifecycle::queue::steering_inputs(
+            &self.node,
+            &source.request,
+            &source.verifier,
         )
+        .await?)
     }
 
     async fn finish_steering_snapshot(
@@ -2171,7 +2174,7 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         };
         self.ensure_steering_before_deadline().await?;
         Ok(Some(
-            crate::lifecycle::queue::steering_snapshot(
+            crate::request::lifecycle::queue::steering_snapshot(
                 &self.node,
                 &source.request,
                 &source.verifier,

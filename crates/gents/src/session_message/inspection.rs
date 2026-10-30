@@ -404,7 +404,7 @@ pub(crate) async fn agent_session_read(
     // Captured before the first contributing lookup (active_session_request).
     let observation_started_at =
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let active = crate::interrupt::active_session_request(
+    let active = crate::request::interrupt::active_session_request(
         node,
         &target.session_id,
         &target.node_did,
@@ -653,7 +653,7 @@ mod tests {
         );
         assert!(!status.to_string().contains("private tool arguments"));
         tool.complete(&"界".repeat(1000)).await.unwrap();
-        let writer = crate::streaming::DefraStreamWriter::new(
+        let writer = crate::request::streaming::DefraStreamWriter::new(
             node.clone(),
             identity.did(),
             std::time::Duration::ZERO,
@@ -686,7 +686,7 @@ mod tests {
             .unwrap();
         worker
             .terminalize_owned(
-                crate::lifecycle::RequestTerminalOutcome::Completed,
+                crate::request::lifecycle::RequestTerminalOutcome::Completed,
                 gents_protocol::output::TerminalOutput::Message {
                     message_doc_id: published.message_doc_id,
                 },

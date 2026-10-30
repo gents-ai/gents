@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use crate::agent::completion_retry::CompletionRetryProfileFields;
 use crate::inference::resolved::SamplingConfig;
+use crate::request::watcher::AgentRequest;
 use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
 use crate::tool_surface::AgentToolSurfaceConfig;
-use crate::watcher::AgentRequest;
 
 fn request() -> AgentRequest {
     AgentRequest {
@@ -711,22 +711,22 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
             .await
             .unwrap();
         let doc_id = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
-        let parent = crate::request_admission::load_request_for_admission_test(&node, &doc_id)
+        let parent = crate::request::admission::load_request_for_admission_test(&node, &doc_id)
             .await
             .unwrap();
-        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_execution_binding(
+        let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
             node.clone(),
             &agent.agent_id,
             agent.node_did(),
             parent,
             120,
-            crate::lifecycle::ExecutionOrigin::Interactive,
+            crate::request::lifecycle::ExecutionOrigin::Interactive,
             agent.backend_id.clone().unwrap(),
         );
         lifecycle.set_configured_max_total_tokens(case.pinned_limit.filter(|limit| *limit != 0));
         assert_eq!(
             lifecycle.claim_with_identity().await.unwrap(),
-            crate::lifecycle::ClaimOutcome::Claimed
+            crate::request::lifecycle::ClaimOutcome::Claimed
         );
         let mut request = lifecycle.request().clone();
         if case.pinned_limit == Some(0) {
@@ -739,7 +739,7 @@ async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
                 .await
                 .unwrap();
             request =
-                crate::request_admission::load_request_for_admission_test(&node, &request.doc_id)
+                crate::request::admission::load_request_for_admission_test(&node, &request.doc_id)
                     .await
                     .unwrap();
         }

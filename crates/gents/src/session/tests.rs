@@ -1299,7 +1299,7 @@ async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
     ensure_runtime_schemas(&node).await.unwrap();
     for (owner, text) in [("did:key:owner", "local"), ("did:key:other", "foreign")] {
         let mut lifecycle = claimed_authored_request(&node, owner, owner, "same").await;
-        let writer = crate::streaming::DefraStreamWriter::new(
+        let writer = crate::request::streaming::DefraStreamWriter::new(
             node.clone(),
             owner,
             std::time::Duration::ZERO,
@@ -1335,7 +1335,7 @@ async fn authored_keys_are_immutable_and_sequences_are_node_scoped() {
         );
         lifecycle
             .terminalize_owned(
-                crate::lifecycle::RequestTerminalOutcome::Completed,
+                crate::request::lifecycle::RequestTerminalOutcome::Completed,
                 gents_protocol::output::TerminalOutput::NoMessage,
                 None,
             )
@@ -1402,8 +1402,8 @@ async fn claimed_authored_request(
     request_id: &str,
     node_did: &str,
     session_id: &str,
-) -> crate::lifecycle::RequestLifecycle {
-    use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
+) -> crate::request::lifecycle::RequestLifecycle {
+    use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
     let request_id = crate::graphql::escape_graphql_string(request_id);
     let escaped_agent = crate::graphql::escape_graphql_string(node_did);
     let session_id = crate::graphql::escape_graphql_string(session_id);
@@ -1422,7 +1422,7 @@ async fn claimed_authored_request(
     let response = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{request_id}"}}}}) {{ {} }} }}"#,
-            crate::watcher::AGENT_REQUEST_FIELDS,
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
         ))
         .await;
     let request: gents_protocol::row::AgentRequestRow =
@@ -1442,7 +1442,7 @@ async fn claimed_authored_request(
 
 #[tokio::test]
 async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates() {
-    use crate::streaming::DefraStreamWriter;
+    use crate::request::streaming::DefraStreamWriter;
     use std::{sync::Arc, time::Duration};
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
@@ -1653,7 +1653,7 @@ async fn retry_frontier_matches_lean_admission() {
             agent_id: "general", session_id: "{session}", content: "Do the work",
             lifecycle_state: "{state}", failure_reason:"Stale", execution_origin: "interactive", created_at: "2026-10-07T00:00:00Z"
         }}) {{ _docID }} }}"#), "create_AgentRequest").await;
-        let mut request = crate::watcher::AgentRequest::try_from(
+        let mut request = crate::request::watcher::AgentRequest::try_from(
             serde_json::from_value::<gents_protocol::row::AgentRequestRow>(serde_json::json!({
                 "_docID":"successor", "request_id":"successor", "purpose":"normal",
                 "node_did":"did:test:test", "session_id":session_id, "agent_id":"general",

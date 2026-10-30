@@ -2168,9 +2168,21 @@ async fn any_newer_active_request_blocks_goal_continuation_for_the_whole_session
 #[tokio::test]
 async fn retired_queued_inputs_do_not_pause_completed_goal_execution() {
     for (name, state, reason) in [
-        ("folded", "superseded", gents::lifecycle::FOLDED_REASON),
-        ("replaced", "superseded", gents::lifecycle::REPLACED_REASON),
-        ("removed", "interrupted", gents::lifecycle::REMOVED_REASON),
+        (
+            "folded",
+            "superseded",
+            gents::request::lifecycle::FOLDED_REASON,
+        ),
+        (
+            "replaced",
+            "superseded",
+            gents::request::lifecycle::REPLACED_REASON,
+        ),
+        (
+            "removed",
+            "interrupted",
+            gents::request::lifecycle::REMOVED_REASON,
+        ),
     ] {
         let db = test_db(&format!("goal-retired-input-{name}")).await;
         let parent = seed_completed_request(&db, "execution-parent").await;
@@ -4113,7 +4125,7 @@ async fn seed_same_second_canonical_goal_child(
         agent_id: crate::support::AGENT_NAME.to_owned(),
         session_id: SESSION.to_owned(),
         content: "The canonical continuation made durable progress".to_owned(),
-        execution_origin: gents::lifecycle::ExecutionOrigin::Scheduled,
+        execution_origin: gents::request::lifecycle::ExecutionOrigin::Scheduled,
         created_at: "2026-07-15T00:00:00Z".to_owned(),
     };
     let admission =

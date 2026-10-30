@@ -1,7 +1,7 @@
 use gents::agent::p2p_reconcile::session_commands::run_session_command_reconciler;
 use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
-use gents::lifecycle::{
+use gents::request::lifecycle::{
     pending_steer_edit, pending_user_queue, submit_pending_user_edit, submit_pending_user_steer,
     PendingMessageEdit, PendingQueueEdit,
 };
@@ -34,7 +34,7 @@ pub(super) async fn enqueue(
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         AgentRequestAdmissionRecord::local_self(did),
     );
-    request.input = gents::lifecycle::prepare_user_message_input(
+    request.input = gents::request::lifecycle::prepare_user_message_input(
         &ConfigAccess::local(db.node.clone()),
         did,
         session,

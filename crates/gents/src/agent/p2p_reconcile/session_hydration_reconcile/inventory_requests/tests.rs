@@ -10,7 +10,7 @@ use crate::file_inventory::{
     admit_demand, begin_client_progress, load_client_progress, receive_client_reply,
     verified_client_response, FileInventoryReceiver, VerifiedInventoryResponse,
 };
-use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
+use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::store::identity::KeyIdentity;
 use crate::tool_call_lifecycle::admission_fixture::{
     ensure_fixture_session, publish_accepted_on_claimed_request,
@@ -275,9 +275,9 @@ async fn exercise_inventory_delivery_inner(recovery: bool) -> Result<()> {
     .await?;
     let request_doc = crate::graphql::created_doc_id(&response, "AgentRequest")?;
     let admitted =
-        crate::request_admission::load_request_for_admission_test(&source_node, &request_doc)
+        crate::request::admission::load_request_for_admission_test(&source_node, &request_doc)
             .await?;
-    let admitted = crate::request_admission::AgentRequestAdmissionVerifier::new(
+    let admitted = crate::request::admission::AgentRequestAdmissionVerifier::new(
         source_node.clone(),
         source.clone(),
         authority.clone(),

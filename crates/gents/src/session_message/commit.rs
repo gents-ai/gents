@@ -5,7 +5,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::graphql::escape_graphql_string;
-use crate::lifecycle::SessionMessageCause;
+use crate::request::lifecycle::SessionMessageCause;
 
 use super::plan::{Plan, PlannedWrite};
 
@@ -25,7 +25,7 @@ pub(crate) struct SessionMessageReceipt {
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CommitError {
     #[error(transparent)]
-    Steer(#[from] crate::lifecycle::queue::SteerAdmissionRefusal),
+    Steer(#[from] crate::request::lifecycle::queue::SteerAdmissionRefusal),
     #[error(transparent)]
     Access(#[from] crate::config_client::ConfigClientError),
     #[error(transparent)]
@@ -95,7 +95,7 @@ async fn commit_once(
     let delivery = report_delivery.then(|| plan.delivery().as_str().to_owned());
     let tool_call_id = lifecycle.tool_call_id().to_owned();
     let receipt_for =
-        move |enqueued: &crate::lifecycle::EnqueuedAgentRequest| SessionMessageReceipt {
+        move |enqueued: &crate::request::lifecycle::EnqueuedAgentRequest| SessionMessageReceipt {
             ok: true,
             session_id: enqueued.session_id.clone(),
             request_id: enqueued.request_id.clone(),
@@ -144,12 +144,12 @@ pub(crate) async fn stage_planned_write_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     cause: &SessionMessageCause,
     plan: &Plan,
-) -> std::result::Result<crate::lifecycle::EnqueuedAgentRequest, CommitError> {
+) -> std::result::Result<crate::request::lifecycle::EnqueuedAgentRequest, CommitError> {
     if plan.interrupt_before_publish {
         let create = match &plan.write {
             PlannedWrite::Request { create, .. } | PlannedWrite::Goal { create, .. } => create,
         };
-        let active = crate::interrupt::interrupt_active_session_in_txn(
+        let active = crate::request::interrupt::interrupt_active_session_in_txn(
             txn,
             &create.session_id,
             &create.node_did,
@@ -171,7 +171,7 @@ pub(crate) async fn stage_planned_write_in_txn(
             if let Some(expected_head) = &plan.steer_head {
                 validate_steer_in_txn(txn, create, &doc_id, expected_head.as_deref()).await??;
             }
-            Ok(crate::lifecycle::EnqueuedAgentRequest {
+            Ok(crate::request::lifecycle::EnqueuedAgentRequest {
                 doc_id,
                 request_id: create.request_id.clone(),
                 session_id: create.session_id.clone(),
@@ -206,7 +206,7 @@ async fn validate_steer_in_txn(
     create: &gents_protocol::request_admission::AgentRequestCreate,
     candidate_doc_id: &str,
     expected_head: Option<&str>,
-) -> Result<std::result::Result<(), crate::lifecycle::queue::SteerAdmissionRefusal>> {
+) -> Result<std::result::Result<(), crate::request::lifecycle::queue::SteerAdmissionRefusal>> {
     let response = txn.execute(&format!(
         r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }},
             purpose: {{ _eq: "normal" }}, lifecycle_state: {{ _in: ["claimed", "processing"] }} }}, limit: 2) {{
@@ -214,7 +214,7 @@ async fn validate_steer_in_txn(
         }} }}"#,
         escape_graphql_string(&create.node_did),
         escape_graphql_string(&create.session_id),
-        crate::request_admission::SIGNED_REQUEST_FIELDS,
+        crate::request::admission::SIGNED_REQUEST_FIELDS,
     )).await?;
     let rows: Vec<gents_protocol::row::AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;
@@ -229,15 +229,15 @@ async fn validate_steer_in_txn(
     let Some(row) = rows.into_iter().next() else {
         return Ok(Ok(()));
     };
-    let head = crate::watcher::AgentRequest::try_from(row)?;
-    let pending = crate::lifecycle::queue::pending_with_new_candidate_in_txn(
+    let head = crate::request::watcher::AgentRequest::try_from(row)?;
+    let pending = crate::request::lifecycle::queue::pending_with_new_candidate_in_txn(
         txn,
         &create.node_did,
         &create.session_id,
         candidate_doc_id,
     )
     .await?;
-    Ok(crate::lifecycle::queue::steer_reachable(
+    Ok(crate::request::lifecycle::queue::steer_reachable(
         &head,
         pending,
         candidate_doc_id,

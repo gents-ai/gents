@@ -401,8 +401,8 @@ impl ToolCallLifecycle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
-    use crate::streaming::DefraStreamWriter;
+    use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+    use crate::request::streaming::DefraStreamWriter;
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
     use std::time::Duration;
 
@@ -422,7 +422,7 @@ mod tests {
         assert!(!created.has_errors(), "{:#?}", created.errors);
         let row = crate::graphql::graphql_with_transaction_retry(node, &format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-            crate::watcher::AGENT_REQUEST_FIELDS,
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
         ), "test.tool_call.load_request").await.unwrap();
         let row: gents_protocol::row::AgentRequestRow =
             crate::graphql::first_row(&row, "AgentRequest")

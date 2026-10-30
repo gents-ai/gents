@@ -16,7 +16,9 @@ const CANCELLATION_GRACE_PERIOD: std::time::Duration = std::time::Duration::from
 /// transaction, whose completion has separate drain and fencing obligations;
 /// an unrecorded managed process is killed with its group when dropped.
 pub(super) async fn prepare_unless_interrupted<T>(
-    interrupt_rx: &mut tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
+    interrupt_rx: &mut tokio::sync::watch::Receiver<
+        Option<crate::request::interrupt::InterruptIntent>,
+    >,
     preparation: impl std::future::Future<Output = T>,
 ) -> Option<T> {
     if interrupt_rx.borrow_and_update().is_some() {
@@ -67,7 +69,7 @@ where
     #[allow(clippy::too_many_arguments)]
     async fn estimate_initial_provider_input(
         &self,
-        request: &crate::watcher::AgentRequest,
+        request: &crate::request::watcher::AgentRequest,
         preamble: String,
         history: &[TaggedMessage],
         skill_reminders: &[crate::inference::llm::message::Message],
@@ -131,10 +133,12 @@ where
 
     pub(super) async fn handle_request(
         &mut self,
-        lifecycle: &mut crate::lifecycle::RequestLifecycle,
-        stream_writer: &crate::streaming::DefraStreamWriter,
+        lifecycle: &mut crate::request::lifecycle::RequestLifecycle,
+        stream_writer: &crate::request::streaming::DefraStreamWriter,
         mut shutdown: tokio::sync::watch::Receiver<bool>,
-        mut interrupt_rx: tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
+        mut interrupt_rx: tokio::sync::watch::Receiver<
+            Option<crate::request::interrupt::InterruptIntent>,
+        >,
     ) -> Result<HandleRequestOutcome> {
         let request_token = tokio_util::sync::CancellationToken::new();
         let request = lifecycle.request().clone();
@@ -263,18 +267,20 @@ where
                     &request,
                     frozen_instruction_manifest.as_deref(),
                 )?;
-                let prompt = |folded: crate::lifecycle::queue::FoldedInput| -> Result<_> {
+                let prompt = |folded: crate::request::lifecycle::queue::FoldedInput| -> Result<_> {
                     Ok(crate::agent::loop_stream::FoldedPrompt {
                         key: folded.key(),
                         message: folded.message()?,
                     })
                 };
                 let consumed_prompts =
-                    crate::lifecycle::queue::load_consumed_folded_inputs(&self.node, &request)
-                        .await?
-                        .into_iter()
-                        .map(prompt)
-                        .collect::<Result<Vec<_>>>()?;
+                    crate::request::lifecycle::queue::load_consumed_folded_inputs(
+                        &self.node, &request,
+                    )
+                    .await?
+                    .into_iter()
+                    .map(prompt)
+                    .collect::<Result<Vec<_>>>()?;
                 let selection = if resume_from_history {
                     &[][..]
                 } else {
@@ -704,7 +710,7 @@ where
                 if let Some(intent) = watched_interrupt {
                     Some(intent.at.to_rfc3339())
                 } else {
-                    crate::interrupt::fetch_interrupt_requested_at_by_doc_id(
+                    crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id(
                         &self.node,
                         &request.doc_id,
                     )
@@ -714,7 +720,7 @@ where
                 request_token.cancel();
                 Some(intent.at.to_rfc3339())
             } else {
-                let persisted = crate::interrupt::fetch_interrupt_requested_at_by_doc_id(
+                let persisted = crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id(
                     &self.node,
                     &request.doc_id,
                 )

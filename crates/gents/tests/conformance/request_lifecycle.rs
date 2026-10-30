@@ -1,5 +1,5 @@
 use super::*;
-use gents::lifecycle::RequestTerminalOutcome;
+use gents::request::lifecycle::RequestTerminalOutcome;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
@@ -56,7 +56,7 @@ async fn ordinary_completion_rejects_claimed_without_execution() {
             )
             .await
             .unwrap(),
-        gents::lifecycle::TerminalizeResult::Lost,
+        gents::request::lifecycle::TerminalizeResult::Lost,
     );
     assert_eq!(
         fetch_request_snapshot(&db.node, &doc_id)
@@ -1018,7 +1018,7 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
             retry_root_request: request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            max_retries: gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -1103,7 +1103,7 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
             retry_root_request: request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            max_retries: gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -1165,7 +1165,7 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
             retry_root_request: request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            max_retries: gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -1216,7 +1216,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
             retry_root_request: lifecycle.request().request_id.clone(),
             superseded_by_request: "".into(),
             retry_count: 0,
-            max_retries: gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
+            max_retries: gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES as i64,
             claimed_at_present: true,
             deadline_present: true,
             failure_reason: "".into(),
@@ -1862,7 +1862,7 @@ async fn create_queue_request(
                 request_hop: 0{input_field}{deadline_field}
             }}) {{ _docID }}
         }}"#,
-        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let response = node.execute(&mutation).await;
     assert!(

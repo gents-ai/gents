@@ -1,7 +1,7 @@
 use super::{MailboxAction, MailboxItem, MailboxStatus};
 use crate::config_client::ConfigApplyTxn;
 use crate::graphql::{escape_graphql_string, rows, single_mutation_document};
-use crate::watcher::AgentRequest;
+use crate::request::watcher::AgentRequest;
 use anyhow::{ensure, Context, Result};
 
 pub(crate) async fn claim_reply_in_txn(
@@ -31,7 +31,7 @@ pub(crate) async fn claim_reply_in_txn(
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
         escape_graphql_string(&request.doc_id),
-        crate::request_admission::SIGNED_REQUEST_FIELDS,
+        crate::request::admission::SIGNED_REQUEST_FIELDS,
     );
     let response = txn.execute_local_response(&query).await?;
     let records = rows::<gents_protocol::row::AgentRequestRow>(&response, "AgentRequest")?;
@@ -39,7 +39,8 @@ pub(crate) async fn claim_reply_in_txn(
         .into_iter()
         .next()
         .context("mailbox reply request disappeared")?;
-    let authenticated = crate::request_admission::verify_request_receipt_signature(&record).is_ok();
+    let authenticated =
+        crate::request::admission::verify_request_receipt_signature(&record).is_ok();
     let signed_request = AgentRequest::try_from(record)?;
     let now_time = chrono::Utc::now();
     let deadline_valid = match item.deadline_at.as_deref() {
@@ -49,7 +50,7 @@ pub(crate) async fn claim_reply_in_txn(
         }
     };
     validate_reply_claim(item, &signed_request, authenticated, deadline_valid).map_err(
-        |error| crate::lifecycle::ClaimAdmissionError::MailboxReplyRejected {
+        |error| crate::request::lifecycle::ClaimAdmissionError::MailboxReplyRejected {
             item_id: item.doc_id.clone(),
             reason: error.to_string(),
         },

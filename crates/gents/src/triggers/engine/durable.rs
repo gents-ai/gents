@@ -387,7 +387,7 @@ pub async fn request_arrival_order(
     const DOC_ID_BATCH_SIZE: usize = 512;
     let mut slots = Vec::new();
     for batch in doc_ids.chunks(DOC_ID_BATCH_SIZE) {
-        slots.extend(crate::lifecycle::queue::effective_slots(txn, batch).await?);
+        slots.extend(crate::request::lifecycle::queue::effective_slots(txn, batch).await?);
     }
     if slots.is_empty() {
         return Ok(Vec::new());

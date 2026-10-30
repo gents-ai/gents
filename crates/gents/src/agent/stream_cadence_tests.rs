@@ -265,7 +265,7 @@ async fn auxiliary_stream(end: End, chunks_per_second: u32) -> Persisted {
         "did:test:test",
         Duration::from_millis(crate::inference::resolved::DEFAULT_STREAM_BATCH_MS),
     ));
-    let sink = crate::streaming::auxiliary::sink_with_writer(
+    let sink = crate::request::streaming::auxiliary::sink_with_writer(
         Arc::clone(&auxiliary_writer),
         request.clone(),
         generation.clone(),
@@ -337,7 +337,7 @@ async fn auxiliary_stream(end: End, chunks_per_second: u32) -> Persisted {
 /// The first reasoning bytes flush at once, later reasoning once per five
 /// batch intervals, and the close carries the remainder.
 fn assert_reasoning_cadence(case: &str, persisted: &Persisted, chunks_per_second: u32) {
-    let batches = (SECONDS / crate::streaming::REASONING_BATCH_FACTOR) as usize;
+    let batches = (SECONDS / crate::request::streaming::REASONING_BATCH_FACTOR) as usize;
     assert!(
         (batches - 1..=batches + 2).contains(&persisted.flushes),
         "{case}: a {SECONDS}s reasoning stream appended {} segments, expected {}..={}",

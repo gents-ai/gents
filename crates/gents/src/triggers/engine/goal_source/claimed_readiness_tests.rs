@@ -84,14 +84,14 @@ async fn install_claim_with_terminal(db: &TestDb, before: &Value, terminal: &str
     let parent = before["parent"].as_str().unwrap();
     let spec = crate::RequestSpec::new(
         gents_protocol::request_admission::RequestPurpose::Normal,
-        crate::lifecycle::RequestIdentity {
+        crate::request::lifecycle::RequestIdentity {
             requester_did: Some(db.node_identity.did().to_owned()),
             request_id: parent.to_owned(),
             node_did: db.node_identity.did().to_owned(),
             agent_id: BEHAVIOR.to_owned(),
             session_id: SESSION.to_owned(),
             content: "original goal attempt".to_owned(),
-            execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
+            execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
             created_at: "2020-01-01T00:00:00Z".to_owned(),
         },
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(

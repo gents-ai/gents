@@ -1111,15 +1111,15 @@ fn request_only_control_link_is_corroborated(request: &TimelineRequestRow) -> bo
     {
         return false;
     }
-    if crate::lifecycle::is_background_completion_request(&request.input) {
+    if crate::request::lifecycle::is_background_completion_request(&request.input) {
         return true;
     }
     request.input.queue.as_ref().is_some_and(|hints| {
         matches!(
             hints.source,
-            crate::lifecycle::queue::QueueSource::User
-                | crate::lifecycle::queue::QueueSource::Steering
-                | crate::lifecycle::queue::QueueSource::Goal
+            crate::request::lifecycle::queue::QueueSource::User
+                | crate::request::lifecycle::queue::QueueSource::Steering
+                | crate::request::lifecycle::queue::QueueSource::Goal
         )
     })
 }

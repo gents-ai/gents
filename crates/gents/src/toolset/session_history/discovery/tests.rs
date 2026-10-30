@@ -1,6 +1,6 @@
 use super::*;
 use crate::inference::llm::tool::Tool;
-use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
+use crate::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use std::sync::Arc;
 

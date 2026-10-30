@@ -467,7 +467,7 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
         fixture
             .owner
             .terminalize_owned(
-                crate::lifecycle::RequestTerminalOutcome::Failed,
+                crate::request::lifecycle::RequestTerminalOutcome::Failed,
                 gents_protocol::output::TerminalOutput::NoMessage,
                 Some("end reader incarnation"),
             )

@@ -1,5 +1,5 @@
 use super::*;
-use crate::lifecycle::{RequestLifecycle, RequestTerminalOutcome, WorkspaceLineage};
+use crate::request::lifecycle::{RequestLifecycle, RequestTerminalOutcome, WorkspaceLineage};
 use crate::store::identity::NodeIdentity;
 use std::sync::Arc;
 use std::time::Duration;
@@ -72,21 +72,21 @@ async fn runtime_seal_case(unowned: bool) {
     create.workspace_id = Some(created.workspace.workspace_id.clone());
     create.workspace_authority = Some("readWrite".into());
     create.workspace_owner_node_did = Some(created.workspace.owner_node_did.clone());
-    crate::request_admission::sign_agent_request_create(&identity, &mut create)
+    crate::request::admission::sign_agent_request_create(&identity, &mut create)
         .await
         .unwrap();
     query(&node, &create.graphql_mutation().unwrap()).await;
     let response = node
         .execute(&format!(
             "{{ AgentRequest {{ {} }} }}",
-            crate::request_admission::SIGNED_REQUEST_FIELDS
+            crate::request::admission::SIGNED_REQUEST_FIELDS
         ))
         .await;
     let row: gents_protocol::row::AgentRequestRow =
         crate::graphql::first_row(&response, "AgentRequest")
             .unwrap()
             .unwrap();
-    let request = crate::watcher::AgentRequest::try_from(row).unwrap();
+    let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
     let lineage = WorkspaceLineage {
         workspace_id: request.workspace_id.clone(),
         workspace_authority: request.workspace_authority.clone(),
@@ -98,7 +98,8 @@ async fn runtime_seal_case(unowned: bool) {
         .unwrap();
     let mut owner = RequestLifecycle::new_with_node_did(node.clone(), "general", did, request, 120);
     owner.claim().await.unwrap();
-    let writer = crate::streaming::DefraStreamWriter::new(node.clone(), did, Duration::ZERO);
+    let writer =
+        crate::request::streaming::DefraStreamWriter::new(node.clone(), did, Duration::ZERO);
     owner.begin_owned_execution(&writer).await.unwrap();
     let request = owner.request().clone();
     let dest = PathBuf::from(&created.placement.host_path);

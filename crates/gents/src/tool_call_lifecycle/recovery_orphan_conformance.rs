@@ -1,4 +1,4 @@
-use crate::lifecycle::{RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
+use crate::request::lifecycle::{RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
 use crate::tool_call_lifecycle::admission_fixture::{
     published_session_message_with_owner, PublishedAdmission, PublishedAdmissionOptions,
 };

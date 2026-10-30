@@ -4,7 +4,7 @@ use defra_node::EmbeddedNode;
 use std::sync::Arc;
 
 use crate::config_client::ConfigAccess;
-use crate::lifecycle::{SessionMessageCause, SessionMessageTarget};
+use crate::request::lifecycle::{SessionMessageCause, SessionMessageTarget};
 
 use super::{AgentMessageDelivery, Delivery, RenderedBody};
 
@@ -194,7 +194,7 @@ pub(crate) async fn plan_with_delivery(
         ));
     }
     let active = if local {
-        match crate::interrupt::active_session_request(
+        match crate::request::interrupt::active_session_request(
             node,
             &target.session_id,
             &target.node_did,
@@ -208,7 +208,7 @@ pub(crate) async fn plan_with_delivery(
                     .as_deref()
                     .context("active session request lacks physical identity")?;
                 Some(
-                    crate::request_binding::load_agent_request_by_doc_id(node, active_doc_id)
+                    crate::request::binding::load_agent_request_by_doc_id(node, active_doc_id)
                         .await?
                         .context("active session request disappeared")?,
                 )
@@ -230,8 +230,8 @@ pub(crate) async fn plan_with_delivery(
                 .await?
         }
     };
-    let hop = crate::lifecycle::next_request_hop(
-        crate::lifecycle::RequestHopCause::CrossSession {
+    let hop = crate::request::lifecycle::next_request_hop(
+        crate::request::lifecycle::RequestHopCause::CrossSession {
             cause_hop: cause.caller_hop,
         },
         own_hop,
@@ -248,7 +248,7 @@ pub(crate) async fn plan_with_delivery(
                 "a Task that declares a Goal requires an idle session".to_owned()
             ));
         }
-        let create = crate::lifecycle::build_session_message_request(
+        let create = crate::request::lifecycle::build_session_message_request(
             cause,
             target,
             &rendered.content,
@@ -284,21 +284,22 @@ pub(crate) async fn plan_with_delivery(
                 background_completion_wake_version: None,
             });
         PlannedWrite::Request {
-            create: crate::lifecycle::materialize::build_session_message_request_with_input(
-                cause,
-                target,
-                &rendered.content,
-                title,
-                &request_id,
-                None,
-                hop,
-                gents_protocol::request_input::RequestInput {
-                    queue,
-                    goal_assignment: target_goal_assignment(node, cause, target).await?,
-                    ..Default::default()
-                },
-            )
-            .await?,
+            create:
+                crate::request::lifecycle::materialize::build_session_message_request_with_input(
+                    cause,
+                    target,
+                    &rendered.content,
+                    title,
+                    &request_id,
+                    None,
+                    hop,
+                    gents_protocol::request_input::RequestInput {
+                        queue,
+                        goal_assignment: target_goal_assignment(node, cause, target).await?,
+                        ..Default::default()
+                    },
+                )
+                .await?,
             delivery: match (&steering, delivery) {
                 (None, _) => Delivery::Request,
                 (Some(_), AgentMessageDelivery::Steer) => Delivery::Steering,

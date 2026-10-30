@@ -31,7 +31,7 @@ pub(super) async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> 
             .node_did
             .as_deref()
             .context("request has no node identity")?;
-        gents::interrupt::interrupt_request_by_doc_id_with_access(
+        gents::request::interrupt::interrupt_request_by_doc_id_with_access(
             &ConfigAccess::Graphql(graphql.clone()),
             physical,
             node,

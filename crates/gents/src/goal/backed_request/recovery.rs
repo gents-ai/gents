@@ -153,7 +153,7 @@ fn decode_goal_backed_request_recovery(
     objective: &str,
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<Option<crate::lifecycle::materialize::EnqueuedAgentRequest>> {
+) -> Result<Option<crate::request::lifecycle::materialize::EnqueuedAgentRequest>> {
     let rows = response
         .pointer("/data/AgentRequest")
         .and_then(serde_json::Value::as_array)
@@ -170,11 +170,13 @@ fn decode_goal_backed_request_recovery(
         objective,
         token_budget,
     )?;
-    Ok(Some(crate::lifecycle::materialize::EnqueuedAgentRequest {
-        doc_id,
-        request_id: request.request_id.clone(),
-        session_id: request.session_id.clone(),
-    }))
+    Ok(Some(
+        crate::request::lifecycle::materialize::EnqueuedAgentRequest {
+            doc_id,
+            request_id: request.request_id.clone(),
+            session_id: request.session_id.clone(),
+        },
+    ))
 }
 
 pub(super) async fn load_goal_backed_request_by_retry_key_from_access(
@@ -184,7 +186,7 @@ pub(super) async fn load_goal_backed_request_by_retry_key_from_access(
     objective: &str,
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<Option<crate::lifecycle::materialize::EnqueuedAgentRequest>> {
+) -> Result<Option<crate::request::lifecycle::materialize::EnqueuedAgentRequest>> {
     let query = goal_backed_request_recovery_query(node_did, session_id, request)?;
     let response = access.execute(&query).await?;
     decode_goal_backed_request_recovery(
@@ -211,7 +213,7 @@ pub(super) async fn load_goal_backed_request_by_retry_key(
     objective: &str,
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<Option<crate::lifecycle::materialize::EnqueuedAgentRequest>> {
+) -> Result<Option<crate::request::lifecycle::materialize::EnqueuedAgentRequest>> {
     let retry_key = request
         .retry_key
         .as_deref()
@@ -234,9 +236,11 @@ pub(super) async fn load_goal_backed_request_by_retry_key(
         objective,
         token_budget,
     )?;
-    Ok(Some(crate::lifecycle::materialize::EnqueuedAgentRequest {
-        doc_id,
-        request_id: request.request_id.clone(),
-        session_id: request.session_id.clone(),
-    }))
+    Ok(Some(
+        crate::request::lifecycle::materialize::EnqueuedAgentRequest {
+            doc_id,
+            request_id: request.request_id.clone(),
+            session_id: request.session_id.clone(),
+        },
+    ))
 }

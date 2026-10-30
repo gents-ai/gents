@@ -1518,18 +1518,18 @@ async fn historical_request_store_faults_propagate_instead_of_dropping_reasoning
     }
 }
 
-async fn stored_agent_request(fixture: &ReplayFixture) -> crate::watcher::AgentRequest {
+async fn stored_agent_request(fixture: &ReplayFixture) -> crate::request::watcher::AgentRequest {
     let response = fixture
         .node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             crate::graphql::escape_graphql_string(&fixture.request_doc_id),
-            crate::watcher::AGENT_REQUEST_FIELDS,
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let row = response.data.unwrap()["AgentRequest"][0].clone();
-    crate::watcher::AgentRequest::try_from(
+    crate::request::watcher::AgentRequest::try_from(
         serde_json::from_value::<gents_protocol::row::AgentRequestRow>(row).unwrap(),
     )
     .unwrap()

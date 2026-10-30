@@ -74,21 +74,21 @@ pub(super) fn project_pending_turn(
     {
         return None;
     }
-    if gents::lifecycle::retired_by_author(request) {
+    if gents::request::lifecycle::retired_by_author(request) {
         return None;
     }
     let request_input = request.input.clone().unwrap_or_default();
-    if !gents::lifecycle::request_content_owns_user_projection(&request_input) {
+    if !gents::request::lifecycle::request_content_owns_user_projection(&request_input) {
         return None;
     }
-    let folded_into = gents::lifecycle::folded_into(request);
+    let folded_into = gents::request::lifecycle::folded_into(request);
 
     let lifecycle_state = request
         .lifecycle_state
         .map(|state| state.as_str().to_string());
     let content = normalize_optional(request.content.as_deref())
         .or_else(|| request_input.has_authored_input("").then(String::new))?;
-    let owner = gents::lifecycle::input_message_owner(request);
+    let owner = gents::request::lifecycle::input_message_owner(request);
     if folded_into.is_some() && owner.is_none() {
         return None;
     }
@@ -107,7 +107,7 @@ pub(super) fn project_pending_turn(
                     .as_ref()
                     .unwrap_or(&gents_protocol::request_input::RequestInput::default())
                     .has_authored_input(row.content.as_deref().unwrap_or_default())
-                && gents::lifecycle::request_content_owns_user_projection(
+                && gents::request::lifecycle::request_content_owns_user_projection(
                     &row.input.clone().unwrap_or_default(),
                 )
         });
@@ -199,13 +199,13 @@ mod retry_tests {
             row(
                 "edited",
                 RequestLifecycleState::Superseded,
-                Some(gents::lifecycle::REPLACED_REASON),
+                Some(gents::request::lifecycle::REPLACED_REASON),
                 Some("waiting"),
             ),
             row(
                 "removed",
                 RequestLifecycleState::Interrupted,
-                Some(gents::lifecycle::REMOVED_REASON),
+                Some(gents::request::lifecycle::REMOVED_REASON),
                 None,
             ),
             row("stopped", RequestLifecycleState::Interrupted, None, None),

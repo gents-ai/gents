@@ -7,7 +7,7 @@ use gents_loop::loop_stream::{
 
 pub(crate) fn owned_replay_input(
     node: Arc<EmbeddedNode>,
-    request: crate::watcher::AgentRequest,
+    request: crate::request::watcher::AgentRequest,
     request_commit_cid: String,
     expected_scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
     issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,

@@ -88,7 +88,7 @@ const DEFAULT_LOG_FILTER: &str = concat!(
     "gents::inference::clients::chatgpt_codex=info,",
     "gents::hook=info,",
     "gents::session::sessions=info,",
-    "gents::streaming=info,",
+    "gents::request::streaming=info,",
     "gents::triggers::engine=info"
 );
 const INIT_CONFIG_FILE_NAME: &str = "init.json";

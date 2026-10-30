@@ -14,10 +14,10 @@ use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::inference::resolved::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
 use crate::lean_vocab_test::lean_runtime_reconcile_case;
+use crate::request::watcher::AgentRequest;
 use crate::runtime_status::RuntimeStatusHandle;
 use crate::store::identity::{KeyIdentity, NodeIdentity as _, RuntimeNode};
 use crate::tool_surface::{AgentToolSurfaceConfig, ToolCeiling, ToolSurface};
-use crate::watcher::AgentRequest;
 
 async fn test_node() -> Arc<defra_node::EmbeddedNode> {
     Arc::new(crate::test_support::node_builder().build().await.unwrap())

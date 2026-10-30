@@ -118,7 +118,7 @@ impl DefraSessionHook {
 
             // Waiting is observational; ending this caller's turn must not
             // revoke the separately budgeted background job.
-            let interruption = crate::interrupt::observe_interrupt_requested_at_scoped(
+            let interruption = crate::request::interrupt::observe_interrupt_requested_at_scoped(
                 &self.node,
                 &caller.request_id,
                 &caller.node_did,

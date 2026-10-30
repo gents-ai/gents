@@ -47,7 +47,7 @@ pub(crate) async fn load_history_through_sequence(
 
 pub(crate) async fn load_sequenced_history_for_request(
     node: &EmbeddedNode,
-    request: &crate::watcher::AgentRequest,
+    request: &crate::request::watcher::AgentRequest,
     through_sequence: Option<u32>,
     after_sequence: Option<u32>,
     provider_profile: crate::provider_input::ProviderInputProfile,
@@ -67,7 +67,7 @@ pub(crate) async fn load_sequenced_history_for_request(
 
 pub(crate) async fn retry_has_published_input(
     node: &EmbeddedNode,
-    request: &crate::watcher::AgentRequest,
+    request: &crate::request::watcher::AgentRequest,
 ) -> Result<bool> {
     let Some(mut parent_id) = request.retry_parent_request_doc_id.clone() else {
         return Ok(false);

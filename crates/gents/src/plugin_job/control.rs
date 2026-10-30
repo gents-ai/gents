@@ -343,7 +343,7 @@ async fn kill_in_txn(
         let Some(request) = caused.get(key) else {
             continue;
         };
-        let interrupted = crate::interrupt::interrupt_request_by_doc_id_in_txn(
+        let interrupted = crate::request::interrupt::interrupt_request_by_doc_id_in_txn(
             txn,
             &request.doc_id,
             &request.node_did,
@@ -813,7 +813,7 @@ mod tests {
     }
 
     async fn interrupted(admission: &PublishedAdmission, doc_id: &str) -> bool {
-        crate::interrupt::fetch_interrupt_requested_at_by_doc_id(&admission.node, doc_id)
+        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id(&admission.node, doc_id)
             .await
             .unwrap()
             .is_some()
@@ -1017,7 +1017,7 @@ mod tests {
         let admission = job_row("control-caller-interrupted").await;
         let node_did = admission.tool.node_did().to_owned();
         let live = caused(&admission, "a", &node_did, "processing").await;
-        crate::interrupt::interrupt_request_by_doc_id_with_access(
+        crate::request::interrupt::interrupt_request_by_doc_id_with_access(
             &access(&admission),
             admission.tool.request_doc_id().unwrap(),
             &node_did,

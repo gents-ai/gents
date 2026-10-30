@@ -17,8 +17,8 @@ use crate::inference::admission::{self, CallKind};
 use crate::inference::compaction::ReductionOptions;
 use crate::inference::llm::message::Message;
 use crate::inference::resolved::{MaxTurnsProvenance, ResolvedAgent};
-use crate::streaming::StreamWriter;
-use crate::watcher::AgentRequest;
+use crate::request::streaming::StreamWriter;
+use crate::request::watcher::AgentRequest;
 
 type RequestDeadline = Option<DateTime<Utc>>;
 
@@ -172,15 +172,17 @@ where
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_inference(
         &mut self,
-        request: &crate::watcher::AgentRequest,
+        request: &crate::request::watcher::AgentRequest,
         doc_id: &str,
         history: &[TaggedMessage],
         wake_notifications: &[TaggedMessage],
         mut replay: LoopReplayInput,
-        lifecycle: &mut crate::lifecycle::RequestLifecycle,
-        stream_writer: &crate::streaming::DefraStreamWriter,
+        lifecycle: &mut crate::request::lifecycle::RequestLifecycle,
+        stream_writer: &crate::request::streaming::DefraStreamWriter,
         shutdown: &mut tokio::sync::watch::Receiver<bool>,
-        interrupt_rx: &mut tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
+        interrupt_rx: &mut tokio::sync::watch::Receiver<
+            Option<crate::request::interrupt::InterruptIntent>,
+        >,
         request_token: &tokio_util::sync::CancellationToken,
         aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
         effective_seed: Option<i64>,
@@ -193,7 +195,7 @@ where
     ) -> Result<HandleRequestOutcome> {
         workspace.runtime_home = self.approval_home.clone();
         let request_deadline = lifecycle.claimed_deadline_at();
-        let trigger_context = crate::lifecycle::TriggerExecutionContext::parse(
+        let trigger_context = crate::request::lifecycle::TriggerExecutionContext::parse(
             request.caused_by_trigger_context.as_deref(),
         )?;
         let trigger_correlation = request.caused_by_correlation.clone();
@@ -649,7 +651,7 @@ where
                                         async {
                                             match processor.validate_execution().await.map_err(RuntimeSeamError::into_inner) {
                                                 Ok(()) => {}
-                                                Err(error) if error.is::<crate::lifecycle::ExecutionOwnershipLost>() => {
+                                                Err(error) if error.is::<crate::request::lifecycle::ExecutionOwnershipLost>() => {
                                                     tracing::warn!(
                                                         request_id = %request_id,
                                                         session_id = %session_id,
@@ -664,7 +666,7 @@ where
                                             Ok(true)
                                         },
                                     ).await {
-                                        Ok(Ok(false)) => return Err(anyhow::Error::new(crate::lifecycle::ExecutionOwnershipLost)
+                                        Ok(Ok(false)) => return Err(anyhow::Error::new(crate::request::lifecycle::ExecutionOwnershipLost)
                                             .context("shutdown drain was not attempted")),
                                         Ok(Ok(true)) => return Err(anyhow!("shutdown requested during inference stream")),
                                         Ok(Err(error)) => return Err(ShutdownDrainFailure {
@@ -1007,9 +1009,9 @@ pub(super) mod tests {
     use crate::inference::llm::tool::ToolDyn;
     use crate::inference::resolved::{ResolvedAgent, SamplingConfig};
     use crate::prompt::LayeredPromptBuilder;
+    use crate::request::watcher::AgentRequest;
     use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
     use crate::tool_surface::AgentToolSurfaceConfig;
-    use crate::watcher::AgentRequest;
     use anyhow::Context;
     use futures::stream;
     use rig::completion::{
@@ -1358,7 +1360,7 @@ pub(super) mod tests {
             .expect("created request physical ID")
             .to_owned();
 
-        crate::request_admission::load_request_for_admission_test(node, &doc_id)
+        crate::request::admission::load_request_for_admission_test(node, &doc_id)
             .await
             .unwrap()
     }
@@ -1418,7 +1420,7 @@ pub(super) mod tests {
             .and_then(|row| row.get("_docID"))
             .and_then(|value| value.as_str())
             .expect("enrollment request doc id");
-        crate::request_admission::load_request_for_admission_test(node, doc_id)
+        crate::request::admission::load_request_for_admission_test(node, doc_id)
             .await
             .unwrap()
     }
@@ -1637,7 +1639,7 @@ pub(super) mod tests {
             startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
             runtime_status,
             slot_generation: 1,
-            request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
+            request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
                 node.clone(),
                 request_identity,
                 crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -1826,7 +1828,7 @@ pub(super) mod tests {
                 admission.node_did.clone(),
             ),
             slot_generation: 1,
-            request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
+            request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
                 node.clone(),
                 request_identity,
                 crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -1910,11 +1912,12 @@ pub(super) mod tests {
             "wake must complete through the daemon's owned request path"
         );
 
-        let mut watcher = crate::watcher::DefraWatcher::new(node.clone(), &admission.node_did)
-            .expect("request watcher");
+        let mut watcher =
+            crate::request::watcher::DefraWatcher::new(node.clone(), &admission.node_did)
+                .expect("request watcher");
         let successor = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                let request = crate::watcher::Watcher::next_request(&mut watcher)
+                let request = crate::request::watcher::Watcher::next_request(&mut watcher)
                     .await
                     .context("successor wake disappeared")??;
                 if request.session_id == wake.session_id
@@ -2093,7 +2096,7 @@ pub(super) mod tests {
             startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
             runtime_status,
             slot_generation: 1,
-            request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
+            request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
                 node.clone(),
                 request_identity,
                 crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -2267,7 +2270,7 @@ pub(super) mod tests {
             startup_barrier: Arc::new(StartupBarrier::ready_for_test()),
             runtime_status,
             slot_generation: 1,
-            request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
+            request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
                 node.clone(),
                 request_identity,
                 authority_handle,

@@ -434,7 +434,7 @@ async fn generated_r6_completion_owner_cases_use_accepted_native_output() {
 
 pub(crate) struct SelectedBackgroundWake {
     pub admission: PublishedAdmission,
-    pub wake: crate::watcher::AgentRequest,
+    pub wake: crate::request::watcher::AgentRequest,
     pub notification_text: String,
     wait_header: String,
     wait_native: gents_protocol::message::Message,
@@ -451,8 +451,8 @@ pub(crate) async fn selected_background_wake_with_successor(
     use super::admission_fixture::{
         complete_child, publish_accepted_on_claimed_request, published_session_message_with_owner,
     };
-    use crate::lifecycle::{RequestTerminalOutcome, TerminalizeResult};
-    use crate::watcher::{DefraWatcher, Watcher};
+    use crate::request::lifecycle::{RequestTerminalOutcome, TerminalizeResult};
+    use crate::request::watcher::{DefraWatcher, Watcher};
     use gents_protocol::message::{AssistantContent, Message};
     use gents_protocol::output::TerminalOutput;
     use std::time::Duration;
@@ -559,7 +559,7 @@ pub(crate) async fn selected_background_wake_with_successor(
         &format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ {} lifecycle_state }} }}"#,
             escape_graphql_string(&session),
-            crate::watcher::AGENT_REQUEST_FIELDS,
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
         ),
         "AgentRequest",
     )
@@ -649,7 +649,7 @@ async fn generated_r6_notification_precedes_continuation_claim() {
     let node = &admission.node;
     let did = &admission.node_did;
     let behavior = selected.agent_id.clone();
-    let mut continuation = crate::lifecycle::RequestLifecycle::new_with_node_did(
+    let mut continuation = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         &behavior,
         did,
@@ -658,7 +658,7 @@ async fn generated_r6_notification_precedes_continuation_claim() {
     );
     assert_eq!(
         continuation.claim_with_identity().await.unwrap(),
-        crate::lifecycle::ClaimOutcome::Claimed,
+        crate::request::lifecycle::ClaimOutcome::Claimed,
         "the selected wake must claim through the real lifecycle owner"
     );
     let after = notification_texts(&admission).await;
@@ -703,11 +703,11 @@ async fn a_retried_over_bound_wake_is_refused_again() {
         .unwrap()
         .to_owned();
     let bound = 8;
-    let over_bound = crate::lifecycle::next_request_hop(
-        crate::lifecycle::RequestHopCause::CrossSession { cause_hop: bound },
+    let over_bound = crate::request::lifecycle::next_request_hop(
+        crate::request::lifecycle::RequestHopCause::CrossSession { cause_hop: bound },
         0,
     );
-    assert!(!crate::lifecycle::request_hop_within_bound(
+    assert!(!crate::request::lifecycle::request_hop_within_bound(
         Some(bound),
         over_bound
     ));
@@ -761,7 +761,7 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     assert_eq!(successor.len(), 1);
     let hop = successor[0]["request_hop"].as_u64().unwrap() as u32;
     assert_eq!(hop, over_bound);
-    assert!(!crate::lifecycle::request_hop_within_bound(
+    assert!(!crate::request::lifecycle::request_hop_within_bound(
         Some(bound),
         hop
     ));

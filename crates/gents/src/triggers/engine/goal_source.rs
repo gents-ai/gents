@@ -23,9 +23,9 @@ use crate::goal::{
 };
 use crate::goal::{publish_claimed_continuation, resume_at_reset};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::request::watcher::AgentRequest;
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
 use crate::store::identity::RegisteredIdentity;
-use crate::watcher::AgentRequest;
 use crate::UpdateSubscriptionSource;
 
 use super::{FireIntent, FireResult, TriggerKind, TriggerSource};

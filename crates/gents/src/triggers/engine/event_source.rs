@@ -984,7 +984,7 @@ impl EventSource {
                 source_fields.insert(field, canonical);
             }
         }
-        crate::lifecycle::snapshot_workspace_lineage_source_fields(
+        crate::request::lifecycle::snapshot_workspace_lineage_source_fields(
             doc,
             &mut source_fields,
             trigger.workspace_authority.as_deref(),
@@ -992,14 +992,14 @@ impl EventSource {
         if source_fields.is_empty() {
             return Ok(None);
         }
-        let encoded = serde_json::to_string(&crate::lifecycle::TriggerExecutionContext {
+        let encoded = serde_json::to_string(&crate::request::lifecycle::TriggerExecutionContext {
             version: 1,
             source_fields,
         })?;
-        if encoded.len() > crate::lifecycle::MAX_TRIGGER_CONTEXT_BYTES {
+        if encoded.len() > crate::request::lifecycle::MAX_TRIGGER_CONTEXT_BYTES {
             anyhow::bail!(
                 "trigger execution context exceeds {} bytes",
-                crate::lifecycle::MAX_TRIGGER_CONTEXT_BYTES
+                crate::request::lifecycle::MAX_TRIGGER_CONTEXT_BYTES
             );
         }
         Ok(Some(encoded))

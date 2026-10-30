@@ -599,7 +599,7 @@ async fn local_access_refuses_watch_and_stops_a_running_job_on_an_offline_home()
                     agent_id: "general".into(),
                     session_id: "job-s1".into(),
                     content: "run".into(),
-                    execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
+                    execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
                     created_at: "2026-06-01T10:00:00Z".into(),
                 },
                 gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),

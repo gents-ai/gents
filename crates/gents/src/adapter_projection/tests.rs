@@ -1285,7 +1285,7 @@ async fn an_agent_new_row_links_the_request_it_caused() {
     .await
     .unwrap();
     let node = message.admission.node.clone();
-    let caller_request_id = crate::request_binding::load_agent_request_by_doc_id(
+    let caller_request_id = crate::request::binding::load_agent_request_by_doc_id(
         &node,
         message.admission.tool.request_doc_id().unwrap(),
     )

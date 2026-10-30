@@ -461,7 +461,7 @@ fn render_task_invocation(
         source_collection: "Task".into(),
         source_doc_id: task_doc_id.into(),
     };
-    let fire_key = gents::lifecycle::task_fire_key(&identity);
+    let fire_key = gents::request::lifecycle::task_fire_key(&identity);
     let session_id = format!("trigger-session:{fire_key}");
     let request_id = format!("trigger-request:{fire_key}");
     let scope = gents::TemplateScope {
@@ -581,10 +581,10 @@ async fn enqueue_task_now(
             &invocation.node_did,
             &invocation.agent_id,
             &invocation.content,
-            gents::lifecycle::ExecutionOrigin::Interactive,
-            gents::lifecycle::TriggerLineage {
+            gents::request::lifecycle::ExecutionOrigin::Interactive,
+            gents::request::lifecycle::TriggerLineage {
                 trigger_kind: Some("manual".into()),
-                ..gents::lifecycle::TriggerLineage::default()
+                ..gents::request::lifecycle::TriggerLineage::default()
             },
             Some(&invocation.session_title),
             None,
@@ -595,12 +595,16 @@ async fn enqueue_task_now(
             None,
         )
         .await?;
-    Ok(
-        gents::lifecycle::write_task_delivery_local(node, actor, &invocation.fire, false, &create)
-            .await?
-            .request
-            .doc_id,
+    Ok(gents::request::lifecycle::write_task_delivery_local(
+        node,
+        actor,
+        &invocation.fire,
+        false,
+        &create,
     )
+    .await?
+    .request
+    .doc_id)
 }
 
 /// Operator override: the resulting `AgentRequest` carries

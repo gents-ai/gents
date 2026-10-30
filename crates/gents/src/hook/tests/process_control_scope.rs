@@ -147,7 +147,7 @@ async fn finish_owned_request(hook: &DefraSessionHook, request_id: &str) {
     fixture
         .lifecycle
         .terminalize_owned(
-            crate::lifecycle::RequestTerminalOutcome::Completed,
+            crate::request::lifecycle::RequestTerminalOutcome::Completed,
             gents_protocol::output::TerminalOutput::Message {
                 message_doc_id: selected,
             },
@@ -218,7 +218,7 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
     })
     .await
     .expect("wait owner registered");
-    crate::interrupt::interrupt_request(&node, request_id)
+    crate::request::interrupt::interrupt_request(&node, request_id)
         .await
         .unwrap();
     let action = tokio::time::timeout(std::time::Duration::from_secs(10), wait)
@@ -748,7 +748,7 @@ mod job_control {
         }
 
         async fn interrupted(&self, child: &str) -> bool {
-            crate::interrupt::fetch_interrupt_requested_at_by_doc_id(&self.node, child)
+            crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id(&self.node, child)
                 .await
                 .unwrap()
                 .is_some()

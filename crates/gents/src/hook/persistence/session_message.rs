@@ -38,7 +38,7 @@ impl DefraSessionHook {
             .context("session-message dispatch lacks its calling request document")?
             .to_owned();
         let caller =
-            crate::request_binding::load_agent_request_by_doc_id(&self.node, &caller_doc_id)
+            crate::request::binding::load_agent_request_by_doc_id(&self.node, &caller_doc_id)
                 .await?
                 .context("session-message calling request disappeared")?;
         let tools = crate::session_message::load_caller_session_tools(
@@ -103,7 +103,7 @@ impl DefraSessionHook {
                 );
             }
             (
-                crate::lifecycle::SessionMessageTarget {
+                crate::request::lifecycle::SessionMessageTarget {
                     node_did: target.target_node_did,
                     agent_id: target.agent_id,
                     session_id: uuid::Uuid::new_v4().to_string(),
@@ -208,7 +208,7 @@ impl DefraSessionHook {
             .doc_id()
             .context("session-message dispatch lacks its physical row")?
             .to_owned();
-        let cause = crate::lifecycle::SessionMessageCause {
+        let cause = crate::request::lifecycle::SessionMessageCause {
             caller_node_did: caller.node_did.clone(),
             caller_agent_id: caller.agent_id.clone(),
             caller_session_id: caller.session_id.clone(),
@@ -260,9 +260,9 @@ impl DefraSessionHook {
         }
         if target.node_did == caller.node_did {
             let max_request_hop =
-                crate::request_admission::max_request_hop(&self.node, &caller.node_did).await?;
+                crate::request::admission::max_request_hop(&self.node, &caller.node_did).await?;
             if let Some(max_request_hop) = max_request_hop.filter(|bound| {
-                !crate::lifecycle::request_hop_within_bound(Some(*bound), plan.hop())
+                !crate::request::lifecycle::request_hop_within_bound(Some(*bound), plan.hop())
             }) {
                 refuse!(
                     FailureClass::ArgumentInvalid,
@@ -349,7 +349,7 @@ impl DefraSessionHook {
             .context("agents tool call lacks its calling request document")?
             .to_owned();
         let caller =
-            crate::request_binding::load_agent_request_by_doc_id(&self.node, &caller_doc_id)
+            crate::request::binding::load_agent_request_by_doc_id(&self.node, &caller_doc_id)
                 .await?
                 .context("agents tool calling request disappeared")?;
         let tools = crate::session_message::load_caller_session_tools(

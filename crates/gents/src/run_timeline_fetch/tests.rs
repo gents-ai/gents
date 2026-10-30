@@ -267,8 +267,8 @@ fn child_bridge_requires_the_exact_parent_tool_document() {
 
 #[tokio::test]
 async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is_null() {
-    use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
-    use crate::streaming::DefraStreamWriter;
+    use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+    use crate::request::streaming::DefraStreamWriter;
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
     use std::{sync::Arc, time::Duration};
 
@@ -315,7 +315,7 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
     let request_response = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "pending-tool-request" }} }}) {{ {} }} }}"#,
-            crate::watcher::AGENT_REQUEST_FIELDS
+            crate::request::watcher::AGENT_REQUEST_FIELDS
         ))
         .await;
     let request: gents_protocol::row::AgentRequestRow =

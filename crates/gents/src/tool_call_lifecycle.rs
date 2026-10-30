@@ -182,7 +182,7 @@ mod session_activity_conformance;
 mod source_read_conformance;
 
 mod plugin_effect;
-pub(crate) use crate::streaming::AcceptedToolCall;
+pub(crate) use crate::request::streaming::AcceptedToolCall;
 pub use recovery::{
     deadline_at_is_expired, deadline_is_expired, BackgroundCompletionSideEffectReport,
     OrphanedBackgroundToolReport, TerminalParentToolReport, ToolCallRecoveryReport,
@@ -586,7 +586,7 @@ impl ToolCallLifecycle {
             .request_doc_id
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("tool invocation lacks its calling request document"))?;
-        let request = crate::request_binding::load_agent_request_by_doc_id(&self.node, doc_id)
+        let request = crate::request::binding::load_agent_request_by_doc_id(&self.node, doc_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("tool invocation's calling request disappeared"))?;
         anyhow::ensure!(
@@ -618,7 +618,8 @@ impl ToolCallLifecycle {
     pub(crate) async fn output_budget(&self) -> usize {
         let agent_id = match &self.request_doc_id {
             Some(doc_id) => {
-                match crate::request_binding::load_agent_request_by_doc_id(&self.node, doc_id).await
+                match crate::request::binding::load_agent_request_by_doc_id(&self.node, doc_id)
+                    .await
                 {
                     Ok(request) => request.map(|request| request.agent_id),
                     Err(error) => {

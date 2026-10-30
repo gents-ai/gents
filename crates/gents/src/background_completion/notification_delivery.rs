@@ -15,9 +15,9 @@ pub(crate) async fn append_background_tool_completion(
     status: &str,
     result: &str,
     reason: Option<&str>,
-    wake: crate::lifecycle::RequestHopCause,
+    wake: crate::request::lifecycle::RequestHopCause,
 ) -> Result<()> {
-    let parent_request = crate::request_binding::load_agent_request(node, parent_request_id)
+    let parent_request = crate::request::binding::load_agent_request(node, parent_request_id)
         .await?
         .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
 
@@ -59,10 +59,12 @@ pub(crate) async fn append_background_tool_completion(
         &notification,
         &key,
         wake,
-        Some(crate::lifecycle::queue::ToolNotificationPublication {
-            tool_call_doc_id: tool_call_doc_id.to_owned(),
-            presentation,
-        }),
+        Some(
+            crate::request::lifecycle::queue::ToolNotificationPublication {
+                tool_call_doc_id: tool_call_doc_id.to_owned(),
+                presentation,
+            },
+        ),
     )
     .await?;
     mark_background_tool_notification_delivered(
@@ -151,31 +153,32 @@ pub(super) async fn ensure_notification_delivery(
     existing: Option<side_effects::ExistingNotification>,
     content: &str,
     message_key: &str,
-    wake: crate::lifecycle::RequestHopCause,
-    native: Option<crate::lifecycle::queue::ToolNotificationPublication>,
+    wake: crate::request::lifecycle::RequestHopCause,
+    native: Option<crate::request::lifecycle::queue::ToolNotificationPublication>,
 ) -> Result<SideEffects> {
     let native = native.context("background notification requires its canonical provenance")?;
-    let enqueued = crate::lifecycle::queue::persist_background_completion_with_message_canonical(
-        node,
-        parent,
-        content,
-        message_key,
-        BACKGROUND_COMPLETION_WAKE_PROMPT,
-        RequestQueue {
-            delivery: Default::default(),
-            position: None,
-            source: QueueSource::BackgroundCompletion,
-            policy: QueuePolicy::Coalesce,
-            key: Some(format!("background_completion:{}", parent.session_id)),
-            queued_after_request_id: Some(parent.request_id.clone()),
-            interrupted_request_id: None,
-            background_completion_wake_version: None,
-        },
-        existing.as_ref().map(|receipt| receipt.doc_id.as_str()),
-        &native,
-        wake,
-    )
-    .await?;
+    let enqueued =
+        crate::request::lifecycle::queue::persist_background_completion_with_message_canonical(
+            node,
+            parent,
+            content,
+            message_key,
+            BACKGROUND_COMPLETION_WAKE_PROMPT,
+            RequestQueue {
+                delivery: Default::default(),
+                position: None,
+                source: QueueSource::BackgroundCompletion,
+                policy: QueuePolicy::Coalesce,
+                key: Some(format!("background_completion:{}", parent.session_id)),
+                queued_after_request_id: Some(parent.request_id.clone()),
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            },
+            existing.as_ref().map(|receipt| receipt.doc_id.as_str()),
+            &native,
+            wake,
+        )
+        .await?;
     Ok(SideEffects {
         wake_request_id: enqueued.request.map(|request| request.request_id),
         created_wake: enqueued.created_request,

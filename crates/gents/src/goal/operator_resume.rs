@@ -1,8 +1,8 @@
 use super::*;
 use crate::config_client::ConfigApplyTxn;
-use crate::lifecycle::materialize::{sign_request, RequestSigner};
-use crate::lifecycle::queue::{goal_continuation_identity, prepare_goal_continuation};
-use crate::request_admission::{verify_request_receipt_signature, SIGNED_REQUEST_FIELDS};
+use crate::request::admission::{verify_request_receipt_signature, SIGNED_REQUEST_FIELDS};
+use crate::request::lifecycle::materialize::{sign_request, RequestSigner};
+use crate::request::lifecycle::queue::{goal_continuation_identity, prepare_goal_continuation};
 use crate::store::identity::NodeIdentity;
 use gents_protocol::row::AgentRequestRow;
 
@@ -301,7 +301,7 @@ async fn stage_resume_inner(
 ) -> Result<GoalResumeReceipt> {
     let (goal, requests, parent_row) =
         resume_context_in_txn(txn, node_did, session_id, from_request_id).await?;
-    let parent = crate::watcher::AgentRequest::try_from(parent_row.clone())?;
+    let parent = crate::request::watcher::AgentRequest::try_from(parent_row.clone())?;
     let agent = parent.agent_id.clone();
     if let Some(receipt) =
         existing_resume_receipt_in_txn(txn, &goal, &parent_row, from_request_id).await?

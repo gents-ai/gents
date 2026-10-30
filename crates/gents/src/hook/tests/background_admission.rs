@@ -523,7 +523,7 @@ async fn spawned_target_rejection_case(
         .remove(&hook_execution_fixture_key(&hook, &request_id))
         .unwrap();
     let completion_outcome = match case.completion_probe_outcome.as_str() {
-        "completed" => crate::lifecycle::RequestTerminalOutcome::Completed,
+        "completed" => crate::request::lifecycle::RequestTerminalOutcome::Completed,
         other => panic!("unsupported modeled completion probe {other}"),
     };
     let selection = fixture

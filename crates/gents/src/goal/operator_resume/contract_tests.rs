@@ -135,14 +135,15 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                             .into_iter()
                             .find(|r| r.request_id == receipt.request_id)
                             .unwrap();
-                        let request = crate::watcher::AgentRequest::try_from(row).unwrap();
+                        let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
                         let (_authority_owner, authority) =
                             crate::agent::p2p_reconcile::enrollment_authority_channel();
-                        let verifier = crate::request_admission::AgentRequestAdmissionVerifier::new(
-                            f.node.clone(),
-                            f.identity.clone(),
-                            authority,
-                        );
+                        let verifier =
+                            crate::request::admission::AgentRequestAdmissionVerifier::new(
+                                f.node.clone(),
+                                f.identity.clone(),
+                                authority,
+                            );
                         verifier
                             .verify_fresh(&request, "contract-behavior")
                             .await

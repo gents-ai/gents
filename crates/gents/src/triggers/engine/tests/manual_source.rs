@@ -170,11 +170,11 @@ async fn production_materializer_persists_event_source_document_lineage() {
     );
     let request_doc_id = row["_docID"].as_str().unwrap();
     let queued =
-        crate::request_admission::load_request_for_admission_test(node.as_ref(), request_doc_id)
+        crate::request::admission::load_request_for_admission_test(node.as_ref(), request_doc_id)
             .await
             .unwrap();
     let (_authority_owner, authority) = crate::agent::p2p_reconcile::enrollment_authority_channel();
-    let verifier = crate::request_admission::AgentRequestAdmissionVerifier::new(
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         identity,
         authority,
@@ -297,14 +297,14 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
     let row = &response.data.unwrap()["AgentRequest"][0];
     assert_eq!(row["requester_did"], desktop.did());
     assert_eq!(row["session_id"], session_id);
-    let queued = crate::request_admission::load_request_for_admission_test(
+    let queued = crate::request::admission::load_request_for_admission_test(
         node.as_ref(),
         row["_docID"].as_str().unwrap(),
     )
     .await
     .unwrap();
     let (_authority_owner, authority) = crate::agent::p2p_reconcile::enrollment_authority_channel();
-    let verified = crate::request_admission::AgentRequestAdmissionVerifier::new(
+    let verified = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         identity,
         authority,
@@ -318,12 +318,12 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
         &owner,
         verified.clone(),
         60,
-        crate::lifecycle::ExecutionOrigin::Scheduled,
+        crate::request::lifecycle::ExecutionOrigin::Scheduled,
         "backend-test",
     );
     assert_eq!(
         lifecycle.claim_with_identity().await.unwrap(),
-        crate::lifecycle::ClaimOutcome::Claimed
+        crate::request::lifecycle::ClaimOutcome::Claimed
     );
     crate::hook::DefraSessionHook::resume_with_identity_policy(
         node.clone(),
@@ -408,14 +408,14 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
     let row = &response.data.as_ref().unwrap()["AgentRequest"][0];
     assert_eq!(row["caused_by_trigger_doc_id"], trigger_doc_id);
     assert!(row["caused_by_source_doc_id"].is_null());
-    let queued = crate::request_admission::load_request_for_admission_test(
+    let queued = crate::request::admission::load_request_for_admission_test(
         node.as_ref(),
         row["_docID"].as_str().unwrap(),
     )
     .await
     .unwrap();
     let (_authority_owner, authority) = crate::agent::p2p_reconcile::enrollment_authority_channel();
-    let verifier = crate::request_admission::AgentRequestAdmissionVerifier::new(
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         identity,
         authority,

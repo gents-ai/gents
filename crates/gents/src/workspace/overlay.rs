@@ -8,9 +8,9 @@ use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
 use crate::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry, rows};
+use crate::request::watcher::AgentRequest;
 use crate::tool_surface::{resolve_configured_tool_root, FileToolMode};
 use crate::toolset::{workspace_write_sandbox_enforced, WorkspaceAuthority};
-use crate::watcher::AgentRequest;
 
 use super::binding::{admit_workspace_binding, new_binding, AdmitBinding};
 use super::documents::{

@@ -68,11 +68,11 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
         .expect("parent doc id")
         .to_string();
     let parent_request =
-        crate::request_binding::load_agent_request(&coordinator, parent_request_id)
+        crate::request::binding::load_agent_request(&coordinator, parent_request_id)
             .await
             .unwrap()
             .unwrap();
-    let mut parent_lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
+    let mut parent_lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         coordinator.clone(),
         "parent-behavior",
         &coordinator_did,
@@ -81,9 +81,9 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
     );
     assert_eq!(
         parent_lifecycle.claim().await.unwrap(),
-        crate::lifecycle::ClaimOutcome::Claimed
+        crate::request::lifecycle::ClaimOutcome::Claimed
     );
-    let parent_writer = crate::streaming::DefraStreamWriter::new(
+    let parent_writer = crate::request::streaming::DefraStreamWriter::new(
         coordinator.clone(),
         &coordinator_did,
         Duration::ZERO,
@@ -227,7 +227,7 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
     )
     .await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    while crate::interrupt::active_session_request(
+    while crate::request::interrupt::active_session_request(
         &coordinator,
         &active.session_id,
         &host_did,
@@ -259,7 +259,7 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
         .await
         .unwrap();
     let caller = parent_lifecycle.request();
-    let cause = crate::lifecycle::SessionMessageCause {
+    let cause = crate::request::lifecycle::SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
         caller_agent_id: caller.agent_id.clone(),
         caller_session_id: caller.session_id.clone(),
@@ -271,7 +271,7 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
         tool_call_doc_id: followup.doc_id().unwrap().into(),
         correlation: None,
     };
-    let target = crate::lifecycle::SessionMessageTarget {
+    let target = crate::request::lifecycle::SessionMessageTarget {
         node_did: host_did.clone(),
         agent_id: active.agent_id.clone(),
         session_id: active.session_id.clone(),
@@ -313,24 +313,30 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
         "an aborted interrupting message publishes no request"
     );
     assert!(
-        crate::interrupt::fetch_interrupt_requested_at_by_doc_id(&coordinator, &active.doc_id)
-            .await
-            .unwrap()
-            .is_none(),
+        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id(
+            &coordinator,
+            &active.doc_id
+        )
+        .await
+        .unwrap()
+        .is_none(),
         "an aborted interrupting message interrupts nothing"
     );
     let receipt = crate::session_message::commit(&coordinator, &cause, &mut followup, plan, true)
         .await
         .unwrap();
     assert!(
-        crate::interrupt::fetch_interrupt_requested_at_by_doc_id(&coordinator, &active.doc_id)
-            .await
-            .unwrap()
-            .is_some()
+        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id(
+            &coordinator,
+            &active.doc_id
+        )
+        .await
+        .unwrap()
+        .is_some()
     );
     wait_for_value(&host, "AgentRequest", "request_id", &receipt.request_id).await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    while crate::interrupt::fetch_interrupt_requested_at_by_doc_id(&host, &active.doc_id)
+    while crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id(&host, &active.doc_id)
         .await
         .unwrap()
         .is_none()

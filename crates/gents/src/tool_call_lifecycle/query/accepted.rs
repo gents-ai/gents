@@ -7,8 +7,8 @@ use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, Outp
 use crate::config_client::ConfigAccess;
 use crate::config_client::ConfigApplyTxn;
 use crate::graphql::escape_graphql_string;
+use crate::request::streaming::AcceptedToolCall;
 use crate::session::canonical_rows::{decode_transcript_message_row, AGENT_MESSAGE_FIELDS};
-use crate::streaming::AcceptedToolCall;
 
 use super::ToolCallLifecycle;
 

@@ -77,7 +77,7 @@ async fn a_queued_or_folded_submission_keeps_the_running_turns_streaming_text() 
     folded["input"] = queue;
     folded["superseded_by_request"] = "req_head".into();
     folded["superseded_by_request_doc_id"] = head_doc.clone().into();
-    folded["failure_reason"] = gents::lifecycle::FOLDED_REASON.into();
+    folded["failure_reason"] = gents::request::lifecycle::FOLDED_REASON.into();
     create(&core, "AgentRequest", folded).await;
 
     let segment = OutputSegment {

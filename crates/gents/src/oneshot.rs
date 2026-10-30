@@ -12,10 +12,12 @@ use crate::agent::stream_processor::{StreamAction, StreamProcessor};
 use crate::completion_factory::loop_config;
 use crate::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use crate::inference::resolved::ResolvedAgent;
-use crate::lifecycle::TerminalizeResult;
-use crate::lifecycle::{ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TriggerLineage};
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
-use crate::streaming::DefraStreamWriter;
+use crate::request::lifecycle::TerminalizeResult;
+use crate::request::lifecycle::{
+    ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TriggerLineage,
+};
+use crate::request::streaming::DefraStreamWriter;
 use crate::tool_surface::{self, ToolRuntimeContext};
 use futures::StreamExt;
 
@@ -204,7 +206,7 @@ where
     anyhow::ensure!(
         matches!(
             lifecycle.claim_with_identity().await?,
-            crate::lifecycle::ClaimOutcome::Claimed
+            crate::request::lifecycle::ClaimOutcome::Claimed
         ),
         "new one-shot request was not claimed"
     );

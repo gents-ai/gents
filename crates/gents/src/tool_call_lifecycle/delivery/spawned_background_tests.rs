@@ -883,7 +883,7 @@ async fn background_bridge_completion_closes_its_source_and_notifies_without_a_s
         "completed",
         final_bytes,
         None,
-        crate::lifecycle::RequestHopCause::Continuation,
+        crate::request::lifecycle::RequestHopCause::Continuation,
     )
     .await
     .unwrap();

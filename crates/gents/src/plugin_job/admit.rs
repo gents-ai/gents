@@ -2,9 +2,11 @@ use std::collections::BTreeSet;
 
 use crate::background_tools::ProcessControlScope;
 use crate::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
-use crate::lifecycle::materialize::{next_request_hop, request_hop_within_bound, RequestHopCause};
 use crate::plugin_job::keys::job_spawn_key;
 use crate::plugin_job::origin::call_origin;
+use crate::request::lifecycle::materialize::{
+    next_request_hop, request_hop_within_bound, RequestHopCause,
+};
 use crate::tool_surface::EndpointScope;
 use gents_protocol::job::{
     DynamicMode, JobCeiling, JobChildState, JobControlRequest, JobEffects, JobGuestPin,

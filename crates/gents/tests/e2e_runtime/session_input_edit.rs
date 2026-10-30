@@ -8,7 +8,7 @@ use gents::agent::p2p_reconcile::{
 };
 use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
-use gents::lifecycle::{prepare_pending_user_edit, PendingMessageEdit, PendingQueueEdit};
+use gents::request::lifecycle::{prepare_pending_user_edit, PendingMessageEdit, PendingQueueEdit};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -331,7 +331,7 @@ impl ModeledEdit {
         };
         let active = in_state(&["claimed", "processing"]);
         assert!(active.len() <= 1, "one active request: {active:?}");
-        let pending = gents::lifecycle::pending_user_queue(
+        let pending = gents::request::lifecycle::pending_user_queue(
             &ConfigAccess::local(runtime.node.clone()),
             runtime.node_identity.did(),
             &self.session_id,
@@ -468,7 +468,7 @@ impl RemoteEdit<'_> {
         );
         assert_eq!(
             active.claim().await.unwrap(),
-            gents::lifecycle::ClaimOutcome::Claimed
+            gents::request::lifecycle::ClaimOutcome::Claimed
         );
         wait_row(
             self.client,

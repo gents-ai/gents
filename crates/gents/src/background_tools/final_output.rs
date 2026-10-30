@@ -63,7 +63,7 @@ pub(crate) async fn load_session_message_terminal(
                 "caused request lacks its session scope"
             );
             let folded = caused.lifecycle_state == Some(RequestLifecycleState::Superseded)
-                && caused.failure_reason.as_deref() == Some(crate::lifecycle::FOLDED_REASON);
+                && caused.failure_reason.as_deref() == Some(crate::request::lifecycle::FOLDED_REASON);
             let mut ids = vec![caused_doc_id.to_owned()];
             if folded {
                 let head = caused.superseded_by_request_doc_id.as_deref()

@@ -9,10 +9,12 @@ use tokio::sync::watch;
 
 use super::{AgentDaemon, ShutdownDrainFailure};
 use crate::inference::admission::{self, AdmissionCallContext, CallKind};
-use crate::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
+use crate::request::lifecycle::{
+    ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
+};
+use crate::request::streaming::DefraStreamWriter;
+use crate::request::watcher::AgentRequest;
 use crate::session;
-use crate::streaming::DefraStreamWriter;
-use crate::watcher::AgentRequest;
 
 pub(super) mod review;
 
@@ -39,7 +41,7 @@ where
     agent_config: Arc<crate::inference::resolved::ResolvedAgent>,
     provider_family: Option<String>,
     model: Arc<M>,
-    verifier: crate::request_admission::AgentRequestAdmissionVerifier,
+    verifier: crate::request::admission::AgentRequestAdmissionVerifier,
     capture_factory: Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
     service_admission: crate::runtime_service::RuntimeServiceAdmission,
 }
@@ -103,7 +105,7 @@ where
                 {
                     return Ok(());
                 }
-                crate::lifecycle::materialize::write_pending_auxiliary_request(
+                crate::request::lifecycle::materialize::write_pending_auxiliary_request(
                     &node,
                     &parent,
                     RequestPurpose::TitleAudit,
@@ -237,9 +239,10 @@ where
         else {
             return Ok(None);
         };
-        let origin =
-            crate::lifecycle::ExecutionOrigin::from_persisted(request.execution_origin.as_deref())
-                .context("admitted auxiliary request is missing execution origin")?;
+        let origin = crate::request::lifecycle::ExecutionOrigin::from_persisted(
+            request.execution_origin.as_deref(),
+        )
+        .context("admitted auxiliary request is missing execution origin")?;
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             Arc::clone(&self.node),
             &self.agent_config.agent_id,
@@ -256,7 +259,7 @@ where
             Ok(ClaimOutcome::Queued | ClaimOutcome::Interrupted | ClaimOutcome::Expired) => {
                 return Ok(None)
             }
-            Err(error) if crate::lifecycle::is_claim_admission_error(&error) => {
+            Err(error) if crate::request::lifecycle::is_claim_admission_error(&error) => {
                 lifecycle.reject_admission(&error.to_string()).await?;
                 return Ok(None);
             }
@@ -270,7 +273,7 @@ where
         let title_request = lifecycle.request().clone();
         let (interrupt_tx, interrupt_rx) = watch::channel(None);
         let _observer = tokio_util::task::AbortOnDropHandle::new(
-            crate::interrupt::spawn_request_interrupt_observer(
+            crate::request::interrupt::spawn_request_interrupt_observer(
                 self.node.clone(),
                 title_request.doc_id.clone(),
                 interrupt_tx,
@@ -357,7 +360,7 @@ where
         writer: &DefraStreamWriter,
         request: AgentRequest,
         shutdown: watch::Receiver<bool>,
-        mut interrupt_rx: watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
+        mut interrupt_rx: watch::Receiver<Option<crate::request::interrupt::InterruptIntent>>,
         review: Option<review::ReviewExecution>,
     ) -> Result<AuxiliaryResult> {
         let Some(parent) = super::request::prepare_unless_interrupted(
@@ -482,7 +485,7 @@ where
         &self,
         generation: TitleGeneration<'_>,
         mut shutdown: watch::Receiver<bool>,
-        interrupt_rx: &mut watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
+        interrupt_rx: &mut watch::Receiver<Option<crate::request::interrupt::InterruptIntent>>,
     ) -> Result<AuxiliaryResult> {
         let TitleGeneration {
             request_id,
@@ -571,7 +574,7 @@ async fn load_auxiliary_parent(
     let escaped = crate::graphql::escape_graphql_string(parent_doc_id);
     let query = format!(
         "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{escaped}\" }} }}, limit: 1) {{ {} }} }}",
-        crate::request_admission::SIGNED_REQUEST_FIELDS
+        crate::request::admission::SIGNED_REQUEST_FIELDS
     );
     let response = crate::graphql::graphql_with_transaction_retry(
         node,
@@ -582,7 +585,7 @@ async fn load_auxiliary_parent(
     let row: gents_protocol::row::AgentRequestRow =
         crate::graphql::first_row(&response, "AgentRequest")?
             .context("request parent request disappeared")?;
-    crate::request_admission::verify_request_receipt_signature(&row)?;
+    crate::request::admission::verify_request_receipt_signature(&row)?;
     let parent = AgentRequest::try_from(row)?;
     anyhow::ensure!(
         parent.purpose == RequestPurpose::Normal

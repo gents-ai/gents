@@ -318,7 +318,7 @@ async fn load_background_continuation_requests(
 pub(super) fn is_background_completion_input(
     input: Option<&gents_protocol::request_input::RequestInput>,
 ) -> bool {
-    input.is_some_and(gents::lifecycle::is_background_completion_request)
+    input.is_some_and(gents::request::lifecycle::is_background_completion_request)
 }
 
 fn continuation_request_has_started(lifecycle_state: Option<RequestLifecycleState>) -> bool {

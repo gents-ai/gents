@@ -433,7 +433,7 @@ async fn persisted_outcome_requests(
     let response = access
         .execute(&format!(
             "{{AgentRequest {{{} lifecycle_state}}}}",
-            crate::watcher::AGENT_REQUEST_FIELDS
+            crate::request::watcher::AGENT_REQUEST_FIELDS
         ))
         .await
         .unwrap();
@@ -478,14 +478,15 @@ async fn generated_terminal_outcome_action_traces_use_native_owners() {
                         .iter()
                         .find(|row| row.request_id == identity.request_id())
                         .unwrap();
-                    let request = crate::watcher::AgentRequest::try_from(row.clone()).unwrap();
+                    let request =
+                        crate::request::watcher::AgentRequest::try_from(row.clone()).unwrap();
                     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
                         node.clone(),
                         "general",
                         &identity.owner_did,
                         request,
                         60,
-                        crate::lifecycle::ExecutionOrigin::Interactive,
+                        crate::request::lifecycle::ExecutionOrigin::Interactive,
                         "test-backend",
                     );
                     let now = chrono::Utc::now();

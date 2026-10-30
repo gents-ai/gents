@@ -1,5 +1,5 @@
+use crate::request::watcher::DefraWatcher;
 use crate::triggers::engine::event_source::EventSource;
-use crate::watcher::DefraWatcher;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EventDeliverySourceContract {

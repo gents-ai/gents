@@ -8,7 +8,7 @@ use crate::agent::p2p_reconcile::{
     enrollment_authority_channel, run_enrollment_reconciler, run_pairing_reconciler,
     EmbeddedRemoteP2pAdmin, GraphqlEnrollmentStore, PairingFilters, RemoteP2pAdmin,
 };
-use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
+use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::store::identity::KeyIdentity;
 use crate::tool_call_lifecycle::admission_fixture::{
     ensure_fixture_session, publish_accepted_on_claimed_request,
@@ -467,9 +467,9 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool, shared: bool) -> 
     .await?;
     let request_doc = crate::graphql::created_doc_id(&response, "AgentRequest")?;
     let request =
-        crate::request_admission::load_request_for_admission_test(&source_node, &request_doc)
+        crate::request::admission::load_request_for_admission_test(&source_node, &request_doc)
             .await?;
-    let request = crate::request_admission::AgentRequestAdmissionVerifier::new(
+    let request = crate::request::admission::AgentRequestAdmissionVerifier::new(
         source_node.clone(),
         source.clone(),
         authority.clone(),

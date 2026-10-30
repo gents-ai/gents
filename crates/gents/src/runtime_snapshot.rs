@@ -13,9 +13,9 @@ pub use crate::documents::ScheduleCadence;
 use crate::documents::TaskHook;
 use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::resolved::ResolvedAgent;
+use crate::request::watcher::AgentRequest;
 use crate::store::identity::RuntimeNode;
 use crate::tool_surface::ToolSurface;
-use crate::watcher::AgentRequest;
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 use gents_protocol::node_readiness::{
     effective_agent_readiness_admission, EffectiveAgentReadinessAdmission,

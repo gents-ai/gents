@@ -2,7 +2,7 @@ use super::*;
 use crate::config_client::{
     apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
+use crate::request::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use crate::Collection;
 use serde_json::Value;
 use std::sync::Arc;
@@ -116,7 +116,7 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
         source_collection: "WorkA".into(),
         source_doc_id: doc_id.clone(),
     };
-    let key = crate::lifecycle::task_fire_key(&identity);
+    let key = crate::request::lifecycle::task_fire_key(&identity);
     let fire = gents_protocol::trigger_delivery::TriggerFire {
         fire_key: key.clone(),
         identity,
@@ -139,14 +139,14 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
     let trigger_doc_id = trigger_record["data"]["Trigger"][0]["_docID"]
         .as_str()
         .unwrap();
-    let create = crate::lifecycle::build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
-        PIN_FIXED_DID, "behavior", "work", crate::lifecycle::ExecutionOrigin::Scheduled,
-        crate::lifecycle::TriggerLineage {trigger_id:Some("trigger".into()), trigger_kind:Some("event".into()), source_doc_id:Some(doc_id.clone()), correlation:None, trigger_context:None},
+    let create = crate::request::lifecycle::build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
+        PIN_FIXED_DID, "behavior", "work", crate::request::lifecycle::ExecutionOrigin::Scheduled,
+        crate::request::lifecycle::TriggerLineage {trigger_id:Some("trigger".into()), trigger_kind:Some("event".into()), source_doc_id:Some(doc_id.clone()), correlation:None, trigger_context:None},
         None, None, &fire.request_id, &fire.session_id, Some(&key), None, Some(trigger_doc_id),
     ).await?;
     publish(&access, vec![trigger(false)]).await?;
     assert!(
-        crate::lifecycle::write_task_delivery(&access, &fire, false, &create)
+        crate::request::lifecycle::write_task_delivery(&access, &fire, false, &create)
             .await
             .is_err()
     );
@@ -166,10 +166,12 @@ async fn persisted_disable_blocks_stale_admission_and_exclusion_but_not_committe
         .unwrap()
         .is_empty());
     publish(&access, vec![trigger(true)]).await?;
-    let admitted = crate::lifecycle::write_task_delivery(&access, &fire, false, &create).await?;
+    let admitted =
+        crate::request::lifecycle::write_task_delivery(&access, &fire, false, &create).await?;
     assert!(!admitted.duplicate);
     publish(&access, vec![trigger(false)]).await?;
-    let duplicate = crate::lifecycle::write_task_delivery(&access, &fire, false, &create).await?;
+    let duplicate =
+        crate::request::lifecycle::write_task_delivery(&access, &fire, false, &create).await?;
     assert!(duplicate.duplicate);
     assert_eq!(duplicate.request.doc_id, admitted.request.doc_id);
     access

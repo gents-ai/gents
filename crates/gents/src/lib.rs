@@ -32,7 +32,6 @@ pub mod health_checker;
 pub mod hook;
 pub mod inference;
 pub mod inference_observation;
-pub mod interrupt;
 #[cfg(test)]
 pub(crate) mod lean_vocab_test;
 pub mod native_logging;
@@ -294,7 +293,6 @@ pub(crate) mod test_support {
          <function=describe_tool>\", \"raw_schema\": false, \
          \"service_id\": \"observability-mcp\", \"tool_name\": \"list_hosts\"}";
 }
-pub mod lifecycle;
 pub mod log_rate;
 pub mod mailbox;
 pub(crate) mod managed_exec;
@@ -307,14 +305,13 @@ pub mod periodic_recovery;
 pub mod prompt;
 pub mod provider_context_reduction;
 pub mod registry;
-mod request_admission;
+pub mod request;
 #[doc(hidden)]
-pub use request_admission::final_claim_admission_disposition;
-pub use request_admission::{
+pub use request::admission::final_claim_admission_disposition;
+pub use request::admission::{
     sign_agent_request_create, sign_agent_request_create_as_registered_target,
     verify_request_receipt_signature, SIGNED_REQUEST_FIELDS,
 };
-pub(crate) mod request_binding;
 pub mod retry;
 pub mod run_timeline;
 pub mod run_timeline_fetch;
@@ -327,8 +324,6 @@ pub mod self_config;
 pub mod session;
 pub mod session_message;
 pub mod session_origin;
-pub mod streaming;
-pub(crate) mod task_hooks;
 pub mod tool_call_lifecycle;
 pub mod tool_control;
 pub mod tool_surface;
@@ -336,7 +331,6 @@ pub mod toolset;
 pub mod trace_export;
 pub mod triggers;
 pub mod truncation;
-pub mod watcher;
 pub mod workspace;
 
 pub use adapter_projection::{
@@ -414,20 +408,6 @@ pub use inference::resolved::{
     DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
     DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
-pub use interrupt::{
-    fetch_interrupt_requested_at, fetch_interrupt_requested_at_by_doc_id, interrupt_request,
-    interrupt_request_by_doc_id,
-};
-pub use lifecycle::{
-    background_wake_next_retry_at, background_wake_retry_delay,
-    build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
-    build_signed_request, enqueue_local_steering_request, next_request_hop,
-    request_hop_within_bound, task_session_title, write_manual_agent_request,
-    write_manual_agent_request_with_conversation_title, BackgroundWakeRedriveReport,
-    EnqueuedAgentRequest, ParentLink, RecoveryReport, RequestHopCause, RequestIdentity,
-    RequestLifecycle, RequestSigner, RequestSpec, RetryLink, TerminalRedriveReport,
-    TerminalRepairReport, TERMINAL_REDRIVE_BATCH_LIMIT, TERMINAL_REDRIVE_CAP,
-};
 pub use mcp_pool::McpPool;
 pub use meta_tools::build_meta_tools;
 pub use native_executor_status::{active_native_executors, NativeExecutorStatus};
@@ -444,6 +424,22 @@ pub use periodic_recovery::{
     PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,
 };
 pub use prompt::{LayeredPromptBuilder, PromptBuilder};
+pub use request::interrupt::{
+    fetch_interrupt_requested_at, fetch_interrupt_requested_at_by_doc_id, interrupt_request,
+    interrupt_request_by_doc_id,
+};
+pub use request::lifecycle::{
+    background_wake_next_retry_at, background_wake_retry_delay,
+    build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
+    build_signed_request, enqueue_local_steering_request, next_request_hop,
+    request_hop_within_bound, task_session_title, write_manual_agent_request,
+    write_manual_agent_request_with_conversation_title, BackgroundWakeRedriveReport,
+    EnqueuedAgentRequest, ParentLink, RecoveryReport, RequestHopCause, RequestIdentity,
+    RequestLifecycle, RequestSigner, RequestSpec, RetryLink, TerminalRedriveReport,
+    TerminalRepairReport, TERMINAL_REDRIVE_BATCH_LIMIT, TERMINAL_REDRIVE_CAP,
+};
+pub use request::streaming::{DefraStreamWriter, StreamWriter, MAX_LIVE_REASONING_BYTES};
+pub use request::watcher::{AgentRequest, DefraWatcher, Watcher};
 pub use run_timeline::{
     build_run_timeline, RetrySummary, RunTimeline, RunTimelineEvent, RunTimelineRows,
     TimelineGoalParentState, TimelineGoalState, TimelineGoalTransitionEvent,
@@ -473,7 +469,6 @@ pub use store::schema::{
     OAUTH_CREDENTIAL_SCHEMA, SCHEDULE_SCHEMA, TASK_SCHEMA, TOOLS_SCHEMA,
     TOOL_SERVICE_HEALTH_STATE_SCHEMA, TOOL_SERVICE_REGISTRY_SCHEMA,
 };
-pub use streaming::{DefraStreamWriter, StreamWriter, MAX_LIVE_REASONING_BYTES};
 pub use tool_control::{cancel_background_tool_call, CancelBackgroundToolCallOutcome};
 pub use tool_surface::{
     cli_tool, AgentToolSurfaceConfig, BashMode, CustomToolFactory, FileToolMode,
@@ -493,16 +488,15 @@ pub use triggers::engine::subscription_source::{
 };
 pub use triggers::engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
 pub use truncation::{TruncationLimits, TruncationMode};
-pub use watcher::{AgentRequest, DefraWatcher, Watcher};
 
 #[doc(hidden)]
 pub mod __test_internals {
     pub use crate::agent::principal_assembly::AgentBuildError;
     pub use crate::config_client::TXN_TRACING_TARGET;
-    pub use crate::lifecycle::activate_workspace_bound_request;
-    pub use crate::lifecycle::materialize::supersede_trigger_requests_in_txn;
-    pub use crate::lifecycle::materialize::EnqueuedAgentRequest;
-    pub use crate::lifecycle::queue::{reconcile_coalesced_pending_request, QueueSource};
+    pub use crate::request::lifecycle::activate_workspace_bound_request;
+    pub use crate::request::lifecycle::materialize::supersede_trigger_requests_in_txn;
+    pub use crate::request::lifecycle::materialize::EnqueuedAgentRequest;
+    pub use crate::request::lifecycle::queue::{reconcile_coalesced_pending_request, QueueSource};
 }
 
 pub(crate) mod tool_output;

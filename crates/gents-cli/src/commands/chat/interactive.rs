@@ -109,7 +109,7 @@ pub(super) async fn run(
                     continue;
                 }
                 let submitted = async {
-                let input = gents::lifecycle::prepare_user_message_input(
+                let input = gents::request::lifecycle::prepare_user_message_input(
                     &gents::ConfigAccess::Graphql(graphql.clone()),
                     node, session, Default::default(), gents_protocol::request_input::QueueDelivery::Steer,
                 ).await?;

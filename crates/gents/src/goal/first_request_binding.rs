@@ -75,7 +75,7 @@ fn continuation_reference(
 
 pub(super) fn continuation_assignment(
     goal: &GoalDocument,
-    parent: &crate::watcher::AgentRequest,
+    parent: &crate::request::watcher::AgentRequest,
     receipt_doc: Option<&str>,
 ) -> Result<GoalAssignmentInput> {
     continuation_reference(

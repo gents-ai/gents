@@ -127,7 +127,7 @@ async fn seed_signed_request(
                 agent_id: "test".into(),
                 session_id: session_id.into(),
                 content: "test".into(),
-                execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
+                execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
                 created_at: created_at.into(),
             },
             AgentRequestAdmissionRecord::local_self(node_did),

@@ -1020,7 +1020,7 @@ mod tests {
 
     use super::*;
     use crate::agent::p2p_reconcile::enrollment_store::{ActiveEnrollment, RevokedEnrollment};
-    use crate::request_admission::AgentRequestAdmissionVerifier;
+    use crate::request::admission::AgentRequestAdmissionVerifier;
     use crate::store::identity::KeyIdentity;
 
     #[derive(Deserialize)]
@@ -1299,7 +1299,7 @@ mod tests {
         member: &dyn NodeIdentity,
         active: &ActiveEnrollment,
         label: &str,
-    ) -> crate::watcher::AgentRequest {
+    ) -> crate::request::watcher::AgentRequest {
         let mut create = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             format!("agent-request-{label}"),
@@ -1345,7 +1345,7 @@ mod tests {
             })
             .and_then(serde_json::Value::as_str)
             .expect("created AgentRequest doc id");
-        crate::request_admission::load_request_for_admission_test(node.as_ref(), doc_id)
+        crate::request::admission::load_request_for_admission_test(node.as_ref(), doc_id)
             .await
             .expect("load queued AgentRequest")
     }

@@ -1,7 +1,9 @@
 use super::*;
-use crate::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
+use crate::request::lifecycle::{
+    ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
+};
+use crate::request::streaming::DefraStreamWriter;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
-use crate::streaming::DefraStreamWriter;
 use crate::tool_call_lifecycle::{AwaitMode, ToolCallLifecycle};
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use gents_protocol::row::AgentRequestRow;
@@ -21,7 +23,7 @@ async fn persist_request(node: &EmbeddedNode, create: &AgentRequestCreate) -> Ag
         &format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             escape_graphql_string(&create.request_id),
-            crate::request_admission::SIGNED_REQUEST_FIELDS,
+            crate::request::admission::SIGNED_REQUEST_FIELDS,
         ),
     )
     .await;
@@ -206,7 +208,7 @@ async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
         tool.start_running().await.unwrap();
 
         if interrupted {
-            crate::interrupt::interrupt_request(&node, request_id)
+            crate::request::interrupt::interrupt_request(&node, request_id)
                 .await
                 .unwrap();
         }
@@ -287,8 +289,9 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             .await
             .unwrap();
         let root_row = persist_request(&node, &root).await;
-        let root_request = crate::watcher::AgentRequest::try_from(root_row.clone()).unwrap();
-        let mut child = crate::lifecycle::queue::prepare_goal_continuation(
+        let root_request =
+            crate::request::watcher::AgentRequest::try_from(root_row.clone()).unwrap();
+        let mut child = crate::request::lifecycle::queue::prepare_goal_continuation(
             &root_request,
             "output-behavior".into(),
             "output-goal",
@@ -314,7 +317,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
             child_row.caused_by_source_doc_id,
             root_row.caused_by_source_doc_id
         );
-        let request = crate::watcher::AgentRequest::try_from(child_row.clone()).unwrap();
+        let request = crate::request::watcher::AgentRequest::try_from(child_row.clone()).unwrap();
         let mut outsider = AgentRequestCreate::base(
             gents_protocol::request_admission::RequestPurpose::Normal,
             "output-outsider",

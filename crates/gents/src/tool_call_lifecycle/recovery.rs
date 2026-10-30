@@ -559,7 +559,7 @@ impl super::ToolCallLifecycle {
                     status,
                     "",
                     Some(reason),
-                    crate::lifecycle::RequestHopCause::Continuation,
+                    crate::request::lifecycle::RequestHopCause::Continuation,
                 )
                 .await
             }
@@ -630,9 +630,9 @@ impl super::ToolCallLifecycle {
             // (Lean `CausalHop.return_keeps_caller_hop`).
             let wake =
                 if super::ToolRowKind::of(&row.tool_name) == super::ToolRowKind::SessionMessage {
-                    crate::lifecycle::RequestHopCause::Return
+                    crate::request::lifecycle::RequestHopCause::Return
                 } else {
-                    crate::lifecycle::RequestHopCause::Continuation
+                    crate::request::lifecycle::RequestHopCause::Continuation
                 };
             let appended = crate::background_completion::append_background_tool_completion(
                 node,
@@ -1008,7 +1008,7 @@ async fn append_recovered_background_tool_completion(
         status,
         "",
         Some(reason),
-        crate::lifecycle::RequestHopCause::Continuation,
+        crate::request::lifecycle::RequestHopCause::Continuation,
     )
     .await
     {

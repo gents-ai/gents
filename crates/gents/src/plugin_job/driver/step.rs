@@ -25,11 +25,11 @@ use super::settle::settle_plugin_job_in_txn;
 use super::{step_failure, JobRuntime, StepFailure};
 use crate::background_tools::ProcessControlScope;
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::lifecycle::SessionMessageCause;
 use crate::plugin::data::{DataCaller, StampContext};
 use crate::plugin::job_calls::JobCaller;
 use crate::plugin::store::{parse_coordinate, read_record, InstalledPlugin};
 use crate::plugin::GuestTrap;
+use crate::request::lifecycle::SessionMessageCause;
 use crate::session_origin::SessionScope;
 use crate::tool_call_lifecycle::{PluginJobTerminal, ToolCallLifecycle, ToolCallState};
 

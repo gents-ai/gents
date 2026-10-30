@@ -332,7 +332,7 @@ fn claude_sse_for_blocks(blocks: &[serde_json::Value]) -> String {
 
 struct ClaudeFixtureRun {
     node: Arc<defra_node::EmbeddedNode>,
-    lifecycle: crate::lifecycle::RequestLifecycle,
+    lifecycle: crate::request::lifecycle::RequestLifecycle,
     collected: CollectedScriptedStream,
     request_commit_cid: String,
 }

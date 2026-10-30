@@ -1,12 +1,12 @@
 use super::*;
-use crate::lifecycle::queue::goal_continuation_identity;
-use crate::request_admission::SIGNED_REQUEST_FIELDS;
+use crate::request::admission::SIGNED_REQUEST_FIELDS;
+use crate::request::lifecycle::queue::goal_continuation_identity;
 use crate::store::identity::NodeIdentity;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::lifecycle::{ClaimOutcome, RequestTerminalOutcome, TerminalizeResult};
+use crate::request::lifecycle::{ClaimOutcome, RequestTerminalOutcome, TerminalizeResult};
 use crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request;
 use crate::tool_call_lifecycle::{AwaitMode, SpawnedBackgroundToolAdmission};
 
@@ -231,7 +231,7 @@ async fn run_generated_wait_observations() {
         )
         .await;
         if case.name == "unrelated_wait_cannot_suppress" {
-            let older = crate::watcher::AgentRequest::try_from(
+            let older = crate::request::watcher::AgentRequest::try_from(
                 request_rows(&fixture.node)
                     .await
                     .into_iter()
@@ -795,7 +795,7 @@ async fn run_historical_publication_cases() {
                 let rows: Vec<AgentRequestRow> =
                     serde_json::from_value(staged["data"]["AgentRequest"].clone()).unwrap();
                 assert_eq!(rows.len(), 1);
-                crate::request_admission::verify_runtime_local_control_receipt(
+                crate::request::admission::verify_runtime_local_control_receipt(
                     &rows[0],
                     fixture.identity.did(),
                     PARENT,

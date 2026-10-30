@@ -265,7 +265,7 @@ pub(crate) async fn settle_session_message_row(
                 "failed",
                 reason,
                 Some(REASON),
-                crate::lifecycle::RequestHopCause::Continuation,
+                crate::request::lifecycle::RequestHopCause::Continuation,
             )
             .await?;
             return Ok(true);
@@ -303,7 +303,7 @@ pub(crate) async fn settle_session_message_row(
         terminal.notification_status(),
         terminal.output(),
         handoff_reason,
-        crate::lifecycle::RequestHopCause::Return,
+        crate::request::lifecycle::RequestHopCause::Return,
     )
     .await?;
     Ok(true)
@@ -523,7 +523,7 @@ mod turn_assignment_tests {
         }}) {{ _docID }} }}"#,
             escape_graphql_string(&caused_request_doc_id),
             escape_graphql_string(&foreign_doc),
-            escape_graphql_string(crate::lifecycle::FOLDED_REASON)
+            escape_graphql_string(crate::request::lifecycle::FOLDED_REASON)
         );
         crate::config_client::ConfigAccess::write_local(node, "test.foreign_fold", &foreign_fold)
             .await
@@ -574,7 +574,7 @@ mod turn_assignment_tests {
         }}) {{ _docID }} }}"#,
             escape_graphql_string(&caused_request_doc_id),
             escape_graphql_string(&foreign_agent_doc),
-            escape_graphql_string(crate::lifecycle::FOLDED_REASON)
+            escape_graphql_string(crate::request::lifecycle::FOLDED_REASON)
         );
         crate::config_client::ConfigAccess::write_local(
             node,
@@ -609,7 +609,7 @@ mod turn_assignment_tests {
         }}) {{ _docID }} }}"#,
             escape_graphql_string(&caused_request_doc_id),
             escape_graphql_string(&head_doc),
-            escape_graphql_string(crate::lifecycle::FOLDED_REASON)
+            escape_graphql_string(crate::request::lifecycle::FOLDED_REASON)
         );
         crate::config_client::ConfigAccess::write_local(
             node,
@@ -637,7 +637,7 @@ mod turn_assignment_tests {
             escape_graphql_string(&caused_request_doc_id),
             escape_graphql_string(&head_id),
             escape_graphql_string(&head_doc),
-            escape_graphql_string(crate::lifecycle::FOLDED_REASON)
+            escape_graphql_string(crate::request::lifecycle::FOLDED_REASON)
         );
         crate::config_client::ConfigAccess::write_local(node, "test.folded_cause", &fold)
             .await

@@ -30,10 +30,10 @@ use crate::plugin_job::records::{read_pin, read_progress, read_step_state};
 use crate::plugin_job::settings::effective_ceiling;
 use crate::plugin_job::JobBinding;
 use crate::provider_usage::{sum_charged_from_persisted_parts, sum_persisted_usage_columns};
-use crate::request_admission::load_request_context;
-use crate::request_binding::load_agent_request_by_doc_id;
+use crate::request::admission::load_request_context;
+use crate::request::binding::load_agent_request_by_doc_id;
+use crate::request::watcher::AgentRequest;
 use crate::tool_call_lifecycle::{load_tool_call_arguments, CausedRequestTerminal, ToolCallState};
-use crate::watcher::AgentRequest;
 use crate::workspace::request_workspace_cwd;
 
 #[cfg(test)]
@@ -1190,14 +1190,14 @@ pub(crate) mod tests {
         let row = node
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-                crate::watcher::AGENT_REQUEST_FIELDS,
+                crate::request::watcher::AGENT_REQUEST_FIELDS,
             ))
             .await;
         let row: gents_protocol::row::AgentRequestRow =
             crate::graphql::first_row(&row, "AgentRequest")
                 .unwrap()
                 .unwrap();
-        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
+        let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
             node.clone(),
             "general",
             node_did,
@@ -1206,9 +1206,9 @@ pub(crate) mod tests {
         );
         assert_eq!(
             lifecycle.claim().await.unwrap(),
-            crate::lifecycle::ClaimOutcome::Claimed
+            crate::request::lifecycle::ClaimOutcome::Claimed
         );
-        let writer = crate::streaming::DefraStreamWriter::new(
+        let writer = crate::request::streaming::DefraStreamWriter::new(
             node.clone(),
             node_did,
             std::time::Duration::from_millis(1),
@@ -1233,7 +1233,7 @@ pub(crate) mod tests {
             .unwrap();
         lifecycle
             .terminalize_owned(
-                crate::lifecycle::RequestTerminalOutcome::Completed,
+                crate::request::lifecycle::RequestTerminalOutcome::Completed,
                 gents_protocol::output::TerminalOutput::Message {
                     message_doc_id: published.message_doc_id,
                 },
@@ -1431,7 +1431,6 @@ pub(crate) mod tests {
 
     use super::{build_step_input, StepKind};
     use crate::documents::Tools;
-    use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
     use crate::plugin::executor::PluginExecutor;
     use crate::plugin::store::InstalledPlugin;
     use crate::plugin_job::driver::JobRuntime;
@@ -1439,6 +1438,7 @@ pub(crate) mod tests {
         write_pin_in_txn, write_progress_in_txn, write_step_state_in_txn, HostProgressFacts,
     };
     use crate::plugin_job::JobBinding;
+    use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
     use crate::tool_call_lifecycle::admission_fixture::{
         fixture_job_pin, publish_accepted_on_claimed_request,
     };
@@ -1585,7 +1585,7 @@ pub(crate) mod tests {
         let response = node
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "request-1" }} }}) {{ {} }} }}"#,
-                crate::watcher::AGENT_REQUEST_FIELDS
+                crate::request::watcher::AGENT_REQUEST_FIELDS
             ))
             .await;
         let row: gents_protocol::row::AgentRequestRow =

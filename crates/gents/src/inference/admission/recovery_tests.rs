@@ -512,22 +512,22 @@ async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
         .await
         .unwrap();
     let parent_doc_id = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
-    let parent = crate::request_admission::load_request_for_admission_test(&node, &parent_doc_id)
+    let parent = crate::request::admission::load_request_for_admission_test(&node, &parent_doc_id)
         .await
         .unwrap();
-    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_execution_binding(
+    let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
         node.clone(),
         "test",
         identity.did(),
         parent,
         120,
-        crate::lifecycle::ExecutionOrigin::Interactive,
+        crate::request::lifecycle::ExecutionOrigin::Interactive,
         "recovery-cas-backend",
     );
     lifecycle.set_configured_max_total_tokens(Some(100));
     assert_eq!(
         lifecycle.claim_with_identity().await.unwrap(),
-        crate::lifecycle::ClaimOutcome::Claimed
+        crate::request::lifecycle::ClaimOutcome::Claimed
     );
     let request = lifecycle.request().clone();
     let snapshot = seed_call(&node, "running", identity.did(), &request.doc_id).await;

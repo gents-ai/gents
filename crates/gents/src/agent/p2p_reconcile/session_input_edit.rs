@@ -178,8 +178,8 @@ pub(crate) async fn process_command(
             }
             let (outcome, reason, request_doc_ids) = match intrinsic_rejection(identity.as_ref(), &command).await {
                 Some(reason) => (SessionInputEditOutcome::Rejected, reason, Vec::new()),
-                None => match crate::lifecycle::queue::persisted_replacements_in_txn(txn, &command.node_did, &command.replacements).await? {
-                    crate::lifecycle::queue::PersistedReplacements::Exact(ids) => {
+                None => match crate::request::lifecycle::queue::persisted_replacements_in_txn(txn, &command.node_did, &command.replacements).await? {
+                    crate::request::lifecycle::queue::PersistedReplacements::Exact(ids) => {
                         (SessionInputEditOutcome::Applied, String::new(), ids)
                     }
                     _ => {
@@ -195,11 +195,11 @@ pub(crate) async fn process_command(
                         };
                         match rejection {
                             Some(reason) => (SessionInputEditOutcome::Rejected, reason, Vec::new()),
-                            None => match crate::lifecycle::queue::validate_pending_user_edit_in_txn(txn, &command.node_did, &command.session_id,
+                            None => match crate::request::lifecycle::queue::validate_pending_user_edit_in_txn(txn, &command.node_did, &command.session_id,
                                 &command.requester_did, &command.edit, &command.replacements).await? {
                                 Err(reason) => (SessionInputEditOutcome::Rejected, reason, Vec::new()),
                                 Ok(validated) => (SessionInputEditOutcome::Applied, String::new(),
-                                    crate::lifecycle::queue::apply_pending_user_edit_in_txn(txn, validated).await?.request_doc_ids),
+                                    crate::request::lifecycle::queue::apply_pending_user_edit_in_txn(txn, validated).await?.request_doc_ids),
                             },
                         }
                     }

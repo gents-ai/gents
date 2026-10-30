@@ -10,7 +10,7 @@ struct CountingWatcher {
     calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
-impl crate::watcher::Watcher for CountingWatcher {
+impl crate::request::watcher::Watcher for CountingWatcher {
     async fn next_request(&mut self) -> Option<anyhow::Result<AgentRequest>> {
         self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.rx.recv().await

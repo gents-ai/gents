@@ -21,8 +21,8 @@ use crate::lean_vocab_test::{
     lean_fleet_slot_accounting_case, lean_inference_slot_accounting_cases, lean_vocabulary_values,
     LeanContractVocabulary, LeanFleetSlotAccountingCase,
 };
+use crate::request::watcher::AgentRequest;
 use crate::store::schema::ensure_runtime_schemas;
-use crate::watcher::AgentRequest;
 
 async fn test_node() -> Arc<EmbeddedNode> {
     lean_inference_slot_accounting_cases();

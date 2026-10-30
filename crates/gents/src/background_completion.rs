@@ -10,7 +10,7 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
-use crate::lifecycle::queue::{QueuePolicy, QueueSource, RequestQueue};
+use crate::request::lifecycle::queue::{QueuePolicy, QueueSource, RequestQueue};
 use crate::tool_call_lifecycle::{FailureClass, ToolCallLifecycle};
 
 const AGENT_REQUEST_COLLECTION: &str = "AgentRequest";

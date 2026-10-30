@@ -11,11 +11,11 @@ use gents_protocol::job::{JobEffects, JobScratch, JobSpawn};
 use gents_protocol::request_admission::AgentRequestCreate;
 use sha2::{Digest, Sha256};
 
-use crate::lifecycle::{
-    next_request_hop, RequestHopCause, SessionMessageCause, SessionMessageTarget,
-};
 use crate::plugin_job::admit::{StepChild, StepContext, StepRow};
 use crate::plugin_job::keys::{job_message_key, job_session_id, job_spawn_key};
+use crate::request::lifecycle::{
+    next_request_hop, RequestHopCause, SessionMessageCause, SessionMessageTarget,
+};
 use crate::session_origin::SessionScope;
 
 const SCRATCH_MAX_BYTES: u64 = 1_048_576;
@@ -355,7 +355,7 @@ async fn stage_request(
         input = crate::goal::bind_goal_input(input, state)?;
     }
     let request_id = uuid::Uuid::new_v4().to_string();
-    let create = crate::lifecycle::materialize::build_session_message_request_with_input(
+    let create = crate::request::lifecycle::materialize::build_session_message_request_with_input(
         cause,
         &SessionMessageTarget {
             node_did: node_did.to_owned(),
@@ -393,7 +393,7 @@ async fn one_request(
                 {}
             }} }}"#,
             crate::graphql::escape_graphql_string(retry_key),
-            crate::request_admission::SIGNED_REQUEST_FIELDS,
+            crate::request::admission::SIGNED_REQUEST_FIELDS,
         ))
         .await?;
     let rows = response
@@ -412,7 +412,7 @@ async fn one_request(
         .transpose()
         .context("decoding job request fingerprint")?;
     if let Some(stored) = &stored {
-        crate::request_admission::verify_request_receipt_signature(stored)?;
+        crate::request::admission::verify_request_receipt_signature(stored)?;
     }
     Ok(stored)
 }
@@ -656,9 +656,9 @@ mod tests {
     }
 
     use crate::background_tools::ProcessControlScope;
-    use crate::lifecycle::SessionMessageCause;
     use crate::plugin_job::admit::{HostFacts, StepCall, StepChild, StepContext, StepRow};
     use crate::plugin_job::keys::{job_message_key, job_session_id, job_spawn_key};
+    use crate::request::lifecycle::SessionMessageCause;
     use crate::tool_call_lifecycle::admission_fixture::{
         published_admission, PublishedAdmissionOptions,
     };
@@ -687,7 +687,7 @@ mod tests {
         let tool = &admission.tool;
         let request_doc_id = tool.request_doc_id().unwrap().to_owned();
         let caller =
-            crate::request_binding::load_agent_request_by_doc_id(&admission.node, &request_doc_id)
+            crate::request::binding::load_agent_request_by_doc_id(&admission.node, &request_doc_id)
                 .await
                 .unwrap()
                 .unwrap();
@@ -978,13 +978,13 @@ mod tests {
             .execute(&format!(
                 "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
                 crate::graphql::escape_graphql_string(doc),
-                crate::watcher::AGENT_REQUEST_FIELDS,
+                crate::request::watcher::AGENT_REQUEST_FIELDS,
             ))
             .await
             .unwrap();
         let row: gents_protocol::row::AgentRequestRow =
             serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
+        let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
             harness.node.clone(),
             "general",
             &harness.cause.caller_node_did,
@@ -993,9 +993,9 @@ mod tests {
         );
         assert_eq!(
             lifecycle.claim().await.unwrap(),
-            crate::lifecycle::ClaimOutcome::Claimed
+            crate::request::lifecycle::ClaimOutcome::Claimed
         );
-        let writer = crate::streaming::DefraStreamWriter::new(
+        let writer = crate::request::streaming::DefraStreamWriter::new(
             harness.node.clone(),
             &harness.cause.caller_node_did,
             std::time::Duration::ZERO,
@@ -1048,7 +1048,7 @@ mod tests {
             rows[0]["content"],
             format!(
                 "{}\n\nfirst",
-                crate::lifecycle::materialize::session_message_sender_header(
+                crate::request::lifecycle::materialize::session_message_sender_header(
                     &harness.cause,
                     rows[0]["created_at"].as_str().unwrap()
                 )
@@ -1152,7 +1152,7 @@ mod tests {
             rows[0]["content"],
             format!(
                 "{}\n\nfirst",
-                crate::lifecycle::materialize::session_message_sender_header(
+                crate::request::lifecycle::materialize::session_message_sender_header(
                     &harness.cause,
                     rows[0]["created_at"].as_str().unwrap()
                 )
@@ -1188,7 +1188,7 @@ mod tests {
             rows[0]["content"],
             format!(
                 "{}\n\nthird",
-                crate::lifecycle::materialize::session_message_sender_header(
+                crate::request::lifecycle::materialize::session_message_sender_header(
                     &harness.cause,
                     rows[0]["created_at"].as_str().unwrap()
                 )
@@ -1216,7 +1216,7 @@ mod tests {
             rows[0]["content"],
             format!(
                 "{}\n\nguest prompt",
-                crate::lifecycle::materialize::session_message_sender_header(
+                crate::request::lifecycle::materialize::session_message_sender_header(
                     &harness.cause,
                     rows[0]["created_at"].as_str().unwrap()
                 )

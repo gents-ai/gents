@@ -1,5 +1,5 @@
 use super::GoalDocument;
-use crate::request_admission::verify_request_receipt_signature;
+use crate::request::admission::verify_request_receipt_signature;
 use gents_protocol::row::AgentRequestRow;
 
 /// Historical display uses the immutable signed request, independently of the

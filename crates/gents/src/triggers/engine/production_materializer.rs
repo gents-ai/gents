@@ -9,7 +9,7 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
-use crate::lifecycle::{
+use crate::request::lifecycle::{
     task_goal_session_title, task_session_title,
     write_pending_agent_request_with_lineage_workspace_and_conversation_title, ExecutionOrigin,
     TriggerLineage, WorkspaceLineage,
@@ -132,7 +132,8 @@ pub(crate) async fn recover_workspace_binding_pending_requests(
         .await
         {
             Ok(()) => {
-                crate::lifecycle::activate_workspace_bound_request(node, request_doc_id).await?;
+                crate::request::lifecycle::activate_workspace_bound_request(node, request_doc_id)
+                    .await?;
                 recovered += 1;
             }
             Err(error) => tracing::warn!(
@@ -231,7 +232,7 @@ impl MaterializerHandle for ProductionMaterializer {
         Box::pin(async move {
             let (agent_id, node_did, _deadline_secs, _backend_id) = resolved?;
             let runtime_actor = runtime_actor?;
-            crate::lifecycle::TriggerExecutionContext::parse(trigger_context.as_deref())?;
+            crate::request::lifecycle::TriggerExecutionContext::parse(trigger_context.as_deref())?;
             let explicit = WorkspaceLineage::from_trigger_context(trigger_context.as_deref())?;
             let mut workspace = explicit;
             crate::workspace::stamp_workspace_lineage(&node, &node_did, &mut workspace).await?;
@@ -281,7 +282,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 } else {
                     &fire.fire_key
                 };
-                let mut spec = crate::lifecycle::materialize::pending_agent_request_spec(
+                let mut spec = crate::request::lifecycle::materialize::pending_agent_request_spec(
                     &node_did,
                     &agent_id,
                     &rendered_prompt,
@@ -301,8 +302,8 @@ impl MaterializerHandle for ProductionMaterializer {
                         root_request_doc_id: None,
                     }
                 });
-                let create = crate::lifecycle::materialize::build_request(spec)?;
-                let admission = crate::lifecycle::write_trigger_delivery(
+                let create = crate::request::lifecycle::materialize::build_request(spec)?;
+                let admission = crate::request::lifecycle::write_trigger_delivery(
                     &node,
                     runtime_actor,
                     &prepared,
@@ -315,7 +316,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 let identity =
                     crate::goal::task_goal_fire_identity(&node_did, &task_id, &durable_fire_key);
                 let conversation_title = task_goal_session_title(&task_label, &identity.retry_key);
-                let mut spec = crate::lifecycle::materialize::pending_agent_request_spec(
+                let mut spec = crate::request::lifecycle::materialize::pending_agent_request_spec(
                     &node_did,
                     &agent_id,
                     &rendered_prompt,
@@ -337,9 +338,9 @@ impl MaterializerHandle for ProductionMaterializer {
                         ),
                         root_request_doc_id: None,
                     });
-                let create = crate::lifecycle::build_signed_request(
+                let create = crate::request::lifecycle::build_signed_request(
                     spec,
-                    crate::lifecycle::RequestSigner::RegisteredTarget,
+                    crate::request::lifecycle::RequestSigner::RegisteredTarget,
                 )
                 .await?;
                 let enqueued = crate::goal::submit_goal_backed_request_local(
@@ -397,7 +398,11 @@ impl MaterializerHandle for ProductionMaterializer {
                     &workspace,
                 )
                 .await?;
-                crate::lifecycle::activate_workspace_bound_request(&node, &enqueued.doc_id).await?;
+                crate::request::lifecycle::activate_workspace_bound_request(
+                    &node,
+                    &enqueued.doc_id,
+                )
+                .await?;
             }
             tracing::info!(
                 task_id = %task_id,
@@ -487,7 +492,7 @@ impl MaterializerHandle for ProductionMaterializer {
                     let trigger_id = &trigger_id;
                     let excluded = excluded.as_deref();
                     Box::pin(async move {
-                        crate::lifecycle::materialize::supersede_trigger_requests_in_txn(
+                        crate::request::lifecycle::materialize::supersede_trigger_requests_in_txn(
                             txn, owner, trigger_id, excluded,
                         )
                         .await

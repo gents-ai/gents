@@ -6,7 +6,7 @@ use anyhow::Context;
 use gents::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
 use gents::eval::runner::embedded::EmbeddedHome;
 use gents::graphql::escape_graphql_string;
-use gents::{watcher::AgentRequest, NodeIdentity};
+use gents::{request::watcher::AgentRequest, NodeIdentity};
 use serde::Deserialize;
 
 pub mod accepted_turn;
@@ -285,7 +285,7 @@ pub async fn create_request_for_agent_with_signed_fields(
                 request_hop: 0
             }}) {{ _docID }}
         }}"#,
-        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = node.execute(&mutation).await;
     assert!(
@@ -389,7 +389,7 @@ pub async fn create_retry_request(node: &EmbeddedNode, spec: &RetryRequestSpec<'
                 max_retries: {max_retries}
             }}) {{ _docID }}
         }}"#,
-        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = node.execute(&mutation).await;
     assert!(

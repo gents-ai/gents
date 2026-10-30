@@ -410,8 +410,8 @@ fn outcome_for_process(
 mod tests {
     use super::*;
     use crate::ensure_runtime_schemas;
-    use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
-    use crate::streaming::DefraStreamWriter;
+    use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
+    use crate::request::streaming::DefraStreamWriter;
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
     use std::time::Duration;
     use tokio_util::sync::CancellationToken;
@@ -637,7 +637,7 @@ mod tests {
         assert!(!created.has_errors(), "{:#?}", created.errors);
         let row = node.execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
-            crate::watcher::AGENT_REQUEST_FIELDS,
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
         )).await;
         let row: gents_protocol::row::AgentRequestRow =
             crate::graphql::first_row(&row, "AgentRequest")

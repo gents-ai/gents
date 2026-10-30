@@ -1266,7 +1266,7 @@ struct Backlog {
     history: String,
 }
 
-const BACKLOG_OWNER: &str = crate::lifecycle::test_support::PIN_FIXED_DID;
+const BACKLOG_OWNER: &str = crate::request::lifecycle::test_support::PIN_FIXED_DID;
 
 impl Backlog {
     async fn registered() -> Self {
@@ -1276,7 +1276,8 @@ impl Backlog {
         };
         use crate::Collection;
         let home = tempfile::tempdir().unwrap();
-        let identity = crate::lifecycle::test_support::pin_fixed_signing_identity(home.path());
+        let identity =
+            crate::request::lifecycle::test_support::pin_fixed_signing_identity(home.path());
         let node = test_node().await;
         let access = ConfigAccess::local(node.clone());
         access

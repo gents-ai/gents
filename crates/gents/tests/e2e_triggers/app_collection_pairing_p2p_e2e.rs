@@ -1055,7 +1055,7 @@ async fn seed_preexisting_hydration_history(
                 request_hop: 0
             }}) {{ _docID }}
         }}"#,
-        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let request_response = node.execute(&request_mutation).await;
     assert!(

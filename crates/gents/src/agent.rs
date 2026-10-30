@@ -57,7 +57,7 @@ pub(crate) async fn process_owned_request_with_model_for_test<M>(
     tool_surface: Arc<crate::tool_surface::ToolSurface>,
     tool_runtime: &crate::tool_surface::ToolRuntimeContext,
     model: M,
-    request: crate::watcher::AgentRequest,
+    request: crate::request::watcher::AgentRequest,
 ) -> anyhow::Result<()>
 where
     M: crate::inference::llm::rig_compat::ProviderModel,
@@ -75,7 +75,7 @@ where
         node.clone(),
         agent_config.node_did().to_string(),
     );
-    let request_admission = crate::request_admission::AgentRequestAdmissionVerifier::new(
+    let request_admission = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         agent_config.node_identity().clone(),
         p2p_reconcile::enrollment_authority_channel().1,

@@ -1,7 +1,7 @@
 use defra_node::EmbeddedNode;
 
 use crate::inference::admission::{InferenceCall, InferenceCallRecoveryReport};
-use crate::lifecycle::{RecoveryReport, RequestLifecycle};
+use crate::request::lifecycle::{RecoveryReport, RequestLifecycle};
 use crate::tool_call_lifecycle::{ToolCallLifecycle, ToolCallRecoveryReport};
 
 #[derive(Debug)]
@@ -33,7 +33,7 @@ pub async fn run_startup_recovery_with_executions(
         ToolCallLifecycle::recover_all_with_executions(node, node_did, executions).await;
     let requests = RequestLifecycle::recover_all(node, node_did).await;
     let inference_calls = InferenceCall::recover_all(node, node_did).await;
-    let task_hooks = crate::task_hooks::recover_task_hook_records(
+    let task_hooks = crate::request::task_hooks::recover_task_hook_records(
         node,
         node_did,
         executions.task_hook_records(),

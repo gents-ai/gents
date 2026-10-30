@@ -237,7 +237,7 @@ async fn foreground_background_handoff_keeps_the_same_process_after_parent_compl
         fixture
             .lifecycle
             .terminalize_owned(
-                crate::lifecycle::RequestTerminalOutcome::Completed,
+                crate::request::lifecycle::RequestTerminalOutcome::Completed,
                 selection,
                 None,
             )

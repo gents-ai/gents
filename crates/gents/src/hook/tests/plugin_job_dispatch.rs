@@ -1492,7 +1492,7 @@ fn controlling(entries: &[(&str, &str)]) -> Value {
 
 impl Step0 {
     async fn interrupted(&self, doc_id: &str) -> bool {
-        crate::interrupt::fetch_interrupt_requested_at_by_doc_id(&self.node, doc_id)
+        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id(&self.node, doc_id)
             .await
             .unwrap()
             .is_some()
