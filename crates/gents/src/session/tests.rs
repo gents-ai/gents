@@ -1586,11 +1586,15 @@ async fn single_header_transaction_matches_bulk_coordinate_validation() {
                             target = crate::graphql::created_doc_id(&created, "AgentMessage")?;
                         }
                     }
-                    let single =
-                        output::load_canonical_message_in_txn(txn, &target, "did:test:owner", None)
-                            .await
-                            .map_err(|error| format!("{error:#}"));
-                    let bulk = output::TxnCanonicalReader::new(txn, "did:test:owner", None)
+                    let single = output::reader::load_canonical_message_in_txn(
+                        txn,
+                        &target,
+                        "did:test:owner",
+                        None,
+                    )
+                    .await
+                    .map_err(|error| format!("{error:#}"));
+                    let bulk = output::reader::TxnCanonicalReader::new(txn, "did:test:owner", None)
                         .load_message(&target)
                         .await
                         .map_err(|error| format!("{error:#}"));

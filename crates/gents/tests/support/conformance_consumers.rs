@@ -800,7 +800,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "session::output::tests::current_input_selection_matches_lean_owner",
             package: "gents",
-            source_path: "crates/gents/src/session/output.rs",
+            source_path: "crates/gents/src/session/output/tests.rs",
             module_path: "session::output::tests",
             function: "current_input_selection_matches_lean_owner",
         },
