@@ -47,7 +47,11 @@ fn generated_origin_cases_pick_the_wire_mode() {
             case["identity"].as_str().unwrap(),
             "{name}"
         );
-        assert_eq!(mode.entrypoint, case["entrypoint"].as_str().unwrap(), "{name}");
+        assert_eq!(
+            mode.entrypoint,
+            case["entrypoint"].as_str().unwrap(),
+            "{name}"
+        );
         assert_eq!(mode.background, flag(case, "background"), "{name}");
         assert_eq!(mode.workload, case["workload"].as_str(), "{name}");
         assert_eq!(mode.subagent, flag(case, "subagent"), "{name}");
