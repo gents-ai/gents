@@ -8,8 +8,8 @@ mod report;
 mod upgrades;
 
 pub use engine::{
-    ensure_migrations, ensure_migrations_arc, ensure_migrations_dynamic,
-    ensure_migrations_with_registry,
+    check_migration_compatibility, ensure_migrations, ensure_migrations_arc,
+    ensure_migrations_dynamic, ensure_migrations_with_registry,
 };
 pub use error::{Error, Result};
 pub use expectation::CollectionExpectation;

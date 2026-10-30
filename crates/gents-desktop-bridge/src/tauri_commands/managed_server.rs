@@ -218,9 +218,18 @@ where
 
     match port {
         PortReadiness::Ready(external) => status = project_external_status(external, &native),
-        PortReadiness::Outdated { version } if !native.job_loaded && !starting => {
-            status.state = ManagedServerState::Failed;
-            status.error = Some(outdated_runtime_message(version.as_deref()));
+        PortReadiness::Outdated { version } => {
+            let selected = run_native(native_service(app, state)?, |service| {
+                service.has_managed_executable()
+            })
+            .await?;
+            if selected {
+                status.error = Some(managed_selection_outdated_message().into());
+                status.error_code = Some(BridgeErrorCode::Unsupported);
+            } else if !native.job_loaded && !starting {
+                status.state = ManagedServerState::Failed;
+                status.error = Some(outdated_runtime_message(version.as_deref()));
+            }
         }
         PortReadiness::Booting => {
             status.runtime_booting = true;
@@ -237,9 +246,7 @@ where
         PortReadiness::Occupied(port) if status.state != ManagedServerState::Starting => {
             project_foreign_port(&mut status, &occupied_port_message(port), starting)
         }
-        PortReadiness::Occupied(_)
-        | PortReadiness::Outdated { .. }
-        | PortReadiness::NotListening => {}
+        PortReadiness::Occupied(_) | PortReadiness::NotListening => {}
     }
     status.pairing_ready = pairing_is_ready(state, status.node_did.as_deref()).await;
     Ok(status)
@@ -479,6 +486,7 @@ where
 struct LaunchFailure<'a> {
     error: anyhow::Error,
     attempted_start: bool,
+    preserve_runtime: bool,
     lifecycle: Option<LifecycleGuard<'a>>,
 }
 
@@ -493,6 +501,7 @@ where
 {
     let mut lifecycle = Some(lifecycle);
     let mut attempted_start = false;
+    let mut preserve_runtime = false;
     let result: anyhow::Result<ManagedServerStatus> = async {
         if launch.requires_approval().await? {
             lifecycle = None;
@@ -509,6 +518,10 @@ where
                 Readiness::Ready(ready) => {
                     lifecycle = Some(relock_start(state, token).await?);
                     return Ok(ready);
+                }
+                Readiness::Outdated { message, selected } => {
+                    preserve_runtime = selected;
+                    anyhow::bail!(message);
                 }
                 Readiness::ApprovalRequired if !resumed_after_approval => {
                     resumed_after_approval = true;
@@ -529,6 +542,7 @@ where
         (Ok(_), None) => unreachable!("readiness relocks before it returns"),
         (Err(error), lifecycle) => Err(LaunchFailure {
             attempted_start: attempted_start && !error.is::<RuntimeStillBooting>(),
+            preserve_runtime,
             error,
             lifecycle,
         }),
@@ -611,6 +625,13 @@ where
         BridgeError::untyped(gents_protocol::error_chain::ErrorChain(&error).to_string())
     })?;
 
+    let service = native_service(app, state)?;
+    let managed_selection = run_native(service, |service| {
+        if let Some(id) = service.pending_update()? {
+            anyhow::bail!("Managed runtime update {id} is in progress. Reconnect after it finishes, or run `gents service update-status --home <node-home> {id}` with this node's home to resume its supervisor.");
+        }
+        service.has_managed_executable()
+    }).await?;
     let mut carried_wait = None;
     let mut replace_loaded_job = false;
     let (ready, initial_enabled, _lifecycle) =
@@ -630,15 +651,22 @@ where
                     )));
                 }
                 let enabled = initial_native.enabled;
-                replace_loaded_job = outdated.is_some()
-                    || (initial_native.job_loaded
-                        && !initial_native.running
-                        && run_native(native_service(app, state)?, |service| {
-                            Ok(service.last_exit()?.is_some()
-                                || service.installed_executable_differs()?)
-                        })
-                        .await
-                        .unwrap_or(false));
+                if managed_selection && outdated.is_some() {
+                    return Err(BridgeError::new(
+                        BridgeErrorCode::Unsupported,
+                        managed_selection_outdated_message(),
+                    ));
+                }
+                replace_loaded_job = !managed_selection
+                    && (outdated.is_some()
+                        || (initial_native.job_loaded
+                            && !initial_native.running
+                            && run_native(native_service(app, state)?, |service| {
+                                Ok(service.last_exit()?.is_some()
+                                    || service.installed_executable_differs()?)
+                            })
+                            .await
+                            .unwrap_or(false)));
                 if initial_native.is_active_or_transitioning()
                     && !initial_native.requires_approval
                     && !replace_loaded_job
@@ -690,6 +718,9 @@ where
     emit_status(app, state).await;
 
     let provisioned: anyhow::Result<()> = async {
+        if managed_selection {
+            return Ok(());
+        }
         if replace_loaded_job {
             run_native(native_service(app, state)?, |service| service.stop(false)).await?;
         }
@@ -753,6 +784,7 @@ where
                     initialized.map_err(|error| LaunchFailure {
                         error,
                         attempted_start: true,
+                        preserve_runtime: false,
                         lifecycle: Some(lifecycle),
                     })
                 }
@@ -762,6 +794,7 @@ where
         Err(error) => Err(LaunchFailure {
             error,
             attempted_start: false,
+            preserve_runtime: false,
             lifecycle: Some(lifecycle),
         }),
     };
@@ -816,6 +849,7 @@ where
     let LaunchFailure {
         error,
         attempted_start,
+        preserve_runtime,
         lifecycle,
     } = failure;
     let cancelled = || BridgeError::untyped(token.cancel_message());
@@ -836,7 +870,7 @@ where
         Some(lifecycle) => lifecycle,
         None => relock_start(state, token).await.map_err(|_| cancelled())?,
     };
-    if attempted_start {
+    if attempted_start && !preserve_runtime {
         if let Err(cleanup) = cleanup().await {
             message =
                 combine_cleanup_error(message, "newly started native service", cleanup.message);
@@ -863,6 +897,7 @@ where
         return Err(LaunchFailure {
             error: error.into(),
             attempted_start: false,
+            preserve_runtime: false,
             lifecycle: Some(lifecycle),
         });
     }
@@ -1313,6 +1348,7 @@ const CRASH_LOOP_RESTARTS: u64 = 2;
 enum Readiness {
     Ready(ManagedServerStatus),
     ApprovalRequired,
+    Outdated { message: String, selected: bool },
 }
 
 enum NativeProgress {
@@ -1352,6 +1388,23 @@ where
     .await
 }
 
+fn managed_selection_outdated_message() -> &'static str {
+    "The selected managed runtime predates this app. Update it with `gents service update --home <node-home>` using a compatible packaged build, or explicitly reinstall it through external administration. Its running service and executable will be preserved."
+}
+
+fn ensure_selected_restart_compatible(
+    selected: bool,
+    port: &PortReadiness,
+) -> Result<(), BridgeError> {
+    if selected && matches!(port, PortReadiness::Outdated { .. }) {
+        return Err(BridgeError::new(
+            BridgeErrorCode::Unsupported,
+            managed_selection_outdated_message(),
+        ));
+    }
+    Ok(())
+}
+
 async fn wait_for_managed_server<R>(
     app: &AppHandle<R>,
     state: &DesktopAppState,
@@ -1360,7 +1413,11 @@ async fn wait_for_managed_server<R>(
 where
     R: Runtime,
 {
-    await_runtime_readiness(
+    let selected = run_native(native_service(app, state)?, |service| {
+        service.has_managed_executable()
+    })
+    .await?;
+    let result = await_runtime_readiness(
         MANAGED_SERVER_READY_TIMEOUT,
         MANAGED_SERVER_POLL_INTERVAL,
         || {
@@ -1371,7 +1428,18 @@ where
         },
         || observe_native_progress(app, state),
     )
-    .await
+    .await;
+    result.map(|readiness| preserve_managed_selection(readiness, selected))
+}
+
+fn preserve_managed_selection(readiness: Readiness, selected: bool) -> Readiness {
+    match readiness {
+        Readiness::Outdated { .. } if selected => Readiness::Outdated {
+            message: managed_selection_outdated_message().into(),
+            selected: true,
+        },
+        readiness => readiness,
+    }
 }
 
 async fn await_runtime_readiness<P, PF, N, NF>(
@@ -1394,7 +1462,10 @@ where
         let (observed_booting, occupied) = match probe().await? {
             PortReadiness::Ready(status) => return Ok(Readiness::Ready(status)),
             PortReadiness::Outdated { version } => {
-                anyhow::bail!("{}", outdated_runtime_message(version.as_deref()))
+                return Ok(Readiness::Outdated {
+                    message: outdated_runtime_message(version.as_deref()),
+                    selected: false,
+                });
             }
             PortReadiness::Foreign(foreign) => anyhow::bail!(foreign.message()),
             PortReadiness::Occupied(port) => (false, Some(port)),
@@ -1501,6 +1572,7 @@ async fn adopt_booting_runtime<'a>(
     Ok(match readiness {
         Readiness::Ready(status) => BootOutcome::Ready(status, lifecycle),
         Readiness::ApprovalRequired => BootOutcome::NeedsLaunch(lifecycle, token.clone()),
+        Readiness::Outdated { message, .. } => anyhow::bail!(message),
     })
 }
 
@@ -1878,6 +1950,12 @@ where
         return Ok(());
     }
     let _lifecycle = state.managed_server_lifecycle.blocking_lock();
+    let native = native_service(app, state)?;
+    if native.pending_update().map_err(native_error)?.is_some()
+        || native.has_managed_executable().map_err(native_error)?
+    {
+        return Ok(());
+    }
     let executable = resolve_service_executable(app, state.policy.desktop_paths.root())?;
     if executable.install()? {
         tracing::info!(
@@ -1934,6 +2012,13 @@ where
     };
     let _lifecycle = state.managed_server_lifecycle.lock().await;
     if state.app_exit.is_quitting() {
+        return Ok(());
+    }
+    let preserve = run_native(native_service(app, state)?, |service| {
+        Ok(service.pending_update()?.is_some() || service.has_managed_executable()?)
+    })
+    .await?;
+    if preserve {
         return Ok(());
     }
     let PortReadiness::Outdated { version } = observe_port_readiness(&node_home).await? else {
@@ -2489,8 +2574,33 @@ where
     refuse_renaming_home(&node_home, &request.node_name).await?;
     let lifecycle = lock_lifecycle_superseding_start(&state).await;
     ensure_app_not_quitting(&state)?;
+    let managed_selection = run_native(native_service(&app, &state)?, |service| {
+        if let Some(id) = service.pending_update()? {
+            anyhow::bail!("Managed runtime update {id} is in progress. Reconnect after it finishes, or run `gents service update-status --home <node-home> {id}` with this node's home to resume its supervisor.");
+        }
+        service.has_managed_executable()
+    }).await?;
+    if managed_selection {
+        // A package older than the selected runtime must not deserialize and
+        // rewrite its init configuration, discarding fields it cannot know.
+        let bytes = tokio::fs::read(node_home.join("init.json"))
+            .await
+            .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        let init: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        let ceiling = serde_json::to_value(runtime_tool_ceiling(authority.tool_ceiling))
+            .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        let root = authority
+            .tool_root
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned());
+        if init["tool_ceiling"] != ceiling || init["tool_root"].as_str() != root.as_deref() {
+            return Err(BridgeError::untyped("This runtime was selected by a managed update. Restart preserves its existing authority; use external administration to change its configuration."));
+        }
+    }
     ensure_launchable_here(&app, &state)?;
     let port = observe_port_readiness(&node_home).await?;
+    ensure_selected_restart_compatible(managed_selection, &port)?;
     let previous_did = match &port {
         PortReadiness::Ready(status) => status.node_did.clone(),
         PortReadiness::Foreign(_)
@@ -2522,6 +2632,9 @@ where
     if let Err(error) = stop_before_reprovision(
         || async { run_native(native_service(&app, &state)?, |service| service.stop(false)).await },
         || async {
+            if managed_selection {
+                return Ok(());
+            }
             gents_server::server_host::ensure_standard_home(
                 tauri::async_runtime::handle().inner(),
                 provision,
@@ -2568,6 +2681,9 @@ where
         enable_at_login: was_enabled,
     };
     let install = async {
+        if managed_selection {
+            return Ok(());
+        }
         ensure_default_port_identity(&node_home)
             .await
             .map_err(|mut error| {
@@ -2585,6 +2701,7 @@ where
             Err(error) => Err(LaunchFailure {
                 error,
                 attempted_start: true,
+                preserve_runtime: false,
                 lifecycle: Some(lifecycle),
             }),
         },
@@ -5152,11 +5269,12 @@ mod tests {
         )
         .await
         .expect("an outdated runtime is not waited on")
-        .unwrap_err();
-        assert!(
-            error.to_string().contains("(v0.18.2) predates this app"),
-            "{error}"
-        );
+        .unwrap();
+        let Readiness::Outdated { message, selected } = error else {
+            panic!("expected an outdated observation");
+        };
+        assert!(!selected);
+        assert!(message.contains("(v0.18.2) predates this app"), "{message}");
     }
 
     #[test]
@@ -5914,6 +6032,7 @@ mod tests {
                 }
                 .into(),
                 attempted_start: false,
+                preserve_runtime: false,
                 lifecycle: Some(lifecycle),
             },
             || async { panic!("a booting runtime is not rolled back") },
@@ -6805,6 +6924,51 @@ mod tests {
             None,
         );
         assert_eq!(status.state, ManagedServerState::Stopped);
+    }
+
+    #[test]
+    fn outdated_managed_restart_is_rejected_before_native_mutation() {
+        let outdated = PortReadiness::Outdated {
+            version: Some("older".into()),
+        };
+        let error = ensure_selected_restart_compatible(true, &outdated).unwrap_err();
+        assert_eq!(error.code, BridgeErrorCode::Unsupported);
+        assert!(error.message.contains("service update"));
+        ensure_selected_restart_compatible(false, &outdated).unwrap();
+        ensure_selected_restart_compatible(true, &PortReadiness::NotListening).unwrap();
+    }
+
+    #[tokio::test]
+    async fn incompatible_managed_selection_is_preserved_when_readiness_fails() {
+        let (_temp, state) = orchestration_state();
+        let token = begin_start_wait(&state).await;
+        let lifecycle = state.managed_server_lifecycle.lock().await;
+        let launch = FakeLaunch {
+            readiness: std::sync::Mutex::new(
+                [preserve_managed_selection(
+                    Readiness::Outdated {
+                        message: "old package".into(),
+                        selected: false,
+                    },
+                    true,
+                )]
+                .into(),
+            ),
+            ..Default::default()
+        };
+        let failure = launch_managed_server(&state, &token, lifecycle, &launch)
+            .await
+            .unwrap_err();
+        assert!(failure.attempted_start && failure.preserve_runtime);
+        let (message, _) = settle_launch_failure(&state, &token, failure, || async {
+            panic!(
+                "an explicitly selected runtime must not be stopped for being older than this app"
+            )
+        })
+        .await
+        .unwrap();
+        assert!(message.contains("compatible packaged build"));
+        assert!(state.managed_server.lock().await.start_wait.is_none());
     }
 
     #[tokio::test]

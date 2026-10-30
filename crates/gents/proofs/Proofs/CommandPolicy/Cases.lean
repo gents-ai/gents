@@ -456,6 +456,10 @@ def commandEnvCases : List CommandEnvCase :=
   , envCase "env_path_fallback_when_absent" .path false
   , envCase "env_home_inherited" .home true "/tmp/home"
   , envCase "env_home_absent_dropped" .home false
+  , envCase "env_xdg_config_home_inherited" .xdgConfigHome true "/tmp/user-config"
+  , envCase "env_xdg_runtime_dir_inherited" .xdgRuntimeDir true "/run/user/1001"
+  , envCase "env_dbus_session_bus_inherited" .dbusSessionBusAddress true "unix:path=/run/user/1001/bus"
+  , envCase "env_dbus_absent_stays_absent" .dbusSessionBusAddress false
   , envCase "env_key_marker_dropped" .key true "secret"
   , envCase "env_secret_marker_dropped" .secret true "secret"
   , envCase "env_token_marker_dropped" .token true "secret"

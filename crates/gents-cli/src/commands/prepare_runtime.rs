@@ -116,6 +116,24 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let home = tokio::task::spawn_blocking(move || std::fs::canonicalize(home)).await??;
     let build = gents::runtime_service::executable_build_id().await?;
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let check_home = home.clone();
+        let check_build = build.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let manager = crate::native_service::NativeServiceManager::new(crate::native_service::NativeServiceConfig::new(check_home.clone(), std::env::current_exe()?)?)?;
+            if let Some(id) = manager.pending_update()? {
+                return Err(refusal(RuntimePreparationRefusal::StartupBusy, format!("Managed update {id} is pending; inspect service update-status --home {} {id} before selecting another package.", check_home.display())));
+            }
+            if manager.definition_owned_by_home()? && manager.has_managed_executable()? {
+                let selected = manager.installed_executable_path()?;
+                if crate::service_update::executable_digest(&selected)? != check_build {
+                    return Err(refusal(RuntimePreparationRefusal::Unsupported, "The node has an explicitly selected managed-update executable. Use that package or an explicit managed update; this package will not replace it automatically."));
+                }
+            }
+            Ok(())
+        }).await??;
+    }
     let reservation =
         tokio::time::timeout(STARTUP_WAIT, gents::home::reserve_runtime_startup(&home))
             .await
@@ -335,7 +353,7 @@ fn local_endpoint(raw: &str) -> Result<reqwest::Url> {
     Ok(endpoint)
 }
 
-async fn control(
+pub(crate) async fn control(
     client: &reqwest::Client,
     endpoint: &reqwest::Url,
     node_did: &str,

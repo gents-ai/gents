@@ -12,6 +12,9 @@ inductive EnvKey where
   | temp
   | tmp
   | home
+  | xdgConfigHome
+  | xdgRuntimeDir
+  | dbusSessionBusAddress
   | lang
   | lcAll
   | lcCtype
@@ -36,6 +39,9 @@ def toContract : EnvKey → String
   | .tmpdir => "tmpdir"
   | .temp => "temp"
   | .tmp => "tmp"
+  | .xdgConfigHome => "xdgConfigHome"
+  | .xdgRuntimeDir => "xdgRuntimeDir"
+  | .dbusSessionBusAddress => "dbusSessionBusAddress"
   | .home => "home"
   | .lang => "lang"
   | .lcAll => "lcAll"
@@ -58,6 +64,9 @@ def sampleName : EnvKey → String
   | .tmpdir => "TMPDIR"
   | .temp => "TEMP"
   | .tmp => "TMP"
+  | .xdgConfigHome => "XDG_CONFIG_HOME"
+  | .xdgRuntimeDir => "XDG_RUNTIME_DIR"
+  | .dbusSessionBusAddress => "DBUS_SESSION_BUS_ADDRESS"
   | .home => "HOME"
   | .lang => "LANG"
   | .lcAll => "LC_ALL"
@@ -117,6 +126,9 @@ def coreEnvKey : EnvKey → Bool
   | .tmpdir => true
   | .temp => true
   | .tmp => true
+  | .xdgConfigHome => true
+  | .xdgRuntimeDir => true
+  | .dbusSessionBusAddress => true
   | .home => true
   | .lang => true
   | .lcAll => true

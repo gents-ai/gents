@@ -45,6 +45,15 @@ async fn generated_bounded_sandboxes_deny_credentials_and_default_network() {
         std::fs::write(&path, "fixture credential").unwrap();
         paths.push(path);
     }
+    let updates = home
+        .join(".gents")
+        .join(crate::home::SERVICE_UPDATES_DIR_NAME);
+    let backup_key = updates.join("operation/backup/keys/node.key");
+    let plan = updates.join("operation/plan.json");
+    std::fs::create_dir_all(backup_key.parent().unwrap()).unwrap();
+    std::fs::write(&backup_key, "fixture backup key").unwrap();
+    std::fs::write(&plan, "fixture operator plan").unwrap();
+    paths.push(updates);
     let alias = root.join("alias");
     std::os::unix::fs::symlink(&paths[0], &alias).unwrap();
     let outside = root.join("linked-secret");
@@ -63,6 +72,8 @@ async fn generated_bounded_sandboxes_deny_credentials_and_default_network() {
     targets.extend([
         alias.to_str().unwrap().into(),
         outside.to_str().unwrap().into(),
+        backup_key.to_str().unwrap().into(),
+        plan.to_str().unwrap().into(),
     ]);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -88,6 +99,7 @@ for name in sys.argv[3:]:
 for operation in [
     lambda: os.link(sys.argv[3], 'credential-alias'),
     lambda: pathlib.Path(sys.argv[3]).write_text('changed'),
+    lambda: pathlib.Path(sys.argv[-1]).write_text('changed'),
     lambda: os.rename('user', 'moved-user'),
 ]:
     try:
@@ -192,6 +204,9 @@ fn runtime_credentials_include_the_configured_identity_and_store_keys() {
     let protection = CredentialProtection::capture(runtime_credentials(&home).unwrap()).unwrap();
     assert!(protection.paths.contains(&custom_key));
     assert!(protection.paths.contains(&crate::home::keys_dir(&home)));
+    assert!(protection
+        .paths
+        .contains(&home.join(crate::home::SERVICE_UPDATES_DIR_NAME)));
     assert!(protection
         .paths
         .contains(&home.join(crate::home::P2P_SECRET_KEY_FILE_NAME)));

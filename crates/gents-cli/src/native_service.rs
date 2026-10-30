@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 
 mod environment;
+pub(crate) mod update;
 pub use environment::read_environment_file;
 
 #[cfg(not(all(feature = "native-e2e", debug_assertions)))]

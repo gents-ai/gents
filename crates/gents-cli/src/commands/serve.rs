@@ -603,12 +603,20 @@ async fn serve_foreground(
         anyhow::bail!("--codex-shim-public-url requires --codex-shim-auth-token-env");
     }
     let home_dir = resolve_home_dir(args.home.as_deref());
+    tokio::fs::create_dir_all(&home_dir).await?;
     let data_dir = args
         .data_dir
         .clone()
         .unwrap_or_else(|| default_data_dir(&home_dir));
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+    // Native supervisor respawns must obey the same reservation as desktop
+    // preparation, before they can reopen a retiring store or claim work.
+    let mut native_reservation = if startup.is_none() {
+        Some(gents::home::reserve_runtime_startup(&home_dir).await?)
+    } else {
+        None
+    };
     let store_lock = gents::home::lock_store(&home_dir, &data_dir)?;
     crate::network_settings::NetworkSettings::read(&home_dir)?.fill_unset(&mut args);
     let http_ip = args
@@ -1232,6 +1240,7 @@ async fn serve_foreground(
                 "grok_shim": grok_shim_output,
                 "apply_root": pack_apply,
             });
+            drop(native_reservation.take());
             if let Some(super::prepare_runtime::PreparedStartup { reservation, outcome }) = startup.take() {
                 let report = gents_protocol::serve_lifecycle::preparation::RuntimePreparationResult::Ready {
                     outcome,
@@ -1280,6 +1289,8 @@ async fn serve_foreground(
                 tracing::info!("gents server is running local-only. Press Ctrl-C to stop.");
             }
 
+            let notices = crate::service_update::watch_notices(runtime_configuration_probe.clone(), home_dir.clone());
+            let serving = async {
             if let Some(handle) = codex_shim_handle.as_mut() {
                 tokio::select! {
                     result = runtime.join() => result,
@@ -1293,6 +1304,12 @@ async fn serve_foreground(
             } else {
                 runtime.join().await
             }
+            };
+            tokio::select! {
+                result = serving => result,
+                _ = notices => unreachable!("the notice observer remains scoped to the serving runtime"),
+            }
+
         }
         .await;
         outcome
