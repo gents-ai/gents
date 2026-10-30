@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
-use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::message::{AssistantContent, Message, UserContent};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -428,7 +428,7 @@ pub(crate) async fn agent_session_read(
             let sessions = rows(&response, "AgentSession")?;
             anyhow::ensure!(sessions.len() == 1, "inspected session is unavailable or ambiguous");
             let session = crate::session::decode_session_row(&sessions[0])?.session;
-            anyhow::ensure!(super::session_target_allowed(&session, &caller.node_did, tools), "inspected session is no longer messageable");
+            anyhow::ensure!(super::target::session_target_allowed(&session, &caller.node_did, tools), "inspected session is no longer messageable");
             let unobserved = if active.is_none() {
                 match session.observation.as_ref().and_then(|view| view.latest_request.as_ref()) {
                     Some(observed) if request_row(txn, &scope, &observed.request_doc_id).await?.is_none() => Some(observed),
