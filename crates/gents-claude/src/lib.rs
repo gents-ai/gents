@@ -9,7 +9,7 @@
 //!
 //! The provider-input rules are modeled in the Lean proofs
 //! (`PromptAssembly.ClaudeMap`, `ClaudeAttribution`, `ClaudeCache`,
-//! `AccountRotation`, `CompletionRetry`) and bound by their generated
+//! `ClaudeOrigin`, `AccountRotation`, `CompletionRetry`) and bound by their generated
 //! conformance cases. The default build performs no I/O and compiles for
 //! `wasm32-wasip1`; the `transport` feature adds the native HTTP/1.1 client.
 
@@ -20,6 +20,7 @@ pub mod catalog;
 pub mod headers;
 pub mod metadata;
 pub mod oauth;
+pub mod origin;
 pub mod pool;
 pub mod profile;
 pub mod ratelimit;

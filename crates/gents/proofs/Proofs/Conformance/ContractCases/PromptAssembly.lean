@@ -998,6 +998,44 @@ def promptAssemblyClaudeAttributionCases : List PromptAssemblyClaudeAttributionC
   , attributionCase "gateway_vouched" { firstPartyFields with provider := .gateway, gateway := some "1" }
   ]
 
+structure PromptAssemblyClaudeOriginCase where
+  name : String
+  origin : PromptAssembly.ClaudeOrigin.Origin
+  mode : PromptAssembly.ClaudeOrigin.WireMode
+  identity : String
+  deriving Repr
+
+open PromptAssembly.ClaudeOrigin in
+def claudeOriginCauseName : Cause → String
+  | .client => "client"
+  | .agentNew => "agent_new"
+  | .taskTrigger => "task_trigger"
+  | .pluginJob => "plugin_job"
+
+open PromptAssembly.ClaudeOrigin in
+def claudeOriginKindName : Kind → String
+  | .turn => "turn"
+  | .compaction => "compaction"
+  | .title => "title"
+  | .oneShot => "one_shot"
+
+open PromptAssembly.ClaudeOrigin in
+/-- Every origin: the mapping is total over a finite input, so the cases are
+exhaustive rather than sampled. -/
+def promptAssemblyClaudeOriginCases : List PromptAssemblyClaudeOriginCase := Id.run do
+  let mut cases := []
+  for cause in [Cause.client, .agentNew, .taskTrigger, .pluginJob] do
+    for rootClient in [true, false] do
+      for scheduled in [false, true] do
+        for kind in [Kind.turn, .compaction, .title, .oneShot] do
+          for appends in [false, true] do
+            let origin : Origin := { cause, rootClient, scheduled, kind, appendsSystemPrompt := appends }
+            let name := s!"{claudeOriginCauseName cause}-{if rootClient then "root_client" else "root_other"}-"
+              ++ s!"{if scheduled then "scheduled" else "unscheduled"}-{claudeOriginKindName kind}-"
+              ++ s!"{if appends then "appends" else "bare"}"
+            cases := cases ++ [{ name, origin, mode := wireMode origin, identity := identity origin }]
+  return cases
+
 structure PromptAssemblyClaudeCacheCase where
   name : String
   caching : Bool

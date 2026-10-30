@@ -1782,6 +1782,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "PromptAssemblyClaudeCacheCases".to_string(),
         ));
     }
+    if !snapshot.prompt_assembly_claude_origin_cases.is_empty() {
+        emitted.insert((
+            "prompt_assembly_cases".to_string(),
+            "PromptAssemblyClaudeOriginCases".to_string(),
+        ));
+    }
     if !snapshot.prompt_assembly_claude_stream_cases.is_empty() {
         emitted.insert((
             "prompt_assembly_cases".to_string(),

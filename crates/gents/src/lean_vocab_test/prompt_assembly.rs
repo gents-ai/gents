@@ -264,6 +264,25 @@ pub(crate) struct LeanPromptAssemblyClaudeCacheCase {
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeOriginCase {
+    pub(crate) name: String,
+    pub(crate) cause: String,
+    pub(crate) root_client: bool,
+    pub(crate) scheduled: bool,
+    pub(crate) kind: String,
+    pub(crate) appends_system_prompt: bool,
+    pub(crate) identity: String,
+    pub(crate) entrypoint: String,
+    pub(crate) background: bool,
+    pub(crate) workload: Option<String>,
+    pub(crate) subagent: bool,
+    pub(crate) request_class: String,
+    pub(crate) main_thread_source: bool,
+    pub(crate) agentic: bool,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanPromptAssemblyClaudeStreamCase {
     pub(crate) name: String,
     pub(crate) surface: Vec<String>,

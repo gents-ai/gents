@@ -155,6 +155,8 @@ def snapshotJsonTail : String :=
       ++ promptAssemblyClaudeAttributionCasesJson ++ ","
     ++ "\"prompt_assembly_claude_cache_cases\":"
       ++ promptAssemblyClaudeCacheCasesJson ++ ","
+    ++ "\"prompt_assembly_claude_origin_cases\":"
+      ++ promptAssemblyClaudeOriginCasesJson ++ ","
     ++ "\"claude_output_config_cases\":" ++ Conformance.CompactionCheckpoint.outputCasesJson.compress ++ ","
     ++ "\"checkpoint_fallback_cases\":" ++ Conformance.CompactionCheckpoint.checkpointCasesJson.compress ++ ","
     ++ "\"checkpoint_list_fields\":" ++ Conformance.CompactionCheckpoint.listFieldsJson.compress ++ ","

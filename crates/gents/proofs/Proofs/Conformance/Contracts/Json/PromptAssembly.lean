@@ -329,6 +329,29 @@ def promptAssemblyClaudeAttributionCaseJson (witness : PromptAssemblyClaudeAttri
 def promptAssemblyClaudeAttributionCasesJson : String :=
   jsonArray (promptAssemblyClaudeAttributionCases.map promptAssemblyClaudeAttributionCaseJson)
 
+def promptAssemblyClaudeOriginCaseJson (witness : PromptAssemblyClaudeOriginCase) : String :=
+  let o := witness.origin
+  let m := witness.mode
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name
+    ++ ",\"cause\":" ++ jsonString (claudeOriginCauseName o.cause)
+    ++ ",\"root_client\":" ++ boolString o.rootClient
+    ++ ",\"scheduled\":" ++ boolString o.scheduled
+    ++ ",\"kind\":" ++ jsonString (claudeOriginKindName o.kind)
+    ++ ",\"appends_system_prompt\":" ++ boolString o.appendsSystemPrompt
+    ++ ",\"identity\":" ++ jsonString witness.identity
+    ++ ",\"entrypoint\":" ++ jsonString m.entrypoint
+    ++ ",\"background\":" ++ boolString m.background
+    ++ ",\"workload\":" ++ jsonOptionalString m.workload
+    ++ ",\"subagent\":" ++ boolString m.subagent
+    ++ ",\"request_class\":" ++ jsonString m.requestClass.name
+    ++ ",\"main_thread_source\":" ++ boolString m.mainThreadSource
+    ++ ",\"agentic\":" ++ boolString m.agentic
+    ++ "}"
+
+def promptAssemblyClaudeOriginCasesJson : String :=
+  jsonArray (promptAssemblyClaudeOriginCases.map promptAssemblyClaudeOriginCaseJson)
+
 def claudeCacheBlockJson : PromptAssembly.ClaudeCache.Block → String
   | .text text => "{\"type\":\"text\",\"text\":" ++ jsonString text ++ "}"
   | .thinking => "{\"type\":\"thinking\"}"

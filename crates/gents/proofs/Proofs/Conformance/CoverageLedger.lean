@@ -2468,6 +2468,11 @@ def caseCoverage : List CoverageEntry :=
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "prompt_assembly_cases"
+      "PromptAssemblyClaudeOriginCases"
+      "gents_claude::origin::tests::generated_origin_cases_pick_the_wire_mode")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "prompt_assembly_cases"
       "PromptAssemblyClaudeStreamCases"
       "conformance::prompt_assembly::generated_claude_stream_cases_drive_the_messages_parser")
       "prompt-assembly" [Surface.runtimeInternal]

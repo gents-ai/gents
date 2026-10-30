@@ -175,6 +175,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_cache_cases_place_the_breakpoint",
         },
         ConformanceConsumer::RustTest {
+            id: "gents_claude::origin::tests::generated_origin_cases_pick_the_wire_mode",
+            package: "gents-claude",
+            source_path: "crates/gents-claude/src/origin_tests.rs",
+            module_path: "gents_claude::origin::tests",
+            function: "generated_origin_cases_pick_the_wire_mode",
+        },
+        ConformanceConsumer::RustTest {
             id: "gents_claude::rotation::tests::generated_rotation_select_cases_choose_the_account",
             package: "gents-claude",
             source_path: "crates/gents-claude/src/rotation_tests.rs",
