@@ -105,7 +105,7 @@ function RailSyncDot() {
           "absolute z-40",
           /* the dot keeps its place as it becomes the row, which spans the
              flyout's rows */
-          flyoutOpen ? "-top-0.5 -left-px w-[261px]" : "top-0 left-0 w-7",
+          flyoutOpen ? "-top-0.5 -left-px w-[275px]" : "top-0 left-0 w-7",
         )}
       >
         <SyncHealth syncHealth={syncHealth} compact={!flyoutOpen} row={flyoutOpen} />
