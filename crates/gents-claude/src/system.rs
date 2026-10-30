@@ -12,7 +12,6 @@ pub const SDK_IDENTITY: &str =
 pub const AGENT_IDENTITY: &str = "You are a Claude agent, built on Anthropic's Claude Agent SDK.";
 
 const IDENTITIES: [&str; 3] = [CLI_IDENTITY, SDK_IDENTITY, AGENT_IDENTITY];
-const ATTRIBUTION_PREFIX: &str = "x-anthropic-billing-header:";
 
 /// How the session runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,7 +61,7 @@ where
         if text.is_empty() {
             continue;
         }
-        if text.starts_with(ATTRIBUTION_PREFIX) {
+        if crate::attribution::is_header(text) {
             attribution = Some(text);
         } else if IDENTITIES.contains(&text) {
             identity = Some(text);

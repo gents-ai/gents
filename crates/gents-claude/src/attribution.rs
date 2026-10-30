@@ -5,7 +5,14 @@
 use sha2::{Digest, Sha256};
 
 /// The first characters of the `system[0]` block every attribution header starts with.
-const PREFIX: &str = "x-anthropic-billing-header:";
+pub const PREFIX: &str = "x-anthropic-billing-header:";
+
+/// Whether a system block text is an attribution header. The header changes
+/// between requests of one conversation, so it is never part of a cached or
+/// replayed prefix.
+pub fn is_header(text: &str) -> bool {
+    text.starts_with(PREFIX)
+}
 
 /// Salt of the version fingerprint (`uH`).
 const FINGERPRINT_SALT: &str = "59cf53e54c78";
