@@ -46,9 +46,13 @@ fn test_client() -> ClaudeSubscriptionClient<StaticBearer> {
 
 #[tokio::test]
 async fn fixture_stream_maps_tool_use_without_touching_the_bearer() {
-    let _guard = crate::claude_messages::lock_fixtures_for_test().await;
-    crate::claude_messages::install_messages_sse_fixtures(vec![
-        crate::claude_messages::sse_fixture_tool_use("toolu_1", "echo", "{\"text\":\"hi\"}"),
+    let _guard = crate::claude_messages::fixtures::lock_fixtures_for_test().await;
+    crate::claude_messages::fixtures::install_messages_sse_fixtures(vec![
+        crate::claude_messages::fixtures::sse_fixture_tool_use(
+            "toolu_1",
+            "echo",
+            "{\"text\":\"hi\"}",
+        ),
     ]);
     let client = test_client();
     let model = client.completion_model("claude-sonnet-5");
@@ -91,9 +95,9 @@ async fn fixture_stream_maps_tool_use_without_touching_the_bearer() {
 
 #[tokio::test]
 async fn messages_http_fixture_streams_text_turn_on_empty_surface() {
-    let _guard = crate::claude_messages::lock_fixtures_for_test().await;
-    crate::claude_messages::install_messages_sse_fixtures(vec![
-        crate::claude_messages::sse_fixture_final_text("pong"),
+    let _guard = crate::claude_messages::fixtures::lock_fixtures_for_test().await;
+    crate::claude_messages::fixtures::install_messages_sse_fixtures(vec![
+        crate::claude_messages::fixtures::sse_fixture_final_text("pong"),
     ]);
     let model = test_client().completion_model("claude-sonnet-5");
     let response = model.completion(ping_request()).await.expect("text turn");
@@ -110,7 +114,7 @@ async fn messages_http_fixture_streams_text_turn_on_empty_surface() {
 
 #[tokio::test]
 async fn live_path_without_fixture_asks_the_bearer_and_fails_closed_on_bearer_error() {
-    let _guard = crate::claude_messages::lock_fixtures_for_test().await;
+    let _guard = crate::claude_messages::fixtures::lock_fixtures_for_test().await;
     let client =
         ClaudeSubscriptionClient::with_bearer(Arc::new(StaticBearer::failing("no credential")));
     let model = client.completion_model("claude-sonnet-5");
@@ -128,9 +132,9 @@ async fn live_path_without_fixture_asks_the_bearer_and_fails_closed_on_bearer_er
 
 #[tokio::test]
 async fn fixture_queue_serves_one_body_per_call_then_asks_the_bearer() {
-    let _guard = crate::claude_messages::lock_fixtures_for_test().await;
-    crate::claude_messages::install_messages_sse_fixtures(vec![
-        crate::claude_messages::sse_fixture_final_text("one"),
+    let _guard = crate::claude_messages::fixtures::lock_fixtures_for_test().await;
+    crate::claude_messages::fixtures::install_messages_sse_fixtures(vec![
+        crate::claude_messages::fixtures::sse_fixture_final_text("one"),
     ]);
     let client =
         ClaudeSubscriptionClient::with_bearer(Arc::new(StaticBearer::failing("no credential")));

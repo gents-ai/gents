@@ -341,7 +341,7 @@ async fn run_claude_fixture_turns(
     first_turn: String,
     scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
 ) -> ClaudeFixtureRun {
-    use crate::claude_messages::{
+    use crate::claude_messages::fixtures::{
         install_messages_sse_fixtures, lock_fixtures_for_test, sse_fixture_final_text,
     };
     use crate::claude_subscription::{ClaudeSubscriptionClient, StaticBearer};
@@ -424,7 +424,7 @@ async fn run_claude_fixture_turns(
 
 #[test]
 fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
-    use crate::claude_messages::{
+    use crate::claude_messages::fixtures::{
         blocking_lock_fixtures_for_test, install_messages_sse_fixtures, sse_fixture_final_text,
     };
     use crate::llm::backend_client::{build_backend_client, BackendClient};
