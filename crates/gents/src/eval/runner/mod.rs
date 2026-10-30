@@ -19,9 +19,10 @@ pub use executor::{
     Capture, CaptureResult, FileRef, FixtureDocument, FixtureFile, InferenceBinding, Isolation,
     StageEvidence, StageSpec, TrialEvidence, TrialExecutor, TrialFixtures, TrialLocator, TrialSpec,
 };
+pub use freeze::snapshot::{read_frozen_definition, DEFINITION_FILE};
 pub use freeze::{
-    freeze, freeze_refused, read_frozen_definition, CellRequest, CellSource, FreezeRefused,
-    FrozenCell, FrozenRun, RunRequest, DEFINITION_FILE,
+    freeze, freeze_refused, CellRequest, CellSource, FreezeRefused, FrozenCell, FrozenRun,
+    RunRequest,
 };
 pub use goal::{case_goal, GoalEntry, SCHEMAS_GOAL};
 pub use grade::{grade, VerdictRow};
