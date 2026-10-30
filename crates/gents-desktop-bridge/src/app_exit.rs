@@ -154,7 +154,7 @@ mod tests {
 
         let preparation = state.app_exit.clone().begin().expect("begin exit");
         assert!(matches!(
-            crate::tauri_commands::lifecycle::register_client_start(&state),
+            crate::tauri_commands::lifecycle::single_flight::register_client_start(&state),
             Err(error) if error.code == crate::error::BridgeErrorCode::ClientStartFailed
         ));
         assert!(state
@@ -170,9 +170,9 @@ mod tests {
             .is_err());
         drop(preparation);
         assert!(!state.app_exit.is_quitting());
-        let registration = crate::tauri_commands::lifecycle::register_client_start(&state)
+        let registration = crate::tauri_commands::lifecycle::single_flight::register_client_start(&state)
             .expect("failed exit permits client start retry");
-        let crate::tauri_commands::lifecycle::ClientStartRegistration::Claimed {
+        let crate::tauri_commands::lifecycle::single_flight::ClientStartRegistration::Claimed {
             progress_tx,
             progress_rx: _,
         } = registration
@@ -191,7 +191,7 @@ mod tests {
         assert!(state.app_exit.ready.load(Ordering::Acquire));
         assert!(state.app_exit.is_quitting());
         assert!(matches!(
-            crate::tauri_commands::lifecycle::register_client_start(&state),
+            crate::tauri_commands::lifecycle::single_flight::register_client_start(&state),
             Err(error) if error.code == crate::error::BridgeErrorCode::ClientStartFailed
         ));
     }
