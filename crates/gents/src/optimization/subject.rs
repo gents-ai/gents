@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::document_config::{
     EvalDefinition, EvalSplit, EventSource, PackConfig, Trigger, TriggerSource,
 };
-use crate::eval::runner::freeze::{load_pack, write_pack_files};
+use crate::eval::runner::freeze::pack::{load_pack, write_pack_files};
 use crate::eval::runner::CellSource;
 use crate::optimization::target::{JobTarget, TargetField};
 use crate::pack::{declared_paths, interpolate, PackManifest};

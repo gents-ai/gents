@@ -52,7 +52,7 @@ pub(crate) async fn load_sequenced_history_for_request(
     after_sequence: Option<u32>,
     provider_profile: crate::provider_input::ProviderInputProfile,
 ) -> Result<Vec<SequencedMessage>> {
-    super::output::load_sequenced_messages(
+    super::output::sequenced::load_sequenced_messages(
         node,
         &request.session_id,
         &request.node_did,
@@ -181,7 +181,7 @@ pub(crate) async fn load_sequenced_history_projection(
     after_sequence: Option<u32>,
     current_input_request_doc_id: Option<&str>,
 ) -> Result<Vec<SequencedMessage>> {
-    let history = super::output::load_sequenced_messages(
+    let history = super::output::sequenced::load_sequenced_messages(
         node,
         session_id,
         node_did,

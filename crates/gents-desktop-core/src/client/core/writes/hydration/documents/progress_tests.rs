@@ -1,3 +1,7 @@
+use std::sync::Arc;
+
+use gents::config_client::ConfigAccess;
+
 use super::*;
 
 #[tokio::test]

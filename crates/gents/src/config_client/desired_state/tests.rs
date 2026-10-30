@@ -1,7 +1,20 @@
+use super::plan::{stale_expectation, DesiredStateApplyDocument, DesiredStateExpectation};
+use super::projection::{config_projection, desired_state_document_digest};
+use super::read::{
+    count_desired_state_read_page_queries, expect_existing_documents_unchanged,
+    read_desired_state_document_in_txn, read_record, read_records, read_records_with_page_size,
+};
+use super::validate::{
+    validate_desired_state_plan, validate_event_trigger_document_fields, OutcomeSourceSchemaError,
+};
 use super::*;
 use crate::config_client::ConfigAccess;
+use crate::defra_query::SchemaField;
+use anyhow::Context;
 use defra_node::EmbeddedNode;
 use serde_json::json;
+use serde_json::Value;
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};

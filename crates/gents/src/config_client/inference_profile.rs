@@ -40,7 +40,7 @@ pub async fn write_inference_profile_document(
                     update: value,
                 }])?;
                 super::apply_desired_state_plan(txn, &plan).await?;
-                super::desired_state::read_record(
+                super::desired_state::read::read_record(
                     txn,
                     Collection::InferenceProfile,
                     &profile.node_did,
@@ -115,7 +115,7 @@ async fn read<T>(
 where
     T: serde::de::DeserializeOwned,
 {
-    super::desired_state::read_record(txn, collection, node_did, id)
+    super::desired_state::read::read_record(txn, collection, node_did, id)
         .await?
         .map(|(_, value)| {
             serde_json::from_value(value).with_context(|| format!("decoding scoped {collection:?}"))
@@ -271,7 +271,7 @@ mod tests {
                         let mut records = Vec::new();
                         for id in ["on-a", "on-b", "compaction"] {
                             records.push(
-                                super::super::desired_state::read_record(
+                                super::super::desired_state::read::read_record(
                                     txn,
                                     Collection::InferenceProfile,
                                     did,

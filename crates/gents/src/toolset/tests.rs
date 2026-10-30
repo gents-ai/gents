@@ -13,9 +13,9 @@ use super::args::{
     BashArgs, EditFileArgs, GlobArgs, GrepArgs, ListFilesArgs, ReadFileArgs, WriteFileArgs,
 };
 use super::bash_tools::{ReadOnlyBashTool, UnrestrictedBashTool};
-use super::file_tools::{
-    EditFileTool, GlobTool, GrepTool, ListFilesTool, ReadFileTool, WriteFileTool,
-};
+use super::file_tools::edit_file::EditFileTool;
+use super::file_tools::read_tools::{GlobTool, GrepTool, ListFilesTool, ReadFileTool};
+use super::file_tools::write_file::WriteFileTool;
 use super::shared::{
     build_shell_env_from_vars, select_sandbox_for_policy, validate_command_policy,
     validate_read_only_command, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,

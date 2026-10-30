@@ -460,8 +460,8 @@ pub async fn read_account_usage(
                 node.clone(),
                 node_did,
                 provider,
-                crate::backend_health::oauth_refresh_kind(kind),
-                crate::backend_health::oauth_product(kind),
+                crate::backend_health::oauth::oauth_refresh_kind(kind),
+                crate::backend_health::oauth::oauth_product(kind),
                 AccountPick::Reference(backend.auth.oauth_account_ref()),
             )
             .await;

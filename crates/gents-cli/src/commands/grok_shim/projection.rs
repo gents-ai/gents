@@ -215,7 +215,7 @@ pub(crate) fn session_notification_for_method(
     params.insert("_meta".to_string(), meta);
     json!({
         "jsonrpc": "2.0",
-        "method": super::acp::wire_method(method),
+        "method": super::acp::wire::wire_method(method),
         "params": Value::Object(params),
     })
 }

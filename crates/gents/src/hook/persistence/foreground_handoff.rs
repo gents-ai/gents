@@ -279,7 +279,7 @@ impl DefraSessionHook {
                     }
                     outcome = &mut execution => {
                         if backgrounded {
-                            super::background_tools::finish_background_execution(
+                            super::background_tools::finish::finish_background_execution(
                                 lifecycle, hook.node.clone(), hook.background_live_outputs.clone(),
                                 hook.background_executions.clone(), reservation, outcome,
                             ).await;

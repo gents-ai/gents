@@ -7,12 +7,14 @@ use syn::{Expr, ExprCall, ExprMethodCall, ItemConst, ItemFn, ItemImpl, ItemMod};
 const OWNER_FILES: &[&str] = &[
     "crates/gents/src/config_client/graphql.rs",
     "crates/gents/src/config_client/retry.rs",
-    "crates/gents/src/config_client/txn.rs",
-    "crates/gents-protocol/src/graphql.rs",
+    "crates/gents/src/config_client/txn/auto_commit.rs",
+    "crates/gents/src/config_client/txn/execute.rs",
+    "crates/gents/src/config_client/txn/transact_entry.rs",
+    "crates/gents-protocol/src/graphql/transport.rs",
 ];
 
 const READ_OWNER_FILES: &[&str] = &[
-    "crates/gents/src/config_client/txn.rs",
+    "crates/gents/src/config_client/txn/auto_commit.rs",
     "crates/gents/src/graphql.rs",
 ];
 
@@ -999,6 +1001,9 @@ const RIG_PATH_ALLOWLIST: &[&str] = &[
     "crates/gents-loop/src/rendered_request/transport.rs",
     "crates/gents/src/chatgpt_codex.rs",
     "crates/gents/src/claude_messages.rs",
+    "crates/gents/src/claude_messages/sse_body.rs",
+    "crates/gents/src/claude_messages/sse_state.rs",
+    "crates/gents/src/claude_messages/transport.rs",
     "crates/gents/src/claude_subscription.rs",
     "crates/gents/src/inference_http.rs",
     "crates/gents/src/llm/backend_client.rs",
@@ -1463,7 +1468,7 @@ const AMBIENT_CONTEXT_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-loop/src/tool_call_lifecycle/runtime.rs", 2, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents-loop/src/tool_effects.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents/src/admission/client.rs", 1, "request context read inside Rig's CompletionModel and HTTP client; thread through a per-call provider client"),
-    ("crates/gents/src/config_client/txn.rs", 1, "re-entrant write fence inside a transaction callback; the handle itself is passed explicitly"),
+    ("crates/gents/src/config_client/txn/native.rs", 1, "re-entrant write fence inside a transaction callback; the handle itself is passed explicitly"),
     ("crates/gents/src/managed_exec/ownership.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents/src/plugin/approval.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents/src/plugin/approval/workspace/context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
@@ -1752,7 +1757,7 @@ fn owner_interface_fence_counts_anyhow_names_outside_tests() {
 const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-cli/src/commands/config/backend.rs", 2),
     ("crates/gents-cli/src/commands/eval/manage.rs", 1),
-    ("crates/gents-cli/src/commands/grok_shim/acp.rs", 2),
+    ("crates/gents-cli/src/commands/grok_shim/acp/errors.rs", 2),
     ("crates/gents-cli/src/commands/grok_shim/job_runs.rs", 2),
     ("crates/gents-cli/src/commands/grok_shim/workflow_command.rs", 1),
     ("crates/gents-cli/src/commands/prepare_runtime.rs", 1),
@@ -1763,7 +1768,9 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-desktop-bridge/src/host/local/windows.rs", 1),
     ("crates/gents-desktop-bridge/src/inference_setup.rs", 2),
     ("crates/gents-desktop-bridge/src/local_pairing.rs", 1),
-    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server.rs", 8),
+    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/launch.rs", 4),
+    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/native.rs", 1),
+    ("crates/gents-desktop-bridge/src/tauri_commands/managed_server/readiness.rs", 3),
     ("crates/gents-desktop-core/src/client/core/route_manager.rs", 2),
     ("crates/gents-desktop-core/src/client/core/sync_state.rs", 1),
     ("crates/gents-desktop-core/src/client/core/writes/pending_submissions.rs", 2),
@@ -1773,8 +1780,9 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", 4),
     ("crates/gents-protocol/src/database_error.rs", 1),
     ("crates/gents-protocol/src/error_chain.rs", 1),
-    ("crates/gents-protocol/src/graphql.rs", 3),
-    ("crates/gents/src/agent/daemon.rs", 2),
+    ("crates/gents-protocol/src/graphql/transport.rs", 3),
+    ("crates/gents/src/agent/daemon.rs", 1),
+    ("crates/gents/src/agent/daemon/owned_work.rs", 1),
     ("crates/gents/src/agent/stream_processor.rs", 1),
     ("crates/gents/src/agent/daemon/request.rs", 1),
     ("crates/gents/src/agent/document_view/snapshot.rs", 1),
@@ -1782,7 +1790,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/agent/reconcile.rs", 1),
     ("crates/gents/src/application_write/mod.rs", 1),
     ("crates/gents/src/background_tools/final_output.rs", 1),
-    ("crates/gents/src/config_client/desired_state.rs", 1),
+    ("crates/gents/src/config_client/desired_state/plan.rs", 1),
     ("crates/gents/src/config_client/retry.rs", 2),
     ("crates/gents/src/config_client/schema_install.rs", 2),
     ("crates/gents/src/defra_query/mod.rs", 1),
@@ -1794,12 +1802,12 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/eval/runner/freeze.rs", 1),
     ("crates/gents/src/eval/runner/mod.rs", 1),
     ("crates/gents/src/file_inventory/operator.rs", 1),
-    ("crates/gents/src/goal.rs", 2),
+    ("crates/gents/src/goal/creation.rs", 2),
     ("crates/gents/src/graphql.rs", 1),
     ("crates/gents/src/home.rs", 3),
     ("crates/gents/src/hook/persistence/background_tools.rs", 1),
     ("crates/gents/src/hook/persistence/session_message.rs", 1),
-    ("crates/gents/src/identity.rs", 1),
+    ("crates/gents/src/identity/error.rs", 1),
     ("crates/gents/src/lifecycle.rs", 1),
     ("crates/gents/src/lifecycle/canonical_recovery.rs", 2),
     ("crates/gents/src/lifecycle/execution_lease.rs", 2),
@@ -1817,20 +1825,23 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/plugin/http_calls.rs", 1),
     ("crates/gents/src/plugin/install.rs", 1),
     ("crates/gents/src/plugin/store.rs", 1),
-    ("crates/gents/src/plugin_job/driver.rs", 2),
+    ("crates/gents/src/plugin_job/driver.rs", 1),
+    ("crates/gents/src/plugin_job/driver/step.rs", 1),
     ("crates/gents/src/provider_input/replay.rs", 1),
     ("crates/gents/src/rendered_request/mod.rs", 2),
     ("crates/gents/src/request_admission.rs", 2),
     ("crates/gents/src/schema_tool/mod.rs", 2),
-    ("crates/gents/src/self_config/command.rs", 5),
+    ("crates/gents/src/self_config/command/guidance.rs", 5),
     ("crates/gents/src/self_config/command/validate.rs", 1),
     ("crates/gents/src/session/fork.rs", 1),
-    ("crates/gents/src/session/output.rs", 3),
+    ("crates/gents/src/session/output/replay_candidates.rs", 1),
+    ("crates/gents/src/session/output/replay_capture.rs", 1),
+    ("crates/gents/src/session/output/replay_request.rs", 1),
     ("crates/gents/src/session/request_output.rs", 1),
     ("crates/gents/src/storage_backend.rs", 9),
     ("crates/gents/src/store_key.rs", 2),
     ("crates/gents/src/streaming.rs", 1),
-    ("crates/gents/src/tool_call_lifecycle/delivery.rs", 1),
+    ("crates/gents/src/tool_call_lifecycle/delivery/terminalize.rs", 1),
     ("crates/gents/src/trigger_engine/mod.rs", 2),
 ];
 
@@ -1974,7 +1985,7 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // DefraDB schema validator messages
     ("crates/gents-migration/src/engine.rs", 1),
     // DefraDB missing-collection messages
-    ("crates/gents-protocol/src/graphql.rs", 4),
+    ("crates/gents-protocol/src/graphql/response.rs", 4),
     // replicated AgentRequest failure_reason
     ("crates/gents-protocol/src/node_readiness.rs", 1),
     // DefraDB HTTP 409 commit body
@@ -1982,7 +1993,7 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // JSON-RPC node pruned-history wording
     ("crates/gents/src/eth/rpc.rs", 8),
     // persisted AgentRequest failure_reason
-    ("crates/gents/src/eval/runner/embedded/executor.rs", 2),
+    ("crates/gents/src/eval/runner/embedded/executor/outcome.rs", 2),
     // MCP probe transport/OS error text (metric label)
     ("crates/gents/src/health_checker.rs", 10),
     // display only: appends a next-call hint when absent
@@ -1990,7 +2001,7 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // DefraDB SDL parser messages (help page choice)
     ("crates/gents/src/schema_tool/mod.rs", 6),
     // serde `invalid type: string` message
-    ("crates/gents/src/self_config/command.rs", 1),
+    ("crates/gents/src/self_config/command/patch.rs", 1),
     // display only: appends a next-call hint when absent
     ("crates/gents/src/toolset/session_history.rs", 1),
     // persisted AgentRequest failure_reason

@@ -14,9 +14,9 @@ use super::canonical_rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
-use super::output::{
-    load_canonical_assistant_candidates, CanonicalReplayScope, ReplayRequestReader,
-};
+use super::output::replay_candidates::load_canonical_assistant_candidates;
+use super::output::replay_request::ReplayRequestReader;
+use super::output::CanonicalReplayScope;
 use crate::provider_context_reduction::{capture_source_boundary, SourceBoundary};
 
 use gents_loop::claude_messages_body::{
@@ -476,7 +476,7 @@ async fn signed_oneshot_continuation_resolves_its_own_physical_capture_scope() {
             attempt: candidate.coordinate.attempt,
         },
     };
-    let evidence = super::output::resolve_canonical_replay_tag(
+    let evidence = super::output::replay_tags::resolve_canonical_replay_tag(
         &fixture.node,
         fixture.scope(),
         &fixture.boundary,
@@ -500,7 +500,7 @@ async fn signed_oneshot_continuation_resolves_its_own_physical_capture_scope() {
         unreachable!("fixture tag is provider-owned")
     };
     *attempt += 1;
-    let batched = super::output::resolve_canonical_replay_tags(
+    let batched = super::output::replay_tags::resolve_canonical_replay_tags(
         &fixture.node,
         fixture.scope(),
         &fixture.boundary,
@@ -522,7 +522,7 @@ async fn signed_oneshot_continuation_resolves_its_own_physical_capture_scope() {
         expected_scope_kind: CaptureScopeKind::Inference,
         ..fixture.scope()
     };
-    let without_scope = super::output::resolve_canonical_replay_tag(
+    let without_scope = super::output::replay_tags::resolve_canonical_replay_tag(
         &fixture.node,
         wrong_scope,
         &fixture.boundary,
@@ -843,7 +843,7 @@ async fn signed_capture_restores_exact_authenticated_suffix_and_rejects_rewritte
         id: id.clone(),
         content: content.clone(),
     }];
-    let evidence = super::output::resolve_canonical_replay_tag(
+    let evidence = super::output::replay_tags::resolve_canonical_replay_tag(
         &fixture.node,
         fixture.scope(),
         &fixture.boundary,
@@ -908,7 +908,7 @@ async fn missing_or_foreign_capture_cannot_authorize_reasoning_suffix() {
             attempt: candidate.coordinate.attempt,
         },
     };
-    assert!(super::output::resolve_canonical_replay_tag(
+    assert!(super::output::replay_tags::resolve_canonical_replay_tag(
         &missing.node,
         missing.scope(),
         &missing.boundary,
@@ -931,7 +931,7 @@ async fn missing_or_foreign_capture_cannot_authorize_reasoning_suffix() {
             attempt: foreign_candidate.coordinate.attempt,
         },
     };
-    let foreign_evidence = super::output::resolve_canonical_replay_tag(
+    let foreign_evidence = super::output::replay_tags::resolve_canonical_replay_tag(
         &foreign.node,
         foreign.scope(),
         &foreign.boundary,
@@ -994,7 +994,7 @@ async fn exact_capture_source_binds_canonical_assistant_across_request_versions(
             attempt: candidate.coordinate.attempt,
         },
     };
-    let evidence = super::output::resolve_canonical_replay_tag(
+    let evidence = super::output::replay_tags::resolve_canonical_replay_tag(
         &claude.node,
         claude.scope(),
         &claude.boundary,
@@ -1038,7 +1038,7 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
             .is_empty()
     );
 
-    let history = super::output::load_sequenced_messages(
+    let history = super::output::sequenced::load_sequenced_messages(
         &fixture.node,
         SESSION_ID,
         NODE_DID,
@@ -1164,7 +1164,7 @@ async fn unverifiable_capture_drops_its_reasoning_without_failing_the_request() 
                 attempt: candidate.coordinate.attempt,
             },
         };
-        let evidence = super::output::resolve_canonical_replay_tag(
+        let evidence = super::output::replay_tags::resolve_canonical_replay_tag(
             &fixture.node,
             fixture.scope(),
             &fixture.boundary,
@@ -1225,7 +1225,9 @@ impl ReplayRequestReader for CountingRequests<'_> {
     async fn request_facts(
         &self,
         ids: &[String],
-    ) -> anyhow::Result<std::collections::BTreeMap<String, super::output::ReplayRequestFacts>> {
+    ) -> anyhow::Result<
+        std::collections::BTreeMap<String, super::output::replay_request::ReplayRequestFacts>,
+    > {
         self.commits
             .fetch_add(ids.len(), std::sync::atomic::Ordering::Relaxed);
         self.rows
@@ -1276,7 +1278,7 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
     };
     for resolution in 1..=2 {
         let (candidates, segment_scans) = crate::session::count_request_output_scans(
-            super::output::load_canonical_assistant_candidates_with(
+            super::output::replay_candidates::load_canonical_assistant_candidates_with(
                 &fixture.node,
                 &requests,
                 fixture.scope(),
@@ -1312,7 +1314,7 @@ async fn replay_resolution_reads_shared_request_once_and_keeps_every_physical_ca
             attempt: candidate.coordinate.attempt,
         },
     };
-    let selected = super::output::load_canonical_assistant_candidates_with(
+    let selected = super::output::replay_candidates::load_canonical_assistant_candidates_with(
         &fixture.node,
         &requests,
         fixture.scope(),
@@ -1330,7 +1332,9 @@ impl ReplayRequestReader for FaultingRequests<'_> {
     async fn request_facts(
         &self,
         request_doc_ids: &[String],
-    ) -> anyhow::Result<std::collections::BTreeMap<String, super::output::ReplayRequestFacts>> {
+    ) -> anyhow::Result<
+        std::collections::BTreeMap<String, super::output::replay_request::ReplayRequestFacts>,
+    > {
         if request_doc_ids.iter().any(|id| id == self.request_doc_id) {
             match self.fault {
                 Some(RequestFault::RowsReadFails) => anyhow::bail!("injected AgentRequest read"),
@@ -1362,7 +1366,7 @@ async fn load_with_fault(
         request_doc_id: &fixture.request_doc_id,
         fault,
     };
-    super::output::load_canonical_assistant_candidates_with(
+    super::output::replay_candidates::load_canonical_assistant_candidates_with(
         &fixture.node,
         &requests,
         scope,
@@ -1851,7 +1855,7 @@ async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits(
     let ((batched, commit_statements), capture_queries) =
         crate::session::count_capture_row_queries(
             crate::rendered_request::commits::count_field_commit_statements(
-                super::output::resolve_canonical_replay_tags(
+                super::output::replay_tags::resolve_canonical_replay_tags(
                     &fixture.node,
                     fixture.scope(),
                     &fixture.boundary,
@@ -1875,7 +1879,7 @@ async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits(
         "field-commit witnesses batch across every manifest of the pass"
     );
     for (index, tag) in tags.iter().enumerate() {
-        let singleton = super::output::resolve_canonical_replay_tag(
+        let singleton = super::output::replay_tags::resolve_canonical_replay_tag(
             &fixture.node,
             fixture.scope(),
             &fixture.boundary,
@@ -2021,7 +2025,7 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
             },
         })
         .collect::<Vec<_>>();
-    let resolved = super::output::resolve_canonical_replay_tags(
+    let resolved = super::output::replay_tags::resolve_canonical_replay_tags(
         &fixture.node,
         fixture.scope(),
         &fixture.boundary,

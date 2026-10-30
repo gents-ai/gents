@@ -412,7 +412,7 @@ fn missing_key(data_path: &Path) -> StoreKeyError {
 }
 
 fn keychain_failure(code: i32, data_path: &Path) -> StoreKeyError {
-    if code == crate::identity::ERR_SEC_ITEM_NOT_FOUND {
+    if code == crate::identity::macos::ERR_SEC_ITEM_NOT_FOUND {
         missing_key(data_path)
     } else {
         StoreKeyError::Unavailable(StoreKeyUnavailable {
@@ -443,7 +443,7 @@ mod keychain {
 
     #[cfg(target_os = "macos")]
     pub(super) fn store(label: &str, bytes: &[u8]) -> Result<()> {
-        crate::identity::macos_keychain_set(SERVICE, label, bytes).map_err(|source| {
+        crate::identity::macos::macos_keychain_set(SERVICE, label, bytes).map_err(|source| {
             StoreKeyError::KeychainStore {
                 label: label.to_owned(),
                 source: Box::new(source),
@@ -453,12 +453,12 @@ mod keychain {
 
     #[cfg(target_os = "macos")]
     pub(super) fn load(label: &str) -> Result<std::result::Result<Zeroizing<Vec<u8>>, i32>> {
-        Ok(crate::identity::macos_keychain_find(SERVICE, label)?)
+        Ok(crate::identity::macos::macos_keychain_find(SERVICE, label)?)
     }
 
     #[cfg(target_os = "macos")]
     pub(super) fn delete(label: &str) -> Result<()> {
-        crate::identity::macos_keychain_delete(SERVICE, label).map_err(|source| {
+        crate::identity::macos::macos_keychain_delete(SERVICE, label).map_err(|source| {
             StoreKeyError::KeychainDelete {
                 label: label.to_owned(),
                 source: Box::new(source),

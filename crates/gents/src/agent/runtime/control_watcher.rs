@@ -174,7 +174,7 @@ pub(super) async fn run_control_watcher_with_timing(
                         &document_view,
                     )
                     .await?;
-                    super::startup::demote_unbuildable_agents(&tool_runtime, &mut snapshot).await?;
+                    super::startup::snapshot::demote_unbuildable_agents(&tool_runtime, &mut snapshot).await?;
                     anyhow::Ok(snapshot)
                 }
                 .await

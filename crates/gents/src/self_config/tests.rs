@@ -1,4 +1,4 @@
-use super::command::{agent_params, help_patch_contracts};
+use super::command::{agents::agent_params, contracts::help_patch_contracts};
 use super::*;
 
 fn test_plugins() -> Arc<crate::plugin::executor::PluginExecutor> {

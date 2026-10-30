@@ -1026,7 +1026,9 @@ async fn generated_snapshot_demotions_preserve_healthy_agents() {
     )
     .await
     .unwrap();
-    let baseline = startup::resolve_startup_snapshot(&agent).await.unwrap();
+    let baseline = startup::snapshot::resolve_startup_snapshot(&agent)
+        .await
+        .unwrap();
     let template = baseline.agents.values().next().unwrap();
     let surface = baseline.tool_surfaces.values().next().unwrap();
     let cases = crate::lean_vocab_test::lean_snapshot_demotion_cases();
@@ -1349,8 +1351,10 @@ async fn startup_demotion_cascades_to_targets_schedules_and_tasks() {
     )
     .with_plugins(agent.plugins().clone());
 
-    let mut snapshot = startup::resolve_startup_snapshot(&agent).await.unwrap();
-    startup::validate_startup_snapshot(&agent, &tool_runtime, &mut snapshot)
+    let mut snapshot = startup::snapshot::resolve_startup_snapshot(&agent)
+        .await
+        .unwrap();
+    startup::snapshot::validate_startup_snapshot(&agent, &tool_runtime, &mut snapshot)
         .await
         .unwrap();
 

@@ -340,9 +340,9 @@ mod tests {
     use crate::config_client::DesiredStateApplyPlan;
     use crate::eval::runner::freeze::tests::OWNER;
     use crate::optimization::driver::job_dir;
+    use crate::optimization::driver::matrix::fixtures::{BASELINE_PROMPT, CANDIDATE_PROMPT};
     use crate::optimization::driver::matrix::{
-        accepting_harness, accepting_task_harness, rejecting_harness, Harness, BASELINE_PROMPT,
-        CANDIDATE_PROMPT, CANDIDATE_TEMPLATE,
+        accepting_harness, accepting_task_harness, rejecting_harness, Harness, CANDIDATE_TEMPLATE,
     };
     use crate::optimization::job::load_job;
     use crate::optimization::subject::tests::FIXTURE_TEMPLATE;

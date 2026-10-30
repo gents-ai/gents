@@ -1,3 +1,4 @@
+use super::observation::{load_session_request_bindings, RequestBindings};
 use super::*;
 
 pub(super) const PAGE_SIZE: usize = 128;

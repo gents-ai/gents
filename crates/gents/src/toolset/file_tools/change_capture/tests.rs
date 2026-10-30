@@ -6,7 +6,8 @@ use crate::tool_call_lifecycle::admission_fixture::{
     published_admission, PublishedAdmissionOptions,
 };
 use crate::toolset::args::WriteFileArgs;
-use crate::toolset::file_tools::{file_mutation_lock_for, WriteFileTool};
+use crate::toolset::file_tools::file_mutation_lock_for;
+use crate::toolset::file_tools::write_file::WriteFileTool;
 use crate::toolset::shared::ToolContext;
 use gents_loop::live_output::LiveToolOutputRegistry;
 use serde_json::Value;
@@ -504,7 +505,7 @@ async fn incomplete_images_retain_the_original_without_claiming_a_finished_mutat
 #[tokio::test]
 async fn previews_and_rejected_edits_do_not_publish_file_images() {
     use crate::toolset::args::EditFileArgs;
-    use crate::toolset::file_tools::EditFileTool;
+    use crate::toolset::file_tools::edit_file::EditFileTool;
     let registry = LiveToolOutputRegistry::default();
     let writer = registry.writer_for("preview-tool").await;
     let root = tempfile::tempdir().unwrap();
@@ -755,7 +756,7 @@ fn changed_inode_metadata_is_detected_with_unchanged_modification_time() {
 
 #[tokio::test]
 async fn readonly_receipts_commit_without_images_and_survive_terminal_retry() {
-    use crate::toolset::file_tools::ReadFileTool;
+    use crate::toolset::file_tools::read_tools::ReadFileTool;
     use gents_loop::tool_call_lifecycle::runtime::{call_tool_managed, ToolOutcome};
 
     let admission = published_admission(PublishedAdmissionOptions {

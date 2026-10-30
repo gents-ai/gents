@@ -1,3 +1,4 @@
+use super::plan::PlannedWrite;
 use super::*;
 use crate::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::goal_control::SessionGoalObservation;

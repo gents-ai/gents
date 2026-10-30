@@ -58,20 +58,22 @@ pub mod patch;
 
 pub use agent_behavior::write_agent_document;
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
-#[cfg(test)]
-pub(crate) use desired_state::canonical_struct_fields;
-pub use desired_state::read_record as read_desired_state_record_in_txn;
-pub use desired_state::read_records as read_desired_state_records_in_txn;
-pub use desired_state::{
-    apply_desired_state_plan, config_projection, desired_state_document_digest,
-    event_trigger_document_field_names, stale_expectation, validate_event_trigger_document_fields,
-    DesiredStateApplyCounts, DesiredStateApplyDocument, DesiredStateApplyPlan,
+pub use desired_state::apply_desired_state_plan;
+pub use desired_state::plan::{
+    stale_expectation, DesiredStateApplyCounts, DesiredStateApplyDocument, DesiredStateApplyPlan,
     DesiredStateExpectation, DriftedDocument, StaleExpectation,
 };
-pub(crate) use desired_state::{
-    collection_is_installed, read_desired_state_document_in_txn, validate_desired_state_plan,
-    OutcomeSourceSchemaError,
+#[cfg(test)]
+pub(crate) use desired_state::projection::canonical_struct_fields;
+pub use desired_state::projection::{config_projection, desired_state_document_digest};
+pub(crate) use desired_state::read::read_desired_state_document_in_txn;
+pub use desired_state::read::read_record as read_desired_state_record_in_txn;
+pub use desired_state::read::read_records as read_desired_state_records_in_txn;
+pub(crate) use desired_state::schema_fields::collection_is_installed;
+pub use desired_state::validate::{
+    event_trigger_document_field_names, validate_event_trigger_document_fields,
 };
+pub(crate) use desired_state::validate::{validate_desired_state_plan, OutcomeSourceSchemaError};
 pub(crate) use inference_backend::write_inference_backend_in_txn;
 pub use inference_backend::{
     list_inference_backends_in_txn, load_inference_backend_in_txn, serving_accounts,

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::document_config::{EvalDefinition, EvalReducer, EvalSplit, EvalTier};
 use crate::eval::report::evidence::{cell_usage, counted_slots, CellUsage, RunRows};
 use crate::eval::report::refused;
-use crate::eval::runner::freeze::definition_ref;
+use crate::eval::runner::freeze::documents::definition_ref;
 use crate::eval::{
     case_means_bp, case_trial_score, classify, exposure, headline_bp, CaseTrialScore, CellSpec,
     DefinitionRef, EvidenceClass, Invalidation, OutcomeKind, ProviderReason, RunHeader, RunRecord,

@@ -1723,7 +1723,7 @@ fn owned_loop_entry_points_are_registered() {
         "crates/gents/src/agent/daemon/inference.rs".to_string(),
         "crates/gents/src/agent/daemon/title.rs".to_string(),
         "crates/gents/src/agent/daemon/title/review.rs".to_string(),
-        "crates/gents-loop/src/compaction.rs".to_string(),
+        "crates/gents-loop/src/compaction_rolling.rs".to_string(),
         "crates/gents/src/oneshot.rs".to_string(),
     ]);
     let found = files_containing(&[
