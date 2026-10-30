@@ -95,6 +95,7 @@ pub fn test_agent_for_node(
     ResolvedAgent {
         profile_id: None,
         skills: Vec::new(),
+        oauth_pool: Vec::new(),
         agent_id,
         node: principal,
         backend_id: None,

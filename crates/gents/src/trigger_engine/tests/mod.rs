@@ -572,6 +572,7 @@ fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
     Arc::new(ResolvedAgent {
         profile_id: None,
         skills: Vec::new(),
+        oauth_pool: Vec::new(),
         agent_id: behavior_name.to_string(),
         node: principal,
         backend_id: Some("backend-it".to_string()),

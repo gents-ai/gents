@@ -57,6 +57,10 @@ pub struct ResolvedAgent {
     /// Effective skill set for this agent. Their tool deps are intersected with
     /// the tool ceiling and never widen it. See `crate::skills`.
     pub skills: Vec<crate::skills::Skill>,
+    /// Credential ids of the backend's account pool in rotation order; empty
+    /// unless the backend rotates a pool. Part of the slot fingerprint, so an
+    /// account signing in, out or being disabled rebuilds the live client.
+    pub oauth_pool: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -388,6 +392,7 @@ impl std::fmt::Debug for ResolvedAgent {
             .field("completion_retry", &self.completion_retry)
             .field("sampling", &self.sampling)
             .field("skills", &self.skills)
+            .field("oauth_pool", &self.oauth_pool)
             .finish()
     }
 }
@@ -632,7 +637,21 @@ mod tests {
             completion_retry: CompletionRetryProfileFields::default(),
             sampling: SamplingConfig::default(),
             skills: Vec::new(),
+            oauth_pool: Vec::new(),
         }
+    }
+
+    #[test]
+    fn an_account_pool_change_recreates_the_agent_slot() {
+        let agent = agent_with_wire(OpenAiWireApi::ChatCompletions);
+        let mut grown = agent.clone();
+        grown.oauth_pool = vec!["claude-a".to_string(), "claude-b".to_string()];
+        let mut shrunk = grown.clone();
+        shrunk.oauth_pool.pop();
+        let fingerprint = crate::completion_factory::agent_slot_fingerprint;
+        assert_ne!(fingerprint(&agent), fingerprint(&grown));
+        assert_ne!(fingerprint(&grown), fingerprint(&shrunk));
+        assert_eq!(fingerprint(&grown), fingerprint(&grown.clone()));
     }
 
     #[test]

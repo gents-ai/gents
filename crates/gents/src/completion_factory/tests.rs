@@ -559,6 +559,7 @@ fn agent_with_retry(completion_retry: CompletionRetryProfileFields) -> ResolvedA
         completion_retry,
         sampling: SamplingConfig::default(),
         skills: Vec::new(),
+        oauth_pool: Vec::new(),
     }
 }
 

@@ -258,6 +258,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                         .into_iter()
                         .cloned()
                         .collect::<Vec<_>>();
+                let oauth_pool = view.oauth_pool_ids(&inference.backend);
                 let factory: AgentFactory = Box::new(move |principal| {
                     agent_config_from_documents(
                         principal,
@@ -271,6 +272,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                             agent_tools,
                             tool_ceiling: &tool_ceiling,
                             skills: behavior_skills,
+                            oauth_pool,
                         },
                     )
                     .map_err(|error| AgentBuildError {

@@ -1944,6 +1944,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let initial_agent = Arc::new(ResolvedAgent {
         profile_id: None,
         skills: Vec::new(),
+        oauth_pool: Vec::new(),
         agent_id: "general".to_string(),
         node: runtime_node.clone(),
         backend_id: Some("backend-general".to_string()),

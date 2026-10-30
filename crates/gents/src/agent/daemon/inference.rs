@@ -1307,6 +1307,7 @@ pub(super) mod tests {
             completion_retry: CompletionRetryProfileFields::default(),
             sampling: SamplingConfig::default(),
             skills: Vec::new(),
+            oauth_pool: Vec::new(),
         })
     }
 

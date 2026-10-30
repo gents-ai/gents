@@ -652,6 +652,7 @@ impl PendingAgent {
             completion_retry: CompletionRetryProfileFields::default(),
             sampling: self.sampling,
             skills: self.skills,
+            oauth_pool: Vec::new(),
         })
     }
 }

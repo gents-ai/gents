@@ -522,6 +522,7 @@ pub(crate) struct AgentDocumentInputs<'a> {
     pub(crate) agent_tools: AgentToolConfig,
     pub(crate) tool_ceiling: &'a ToolCeiling,
     pub(crate) skills: Vec<crate::skills::Skill>,
+    pub(crate) oauth_pool: Vec<String>,
 }
 
 pub(crate) fn agent_config_from_documents(
@@ -538,6 +539,7 @@ pub(crate) fn agent_config_from_documents(
         agent_tools,
         tool_ceiling,
         skills,
+        oauth_pool,
     } = inputs;
     let execution = inference.execution.clone().unwrap_or_default();
     let retry = inference.retry_policy.clone().unwrap_or_default();
@@ -619,6 +621,7 @@ pub(crate) fn agent_config_from_documents(
         },
         sampling: inference.sampling_config()?,
         skills,
+        oauth_pool,
     })
 }
 

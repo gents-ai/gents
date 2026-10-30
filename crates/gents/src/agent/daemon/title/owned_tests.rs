@@ -1228,6 +1228,7 @@ impl TitleFixture {
             completion_retry: CompletionRetryProfileFields::default(),
             sampling: SamplingConfig::default(),
             skills: Vec::new(),
+            oauth_pool: Vec::new(),
         });
         crate::test_support::install_test_agent(&node, identity.did(), &agent_config.agent_id)
             .await;
