@@ -5,8 +5,8 @@ use std::sync::{
 };
 use std::time::Duration;
 
+use gents::inference::auth::credential::{OAuthCredential, SignIn};
 use gents::inference_setup::InferenceAuthMethod;
-use gents::oauth_credential::{OAuthCredential, SignIn};
 use tokio_util::sync::CancellationToken;
 
 use super::{
@@ -18,7 +18,9 @@ use crate::error::{BridgeError, BridgeErrorCode};
 pub(crate) fn provider(method: InferenceAuthMethod) -> Result<&'static str, BridgeError> {
     match method {
         InferenceAuthMethod::ChatGptOauth => Ok(gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER),
-        InferenceAuthMethod::ClaudeOauth => Ok(gents::claude_oauth::CLAUDE_OAUTH_PROVIDER),
+        InferenceAuthMethod::ClaudeOauth => {
+            Ok(gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER)
+        }
         InferenceAuthMethod::GrokOauth => Ok(gents::xai_grok_oauth::XAI_OAUTH_PROVIDER),
         _ => Err(BridgeError::new(
             BridgeErrorCode::InvalidArgument,
@@ -142,7 +144,7 @@ where
                 product,
             )
             .await?;
-            let tokens = gents::claude_oauth::ClaudeLoginTokens {
+            let tokens = gents::inference::auth::claude::ClaudeLoginTokens {
                 access_token: tokens.access_token,
                 refresh_token: tokens.refresh_token,
                 expires_in: tokens.expires_in,
@@ -153,7 +155,7 @@ where
             };
             OAuthCredential {
                 label,
-                ..gents::claude_oauth::credential_from_login_tokens(
+                ..gents::inference::auth::claude::credential_from_login_tokens(
                     node_did,
                     credential_provider,
                     &tokens,
@@ -170,7 +172,7 @@ where
                 .timeout(Duration::from_secs(30))
                 .build()
                 .map_err(|_| BridgeError::untyped("Could not prepare the sign-in connection."))?;
-            let login = gents::xai_oauth_login::run_device_code_login_with_url_callback(
+            let login = gents::inference::auth::xai_login::run_device_code_login_with_url_callback(
                 &http,
                 Some(stop.clone()),
                 async move |url| {
@@ -202,7 +204,7 @@ where
             })?;
             OAuthCredential {
                 label,
-                ..gents::xai_oauth_login::credential_from_login_tokens(
+                ..gents::inference::auth::xai_login::credential_from_login_tokens(
                     node_did,
                     credential_provider,
                     &tokens,

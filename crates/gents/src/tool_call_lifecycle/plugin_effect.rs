@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, SecondsFormat, Utc};
-use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::output::{
     reconstruction::{reconstruct_stream, ObservedSegment},
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
     OutputWriter, PayloadRef, SegmentRun, SourceClose, StreamDeclaration, StreamPayload,
 };
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use crate::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::graphql::{created_doc_id, escape_graphql_string};

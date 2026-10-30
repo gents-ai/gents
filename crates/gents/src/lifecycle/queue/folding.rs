@@ -314,7 +314,9 @@ pub(crate) async fn consume_folded_in_txn(
         escape_graphql_string(&consumption.head_request_id),
         escape_graphql_string(&consumption.head_doc_id),
         escape_graphql_string(FOLDED_REASON),
-        escape_graphql_string(published_at), pending = RequestLifecycleState::Pending.as_str(), superseded = RequestLifecycleState::Superseded.as_str()
+        escape_graphql_string(published_at),
+        pending = RequestLifecycleState::Pending.as_str(),
+        superseded = RequestLifecycleState::Superseded.as_str()
     );
     let response = txn.execute(&mutation).await?;
     let updated = response["data"]["update_AgentRequest"]
@@ -387,7 +389,8 @@ pub(crate) async fn load_consumed_folded_inputs(
         escape_graphql_string(&head.node_did),
         escape_graphql_string(&head.session_id),
         escape_graphql_string(&head.doc_id),
-        escape_graphql_string(FOLDED_REASON), superseded = RequestLifecycleState::Superseded.as_str()
+        escape_graphql_string(FOLDED_REASON),
+        superseded = RequestLifecycleState::Superseded.as_str()
     );
     let observed = crate::graphql::graphql_with_transaction_retry(
         node,

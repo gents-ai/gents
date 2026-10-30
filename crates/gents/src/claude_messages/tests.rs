@@ -1104,13 +1104,45 @@ pub(super) fn test_account() -> ClaudeAccountContext {
     }
 }
 
+#[tokio::test]
+async fn transport_401_invalidates_the_bearer_once() {
+    let _guard = lock_fixtures_for_test().await;
+    let (url, handle) = crate::inference::auth::credential::test_support::one_shot_token_server(
+        401,
+        r#"{"type":"error","error":{"type":"authentication_error","message":"bad token"}}"#,
+    )
+    .await;
+    let bearer = crate::claude_subscription::StaticBearer::new("access-STALE");
+    let err = stream_messages_at(
+        &url,
+        "claude-sonnet-5",
+        &echo_request(),
+        RapidHashSet::new(),
+        &bearer,
+        &ReqwestClient::new(),
+        None,
+    )
+    .await
+    .err()
+    .expect("401");
+    assert!(err.to_string().contains("401"), "{err}");
+    assert_eq!(bearer.invalidations(), 1);
+    let request = handle.await.expect("request");
+    assert!(
+        request
+            .lines()
+            .any(|line| line.eq_ignore_ascii_case("authorization: Bearer access-STALE")),
+        "{request}"
+    );
+}
+
 fn captured_request<S>(
     account: &ClaudeAccountContext,
     bearer: &S,
     request: &CompletionRequest,
 ) -> String
 where
-    S: crate::oauth_credential::BearerSource,
+    S: crate::inference::auth::credential::BearerSource,
 {
     let _guard = blocking_lock_fixtures_for_test();
     tokio::runtime::Builder::new_current_thread()
@@ -1118,7 +1150,7 @@ where
         .build()
         .expect("runtime")
         .block_on(async {
-            let (url, handle) = crate::oauth_credential::test_support::one_shot_token_server(
+            let (url, handle) = crate::inference::auth::credential::test_support::one_shot_token_server(
                 401,
                 r#"{"type":"error","error":{"type":"authentication_error","message":"bad token"}}"#,
             )
@@ -1486,7 +1518,7 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
         .build()
         .expect("runtime")
         .block_on(async {
-            let node = crate::oauth_credential::test_support::test_node().await;
+            let node = crate::inference::auth::credential::test_support::test_node().await;
             let cache: std::sync::Arc<crate::usage_observation::UsageCache> =
                 std::sync::Arc::default();
             let account = crate::usage_observation::UsageAccount::Backend {

@@ -16,7 +16,9 @@ impl BackendProviderOauthExt for BackendProviderKind {
         match self {
             Self::ChatGptCodex => Some(crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER),
             Self::XaiGrokOAuth => Some(crate::xai_grok_oauth::XAI_OAUTH_PROVIDER),
-            Self::ClaudeCliSubscription => Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
+            Self::ClaudeCliSubscription => {
+                Some(crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER)
+            }
             Self::ClaudeGateway => Some(crate::claude_gateway_login::CLAUDE_GATEWAY_PROVIDER),
             _ => None,
         }
@@ -281,7 +283,7 @@ pub async fn discover_models(
     kind: BackendProviderKind,
     endpoint: &str,
     api_key: Option<&str>,
-    oauth_credential: Option<&crate::oauth_credential::OAuthCredential>,
+    oauth_credential: Option<&crate::inference::auth::credential::OAuthCredential>,
 ) -> Result<Vec<AdvertisedModel>> {
     if kind.is_claude_platform() {
         return probe_platform_reachability(client, kind, endpoint).await;

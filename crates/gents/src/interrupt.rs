@@ -2,9 +2,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents_protocol::request_lifecycle::RequestLifecycleState;
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use tokio::sync::watch;
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
@@ -209,7 +209,11 @@ pub(crate) async fn interrupt_active_session_in_txn(
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ {scope}, purpose: {{ _eq: "normal" }},
                 lifecycle_state: {{ _in: {claimed_or_processing} }} }}, limit: 2)
-                {{ _docID request_id }} }}"#, claimed_or_processing = RequestLifecycleState::graphql_list([RequestLifecycleState::Claimed, RequestLifecycleState::Processing])
+                {{ _docID request_id }} }}"#,
+            claimed_or_processing = RequestLifecycleState::graphql_list([
+                RequestLifecycleState::Claimed,
+                RequestLifecycleState::Processing
+            ])
         ))
         .await?;
     let rows = response

@@ -336,7 +336,7 @@ async fn stage_resume_inner(
                 .provider_kind
                 .oauth_provider()
                 .context("target backend has no OAuth provider")?;
-            let account = crate::oauth_credential::resolve_oauth_credential_in_txn(
+            let account = crate::inference::auth::credential::resolve_oauth_credential_in_txn(
                 txn, node_did, provider, pick,
             )
             .await?;

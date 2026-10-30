@@ -289,7 +289,9 @@ mod tests {
     };
     use gents::defra_node::EmbeddedNode;
     use gents::document_config::{AdvertisedModel, BackendAuth, BackendModelCatalog};
-    use gents::oauth_credential::{oauth_credential_id, upsert_oauth_credential, OAuthCredential};
+    use gents::inference::auth::credential::{
+        oauth_credential_id, upsert_oauth_credential, OAuthCredential,
+    };
     use gents::usage_observation::account_usage::{UsageReport, UsageSource, UsageWindow};
     use gents::usage_observation::{load_usage, record_usage, UsageAccount};
     use gents::{

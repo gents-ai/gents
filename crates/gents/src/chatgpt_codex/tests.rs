@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[tokio::test]
 async fn routing_affinity_matches_lean_owner() {
-    use crate::oauth_http::OAuthHttpPolicy;
+    use crate::inference::auth::http::OAuthHttpPolicy;
     use gents_loop::provider_input::routing_affinity::{scope, RoutingAffinity};
     for case in &crate::lean_vocab_test::lean_contract_snapshot().routing_affinity_cases {
         let state = RoutingAffinity::start(
@@ -72,7 +72,7 @@ async fn routing_affinity_isolates_concurrent_executions_without_capture() {
             })
             .await;
             assert_eq!(current().unwrap().token(), Some(token));
-            use crate::oauth_http::OAuthHttpPolicy;
+            use crate::inference::auth::http::OAuthHttpPolicy;
             let other = Request::builder()
                 .uri("https://api.x.ai/v1/responses")
                 .header("x-custom", "unchanged")
@@ -191,7 +191,7 @@ impl HttpClientExt for StatusInjectingClient {
 
 #[tokio::test]
 async fn codex_affinity_transport_captures_first_response_and_reuses_it_on_followup() {
-    use crate::oauth_http::OAuthHttpPolicy;
+    use crate::inference::auth::http::OAuthHttpPolicy;
     use gents_loop::provider_input::routing_affinity::{scope, RoutingAffinity};
     let client = ChatGptCodexHttpClient::with_inner(
         CountingBearer::new("test-bearer"),
@@ -503,7 +503,7 @@ fn chatgpt_login(id_claims: Value, access_token: String) -> OAuthCredential {
     OAuthCredential::from_login_tokens(
         "did:key:zAgent",
         CHATGPT_CODEX_PROVIDER,
-        &crate::oauth_credential::test_support::unsigned_jwt(id_claims),
+        &crate::inference::auth::credential::test_support::unsigned_jwt(id_claims),
         access_token,
         "refresh".to_string(),
         Utc::now(),
@@ -511,7 +511,7 @@ fn chatgpt_login(id_claims: Value, access_token: String) -> OAuthCredential {
 }
 
 fn access_token(auth: Value) -> String {
-    crate::oauth_credential::test_support::unsigned_jwt(
+    crate::inference::auth::credential::test_support::unsigned_jwt(
         json!({ "https://api.openai.com/auth": auth }),
     )
 }

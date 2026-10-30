@@ -145,7 +145,7 @@ async fn generated_goal_reset_resume_cases_drive_real_transactions() {
             .unwrap();
         }
         if !facts.account_enabled {
-            crate::oauth_credential::set_account_enabled(
+            crate::inference::auth::credential::set_account_enabled(
                 &accounts.access,
                 did,
                 &accounts.a_credential,

@@ -351,14 +351,14 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
     result
 }
 
-fn added_account_note(sign_in: &gents::oauth_credential::SignIn) -> Option<String> {
-    (sign_in.result == gents::oauth_credential::SignInResult::Added
+fn added_account_note(sign_in: &gents::inference::auth::credential::SignIn) -> Option<String> {
+    (sign_in.result == gents::inference::auth::credential::SignInResult::Added
         && sign_in.credential.account_ref.is_some())
     .then(|| {
         format!(
             "This sign-in was stored as another account, {}. The backend set up here runs on \
              the provider's original account; see `gents accounts`.",
-            gents::oauth_credential::effective_account_label(&sign_in.credential)
+            gents::inference::auth::credential::effective_account_label(&sign_in.credential)
         )
     })
 }
@@ -413,11 +413,11 @@ async fn maybe_inline_grok_login(
         return InlineGrokLoginState::Unauthenticated;
     }
     let provider = gents::xai_grok_oauth::normalize_provider("xai-oauth");
-    match gents::oauth_credential::resolve_oauth_credential(
+    match gents::inference::auth::credential::resolve_oauth_credential(
         access,
         node_did,
         &provider,
-        gents::oauth_credential::AccountPick::Reference(None),
+        gents::inference::auth::credential::AccountPick::Reference(None),
     )
     .await
     {
@@ -484,13 +484,14 @@ async fn maybe_inline_claude_login(
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return InlineClaudeLoginState::Unauthenticated;
     }
-    let provider =
-        gents::claude_oauth::normalize_provider(gents::claude_oauth::CLAUDE_OAUTH_PROVIDER);
-    match gents::oauth_credential::resolve_oauth_credential(
+    let provider = gents::inference::auth::claude::normalize_provider(
+        gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+    );
+    match gents::inference::auth::credential::resolve_oauth_credential(
         access,
         node_did,
         &provider,
-        gents::oauth_credential::AccountPick::Reference(None),
+        gents::inference::auth::credential::AccountPick::Reference(None),
     )
     .await
     {
@@ -542,11 +543,11 @@ async fn maybe_inline_codex_login(
         return InlineCodexLoginState::Unauthenticated;
     }
     let provider = gents::chatgpt_codex::normalize_provider("chatgpt-codex");
-    match gents::oauth_credential::resolve_oauth_credential(
+    match gents::inference::auth::credential::resolve_oauth_credential(
         access,
         node_did,
         &provider,
-        gents::oauth_credential::AccountPick::Reference(None),
+        gents::inference::auth::credential::AccountPick::Reference(None),
     )
     .await
     {

@@ -146,7 +146,9 @@ pub(crate) fn supersede_pending_mutation(
         escape_graphql_string(survivor_doc_id),
         escape_graphql_string(reason),
         escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
-        physical_doc_id = escape_graphql_string(doc_id), pending = RequestLifecycleState::Pending.as_str(), superseded = RequestLifecycleState::Superseded.as_str()
+        physical_doc_id = escape_graphql_string(doc_id),
+        pending = RequestLifecycleState::Pending.as_str(),
+        superseded = RequestLifecycleState::Superseded.as_str()
     )
 }
 
@@ -166,7 +168,8 @@ async fn matching_coalesced_pending_requests(
                 node_did: {{_eq: "{escaped_node_did}"}}, lifecycle_state: {{_eq: "{pending}"}}}},
             order: [{{created_at: ASC}}, {{request_id: ASC}}]
         ) {{{}}} }}"#,
-        crate::request_admission::SIGNED_REQUEST_FIELDS, pending = RequestLifecycleState::Pending.as_str()
+        crate::request_admission::SIGNED_REQUEST_FIELDS,
+        pending = RequestLifecycleState::Pending.as_str()
     );
     crate::config_client::ConfigAccess::transact_local_readonly(
         node,

@@ -3,33 +3,26 @@ use super::*;
 impl ConfigCommandTool {
     /// Usage endpoint reads select no account and expose no credential identity.
     pub(super) async fn account_inventory(&self) -> Result<String> {
+        use crate::backend_provider::BackendProviderOauthExt;
         use crate::inference::auth::credential::backend_account;
-        use crate::inference::backends::provider::BackendProviderOauthExt;
-        use crate::inference::usage_observation::{read_node_usage, UsageTrigger};
-        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
+        use crate::usage_observation::{read_node_usage, UsageTrigger};
+        let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let node_did = self.node_did.as_str();
         let accounts = crate::inference::auth::credential::list_accounts(&access, node_did).await?;
-        let (backends, profiles) =
-            crate::store::config_client::ConfigAccess::transact_local_readonly(
-                &self.node,
-                Some(self.core.identity()?),
-                "self_config.account_inventory",
-                |txn| {
-                    Box::pin(async move {
-                        Ok::<_, anyhow::Error>((
-                            crate::store::config_client::list_inference_backends_in_txn(
-                                txn, node_did,
-                            )
-                            .await?,
-                            crate::store::config_client::list_inference_profiles_in_txn(
-                                txn, node_did,
-                            )
-                            .await?,
-                        ))
-                    })
-                },
-            )
-            .await?;
+        let (backends, profiles) = crate::config_client::ConfigAccess::transact_local_readonly(
+            &self.node,
+            Some(self.core.identity()?),
+            "self_config.account_inventory",
+            |txn| {
+                Box::pin(async move {
+                    Ok::<_, anyhow::Error>((
+                        crate::config_client::list_inference_backends_in_txn(txn, node_did).await?,
+                        crate::config_client::list_inference_profiles_in_txn(txn, node_did).await?,
+                    ))
+                })
+            },
+        )
+        .await?;
         let profiles_on = |backend_ids: &[&str]| {
             profiles
                 .iter()

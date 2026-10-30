@@ -6,13 +6,13 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::Utc;
 use defra_node::EmbeddedNode;
-use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::request_admission::{
     project_agent_request_admission_disposition, validate_signing_fields,
     AgentRequestAdmissionDisposition, AgentRequestAdmissionKind, AgentRequestAdmissionObservation,
     AgentRequestAdmissionRecord, AgentRequestSigningFields, RequestPurpose,
     RuntimeInternalSourceKind,
 };
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
@@ -229,7 +229,9 @@ pub(crate) async fn terminalize_pending_request_rejection(
             ) {{ _docID request_id purpose node_did requester_did agent_id session_id content
                  input created_at caused_by_parent_request_doc_id
                  workspace_id workspace_owner_node_did }}
-        }}"#, pending = RequestLifecycleState::Pending.as_str(), failed = RequestLifecycleState::Failed.as_str()
+        }}"#,
+        pending = RequestLifecycleState::Pending.as_str(),
+        failed = RequestLifecycleState::Failed.as_str()
     );
     let mutation = &mutation;
     crate::config_client::ConfigAccess::transact_local_idempotent(

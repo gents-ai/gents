@@ -1,10 +1,10 @@
 use super::*;
-use crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
 use crate::config_client::{
     apply_desired_state_plan, write_inference_backend_document, ConfigAccess,
     DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use crate::oauth_credential::{preset_account_backend, store_sign_in};
+use crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
+use crate::inference::auth::credential::{preset_account_backend, store_sign_in};
 use crate::request_admission::verify_runtime_local_control_receipt;
 use crate::store::identity::KeyIdentity;
 use crate::Collection;
@@ -214,10 +214,10 @@ impl Fixture {
             .unwrap();
         let mut accounts = Vec::new();
         for who in ["a", "b"] {
-            let credential = crate::claude_oauth::credential_from_login_tokens(
+            let credential = crate::inference::auth::claude::credential_from_login_tokens(
                 &did,
                 CLAUDE_OAUTH_PROVIDER,
-                &crate::claude_oauth::ClaudeLoginTokens {
+                &crate::inference::auth::claude::ClaudeLoginTokens {
                     access_token: format!("access-SECRET-{who}"),
                     refresh_token: format!("refresh-SECRET-{who}"),
                     expires_in: Some(3600),

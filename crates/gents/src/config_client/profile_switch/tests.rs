@@ -7,13 +7,13 @@ use gents_loop::account_usage::{UsageReport, UsageSource, UsageWindow};
 use serde_json::{json, Value};
 
 use super::*;
-use crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
 use crate::config_client::{
     apply_desired_state_plan, list_inference_backends_in_txn, read_desired_state_record_in_txn,
     write_inference_backend_document, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::document_config::AdvertisedModel;
-use crate::oauth_credential::{
+use crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
+use crate::inference::auth::credential::{
     preset_account_backend, remove_account_in_txn, set_account_enabled, store_sign_in,
     OAuthCredential,
 };
@@ -24,10 +24,10 @@ use crate::{Collection, InferenceBackend};
 const DID: &str = "did:key:z6MkTestSwitch";
 
 fn claude_sign_in(did: &str, who: &str) -> OAuthCredential {
-    crate::claude_oauth::credential_from_login_tokens(
+    crate::inference::auth::claude::credential_from_login_tokens(
         did,
         CLAUDE_OAUTH_PROVIDER,
-        &crate::claude_oauth::ClaudeLoginTokens {
+        &crate::inference::auth::claude::ClaudeLoginTokens {
             access_token: format!("access-SECRET-{who}"),
             refresh_token: format!("refresh-{who}"),
             expires_in: Some(3600),
@@ -367,7 +367,7 @@ async fn switch_with_companions_moves_both_in_one_transaction() {
 #[tokio::test]
 async fn next_turns_use_the_target_credentials() {
     use crate::agent::PendingAgent;
-    use crate::oauth_credential::BearerSource as _;
+    use crate::inference::auth::credential::BearerSource as _;
     use crate::store::identity::{KeyIdentity, NodeIdentity as _};
     let key = std::env::temp_dir().join(format!("switch-{}.key", uuid::Uuid::new_v4()));
     let did = KeyIdentity::load_or_create(&key, None)
@@ -411,14 +411,14 @@ async fn next_turns_use_the_target_credentials() {
         )
         .await
         .unwrap_or_else(|error| panic!("{agent_id}: {error:#}"));
-        let bearer = crate::oauth_credential::test_support::bound_bearer(
+        let bearer = crate::inference::auth::credential::test_support::bound_bearer(
             &fixture.credentials["b"].credential_id,
         )
         .unwrap_or_else(|| panic!("{agent_id} did not bind B"));
         assert_eq!(bearer.current_bearer().await.unwrap(), "access-SECRET-b");
     }
     assert!(
-        crate::oauth_credential::test_support::bound_bearer(
+        crate::inference::auth::credential::test_support::bound_bearer(
             &fixture.credentials["a"].credential_id
         )
         .is_none(),

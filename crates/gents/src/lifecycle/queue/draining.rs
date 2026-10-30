@@ -67,7 +67,8 @@ async fn drain_pending_session_requests_where_in_txn(
                 execution_origin
                 input
             }}
-        }}"#, pending = RequestLifecycleState::Pending.as_str()
+        }}"#,
+        pending = RequestLifecycleState::Pending.as_str()
     );
 
     let response = txn.execute(&query).await?;
@@ -102,7 +103,9 @@ async fn drain_pending_session_requests_where_in_txn(
                         terminal_redrive_attempts: 0
                     }}
                 ) {{ _docID }}
-            }}"#, pending = RequestLifecycleState::Pending.as_str(), interrupted = RequestLifecycleState::Interrupted.as_str()
+            }}"#,
+            pending = RequestLifecycleState::Pending.as_str(),
+            interrupted = RequestLifecycleState::Interrupted.as_str()
         );
         let response = txn.execute(&mutation).await?;
         let updated = response["data"]

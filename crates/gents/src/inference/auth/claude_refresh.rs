@@ -1,11 +1,11 @@
 use chrono::{DateTime, Utc};
 use gents_claude::oauth::{self, RefreshFailure};
 
-use crate::claude_oauth::{CLAUDE_OAUTH_PRODUCT, CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV};
-use crate::oauth_credential::token_endpoint::{
+use crate::inference::auth::claude::{CLAUDE_OAUTH_PRODUCT, CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV};
+use crate::inference::auth::credential::token_endpoint::{
     endpoint_url, BadRequest, TokenEndpoint, TransportDetail,
 };
-use crate::oauth_credential::{OAuthAuthProblem, RefreshedTokens};
+use crate::inference::auth::credential::{OAuthAuthProblem, RefreshedTokens};
 
 const TOKEN_ENDPOINT: TokenEndpoint = TokenEndpoint {
     provider: "Claude",
@@ -100,7 +100,7 @@ fn refresh_problem(status: reqwest::StatusCode, body: &[u8]) -> OAuthAuthProblem
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::oauth_credential::test_support::one_shot_token_server;
+    use crate::inference::auth::credential::test_support::one_shot_token_server;
 
     async fn refresh_against(
         status: u16,
@@ -129,8 +129,14 @@ mod tests {
             serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
         assert_eq!(body["grant_type"], "refresh_token");
         assert_eq!(body["refresh_token"], "refresh-OLD");
-        assert_eq!(body["client_id"], oauth::CLIENT_ID);
-        assert_eq!(body["scope"], oauth::REFRESH_SCOPES.join(" "));
+        assert_eq!(
+            body["client_id"],
+            crate::inference::auth::claude::CLAUDE_OAUTH_CLIENT_ID
+        );
+        assert_eq!(
+            body["scope"],
+            crate::inference::auth::claude::CLAUDE_OAUTH_SCOPES
+        );
         assert_eq!(refreshed.access_token, "access-NEW");
         assert_eq!(refreshed.refresh_token, "refresh-NEW");
         assert!(

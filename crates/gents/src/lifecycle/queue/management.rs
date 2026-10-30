@@ -789,7 +789,9 @@ pub(crate) async fn apply_pending_user_edit_in_txn(
                 escape_graphql_string(old_id),
                 escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
                 escape_graphql_string(&chrono::Utc::now().to_rfc3339()),
-                escape_graphql_string(REMOVED_REASON), pending = RequestLifecycleState::Pending.as_str(), interrupted = RequestLifecycleState::Interrupted.as_str()
+                escape_graphql_string(REMOVED_REASON),
+                pending = RequestLifecycleState::Pending.as_str(),
+                interrupted = RequestLifecycleState::Interrupted.as_str()
             )
         };
         let result = if creates.is_empty() {

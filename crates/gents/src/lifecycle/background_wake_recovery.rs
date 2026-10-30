@@ -139,7 +139,9 @@ async fn load_candidates(
                     node_did: {{ _eq: "{node_did}" }},
                     lifecycle_state: {{ _eq: "{pending}" }}
                 }}) {{ request_id session_id requester_did input }}
-            }}"#, failed = RequestLifecycleState::Failed.as_str(), pending = RequestLifecycleState::Pending.as_str()
+            }}"#,
+            failed = RequestLifecycleState::Failed.as_str(),
+            pending = RequestLifecycleState::Pending.as_str()
         ),
         "load_candidates",
     )
@@ -375,7 +377,9 @@ fn precondition_query(candidate: &AgentRequestRow, retry_key: &str) -> Result<St
                 lifecycle_state: {{ _eq: "{pending}" }}
             }}) {{ request_id input }}
         }}"#,
-        request_fields = crate::watcher::AGENT_REQUEST_FIELDS, failed = RequestLifecycleState::Failed.as_str(), pending = RequestLifecycleState::Pending.as_str()
+        request_fields = crate::watcher::AGENT_REQUEST_FIELDS,
+        failed = RequestLifecycleState::Failed.as_str(),
+        pending = RequestLifecycleState::Pending.as_str()
     ))
 }
 

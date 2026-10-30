@@ -20,13 +20,15 @@ use gents_claude::rotation::{tier, Family, Tier};
 use gents_loop::claude_messages_body::{ClaudeAccountContext, SESSION_KEY_PARAM};
 use gents_loop::provider_limit::{mark_account_rotated, ProviderLimitHeaders};
 
-use crate::claude_messages::{non_success_message, open_messages_at, ClaudeRoute, MESSAGES_URI};
-use crate::claude_oauth::{CLAUDE_OAUTH_PRODUCT, CLAUDE_OAUTH_PROVIDER};
-use crate::oauth_credential::{
+use crate::inference::auth::claude::{CLAUDE_OAUTH_PRODUCT, CLAUDE_OAUTH_PROVIDER};
+use crate::inference::auth::credential::{
     BearerSource, DbCredentialBearer, OAuthCredential, OAuthRefreshKind,
 };
-use crate::usage_observation::now_unix_secs;
-use crate::usage_observation::{RotationFeed, UsageAccount, UsageCache, UsageReporter};
+use crate::inference::clients::claude_messages::{
+    non_success_message, open_messages_at, ClaudeRoute, MESSAGES_URI,
+};
+use crate::inference::usage_observation::now_unix_secs;
+use crate::inference::usage_observation::{RotationFeed, UsageAccount, UsageCache, UsageReporter};
 
 pub const DEFAULT_BACKEND_ENDPOINT: &str = "claude-cli://subscription";
 pub const ANTHROPIC_API_ENDPOINT: &str = "https://api.anthropic.com/v1";
@@ -231,13 +233,13 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
         node_did: &str,
         account_ref: Option<&str>,
     ) -> Result<ClaudeAccount<DbCredentialBearer>> {
-        let (bearer, credential) = crate::oauth_http::bootstrap_oauth_client(
+        let (bearer, credential) = crate::inference::auth::http::bootstrap_oauth_client(
             node.clone(),
             node_did,
             CLAUDE_OAUTH_PROVIDER,
             OAuthRefreshKind::Claude,
             CLAUDE_OAUTH_PRODUCT,
-            crate::oauth_credential::AccountPick::Reference(account_ref),
+            crate::inference::auth::credential::AccountPick::Reference(account_ref),
         )
         .await?;
         Ok(ClaudeAccount {

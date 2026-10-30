@@ -30,7 +30,11 @@ pub async fn prepare_user_message_input(
             lifecycle_state: {{ _in: {claimed_or_processing} }}
         }}) {{ _docID request_id }} }}"#,
             escape_graphql_string(node_did),
-            escape_graphql_string(session_id), claimed_or_processing = RequestLifecycleState::graphql_list([RequestLifecycleState::Claimed, RequestLifecycleState::Processing])
+            escape_graphql_string(session_id),
+            claimed_or_processing = RequestLifecycleState::graphql_list([
+                RequestLifecycleState::Claimed,
+                RequestLifecycleState::Processing
+            ])
         ))
         .await?;
     let rows: Vec<AgentRequestRow> =

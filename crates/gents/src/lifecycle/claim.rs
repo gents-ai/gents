@@ -429,7 +429,9 @@ impl RequestLifecycle {
                         terminal_redrive_attempts: 0
                     }}
                 ) {{ _docID request_id workspace_id workspace_owner_node_did }}
-            }}"#, pending = RequestLifecycleState::Pending.as_str(), interrupted = RequestLifecycleState::Interrupted.as_str()
+            }}"#,
+            pending = RequestLifecycleState::Pending.as_str(),
+            interrupted = RequestLifecycleState::Interrupted.as_str()
         );
         let request = &self.request;
         let resp = crate::config_client::ConfigAccess::transact_local_idempotent(
@@ -512,7 +514,9 @@ impl RequestLifecycle {
                         terminal_redrive_attempts: 0
                     }}
                 ) {{ _docID request_id workspace_id workspace_owner_node_did }}
-            }}"#, pending = RequestLifecycleState::Pending.as_str(), dead = RequestLifecycleState::Dead.as_str()
+            }}"#,
+            pending = RequestLifecycleState::Pending.as_str(),
+            dead = RequestLifecycleState::Dead.as_str()
         );
         let request = &self.request;
         let resp = crate::config_client::ConfigAccess::transact_local_idempotent(
@@ -601,7 +605,9 @@ impl RequestLifecycle {
                         terminal_output: $terminal_output
                     }}
                 ) {{ _docID request_id workspace_id workspace_owner_node_did }}
-            }}"#, pending = RequestLifecycleState::Pending.as_str(), failed = RequestLifecycleState::Failed.as_str()
+            }}"#,
+            pending = RequestLifecycleState::Pending.as_str(),
+            failed = RequestLifecycleState::Failed.as_str()
         );
         let request_mutation = &request_mutation;
         let request = &self.request;
@@ -801,7 +807,8 @@ impl RequestLifecycle {
                     _version {{ cid height fieldName }}
                 }}
             }}"#,
-                lifecycle_state = RequestLifecycleState::Claimed.as_str(), pending = RequestLifecycleState::Pending.as_str()
+                lifecycle_state = RequestLifecycleState::Claimed.as_str(),
+                pending = RequestLifecycleState::Pending.as_str()
             )
         };
 

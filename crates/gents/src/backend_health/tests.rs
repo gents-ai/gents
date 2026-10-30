@@ -12,11 +12,11 @@ use super::probe::{probe_selected_backends, record_probe_event, ProbeEnv, ProbeS
 use super::prober::run_scheduled_backend_probe_cycle;
 use super::*;
 use crate::backend_registry::DEFAULT_MAX_QUEUE_DEPTH;
-use crate::lean_vocab_test::lean_backend_health_cases;
-use crate::oauth_credential::test_support::{
+use crate::inference::auth::credential::test_support::{
     one_shot_token_server, seed_credential, seed_credential_with_refresh_token, test_node,
     TOKEN_URL_ENV,
 };
+use crate::lean_vocab_test::lean_backend_health_cases;
 
 fn state_from_lean(name: &str, state: &str) -> BackendHealthState {
     match state {

@@ -63,7 +63,8 @@ impl DefraWatcher {
             }}"#,
             doc_id = escaped_doc_id,
             node_did = escaped_node_did,
-            fields = AGENT_REQUEST_FIELDS, pending = RequestLifecycleState::Pending.as_str()
+            fields = AGENT_REQUEST_FIELDS,
+            pending = RequestLifecycleState::Pending.as_str()
         );
 
         let resp =
@@ -175,7 +176,10 @@ impl DefraWatcher {
     }
 
     async fn terminalize_malformed_pending_request(&self, row: &MalformedPendingRow) {
-        if row.node_did != self.node_did || RequestLifecycleState::parse_opt(row.lifecycle_state.as_deref()) != Some(RequestLifecycleState::Pending) {
+        if row.node_did != self.node_did
+            || RequestLifecycleState::parse_opt(row.lifecycle_state.as_deref())
+                != Some(RequestLifecycleState::Pending)
+        {
             return;
         }
         let reason = "request rejected at ingest: malformed durable AgentRequest row";

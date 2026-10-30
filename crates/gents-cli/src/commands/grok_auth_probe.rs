@@ -80,7 +80,7 @@ pub(crate) async fn grok_auth_probe(args: GrokAuthProbeArgs) -> Result<()> {
             gents::xai_grok_oauth::classify_xai_auth_error(
                 &node_did,
                 &provider,
-                &gents::oauth_credential::OAuthAuthProblem::Missing,
+                &gents::inference::auth::credential::OAuthAuthProblem::Missing,
             )
         );
     }
@@ -92,7 +92,7 @@ pub(crate) async fn grok_auth_probe(args: GrokAuthProbeArgs) -> Result<()> {
 }
 
 async fn probe_account(
-    credential: gents::oauth_credential::OAuthCredential,
+    credential: gents::inference::auth::credential::OAuthCredential,
     node_did: &str,
     provider: &str,
     max_models: usize,
@@ -125,7 +125,7 @@ async fn probe_account(
             let guidance = gents::xai_grok_oauth::classify_xai_auth_error(
                 node_did,
                 provider,
-                &gents::oauth_credential::OAuthAuthProblem::Expired,
+                &gents::inference::auth::credential::OAuthAuthProblem::Expired,
             );
             bail!("models request failed with HTTP {status}: {body}\n{guidance}");
         }
@@ -133,7 +133,7 @@ async fn probe_account(
             let guidance = gents::xai_grok_oauth::classify_xai_auth_error(
                 node_did,
                 provider,
-                &gents::oauth_credential::OAuthAuthProblem::NotEntitled,
+                &gents::inference::auth::credential::OAuthAuthProblem::NotEntitled,
             );
             bail!("models request failed with HTTP {status}: {body}\n{guidance}");
         }
@@ -155,7 +155,7 @@ async fn probe_account(
         "Access token expires: {}",
         credential.access_token_expires_at
     )?;
-    if !gents::oauth_credential::token_is_fresh(credential.access_token_expires_at) {
+    if !gents::inference::auth::credential::token_is_fresh(credential.access_token_expires_at) {
         writeln!(
             out,
             "Note: access token is within the refresh skew window; the owner runtime will refresh on next use."

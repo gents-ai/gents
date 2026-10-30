@@ -7,10 +7,10 @@ use gents_protocol::chatgpt_oauth::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::oauth_credential::token_endpoint::{
+use crate::inference::auth::credential::token_endpoint::{
     endpoint_url, BadRequest, TokenEndpoint, TransportDetail,
 };
-use crate::oauth_credential::{OAuthAuthProblem, RefreshedTokens};
+use crate::inference::auth::credential::{OAuthAuthProblem, RefreshedTokens};
 
 const TOKEN_ENDPOINT: TokenEndpoint = TokenEndpoint {
     provider: "ChatGPT",
@@ -219,7 +219,7 @@ pub(crate) fn jwt_payload(jwt: &str) -> Option<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::oauth_credential::test_support::{one_shot_token_server, unsigned_jwt};
+    use crate::inference::auth::credential::test_support::{one_shot_token_server, unsigned_jwt};
 
     #[tokio::test]
     async fn refresh_classifies_invalid_grant_without_using_display_text() {

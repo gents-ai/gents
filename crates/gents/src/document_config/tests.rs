@@ -1173,7 +1173,7 @@ fn default_agent_publication_matches_lean() {
 #[tokio::test]
 async fn oauth_account_scope_matches_lean() {
     use crate::backend_provider::{BackendProviderKind, BackendProviderOauthExt};
-    use crate::oauth_credential::{
+    use crate::inference::auth::credential::{
         resolve_oauth_credential, resolve_oauth_pool, upsert_oauth_credential, AccountPick,
     };
     let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
@@ -1182,12 +1182,12 @@ async fn oauth_account_scope_matches_lean() {
         serde_json::from_value(value.clone()).unwrap()
     };
 
-    let node = crate::oauth_credential::test_support::test_node().await;
+    let node = crate::inference::auth::credential::test_support::test_node().await;
     for row in lean["rows"].as_array().unwrap() {
         let provider = kind_of(&row["provider_kind"]).oauth_provider().unwrap();
         let owner = row["owner"].as_str().unwrap();
         let account = row["account"].as_str();
-        let credential = crate::oauth_credential::OAuthCredential {
+        let credential = crate::inference::auth::credential::OAuthCredential {
             doc_id: None,
             credential_id: format!("{provider}:{owner}:{}", account.unwrap_or("original")),
             node_did: owner.to_string(),

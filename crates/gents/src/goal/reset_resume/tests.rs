@@ -200,7 +200,7 @@ async fn waits_for_a_sign_in_after_the_limited_call() {
 #[tokio::test]
 async fn waits_after_the_account_was_disabled() {
     let reset = Reset::new("inference", Some(T)).await;
-    crate::oauth_credential::set_account_enabled(
+    crate::inference::auth::credential::set_account_enabled(
         &reset.accounts.access,
         reset.f.identity.did(),
         &reset.accounts.a_credential,
@@ -219,7 +219,7 @@ async fn waits_after_the_account_was_removed() {
         .accounts
         .access
         .transact_write("test.remove_account", |txn| {
-            Box::pin(crate::oauth_credential::remove_account_in_txn(
+            Box::pin(crate::inference::auth::credential::remove_account_in_txn(
                 txn, did, credential,
             ))
         })

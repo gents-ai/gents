@@ -11,7 +11,7 @@ use rig::http_client::{
 };
 use rig::wasm_compat::WasmCompatSend;
 
-use crate::oauth_credential::{
+use crate::inference::auth::credential::{
     classify_oauth_auth_error, resolve_oauth_credential, shared_bearer, AccountPick, BearerSource,
     DbCredentialBearer, OAuthAuthProblem, OAuthCredential, OAuthProduct, OAuthRefreshKind,
 };
@@ -295,7 +295,7 @@ pub(crate) async fn bootstrap_oauth_client_typed(
     pick: AccountPick<'_>,
 ) -> std::result::Result<
     (Arc<DbCredentialBearer>, OAuthCredential),
-    crate::oauth_credential::OAuthCredentialError,
+    crate::inference::auth::credential::OAuthCredentialError,
 > {
     let credential = resolve_oauth_credential(
         &crate::config_client::ConfigAccess::local(node.clone()),
@@ -305,15 +305,17 @@ pub(crate) async fn bootstrap_oauth_client_typed(
     )
     .await
     .with_context(|| format!("loading OAuthCredential for node {node_did}"))?
-    .ok_or_else(|| crate::oauth_credential::OAuthCredentialAuthError {
-        problem: OAuthAuthProblem::Missing,
-        message: classify_oauth_auth_error(
-            &product,
-            node_did,
-            provider,
-            &OAuthAuthProblem::Missing,
-        ),
-    })?;
+    .ok_or_else(
+        || crate::inference::auth::credential::OAuthCredentialAuthError {
+            problem: OAuthAuthProblem::Missing,
+            message: classify_oauth_auth_error(
+                &product,
+                node_did,
+                provider,
+                &OAuthAuthProblem::Missing,
+            ),
+        },
+    )?;
     let credential_id = credential.credential_id.clone();
     let provider = provider.to_string();
     let bearer = shared_bearer(&credential_id, || {
@@ -338,12 +340,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_rebuilt_client_does_not_serve_a_removed_sign_ins_cached_token() {
-        use crate::claude_oauth::{
+        use crate::config_client::ConfigAccess;
+        use crate::inference::auth::claude::{
             credential_from_login_tokens, ClaudeLoginTokens, CLAUDE_OAUTH_PRODUCT,
             CLAUDE_OAUTH_PROVIDER,
         };
-        use crate::config_client::ConfigAccess;
-        use crate::oauth_credential::{
+        use crate::inference::auth::credential::{
             remove_account_in_txn, store_sign_in, test_support::test_node, AccountPick,
             OAuthRefreshKind, SignInResult,
         };

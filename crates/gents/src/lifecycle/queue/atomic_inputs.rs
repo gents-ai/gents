@@ -387,7 +387,8 @@ async fn background_completion_transaction_attempt(
                     retry_key
                 }}
             }}"#,
-            crate::session::canonical_rows::AGENT_MESSAGE_FIELDS, pending = RequestLifecycleState::Pending.as_str()
+            crate::session::canonical_rows::AGENT_MESSAGE_FIELDS,
+            pending = RequestLifecycleState::Pending.as_str()
         ))
         .await?;
     let notifications = response["data"]["notification"]

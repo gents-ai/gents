@@ -408,7 +408,7 @@ fn ensure_inference_available(
                 crate::xai_grok_oauth::XAI_OAUTH_PROVIDER
             }
             crate::backend_provider::BackendProviderKind::ClaudeCliSubscription => {
-                crate::claude_oauth::CLAUDE_OAUTH_PROVIDER
+                crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER
             }
             _ => {
                 return Err(AgentResolutionError::new(
@@ -417,10 +417,9 @@ fn ensure_inference_available(
                 ));
             }
         };
-        let pick = backend
-            .auth
-            .account_pick()
-            .unwrap_or(crate::oauth_credential::AccountPick::Reference(None));
+        let pick = backend.auth.account_pick().unwrap_or(
+            crate::inference::auth::credential::AccountPick::Reference(None),
+        );
         if !view.resolves_oauth_credential(provider, pick) {
             return Err(AgentResolutionError::new(
                 AgentReadinessUnavailableReason::CredentialsRequired,

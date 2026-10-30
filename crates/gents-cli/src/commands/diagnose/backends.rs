@@ -11,7 +11,7 @@ use crate::shared::ConfigExportBundle;
 pub(super) async fn diagnose_backends(
     access: &ConfigAccess,
     bundle: &ConfigExportBundle,
-    accounts: &[gents::oauth_credential::AccountSummary],
+    accounts: &[gents::inference::auth::credential::AccountSummary],
     runtime_probes: &BTreeMap<String, Value>,
 ) -> Vec<Value> {
     let mut models = BTreeMap::<&str, BTreeSet<&str>>::new();
@@ -152,9 +152,9 @@ fn with_runtime_probe_reason(message: String, runtime_probe: Option<&Value>) -> 
 
 fn account_field(
     backend: &InferenceBackend,
-    accounts: &[gents::oauth_credential::AccountSummary],
+    accounts: &[gents::inference::auth::credential::AccountSummary],
 ) -> Option<Value> {
-    gents::oauth_credential::backend_account(backend, accounts)
+    gents::inference::auth::credential::backend_account(backend, accounts)
         .map(|account| account.map_or(Value::Null, |account| json!(account.label)))
 }
 

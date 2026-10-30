@@ -303,7 +303,7 @@ pub fn connection_spec(
                 requested
             }
             .into(),
-            oauth_provider: Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
+            oauth_provider: Some(crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER),
             api_key_required: false,
         },
         (Anthropic, ApiKey) => {

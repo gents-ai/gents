@@ -11,7 +11,7 @@ pub(crate) struct GrokLoginOptions {
 }
 
 pub(crate) struct GrokLoginOutcome {
-    pub(crate) sign_in: gents::oauth_credential::SignIn,
+    pub(crate) sign_in: gents::inference::auth::credential::SignIn,
 }
 
 pub(crate) async fn grok_login(args: GrokLoginArgs) -> Result<()> {
@@ -39,18 +39,22 @@ pub(crate) async fn run_grok_login(
     let provider = gents::xai_grok_oauth::normalize_provider(&opts.provider);
     let http = reqwest::Client::new();
 
-    let tokens = gents::xai_oauth_login::run_device_code_login(&http, true)
+    let tokens = gents::inference::auth::xai_login::run_device_code_login(&http, true)
         .await
         .context("Grok / xAI device-code login failed")?;
 
-    let credential = gents::xai_oauth_login::credential_from_login_tokens(
+    let credential = gents::inference::auth::xai_login::credential_from_login_tokens(
         node_did,
         &provider,
         &tokens,
         chrono::Utc::now(),
     );
-    let sign_in =
-        gents::oauth_credential::store_sign_in(access, credential, opts.label.as_deref()).await?;
+    let sign_in = gents::inference::auth::credential::store_sign_in(
+        access,
+        credential,
+        opts.label.as_deref(),
+    )
+    .await?;
     if let Some(hint) = sign_in.account_chooser_hint() {
         eprintln!("{hint}");
     }
@@ -64,7 +68,7 @@ pub(crate) fn grok_login_result_json(outcome: &GrokLoginOutcome) -> Value {
     let credential = &outcome.sign_in.credential;
     json!({
         "doc_id": outcome.sign_in.doc_id,
-        "label": gents::oauth_credential::effective_account_label(credential),
+        "label": gents::inference::auth::credential::effective_account_label(credential),
         "result": outcome.sign_in.result,
         "profiles": outcome.sign_in.profiles,
         "credential_id": credential.credential_id,

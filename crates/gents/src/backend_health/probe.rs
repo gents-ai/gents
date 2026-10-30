@@ -190,7 +190,9 @@ pub(super) async fn probe_selected_backends(
                     }
                 }
                 Err(error) => {
-                    use crate::oauth_credential::{OAuthAuthProblem, OAuthCredentialError};
+                    use crate::inference::auth::credential::{
+                        OAuthAuthProblem, OAuthCredentialError,
+                    };
                     let event = match &error.source {
                         OAuthCredentialError::Auth(auth) => match &auth.problem {
                             OAuthAuthProblem::Missing

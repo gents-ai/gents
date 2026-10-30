@@ -110,7 +110,9 @@ pub(crate) async fn load_document_runtime_view(
                 .insert(backend_id.clone(), observation);
         }
     }
-    for credential in crate::oauth_credential::list_oauth_credentials(node, node_did).await? {
+    for credential in
+        crate::inference::auth::credential::list_oauth_credentials(node, node_did).await?
+    {
         let doc_id = credential
             .doc_id
             .clone()

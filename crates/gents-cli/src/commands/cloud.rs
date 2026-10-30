@@ -45,7 +45,7 @@ pub(crate) struct CloudLoginOutcome {
     pub(crate) doc_id: String,
     pub(crate) email: String,
     pub(crate) workspace_id: String,
-    pub(crate) credential: gents::oauth_credential::OAuthCredential,
+    pub(crate) credential: gents::inference::auth::credential::OAuthCredential,
 }
 
 pub(crate) async fn cloud_login(args: CloudLoginArgs) -> Result<()> {
@@ -93,7 +93,8 @@ pub(crate) async fn run_cloud_login(
     eprintln!("Workspace {} is ready.", session.workspace_id);
 
     let credential = credential_from_session(node_did, provider, &session, Utc::now());
-    let mutation = gents::oauth_credential::oauth_credential_upsert_mutation(&credential);
+    let mutation =
+        gents::inference::auth::credential::oauth_credential_upsert_mutation(&credential);
     let response = access
         .write("cli.cloud_login.credential", &mutation)
         .await?;
@@ -268,10 +269,10 @@ fn credential_from_session(
     provider: &str,
     session: &SignedIn,
     now: DateTime<Utc>,
-) -> gents::oauth_credential::OAuthCredential {
-    gents::oauth_credential::OAuthCredential {
+) -> gents::inference::auth::credential::OAuthCredential {
+    gents::inference::auth::credential::OAuthCredential {
         doc_id: None,
-        credential_id: gents::oauth_credential::oauth_credential_id(node_did, provider),
+        credential_id: gents::inference::auth::credential::oauth_credential_id(node_did, provider),
         node_did: node_did.to_string(),
         provider: provider.to_string(),
         access_token: session.token.clone(),
@@ -342,7 +343,7 @@ fn cloud_provider(provider: &str) -> Result<&str> {
     }
     if matches!(
         provider,
-        gents::claude_oauth::CLAUDE_OAUTH_PROVIDER
+        gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER
             | gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER
             | gents::xai_grok_oauth::XAI_OAUTH_PROVIDER
     ) {
@@ -820,7 +821,7 @@ mod tests {
                 }]
             }
         });
-        let loaded = gents::oauth_credential::oauth_credentials_from_response(&response)
+        let loaded = gents::inference::auth::credential::oauth_credentials_from_response(&response)
             .into_iter()
             .collect::<Result<Vec<_>, _>>()
             .expect("cloud credential decodes");
