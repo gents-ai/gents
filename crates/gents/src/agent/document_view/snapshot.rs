@@ -400,12 +400,7 @@ fn ensure_inference_available(
                 .unwrap_or(AgentReadinessUnavailableReason::BackendTemporarilyUnavailable),
         ),
     };
-    if admission.availability() != BackendAvailability::Disabled
-        && matches!(
-            backend.auth,
-            crate::document_config::BackendAuth::NodeOAuth { .. }
-        )
-    {
+    if admission.availability() != BackendAvailability::Disabled && backend.auth.uses_node_oauth() {
         let provider = match backend.provider_kind {
             crate::backend_provider::BackendProviderKind::ChatGptCodex => {
                 crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER
@@ -423,10 +418,11 @@ fn ensure_inference_available(
                 ));
             }
         };
-        if !view.resolves_oauth_credential(
-            provider,
-            crate::oauth_credential::AccountPick::Reference(backend.auth.oauth_account_ref()),
-        ) {
+        let pick = backend
+            .auth
+            .account_pick()
+            .unwrap_or(crate::oauth_credential::AccountPick::Reference(None));
+        if !view.resolves_oauth_credential(provider, pick) {
             return Err(AgentResolutionError::new(
                 AgentReadinessUnavailableReason::CredentialsRequired,
                 anyhow!(

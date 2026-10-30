@@ -1340,3 +1340,13 @@ fn an_unsendable_structured_output_schema_is_an_error_not_a_dropped_field() {
         "{error}"
     );
 }
+
+#[test]
+fn session_key_param_never_reaches_the_wire() {
+    let mut request = echo_request();
+    let plain = build_messages_body("claude-sonnet-5", &request).expect("body");
+    request.additional_params = Some(json!({ SESSION_KEY_PARAM: "session-1" }));
+    let keyed = build_messages_body("claude-sonnet-5", &request).expect("body");
+    assert_eq!(plain, keyed);
+    assert!(!keyed.to_string().contains("session"));
+}

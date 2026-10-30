@@ -994,6 +994,12 @@ pub fn guard_backend_auth(
             "OAuth account references are operator-managed; keep the backend's account_ref as stored"
         );
     }
+    if matches!(candidate, BackendAuth::NodeOAuthPool { .. }) {
+        anyhow::ensure!(
+            candidate == stored,
+            "OAuth account pools are operator-managed; keep the backend's auth as stored"
+        );
+    }
     Ok(())
 }
 /// Lean `SelfConfig.backendChoiceAllowed`; `default_account` is `next`'s
@@ -1003,19 +1009,31 @@ pub fn guard_backend_choice(
     next: &crate::InferenceBackend,
     default_account: Option<&str>,
 ) -> Result<()> {
-    let BackendAuth::NodeOAuth { account_ref } = &next.auth else {
-        return Ok(());
-    };
-    let allowed = match current {
-        Some(current) if current.provider_kind == next.provider_kind => current.auth == next.auth,
-        _ => account_ref.as_deref() == default_account,
-    };
-    anyhow::ensure!(
-        allowed,
-        "backend {} selects another {} account; keep the current account, or pick an account-free backend or another provider's default account",
-        next.backend_id,
-        next.provider_kind
-    );
+    match &next.auth {
+        BackendAuth::NodeOAuth { account_ref } => {
+            let allowed = match current {
+                Some(current) if current.provider_kind == next.provider_kind => {
+                    current.auth == next.auth
+                }
+                _ => account_ref.as_deref() == default_account,
+            };
+            anyhow::ensure!(
+                allowed,
+                "backend {} selects another {} account; keep the current account, or pick an account-free backend or another provider's default account",
+                next.backend_id,
+                next.provider_kind
+            );
+        }
+        BackendAuth::NodeOAuthPool { .. } => anyhow::ensure!(
+            current.is_some_and(|current| {
+                current.provider_kind == next.provider_kind && current.auth == next.auth
+            }),
+            "backend {} rotates a {} account pool the profile does not use; keep the current backend",
+            next.backend_id,
+            next.provider_kind
+        ),
+        _ => {}
+    }
     Ok(())
 }
 pub(crate) async fn guard_backend_choice_in_txn(

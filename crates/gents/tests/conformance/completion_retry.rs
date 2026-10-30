@@ -108,6 +108,20 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
             assert_eq!(case.expected_phase.as_deref(), Some("compacting"));
             assert_context_overflow_compacts_once();
         }
+        match case.name.as_str() {
+            "provider_account_limit_requires_retraction" => {
+                assert_eq!(case.expected_phase.as_deref(), Some("retract_required"));
+            }
+            "account_limit_reissues_on_next_account_without_backoff" => {
+                assert_eq!(case.expected_phase.as_deref(), Some("issuing"));
+                assert_account_limit_reissues_at_once(case);
+            }
+            "account_hops_exhausted_is_terminal_for_policy" => {
+                assert_eq!(case.expected_phase.as_deref(), Some("exhausted"));
+                assert_account_hops_exhausted(case);
+            }
+            _ => {}
+        }
         if case.name == "context_overflow_after_compaction_is_exhausted" {
             assert_eq!(case.expected_phase.as_deref(), Some("exhausted"));
         }
@@ -186,6 +200,17 @@ fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
             );
             rig::agent::StreamingError::Completion(completion)
         }
+        "provider_account_limited" => {
+            let message = gents_loop::provider_limit::ProviderLimitHeaders {
+                usage_exhausted: true,
+                account_rotated: true,
+                ..Default::default()
+            }
+            .annotate("Claude Messages HTTP 429 Too Many Requests (request-id -) body=usage limit");
+            rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
+                message,
+            ))
+        }
         "provider_reasoning_rejected" => {
             rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
                 "400 invalid_request_error: messages.5.content.0: Invalid `signature` in \
@@ -215,6 +240,13 @@ fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
                 case.name
             );
             assert_eq!(state.retry_count(), 0, "{}", case.name);
+        }
+        Some("retract_required") if origin == "provider_account_limited" => {
+            assert!(
+                matches!(&directive, PreStreamDirective::Fail { .. }),
+                "{}: a pool of one account has no hop to spend: {directive:?}",
+                case.name
+            );
         }
         Some("retract_required") if origin == "provider_reasoning_rejected" => {
             assert!(
@@ -290,6 +322,7 @@ fn assert_failure_class_bridge_matches_vocabulary() {
             "Invalid `signature` in `thinking` block",
         )),
         class_name(class_of(&context_overflow(), CLAUDE_PROMPT_TOO_LONG)),
+        class_name(failure_class(&account_limited_failure())),
         class_name(class_of(
             &InferenceError::PermanentFailure {
                 reason: "bad request".to_string(),
@@ -304,6 +337,7 @@ fn assert_failure_class_bridge_matches_vocabulary() {
             "parse_bad_request",
             "reasoning_rejected",
             "context_overflow",
+            "account_limited",
             "permanent"
         ]
     );
@@ -364,6 +398,7 @@ fn assert_selected_delay_past_deadline_fails_fast(case: &LeanCompletionRetryCase
         transport_backoff: vec![Duration::from_secs(30)],
         max_resample: 0,
         allow_repair: true,
+        account_hops: 0,
     });
     let now = now();
     let deadline = now + chrono::Duration::seconds(10);
@@ -384,6 +419,7 @@ fn assert_deadline_behind_clock_fails_fast(case: &LeanCompletionRetryCase) {
         transport_backoff: vec![Duration::from_secs(5)],
         max_resample: 0,
         allow_repair: true,
+        account_hops: 0,
     });
     let now = now();
     match state.pre_stream(
@@ -406,6 +442,7 @@ fn assert_deterministic_400_repairs(_case: &LeanCompletionRetryCase) {
         transport_backoff: vec![Duration::from_secs(5), Duration::from_secs(30)],
         max_resample: 2,
         allow_repair: true,
+        account_hops: 0,
     });
     let text = parse_400_text("json-parse");
     assert!(matches!(
@@ -427,6 +464,7 @@ fn assert_resample_budget_outlives_ladder(_case: &LeanCompletionRetryCase) {
         transport_backoff: vec![Duration::from_secs(5)],
         max_resample: 3,
         allow_repair: true,
+        account_hops: 0,
     });
 
     for attempt in 0..3 {
@@ -455,6 +493,7 @@ fn assert_resample_exhausts_on_its_own_budget(_case: &LeanCompletionRetryCase) {
         transport_backoff: vec![Duration::from_secs(5)],
         max_resample: 2,
         allow_repair: true,
+        account_hops: 0,
     });
 
     for attempt in 0..2 {
@@ -484,6 +523,7 @@ fn assert_repair_second_time_illegal(case: &LeanCompletionRetryCase) {
         transport_backoff: vec![Duration::from_secs(5)],
         max_resample: 0,
         allow_repair: true,
+        account_hops: 0,
     });
     state.mark_repair_used();
     let text = parse_400_text("used");
@@ -537,6 +577,7 @@ fn class_name(class: FailureClass) -> &'static str {
         FailureClass::ParseBadRequest => "parse_bad_request",
         FailureClass::ReasoningRejected => "reasoning_rejected",
         FailureClass::ContextOverflow => "context_overflow",
+        FailureClass::AccountLimited => "account_limited",
         FailureClass::Permanent => "permanent",
     }
 }
@@ -549,6 +590,63 @@ fn context_overflow() -> InferenceError {
         input_tokens: Some(1_001_685),
         limit: Some(1_000_000),
     }
+}
+
+const ACCOUNT_LIMIT_TEXT: &str = "account limit reached";
+
+fn account_limited_failure() -> gents::error::ClassifiedFailure {
+    let error = InferenceError::UsageLimited(gents_loop::provider_limit::UsageLimit {
+        resets_at: None,
+        detail: ACCOUNT_LIMIT_TEXT.to_string(),
+    });
+    let mut failure = classified(&error, ACCOUNT_LIMIT_TEXT);
+    failure.report.account_limited = true;
+    failure
+}
+
+fn account_policy(hops: u32) -> CompletionRetryPolicy {
+    CompletionRetryPolicy {
+        account_hops: hops,
+        ..scheduled_like_policy()
+    }
+}
+
+/// The modeled `schedule` of a retracted account limit with hops left is an
+/// immediate reissue: attempt advances, no backoff, no transport budget.
+fn assert_account_limit_reissues_at_once(case: &LeanCompletionRetryCase) {
+    let mut state = CompletionRetryState::new(account_policy(2));
+    match state.on_pre_stream_failure(&account_limited_failure(), now(), None) {
+        PreStreamDirective::RetryAfter { delay, kind } => {
+            assert_eq!((delay, kind), (Duration::ZERO, RetryKind::Account));
+        }
+        other => panic!(
+            "expected an account reissue for {}, got {other:?}",
+            case.name
+        ),
+    }
+    assert_eq!(state.retry_count(), 0, "{}", case.name);
+    assert_eq!(case.expected_transport_used, Some(0));
+    assert_eq!(case.expected_account_used, Some(1));
+    assert_eq!(case.expected_attempt, Some(1));
+}
+
+/// With every hop spent the modeled `schedule` is exhausted: the usage-limit reason.
+fn assert_account_hops_exhausted(case: &LeanCompletionRetryCase) {
+    let mut state = CompletionRetryState::new(account_policy(1));
+    assert!(matches!(
+        state.on_pre_stream_failure(&account_limited_failure(), now(), None),
+        PreStreamDirective::RetryAfter {
+            kind: RetryKind::Account,
+            ..
+        }
+    ));
+    match state.on_pre_stream_failure(&account_limited_failure(), now(), None) {
+        PreStreamDirective::Fail { reason } => {
+            assert!(reason.contains("usage limit"), "{}: {reason}", case.name);
+        }
+        other => panic!("expected exhausted Fail for {}, got {other:?}", case.name),
+    }
+    assert_eq!(case.expected_account_used, Some(1));
 }
 
 /// The modeled `schedule` of a retracted overflow is the one compaction;
@@ -576,6 +674,7 @@ fn scheduled_like_policy() -> CompletionRetryPolicy {
         ],
         max_resample: 1,
         allow_repair: true,
+        account_hops: 0,
     }
 }
 

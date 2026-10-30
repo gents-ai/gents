@@ -174,6 +174,7 @@ where
     agent_config: Arc<ResolvedAgent>,
     provider_family: Option<String>,
     replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
+    account_hops: u32,
     compaction_provider_family: Option<String>,
     model: Arc<M>,
     preamble: String,
@@ -300,6 +301,7 @@ where
             agent_config,
             provider_family: provider_family.clone(),
             replay_issuer: None,
+            account_hops: 0,
             compaction_provider_family: provider_family,
             model,
             preamble,
@@ -350,6 +352,11 @@ where
         issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
     ) -> Self {
         self.replay_issuer = issuer;
+        self
+    }
+
+    pub(super) fn with_account_hops(mut self, account_hops: u32) -> Self {
+        self.account_hops = account_hops;
         self
     }
 

@@ -107,11 +107,19 @@ impl InferenceBackend {
             }
             _ => {}
         }
-        if matches!(self.auth, BackendAuth::NodeOAuth { .. })
-            != self.provider_kind.is_node_scoped_oauth()
-        {
+        if self.auth.uses_node_oauth() != self.provider_kind.is_node_scoped_oauth() {
             violations
                 .push("backend auth selection is incompatible with the provider adapter".into());
+        }
+        // The rotation policy reads Claude's unified rate-limit headers; no
+        // other provider adapter reports the limit state it chooses by.
+        if matches!(self.auth, BackendAuth::NodeOAuthPool { .. })
+            && self.provider_kind != BackendProviderKind::ClaudeCliSubscription
+        {
+            violations.push(
+                "account pools rotate Claude subscription accounts; select one account for this provider"
+                    .into(),
+            );
         }
         let anthropic_endpoint = crate::claude_subscription::ANTHROPIC_API_ENDPOINT;
         if self.provider_kind == BackendProviderKind::AnthropicApiKey
@@ -131,7 +139,9 @@ impl InferenceBackend {
     }
 
     pub fn catalog_scope(&self) -> Option<&str> {
-        matches!(self.auth, BackendAuth::NodeOAuth { .. }).then_some(self.node_did.as_str())
+        self.auth
+            .uses_node_oauth()
+            .then_some(self.node_did.as_str())
     }
 }
 
@@ -157,7 +167,7 @@ impl BackendAuth {
                 );
                 Ok(Some(key))
             }
-            Self::NodeOAuth { .. } => {
+            Self::NodeOAuth { .. } | Self::NodeOAuthPool { .. } => {
                 anyhow::bail!("node OAuth requires the invoking node's OAuthCredential")
             }
         }
@@ -655,7 +665,7 @@ pub async fn probe_and_promote_enabled_backends(node: &Arc<EmbeddedNode>) {
     for backend in backends {
         // Agent-scoped credential refresh stays with the invoking-agent owner;
         // a fleet scan cannot choose an OAuth principal.
-        if matches!(backend.auth, BackendAuth::NodeOAuth { .. }) {
+        if backend.auth.uses_node_oauth() {
             continue;
         }
         if let Err(error) = discover_shared_backend(node, &backend).await {

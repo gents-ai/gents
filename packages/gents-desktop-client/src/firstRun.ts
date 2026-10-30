@@ -42,7 +42,11 @@ export function inferenceIsConfigured(
 export function backendIsConfigured(backend: InferenceBackendView): boolean {
   if (backend.enabled === false) return false;
   if (backend.apiKeyConfigured) return true;
-  if (backend.authKind === "node_oauth" || backend.authKind === "environment") {
+  if (
+    backend.authKind === "node_oauth" ||
+    backend.authKind === "node_oauth_pool" ||
+    backend.authKind === "environment"
+  ) {
     return true;
   }
   return backend.probeStatus === "ok" || backend.probeStatus === "healthy";

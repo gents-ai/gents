@@ -294,6 +294,7 @@ where
                         request,
                         aggregate_token_budget.clone(),
                         self.loop_tools.len(),
+                        self.account_hops,
                     )?;
                     loop_config.deadline = request_deadline;
                     loop_config.context_calibration = context_calibration.clone();

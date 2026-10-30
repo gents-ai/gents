@@ -4625,6 +4625,7 @@ dependencies = [
  "flate2",
  "futures",
  "gents-callback-fixture-create-workspace",
+ "gents-claude",
  "gents-fs-runner",
  "gents-lean-contract",
  "gents-loop",

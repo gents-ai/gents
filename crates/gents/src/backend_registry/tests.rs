@@ -341,6 +341,50 @@ fn inference_backend_validation_requires_provider_compatible_auth() {
 }
 
 #[test]
+fn an_account_pool_is_valid_only_for_the_claude_subscription() {
+    let mut backend = base_backend();
+    for allow_overage in [false, true] {
+        backend.auth = BackendAuth::NodeOAuthPool { allow_overage };
+        backend.provider_kind = BackendProviderKind::ClaudeCliSubscription;
+        backend.validate().unwrap();
+        for provider in [
+            BackendProviderKind::ChatGptCodex,
+            BackendProviderKind::XaiGrokOAuth,
+        ] {
+            backend.provider_kind = provider;
+            let error = backend.validate().unwrap_err().to_string();
+            assert!(error.contains("account pools rotate Claude subscription accounts"));
+        }
+    }
+    backend.provider_kind = BackendProviderKind::ClaudeCliSubscription;
+    backend.auth = BackendAuth::NodeOAuthPool {
+        allow_overage: false,
+    };
+    assert!(backend.auth.uses_node_oauth());
+    assert_eq!(backend.auth.oauth_account_ref(), None);
+    assert!(backend.auth.resolve_api_key().is_err());
+}
+
+#[test]
+fn pool_auth_round_trips_and_defaults_overage_off() {
+    let auth: BackendAuth = serde_json::from_str(r#"{"kind":"node_oauth_pool"}"#).unwrap();
+    assert_eq!(
+        auth,
+        BackendAuth::NodeOAuthPool {
+            allow_overage: false
+        }
+    );
+    assert_eq!(
+        serde_json::to_string(&auth).unwrap(),
+        r#"{"kind":"node_oauth_pool","allow_overage":false}"#
+    );
+    assert!(
+        serde_json::from_str::<BackendAuth>(r#"{"kind":"node_oauth_pool","account_ref":"a"}"#)
+            .is_err()
+    );
+}
+
+#[test]
 fn admission_rejects_unrelated_observation_and_defaults_capacity() {
     let backend = base_backend();
     let mut observation = InferenceBackendObservation {

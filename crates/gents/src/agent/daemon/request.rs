@@ -84,6 +84,7 @@ where
             request,
             aggregate_token_budget,
             self.loop_tools.len(),
+            self.account_hops,
         )?;
         let provider_history = skill_reminders
             .iter()

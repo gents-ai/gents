@@ -77,6 +77,7 @@ pub fn backend_config_view(
         BackendAuth::ApiKey { .. } => ("api_key", true, None),
         BackendAuth::Environment { variable } => ("environment", false, Some(variable.clone())),
         BackendAuth::NodeOAuth { .. } => ("node_oauth", false, None),
+        BackendAuth::NodeOAuthPool { .. } => ("node_oauth_pool", false, None),
     };
     let advertised_models = match gents::config::backend_catalog(row, observation) {
         Ok(catalog) => catalog,

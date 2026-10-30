@@ -422,20 +422,27 @@ theorem omitted_context_capabilities_empty :
 /-- Auth is explicit. OAuth lookup uses the executing node and existing
 credential owner; the backend contains no copied OAuth tokens or host identity.
 A node-OAuth `account` is an opaque, DID-free reference minted when an
-account is first stored; `none` is the provider's original account. -/
+account is first stored; `none` is the provider's original account.
+`nodeOAuthPool` rotates every call over all enabled accounts of the backend's
+provider on the executing node (`AccountRotation`); drawing paid extra usage
+when every account is past its limit is the operator's choice, off by default. -/
 inductive BackendAuth where
   | unauthenticated
   | apiKey (key : String)
   | environment (name : String)
   | nodeOAuth (account : Option String)
+  | nodeOAuthPool (allowOverage : Bool)
   deriving DecidableEq, Repr
 
 def oauthLookupOwner (scope : String) : BackendAuth → Option String
-  | .nodeOAuth _ => some scope
+  | .nodeOAuth _ | .nodeOAuthPool _ => some scope
   | _ => none
 
 theorem oauth_uses_execution_scope (scope : String) (account : Option String) :
     oauthLookupOwner scope (.nodeOAuth account) = some scope := rfl
+
+theorem oauth_pool_uses_execution_scope (scope : String) (allowOverage : Bool) :
+    oauthLookupOwner scope (.nodeOAuthPool allowOverage) = some scope := rfl
 
 structure OAuthAccountRow where
   owner : String
@@ -460,6 +467,25 @@ theorem oauth_resolve_sound {scope kind : String} {account : Option String}
   have hp := List.find?_some h
   simp only [Bool.and_eq_true, beq_iff_eq] at hp
   exact ⟨List.mem_of_find?_eq_some h, hp.1.1.1, hp.1.1.2, hp.1.2, hp.2⟩
+
+/-- A pool backend's accounts: every enabled row of `kind` the executing node
+owns. Another node's row never joins the pool. Rotation order is the Rust
+resolver's (earliest-connected first, `oauth_credential.rs`) and is not modeled,
+as for `oauthResolve`. -/
+def oauthPool (scope kind : String) (rows : List OAuthAccountRow) : List OAuthAccountRow :=
+  rows.filter fun r => r.owner == scope && r.kind == kind && r.enabled
+
+theorem oauth_pool_sound {scope kind : String} {rows : List OAuthAccountRow}
+    {r : OAuthAccountRow} (h : r ∈ oauthPool scope kind rows) :
+    r ∈ rows ∧ r.owner = scope ∧ r.kind = kind ∧ r.enabled = true := by
+  simp only [oauthPool, List.mem_filter, Bool.and_eq_true, beq_iff_eq] at h
+  exact ⟨h.1, h.2.1.1, h.2.1.2, h.2.2⟩
+
+theorem oauth_pool_holds_every_enabled_row {scope kind : String}
+    {rows : List OAuthAccountRow} {r : OAuthAccountRow} (hr : r ∈ rows)
+    (ho : r.owner = scope) (hk : r.kind = kind) (he : r.enabled = true) :
+    r ∈ oauthPool scope kind rows := by
+  simp [oauthPool, List.mem_filter, hr, ho, hk, he]
 
 structure BackendControls where
   connectionTimeoutSecs : Nat

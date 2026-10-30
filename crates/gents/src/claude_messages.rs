@@ -30,7 +30,7 @@ pub(crate) const OAUTH_BETA: &str = "oauth-2025-04-20";
 
 pub use gents_loop::claude_messages_body::{
     apply_reasoning_parameters, build_messages_body, build_messages_body_native,
-    ADVERTISED_REASONING_EFFORTS_PARAM, CLAUDE_CODE_IDENTITY,
+    ADVERTISED_REASONING_EFFORTS_PARAM, CLAUDE_CODE_IDENTITY, SESSION_KEY_PARAM,
 };
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -963,6 +963,21 @@ where
     stream_messages_at(MESSAGES_URI, model, request, surface, bearer, http, usage).await
 }
 
+/// A failed open of a Messages stream; `rejected` is set when the provider answered with a non-success status.
+pub(crate) struct MessagesOpenError {
+    pub(crate) error: CompletionError,
+    pub(crate) rejected: bool,
+}
+
+impl From<CompletionError> for MessagesOpenError {
+    fn from(error: CompletionError) -> Self {
+        Self {
+            error,
+            rejected: false,
+        }
+    }
+}
+
 pub(crate) async fn stream_messages_at<S>(
     uri: &str,
     model: &str,
@@ -978,10 +993,26 @@ pub(crate) async fn stream_messages_at<S>(
 where
     S: BearerSource,
 {
-    #[cfg(test)]
-    let fixture = take_messages_sse_fixture();
-    #[cfg(not(test))]
-    let fixture: Option<String> = None;
+    open_messages_at(uri, model, request, surface, bearer, http, usage)
+        .await
+        .map_err(|failure| failure.error)
+}
+
+pub(crate) async fn open_messages_at<S>(
+    uri: &str,
+    model: &str,
+    request: &CompletionRequest,
+    surface: RapidHashSet<String>,
+    bearer: &S,
+    http: &ReqwestClient,
+    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
+) -> Result<
+    impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
+    MessagesOpenError,
+>
+where
+    S: BearerSource,
+{
     let body = build_messages_body(model, request).map_err(|error| {
         CompletionError::RequestError(Box::new(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -994,6 +1025,12 @@ where
             format!("encode Claude Messages body: {error}"),
         )))
     })?;
+    // Only a request that would be sent consumes a fixture: a test whose body
+    // fails to build must not take a body queued by a concurrent test.
+    #[cfg(test)]
+    let fixture = take_messages_sse_fixture();
+    #[cfg(not(test))]
+    let fixture: Option<String> = None;
 
     let mut builder = Request::builder()
         .method("POST")
@@ -1039,13 +1076,16 @@ where
                 bearer.invalidate().await;
             }
             let (body, marker) = gents_loop::provider_limit::split_annotated_body(&message);
-            return Err(non_success_error(
-                status,
-                None,
-                &format!("{}{marker}", body_prefix(body.as_bytes())),
-            ));
+            return Err(MessagesOpenError {
+                error: non_success_error(
+                    status,
+                    None,
+                    &format!("{}{marker}", body_prefix(body.as_bytes())),
+                ),
+                rejected: true,
+            });
         }
-        Err(error) => return Err(error.into()),
+        Err(error) => return Err(CompletionError::from(error).into()),
     };
     let status = response.status();
     let request_id = response
@@ -1055,13 +1095,17 @@ where
         .map(str::to_string);
     if !status.is_success() {
         let prefix = read_body_prefix(response.into_body()).await;
-        return Err(non_success_error(status, request_id.as_deref(), &prefix));
+        return Err(MessagesOpenError {
+            error: non_success_error(status, request_id.as_deref(), &prefix),
+            rejected: true,
+        });
     }
     let audit_sender = gents_loop::rendered_request::scope::current_audit_sender();
     if gents_loop::rendered_request::scope::current_scope().is_some() && audit_sender.is_none() {
         return Err(CompletionError::ProviderError(
             "Claude Messages response has no exact provider audit attempt".into(),
-        ));
+        )
+        .into());
     }
     Ok(stream_sse_body_observed(
         response.into_body(),
@@ -1075,11 +1119,20 @@ const NON_SUCCESS_BODY_PREFIX_BYTES: usize = 512;
 /// Non-2xx Messages response as a `ProviderError`. Carries the status, the
 /// `request-id` header and a bounded body prefix (Anthropic's
 /// `error.type`/`error.message`); never request headers.
-fn non_success_error(
+pub(crate) fn non_success_error(
     status: reqwest::StatusCode,
     request_id: Option<&str>,
     body_prefix: &str,
 ) -> CompletionError {
+    CompletionError::ProviderError(non_success_message(status, request_id, body_prefix))
+}
+
+/// The text of [`non_success_error`], for callers that annotate it before wrapping.
+pub(crate) fn non_success_message(
+    status: reqwest::StatusCode,
+    request_id: Option<&str>,
+    body_prefix: &str,
+) -> String {
     let mut message = format!(
         "Claude Messages HTTP {status} (request-id {})",
         request_id.unwrap_or("-")
@@ -1088,7 +1141,7 @@ fn non_success_error(
         message.push_str(" body=");
         message.push_str(body_prefix);
     }
-    CompletionError::ProviderError(message)
+    message
 }
 
 fn body_prefix(bytes: &[u8]) -> String {

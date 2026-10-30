@@ -5,8 +5,9 @@
 //! allocation-bounded by it, the session map never exceeds its cap, and the
 //! policy decision is always made by [`rotation::select`], never re-derived here.
 
+use std::fmt;
 use std::hash::Hash;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use kovan_map::HopscotchMap;
@@ -42,7 +43,6 @@ where
     limits: HopscotchMap<K, Arc<Account>, RandomState>,
     sessions: HopscotchMap<String, K, RandomState>,
     cursor: AtomicUsize,
-    allow_overage: AtomicBool,
     session_cap: usize,
 }
 
@@ -59,27 +59,13 @@ impl<K> AccountPool<K>
 where
     K: Hash + Eq + Clone + Send + Sync + 'static,
 {
-    /// An empty pool under `policy` remembering at most `session_cap` sessions.
-    pub fn new(policy: Policy, session_cap: usize) -> Self {
+    /// An empty pool remembering at most `session_cap` sessions.
+    pub fn new(session_cap: usize) -> Self {
         Self {
             limits: HopscotchMap::with_hasher(RandomState::new()),
             sessions: HopscotchMap::with_hasher(RandomState::new()),
             cursor: AtomicUsize::new(0),
-            allow_overage: AtomicBool::new(policy.allow_overage),
             session_cap,
-        }
-    }
-
-    /// Replace the rotation policy.
-    pub fn set_policy(&self, policy: Policy) {
-        self.allow_overage
-            .store(policy.allow_overage, Ordering::Relaxed);
-    }
-
-    /// The current rotation policy.
-    pub fn policy(&self) -> Policy {
-        Policy {
-            allow_overage: self.allow_overage.load(Ordering::Relaxed),
         }
     }
 
@@ -99,13 +85,14 @@ where
         self.limits.insert(key.clone(), Arc::new(account));
     }
 
-    /// Pick the account for the next call of `session`, or `None` when every listed account is exhausted.
+    /// Pick the account for the next call of `session` under `policy`, or `None` when every listed account is exhausted.
     pub fn choose(
         &self,
         accounts: &[K],
         session: &str,
         family: Family,
         now: u64,
+        policy: &Policy,
     ) -> Option<Choice<K>> {
         let list: Vec<Account> = accounts
             .iter()
@@ -120,7 +107,7 @@ where
             .as_ref()
             .and_then(|r| accounts.iter().position(|k| k == r));
         let index = rotation::select(
-            &self.policy(),
+            policy,
             now,
             family,
             &list,
@@ -167,15 +154,20 @@ where
         self.update(key, |a| rotation::reject(now, reset_at, a));
     }
 
-    /// The soonest time any listed account can serve `family` again; `now` when one already can.
-    pub fn earliest_reset(&self, accounts: &[K], family: Family, now: u64) -> Option<u64> {
-        let policy = self.policy();
+    /// The soonest time any listed account can serve `family` again under `policy`; `now` when one already can.
+    pub fn earliest_reset(
+        &self,
+        accounts: &[K],
+        family: Family,
+        now: u64,
+        policy: &Policy,
+    ) -> Option<u64> {
         accounts
             .iter()
             .map(|k| {
                 let mut a = self.snapshot(k);
                 a.enabled = true;
-                if rotation::tier(&policy, now, family, &a).is_some() {
+                if rotation::tier(policy, now, family, &a).is_some() {
                     return now;
                 }
                 a.limits
@@ -204,6 +196,27 @@ where
     /// The last observed state of an account, if any response or rejection was recorded.
     pub fn account_state(&self, key: &K) -> Option<Arc<Account>> {
         self.limits.get(key)
+    }
+}
+
+impl<K> Default for AccountPool<K>
+where
+    K: Hash + Eq + Clone + Send + Sync + 'static,
+{
+    fn default() -> Self {
+        Self::new(DEFAULT_SESSION_CAP)
+    }
+}
+
+impl<K> fmt::Debug for AccountPool<K>
+where
+    K: Hash + Eq + Clone + Send + Sync + 'static,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AccountPool")
+            .field("accounts", &self.limits.len())
+            .field("sessions", &self.sessions.len())
+            .finish()
     }
 }
 

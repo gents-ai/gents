@@ -74,6 +74,8 @@ private def authText : BackendAuth → String
   | .nodeOAuth none => "{\"kind\":\"node_oauth\"}"
   | .nodeOAuth (some a) =>
     s!"\{\"kind\":\"node_oauth\",\"account_ref\":{(toJson a).compress}}"
+  | .nodeOAuthPool allowOverage =>
+    s!"\{\"kind\":\"node_oauth_pool\",\"allow_overage\":{(toJson allowOverage).compress}}"
 
 private def oauthRows : List OAuthAccountRow := [
   ⟨"alice", "ChatGptCodex", none, true⟩,
@@ -89,7 +91,9 @@ private def oauthAccountCases : List (String × String × String × String × Ba
   ("environment_has_no_owner", "alice", "alice", "OpenAiCompatible", .environment "KEY"),
   ("foreign_node_row_rejected", "alice", "alice", "ChatGptCodex",
     .nodeOAuth (some "acct-2")),
-  ("disabled_row_not_picked", "alice", "alice", "ChatGptCodex", .nodeOAuth (some "acct-off"))]
+  ("disabled_row_not_picked", "alice", "alice", "ChatGptCodex", .nodeOAuth (some "acct-off")),
+  ("pool_holds_every_enabled_scope_row", "alice", "alice", "ChatGptCodex", .nodeOAuthPool false),
+  ("pool_overage_choice_kept", "alice", "alice", "ChatGptCodex", .nodeOAuthPool true)]
 
 private def oauthRowJson (row : OAuthAccountRow) : Json := Json.mkObj
   [("owner", toJson row.owner), ("provider_kind", toJson row.kind),
@@ -98,6 +102,7 @@ private def oauthRowJson (row : OAuthAccountRow) : Json := Json.mkObj
 private def oauthResolvedJson (scope kind : String) : BackendAuth → Json
   | .nodeOAuth account =>
     (oauthResolve scope kind account oauthRows).map oauthRowJson |>.getD Json.null
+  | .nodeOAuthPool _ => toJson ((oauthPool scope kind oauthRows).map oauthRowJson)
   | _ => Json.null
 
 private def oauthAccountJson : Json := Json.mkObj

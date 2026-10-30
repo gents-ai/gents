@@ -3,4 +3,4 @@
 /**
  * Authentication selection on a backend, not a second credential store.
  */
-export type BackendAuth = { "kind": "unauthenticated" } | { "kind": "api_key", key: string, } | { "kind": "environment", variable: string, } | { "kind": "node_oauth", account_ref?: string, };
+export type BackendAuth = { "kind": "unauthenticated" } | { "kind": "api_key", key: string, } | { "kind": "environment", variable: string, } | { "kind": "node_oauth", account_ref?: string, } | { "kind": "node_oauth_pool", allow_overage: boolean, };

@@ -11,7 +11,7 @@ fn keys(n: usize) -> Vec<String> {
 }
 
 fn pool() -> AccountPool<String> {
-    AccountPool::new(Policy::default(), DEFAULT_SESSION_CAP)
+    AccountPool::new(DEFAULT_SESSION_CAP)
 }
 
 fn limit(claim: Claim, severity: Severity, reset_at: u64) -> Limit {
@@ -23,7 +23,8 @@ fn limit(claim: Claim, severity: Severity, reset_at: u64) -> Limit {
 }
 
 fn pick(p: &AccountPool<String>, a: &[String], s: &str) -> Choice<String> {
-    p.choose(a, s, Family::Sonnet, NOW).expect("eligible")
+    p.choose(a, s, Family::Sonnet, NOW, &Policy::default())
+        .expect("eligible")
 }
 
 #[test]
@@ -73,17 +74,33 @@ fn rejection_hops_then_exhausts() {
     p.reject(&c2.key, NOW, 300);
     let c3 = pick(&p, &a, "s");
     p.reject(&c3.key, NOW, 700);
-    assert!(p.choose(&a, "s", Family::Sonnet, NOW).is_none());
-    assert_eq!(p.earliest_reset(&a, Family::Sonnet, NOW), Some(300));
-    assert_eq!(p.earliest_reset(&a, Family::Sonnet, 300), Some(300));
-    assert!(p.choose(&a, "s", Family::Sonnet, 300).is_some());
+    assert!(p
+        .choose(&a, "s", Family::Sonnet, NOW, &Policy::default())
+        .is_none());
+    assert_eq!(
+        p.earliest_reset(&a, Family::Sonnet, NOW, &Policy::default()),
+        Some(300)
+    );
+    assert_eq!(
+        p.earliest_reset(&a, Family::Sonnet, 300, &Policy::default()),
+        Some(300)
+    );
+    assert!(p
+        .choose(&a, "s", Family::Sonnet, 300, &Policy::default())
+        .is_some());
 }
 
 #[test]
 fn earliest_reset_uses_rejected_limits_and_now_when_free() {
     let (p, a) = (pool(), keys(2));
-    assert_eq!(p.earliest_reset(&a, Family::Sonnet, NOW), Some(NOW));
-    assert_eq!(p.earliest_reset(&[], Family::Sonnet, NOW), None);
+    assert_eq!(
+        p.earliest_reset(&a, Family::Sonnet, NOW, &Policy::default()),
+        Some(NOW)
+    );
+    assert_eq!(
+        p.earliest_reset(&[], Family::Sonnet, NOW, &Policy::default()),
+        None
+    );
     p.observe(
         &a[0],
         Family::Sonnet,
@@ -96,7 +113,10 @@ fn earliest_reset_uses_rejected_limits_and_now_when_free() {
         &[limit(Claim::SevenDay, Severity::Rejected, 800)],
         Overage::Absent,
     );
-    assert_eq!(p.earliest_reset(&a, Family::Sonnet, NOW), Some(800));
+    assert_eq!(
+        p.earliest_reset(&a, Family::Sonnet, NOW, &Policy::default()),
+        Some(800)
+    );
 }
 
 #[test]
@@ -110,12 +130,25 @@ fn overage_only_when_policy_allows() {
             Overage::Allowed,
         );
     }
-    assert!(p.choose(&a, "s", Family::Sonnet, NOW).is_none());
-    p.set_policy(Policy {
+    let allow = Policy {
         allow_overage: true,
-    });
-    assert!(p.policy().allow_overage);
-    assert!(p.choose(&a, "s", Family::Sonnet, NOW).is_some());
+    };
+    assert!(p
+        .choose(&a, "s", Family::Sonnet, NOW, &Policy::default())
+        .is_none());
+    assert!(p.choose(&a, "s", Family::Sonnet, NOW, &allow).is_some());
+    assert_eq!(p.earliest_reset(&a, Family::Sonnet, NOW, &allow), Some(NOW));
+    assert_eq!(
+        p.earliest_reset(&a, Family::Sonnet, NOW, &Policy::default()),
+        Some(FAR)
+    );
+}
+
+#[test]
+fn default_and_debug_report_counts_only() {
+    let p = AccountPool::<String>::default();
+    pick(&p, &keys(2), "s");
+    assert_eq!(format!("{p:?}"), "AccountPool { accounts: 0, sessions: 1 }");
 }
 
 #[test]
@@ -128,9 +161,13 @@ fn limits_are_family_scoped() {
         &[limit(Claim::SevenDayOpus, Severity::Rejected, FAR)],
         Overage::Absent,
     );
-    let sonnet = p.choose(&a, "s", Family::Sonnet, NOW).expect("eligible");
+    let sonnet = p
+        .choose(&a, "s", Family::Sonnet, NOW, &Policy::default())
+        .expect("eligible");
     assert!(!sonnet.switched);
-    let opus = p.choose(&a, "s", Family::Opus, NOW).expect("eligible");
+    let opus = p
+        .choose(&a, "s", Family::Opus, NOW, &Policy::default())
+        .expect("eligible");
     assert!(opus.switched && opus.key != c.key);
 }
 
@@ -145,7 +182,7 @@ fn removed_account_gets_fresh_choice() {
 
 #[test]
 fn session_cap_clears_and_still_answers() {
-    let (p, a) = (AccountPool::<String>::new(Policy::default(), 4), keys(3));
+    let (p, a) = (AccountPool::<String>::new(4), keys(3));
     for i in 0..50 {
         let c = pick(&p, &a, &format!("s{i}"));
         assert!(a.contains(&c.key));
@@ -170,7 +207,10 @@ fn headerless_response_changes_nothing_and_headers_apply() {
         NOW,
     );
     assert!(p.account_state(&a[0]).is_some());
-    assert_eq!(p.earliest_reset(&a, Family::Sonnet, NOW), Some(900));
+    assert_eq!(
+        p.earliest_reset(&a, Family::Sonnet, NOW, &Policy::default()),
+        Some(900)
+    );
 }
 
 #[test]
@@ -212,7 +252,9 @@ fn concurrent_choices_never_return_dead_accounts() {
                         _ => {}
                     }
                     let s = format!("s{}", rng.random_range(0..64));
-                    let c = p.choose(a, &s, Family::Sonnet, NOW).expect("live accounts");
+                    let c = p
+                        .choose(a, &s, Family::Sonnet, NOW, &Policy::default())
+                        .expect("live accounts");
                     assert!(a.contains(&c.key));
                     assert!(c.index >= 3, "returned permanently rejected {}", c.key);
                 }
@@ -241,14 +283,14 @@ fn random_sequences_match_policy() {
             );
         }
         let now = NOW + rng.random_range(0..200);
-        let got = p.choose(&a, "s", Family::Sonnet, now);
+        let got = p.choose(&a, "s", Family::Sonnet, now, &Policy::default());
         let tiers: Vec<_> = a
             .iter()
             .map(|k| {
                 let acc = p
                     .account_state(k)
                     .map_or_else(fresh, |x| Account::clone(&x));
-                rotation::tier(&p.policy(), now, Family::Sonnet, &acc)
+                rotation::tier(&Policy::default(), now, Family::Sonnet, &acc)
             })
             .collect();
         match got {

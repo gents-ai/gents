@@ -471,11 +471,10 @@ pub fn backend_catalog<'a>(
     backend: &crate::document_config::InferenceBackend,
     observation: Option<&'a crate::document_config::InferenceBackendObservation>,
 ) -> anyhow::Result<Option<&'a crate::document_config::BackendModelCatalog>> {
-    let credential_scope = matches!(
-        backend.auth,
-        crate::document_config::BackendAuth::NodeOAuth { .. }
-    )
-    .then_some(backend.node_did.as_str());
+    let credential_scope = backend
+        .auth
+        .uses_node_oauth()
+        .then_some(backend.node_did.as_str());
     Ok(observation
         .filter(|observation| observation.backend_id == backend.backend_id)
         .map(|observation| observation.catalog_for(credential_scope))

@@ -106,6 +106,8 @@ def decodeAuthText : String → Option Configuration.BackendAuth
   | "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}" => some (.nodeOAuth (some "a1"))
   | "{\"kind\":\"node_oauth\",\"account_ref\":\"a2\"}" => some (.nodeOAuth (some "a2"))
   | "{\"kind\":\"node_oauth\",\"account_ref\":\"g2\"}" => some (.nodeOAuth (some "g2"))
+  | "{\"kind\":\"node_oauth_pool\",\"allow_overage\":false}" => some (.nodeOAuthPool false)
+  | "{\"kind\":\"node_oauth_pool\",\"allow_overage\":true}" => some (.nodeOAuthPool true)
   | _ => none
 
 def decodeAuth (doc : Doc) : Option Configuration.BackendAuth :=
@@ -228,7 +230,14 @@ def profileBackends : List (String × String × String) :=
   , ("\"chat-a2\"", "ChatGptCodex", "{\"kind\":\"node_oauth\",\"account_ref\":\"a2\"}")
   , ("\"grok-original\"", "XaiGrokOAuth", "{\"kind\":\"node_oauth\"}")
   , ("\"grok-g2\"", "XaiGrokOAuth", "{\"kind\":\"node_oauth\",\"account_ref\":\"g2\"}")
-  , ("\"local\"", "OpenAiCompatible", "{\"kind\":\"environment\",\"variable\":\"KEY\"}") ]
+  , ("\"local\"", "OpenAiCompatible", "{\"kind\":\"environment\",\"variable\":\"KEY\"}")
+  , ("\"claude-pool\"", "ClaudeCliSubscription",
+      "{\"kind\":\"node_oauth_pool\",\"allow_overage\":false}")
+  , ("\"claude-pool-alt\"", "ClaudeCliSubscription",
+      "{\"kind\":\"node_oauth_pool\",\"allow_overage\":false}")
+  , ("\"claude-pool-overage\"", "ClaudeCliSubscription",
+      "{\"kind\":\"node_oauth_pool\",\"allow_overage\":true}")
+  , ("\"claude-original\"", "ClaudeCliSubscription", "{\"kind\":\"node_oauth\"}") ]
 
 def scenarios : List CaseRow := examplesToRows ++
   [ { name := "agent_owner_patch_rejected"
@@ -337,6 +346,33 @@ def scenarios : List CaseRow := examplesToRows ++
     , target := .inferenceBackend, guarded := true, validates := true
     , doc := [("auth", "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}")]
     , patch := [("endpoint", some "\"http://127.0.0.1:2/v1\"")] }
+  , { name := "backend_pool_introduce_rejected"
+    , target := .inferenceBackend, guarded := true, validates := true
+    , doc := [("auth", "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}")]
+    , patch := [("auth", some "{\"kind\":\"node_oauth_pool\",\"allow_overage\":false}")] }
+  , { name := "backend_pool_overage_change_rejected"
+    , target := .inferenceBackend, guarded := true, validates := true
+    , doc := [("auth", "{\"kind\":\"node_oauth_pool\",\"allow_overage\":false}")]
+    , patch := [("auth", some "{\"kind\":\"node_oauth_pool\",\"allow_overage\":true}")] }
+  , { name := "backend_pool_kept_endpoint_edit_accepted"
+    , target := .inferenceBackend, guarded := true, validates := true
+    , doc := [("auth", "{\"kind\":\"node_oauth_pool\",\"allow_overage\":false}")]
+    , patch := [("endpoint", some "\"http://127.0.0.1:2/v1\"")] }
+  , { name := "profile_switch_to_pool_rejected"
+    , target := .inferenceProfile, guarded := true, validates := true
+    , doc := [("backend_id", "\"claude-original\"")]
+    , patch := [("backend_id", some "\"claude-pool\"")]
+    , backends := profileBackends }
+  , { name := "profile_same_pool_alt_backend_accepted"
+    , target := .inferenceProfile, guarded := true, validates := true
+    , doc := [("backend_id", "\"claude-pool\"")]
+    , patch := [("backend_id", some "\"claude-pool-alt\"")]
+    , backends := profileBackends }
+  , { name := "profile_pool_overage_switch_rejected"
+    , target := .inferenceProfile, guarded := true, validates := true
+    , doc := [("backend_id", "\"claude-pool\"")]
+    , patch := [("backend_id", some "\"claude-pool-overage\"")]
+    , backends := profileBackends }
   , { name := "backend_oauth_to_environment_accepted"
     , target := .inferenceBackend, guarded := true, validates := true
     , doc := [("auth", "{\"kind\":\"node_oauth\",\"account_ref\":\"a1\"}")]

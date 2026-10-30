@@ -169,6 +169,7 @@ fn deterministic_parse_400_skips_remaining_resample_budget_and_repairs() {
         transport_backoff: vec![Duration::from_secs(5), Duration::from_secs(30)],
         max_resample: 2,
         allow_repair: true,
+        account_hops: 0,
     };
     let mut state = CompletionRetryState::new(policy);
     let now = Utc::now();
@@ -192,6 +193,7 @@ fn repair_is_available_only_once() {
         transport_backoff: vec![Duration::from_secs(5)],
         max_resample: 0,
         allow_repair: true,
+        account_hops: 0,
     };
     let mut state = CompletionRetryState::new(policy);
     let now = Utc::now();
@@ -216,6 +218,7 @@ fn fresh_parse_400_deadline_overshoot_fails_immediately_not_repair() {
         transport_backoff: vec![Duration::from_secs(30)],
         max_resample: 1,
         allow_repair: true,
+        account_hops: 0,
     };
     let mut state = CompletionRetryState::new(policy);
     let now = Utc::now();
@@ -347,6 +350,7 @@ fn reasoning_rejection_repairs_once_then_fails() {
         transport_backoff: vec![Duration::from_secs(1)],
         max_resample: 3,
         allow_repair: true,
+        account_hops: 0,
     });
     let error = InferenceError::PermanentFailure {
         reason: "Invalid `signature` in `thinking` block".to_string(),
@@ -419,4 +423,87 @@ fn context_overflow_compacts_once_then_fails() {
         ),
         "the next completion may compact once again"
     );
+}
+
+fn account_limited(error: &InferenceError, text: &str) -> crate::error::ClassifiedFailure {
+    let mut failure = classified(error, text);
+    failure.report.account_limited = true;
+    failure
+}
+
+fn account_policy(hops: u32) -> CompletionRetryPolicy {
+    CompletionRetryPolicy {
+        account_hops: hops,
+        ..CompletionRetryPolicy::scheduled_default()
+    }
+}
+
+#[test]
+fn account_limited_report_selects_its_class() {
+    let error = transient("limit");
+    assert_eq!(
+        failure_class(&account_limited(&error, "limit")),
+        FailureClass::AccountLimited
+    );
+    assert_eq!(class_of(&error, "limit"), FailureClass::Transport);
+}
+
+#[test]
+fn account_limit_reissues_at_once_within_hops_without_spending_transport() {
+    let mut state = CompletionRetryState::new(account_policy(2));
+    let error = transient("limit");
+    for _ in 0..2 {
+        assert_eq!(
+            state.on_pre_stream_failure(&account_limited(&error, "limit"), Utc::now(), None),
+            PreStreamDirective::RetryAfter {
+                delay: Duration::ZERO,
+                kind: RetryKind::Account,
+            }
+        );
+    }
+    assert_eq!(state.retry_count(), 0);
+    assert!(matches!(
+        state.on_pre_stream_failure(&account_limited(&error, "limit"), Utc::now(), None),
+        PreStreamDirective::Fail { .. }
+    ));
+    assert!(matches!(
+        state.on_pre_stream_failure(&classified(&error, "io"), Utc::now(), None),
+        PreStreamDirective::RetryAfter {
+            kind: RetryKind::Transport,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn account_limit_with_no_hops_fails_with_the_usage_limit_reason() {
+    let mut state = CompletionRetryState::new(CompletionRetryPolicy::scheduled_default());
+    let limit = crate::provider_limit::UsageLimit {
+        resets_at: None,
+        detail: "cap".into(),
+    };
+    let error = InferenceError::UsageLimited(limit.clone());
+    match state.on_pre_stream_failure(&account_limited(&error, "cap"), Utc::now(), None) {
+        PreStreamDirective::Fail { reason } => assert_eq!(reason, limit.to_string()),
+        other => panic!("expected Fail, got {other:?}"),
+    }
+}
+
+#[test]
+fn account_rotated_marker_reaches_the_classified_report() {
+    use crate::error::{classify_loop_failure, CompletionFailure, LoopFailureCause};
+    let message = crate::provider_limit::ProviderLimitHeaders {
+        usage_exhausted: true,
+        account_rotated: true,
+        ..Default::default()
+    }
+    .annotate("Claude Messages HTTP 429 Too Many Requests (request-id -) body=usage limit");
+    let cause = LoopFailureCause::Completion {
+        failure: CompletionFailure::Provider(message.clone()),
+        reason: message.clone(),
+    };
+    let failure = classify_loop_failure(&cause, &message);
+    assert!(matches!(failure.error, InferenceError::UsageLimited(_)));
+    assert_eq!(failure_class(&failure), FailureClass::AccountLimited);
+    assert!(!failure.text.contains("provider-limit"));
 }

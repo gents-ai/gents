@@ -51,6 +51,7 @@ impl BackendAuthenticationView {
             BackendAuth::ApiKey { .. } => ("api_key", None, None),
             BackendAuth::Environment { variable } => ("environment", Some(variable.clone()), None),
             BackendAuth::NodeOAuth { account_ref } => ("node_oauth", None, account_ref.clone()),
+            BackendAuth::NodeOAuthPool { .. } => ("node_oauth_pool", None, None),
         };
         Self {
             revision,

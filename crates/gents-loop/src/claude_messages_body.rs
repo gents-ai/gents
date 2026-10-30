@@ -26,6 +26,10 @@ pub const ADVERTISED_REASONING_EFFORTS_PARAM: &str = "_gents_advertised_reasonin
 /// fallback) then share a cache entry at that boundary.
 pub const CACHE_PREFIX_BREAKPOINT_PARAM: &str = "_gents_cache_prefix_breakpoint";
 
+/// Request parameter (never sent) naming the session a request belongs to, so
+/// account rotation keeps one session on one account.
+pub const SESSION_KEY_PARAM: &str = "_gents_session_key";
+
 pub const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

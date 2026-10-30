@@ -211,7 +211,7 @@ fn stored_backend_target(backend: &InferenceBackend) -> Result<ResolvedBackendCo
         openai_wire_api: backend.openai_wire_api,
         endpoint: backend.endpoint.clone(),
         api_key: match &backend.auth {
-            BackendAuth::NodeOAuth { .. } => None,
+            auth if auth.uses_node_oauth() => None,
             auth => auth.resolve_api_key()?,
         },
         api_key_env_var: match &backend.auth {

@@ -90,6 +90,16 @@ impl BackendClient {
         )
     }
 
+    /// Other accounts a refused request can be reissued on at once: the pool's size, none for a single account.
+    pub(crate) fn account_hops(&self) -> u32 {
+        match self {
+            Self::ClaudeSubscription(client) if client.rotation.is_some() => {
+                u32::try_from(client.accounts.len()).unwrap_or(u32::MAX)
+            }
+            _ => 0,
+        }
+    }
+
     pub(crate) fn provider_family(&self) -> &'static str {
         match self {
             Self::OpenAiChatCompletions(_) | Self::OpenAiResponses(_) => {
@@ -273,15 +283,29 @@ pub(crate) async fn build_backend_client(
             }
         }
         BackendProviderKind::ClaudeCliSubscription => {
-            let client = tokio::time::timeout(
-                build_timeout,
-                crate::claude_subscription::ClaudeSubscriptionClient::build(
-                    cache.clone(),
-                    node,
-                    agent.node_did(),
-                    agent.backend_auth.oauth_account_ref(),
-                ),
-            )
+            let build = async {
+                match &agent.backend_auth {
+                    crate::document_config::BackendAuth::NodeOAuthPool { allow_overage } => {
+                        crate::claude_subscription::ClaudeSubscriptionClient::build_pool(
+                            cache.clone(),
+                            node,
+                            agent.node_did(),
+                            *allow_overage,
+                        )
+                        .await
+                    }
+                    auth => {
+                        crate::claude_subscription::ClaudeSubscriptionClient::build(
+                            cache.clone(),
+                            node,
+                            agent.node_did(),
+                            auth.oauth_account_ref(),
+                        )
+                        .await
+                    }
+                }
+            };
+            let client = tokio::time::timeout(build_timeout, build)
             .await
             .map_err(|_| {
                 anyhow::anyhow!(
@@ -298,12 +322,14 @@ pub(crate) async fn build_backend_client(
             Ok(BackendClient::ClaudeSubscription(client))
         }
         BackendProviderKind::AnthropicApiKey => {
-            let mut client = crate::claude_subscription::ClaudeSubscriptionClient::with_api_key(
-                api_key.to_owned(),
-            );
-            client.usage = crate::usage_observation::UsageAccount::for_agent(agent)
+            let usage = crate::usage_observation::UsageAccount::for_agent(agent)
                 .map(|account| crate::usage_observation::UsageReporter::new(cache, node, account));
-            Ok(BackendClient::AnthropicApiKey(client))
+            Ok(BackendClient::AnthropicApiKey(
+                crate::claude_subscription::ClaudeSubscriptionClient::with_api_key(
+                    api_key.to_owned(),
+                    usage,
+                ),
+            ))
         }
     }
 }

@@ -1,9 +1,8 @@
 use super::*;
 use crate::blocked_turn::{goal_stopped_in_txn, served_profile};
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::document_config::BackendAuth;
 use crate::identity::NodeIdentity;
-use crate::oauth_credential::{resolve_oauth_credential_in_txn, AccountPick};
+use crate::oauth_credential::resolve_oauth_credential_in_txn;
 use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 
 pub async fn resume_at_reset(
@@ -67,24 +66,19 @@ async fn stage_reset_resume(
         return Ok(None);
     };
     let account_serves = backend.enabled
-        && match &backend.auth {
-            BackendAuth::NodeOAuth { account_ref } => {
+        && match backend.auth.account_pick() {
+            Some(pick) => {
                 use crate::backend_provider::BackendProviderOauthExt;
                 let Some(provider) = backend.provider_kind.oauth_provider() else {
                     return Ok(None);
                 };
-                resolve_oauth_credential_in_txn(
-                    txn,
-                    node_did,
-                    provider,
-                    AccountPick::Reference(account_ref.as_deref()),
-                )
-                .await?
-                .is_some_and(|row| {
-                    row.enabled && row.connected_at.is_none_or(|since| since <= started)
-                })
+                resolve_oauth_credential_in_txn(txn, node_did, provider, pick)
+                    .await?
+                    .is_some_and(|row| {
+                        row.enabled && row.connected_at.is_none_or(|since| since <= started)
+                    })
             }
-            _ => backend.enabled,
+            None => backend.enabled,
         };
     if !account_serves {
         return Ok(None);

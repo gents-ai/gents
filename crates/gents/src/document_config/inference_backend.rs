@@ -105,6 +105,15 @@ pub enum BackendAuth {
         #[cfg_attr(feature = "typescript", ts(optional))]
         account_ref: Option<String>,
     },
+    /// Rotate every call over all of the node's enabled OAuthCredential rows
+    /// for the backend's provider (Lean `nodeOAuthPool`, `AccountRotation`).
+    /// `allow_overage` lets a call draw paid extra usage once every account
+    /// is past its limit; it is off unless the operator turns it on.
+    #[serde(rename = "node_oauth_pool")]
+    NodeOAuthPool {
+        #[serde(default)]
+        allow_overage: bool,
+    },
 }
 
 impl std::fmt::Debug for BackendAuth {
@@ -123,12 +132,37 @@ impl std::fmt::Debug for BackendAuth {
                 .debug_struct("NodeOAuth")
                 .field("account_ref", account_ref)
                 .finish(),
+            Self::NodeOAuthPool { allow_overage } => f
+                .debug_struct("NodeOAuthPool")
+                .field("allow_overage", allow_overage)
+                .finish(),
         }
     }
 }
 
 impl BackendAuth {
-    /// The account a node OAuth backend names (Lean `oauthRef`).
+    /// Credentials come from the executing node's OAuthCredential rows
+    /// (Lean `oauthLookupOwner` is the execution scope).
+    pub fn uses_node_oauth(&self) -> bool {
+        matches!(self, Self::NodeOAuth { .. } | Self::NodeOAuthPool { .. })
+    }
+
+    /// How a node OAuth backend resolves one account for readiness, discovery
+    /// and resume: its named account, or for a pool the earliest-connected
+    /// enabled account, so a pool resolves while any of its accounts does.
+    pub fn account_pick(&self) -> Option<crate::oauth_credential::AccountPick<'_>> {
+        match self {
+            Self::NodeOAuth { account_ref } => Some(
+                crate::oauth_credential::AccountPick::Reference(account_ref.as_deref()),
+            ),
+            Self::NodeOAuthPool { .. } => {
+                Some(crate::oauth_credential::AccountPick::ProviderDefault)
+            }
+            _ => None,
+        }
+    }
+
+    /// The account a node OAuth backend names (Lean `oauthRef`); a pool names none.
     pub fn oauth_account_ref(&self) -> Option<&str> {
         match self {
             Self::NodeOAuth { account_ref } => account_ref.as_deref(),
