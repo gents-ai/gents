@@ -1807,7 +1807,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/home.rs", 3),
     ("crates/gents/src/hook/persistence/background_tools.rs", 1),
     ("crates/gents/src/hook/persistence/session_message.rs", 1),
-    ("crates/gents/src/identity.rs", 1),
+    ("crates/gents/src/identity/error.rs", 1),
     ("crates/gents/src/lifecycle.rs", 1),
     ("crates/gents/src/lifecycle/canonical_recovery.rs", 2),
     ("crates/gents/src/lifecycle/execution_lease.rs", 2),
