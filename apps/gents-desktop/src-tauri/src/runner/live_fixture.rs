@@ -163,10 +163,10 @@ impl LiveBridgeFixture {
         let remote_core =
             Arc::new(ClientCore::start_with_paths_and_options(remote_paths, remote_options).await?);
 
-        let agent_key = tempdir.path().join("agent").join("fleet-e2e-agent.key");
+        let agent_root = tempdir.path().join("agent");
         let (running_node, docs, tool_root) = spawn_live_node(
             Arc::clone(&remote_core),
-            agent_key,
+            agent_root,
             DEFAULT_NODE_NAME,
             &backend,
             agent_target_backend.as_ref(),

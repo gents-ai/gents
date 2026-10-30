@@ -46,7 +46,7 @@ pub fn fixture_pack_dir(name: &str) -> std::path::PathBuf {
         .join(name)
 }
 
-pub const DEFAULT_MODEL_ENDPOINT: &str = "http://100.73.235.38:8000/v1";
+pub const DEFAULT_MODEL_ENDPOINT: &str = "http://workstation-1:8000/v1";
 pub const DEFAULT_MODEL_NAME: &str = "GLM-5.2";
 
 pub async fn initialized_node(

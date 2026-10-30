@@ -466,6 +466,32 @@ pub(super) async fn handle_request(
             let result = send_chat_message(fixture.desktop_core().as_ref(), request).await?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
+        ("POST", "/desktop/chat/recover") => {
+            let query = decode::<gents_desktop_bridge::types::ChatSubmissionQuery>(
+                &request.body,
+                "decoding chat submission query",
+            )?;
+            let result = gents_desktop_bridge::commands::recover_chat_submission(
+                fixture.desktop_core().as_ref(),
+                query,
+            )
+            .await?;
+            Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
+        }
+        ("POST", "/desktop/chat/acknowledge") => {
+            let receipt = decode::<gents_desktop_bridge::types::ChatSubmissionReceipt>(
+                &request.body,
+                "decoding chat submission receipt",
+            )?;
+            gents_desktop_bridge::commands::acknowledge_chat_submission(
+                fixture.desktop_core().as_ref(),
+                receipt,
+            )
+            .await?;
+            Ok(HttpResponse::json_ok(
+                serde_json::json!({ "status": "ok" }).to_string(),
+            ))
+        }
         ("POST", "/desktop/queue/edit") => {
             let request = decode::<gents_desktop_bridge::types::PendingQueueEditRequest>(
                 &request.body,

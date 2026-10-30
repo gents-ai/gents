@@ -6,11 +6,11 @@ on:
       inference_endpoint:
         description: OpenAI-compatible base URL, including /v1
         required: true
-        default: http://100.73.235.38:8000/v1
+        default: http://workstation-1:8000/v1
       model_name:
         description: Model name served by the endpoint
         required: true
-        default: GLM-5.3-Flash-NVFP4
+        default: DeepSeek-V4.1-Flash
 
 env:
   CARGO_BUILD_JOBS: ${{ vars.CARGO_BUILD_JOBS || '4' }}
@@ -37,7 +37,7 @@ env:
 jobs:
   live-cli-smoke:
     runs-on: [self-hosted, macOS, ARM64, studio]
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
         with:
@@ -60,7 +60,7 @@ jobs:
 
   desktop-live-smoke:
     runs-on: [self-hosted, macOS, ARM64, studio]
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
         with:
@@ -82,6 +82,14 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: Build desktop packages
+        run: npm run build:packages
+
+      - name: Build live bridge runner
+        run: |
+          cargo build -p gents-desktop-tauri --bin bridge_runner
+          echo "GENTS_TAURI_LIVE_RUNNER_BINARY=$CARGO_TARGET_DIR/debug/bridge_runner" >> "$GITHUB_ENV"
 
       - name: Run live desktop chat smoke
         working-directory: apps/gents-desktop
@@ -113,7 +121,7 @@ jobs:
 
   desktop-live-browser-smoke:
     runs-on: [self-hosted, macOS, ARM64, studio]
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
         with:
@@ -135,6 +143,14 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: Build desktop packages
+        run: npm run build:packages
+
+      - name: Build live bridge runner
+        run: |
+          cargo build -p gents-desktop-tauri --bin bridge_runner
+          echo "GENTS_TAURI_LIVE_RUNNER_BINARY=$CARGO_TARGET_DIR/debug/bridge_runner" >> "$GITHUB_ENV"
 
       - name: Install Playwright browser
         working-directory: apps/gents-desktop

@@ -63,8 +63,11 @@ export function createBridgeHttpAdapter(
     recoverGoalSubmission: unsupported("recoverGoalSubmission"),
     resumeGoalSubmission: unsupported("resumeGoalSubmission"),
     acknowledgeGoalSubmission: unsupported("acknowledgeGoalSubmission"),
-    recoverChatSubmission: unsupported("recoverChatSubmission"),
-    acknowledgeChatSubmission: unsupported("acknowledgeChatSubmission"),
+    recoverChatSubmission: async (query) =>
+      client.postJson("/desktop/chat/recover", query),
+    acknowledgeChatSubmission: async (receipt) => {
+      await client.postJson("/desktop/chat/acknowledge", receipt);
+    },
     explainToolSurface: unsupported("explainToolSurface"),
     fetchNetworkStatus: unsupported("fetchNetworkStatus"),
     listMailbox: unsupported("listMailbox"),

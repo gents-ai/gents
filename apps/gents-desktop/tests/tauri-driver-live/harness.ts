@@ -8,7 +8,7 @@ import type {
 import { LiveBridgeRunner, type LiveBridgeRunnerOptions } from "../live-bridge-runner";
 import { renderTauriAppDriverWithBridge } from "../tauri-driver";
 
-export const DEFAULT_LIVE_INFERENCE_URL = "http://100.73.235.38:8000/v1";
+export const DEFAULT_LIVE_INFERENCE_URL = "http://workstation-1:8000/v1";
 export const DEFAULT_LIVE_MODEL_NAME = "GLM-5.2";
 
 export type LiveDesktopDriver = ReturnType<typeof renderTauriAppDriverWithBridge>;
@@ -87,6 +87,17 @@ export async function withLiveDesktop<T>(
   const context = await startLiveDesktop(options);
   try {
     return await callback(context);
+  } catch (error) {
+    const alerts = [
+      ...document.querySelectorAll(
+        '[role="alert"], [role="status"], [data-sonner-toast]',
+      ),
+    ]
+      .map((alert) => alert.textContent?.trim())
+      .filter(Boolean);
+    if (error instanceof Error && alerts.length)
+      error.message += `\nvisible alerts: ${JSON.stringify(alerts)}`;
+    throw error;
   } finally {
     await context.driver.dispose();
   }

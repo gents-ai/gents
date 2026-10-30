@@ -33,7 +33,8 @@ export default defineConfig({
     video: "retain-on-failure",
   },
   webServer: {
-    command: `node ${viteBin} --host 127.0.0.1 --port ${port} --strictPort --clearScreen false`,
+    /* the plugin frames inline a prebuilt runtime; build it before serving */
+    command: `node ${viteBin} build -c vite.sandbox.config.ts --logLevel warn && node ${viteBin} --host 127.0.0.1 --port ${port} --strictPort --clearScreen false`,
     url: `${baseURL}/tests/ui-harness/harness.html`,
     reuseExistingServer: !process.env.CI,
     timeout: 30_000,
