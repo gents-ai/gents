@@ -63,12 +63,16 @@ impl DocumentRuntimeView {
         pick: crate::oauth_credential::AccountPick<'_>,
     ) -> bool {
         crate::oauth_credential::pick_oauth_credential(
-            self.oauth_credentials.values().map(|record| &record.value),
+            self.oauth_rows(),
             &self.node.value.node_did,
             provider,
             pick,
         )
         .is_some()
+    }
+
+    fn oauth_rows(&self) -> impl Iterator<Item = &OAuthCredential> {
+        self.oauth_credentials.values().map(|record| &record.value)
     }
 
     /// The enabled accounts a backend rotates, as credential ids in rotation
@@ -79,7 +83,7 @@ impl DocumentRuntimeView {
             return Vec::new();
         }
         crate::oauth_credential::pick_oauth_pool(
-            self.oauth_credentials.values().map(|record| &record.value),
+            self.oauth_rows(),
             &self.node.value.node_did,
             crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
         )
