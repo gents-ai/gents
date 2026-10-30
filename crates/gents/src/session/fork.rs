@@ -14,7 +14,7 @@ use super::compaction_entries::{
     compaction_key, validate_compaction_chain, CompactionGenerationRow,
 };
 use super::history::sequence_message_key;
-use super::output::load_canonical_message_in_txn;
+use super::output::reader::load_canonical_message_in_txn;
 use super::query::session_scope_filter;
 use super::sessions::{
     ensure_session_in_txn, load_agent_session_owner_in_txn, load_agent_session_row_in_txn,
