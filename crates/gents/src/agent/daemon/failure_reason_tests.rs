@@ -1,4 +1,4 @@
-use super::request_failure_reason;
+use super::terminal::request_failure_reason;
 
 #[test]
 fn request_failure_reason_keeps_the_cause_under_its_context() {
