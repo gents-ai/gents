@@ -3,13 +3,19 @@ mod process_control_acceptance;
 
 use std::time::Instant;
 
+use axum::http::header;
 use gents_protocol::row::{
     AgentReadinessEntry, AgentReadinessState, NodeReadinessProcessState, NodeReadinessRow,
     NodeReadinessSnapshot, NODE_READINESS_FORMAT_VERSION,
 };
-use serde_json::json;
+use serde_json::{json, Value};
 
+use super::metrics::{
+    load_p2p_metrics_for_scrape, p2p_metrics_from_status, P2P_METRICS_FETCH_BUDGET,
+};
+use super::status::{status_handler, STATUS_PROBE_BUDGET};
 use super::*;
+use crate::http::prometheus::MetricsRuntimeRow;
 
 fn state() -> RuntimeHttpState {
     let (activation_runtime, activation_observation) = empty_activation_state();
