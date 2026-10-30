@@ -174,9 +174,9 @@ pub enum TurnCompactionOutcome {
     CannotFit,
 }
 
-type TurnReductionCommitFn = Box<
-    dyn FnOnce() -> Pin<Box<dyn Future<Output = Result<(), TurnCompactionError>> + Send>> + Send,
->;
+type TurnReductionCommitFuture =
+    Pin<Box<dyn Future<Output = Result<(), TurnCompactionError>> + Send>>;
+type TurnReductionCommitFn = Box<dyn FnOnce() -> TurnReductionCommitFuture + Send>;
 
 /// Makes a staged reduction durable. The loop runs it only once the rebuilt
 /// request fits; dropping it discards the reduction, so a request that cannot
@@ -193,8 +193,8 @@ impl TurnReductionCommit {
         Self(Box::new(move || Box::pin(commit())))
     }
 
-    pub(crate) async fn run(self) -> Result<(), TurnCompactionError> {
-        (self.0)().await
+    pub(crate) fn run(self) -> TurnReductionCommitFuture {
+        (self.0)()
     }
 }
 
