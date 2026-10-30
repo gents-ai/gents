@@ -160,16 +160,48 @@ pub struct TurnCompactionRequest {
     pub prior_reduction_keys: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum TurnCompactionOutcome {
     ProviderViewRepaired {
         messages: Vec<TaggedMessage>,
     },
+    /// A staged reduction: `messages` is its checkpoint, not yet durable.
     Reduced {
         messages: Vec<TaggedMessage>,
         reduction_key: String,
+        commit: TurnReductionCommit,
     },
     CannotFit,
+}
+
+type TurnReductionCommitFuture =
+    Pin<Box<dyn Future<Output = Result<(), TurnCompactionError>> + Send>>;
+type TurnReductionCommitFn = Box<dyn FnOnce() -> TurnReductionCommitFuture + Send>;
+
+/// Makes a staged reduction durable. The loop runs it only once the rebuilt
+/// request fits; dropping it discards the reduction, so a request that cannot
+/// fit leaves no durable reduction behind
+/// (`Compaction.ReductionEngine.commitRequestLocalAfterRebuild`).
+pub struct TurnReductionCommit(TurnReductionCommitFn);
+
+impl TurnReductionCommit {
+    pub fn new<F, Fut>(commit: F) -> Self
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = Result<(), TurnCompactionError>> + Send + 'static,
+    {
+        Self(Box::new(move || Box::pin(commit())))
+    }
+
+    pub(crate) fn run(self) -> TurnReductionCommitFuture {
+        (self.0)()
+    }
+}
+
+impl std::fmt::Debug for TurnReductionCommit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("TurnReductionCommit")
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

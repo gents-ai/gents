@@ -434,9 +434,7 @@ where
                                     &provider_view[split..],
                                 );
                             let reduction_index = compaction_request.prior_reduction_keys.len() + 1;
-                            let (row, _) =
-                                crate::provider_context_reduction::persist_exact(
-                                &node,
+                            crate::provider_context_reduction::stage_exact(
                                 crate::provider_context_reduction::NewExactProviderContextReduction {
                                     node_did: &request.node_did,
                                     requester_did: request.requester_did.as_deref(),
@@ -458,12 +456,8 @@ where
                                 },
                                 exact,
                             )
-                            .await
-                            .map_err(compactor_failure)?;
-                            Ok(crate::agent::loop_stream::TurnCompactionOutcome::Reduced {
-                                messages: row.checkpoint_tagged_messages().map_err(compactor_failure)?,
-                                reduction_key: row.reduction_key,
-                            })
+                            .and_then(|staged| staged.into_turn_outcome(node))
+                            .map_err(compactor_failure)
                         })
                     };
                     loop_config.turn_compactor =
