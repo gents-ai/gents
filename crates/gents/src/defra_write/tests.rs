@@ -389,6 +389,59 @@ async fn runtime_fills_are_hidden_rejected_from_model_input_and_stamped_at_call_
 }
 
 #[tokio::test]
+async fn uncaptured_optional_source_fill_is_omitted_from_the_write() {
+    let node = node_with_actionrequest().await;
+    let tool = BoundedWriteTool::new(
+        ConfigAccess::local(Arc::clone(&node)),
+        WriteToolDecl {
+            notification: None,
+            tool_name: "write_result".into(),
+            collection: "ActionRequest".into(),
+            description: "write a result stamped from its trigger".into(),
+            fields: vec![
+                WriteToolField {
+                    name: "summary".into(),
+                    required: true,
+                    fill: None,
+                },
+                WriteToolField {
+                    name: "expected_total".into(),
+                    required: false,
+                    fill: Some(WriteToolFieldFill::SourceField("expected_total".into())),
+                },
+            ],
+            output_obligation: None,
+        },
+    );
+    crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+        None,
+        tokio_util::sync::CancellationToken::new(),
+        None,
+        None,
+        None,
+        Some("run-42".to_string()),
+        std::collections::BTreeMap::new(),
+        false,
+        async {
+            Tool::call(
+                &tool,
+                serde_json::from_value(json!({"summary": "done"})).unwrap(),
+            )
+            .await
+            .expect("an uncaptured optional source fill does not block the write");
+        },
+    )
+    .await;
+
+    let response = node
+        .execute("{ ActionRequest { summary expected_total } }")
+        .await;
+    let row = response.data.unwrap()["ActionRequest"][0].clone();
+    assert_eq!(row["summary"], "done");
+    assert!(row["expected_total"].is_null());
+}
+
+#[tokio::test]
 async fn native_schema_and_receipts_preserve_lists_json_and_null() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     node.add_collection(
