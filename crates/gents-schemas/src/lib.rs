@@ -67,15 +67,9 @@ pub const SKILL: &str = include_str!("../schemas/agent/skill.graphql");
 pub const DATASTORE_TOOL_SURFACE_NAME: &str = "DatastoreToolSurface";
 pub const DATASTORE_TOOL_SURFACE: &str =
     include_str!("../schemas/agent/datastore_tool_surface.graphql");
-pub const CHAIN_KEY_BINDING_NAME: &str = "ChainKeyBinding";
-pub const CHAIN_KEY_BINDING: &str = include_str!("../schemas/agent/chain_key_binding.graphql");
-pub const ETH_TOOL_NAME: &str = "EthTool";
-pub const ETH_TOOL: &str = include_str!("../schemas/agent/eth_tool.graphql");
 pub const PENDING_CHAT_SUBMISSION_NAME: &str = "PendingChatSubmission";
 pub const PENDING_CHAT_SUBMISSION: &str =
     include_str!("../schemas/agent/pending_chat_submission.graphql");
-pub const ETH_SUBMISSION_NAME: &str = "EthSubmission";
-pub const ETH_SUBMISSION: &str = include_str!("../schemas/agent/eth_submission.graphql");
 pub const WORKSPACE_ROOT_NAME: &str = "WorkspaceRoot";
 pub const WORKSPACE_ROOT: &str = include_str!("../schemas/agent/workspace_root.graphql");
 pub const ISOLATED_WORKSPACE_NAME: &str = "IsolatedWorkspace";
@@ -204,9 +198,6 @@ pub const ALL: &[&str] = &[
     TOOLS,
     SKILL,
     DATASTORE_TOOL_SURFACE,
-    CHAIN_KEY_BINDING,
-    ETH_TOOL,
-    ETH_SUBMISSION,
     PENDING_CHAT_SUBMISSION,
     WORKSPACE_ROOT,
     ISOLATED_WORKSPACE,
@@ -287,9 +278,6 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     TOOLS_NAME,
     SKILL_NAME,
     DATASTORE_TOOL_SURFACE_NAME,
-    CHAIN_KEY_BINDING_NAME,
-    ETH_TOOL_NAME,
-    ETH_SUBMISSION_NAME,
     PENDING_CHAT_SUBMISSION_NAME,
     WORKSPACE_ROOT_NAME,
     ISOLATED_WORKSPACE_NAME,
@@ -400,7 +388,6 @@ pub const LOCAL_AUDIT_COLLECTION_NAMES: &[&str] = &[
     RENDERED_REQUEST_NAME,
     RENDERED_REQUEST_BLOCK_NAME,
     PROVIDER_CONTEXT_REDUCTION_NAME,
-    ETH_SUBMISSION_NAME,
     EVAL_DEFINITION_NAME,
     EVAL_VERDICT_NAME,
     OPTIMIZATION_JOB_NAME,

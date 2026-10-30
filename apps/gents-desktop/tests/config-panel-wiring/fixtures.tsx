@@ -254,7 +254,6 @@ export const deployment: DeploymentView = {
   ],
   agentTargets: [],
   datastoreToolSurfaces: [],
-  chainKeyBindings: [],
   skills: [
     {
       skillId: "skill-a",

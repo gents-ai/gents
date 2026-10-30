@@ -173,18 +173,6 @@ pub(crate) fn include_existing(
             "bafyreibrawpzq3wv3gm6ew2gd26k75rfi6xm64fp4x55njpfdics6xx26e"
         ),
         updated_at_upgrade!(
-            "ChainKeyBinding",
-            "chain-key-binding-add-updated-at",
-            "bafyreigkgc7vx3bacpnoop5ouryihgdckohdnkjzitapw3xqgakmimxd6a",
-            "bafyreias5umbmxkuo6iguihj6tvovbuzgjscwj7wjcmz23pirgk7jo4uom"
-        ),
-        updated_at_upgrade!(
-            "EthTool",
-            "eth-tool-add-updated-at",
-            "bafyreieeavm747hdfwfrlm524uilhmnokwz3wodn22x4daidndbyg3pz6a",
-            "bafyreie24fvfqig33silif6nxrf4jfua2yokujyqbf4ydvstrifvhweaca"
-        ),
-        updated_at_upgrade!(
             "Callback",
             "callback-add-updated-at",
             "bafyreigwyv5fj5jfy2evxtq5ca4xz6bqd7eq2q5mcw5moiize4gpgusu2q",

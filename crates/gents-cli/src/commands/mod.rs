@@ -1,7 +1,6 @@
 pub(crate) mod accounts;
 pub(crate) mod afterburner_build;
 pub(crate) mod background;
-pub(crate) mod chain;
 pub(crate) mod chat;
 pub(crate) mod claude_login;
 pub(crate) mod cloud;

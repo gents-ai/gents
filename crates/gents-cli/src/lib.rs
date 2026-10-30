@@ -486,7 +486,6 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Command::Session { command } => commands::session::dispatch(command).await,
         Command::Goal { command } => commands::goal::dispatch(command).await,
         Command::Job { command } => commands::job::dispatch(command).await,
-        Command::Chain { command } => commands::chain::dispatch(command).await,
         Command::Mailbox { command } => commands::mailbox::dispatch(command).await,
         Command::Eval { command } => commands::eval::dispatch(command, runtime).await,
         Command::Optimization { command } => {

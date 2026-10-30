@@ -36,8 +36,6 @@ def Surface.meet (a b : Surface) : Surface :=
   , backgroundTools := a.backgroundTools.meet unitVM b.backgroundTools
   , writeTools := a.writeTools.meet fieldsVM b.writeTools
   , queryTools := a.queryTools.meet fieldsVM b.queryTools
-  , ethQueryMethods := a.ethQueryMethods.meet unitVM b.ethQueryMethods
-  , ethCallTools := a.ethCallTools.meet unitVM b.ethCallTools
   , pluginTools := a.pluginTools.meet unitVM b.pluginTools }
 
 def effective (agent ceiling : Surface) (runtime : Avail) : Surface :=

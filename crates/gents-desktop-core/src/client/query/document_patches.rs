@@ -221,7 +221,6 @@ pub async fn fetch_doc_patch(
         "EventSource" => rows.event_sources = load_rows(node, "EventSource", &format!("query {{ EventSource(docIDs: [{in_clause}]) {{ {EVENT_SOURCE_FIELDS} }} }}")).await?,
         AGENT_TARGET_NAME => rows.agent_targets = load_rows(node, AGENT_TARGET_NAME, &format!("query {{ {AGENT_TARGET_NAME}(docIDs: [{in_clause}]) {{ {AGENT_TARGET_FIELDS} }} }}")).await?,
         "DatastoreToolSurface" => rows.datastore_tool_surfaces = load_rows(node, "DatastoreToolSurface", &format!("query {{ DatastoreToolSurface(docIDs: [{in_clause}]) {{ {DATASTORE_TOOL_SURFACE_FIELDS} }} }}")).await?,
-        "ChainKeyBinding" => rows.chain_key_bindings = load_rows(node, "ChainKeyBinding", &format!("query {{ ChainKeyBinding(docIDs: [{in_clause}]) {{ {CHAIN_KEY_BINDING_FIELDS} }} }}")).await?,
         INFERENCE_PROFILE_NAME => {
             rows.inference_profiles = load_rows(
                 node,
@@ -272,11 +271,6 @@ pub async fn fetch_doc_patch(
         .collect();
     rows.datastore_tool_surface_source_node_dids = rows
         .datastore_tool_surfaces
-        .iter()
-        .map(|row| Some(row.node_did.clone()))
-        .collect();
-    rows.chain_key_binding_source_node_dids = rows
-        .chain_key_bindings
         .iter()
         .map(|row| Some(row.node_did.clone()))
         .collect();
@@ -346,7 +340,6 @@ pub(crate) fn supports_doc_patch_collection(collection_name: &str) -> bool {
             | "EventSource"
             | AGENT_TARGET_NAME
             | "DatastoreToolSurface"
-            | "ChainKeyBinding"
     )
 }
 

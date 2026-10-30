@@ -193,34 +193,3 @@ where
 pub(super) fn is_disabled(value: &bool) -> bool {
     !*value
 }
-
-/// Strict storage-envelope decoding for signing/configuration owners.
-pub(super) fn try_rows_with_doc_id<T>(
-    data: Option<&Value>,
-    field: &str,
-) -> anyhow::Result<Vec<(String, T)>>
-where
-    T: DeserializeOwned,
-{
-    use anyhow::Context;
-    let rows = data
-        .and_then(|data| data.get(field))
-        .and_then(Value::as_array)
-        .with_context(|| format!("{field} response has no rows array"))?;
-    rows.iter()
-        .map(|row| {
-            let mut payload = row.clone();
-            let doc_id = payload
-                .as_object_mut()
-                .context("document row must be an object")?
-                .remove("_docID")
-                .and_then(|value| value.as_str().map(str::to_string))
-                .filter(|value| !value.trim().is_empty())
-                .context("document row requires physical ID")?;
-            Ok((
-                doc_id,
-                serde_json::from_value(payload).with_context(|| format!("invalid {field} row"))?,
-            ))
-        })
-        .collect()
-}

@@ -19,7 +19,6 @@ fn document_explanation_resolves_target_owner_separately_from_destination() {
             "coordinator",
             &tools,
             &[],
-            &[],
             targets,
             &ToolCeiling::meta_only(),
             Vec::new(),

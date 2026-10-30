@@ -13,19 +13,6 @@ pub(super) fn validate_surfaces(manifest: &DesiredStateManifest, errors: &mut Ve
     }
 }
 
-pub(super) fn validate_eth_tools(manifest: &DesiredStateManifest, errors: &mut Vec<String>) {
-    for binding in &manifest.chain_key_bindings {
-        if let Err(error) = binding.validate() {
-            errors.push(format!("ChainKeyBinding {}: {error:#}", binding.binding_id));
-        }
-    }
-    for tool in &manifest.eth_tools {
-        if let Err(error) = tool.validate() {
-            errors.push(format!("EthTool {}: {error:#}", tool.tool_id));
-        }
-    }
-}
-
 pub(super) fn validate_tools(manifest: &DesiredStateManifest, errors: &mut Vec<String>) {
     for tools in &manifest.tools {
         if let Err(error) = tools.validate() {
