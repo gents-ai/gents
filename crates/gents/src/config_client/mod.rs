@@ -31,6 +31,7 @@ mod schema_contract;
 mod schema_install;
 mod schema_management;
 mod txn;
+pub use txn::TRACING_TARGET as TXN_TRACING_TARGET;
 pub(crate) mod write_telemetry;
 
 pub(crate) fn is_transaction_step_unavailable<E>(error: &E) -> bool

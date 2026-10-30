@@ -32,7 +32,7 @@ where
 
             fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
         }
-        if event.metadata().target() == "gents::agent::daemon" {
+        if event.metadata().target() == crate::agent::daemon::TRACING_TARGET {
             event.record(&mut SourceVisitor(&mut self.0.lock().unwrap()));
         }
     }
@@ -62,7 +62,7 @@ fn interruption_capture_survives_interest_rebuild_on_another_thread() {
     }
     fn emit() {
         tracing::info!(
-            target: "gents::agent::daemon",
+            target: crate::agent::daemon::TRACING_TARGET,
             cancellation_source = "claimed",
             "request interrupted"
         );

@@ -5,6 +5,9 @@ use crate::llm::rig_compat::ProviderModel;
 use anyhow::Result;
 use tokio::task::JoinError;
 
+/// Tracing target of the daemon's request interruption events; tests observe it by this name.
+pub(crate) const TRACING_TARGET: &str = module_path!();
+
 mod auxiliary_tasks;
 mod construction;
 #[cfg(test)]

@@ -524,6 +524,7 @@ pub use watcher::{AgentRequest, DefraWatcher, Watcher};
 #[doc(hidden)]
 pub mod __test_internals {
     pub use crate::agent::principal_assembly::AgentBuildError;
+    pub use crate::config_client::TXN_TRACING_TARGET;
     pub use crate::lifecycle::activate_workspace_bound_request;
     pub use crate::lifecycle::materialize::supersede_trigger_requests_in_txn;
     pub use crate::lifecycle::materialize::EnqueuedAgentRequest;

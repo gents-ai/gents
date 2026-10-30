@@ -1040,7 +1040,7 @@ where
 {
     fn on_event(&self, event: &tracing::Event<'_>, _: LayerContext<'_, S>) {
         let metadata = event.metadata();
-        if metadata.target() == "gents::agent::daemon::title"
+        if metadata.target() == crate::agent::daemon::title::TRACING_TARGET
             && *metadata.level() == tracing::Level::WARN
         {
             self.0.lock().unwrap().push(metadata.name());
