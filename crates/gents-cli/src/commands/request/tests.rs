@@ -1,4 +1,12 @@
+use serde_json::Value;
+
+use super::show_text::{push_request_output_text, render_request_show_text};
+use super::show_views::{
+    request_cancel_cause_view, request_header_view, terminal_source, terminal_timestamp,
+    transition_history, RequestShowSnapshot,
+};
 use super::*;
+use crate::request_helpers::CliOutputObservation;
 
 fn output_envelope(output: CliOutputObservation) -> RequestOutputEnvelope {
     RequestOutputEnvelope {
