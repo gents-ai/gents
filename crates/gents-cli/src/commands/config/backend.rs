@@ -100,7 +100,7 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
         {
             let guidance = gents::inference::auth::credential::classify_chatgpt_auth_error(
                 oauth_node_did.as_deref().unwrap_or(""),
-                gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+                gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
                 &gents::inference::auth::credential::OAuthAuthProblem::Expired,
             );
             anyhow::bail!("{error:#}\n{guidance}");
@@ -109,9 +109,9 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
             if target.provider_kind == BackendProviderKind::XaiGrokOAuth
                 && discovery_error_is_auth(&error) =>
         {
-            let guidance = gents::xai_grok_oauth::classify_xai_auth_error(
+            let guidance = gents::inference::clients::xai_grok::classify_xai_auth_error(
                 oauth_node_did.as_deref().unwrap_or(""),
-                gents::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+                gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
                 &gents::inference::auth::credential::OAuthAuthProblem::Expired,
             );
             anyhow::bail!("{error:#}\n{guidance}");
@@ -122,7 +122,7 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
         {
             anyhow::bail!(
                 "{error:#}\n{}",
-                gents::xai_grok_oauth::grok_client_version_gate_guidance()
+                gents::inference::clients::xai_grok::grok_client_version_gate_guidance()
             );
         }
         Err(error)
@@ -165,11 +165,11 @@ async fn load_oauth_credential_for_discovery(
 )> {
     let (provider, _login) = match provider_kind {
         BackendProviderKind::ChatGptCodex => (
-            gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+            gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
             "gents codex-login",
         ),
         BackendProviderKind::XaiGrokOAuth => (
-            gents::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+            gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
             "gents grok-login",
         ),
         BackendProviderKind::ClaudeCliSubscription => (
@@ -194,7 +194,7 @@ async fn load_oauth_credential_for_discovery(
 fn discovery_error_is_auth(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
-            .downcast_ref::<gents::backend_provider::ModelDiscoveryHttpError>()
+            .downcast_ref::<gents::inference::backends::provider::ModelDiscoveryHttpError>()
             .is_some_and(|http| http.is_auth())
     })
 }
@@ -202,7 +202,7 @@ fn discovery_error_is_auth(error: &anyhow::Error) -> bool {
 fn discovery_error_is_client_version_gate(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
-            .downcast_ref::<gents::backend_provider::ModelDiscoveryHttpError>()
+            .downcast_ref::<gents::inference::backends::provider::ModelDiscoveryHttpError>()
             .is_some_and(|http| http.is_client_version_gate())
     })
 }

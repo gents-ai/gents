@@ -495,7 +495,9 @@ async fn bind_agent_backend_chain(
     )
     .await
     .unwrap();
-    gents::backend_registry::set_backend_probe_status(node, node_did, backend_id, "healthy")
-        .await
-        .unwrap();
+    gents::inference::backends::registry::set_backend_probe_status(
+        node, node_did, backend_id, "healthy",
+    )
+    .await
+    .unwrap();
 }

@@ -6,7 +6,7 @@ use std::sync::{
 use std::time::Duration;
 
 use gents::inference::auth::credential::{OAuthCredential, SignIn};
-use gents::inference_setup::InferenceAuthMethod;
+use gents::inference::backends::setup::InferenceAuthMethod;
 use tokio_util::sync::CancellationToken;
 
 use super::{
@@ -17,11 +17,15 @@ use crate::error::{BridgeError, BridgeErrorCode};
 
 pub(crate) fn provider(method: InferenceAuthMethod) -> Result<&'static str, BridgeError> {
     match method {
-        InferenceAuthMethod::ChatGptOauth => Ok(gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER),
+        InferenceAuthMethod::ChatGptOauth => {
+            Ok(gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER)
+        }
         InferenceAuthMethod::ClaudeOauth => {
             Ok(gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER)
         }
-        InferenceAuthMethod::GrokOauth => Ok(gents::xai_grok_oauth::XAI_OAUTH_PROVIDER),
+        InferenceAuthMethod::GrokOauth => {
+            Ok(gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER)
+        }
         _ => Err(BridgeError::new(
             BridgeErrorCode::InvalidArgument,
             "Choose a browser sign-in method.",
@@ -230,7 +234,7 @@ mod tests {
             || panic!("cancelled sign-in must not read configuration"),
             "did:test:node",
             InferenceAuthMethod::GrokOauth,
-            gents::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+            gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
             None,
             &cancel,
             async |_| panic!("cancelled sign-in must not open a browser"),

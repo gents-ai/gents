@@ -11,8 +11,8 @@ use super::context::{RuntimeContext, StartupBarrier};
 use crate::admission::AdmissionRegistry;
 use crate::agent::reconcile::GenerationSupervisor;
 use crate::agent::{Gents, ProcessLifecycleState};
-use crate::backend_registry;
 use crate::health_checker::{spawn_health_checker, ServiceHealthMap};
+use crate::inference::backends::registry;
 use crate::runtime_status::{ReconcilePhase, RuntimeStatusHandle};
 use crate::tool_surface::ToolRuntimeContext;
 
@@ -250,7 +250,7 @@ async fn run_agent_owned(
     )
     .with_plugins(agent.plugins().clone())
     .with_usage_cache(agent.usage_cache().clone());
-    backend_registry::probe_and_promote_enabled_backends(&agent.node).await;
+    registry::probe_and_promote_enabled_backends(&agent.node).await;
 
     // Subscribe before reading startup configuration so racing commits remain pending.
     let control_subscription = match agent
@@ -422,14 +422,15 @@ async fn run_agent_owned(
         agent.node_did().to_string(),
     ));
     let (backend_health_events_tx, backend_health_events_rx) = mpsc::channel::<()>(1);
-    let backend_prober = AbortOnDropHandle::new(crate::backend_health::spawn_backend_prober(
-        agent.node.clone(),
-        agent.backend_health.clone(),
-        agent.backend_prober_options.clone(),
-        backend_health_events_tx,
-        cancel.child_token(),
-        agent.node_did().to_string(),
-    ));
+    let backend_prober =
+        AbortOnDropHandle::new(crate::inference::backends::health::spawn_backend_prober(
+            agent.node.clone(),
+            agent.backend_health.clone(),
+            agent.backend_prober_options.clone(),
+            backend_health_events_tx,
+            cancel.child_token(),
+            agent.node_did().to_string(),
+        ));
 
     let runtime_snapshot_observer_handle =
         if let Some(observer) = agent.runtime_snapshot_observer.clone() {

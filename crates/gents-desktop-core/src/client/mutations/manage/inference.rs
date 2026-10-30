@@ -107,13 +107,16 @@ mod tests {
             let backend = &backend;
             let catalog = catalog.clone();
             Box::pin(async move {
-                gents::backend_registry::record_model_catalog_in_txn(txn, backend, catalog).await
+                gents::inference::backends::registry::record_model_catalog_in_txn(
+                    txn, backend, catalog,
+                )
+                .await
             })
         })
         .await?;
         backend.name = "Renamed".into();
         upsert_inference_backend(&node, &backend).await?;
-        let observation = gents::backend_registry::lookup_backend_observation(
+        let observation = gents::inference::backends::registry::lookup_backend_observation(
             &node,
             &backend.node_did,
             &backend.backend_id,
@@ -142,13 +145,15 @@ mod tests {
             delete_inference_backend(&node, &other.node_did, "shared").await?,
             0
         );
-        assert!(gents::backend_registry::lookup_backend_observation(
-            &node,
-            &backend.node_did,
-            "shared"
-        )
-        .await?
-        .is_some());
+        assert!(
+            gents::inference::backends::registry::lookup_backend_observation(
+                &node,
+                &backend.node_did,
+                "shared"
+            )
+            .await?
+            .is_some()
+        );
         Ok(())
     }
 }

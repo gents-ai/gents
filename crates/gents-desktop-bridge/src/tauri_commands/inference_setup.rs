@@ -15,7 +15,7 @@ use gents::inference::auth::credential::list_oauth_credentials_on;
 #[cfg(test)]
 use gents::inference::auth::credential::OAuthCredential;
 use gents::inference::auth::credential::SignIn;
-use gents::inference_setup::{
+use gents::inference::backends::setup::{
     InferenceAuthMethod, InferenceModelRecommendation, InferenceSetupCatalog,
 };
 use gents_desktop_core::client::ClientCore;
@@ -203,8 +203,9 @@ pub(crate) async fn desktop_codex_login<R>(
 where
     R: Runtime,
 {
-    let provider =
-        gents::chatgpt_codex::normalize_provider(request.provider.as_deref().unwrap_or_default());
+    let provider = gents::inference::clients::chatgpt_codex::normalize_provider(
+        request.provider.as_deref().unwrap_or_default(),
+    );
     let signed = sign_in::run(
         &app,
         &state,
@@ -422,8 +423,9 @@ pub(crate) async fn desktop_grok_login<R>(
 where
     R: Runtime,
 {
-    let provider =
-        gents::xai_grok_oauth::normalize_provider(request.provider.as_deref().unwrap_or_default());
+    let provider = gents::inference::clients::xai_grok::normalize_provider(
+        request.provider.as_deref().unwrap_or_default(),
+    );
     let signed = sign_in::run(
         &app,
         &state,
@@ -547,7 +549,7 @@ mod provider_account_tests {
                 "managed node did:key:zAgent has no operator GraphQL endpoint"
             )),
             "did:key:zAgent",
-            gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+            gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
         )
         .await
         .expect_err("unresolvable configuration access must refuse sign-in");
@@ -581,7 +583,7 @@ mod provider_account_tests {
     #[tokio::test]
     async fn a_desktop_sign_in_writes_its_own_key() {
         let node_did = "did:key:zAgent";
-        let provider = gents::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+        let provider = gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
         let node = serving_node().await;
         let keyed = OAuthCredential {
             credential_id: format!("{provider}:{node_did}"),
@@ -757,7 +759,7 @@ mod provider_account_tests {
             ),
             (
                 "did:key:zAgent",
-                gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+                gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
             ),
         ] {
             let error = retry_pending_credential(

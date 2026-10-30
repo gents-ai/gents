@@ -116,7 +116,9 @@ impl ReplayFixture {
 
         let capture_scope = format!("{}.1", self.scope_kind);
         let uri = match source {
-            RenderedRequestSource::ClaudeCliSubscription => crate::claude_messages::MESSAGES_URI,
+            RenderedRequestSource::ClaudeCliSubscription => {
+                crate::inference::clients::claude_messages::MESSAGES_URI
+            }
             RenderedRequestSource::OpenAiChatCompletions => {
                 "https://api.openai.com/v1/chat/completions"
             }

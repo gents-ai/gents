@@ -6,9 +6,9 @@ use serde::Deserialize;
 use crate::admission::{AdmissionRegistry, AdmittedCompletionModel};
 use crate::agent::completion_retry::CompletionRetryPolicy;
 use crate::agent::loop_stream::{AggregateTokenBudget, LoopConfig};
-use crate::backend_provider::BackendProviderKind;
 use crate::config::{ReasoningEffort, ResolvedAgent};
 use crate::graphql::escape_graphql_string;
+use crate::inference::backends::provider::BackendProviderKind;
 use crate::lifecycle::ExecutionOrigin;
 use crate::openai_wire::OpenAiWireApi;
 use crate::provider_usage;
@@ -23,13 +23,15 @@ pub(crate) fn effective_max_tokens(
 }
 
 pub(crate) fn agent_connection_fingerprint(agent_config: &ResolvedAgent) -> String {
-    crate::admission::backend_connection_fingerprint(&crate::backend_registry::BackendFields {
-        backend_id: agent_config.backend_id.clone(),
-        backend_provider_kind: agent_config.backend_provider_kind,
-        openai_wire_api: agent_config.openai_wire_api,
-        backend_endpoint: agent_config.backend_endpoint.clone(),
-        backend_auth: agent_config.backend_auth.clone(),
-    })
+    crate::admission::backend_connection_fingerprint(
+        &crate::inference::backends::registry::BackendFields {
+            backend_id: agent_config.backend_id.clone(),
+            backend_provider_kind: agent_config.backend_provider_kind,
+            openai_wire_api: agent_config.openai_wire_api,
+            backend_endpoint: agent_config.backend_endpoint.clone(),
+            backend_auth: agent_config.backend_auth.clone(),
+        },
+    )
 }
 
 /// Identity of everything an agent_config slot builds once and keeps: its resolved
@@ -63,7 +65,7 @@ where
         agent_config.openai_wire_api == OpenAiWireApi::ChatCompletions
             && (agent_config.backend_provider_kind == BackendProviderKind::XaiGrokOAuth
                 || (agent_config.backend_provider_kind == BackendProviderKind::OpenAiCompatible
-                    && crate::inference_setup::is_xai_api_endpoint(
+                    && crate::inference::backends::setup::is_xai_api_endpoint(
                         &agent_config.backend_endpoint,
                     ))),
     )
@@ -103,7 +105,7 @@ pub(crate) fn loop_config(
                     reasoning_profile_params(
                         agent_config.backend_provider_kind,
                         agent_config.openai_wire_api,
-                        crate::inference_setup::sent_reasoning_effort(
+                        crate::inference::backends::setup::sent_reasoning_effort(
                             agent_config.backend_provider_kind,
                             agent_config.openai_wire_api,
                             &agent_config.backend_endpoint,
@@ -162,7 +164,7 @@ fn authoritative_reasoning_capabilities(
         return params;
     }
     let mut params = params.unwrap_or_else(|| serde_json::json!({}));
-    params[crate::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM] =
+    params[crate::inference::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM] =
         advertised.map_or(serde_json::Value::Null, |values| {
             serde_json::Value::Array(
                 values
@@ -617,7 +619,7 @@ fn provider_additional_params(
     match kind {
         BackendProviderKind::OpenAiCompatible
             if wire == crate::OpenAiWireApi::Responses
-                && crate::inference_setup::is_xai_api_endpoint(endpoint) =>
+                && crate::inference::backends::setup::is_xai_api_endpoint(endpoint) =>
         {
             Some(serde_json::json!({
                 "store": false,

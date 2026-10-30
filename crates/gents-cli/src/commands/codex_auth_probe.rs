@@ -28,7 +28,7 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
     let (access, home_dir) =
         resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let node_did = resolve_node_did(Some(&home_dir), args.node_did.as_deref())?;
-    let provider = gents::chatgpt_codex::normalize_provider(&args.provider);
+    let provider = gents::inference::clients::chatgpt_codex::normalize_provider(&args.provider);
     let blocks = crate::commands::accounts::probe_each_account(
         &access,
         &node_did,
@@ -61,16 +61,16 @@ async fn probe_account(
 ) -> Result<String> {
     use std::fmt::Write;
     let mut out = String::new();
-    let backend_url = gents::chatgpt_codex::default_backend_endpoint();
+    let backend_url = gents::inference::clients::chatgpt_codex::default_backend_endpoint();
     let models_url = format!("{}/models", backend_url.trim_end_matches('/'));
     let mut request = reqwest::Client::new()
         .get(&models_url)
         .query(&[(
             "client_version",
-            gents::chatgpt_codex::chatgpt_codex_client_version(),
+            gents::inference::clients::chatgpt_codex::chatgpt_codex_client_version(),
         )])
         .bearer_auth(&credential.access_token);
-    for (name, value) in gents::chatgpt_codex::build_chatgpt_codex_headers(
+    for (name, value) in gents::inference::clients::chatgpt_codex::build_chatgpt_codex_headers(
         credential.account_id.as_deref(),
         credential.is_fedramp,
     )? {

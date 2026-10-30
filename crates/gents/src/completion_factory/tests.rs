@@ -193,7 +193,7 @@ fn profile_reasoning_serializes_top_level_into_openai_body() {
             provider_additional_params(
                 BackendProviderKind::OpenAiCompatible,
                 crate::OpenAiWireApi::ChatCompletions,
-                crate::inference_setup::OPENAI_ENDPOINT,
+                crate::inference::backends::setup::OPENAI_ENDPOINT,
             ),
         ),
         SamplingConfig::default().additional_params(),
@@ -235,7 +235,7 @@ fn openrouter_additional_params_require_parameters() {
     let value = provider_additional_params(
         BackendProviderKind::OpenRouter,
         crate::OpenAiWireApi::Responses,
-        crate::inference_setup::OPENAI_ENDPOINT,
+        crate::inference::backends::setup::OPENAI_ENDPOINT,
     )
     .expect("OpenRouter should contribute additional params");
 
@@ -368,7 +368,7 @@ fn sampling_additional_params_merge_with_provider_params() {
         provider_additional_params(
             BackendProviderKind::OpenRouter,
             crate::OpenAiWireApi::Responses,
-            crate::inference_setup::OPENAI_ENDPOINT,
+            crate::inference::backends::setup::OPENAI_ENDPOINT,
         ),
         sampling.additional_params(),
     )
@@ -565,7 +565,7 @@ fn agent_with_retry(completion_retry: CompletionRetryProfileFields) -> ResolvedA
 #[test]
 fn claude_advertised_efforts_override_spoofed_additional_params() {
     let spoofed = Some(serde_json::json!({
-        (crate::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM): ["high"]
+        (crate::inference::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM): ["high"]
     }));
     let unknown = super::authoritative_reasoning_capabilities(
         spoofed.clone(),
@@ -573,7 +573,9 @@ fn claude_advertised_efforts_override_spoofed_additional_params() {
         None,
     )
     .unwrap();
-    assert!(unknown[crate::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM].is_null());
+    assert!(unknown
+        [crate::inference::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM]
+        .is_null());
 
     let advertised = super::authoritative_reasoning_capabilities(
         spoofed,
@@ -582,7 +584,7 @@ fn claude_advertised_efforts_override_spoofed_additional_params() {
     )
     .unwrap();
     assert_eq!(
-        advertised[crate::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM],
+        advertised[crate::inference::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM],
         serde_json::json!(["low", "xhigh"])
     );
 }

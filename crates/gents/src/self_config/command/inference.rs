@@ -135,7 +135,7 @@ impl ConfigCommandTool {
         if verb == "discover" {
             anyhow::ensure!(argv.len() == 2, "backend discover requires one BACKEND_ID");
             let backend_id = &argv[1];
-            let matches = crate::backend_registry::list_enabled_backends_for_agent(
+            let matches = crate::inference::backends::registry::list_enabled_backends_for_agent(
                 &self.node,
                 &self.node_did,
             )
@@ -170,8 +170,9 @@ impl ConfigCommandTool {
             }
             self.execution.enter_mutation();
             let observation =
-                crate::backend_registry::discover_shared_backend(&self.node, backend).await?;
-            let observation = crate::backend_registry::scoped_observation_view(
+                crate::inference::backends::registry::discover_shared_backend(&self.node, backend)
+                    .await?;
+            let observation = crate::inference::backends::registry::scoped_observation_view(
                 Some(&observation),
                 &self.node_did,
                 backend.provider_kind,

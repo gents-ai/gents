@@ -4,7 +4,7 @@ use anyhow::Result;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
-use crate::backend_registry::{BackendFields, InferenceBackend, HEALTHY_PROBE_STATUS};
+use crate::inference::backends::registry::{BackendFields, InferenceBackend, HEALTHY_PROBE_STATUS};
 
 const BACKEND_CONFIG_FINGERPRINT_TAG: &str = "gents-backend-admission-config-v1";
 const BACKEND_CONNECTION_FINGERPRINT_TAG: &str = "gents-backend-connection-v1";
@@ -99,10 +99,9 @@ impl BackendAdmissionConfig {
             max_concurrent,
             max_queue_depth,
             enabled: backend.enabled,
-            probe_status: observation
-                .probe_status
-                .clone()
-                .unwrap_or_else(|| crate::backend_registry::UNKNOWN_PROBE_STATUS.into()),
+            probe_status: observation.probe_status.clone().unwrap_or_else(|| {
+                crate::inference::backends::registry::UNKNOWN_PROBE_STATUS.into()
+            }),
             measured_unhealthy: false,
             config_fingerprint,
         })

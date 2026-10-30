@@ -376,7 +376,10 @@ fn ensure_inference_available(
     view: &DocumentRuntimeView,
     inference: &crate::config::ResolvedInference,
     admission_configs: &RapidHashMap<String, crate::admission::BackendAdmissionConfig>,
-    measured_health: &RapidHashMap<String, crate::backend_health::BackendHealthSnapshot>,
+    measured_health: &RapidHashMap<
+        String,
+        crate::inference::backends::health::BackendHealthSnapshot,
+    >,
 ) -> std::result::Result<(), AgentResolutionError> {
     let scope = view.node.value.node_did.as_str();
     let backend = &inference.backend;
@@ -404,13 +407,13 @@ fn ensure_inference_available(
         )
     {
         let provider = match backend.provider_kind {
-            crate::backend_provider::BackendProviderKind::ChatGptCodex => {
-                crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER
+            crate::inference::backends::provider::BackendProviderKind::ChatGptCodex => {
+                crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER
             }
-            crate::backend_provider::BackendProviderKind::XaiGrokOAuth => {
-                crate::xai_grok_oauth::XAI_OAUTH_PROVIDER
+            crate::inference::backends::provider::BackendProviderKind::XaiGrokOAuth => {
+                crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER
             }
-            crate::backend_provider::BackendProviderKind::ClaudeCliSubscription => {
+            crate::inference::backends::provider::BackendProviderKind::ClaudeCliSubscription => {
                 crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER
             }
             _ => {

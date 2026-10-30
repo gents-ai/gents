@@ -534,7 +534,7 @@ pub(super) fn parse_backend_observation_rows(
     let mut observations = Vec::with_capacity(rows.len());
     let mut observation_sources = Vec::with_capacity(rows.len());
     for (row, source) in rows.into_iter().zip(sources) {
-        match gents::backend_registry::decode_backend_observation(row) {
+        match gents::inference::backends::registry::decode_backend_observation(row) {
             Ok(observation) => {
                 observations.push(observation);
                 observation_sources.push(source);

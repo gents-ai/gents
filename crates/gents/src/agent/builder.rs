@@ -12,9 +12,6 @@ pub(crate) type AgentFactory =
 use super::{assemble_node_and_agents, runtime, AgentBuildError, Gents, ProcessLifecycleObserver};
 use crate::admission::BackendAdmissionConfig;
 use crate::agent::completion_retry::CompletionRetryProfileFields;
-#[cfg(test)]
-use crate::backend_provider::BackendProviderKind;
-use crate::backend_registry::lookup_backend;
 use crate::compaction::CompactionStrategy;
 use crate::config::{
     ResolvedAgent, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
@@ -24,6 +21,9 @@ use crate::config::{
 };
 use crate::health_checker::HealthCheckerOptions;
 use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
+#[cfg(test)]
+use crate::inference::backends::provider::BackendProviderKind;
+use crate::inference::backends::registry::lookup_backend;
 use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
 use crate::store::identity::{NodeIdentity, RuntimeNode};
@@ -51,7 +51,7 @@ pub struct GentsBuilder {
     rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     agents: Vec<PendingAgent>,
-    backend_health: crate::backend_health::BackendHealthMap,
+    backend_health: crate::inference::backends::health::BackendHealthMap,
     plugin_home: Option<std::path::PathBuf>,
 }
 
@@ -73,7 +73,7 @@ impl GentsBuilder {
     #[cfg(test)]
     pub(crate) fn backend_health(
         mut self,
-        backend_health: crate::backend_health::BackendHealthMap,
+        backend_health: crate::inference::backends::health::BackendHealthMap,
     ) -> Self {
         self.backend_health = backend_health;
         self
@@ -249,7 +249,8 @@ impl GentsBuilder {
             background_execution_registry: BackgroundExecutionRegistry::default(),
             inference_observations: Default::default(),
             health_checker_options: self.health_checker_options,
-            backend_prober_options: crate::backend_health::BackendProberOptions::default(),
+            backend_prober_options:
+                crate::inference::backends::health::BackendProberOptions::default(),
             backend_health: self.backend_health,
             process_state_observer: self.process_state_observer,
             runtime_snapshot_observer: None,
@@ -537,7 +538,7 @@ impl PendingAgent {
         node: &Arc<EmbeddedNode>,
         node_did: &str,
         tool_ceiling: &ToolCeiling,
-        backend_health: &crate::backend_health::BackendHealthMap,
+        backend_health: &crate::inference::backends::health::BackendHealthMap,
     ) -> Result<AgentFactory> {
         let backend_id = self
             .backend_id
@@ -553,10 +554,13 @@ impl PendingAgent {
                     backend_id
                 )
             })?;
-        let observation =
-            crate::backend_registry::lookup_backend_observation(node, node_did, &backend_id)
-                .await?
-                .ok_or_else(|| anyhow!("backend {} disappeared during assembly", backend_id))?;
+        let observation = crate::inference::backends::registry::lookup_backend_observation(
+            node,
+            node_did,
+            &backend_id,
+        )
+        .await?
+        .ok_or_else(|| anyhow!("backend {} disappeared during assembly", backend_id))?;
         let admission_config = BackendAdmissionConfig::from_backend(&backend, &observation)?
             .with_measured_unhealthy(
                 backend_health
@@ -592,7 +596,7 @@ impl PendingAgent {
     fn build_with_resolved_backend(
         self,
         principal: Arc<RuntimeNode>,
-        backend_fields: crate::backend_registry::BackendFields,
+        backend_fields: crate::inference::backends::registry::BackendFields,
         tool_ceiling: &ToolCeiling,
     ) -> Result<ResolvedAgent> {
         let agent_name = self.name.clone();
@@ -675,7 +679,7 @@ impl PendingAgent {
         });
         self.build_with_resolved_backend(
             principal,
-            crate::backend_registry::BackendFields {
+            crate::inference::backends::registry::BackendFields {
                 backend_id,
                 backend_provider_kind: BackendProviderKind::OpenAiCompatible,
                 openai_wire_api: crate::OpenAiWireApi::effective_for_provider(

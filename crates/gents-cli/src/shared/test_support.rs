@@ -75,8 +75,10 @@ async fn catalog_freshness_reaches_cli_observation_reader() -> anyhow::Result<()
                 let backend = &backend;
                 let catalog = catalog.clone();
                 Box::pin(async move {
-                    gents::backend_registry::record_model_catalog_in_txn(txn, backend, catalog)
-                        .await
+                    gents::inference::backends::registry::record_model_catalog_in_txn(
+                        txn, backend, catalog,
+                    )
+                    .await
                 })
             })
             .await?;

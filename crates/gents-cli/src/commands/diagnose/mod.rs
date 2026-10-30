@@ -187,7 +187,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         .unwrap_or(false);
     let principal_present = bundle.is_some();
 
-    let chatgpt_provider = gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
+    let chatgpt_provider = gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
     let mut chatgpt_auth_check = match gents::inference::auth::credential::resolve_oauth_credential(
         &access,
         &node_did,
@@ -237,7 +237,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         }),
     };
 
-    let xai_provider = gents::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+    let xai_provider = gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
     let mut xai_auth_check = match gents::inference::auth::credential::resolve_oauth_credential(
         &access,
         &node_did,
@@ -263,7 +263,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "credential_id": credential.credential_id,
             "provider": credential.provider,
             "expires_at": credential.access_token_expires_at,
-            "guidance": gents::xai_grok_oauth::classify_xai_auth_error(
+            "guidance": gents::inference::clients::xai_grok::classify_xai_auth_error(
                 &node_did,
                 xai_provider,
                 &gents::inference::auth::credential::OAuthAuthProblem::Expired,
@@ -272,7 +272,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         Ok(None) => json!({
             "ok": false,
             "provider": xai_provider,
-            "guidance": gents::xai_grok_oauth::classify_xai_auth_error(
+            "guidance": gents::inference::clients::xai_grok::classify_xai_auth_error(
                 &node_did,
                 xai_provider,
                 &gents::inference::auth::credential::OAuthAuthProblem::Missing,
@@ -343,7 +343,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         (
             &mut xai_auth_check,
             xai_provider,
-            gents::xai_grok_oauth::classify_xai_auth_error,
+            gents::inference::clients::xai_grok::classify_xai_auth_error,
         ),
         (
             &mut claude_auth_check,
@@ -367,7 +367,9 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
 
     let chatgpt_backend_configured = backend_reports.iter().any(|report| {
         report.get("provider_kind").and_then(Value::as_str)
-            == Some(gents::backend_provider::BackendProviderKind::ChatGptCodex.as_str())
+            == Some(
+                gents::inference::backends::provider::BackendProviderKind::ChatGptCodex.as_str(),
+            )
             && report.get("enabled").and_then(Value::as_bool) == Some(true)
     });
     let chatgpt_auth_ok = !chatgpt_backend_configured
@@ -375,7 +377,9 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
 
     let xai_backend_configured = backend_reports.iter().any(|report| {
         report.get("provider_kind").and_then(Value::as_str)
-            == Some(gents::backend_provider::BackendProviderKind::XaiGrokOAuth.as_str())
+            == Some(
+                gents::inference::backends::provider::BackendProviderKind::XaiGrokOAuth.as_str(),
+            )
             && report.get("enabled").and_then(Value::as_bool) == Some(true)
     });
     let xai_auth_ok =
@@ -383,7 +387,10 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
 
     let claude_backend_configured = backend_reports.iter().any(|report| {
         report.get("provider_kind").and_then(Value::as_str)
-            == Some(gents::backend_provider::BackendProviderKind::ClaudeCliSubscription.as_str())
+            == Some(
+                gents::inference::backends::provider::BackendProviderKind::ClaudeCliSubscription
+                    .as_str(),
+            )
             && report.get("enabled").and_then(Value::as_bool) == Some(true)
     });
     let claude_auth_ok = claude_auth_gate(claude_backend_configured, &claude_auth_check);

@@ -308,7 +308,7 @@ pub(super) async fn validate_advertised_profiles(
         let Some((profile, backend)) = references.profile_with_backend(&profile_id)? else {
             continue;
         };
-        let observation = crate::backend_registry::lookup_backend_observation_in_txn(
+        let observation = crate::inference::backends::registry::lookup_backend_observation_in_txn(
             txn,
             owner,
             &backend.backend_id,

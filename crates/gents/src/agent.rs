@@ -7,13 +7,13 @@ use anyhow::Context as _;
 use defra_node::EmbeddedNode;
 use tokio::sync::{watch, OnceCell};
 
-use crate::backend_health::{BackendHealthMap, BackendProberOptions};
 use crate::config::{
     ResolvedAgent, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
     DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 use crate::health_checker::HealthCheckerOptions;
 use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
+use crate::inference::backends::health::{BackendHealthMap, BackendProberOptions};
 use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};

@@ -454,7 +454,7 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
     backend_health
         .set_for_test(
             "backend-measured",
-            crate::backend_health::BackendHealthState::Unhealthy,
+            crate::inference::backends::health::BackendHealthState::Unhealthy,
             3,
         )
         .await;
@@ -490,7 +490,7 @@ async fn control_watcher_demotes_and_recovers_agent_on_measured_health_flip() {
     backend_health
         .set_for_test(
             "backend-measured",
-            crate::backend_health::BackendHealthState::Healthy,
+            crate::inference::backends::health::BackendHealthState::Healthy,
             0,
         )
         .await;
@@ -705,11 +705,14 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
     let node_did = agent.node_did().to_string();
     let selected_agent_id = agent.default_agent_id().to_string();
 
-    let backend =
-        crate::backend_registry::lookup_backend(node.as_ref(), &node_did, "backend-settle")
-            .await
-            .unwrap()
-            .expect("configured backend document");
+    let backend = crate::inference::backends::registry::lookup_backend(
+        node.as_ref(),
+        &node_did,
+        "backend-settle",
+    )
+    .await
+    .unwrap()
+    .expect("configured backend document");
     let advertised = |model_name: &str| crate::document_config::AdvertisedModel {
         model_name: model_name.into(),
         display_name: None,
@@ -725,7 +728,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
             models,
         }
     };
-    crate::backend_registry::record_model_catalog(
+    crate::inference::backends::registry::record_model_catalog(
         &node,
         &backend,
         catalog(
@@ -775,7 +778,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
         ],
     )
     .await;
-    crate::backend_registry::record_model_catalog(
+    crate::inference::backends::registry::record_model_catalog(
         &node,
         &backend,
         catalog("2026-01-02T00:00:00Z", vec![advertised("default")]),

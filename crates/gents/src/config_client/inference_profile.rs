@@ -225,9 +225,9 @@ mod tests {
         crate::ensure_runtime_schemas(&node).await?;
         crate::ensure_node(&node, did).await?;
         let access = ConfigAccess::local(node);
-        let spec = crate::inference_setup::connection_spec(
-            crate::inference_setup::InferenceProviderId::Anthropic,
-            crate::inference_setup::InferenceAuthMethod::ClaudeOauth,
+        let spec = crate::inference::backends::setup::connection_spec(
+            crate::inference::backends::setup::InferenceProviderId::Anthropic,
+            crate::inference::backends::setup::InferenceAuthMethod::ClaudeOauth,
             "",
         )?;
         let original = crate::InferenceBackend {
@@ -345,8 +345,12 @@ mod tests {
             })
             .await?;
         for backend in &backends {
-            crate::backend_registry::record_discovered_catalog_on(&access, backend, Vec::new())
-                .await?;
+            crate::inference::backends::registry::record_discovered_catalog_on(
+                &access,
+                backend,
+                Vec::new(),
+            )
+            .await?;
         }
         assert_eq!(profiles().await, before, "catalog refresh");
         let ConfigAccess::Local(local) = &access else {
@@ -368,9 +372,9 @@ mod tests {
         crate::ensure_runtime_schemas(&node).await?;
         crate::ensure_node(&node, did).await?;
         let access = ConfigAccess::local(node);
-        let spec = crate::inference_setup::connection_spec(
-            crate::inference_setup::InferenceProviderId::Anthropic,
-            crate::inference_setup::InferenceAuthMethod::ClaudeOauth,
+        let spec = crate::inference::backends::setup::connection_spec(
+            crate::inference::backends::setup::InferenceProviderId::Anthropic,
+            crate::inference::backends::setup::InferenceAuthMethod::ClaudeOauth,
             "",
         )?;
         let original = json!({

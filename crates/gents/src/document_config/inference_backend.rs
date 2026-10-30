@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::backend_provider::BackendProviderKind;
 use crate::config::ReasoningEffort;
+use crate::inference::backends::provider::BackendProviderKind;
 use crate::openai_wire::OpenAiWireApi;
 
 /// Shared provider connection. Authentication must be compatible with the

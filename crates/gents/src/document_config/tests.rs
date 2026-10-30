@@ -1172,10 +1172,10 @@ fn default_agent_publication_matches_lean() {
 
 #[tokio::test]
 async fn oauth_account_scope_matches_lean() {
-    use crate::backend_provider::{BackendProviderKind, BackendProviderOauthExt};
     use crate::inference::auth::credential::{
         resolve_oauth_credential, upsert_oauth_credential, AccountPick,
     };
+    use crate::inference::backends::provider::{BackendProviderKind, BackendProviderOauthExt};
     let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
     let lean = &snapshot.configuration_scope_cases["oauth_account"];
     let kind_of = |value: &serde_json::Value| -> BackendProviderKind {

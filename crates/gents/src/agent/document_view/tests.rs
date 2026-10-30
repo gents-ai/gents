@@ -38,7 +38,7 @@ async fn bind_default_agent_backend(
     crate::upsert_node(node, node_did, None, Some(agent_id), true, None)
         .await
         .unwrap();
-    crate::backend_registry::set_backend_probe_status(
+    crate::inference::backends::registry::set_backend_probe_status(
         node,
         node_did,
         &format!("{agent_id}:backend"),
@@ -135,7 +135,7 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::backend_health::BackendHealthMap::new(),
+        crate::inference::backends::health::BackendHealthMap::new(),
     );
     let mut view = load_document_runtime_view(&node, identity.did())
         .await
@@ -242,7 +242,7 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::backend_health::BackendHealthMap::new(),
+        crate::inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, identity.did())
         .await
@@ -455,7 +455,7 @@ async fn resolve_quarantines_behavior_with_empty_agent_target_id() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::backend_health::BackendHealthMap::new(),
+        crate::inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, node_did)
         .await
@@ -514,7 +514,7 @@ async fn resolve_quarantines_behavior_with_missing_local_agent_target() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::backend_health::BackendHealthMap::new(),
+        crate::inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, node_did)
         .await
@@ -912,7 +912,7 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::backend_health::BackendHealthMap::new(),
+        crate::inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, node_did)
         .await
@@ -982,7 +982,7 @@ async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::backend_health::BackendHealthMap::new(),
+        crate::inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, node_did)
         .await
@@ -1060,7 +1060,7 @@ async fn resolve_marks_event_trigger_unavailable_when_task_missing_or_disabled()
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::backend_health::BackendHealthMap::new(),
+        crate::inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, identity.did())
         .await
@@ -1139,7 +1139,7 @@ async fn resolve_quarantines_event_trigger_with_invalid_source_collection() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::backend_health::BackendHealthMap::new(),
+        crate::inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, node_did)
         .await
@@ -1205,7 +1205,7 @@ async fn resolve_marks_schedule_unavailable_when_task_missing_or_disabled() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::backend_health::BackendHealthMap::new(),
+        crate::inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, node_did)
         .await
@@ -1276,7 +1276,7 @@ async fn resolve_populates_active_tasks_for_enabled_tasks_with_ready_behaviors()
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::backend_health::BackendHealthMap::new(),
+        crate::inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, node_did)
         .await
@@ -1332,7 +1332,7 @@ async fn bind_subscription_backend(
     crate::upsert_node(node, node_did, None, Some(agent_id), true, None)
         .await
         .unwrap();
-    crate::backend_registry::set_backend_probe_status(
+    crate::inference::backends::registry::set_backend_probe_status(
         node,
         node_did,
         &format!("{agent_id}:backend"),
@@ -1377,10 +1377,10 @@ async fn insert_enabled_oauth_credential(node: &defra_node::EmbeddedNode, node_d
         doc_id: None,
         credential_id: crate::inference::auth::credential::oauth_credential_id(
             node_did,
-            crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+            crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
         ),
         node_did: node_did.to_string(),
-        provider: crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER.to_string(),
+        provider: crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER.to_string(),
         access_token: "access-token".to_string(),
         refresh_token: "refresh-token".to_string(),
         id_token: None,
@@ -1421,7 +1421,7 @@ async fn chatgpt_codex_behavior_without_credential_is_unavailable() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::backend_health::BackendHealthMap::new(),
+        crate::inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, identity.did())
         .await
@@ -1475,7 +1475,7 @@ async fn runtime_snapshot_skips_an_unknown_provider_kind_backend() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::backend_health::BackendHealthMap::new(),
+        crate::inference::backends::health::BackendHealthMap::new(),
     );
     let snapshot = resolve_document_runtime_snapshot_from_view(&node, &resolve_context, &view)
         .await
@@ -1517,7 +1517,7 @@ async fn chatgpt_codex_behavior_with_enabled_credential_is_runnable() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::backend_health::BackendHealthMap::new(),
+        crate::inference::backends::health::BackendHealthMap::new(),
     );
     let view = load_document_runtime_view(&node, identity.did())
         .await
@@ -1544,7 +1544,7 @@ async fn readiness_follows_the_backend_account_reference() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::backend_health::BackendHealthMap::new(),
+        crate::inference::backends::health::BackendHealthMap::new(),
     );
     let mut view = load_document_runtime_view(&node, identity.did())
         .await
@@ -1633,7 +1633,7 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::backend_health::BackendHealthMap::new(),
+        crate::inference::backends::health::BackendHealthMap::new(),
     );
     let ready_on = |account_ref: Option<String>| {
         let node = node.clone();
@@ -1721,13 +1721,15 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
             .as_deref()
             .expect("b has a reference")
     );
-    crate::backend_registry::set_backend_probe_status(&node, &did, &b_backend, "healthy")
-        .await
-        .unwrap();
+    crate::inference::backends::registry::set_backend_probe_status(
+        &node, &did, &b_backend, "healthy",
+    )
+    .await
+    .unwrap();
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::backend_health::BackendHealthMap::new(),
+        crate::inference::backends::health::BackendHealthMap::new(),
     );
     let on_a = format!("{x}:inference");
     let on_b = format!("{x}:inference-b");
@@ -1831,7 +1833,7 @@ async fn bind_default_agent_claude_backend(
         node_did,
         agent_id,
         "ClaudeCliSubscription",
-        crate::claude_subscription::default_backend_endpoint(),
+        crate::inference::clients::claude_subscription::default_backend_endpoint(),
         "default",
     )
     .await;
@@ -1852,7 +1854,7 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::backend_health::BackendHealthMap::new(),
+        crate::inference::backends::health::BackendHealthMap::new(),
     );
 
     let view = load_document_runtime_view(&node, identity.did())
@@ -1911,10 +1913,10 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
         snapshot.unavailable_agents
     );
     for state in [
-        crate::backend_health::BackendHealthState::CredentialsRequired,
-        crate::backend_health::BackendHealthState::SubscriptionNotEntitled,
-        crate::backend_health::BackendHealthState::Unhealthy,
-        crate::backend_health::BackendHealthState::Healthy,
+        crate::inference::backends::health::BackendHealthState::CredentialsRequired,
+        crate::inference::backends::health::BackendHealthState::SubscriptionNotEntitled,
+        crate::inference::backends::health::BackendHealthState::Unhealthy,
+        crate::inference::backends::health::BackendHealthState::Healthy,
     ] {
         for backend in view.backends.values() {
             resolve_context
@@ -1956,7 +1958,7 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
     let resolve_context = DocumentResolveContext::for_tests(
         identity.clone(),
         ToolCeiling::readonly(),
-        crate::backend_health::BackendHealthMap::new(),
+        crate::inference::backends::health::BackendHealthMap::new(),
     );
 
     let mut view = load_document_runtime_view(&node, identity.did())
@@ -1974,10 +1976,10 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
         doc_id: None,
         credential_id: crate::inference::auth::credential::oauth_credential_id(
             identity.did(),
-            crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+            crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
         ),
         node_did: identity.did().to_string(),
-        provider: crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER.to_string(),
+        provider: crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER.to_string(),
         access_token: "access-token".to_string(),
         refresh_token: "refresh-token".to_string(),
         id_token: None,

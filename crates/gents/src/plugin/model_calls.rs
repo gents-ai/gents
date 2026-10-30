@@ -111,7 +111,7 @@ pub fn endpoint_for(
     profile: &InferenceProfile,
     backend: &InferenceBackend,
 ) -> Result<ModelEndpoint> {
-    use crate::backend_provider::BackendProviderKind::{OpenAiCompatible, OpenRouter};
+    use crate::inference::backends::provider::BackendProviderKind::{OpenAiCompatible, OpenRouter};
     anyhow::ensure!(
         backend.enabled,
         "the backend of profile {:?} is disabled",

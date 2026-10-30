@@ -3,8 +3,8 @@ use super::*;
 impl ConfigCommandTool {
     /// Usage endpoint reads select no account and expose no credential identity.
     pub(super) async fn account_inventory(&self) -> Result<String> {
-        use crate::backend_provider::BackendProviderOauthExt;
         use crate::inference::auth::credential::backend_account;
+        use crate::inference::backends::provider::BackendProviderOauthExt;
         use crate::usage_observation::{read_node_usage, UsageTrigger};
         let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let node_did = self.node_did.as_str();
@@ -191,7 +191,7 @@ impl ConfigCommandTool {
         if target == SelfConfigTarget::InferenceBackend {
             for row in &mut rows {
                 let observation: crate::document_config::InferenceBackendObservation =
-                    crate::backend_registry::decode_backend_observation(row.clone())
+                    crate::inference::backends::registry::decode_backend_observation(row.clone())
                         .context("decoding backend observation")?;
                 let provider_kind = serde_json::from_value(
                     row.get("provider_kind")
@@ -199,7 +199,7 @@ impl ConfigCommandTool {
                         .context("backend row has no provider_kind")?,
                 )
                 .context("decoding backend provider_kind")?;
-                let view = crate::backend_registry::scoped_observation_view(
+                let view = crate::inference::backends::registry::scoped_observation_view(
                     Some(&observation),
                     &self.node_did,
                     provider_kind,

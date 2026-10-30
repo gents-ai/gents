@@ -20,7 +20,7 @@ pub struct PackInferenceProfileOption {
     pub reasoning_effort: Option<crate::config::ReasoningEffort>,
     pub backend_id: String,
     pub backend_name: Option<String>,
-    pub provider_kind: Option<crate::backend_provider::BackendProviderKind>,
+    pub provider_kind: Option<crate::inference::backends::provider::BackendProviderKind>,
     pub usable: bool,
     pub unavailable_reason: Option<String>,
 }

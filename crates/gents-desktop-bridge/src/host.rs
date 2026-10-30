@@ -133,7 +133,7 @@ impl ClientHost {
                 encode(record.is_managed_runtime())
             }
             ClientCommand::InferenceCatalog {} => {
-                encode(gents::inference_setup::inference_setup_catalog())
+                encode(gents::inference::backends::setup::inference_setup_catalog())
             }
             ClientCommand::InferenceSetupState { node_did } => {
                 let record = self.require_connected_runtime(&node_did).await?;

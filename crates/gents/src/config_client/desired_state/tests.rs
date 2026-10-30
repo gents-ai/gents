@@ -1060,7 +1060,7 @@ async fn preview_rejects_a_context_window_above_the_advertised_maximum() -> Resu
     .await?;
     let typed: crate::document_config::InferenceBackend =
         serde_json::from_value(backend(owner, "backend"))?;
-    crate::backend_registry::record_model_catalog(
+    crate::inference::backends::registry::record_model_catalog(
         &node,
         &typed,
         serde_json::from_value(json!({

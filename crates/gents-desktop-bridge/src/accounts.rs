@@ -10,7 +10,7 @@ pub mod usage;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderSignInRequest {
     pub node_did: String,
-    pub method: gents::inference_setup::InferenceAuthMethod,
+    pub method: gents::inference::backends::setup::InferenceAuthMethod,
     pub label: Option<String>,
 }
 
@@ -46,8 +46,8 @@ impl BackendAuthenticationView {
         revision: gents_desktop_core::client::ConfigEditorRevision,
         backend: &gents::InferenceBackend,
     ) -> Self {
-        use gents::backend_provider::BackendProviderOauthExt;
         use gents::document_config::BackendAuth;
+        use gents::inference::backends::provider::BackendProviderOauthExt;
         let (kind, variable, account_ref) = match &backend.auth {
             BackendAuth::Unauthenticated => ("unauthenticated", None, None),
             BackendAuth::ApiKey { .. } => ("api_key", None, None),
@@ -267,9 +267,9 @@ impl PendingOAuthCredentials {
 
 pub(crate) fn provider_label(provider: &str) -> &'static str {
     match provider {
-        gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER => "ChatGPT",
+        gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER => "ChatGPT",
         gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER => "Claude",
-        gents::xai_grok_oauth::XAI_OAUTH_PROVIDER => "Grok",
+        gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER => "Grok",
         _ => "provider",
     }
 }

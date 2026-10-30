@@ -46,7 +46,7 @@ pub(crate) async fn run_codex_login(
     node_did: &str,
     opts: &CodexLoginOptions,
 ) -> Result<CodexLoginOutcome> {
-    let provider = gents::chatgpt_codex::normalize_provider(&opts.provider);
+    let provider = gents::inference::clients::chatgpt_codex::normalize_provider(&opts.provider);
     let mut login_options = LoginOptions {
         client_id: opts
             .client_id

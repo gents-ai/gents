@@ -1001,10 +1001,10 @@ pub(super) mod tests {
     use crate::agent::completion_retry::CompletionRetryProfileFields;
     use crate::agent::daemon::AgentDaemonInit;
     use crate::agent::runtime::StartupBarrier;
-    use crate::backend_provider::BackendProviderKind;
     use crate::config::{ResolvedAgent, SamplingConfig};
     use crate::error::LoopFailureCause;
     use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
+    use crate::inference::backends::provider::BackendProviderKind;
     use crate::llm::tool::ToolDyn;
     use crate::prompt::LayeredPromptBuilder;
     use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};

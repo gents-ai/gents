@@ -344,8 +344,8 @@ fn cloud_provider(provider: &str) -> Result<&str> {
     if matches!(
         provider,
         gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER
-            | gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER
-            | gents::xai_grok_oauth::XAI_OAUTH_PROVIDER
+            | gents::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER
+            | gents::inference::clients::xai_grok::XAI_OAUTH_PROVIDER
     ) {
         anyhow::bail!(
             "--provider {provider} is an OAuth credential gents refreshes; cloud login stores a workspace token under gents-cloud"

@@ -114,8 +114,8 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "backend_registry::tests::generated_catalog_refreshes_preserve_payload_commits_and_latest_freshness",
             package: "gents",
-            source_path: "crates/gents/src/backend_registry/tests.rs",
-            module_path: "backend_registry::tests",
+            source_path: "crates/gents/src/inference/backends/registry/tests.rs",
+            module_path: "inference::backends::registry::tests",
             function: "generated_catalog_refreshes_preserve_payload_commits_and_latest_freshness",
         },
         ConformanceConsumer::RustTest {
@@ -653,8 +653,8 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "claude_messages::tests::generated_claude_wire_start_cases_drive_native_parser",
             package: "gents",
-            source_path: "crates/gents/src/claude_messages/tests.rs",
-            module_path: "claude_messages::tests",
+            source_path: "crates/gents/src/inference/clients/claude_messages/tests.rs",
+            module_path: "inference::clients::claude_messages::tests",
             function: "generated_claude_wire_start_cases_drive_native_parser",
         },
         ConformanceConsumer::RustTest {
@@ -786,8 +786,8 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "chatgpt_codex::tests::routing_affinity_matches_lean_owner",
             package: "gents",
-            source_path: "crates/gents/src/chatgpt_codex/tests.rs",
-            module_path: "chatgpt_codex::tests",
+            source_path: "crates/gents/src/inference/clients/chatgpt_codex/tests.rs",
+            module_path: "inference::clients::chatgpt_codex::tests",
             function: "routing_affinity_matches_lean_owner",
         },
         ConformanceConsumer::RustTest {
@@ -1941,29 +1941,29 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "backend_registry::tests::generated_backend_health_admission_cases_match_registry_and_admission_policy",
             package: "gents",
-            source_path: "crates/gents/src/backend_registry/tests.rs",
-            module_path: "backend_registry::tests",
+            source_path: "crates/gents/src/inference/backends/registry/tests.rs",
+            module_path: "inference::backends::registry::tests",
             function: "generated_backend_health_admission_cases_match_registry_and_admission_policy",
         },
         ConformanceConsumer::RustTest {
             id: "backend_registry::tests::display_state_matches_every_lean_backend_health_admission_case",
             package: "gents",
-            source_path: "crates/gents/src/backend_registry/tests.rs",
-            module_path: "backend_registry::tests",
+            source_path: "crates/gents/src/inference/backends/registry/tests.rs",
+            module_path: "inference::backends::registry::tests",
             function: "display_state_matches_every_lean_backend_health_admission_case",
         },
         ConformanceConsumer::RustTest {
             id: "backend_health::tests::generated_backend_health_cases_match_prober_transitions",
             package: "gents",
-            source_path: "crates/gents/src/backend_health/tests.rs",
-            module_path: "backend_health::tests",
+            source_path: "crates/gents/src/inference/backends/health/tests.rs",
+            module_path: "inference::backends::health::tests",
             function: "generated_backend_health_cases_match_prober_transitions",
         },
         ConformanceConsumer::RustTest {
             id: "backend_health::tests::generated_backend_probe_schedule_cases_match_runtime_selection",
             package: "gents",
-            source_path: "crates/gents/src/backend_health/tests.rs",
-            module_path: "backend_health::tests",
+            source_path: "crates/gents/src/inference/backends/health/tests.rs",
+            module_path: "inference::backends::health::tests",
             function: "generated_backend_probe_schedule_cases_match_runtime_selection",
         },
         ConformanceConsumer::RustTest {

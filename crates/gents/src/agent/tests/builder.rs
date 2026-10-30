@@ -108,11 +108,11 @@ async fn builder_rejects_backend_vetoed_by_measured_health() {
     )
     .await;
 
-    let backend_health = crate::backend_health::BackendHealthMap::new();
+    let backend_health = crate::inference::backends::health::BackendHealthMap::new();
     backend_health
         .set_for_test(
             "builder-vetoed-backend",
-            crate::backend_health::BackendHealthState::Unhealthy,
+            crate::inference::backends::health::BackendHealthState::Unhealthy,
             3,
         )
         .await;

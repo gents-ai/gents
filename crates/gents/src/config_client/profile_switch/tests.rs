@@ -17,8 +17,8 @@ use crate::inference::auth::credential::{
     preset_account_backend, remove_account_in_txn, set_account_enabled, store_sign_in,
     OAuthCredential,
 };
+use crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
 use crate::usage_observation::{record_usage, UsageAccount};
-use crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
 use crate::{Collection, InferenceBackend};
 
 const DID: &str = "did:key:z6MkTestSwitch";
@@ -191,9 +191,13 @@ impl Fixture {
                 reasoning_efforts: None,
             })
             .collect();
-        crate::backend_registry::record_discovered_catalog_on(&self.access, &backend, models)
-            .await
-            .unwrap();
+        crate::inference::backends::registry::record_discovered_catalog_on(
+            &self.access,
+            &backend,
+            models,
+        )
+        .await
+        .unwrap();
     }
 
     async fn profiles(&self) -> BTreeMap<String, Value> {

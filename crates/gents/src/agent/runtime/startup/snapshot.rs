@@ -6,7 +6,7 @@ use tracing::Instrument;
 
 use crate::admission::BackendAdmissionConfig;
 use crate::agent::{DocumentResolveContext, Gents};
-use crate::backend_registry;
+use crate::inference::backends::registry;
 use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
 use crate::tool_surface::{ToolRuntimeContext, ToolSurface};
 
@@ -183,7 +183,7 @@ async fn resolve_backend_admission_configs(
             continue;
         }
         let (resolved_backend_id, config) = async {
-            let backend = backend_registry::lookup_backend(node, agent.node_did(), backend_id)
+            let backend = registry::lookup_backend(node, agent.node_did(), backend_id)
                 .await?
                 .ok_or_else(|| {
                     anyhow!(
@@ -193,7 +193,7 @@ async fn resolve_backend_admission_configs(
                     )
                 })?;
             let observation =
-                backend_registry::lookup_backend_observation(node, agent.node_did(), backend_id)
+                registry::lookup_backend_observation(node, agent.node_did(), backend_id)
                     .await?
                     .context("backend observation disappeared during admission resolution")?;
             tracing::Span::current().record("backend_enabled", backend.enabled);

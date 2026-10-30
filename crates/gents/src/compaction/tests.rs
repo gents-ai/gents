@@ -551,11 +551,12 @@ async fn live_compaction_uses_rig_structured_output_end_to_end() {
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(150);
-    let client = crate::inference_http::build_openai_chat_completions_client(
+    let client = crate::inference::clients::inference_http::build_openai_chat_completions_client(
         "no-key",
         &endpoint,
-        crate::inference_http::SessionTaggingHttpClient::<rig::http_client::ReqwestClient>::default(
-        ),
+        crate::inference::clients::inference_http::SessionTaggingHttpClient::<
+            rig::http_client::ReqwestClient,
+        >::default(),
     )
     .expect("build live OpenAI-compatible client");
     let model = client.completion_model(&model_name);

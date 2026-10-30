@@ -160,7 +160,7 @@ fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
             rig::completion::CompletionError::ProviderError("connection reset".into()),
         ),
         "provider_stream_malformed" => {
-            use gents::claude_messages::{
+            use gents::inference::clients::claude_messages::{
                 parse_messages_sse, parse_messages_sse_typed, MessagesParseError,
                 ThinkingParseCause,
             };
@@ -242,7 +242,9 @@ fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
                 case.name
             );
             if origin == "provider_stream_malformed" {
-                let mut parser = gents::claude_messages::MessagesSseState::new(Default::default());
+                let mut parser = gents::inference::clients::claude_messages::MessagesSseState::new(
+                    Default::default(),
+                );
                 let preview_sse = "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"partial\"}}\n\n";
                 let mut saw_preview = false;
                 for line in preview_sse.lines() {

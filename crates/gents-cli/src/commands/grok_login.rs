@@ -36,7 +36,7 @@ pub(crate) async fn run_grok_login(
     node_did: &str,
     opts: &GrokLoginOptions,
 ) -> Result<GrokLoginOutcome> {
-    let provider = gents::xai_grok_oauth::normalize_provider(&opts.provider);
+    let provider = gents::inference::clients::xai_grok::normalize_provider(&opts.provider);
     let http = reqwest::Client::new();
 
     let tokens = gents::inference::auth::xai_login::run_device_code_login(&http, true)

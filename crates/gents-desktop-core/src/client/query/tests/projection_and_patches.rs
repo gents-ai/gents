@@ -777,8 +777,10 @@ async fn catalog_freshness_reaches_snapshot_operator_and_document_patch_readers(
                 let backend = &backend;
                 let catalog = catalog.clone();
                 Box::pin(async move {
-                    gents::backend_registry::record_model_catalog_in_txn(txn, backend, catalog)
-                        .await
+                    gents::inference::backends::registry::record_model_catalog_in_txn(
+                        txn, backend, catalog,
+                    )
+                    .await
                 })
             })
             .await?;

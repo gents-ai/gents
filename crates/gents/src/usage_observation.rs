@@ -13,13 +13,13 @@ use rig::http_client::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::backend_provider::BackendProviderOauthExt;
 use crate::config::ResolvedAgent;
 use crate::config_client::ConfigAccess;
 use crate::document_config::{BackendAuth, InferenceBackend};
 use crate::inference::auth::credential::{
     resolve_oauth_credential, AccountPick, BearerSource, OAuthCredential,
 };
+use crate::inference::backends::provider::BackendProviderOauthExt;
 
 /// Provider clients bind a physical credential row or a keyed backend
 /// connection identity. Inventory reads resolve the currently configured
@@ -391,7 +391,7 @@ impl Default for UsageEndpoints {
         Self {
             grok_billing: format!(
                 "{}/billing?format=credits",
-                crate::xai_grok_oauth::XAI_GROK_OAUTH_BASE_URL
+                crate::inference::clients::xai_grok::XAI_GROK_OAUTH_BASE_URL
             ),
             claude_usage: "https://api.anthropic.com/api/oauth/usage".to_string(),
         }
@@ -419,7 +419,7 @@ pub async fn read_account_usage(
     endpoints: &UsageEndpoints,
     now: DateTime<Utc>,
 ) -> Result<UsageRead> {
-    use crate::backend_provider::BackendProviderKind as Kind;
+    use crate::inference::backends::provider::BackendProviderKind as Kind;
     let kind = backend.provider_kind;
     if !backend.enabled {
         return Ok(UsageRead::Disabled);
@@ -460,8 +460,8 @@ pub async fn read_account_usage(
                 node.clone(),
                 node_did,
                 provider,
-                crate::backend_health::oauth::oauth_refresh_kind(kind),
-                crate::backend_health::oauth::oauth_product(kind),
+                crate::inference::backends::health::oauth::oauth_refresh_kind(kind),
+                crate::inference::backends::health::oauth::oauth_product(kind),
                 AccountPick::Reference(backend.auth.oauth_account_ref()),
             )
             .await;
@@ -474,7 +474,7 @@ pub async fn read_account_usage(
             let (request, parse): (reqwest::RequestBuilder, UsageParser) = match kind {
                 Kind::ChatGptCodex => (
                     http.get(codex_usage_url(&backend.endpoint)).headers(
-                        crate::chatgpt_codex::build_chatgpt_codex_headers(
+                        crate::inference::clients::chatgpt_codex::build_chatgpt_codex_headers(
                             credential.account_id.as_deref(),
                             credential.is_fedramp,
                         )?,
@@ -482,13 +482,16 @@ pub async fn read_account_usage(
                     account_usage::codex_usage,
                 ),
                 Kind::XaiGrokOAuth => (
-                    http.get(&endpoints.grok_billing)
-                        .headers(crate::xai_grok_oauth::build_xai_grok_oauth_headers()?),
+                    http.get(&endpoints.grok_billing).headers(
+                        crate::inference::clients::xai_grok::build_xai_grok_oauth_headers()?,
+                    ),
                     account_usage::grok_billing,
                 ),
                 Kind::ClaudeCliSubscription => (
-                    http.get(&endpoints.claude_usage)
-                        .header("anthropic-beta", crate::claude_messages::OAUTH_BETA),
+                    http.get(&endpoints.claude_usage).header(
+                        "anthropic-beta",
+                        crate::inference::clients::claude_messages::OAUTH_BETA,
+                    ),
                     account_usage::claude_oauth_usage,
                 ),
                 // A new provider kind must fail to compile here rather than
@@ -673,7 +676,7 @@ fn unavailable(reason: &str) -> UsageRead {
 }
 
 fn codex_usage_url(endpoint: &str) -> String {
-    let base = crate::chatgpt_codex::normalize_endpoint(endpoint);
+    let base = crate::inference::clients::chatgpt_codex::normalize_endpoint(endpoint);
     format!(
         "{}/wham/usage",
         base.strip_suffix("/codex").unwrap_or(&base)

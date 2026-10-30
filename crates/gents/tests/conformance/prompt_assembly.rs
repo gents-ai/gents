@@ -7,10 +7,10 @@ use gents_loop::provider_input::ProviderInputProfile;
 
 use rapidhash::{HashSetExt, RapidHashSet};
 
-use gents::claude_messages::{
+use gents::inference::clients::claude_messages::{
     build_messages_body_native, parse_messages_sse, parse_messages_sse_typed, CLAUDE_CODE_IDENTITY,
 };
-use gents::claude_subscription::ClaudeStreamResponse;
+use gents::inference::clients::claude_subscription::ClaudeStreamResponse;
 use rig::completion::CompletionError;
 use rig::streaming::RawStreamingChoice;
 
@@ -557,7 +557,9 @@ fn generated_claude_thinking_stream_cases_drive_native_sse_parser() {
         let parsed =
             parse_messages_sse_typed(&claude_thinking_events_as_sse(&case.events), &surface);
         if case.outcome != "ok" {
-            use gents::claude_messages::{MessagesParseError, ThinkingParseCause};
+            use gents::inference::clients::claude_messages::{
+                MessagesParseError, ThinkingParseCause,
+            };
             let error = parsed.expect_err("modeled malformed block must fail closed");
             let MessagesParseError::MalformedThinking { cause } = error else {
                 panic!("{}: expected malformed thinking: {error}", case.name);
@@ -579,7 +581,8 @@ fn generated_claude_thinking_stream_cases_drive_native_sse_parser() {
         }
         let parsed = parsed.unwrap_or_else(|error| panic!("{}: {error}", case.name));
         assert_eq!(case.steps.len(), case.events.len(), "{}", case.name);
-        let mut state = gents::claude_messages::MessagesSseState::new(surface.clone());
+        let mut state =
+            gents::inference::clients::claude_messages::MessagesSseState::new(surface.clone());
         let mut live_preview = String::new();
         for (event, (sse, step)) in case.events.iter().zip(
             claude_thinking_sse_events(&case.events)
@@ -676,7 +679,7 @@ fn generated_claude_decoded_abort_prefixes_emit_native_audit_events() {
     {
         assert_eq!(case.steps.len(), case.events.len(), "{}", case.name);
         let surface = case.surface.iter().cloned().collect::<RapidHashSet<_>>();
-        let mut state = gents::claude_messages::MessagesSseState::new(surface);
+        let mut state = gents::inference::clients::claude_messages::MessagesSseState::new(surface);
         let mut signature = None::<String>;
         let mut redacted = None::<String>;
         for ((event, sse), step) in case
@@ -1584,10 +1587,10 @@ fn generated_claude_body_cases_drive_the_body_builder() {
             &tools,
         )
         .expect("Claude body");
-        gents::claude_messages::apply_reasoning_parameters(
+        gents::inference::clients::claude_messages::apply_reasoning_parameters(
             "claude-sonnet-5",
             &serde_json::json!({
-                (gents::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM):
+                (gents::inference::clients::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM):
                     case.supported_efforts,
                 "output_config": {"effort": case.effort}
             }),

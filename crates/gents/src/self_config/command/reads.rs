@@ -59,7 +59,7 @@ impl ConfigCommandTool {
                 let owner = owner.clone();
                 let backend_id = backend_id.clone();
                 Box::pin(async move {
-                    crate::backend_registry::lookup_backend_observation_in_txn(
+                    crate::inference::backends::registry::lookup_backend_observation_in_txn(
                         txn,
                         &owner,
                         &backend_id,
@@ -69,7 +69,7 @@ impl ConfigCommandTool {
             },
         )
         .await?;
-        crate::backend_registry::scoped_observation_view(
+        crate::inference::backends::registry::scoped_observation_view(
             observation.as_ref(),
             &self.node_did,
             provider_kind,

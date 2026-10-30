@@ -9,10 +9,10 @@ use tokio::sync::{mpsc, watch, Mutex, Notify, Semaphore};
 use super::*;
 use crate::admission::BackendAdmissionConfig;
 use crate::agent::PendingAgent;
-use crate::backend_provider::BackendProviderKind;
 use crate::config::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
+use crate::inference::backends::provider::BackendProviderKind;
 use crate::lean_vocab_test::lean_runtime_reconcile_case;
 use crate::runtime_status::RuntimeStatusHandle;
 use crate::store::identity::{KeyIdentity, NodeIdentity as _, RuntimeNode};
@@ -112,7 +112,7 @@ fn backend_admission_config(
         max_concurrent,
         max_queue_depth,
         enabled: true,
-        probe_status: crate::backend_registry::HEALTHY_PROBE_STATUS.to_string(),
+        probe_status: crate::inference::backends::registry::HEALTHY_PROBE_STATUS.to_string(),
         measured_unhealthy: false,
         config_fingerprint: format!("{backend_id}:{max_concurrent}:{max_queue_depth}"),
     }

@@ -58,12 +58,16 @@ pub(crate) async fn load_bound_context_window(
     agent_id: &str,
 ) -> Result<i64> {
     let profile = load_bound_profile(node, node_did, agent_id).await?;
-    let backend = gents::backend_registry::lookup_backend(node, node_did, &profile.backend_id)
-        .await?
-        .ok_or_else(|| anyhow!("bound backend disappeared"))?;
-    let observation =
-        gents::backend_registry::lookup_backend_observation(node, node_did, &profile.backend_id)
-            .await?;
+    let backend =
+        gents::inference::backends::registry::lookup_backend(node, node_did, &profile.backend_id)
+            .await?
+            .ok_or_else(|| anyhow!("bound backend disappeared"))?;
+    let observation = gents::inference::backends::registry::lookup_backend_observation(
+        node,
+        node_did,
+        &profile.backend_id,
+    )
+    .await?;
     let credential_scope = matches!(
         backend.auth,
         gents::document_config::BackendAuth::NodeOAuth { .. }

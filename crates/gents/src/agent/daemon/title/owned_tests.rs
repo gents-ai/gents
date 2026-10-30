@@ -27,10 +27,10 @@ use crate::agent::daemon::AgentDaemonInit;
 use crate::agent::runtime::{
     run_router_with_watcher, RouterInputs, RuntimeAdmissionGate, StartupBarrier,
 };
-use crate::backend_provider::BackendProviderKind;
 use crate::config::{ResolvedAgent, SamplingConfig};
 use crate::config_client::ConfigAccess;
 use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
+use crate::inference::backends::provider::BackendProviderKind;
 use crate::lean_vocab_test::{
     LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation, LeanCanonicalSource,
     LeanPayloadKind, LeanTerminalSelection,

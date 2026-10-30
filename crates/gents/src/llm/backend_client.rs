@@ -4,25 +4,25 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 
-use crate::backend_provider::BackendProviderKind;
 use crate::config::ResolvedAgent;
+use crate::inference::backends::provider::BackendProviderKind;
 
 pub(crate) enum BackendClient {
     OpenAiChatCompletions(
         rig::providers::openai::CompletionsClient<
-            crate::inference_http::SessionTaggingHttpClient<
+            crate::inference::clients::inference_http::SessionTaggingHttpClient<
                 crate::rendered_request::RenderedRequestCapturingHttpClient<
-                    crate::provider_http::ProviderHttpClient,
+                    crate::inference::clients::provider_http::ProviderHttpClient,
                 >,
             >,
         >,
     ),
     OpenAiResponses(
         rig::providers::openai::Client<
-            crate::inference_http::SessionTaggingHttpClient<
-                crate::inference_http::ResponsesNormalizingHttpClient<
+            crate::inference::clients::inference_http::SessionTaggingHttpClient<
+                crate::inference::clients::inference_http::ResponsesNormalizingHttpClient<
                     crate::rendered_request::RenderedRequestCapturingHttpClient<
-                        crate::provider_http::ProviderHttpClient,
+                        crate::inference::clients::provider_http::ProviderHttpClient,
                     >,
                 >,
             >,
@@ -31,36 +31,38 @@ pub(crate) enum BackendClient {
     OpenRouter(
         rig::providers::openrouter::Client<
             crate::rendered_request::RenderedRequestCapturingHttpClient<
-                crate::provider_http::ProviderHttpClient,
+                crate::inference::clients::provider_http::ProviderHttpClient,
             >,
         >,
     ),
     ChatGptCodex(
         rig::providers::openai::Client<
-            crate::chatgpt_codex::ChatGptCodexHttpClient<
+            crate::inference::clients::chatgpt_codex::ChatGptCodexHttpClient<
                 crate::inference::auth::credential::DbCredentialBearer,
                 crate::rendered_request::RenderedRequestCapturingHttpClient<
-                    crate::provider_http::ProviderHttpClient,
+                    crate::inference::clients::provider_http::ProviderHttpClient,
                 >,
             >,
         >,
     ),
     XaiGrokChatCompletions(
         rig::providers::openai::CompletionsClient<
-            crate::xai_grok_oauth::CapturingXaiGrokOAuthHttpClient,
+            crate::inference::clients::xai_grok::CapturingXaiGrokOAuthHttpClient,
         >,
     ),
     XaiGrokResponses(
-        rig::providers::openai::Client<crate::xai_grok_oauth::CapturingXaiGrokOAuthHttpClient>,
+        rig::providers::openai::Client<
+            crate::inference::clients::xai_grok::CapturingXaiGrokOAuthHttpClient,
+        >,
     ),
     ClaudeSubscription(
-        crate::claude_subscription::ClaudeSubscriptionClient<
+        crate::inference::clients::claude_subscription::ClaudeSubscriptionClient<
             crate::inference::auth::credential::DbCredentialBearer,
         >,
     ),
     AnthropicApiKey(
-        crate::claude_subscription::ClaudeSubscriptionClient<
-            crate::claude_subscription::ApiKeyBearer,
+        crate::inference::clients::claude_subscription::ClaudeSubscriptionClient<
+            crate::inference::clients::claude_subscription::ApiKeyBearer,
         >,
     ),
 }
@@ -114,7 +116,9 @@ pub(crate) fn claude_subscription_replay_issuer(
 fn messages_replay_issuer(
     kind: BackendProviderKind,
 ) -> Result<Option<gents_loop::claude_messages_body::ReplayIssuer>> {
-    let request = rig::http_client::Request::post(crate::claude_messages::MESSAGES_URI).body(())?;
+    let request =
+        rig::http_client::Request::post(crate::inference::clients::claude_messages::MESSAGES_URI)
+            .body(())?;
     Ok(
         gents_loop::rendered_request::transport::replay_issuer_for_destination(
             kind.as_str(),
@@ -127,13 +131,13 @@ fn api_key_http(
     cache: &Arc<crate::usage_observation::UsageCache>,
     node: &Arc<EmbeddedNode>,
     agent: &ResolvedAgent,
-) -> crate::provider_http::ProviderHttpClient {
+) -> crate::inference::clients::provider_http::ProviderHttpClient {
     match crate::usage_observation::UsageAccount::for_agent(agent) {
-        Some(account) => crate::provider_http::ProviderHttpClient::with_usage(
+        Some(account) => crate::inference::clients::provider_http::ProviderHttpClient::with_usage(
             Default::default(),
             crate::usage_observation::UsageReporter::new(cache.clone(), node.clone(), account),
         ),
-        None => crate::provider_http::ProviderHttpClient::default(),
+        None => crate::inference::clients::provider_http::ProviderHttpClient::default(),
     }
 }
 
@@ -153,10 +157,10 @@ pub(crate) async fn build_backend_client(
                 agent.agent_id, agent.backend_endpoint
             );
             if agent.openai_wire_api == crate::OpenAiWireApi::ChatCompletions {
-                let client = crate::inference_http::build_openai_chat_completions_client(
+                let client = crate::inference::clients::inference_http::build_openai_chat_completions_client(
                     api_key,
                     &agent.backend_endpoint,
-                    crate::inference_http::SessionTaggingHttpClient::new(
+                    crate::inference::clients::inference_http::SessionTaggingHttpClient::new(
                         crate::rendered_request::RenderedRequestCapturingHttpClient::new(
                             api_key_http(&cache, &node, agent),
                         ),
@@ -165,11 +169,11 @@ pub(crate) async fn build_backend_client(
                 .with_context(|| build_context.clone())?;
                 Ok(BackendClient::OpenAiChatCompletions(client))
             } else {
-                let client = crate::inference_http::build_openai_responses_client(
+                let client = crate::inference::clients::inference_http::build_openai_responses_client(
                     api_key,
                     &agent.backend_endpoint,
-                    crate::inference_http::SessionTaggingHttpClient::new(
-                        crate::inference_http::ResponsesNormalizingHttpClient::new(
+                    crate::inference::clients::inference_http::SessionTaggingHttpClient::new(
+                        crate::inference::clients::inference_http::ResponsesNormalizingHttpClient::new(
                             crate::rendered_request::RenderedRequestCapturingHttpClient::new(
                                 api_key_http(&cache, &node, agent),
                             ),
@@ -189,14 +193,14 @@ pub(crate) async fn build_backend_client(
             );
             let client: rig::providers::openrouter::Client<
                 crate::rendered_request::RenderedRequestCapturingHttpClient<
-                    crate::provider_http::ProviderHttpClient,
+                    crate::inference::clients::provider_http::ProviderHttpClient,
                 >,
             > = rig::providers::openrouter::Client::builder()
                 .api_key(api_key)
                 .base_url(&agent.backend_endpoint)
                 .http_client(
                     crate::rendered_request::RenderedRequestCapturingHttpClient::<
-                        crate::provider_http::ProviderHttpClient,
+                        crate::inference::clients::provider_http::ProviderHttpClient,
                     >::new(api_key_http(&cache, &node, agent)),
                 )
                 .build()
@@ -206,7 +210,7 @@ pub(crate) async fn build_backend_client(
         BackendProviderKind::ChatGptCodex => {
             let client = tokio::time::timeout(
                 build_timeout,
-                crate::chatgpt_codex::build_responses_client(
+                crate::inference::clients::chatgpt_codex::build_responses_client(
                     cache.clone(),
                     node,
                     agent.node_did(),
@@ -243,7 +247,7 @@ pub(crate) async fn build_backend_client(
             if agent.openai_wire_api == crate::OpenAiWireApi::ChatCompletions {
                 let client = tokio::time::timeout(
                     build_timeout,
-                    crate::xai_grok_oauth::build_chat_completions_client(
+                    crate::inference::clients::xai_grok::build_chat_completions_client(
                         node,
                         agent.node_did(),
                         agent.backend_auth.oauth_account_ref(),
@@ -258,7 +262,7 @@ pub(crate) async fn build_backend_client(
             } else {
                 let client = tokio::time::timeout(
                     build_timeout,
-                    crate::xai_grok_oauth::build_responses_client(
+                    crate::inference::clients::xai_grok::build_responses_client(
                         node,
                         agent.node_did(),
                         agent.backend_auth.oauth_account_ref(),
@@ -275,7 +279,7 @@ pub(crate) async fn build_backend_client(
         BackendProviderKind::ClaudeCliSubscription => {
             let client = tokio::time::timeout(
                 build_timeout,
-                crate::claude_subscription::ClaudeSubscriptionClient::build(
+                crate::inference::clients::claude_subscription::ClaudeSubscriptionClient::build(
                     cache.clone(),
                     node,
                     agent.node_did(),
@@ -298,7 +302,7 @@ pub(crate) async fn build_backend_client(
             Ok(BackendClient::ClaudeSubscription(client))
         }
         BackendProviderKind::AnthropicApiKey => {
-            let mut client = crate::claude_subscription::ClaudeSubscriptionClient::with_api_key(
+            let mut client = crate::inference::clients::claude_subscription::ClaudeSubscriptionClient::with_api_key(
                 api_key.to_owned(),
             );
             client.usage = crate::usage_observation::UsageAccount::for_agent(agent)
@@ -507,17 +511,17 @@ mod tests {
             (
                 BackendProviderKind::ChatGptCodex,
                 crate::OpenAiWireApi::Responses,
-                crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+                crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
             ),
             (
                 BackendProviderKind::XaiGrokOAuth,
                 crate::OpenAiWireApi::ChatCompletions,
-                crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+                crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
             ),
             (
                 BackendProviderKind::XaiGrokOAuth,
                 crate::OpenAiWireApi::Responses,
-                crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+                crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
             ),
             (
                 BackendProviderKind::ClaudeCliSubscription,
@@ -575,12 +579,12 @@ mod tests {
             (
                 BackendProviderKind::ChatGptCodex,
                 crate::OpenAiWireApi::Responses,
-                crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+                crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
             ),
             (
                 BackendProviderKind::XaiGrokOAuth,
                 crate::OpenAiWireApi::ChatCompletions,
-                crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+                crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
             ),
             (
                 BackendProviderKind::ClaudeCliSubscription,
@@ -628,7 +632,12 @@ mod tests {
             BackendProviderKind::ChatGptCodex,
             crate::OpenAiWireApi::Responses,
         );
-        seed_oauth_credential(&node, &codex, crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER).await;
+        seed_oauth_credential(
+            &node,
+            &codex,
+            crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+        )
+        .await;
         codex.backend_auth = crate::document_config::BackendAuth::NodeOAuth {
             account_ref: Some("acct-b".into()),
         };
@@ -644,7 +653,7 @@ mod tests {
         .expect("an account reference must not build with the original credential");
         let missing = crate::inference::auth::credential::classify_chatgpt_auth_error(
             codex.node_did(),
-            crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+            crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
             &crate::inference::auth::credential::OAuthAuthProblem::Missing,
         );
         assert!(format!("{error:#}").contains(&missing), "{error:#}");
@@ -661,7 +670,12 @@ mod tests {
             BackendProviderKind::ChatGptCodex,
             crate::OpenAiWireApi::Responses,
         );
-        seed_oauth_credential(&node, &codex, crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER).await;
+        seed_oauth_credential(
+            &node,
+            &codex,
+            crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+        )
+        .await;
         let client = build_backend_client(
             std::sync::Arc::default(),
             node.clone(),
@@ -681,7 +695,12 @@ mod tests {
             BackendProviderKind::XaiGrokOAuth,
             crate::OpenAiWireApi::ChatCompletions,
         );
-        seed_oauth_credential(&node, &xai_chat, crate::xai_grok_oauth::XAI_OAUTH_PROVIDER).await;
+        seed_oauth_credential(
+            &node,
+            &xai_chat,
+            crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
+        )
+        .await;
         let client = build_backend_client(
             std::sync::Arc::default(),
             node.clone(),
@@ -704,7 +723,7 @@ mod tests {
         seed_oauth_credential(
             &node,
             &xai_responses,
-            crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+            crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER,
         )
         .await;
         let client = build_backend_client(

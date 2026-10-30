@@ -4,8 +4,8 @@ use std::time::Duration;
 use anyhow::Result;
 
 use crate::agent::completion_retry::CompletionRetryProfileFields;
-use crate::backend_provider::BackendProviderKind;
 use crate::compaction::CompactionStrategy;
+use crate::inference::backends::provider::BackendProviderKind;
 use crate::openai_wire::OpenAiWireApi;
 use crate::store::identity::{NodeIdentity, RuntimeNode};
 use crate::tool_surface::AgentToolSurfaceConfig;
@@ -76,7 +76,7 @@ impl ResolvedInference {
             .as_ref()
             .and_then(|model| model.reasoning_efforts.as_deref());
         if self.backend.provider_kind.uses_messages_wire() {
-            crate::inference_setup::claude_supported_reasoning_efforts(
+            crate::inference::backends::setup::claude_supported_reasoning_efforts(
                 &self.profile.model_name,
                 advertised,
             )
@@ -433,7 +433,7 @@ impl ResolvedAgent {
 }
 
 pub fn resolve_backend_api_key(
-    backend: &crate::backend_registry::InferenceBackend,
+    backend: &crate::inference::backends::registry::InferenceBackend,
 ) -> Result<Option<String>> {
     backend
         .auth
@@ -490,7 +490,7 @@ pub fn admits_reasoning_effort(
 ) -> bool {
     advertised.contains(&effort)
         || (backend.provider_kind == BackendProviderKind::OpenAiCompatible
-            && crate::inference_setup::is_xai_api_endpoint(&backend.endpoint))
+            && crate::inference::backends::setup::is_xai_api_endpoint(&backend.endpoint))
 }
 
 pub fn unsent_reasoning_effort(
@@ -510,7 +510,7 @@ pub fn unsent_reasoning_effort(
                 .find(|model| model.model_name == profile.model_name)
         });
     let advertised = model.and_then(|model| model.reasoning_efforts.as_deref());
-    crate::inference_setup::sent_reasoning_effort(
+    crate::inference::backends::setup::sent_reasoning_effort(
         fields.backend_provider_kind,
         fields.openai_wire_api,
         &fields.backend_endpoint,

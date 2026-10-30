@@ -182,7 +182,7 @@ pub(super) async fn handle_request(
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
         }
         ("GET", "/desktop/inference/setup/catalog") => Ok(HttpResponse::json_ok(
-            serde_json::to_string(&gents::inference_setup::inference_setup_catalog())?,
+            serde_json::to_string(&gents::inference::backends::setup::inference_setup_catalog())?,
         )),
         ("POST", "/desktop/inference/models/discover") => {
             let request = decode::<InferenceDiscoveryRequest>(

@@ -50,7 +50,7 @@ async fn change_unit_pack_completes_writer_seal_review_and_host_integration() {
     install_inference(&access, &owner, backend.endpoint()).await;
     install_pack(&access, &owner, &repo).await;
     select_default_agent(&access, &db.node, &owner).await;
-    gents::backend_registry::set_backend_probe_status(
+    gents::inference::backends::registry::set_backend_probe_status(
         &db.node,
         &owner,
         "workspace-cycle-backend",
@@ -345,7 +345,7 @@ async fn change_unit_pack_rejection_records_terminal_result_without_integration(
     install_inference(&access, &owner, backend.endpoint()).await;
     install_pack(&access, &owner, &repo).await;
     select_default_agent(&access, &db.node, &owner).await;
-    gents::backend_registry::set_backend_probe_status(
+    gents::inference::backends::registry::set_backend_probe_status(
         &db.node,
         &owner,
         "workspace-cycle-backend",
@@ -503,7 +503,7 @@ async fn failed_stage_outcome_reaches_the_existing_supervisor_session() {
     install_inference(&access, &owner, backend.endpoint()).await;
     install_pack(&access, &owner, &repo).await;
     select_default_agent(&access, &db.node, &owner).await;
-    gents::backend_registry::set_backend_probe_status(
+    gents::inference::backends::registry::set_backend_probe_status(
         &db.node,
         &owner,
         "workspace-cycle-backend",

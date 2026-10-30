@@ -1520,7 +1520,7 @@ fn push_backend_metric(
         &[("backend_id", backend.backend_id.clone())],
         backend
             .max_concurrent
-            .unwrap_or(gents::backend_registry::DEFAULT_MAX_CONCURRENT),
+            .unwrap_or(gents::inference::backends::registry::DEFAULT_MAX_CONCURRENT),
     );
     push_metric_sample(
         lines,
@@ -1528,7 +1528,7 @@ fn push_backend_metric(
         &[("backend_id", backend.backend_id.clone())],
         backend
             .max_queue_depth
-            .unwrap_or(gents::backend_registry::DEFAULT_MAX_QUEUE_DEPTH),
+            .unwrap_or(gents::inference::backends::registry::DEFAULT_MAX_QUEUE_DEPTH),
     );
     let status = measured
         .map(|(state, _)| state.as_str().to_string())
@@ -1615,7 +1615,9 @@ mod tests {
 
     #[test]
     fn backend_capacity_metrics_resolve_nullable_config_through_backend_defaults() {
-        use gents::backend_registry::{DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_QUEUE_DEPTH};
+        use gents::inference::backends::registry::{
+            DEFAULT_MAX_CONCURRENT, DEFAULT_MAX_QUEUE_DEPTH,
+        };
 
         for (limits, concurrency, queue_depth) in [
             (
