@@ -174,6 +174,8 @@ async fn permission_search_releases_unrelated_output_writers() {
 }
 
 #[cfg(target_os = "macos")]
+/// Select the SDK together with the compiler: the default Command Line Tools
+/// SDK can be newer than the active Xcode linker's TAPI reader.
 async fn concurrent_spawn_fixture(permission_search: bool) {
     const FIXTURE: &str = "GENTS_CAPTURE_SPAWN_FIXTURE";
     if let Some(root) = std::env::var_os(FIXTURE) {
@@ -185,8 +187,8 @@ async fn concurrent_spawn_fixture(permission_search: bool) {
     let source = root.path().join("fork_delay.c");
     let library = root.path().join("fork_delay.dylib");
     std::fs::write(&source, include_str!("fork_delay.c")).unwrap();
-    let compiler = tokio::process::Command::new("/usr/bin/cc")
-        .args(["-dynamiclib", "-o"])
+    let compiler = tokio::process::Command::new("/usr/bin/xcrun")
+        .args(["--sdk", "macosx", "clang", "-dynamiclib", "-o"])
         .arg(&library)
         .arg(&source)
         .output()
