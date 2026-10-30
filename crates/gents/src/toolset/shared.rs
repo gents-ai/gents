@@ -4,25 +4,30 @@ mod filesystem;
 
 #[cfg(test)]
 pub(crate) use command::apply_workspace_authority;
-pub(crate) use command::is_secret_env_name;
-pub(super) use command::run_command;
 #[cfg(test)]
-pub(crate) use command::run_command as run_command_for_test;
+pub(super) use command::command_env::build_shell_env_from_vars;
+pub(crate) use command::command_env::is_secret_env_name;
+pub(crate) use command::command_host_executable::admit_host_executable;
+pub(crate) use command::command_launch::prepare_declared_cli_command;
 #[cfg(test)]
-pub(crate) use command::select_sandbox_for_policy;
-pub(crate) use command::shell_join;
-pub(crate) use command::validate_command_policy;
+pub(crate) use command::command_launch::select_sandbox_for_policy;
+pub use command::command_launch::workspace_write_sandbox_enforced;
+pub(crate) use command::command_output::shell_join;
+pub(super) use command::command_output::{captured_channel, stopped_stream, truncate_stream};
+pub(super) use command::command_run::run_command;
+#[cfg(test)]
+pub(crate) use command::command_run::run_command as run_command_for_test;
+pub(crate) use command::command_validation::validate_command_policy;
+#[cfg(test)]
+pub(super) use command::command_validation::validate_read_only_command;
 pub(crate) use command::{
-    admit_host_executable, current_managed_command_credential_snapshot, default_lsp_network_mode,
+    current_managed_command_credential_snapshot, default_lsp_network_mode,
     effective_command_policy, lsp_sandbox_for_effective, normalize_workspace_lifecycle_state,
-    prepare_declared_cli_command, prepare_managed_command,
+    prepare_managed_command,
 };
-#[cfg(test)]
-pub(super) use command::{build_shell_env_from_vars, validate_read_only_command};
-pub(super) use command::{captured_channel, stopped_stream, truncate_stream};
 pub use command::{
-    workspace_write_sandbox_enforced, CommandConstraints, CommandExecutionMode,
-    CommandExecutionPolicy, CommandNetworkMode, WorkspaceAuthority,
+    CommandConstraints, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
+    WorkspaceAuthority,
 };
 pub(crate) use context::ToolContext;
 pub(super) use context::ToolError;
