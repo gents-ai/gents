@@ -764,7 +764,41 @@ fn versions_by_name(
 /// this registry does not know, before anything is registered or patched.
 async fn reject_unknown_lineage(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
     let all_versions = node.get_all_collection_versions().await?;
-    let by_name = versions_by_name(&all_versions);
+    check_lineage_versions(&all_versions, registry)
+}
+
+/// Read-only preflight of the same lineages startup will accept. Callers may
+/// read these versions through ConfigAccess while another process owns the store.
+pub fn check_migration_compatibility(all_versions: &[CollectionVersion]) -> Result<()> {
+    let mut baseline = DEFAULT_REGISTRY.baseline.to_vec();
+    let mut steps = DEFAULT_REGISTRY.steps.to_vec();
+    crate::upgrades::include_existing_by_version(
+        &|name| {
+            Ok(all_versions
+                .iter()
+                .find(|version| {
+                    version.name == name && version.is_active && !version.is_placeholder
+                })
+                .map(|version| version.version_id.clone()))
+        },
+        &mut baseline,
+        &mut steps,
+    )?;
+    check_lineage_versions(
+        all_versions,
+        &Registry {
+            baseline: &baseline,
+            steps: &steps,
+            ordinary_indexes: DEFAULT_REGISTRY.ordinary_indexes,
+        },
+    )
+}
+
+fn check_lineage_versions(
+    all_versions: &[CollectionVersion],
+    registry: &Registry<'_>,
+) -> Result<()> {
+    let by_name = versions_by_name(all_versions);
     let known_pins = known_pin_set(registry);
     for entry in registry.baseline {
         if let Some(versions) = by_name.get(entry.name) {

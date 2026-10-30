@@ -255,6 +255,7 @@ pub const PLUGINS_DIR_NAME: &str = "plugins";
 pub const PLUGIN_SERVICES_DIR_NAME: &str = "plugin-services";
 pub const REGISTRY_DIR_NAME: &str = "registry";
 pub const CODEX_UI_DIR_NAME: &str = "codex-ui";
+pub const SERVICE_UPDATES_DIR_NAME: &str = "service-updates";
 pub const EVAL_DIR_NAME: &str = "eval";
 pub const PACK_INSTALLS_DIR_NAME: &str = "pack-installs";
 /// UX plugins dropped in by hand for development (`<id>/plugin.js`); the
@@ -292,6 +293,12 @@ pub const RUNTIME_HOME_LOCK_FILES: &[&str] = &[
     WORKSPACE_APPROVALS_LOCK_FILE_NAME,
     PLUGIN_APPROVALS_LOCK_FILE_NAME,
 ];
+
+/// Independently supervised maintenance retains its receipts, executables and
+/// cold backups across retirement of live node state. Moving these paths on
+/// reset would strand a running helper; it authenticates the node/build again
+/// before retirement, so retained receipts confer no authority on a fresh node.
+pub const RUNTIME_HOME_RETAINED_ENTRIES: &[&str] = &[SERVICE_UPDATES_DIR_NAME];
 
 pub fn default_data_dir(home_dir: &Path) -> PathBuf {
     home_dir.join(DATA_DIR_NAME)
@@ -1241,6 +1248,18 @@ mod tests {
     }
 
     #[test]
+    fn native_maintenance_state_is_retained_when_live_state_is_retired() {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir(home.path().join(DATA_DIR_NAME)).unwrap();
+        fs::create_dir(home.path().join(SERVICE_UPDATES_DIR_NAME)).unwrap();
+        let entries = home_entries(home.path(), &[]).unwrap();
+        assert_eq!(entries.owned, vec![home.path().join(DATA_DIR_NAME)]);
+        assert!(entries
+            .retained
+            .contains(&home.path().join(SERVICE_UPDATES_DIR_NAME)));
+    }
+
+    #[test]
     fn runtime_writers_name_home_entries_only_from_the_inventory() {
         const NOT_GENTS_HOMES: &[&str] = &["fixture-domain-plugin"];
         let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
@@ -1320,6 +1339,7 @@ mod tests {
                     let top = capture[1].split('/').next().unwrap_or_default();
                     if !RUNTIME_HOME_ENTRIES.contains(&top)
                         && !RUNTIME_HOME_LOCK_FILES.contains(&top)
+                        && !RUNTIME_HOME_RETAINED_ENTRIES.contains(&top)
                     {
                         unlisted.push(format!("{}: {top}", at()));
                     }
@@ -1328,7 +1348,8 @@ mod tests {
                     match resolve(&capture[1]) {
                         Some(value)
                             if RUNTIME_HOME_ENTRIES.contains(&value.as_str())
-                                || RUNTIME_HOME_LOCK_FILES.contains(&value.as_str()) => {}
+                                || RUNTIME_HOME_LOCK_FILES.contains(&value.as_str())
+                                || RUNTIME_HOME_RETAINED_ENTRIES.contains(&value.as_str()) => {}
                         Some(value) => {
                             unlisted.push(format!("{}: {} = {value}", at(), &capture[1]))
                         }
