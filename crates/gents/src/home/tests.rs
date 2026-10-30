@@ -80,6 +80,10 @@ fn a_symlinked_lock_file_is_refused_without_touching_its_target() {
     assert_eq!(fs::read_to_string(&victim).unwrap(), "precious");
 }
 
+use std::fs;
+
+use super::lock::{open_runtime_lock, start_runtime_startup_waiter, start_store_release_waiter};
+use super::retire::{archive_preflight_with, retire_entries_with};
 use super::*;
 
 #[tokio::test]
