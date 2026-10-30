@@ -1,5 +1,6 @@
 use super::*;
-use gents_protocol::job::StampedField;
+use gents_protocol::job::{PluginDataDeclaration, PluginJobDeclaration, StampedField};
+use std::collections::BTreeSet;
 
 #[test]
 fn a_run_script_import_needs_a_job_plugin_with_a_script_input() {
