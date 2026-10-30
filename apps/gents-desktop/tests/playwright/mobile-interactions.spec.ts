@@ -62,7 +62,11 @@ test("dialogs fit inside the visible viewport", async ({ page }) => {
     .poll(() => dialog.evaluate((el) => el.getBoundingClientRect().top))
     .toBeGreaterThanOrEqual(50);
   const save = page.getByRole("button", { name: "Save dialog" });
-  await save.scrollIntoViewIfNeeded();
+  /* the person's own scroll takes over from revealing the focused field;
+     a script scroll does not, and the keyboard's settled reveal scrolls the
+     field back over it */
+  await dialog.hover();
+  await page.mouse.wheel(0, 600);
   await expect
     .poll(() => save.evaluate((el) => el.getBoundingClientRect().bottom))
     .toBeLessThanOrEqual(350);
