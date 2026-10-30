@@ -244,7 +244,7 @@ async fn retry_entry_does_not_publish_recorded_prompt_again() {
         ]);
         let mut loop_config = config(1);
         loop_config.resume_from_history = case["resume"].as_bool().unwrap();
-        let context = crate::rendered_request::RenderedRequestContext {
+        let context = crate::inference::rendered_request::RenderedRequestContext {
             request_doc_id: "retry-input-doc".into(),
             request_commit_cid: "bafy-retry".into(),
             request_id: "retry-input".into(),
@@ -255,15 +255,15 @@ async fn retry_entry_does_not_publish_recorded_prompt_again() {
             model_name: "test-model".into(),
             provider_family: None,
         };
-        let scope = crate::rendered_request::scope::test_scope(
+        let scope = crate::inference::rendered_request::scope::test_scope(
             context,
             Arc::new(|_| Box::pin(async { Ok(()) })),
         );
         loop_config.on_rendered_request =
-            Some(crate::rendered_request::scope::ambient_arming_sink(
-                crate::rendered_request::scope::CaptureScopeKind::Inference,
+            Some(crate::inference::rendered_request::scope::ambient_arming_sink(
+                crate::inference::rendered_request::scope::CaptureScopeKind::Inference,
             ));
-        let authored = crate::rendered_request::scope::scope_request(scope, async {
+        let authored = crate::inference::rendered_request::scope::scope_request(scope, async {
             let stream = run_loop_stream(
                 model,
                 Some(gents_loop::session_hook::NoopSessionHook),

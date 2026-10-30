@@ -1,5 +1,5 @@
-use crate::llm::tool::Tool;
-use crate::llm::tool::ToolDefinition;
+use crate::inference::llm::tool::Tool;
+use crate::inference::llm::tool::ToolDefinition;
 use anyhow::anyhow;
 
 use crate::background_tools::r4c_args::{ListBackgroundToolsArgs, ReadToolOutputArgs};

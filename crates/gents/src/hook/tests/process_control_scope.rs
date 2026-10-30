@@ -44,7 +44,7 @@ async fn unowned_live_process_group_keeps_the_retained_owner_record() {
     assert!(registry.process_record("stale-call", "stale-doc").is_some());
     registry.process_records.remove("stale-doc");
 }
-use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
+use crate::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use crate::store::identity::NodeIdentity;
 
 struct PendingTool;

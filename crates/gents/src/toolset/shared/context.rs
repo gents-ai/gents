@@ -28,16 +28,16 @@ impl ToolError {
         Self::ReportedFailure { class, text }
     }
 
-    pub(crate) fn into_dispatch_error(self) -> crate::llm::tool::ToolError {
+    pub(crate) fn into_dispatch_error(self) -> crate::inference::llm::tool::ToolError {
         match self {
-            Self::PolicyDenial(denial) => crate::llm::tool::ToolError::ReportedFailure {
+            Self::PolicyDenial(denial) => crate::inference::llm::tool::ToolError::ReportedFailure {
                 class: FailureClass::PolicyDenied,
                 text: denial.tool_error_payload(),
             },
             Self::ReportedFailure { class, text } => {
-                crate::llm::tool::ToolError::ReportedFailure { class, text }
+                crate::inference::llm::tool::ToolError::ReportedFailure { class, text }
             }
-            other => crate::llm::tool::ToolError::ToolCallError(Box::new(other)),
+            other => crate::inference::llm::tool::ToolError::ToolCallError(Box::new(other)),
         }
     }
 

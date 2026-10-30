@@ -128,7 +128,7 @@ impl CompletionModel for ScriptedModel {
             request
                 .chat_history
                 .iter()
-                .map(crate::llm::rig_compat::from_rig_message)
+                .map(crate::inference::llm::rig_compat::from_rig_message)
                 .collect(),
         );
         self.seen_tools
@@ -437,8 +437,8 @@ pub(super) fn config(max_turns: usize) -> LoopConfig {
         reduction_chain_keys: Vec::new(),
         initial_turn_index: 0,
         resume_from_history: false,
-        context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
-        compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
+        context_window: crate::inference::resolved::DEFAULT_CONTEXT_WINDOW,
+        compaction_threshold: crate::inference::resolved::DEFAULT_COMPACTION_THRESHOLD,
         context_calibration: Default::default(),
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
         provider_idle_timeout: None,
@@ -452,9 +452,11 @@ pub(super) fn config(max_turns: usize) -> LoopConfig {
 
 pub(super) fn owned_config(max_turns: usize) -> LoopConfig {
     let mut config = config(max_turns);
-    config.on_rendered_request = Some(crate::rendered_request::scope::ambient_arming_sink(
-        crate::rendered_request::scope::CaptureScopeKind::Inference,
-    ));
+    config.on_rendered_request = Some(
+        crate::inference::rendered_request::scope::ambient_arming_sink(
+            crate::inference::rendered_request::scope::CaptureScopeKind::Inference,
+        ),
+    );
     config
 }
 
@@ -546,19 +548,19 @@ pub(super) async fn collect_owned_scripted_stream_with_capture_scope<S>(
     writer: &crate::streaming::DefraStreamWriter,
     lifecycle: &mut crate::lifecycle::RequestLifecycle,
     profile: gents_loop::provider_input::ProviderInputProfile,
-    capture_scope: Option<Arc<crate::rendered_request::scope::RequestCaptureScope>>,
+    capture_scope: Option<Arc<crate::inference::rendered_request::scope::RequestCaptureScope>>,
 ) -> CollectedScriptedStream
 where
     S: Stream<Item = Result<LoopStreamItem, crate::error::LoopStreamError>>,
 {
     let scope = capture_scope.unwrap_or_else(|| {
-        let context = crate::rendered_request::context_for_claimed_request(
+        let context = crate::inference::rendered_request::context_for_claimed_request(
             lifecycle.request(),
             "",
             "test-model".into(),
             None,
         );
-        crate::rendered_request::scope::test_scope(
+        crate::inference::rendered_request::scope::test_scope(
             context,
             Arc::new(|_| Box::pin(async { Ok(()) })),
         )
@@ -571,7 +573,7 @@ where
     let agent_id = request.agent_id.clone();
     let request_id = request.request_id.clone();
     let inherited = crate::tool_call_lifecycle::runtime::current_tool_runtime_context().is_some();
-    let collection = crate::rendered_request::scope::scope_request(scope, async move {
+    let collection = crate::inference::rendered_request::scope::scope_request(scope, async move {
         futures::pin_mut!(stream);
         let doc_id = lifecycle.request().doc_id.clone();
         let mut processor = crate::agent::stream_processor::StreamProcessor::new(

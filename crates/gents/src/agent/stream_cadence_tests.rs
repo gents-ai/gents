@@ -104,7 +104,7 @@ async fn fixture(
     let writer = DefraStreamWriter::new(
         node.clone(),
         "did:test:test",
-        Duration::from_millis(crate::config::DEFAULT_STREAM_BATCH_MS),
+        Duration::from_millis(crate::inference::resolved::DEFAULT_STREAM_BATCH_MS),
     );
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     (node, data_path, hook, lifecycle, writer)
@@ -263,7 +263,7 @@ async fn auxiliary_stream(end: End, chunks_per_second: u32) -> Persisted {
     let auxiliary_writer = Arc::new(DefraStreamWriter::new(
         node.clone(),
         "did:test:test",
-        Duration::from_millis(crate::config::DEFAULT_STREAM_BATCH_MS),
+        Duration::from_millis(crate::inference::resolved::DEFAULT_STREAM_BATCH_MS),
     ));
     let sink = crate::streaming::auxiliary::sink_with_writer(
         Arc::clone(&auxiliary_writer),

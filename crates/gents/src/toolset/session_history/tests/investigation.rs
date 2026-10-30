@@ -26,7 +26,7 @@ async fn sessions_get_reports_timeline_tools_usage_and_compactions() {
     assert_eq!(parsed.compactions[0].scope, "session_prefix");
     assert_eq!(
         parsed.compaction_strategy,
-        crate::compaction::CompactionStrategy::StripThenSummarize
+        crate::inference::compaction::CompactionStrategy::StripThenSummarize
     );
     assert_eq!(parsed.context_window, Some(10_000));
     assert_eq!(parsed.compaction_threshold, Some(0.57));

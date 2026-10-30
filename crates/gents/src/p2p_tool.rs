@@ -13,7 +13,7 @@ use crate::agent::p2p_reconcile::{
 use crate::config_client::ConfigAccess;
 use crate::defra_node::EmbeddedNode;
 use crate::graphql::{escape_graphql_string, validate_collection_identifier};
-use crate::llm::tool::{Tool, ToolDefinition};
+use crate::inference::llm::tool::{Tool, ToolDefinition};
 use crate::tool_surface::EndpointScope;
 use crate::NodeIdentity;
 use gents_protocol::enrollment::EnrollmentDecisionKind;

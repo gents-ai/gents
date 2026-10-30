@@ -8,10 +8,10 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::AbortOnDropHandle;
 
 use super::context::{RuntimeContext, StartupBarrier};
-use crate::admission::AdmissionRegistry;
 use crate::agent::reconcile::GenerationSupervisor;
 use crate::agent::{Gents, ProcessLifecycleState};
 use crate::health_checker::{spawn_health_checker, ServiceHealthMap};
+use crate::inference::admission::AdmissionRegistry;
 use crate::inference::backends::registry;
 use crate::runtime_status::{ReconcilePhase, RuntimeStatusHandle};
 use crate::tool_surface::ToolRuntimeContext;

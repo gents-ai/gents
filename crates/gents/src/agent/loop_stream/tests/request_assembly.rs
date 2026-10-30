@@ -31,7 +31,10 @@ fn generated_steering_prepared_prompt(
     assert!(matches!(&payload.presentation, LeanPresentation::Full));
     assert_eq!(payload.reference.close_id, segment.id);
     assert_eq!(payload.reference.stream, 0);
-    assert_eq!(message.header.refs.as_slice(), std::slice::from_ref(&payload.reference));
+    assert_eq!(
+        message.header.refs.as_slice(),
+        std::slice::from_ref(&payload.reference)
+    );
     let flush = segment.flush.as_ref().expect("prepared text lacks a flush");
     assert_eq!(flush.ordinal, 0);
     let [run] = flush.runs.as_slice() else {
@@ -188,25 +191,31 @@ async fn loop_entry_sanitizes_a_recovered_checkpoint_as_one_projection() {
         RawStreamingChoice::Message("continued".to_string()),
         RawStreamingChoice::FinalResponse(()),
     ]);
-    let call = Message::Assistant { request_id: None,
+    let call = Message::Assistant {
+        request_id: None,
         id: None,
-        content: vec![AssistantContent::ToolCall(crate::llm::message::ToolCall { raw_arguments: None,
-            id: "restored-call".to_string(),
-            call_id: Some("restored-call".to_string()),
-            function: crate::llm::message::ToolFunction {
-                name: "read".to_string(),
-                arguments: serde_json::json!({}),
+        content: vec![AssistantContent::ToolCall(
+            crate::inference::llm::message::ToolCall {
+                raw_arguments: None,
+                id: "restored-call".to_string(),
+                call_id: Some("restored-call".to_string()),
+                function: crate::inference::llm::message::ToolFunction {
+                    name: "read".to_string(),
+                    arguments: serde_json::json!({}),
+                },
+                signature: None,
+                additional_params: None,
             },
-            signature: None,
-            additional_params: None,
-        })],
+        )],
     };
     let result = Message::User {
-        content: vec![UserContent::ToolResult(crate::llm::message::ToolResult {
-            id: "restored-call".to_string(),
-            call_id: Some("restored-call".to_string()),
-            content: vec![ToolResultContent::text("restored result")],
-        })],
+        content: vec![UserContent::ToolResult(
+            crate::inference::llm::message::ToolResult {
+                id: "restored-call".to_string(),
+                call_id: Some("restored-call".to_string()),
+                content: vec![ToolResultContent::text("restored result")],
+            },
+        )],
     };
 
     let collected = collect_scripted_stream(run_loop_stream(
@@ -343,20 +352,22 @@ async fn every_request_in_a_tool_loop_satisfies_provider_invariants() {
 
 #[tokio::test]
 async fn dirty_caller_history_is_sanitized_at_loop_entry() {
-    let unpaired_call = crate::llm::message::ToolCall { raw_arguments: None,
+    let unpaired_call = crate::inference::llm::message::ToolCall {
+        raw_arguments: None,
         id: "call-unpaired".to_string(),
         call_id: Some("call-unpaired".to_string()),
-        function: crate::llm::message::ToolFunction {
+        function: crate::inference::llm::message::ToolFunction {
             name: "echo".to_string(),
             arguments: serde_json::json!({}),
         },
         signature: None,
         additional_params: None,
     };
-    let paired_call = crate::llm::message::ToolCall { raw_arguments: None,
+    let paired_call = crate::inference::llm::message::ToolCall {
+        raw_arguments: None,
         id: "call-paired".to_string(),
         call_id: Some("call-paired".to_string()),
-        function: crate::llm::message::ToolFunction {
+        function: crate::inference::llm::message::ToolFunction {
             name: "echo".to_string(),
             arguments: serde_json::json!({}),
         },
@@ -367,15 +378,18 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
         Message::User {
             content: vec![UserContent::tool_result(
                 "call-gone".to_string(),
-                vec![crate::llm::message::ToolResultContent::text("orphaned")],
+                vec![crate::inference::llm::message::ToolResultContent::text(
+                    "orphaned",
+                )],
             )],
         },
-        Message::Assistant { request_id: None,
+        Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![
                 AssistantContent::ToolCall(paired_call),
                 AssistantContent::ToolCall(unpaired_call),
-                AssistantContent::Text(crate::llm::message::Text {
+                AssistantContent::Text(crate::inference::llm::message::Text {
                     text: "stale ordering".to_string(),
                 }),
             ],
@@ -383,7 +397,9 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
         Message::User {
             content: vec![UserContent::tool_result(
                 "call-paired".to_string(),
-                vec![crate::llm::message::ToolResultContent::text("ok")],
+                vec![crate::inference::llm::message::ToolResultContent::text(
+                    "ok",
+                )],
             )],
         },
     ];
@@ -508,7 +524,7 @@ fn is_request_context_message_only_matches_context_user_text() {
 
 #[tokio::test]
 async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
-    use crate::llm::tool::{Tool, ToolDefinition};
+    use crate::inference::llm::tool::{Tool, ToolDefinition};
 
     struct DescribeTool;
     #[derive(Debug, thiserror::Error)]
@@ -586,7 +602,7 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
 
 #[tokio::test]
 async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
-    use crate::llm::tool::{Tool, ToolDefinition};
+    use crate::inference::llm::tool::{Tool, ToolDefinition};
 
     struct StrictTool;
     #[derive(Debug, thiserror::Error)]
@@ -699,10 +715,11 @@ fn assert_all_history_tool_args_object_shaped(history: &[Message]) {
 async fn repair_sanitizes_poisoned_tool_args_in_loaded_history() {
     let poison = format!("bad{}value", '\u{0007}');
 
-    let poisoned_call = crate::llm::message::ToolCall { raw_arguments: None,
+    let poisoned_call = crate::inference::llm::message::ToolCall {
+        raw_arguments: None,
         id: "call-historic".to_string(),
         call_id: Some("call-historic".to_string()),
-        function: crate::llm::message::ToolFunction {
+        function: crate::inference::llm::message::ToolFunction {
             name: "echo".to_string(),
             arguments: serde_json::json!({ "note": poison }),
         },
@@ -711,7 +728,8 @@ async fn repair_sanitizes_poisoned_tool_args_in_loaded_history() {
     };
     let history = vec![
         Message::user("earlier"),
-        Message::Assistant { request_id: None,
+        Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![AssistantContent::ToolCall(poisoned_call)],
         },
@@ -911,27 +929,35 @@ fn has_raw_leaf(value: &serde_json::Value) -> bool {
 
 fn repaired_arguments(arguments: serde_json::Value) -> serde_json::Value {
     let history = vec![
-        Message::Assistant { request_id: None,
+        Message::Assistant {
+            request_id: None,
             id: None,
-            content: vec![AssistantContent::ToolCall(crate::llm::message::ToolCall { raw_arguments: None,
-                id: "call-1".to_string(),
-                call_id: Some("call-1".to_string()),
-                function: crate::llm::message::ToolFunction {
-                    name: "echo".to_string(),
-                    arguments,
+            content: vec![AssistantContent::ToolCall(
+                crate::inference::llm::message::ToolCall {
+                    raw_arguments: None,
+                    id: "call-1".to_string(),
+                    call_id: Some("call-1".to_string()),
+                    function: crate::inference::llm::message::ToolFunction {
+                        name: "echo".to_string(),
+                        arguments,
+                    },
+                    signature: None,
+                    additional_params: None,
                 },
-                signature: None,
-                additional_params: None,
-            })],
+            )],
         },
         Message::User {
-            content: vec![UserContent::ToolResult(crate::llm::message::ToolResult {
-                id: "call-1".to_string(),
-                call_id: Some("call-1".to_string()),
-                content: vec![ToolResultContent::Text(crate::llm::message::Text {
-                    text: "call-1-result".to_string(),
-                })],
-            })],
+            content: vec![UserContent::ToolResult(
+                crate::inference::llm::message::ToolResult {
+                    id: "call-1".to_string(),
+                    call_id: Some("call-1".to_string()),
+                    content: vec![ToolResultContent::Text(
+                        crate::inference::llm::message::Text {
+                            text: "call-1-result".to_string(),
+                        },
+                    )],
+                },
+            )],
         },
     ];
     let mut history = history
@@ -956,27 +982,35 @@ fn repaired_arguments(arguments: serde_json::Value) -> serde_json::Value {
 
 #[test]
 fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
-    let history = vec![Message::Assistant { request_id: None,
+    let history = vec![Message::Assistant {
+        request_id: None,
         id: None,
-        content: vec![AssistantContent::ToolCall(crate::llm::message::ToolCall { raw_arguments: None,
-            id: "call-1".to_string(),
-            call_id: Some("call-1".to_string()),
-            function: crate::llm::message::ToolFunction {
-                name: "echo".to_string(),
-                arguments: serde_json::json!({ "text": "bad\nvalue" }),
+        content: vec![AssistantContent::ToolCall(
+            crate::inference::llm::message::ToolCall {
+                raw_arguments: None,
+                id: "call-1".to_string(),
+                call_id: Some("call-1".to_string()),
+                function: crate::inference::llm::message::ToolFunction {
+                    name: "echo".to_string(),
+                    arguments: serde_json::json!({ "text": "bad\nvalue" }),
+                },
+                signature: None,
+                additional_params: None,
             },
-            signature: None,
-            additional_params: None,
-        })],
+        )],
     }];
     let new_messages = vec![Message::User {
-        content: vec![UserContent::ToolResult(crate::llm::message::ToolResult {
-            id: "call-1".to_string(),
-            call_id: Some("call-1".to_string()),
-            content: vec![ToolResultContent::Text(crate::llm::message::Text {
-                text: "done".to_string(),
-            })],
-        })],
+        content: vec![UserContent::ToolResult(
+            crate::inference::llm::message::ToolResult {
+                id: "call-1".to_string(),
+                call_id: Some("call-1".to_string()),
+                content: vec![ToolResultContent::Text(
+                    crate::inference::llm::message::Text {
+                        text: "done".to_string(),
+                    },
+                )],
+            },
+        )],
     }];
     let mut history = history
         .into_iter()
@@ -1009,7 +1043,7 @@ fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
         .map(|row| row.message.clone())
         .collect::<Vec<_>>();
     assert_eq!(
-        crate::compaction::sanitize_history_for_provider(
+        crate::inference::compaction::sanitize_history_for_provider(
             crate::provider_input::ProviderInputProfile::OpenAiChatCompletions,
             joined.clone(),
         ),

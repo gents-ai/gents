@@ -356,14 +356,14 @@ impl LoadSkillTool {
     }
 }
 
-impl crate::llm::tool::Tool for LoadSkillTool {
+impl crate::inference::llm::tool::Tool for LoadSkillTool {
     const NAME: &'static str = "load_skill";
     type Error = LoadSkillError;
     type Args = LoadSkillArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> crate::llm::tool::ToolDefinition {
-        crate::llm::tool::ToolDefinition {
+    async fn definition(&self, _prompt: String) -> crate::inference::llm::tool::ToolDefinition {
+        crate::inference::llm::tool::ToolDefinition {
             name: Self::NAME.to_string(),
             description: "Load a skill's full instructions by name (or skill_id), then follow \
                 them for the task. Choose a skill from the Skills catalog in your system prompt."

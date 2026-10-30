@@ -680,7 +680,7 @@ pub struct TimelineInferenceCallEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_completeness: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_accounting: Option<crate::rendered_request::ContextAccounting>,
+    pub context_accounting: Option<crate::inference::rendered_request::ContextAccounting>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub queued_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -805,9 +805,10 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
     }
     let mut inference_calls = sorted_inference_calls(rows.inference_calls, &included_request_ids);
     for call in &mut inference_calls {
-        call.backend_config_fingerprint = crate::admission::exportable_backend_fingerprint(
-            call.backend_config_fingerprint.as_deref(),
-        );
+        call.backend_config_fingerprint =
+            crate::inference::admission::exportable_backend_fingerprint(
+                call.backend_config_fingerprint.as_deref(),
+            );
     }
     apply_retry_summaries(&mut rows.request, &mut rows.requests, &inference_calls);
 

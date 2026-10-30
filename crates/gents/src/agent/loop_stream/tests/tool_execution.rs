@@ -687,9 +687,9 @@ async fn plugin_image_parts_reach_the_provider_whole() {
     };
     assert_eq!(
         image.media_type,
-        Some(crate::llm::message::ImageMediaType::PNG)
+        Some(crate::inference::llm::message::ImageMediaType::PNG)
     );
-    let crate::llm::message::DocumentSourceKind::Base64(data) = &image.data else {
+    let crate::inference::llm::message::DocumentSourceKind::Base64(data) = &image.data else {
         panic!("the image arrives as base64 data");
     };
     assert_eq!(
@@ -772,7 +772,7 @@ async fn plugin_image_parts_become_a_note_where_the_provider_refuses_them() {
 
 #[tokio::test]
 async fn dispatch_tool_types_unparseable_args_as_argument_invalid() {
-    use crate::llm::tool::{Tool, ToolDefinition};
+    use crate::inference::llm::tool::{Tool, ToolDefinition};
 
     struct StrictArgsTool {
         calls: Arc<AtomicUsize>,
@@ -852,7 +852,7 @@ async fn dispatch_tool_types_unparseable_args_as_argument_invalid() {
 
 #[tokio::test]
 async fn missing_tool_args_notify_model_and_terminalize_failed() {
-    use crate::llm::tool::{Tool, ToolDefinition};
+    use crate::inference::llm::tool::{Tool, ToolDefinition};
 
     struct StrictArgsTool;
     #[derive(Debug, thiserror::Error)]

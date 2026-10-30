@@ -86,7 +86,7 @@ struct PreInferenceBlockingTool {
     entered: Arc<tokio::sync::Notify>,
 }
 
-impl crate::llm::tool::ToolDyn for PreInferenceBlockingTool {
+impl crate::inference::llm::tool::ToolDyn for PreInferenceBlockingTool {
     fn name(&self) -> String {
         "pre_inference_block".into()
     }
@@ -94,7 +94,7 @@ impl crate::llm::tool::ToolDyn for PreInferenceBlockingTool {
     fn definition<'a>(
         &'a self,
         _: String,
-    ) -> crate::llm::tool::BoxFuture<'a, crate::llm::tool::ToolDefinition> {
+    ) -> crate::inference::llm::tool::BoxFuture<'a, crate::inference::llm::tool::ToolDefinition> {
         Box::pin(async move {
             self.entered.notify_one();
             std::future::pending().await
@@ -104,7 +104,7 @@ impl crate::llm::tool::ToolDyn for PreInferenceBlockingTool {
     fn call<'a>(
         &'a self,
         _: String,
-    ) -> crate::llm::tool::BoxFuture<'a, Result<String, crate::llm::tool::ToolError>> {
+    ) -> crate::inference::llm::tool::BoxFuture<'a, Result<String, crate::inference::llm::tool::ToolError>> {
         Box::pin(async { unreachable!("the pre-inference window never dispatches a tool") })
     }
 }
@@ -235,7 +235,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(vec![Box::new(PreInferenceBlockingTool {
             entered: entered.clone(),
-        }) as Box<dyn crate::llm::tool::ToolDyn>]),
+        }) as Box<dyn crate::inference::llm::tool::ToolDyn>]),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: None,
@@ -298,7 +298,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
         settled_in < Duration::from_secs(10),
         "owner terminalization took {settled_in:?}, which no longer excludes the \
          recovery path waiting out the {}s default execution lease",
-        crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+        crate::inference::resolved::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
     );
 
     let row = request_terminal_row(node.as_ref(), &request_doc_id)
@@ -344,7 +344,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         provider_family: None,
         model: Arc::new(ProviderCallCountingModel(provider_calls.clone())),
         preamble: prompt.preamble().to_owned(),
-        loop_tools: Arc::new(Vec::<Box<dyn crate::llm::tool::ToolDyn>>::new()),
+        loop_tools: Arc::new(Vec::<Box<dyn crate::inference::llm::tool::ToolDyn>>::new()),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: None,
@@ -523,7 +523,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
         provider_family: None,
         model: Arc::new(ProviderCallCountingModel(provider_calls.clone())),
         preamble: prompt.preamble().to_owned(),
-        loop_tools: Arc::new(Vec::<Box<dyn crate::llm::tool::ToolDyn>>::new()),
+        loop_tools: Arc::new(Vec::<Box<dyn crate::inference::llm::tool::ToolDyn>>::new()),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: None,

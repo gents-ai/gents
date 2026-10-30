@@ -1,4 +1,4 @@
-use crate::llm::message::{AssistantContent, Message};
+use crate::inference::llm::message::{AssistantContent, Message};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;

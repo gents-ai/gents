@@ -27,7 +27,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::llm::tool::{Tool, ToolDefinition};
+use crate::inference::llm::tool::{Tool, ToolDefinition};
 use crate::tool_call_lifecycle::FailureClass;
 use crate::tool_surface::{FileToolMode, ToolPolicyBash, ToolPolicySurface};
 use crate::toolset::shared::{ToolContext, ToolError};
@@ -426,7 +426,7 @@ impl Tool for LspTool {
         .await
     }
 
-    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+    fn into_dyn_error(error: Self::Error) -> crate::inference::llm::tool::ToolError {
         error.into_dispatch_error()
     }
 }

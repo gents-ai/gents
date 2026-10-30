@@ -127,37 +127,46 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
             let decoded_pair = if version == 1 {
                 None
             } else {
-                Some(gents::rendered_request::decode_capture_pair(&access, version, &stored).await?)
+                Some(
+                    gents::inference::rendered_request::decode_capture_pair(
+                        &access, version, &stored,
+                    )
+                    .await?,
+                )
             };
             let request = match decoded_pair.as_ref() {
                 Some((request, _)) => request.clone(),
                 None => {
-                    gents::rendered_request::decode_capture_json(
+                    gents::inference::rendered_request::decode_capture_json(
                         &access,
                         version,
                         &stored,
-                        gents::rendered_request::CapturePayloadKind::RequestBody,
+                        gents::inference::rendered_request::CapturePayloadKind::RequestBody,
                     )
                     .await?
                 }
             };
-            raw["request_json"] = json!(gents::rendered_request::canonical_json_string(&request)?);
+            raw["request_json"] = json!(gents::inference::rendered_request::canonical_json_string(
+                &request
+            )?);
             if version == 1 {
                 let provenance: Value = serde_json::from_str(
                     row.provenance_json
                         .as_deref()
                         .context("legacy capture has no provenance")?,
                 )?;
-                raw["provenance_payload_json"] = json!(
-                    gents::rendered_request::canonical_json_string(&provenance["assembly_trace"],)?
-                );
+                raw["provenance_payload_json"] =
+                    json!(gents::inference::rendered_request::canonical_json_string(
+                        &provenance["assembly_trace"],
+                    )?);
             } else {
                 let payload = &decoded_pair
                     .as_ref()
                     .context("missing decoded capture pair")?
                     .1;
-                raw["provenance_payload_json"] =
-                    json!(gents::rendered_request::canonical_json_string(payload)?);
+                raw["provenance_payload_json"] = json!(
+                    gents::inference::rendered_request::canonical_json_string(payload)?
+                );
             }
         }
     }
@@ -203,19 +212,21 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
     let (row, raw) = &entries[0];
     let mut value = capture_metadata_value(row, raw, args.include_body);
     let commit = match row.doc_id.as_deref() {
-        Some(doc_id) => gents::rendered_request::commits::request_json_commit(&access, doc_id)
-            .await?
-            .map(|commit| {
-                json!({
-                    "cid": commit.cid,
-                    "height": commit.height,
-                    "semantics": if row.capture_version == Some(1) {
-                        "canonical_body"
-                    } else {
-                        "storage_envelope"
-                    },
+        Some(doc_id) => {
+            gents::inference::rendered_request::commits::request_json_commit(&access, doc_id)
+                .await?
+                .map(|commit| {
+                    json!({
+                        "cid": commit.cid,
+                        "height": commit.height,
+                        "semantics": if row.capture_version == Some(1) {
+                            "canonical_body"
+                        } else {
+                            "storage_envelope"
+                        },
+                    })
                 })
-            }),
+        }
         None => None,
     };
     value["request_json_commit"] = commit.unwrap_or_else(|| json!("unavailable"));

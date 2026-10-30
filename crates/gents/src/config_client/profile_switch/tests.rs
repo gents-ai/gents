@@ -18,7 +18,7 @@ use crate::inference::auth::credential::{
     OAuthCredential,
 };
 use crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
-use crate::usage_observation::{record_usage, UsageAccount};
+use crate::inference::usage_observation::{record_usage, UsageAccount};
 use crate::{Collection, InferenceBackend};
 
 const DID: &str = "did:key:z6MkTestSwitch";
@@ -41,7 +41,7 @@ fn claude_sign_in(did: &str, who: &str) -> OAuthCredential {
 }
 
 struct Fixture {
-    cache: crate::usage_observation::UsageCache,
+    cache: crate::inference::usage_observation::UsageCache,
     node: Arc<EmbeddedNode>,
     access: ConfigAccess,
     did: String,
@@ -233,11 +233,11 @@ impl Fixture {
     }
 
     async fn plan(&self) -> Result<SwitchPlan> {
-        let observations = crate::usage_observation::read_node_usage(
+        let observations = crate::inference::usage_observation::read_node_usage(
             &self.cache,
             self.node.clone(),
             &self.did,
-            crate::usage_observation::UsageTrigger::Cached,
+            crate::inference::usage_observation::UsageTrigger::Cached,
             None,
             &Default::default(),
             Utc::now(),
@@ -406,7 +406,7 @@ async fn next_turns_use_the_target_credentials() {
         behavior.openai_wire_api = fields.openai_wire_api;
         behavior.backend_endpoint = fields.backend_endpoint;
         behavior.backend_auth = fields.backend_auth;
-        crate::llm::backend_client::build_backend_client(
+        crate::inference::llm::backend_client::build_backend_client(
             std::sync::Arc::default(),
             fixture.node.clone(),
             &behavior,

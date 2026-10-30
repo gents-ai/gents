@@ -127,9 +127,9 @@ async fn session_texts(h: &JobHarness) -> Vec<String> {
         )
         .await
         .expect("reconstruct the message");
-        if let gents::llm::message::Message::User { content } = message {
+        if let gents::inference::llm::message::Message::User { content } = message {
             texts.extend(content.into_iter().filter_map(|item| match item {
-                gents::llm::message::UserContent::Text(text) => Some(text.text),
+                gents::inference::llm::message::UserContent::Text(text) => Some(text.text),
                 _ => None,
             }));
         }

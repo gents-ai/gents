@@ -8,7 +8,7 @@ use anyhow::Context;
 use std::collections::BTreeMap;
 
 const REQUEST_FACT_SESSION_BATCH_SIZE: usize =
-    crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH;
+    crate::inference::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRequestFact {

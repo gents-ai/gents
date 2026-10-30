@@ -1,5 +1,5 @@
-use crate::llm::tool::Tool;
-use crate::llm::tool::ToolDefinition;
+use crate::inference::llm::tool::Tool;
+use crate::inference::llm::tool::ToolDefinition;
 use serde::Deserialize;
 
 use crate::health_checker::HealthStatus;

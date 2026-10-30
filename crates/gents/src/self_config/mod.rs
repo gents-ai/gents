@@ -49,7 +49,7 @@ use serde_json::{json, Value};
 
 use crate::config_client::patch::{SelfConfigPatch, SelfConfigTarget};
 use crate::graphql::escape_graphql_string;
-use crate::llm::tool::{Tool, ToolDefinition, ToolDyn};
+use crate::inference::llm::tool::{Tool, ToolDefinition, ToolDyn};
 use crate::tool_surface::presets::{builtin_preset_names, preset_fields};
 use crate::tool_surface::SelfConfigToolConfig;
 use crate::NodeIdentity;
@@ -176,7 +176,7 @@ pub struct ConfigureAgentParams {
 }
 
 pub fn build_self_config_tools(
-    usage_cache: Arc<crate::usage_observation::UsageCache>,
+    usage_cache: Arc<crate::inference::usage_observation::UsageCache>,
     node: Arc<EmbeddedNode>,
     node_did: String,
     identity: Option<Arc<dyn NodeIdentity>>,

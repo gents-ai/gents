@@ -1,8 +1,8 @@
 use rapidhash::RapidHashMap;
 
-use crate::llm::tool::BoxFuture;
-use crate::llm::tool::ToolDefinition;
-use crate::llm::tool::{ToolDyn, ToolError};
+use crate::inference::llm::tool::BoxFuture;
+use crate::inference::llm::tool::ToolDefinition;
+use crate::inference::llm::tool::{ToolDyn, ToolError};
 use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 use crate::tool_call_lifecycle::runtime::tool_execution_bounds;
 use anyhow::{bail, Context, Result};

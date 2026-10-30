@@ -10,8 +10,8 @@ use super::{
     RequestInterruptionSource,
 };
 use crate::agent::worker_capacity::{RequestGuard, WorkerTicket};
+use crate::inference::llm::rig_compat::ProviderModel;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome};
-use crate::llm::rig_compat::ProviderModel;
 use crate::runtime_trace::{
     record_current_claim_outcome, record_current_failure_class, record_current_request_outcome,
 };

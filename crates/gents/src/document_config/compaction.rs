@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::compaction::CompactionStrategy;
+use crate::inference::compaction::CompactionStrategy;
 
 /// Unset limits retain the existing runtime defaults. These are desired limits:
 /// provider budgets and pair-safe transcript splitting can further constrain them.

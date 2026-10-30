@@ -2,7 +2,7 @@ mod final_output;
 pub(crate) mod r4c_args;
 pub mod status_projection;
 
-use crate::llm::message::{AssistantContent, Message, Text};
+use crate::inference::llm::message::{AssistantContent, Message, Text};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use defra_node::EmbeddedNode;

@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 pub(super) fn execution_settings(document: Option<&Value>) -> Result<Value> {
-    use crate::config::*;
+    use crate::inference::resolved::*;
     let mut document = document.cloned().unwrap_or_else(|| {
         json!({
             "node_did": "", "execution_id": ""

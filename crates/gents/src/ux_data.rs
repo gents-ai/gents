@@ -24,7 +24,7 @@ use crate::defra_write::{BoundedWriteParams, BoundedWriteTool};
 use crate::document_config::{
     list_datastore_tool_surfaces, DatastoreToolSurfaceDocument, SurfaceToolDecl,
 };
-use crate::llm::tool::Tool;
+use crate::inference::llm::tool::Tool;
 use crate::ux_plugin::UxListing;
 
 /// One call from a page, as `desktop_ux_data_call` receives it.

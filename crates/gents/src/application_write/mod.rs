@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::defra_query::{CollectionScope, DefraQueryParams};
-use crate::llm::tool::{Tool, ToolDefinition};
+use crate::inference::llm::tool::{Tool, ToolDefinition};
 
 mod plugin_writes;
 pub use plugin_writes::apply_plugin_writes_in_txn;

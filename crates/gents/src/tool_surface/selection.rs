@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::llm::tool::ToolDyn;
+use crate::inference::llm::tool::ToolDyn;
 use anyhow::Result;
 
 use super::modes::{BashMode, FileToolMode};

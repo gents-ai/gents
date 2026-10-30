@@ -1069,9 +1069,9 @@ mod turn_assignment_tests {
             )
             .await
             .expect("reconstruct canonical session message");
-            if let crate::llm::message::Message::User { content } = message {
+            if let crate::inference::llm::message::Message::User { content } = message {
                 for item in content {
-                    if let crate::llm::message::UserContent::Text(text) = item {
+                    if let crate::inference::llm::message::UserContent::Text(text) = item {
                         if text.text.contains("<tool-completion") {
                             notifications.push(text.text);
                         }

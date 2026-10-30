@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use crate::llm::tool::ToolDefinition;
-use crate::llm::tool::{Tool, ToolDyn};
+use crate::inference::llm::tool::ToolDefinition;
+use crate::inference::llm::tool::{Tool, ToolDyn};
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
@@ -575,7 +575,7 @@ fn latest_request_context(rows: &[InferenceCallRow]) -> Result<Option<LastReques
 mod tests {
     use std::sync::Arc;
 
-    use crate::llm::tool::Tool;
+    use crate::inference::llm::tool::Tool;
 
     use super::*;
 

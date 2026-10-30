@@ -1,5 +1,5 @@
 use super::{visible_context, ReviewInput, MAX_INPUT_BYTES};
-use crate::llm::message::Message;
+use crate::inference::llm::message::Message;
 
 fn bounded(history: &[Message]) -> ReviewInput {
     ReviewInput::bounded(

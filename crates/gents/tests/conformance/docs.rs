@@ -126,7 +126,7 @@ fn rig_vocabulary_confined_to_the_seam() {
         "crates/gents/tests/conformance/docs.rs",
         "crates/gents/src/agent/loop_stream/tests/budgeting.rs",
         "crates/gents/src/agent/stream_processor_tests.rs",
-        "crates/gents/src/compaction/tests.rs",
+        "crates/gents/src/inference/compaction/tests.rs",
         "crates/gents/src/completion_factory/tests.rs",
         "crates/gents/src/provider_input/tests.rs",
         "crates/gents-protocol/src/message.rs",

@@ -9,14 +9,14 @@ use gents_loop::output_obligation::OutputObligationCheck;
 use tracing::Instrument;
 
 use super::{AgentDaemon, HandleRequestOutcome, ShutdownDrainFailure};
-use crate::admission::{self, CallKind};
 use crate::agent::loop_stream::{LoopReplayInput, TaggedMessage};
 use crate::agent::stream_processor::{processor_failure, RuntimeSeamError};
-use crate::compaction::ReductionOptions;
-use crate::config::{MaxTurnsProvenance, ResolvedAgent};
 use crate::error::LoopFailureCause;
 use crate::hook::DefraSessionHook;
-use crate::llm::message::Message;
+use crate::inference::admission::{self, CallKind};
+use crate::inference::compaction::ReductionOptions;
+use crate::inference::llm::message::Message;
+use crate::inference::resolved::{MaxTurnsProvenance, ResolvedAgent};
 use crate::streaming::StreamWriter;
 use crate::watcher::AgentRequest;
 
@@ -167,7 +167,7 @@ where
 
 impl<M> AgentDaemon<M>
 where
-    M: crate::llm::rig_compat::ProviderModel,
+    M: crate::inference::llm::rig_compat::ProviderModel,
 {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_inference(
@@ -185,7 +185,7 @@ where
         aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
         effective_seed: Option<i64>,
         mut workspace: crate::tool_call_lifecycle::runtime::ToolWorkspaceScope,
-        request_context_message: Option<crate::llm::message::Message>,
+        request_context_message: Option<crate::inference::llm::message::Message>,
         resume_from_history: bool,
         consumed_prompts: Vec<crate::agent::loop_stream::FoldedPrompt>,
         folded_prompts: Vec<crate::agent::loop_stream::FoldedPrompt>,
@@ -357,7 +357,7 @@ where
                                 crate::agent::loop_stream::replay_compaction_prefix_bound(
                                     &provider_view, &compaction_request.required,
                                 )
-                                .map_err(crate::compaction::CompactionError::from)?;
+                                .map_err(crate::inference::compaction::CompactionError::from)?;
                             let native_messages = crate::agent::loop_stream::provider_messages(
                                 provider_profile,
                                 &provider_view,
@@ -413,7 +413,7 @@ where
                                 }
                                 if result
                                     .provider_messages()
-                                    .map_err(crate::compaction::CompactionError::from)?
+                                    .map_err(crate::inference::compaction::CompactionError::from)?
                                     != provider_values
                                 {
                                     return Err(compactor_failure(
@@ -1011,11 +1011,11 @@ pub(super) mod tests {
     use crate::agent::completion_retry::CompletionRetryProfileFields;
     use crate::agent::daemon::AgentDaemonInit;
     use crate::agent::runtime::StartupBarrier;
-    use crate::config::{ResolvedAgent, SamplingConfig};
     use crate::error::LoopFailureCause;
     use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
     use crate::inference::backends::provider::BackendProviderKind;
-    use crate::llm::tool::ToolDyn;
+    use crate::inference::llm::tool::ToolDyn;
+    use crate::inference::resolved::{ResolvedAgent, SamplingConfig};
     use crate::prompt::LayeredPromptBuilder;
     use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
     use crate::tool_surface::AgentToolSurfaceConfig;
@@ -1302,7 +1302,7 @@ pub(super) mod tests {
             context_window: 8_192,
             max_output_tokens: 1_024,
             max_turns: 2,
-            max_turns_provenance: crate::config::MaxTurnsProvenance::Default,
+            max_turns_provenance: crate::inference::resolved::MaxTurnsProvenance::Default,
             system_prompt: "system".to_string(),
             tools: AgentToolSurfaceConfig::meta_only(),
             compaction: None,
@@ -1312,7 +1312,7 @@ pub(super) mod tests {
             stream_liveness_timeout: Duration::from_secs(5),
             deadline_duration: Duration::from_secs(30),
             provider_idle_timeout: Duration::from_secs(
-                crate::config::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+                crate::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
             ),
             completion_retry: CompletionRetryProfileFields::default(),
             sampling: SamplingConfig::default(),
@@ -1441,7 +1441,7 @@ pub(super) mod tests {
             request_entry, wake_frontier_message, TaggedMessage, BACKGROUND_WAKE_RESULT_FRAMING,
         };
         use crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
-        use crate::llm::message::Message;
+        use crate::inference::llm::message::Message;
 
         let notification = TaggedMessage::unassociated(Message::user(
             "<tool-completion tool_call_id=\"c1\" status=\"completed\">".to_owned(),
@@ -1475,14 +1475,20 @@ pub(super) mod tests {
         // provenance; it is never reframed and its document parts survive.
         let captured = Message::User {
             content: vec![
-                crate::llm::message::UserContent::text(BACKGROUND_COMPLETION_WAKE_PROMPT),
-                crate::llm::message::UserContent::Document(crate::llm::message::Document {
-                    data: crate::llm::message::DocumentSourceKind::String("fn main() {}".into()),
-                    media_type: Some(crate::llm::message::DocumentMediaType::TXT),
-                    additional_params: Some(
-                        serde_json::json!({ "captured_context": { "kind": "selection" } }),
-                    ),
-                }),
+                crate::inference::llm::message::UserContent::text(
+                    BACKGROUND_COMPLETION_WAKE_PROMPT,
+                ),
+                crate::inference::llm::message::UserContent::Document(
+                    crate::inference::llm::message::Document {
+                        data: crate::inference::llm::message::DocumentSourceKind::String(
+                            "fn main() {}".into(),
+                        ),
+                        media_type: Some(crate::inference::llm::message::DocumentMediaType::TXT),
+                        additional_params: Some(
+                            serde_json::json!({ "captured_context": { "kind": "selection" } }),
+                        ),
+                    },
+                ),
             ],
         };
         assert_eq!(wake_frontier_message(&captured, &notifications), captured);
@@ -1531,12 +1537,12 @@ pub(super) mod tests {
     fn retry_entry_matches_lean_frontier() {
         for case in &crate::lean_vocab_test::lean_contract_snapshot().retry_entry_cases {
             let message = |value: &serde_json::Value| {
-                use crate::llm::message::{
+                use crate::inference::llm::message::{
                     AssistantContent, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
                     UserContent,
                 };
                 let native = match value.as_u64().unwrap() {
-                    2 => crate::llm::message::Message::Assistant {
+                    2 => crate::inference::llm::message::Message::Assistant {
                         request_id: None,
                         id: None,
                         content: vec![AssistantContent::ToolCall(ToolCall {
@@ -1551,7 +1557,7 @@ pub(super) mod tests {
                             },
                         })],
                     },
-                    3 => crate::llm::message::Message::User {
+                    3 => crate::inference::llm::message::Message::User {
                         content: vec![UserContent::ToolResult(ToolResult {
                             id: "call-1".into(),
                             call_id: Some("call-1".into()),
@@ -1560,9 +1566,9 @@ pub(super) mod tests {
                             })],
                         })],
                     },
-                    4 => crate::llm::message::Message::assistant("recorded progress"),
-                    10 => crate::llm::message::Message::user(super::RETRY_CONTINUATION),
-                    _ => crate::llm::message::Message::user(value.to_string()),
+                    4 => crate::inference::llm::message::Message::assistant("recorded progress"),
+                    10 => crate::inference::llm::message::Message::user(super::RETRY_CONTINUATION),
+                    _ => crate::inference::llm::message::Message::user(value.to_string()),
                 };
                 super::TaggedMessage::unassociated(native)
             };
@@ -1575,7 +1581,7 @@ pub(super) mod tests {
             let context = (!case["context"].is_null()).then(|| message(&case["context"]).message);
             let (mut actual, prompt) = super::request_entry(
                 history,
-                &crate::llm::message::Message::user(case["authored"].to_string()),
+                &crate::inference::llm::message::Message::user(case["authored"].to_string()),
                 case["resume"].as_bool().unwrap(),
                 context.as_ref(),
                 &[],
@@ -1636,7 +1642,9 @@ pub(super) mod tests {
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+                crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                    node.clone(),
+                ),
             ),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -1820,7 +1828,9 @@ pub(super) mod tests {
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+                crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                    node.clone(),
+                ),
             ),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -2088,7 +2098,9 @@ pub(super) mod tests {
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+                crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                    node.clone(),
+                ),
             ),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -2260,7 +2272,9 @@ pub(super) mod tests {
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+                crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                    node.clone(),
+                ),
             ),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_execution_registry: BackgroundExecutionRegistry::default(),

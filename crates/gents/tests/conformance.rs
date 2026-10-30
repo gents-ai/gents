@@ -8,16 +8,16 @@ use gents::event_delivery_contract::{
     runtime_event_delivery_source_contracts, EventDeliverySourceContract,
 };
 use gents::graphql::escape_graphql_string;
-use gents::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
-use gents::llm::message::{
+use gents::inference::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
+use gents::lifecycle::{ClaimOutcome, ExecutionOrigin, TriggerLineage};
 use gents::{write_manual_agent_request, InferenceCall, RequestLifecycle};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-#[path = "../src/admission/slot_accounting.rs"]
+#[path = "../src/inference/admission/slot_accounting.rs"]
 mod admission_slot_accounting;
 #[path = "../src/lean_vocab_test/support.rs"]
 mod lean_vocab_test;

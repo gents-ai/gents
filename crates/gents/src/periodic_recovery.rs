@@ -1,9 +1,9 @@
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 
-use crate::admission::{InferenceCall, InferenceCallRecoveryReport};
+use crate::inference::admission::{InferenceCall, InferenceCallRecoveryReport};
+use crate::inference::llm::tool::BoxFuture;
 use crate::lifecycle::{RequestLifecycle, TerminalRepairReport};
-use crate::llm::tool::BoxFuture;
 use crate::tool_call_lifecycle::{
     BackgroundCompletionSideEffectReport, OrphanedBackgroundToolReport, TerminalParentToolReport,
     ToolCallLifecycle,

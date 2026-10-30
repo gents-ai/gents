@@ -11,10 +11,10 @@ use serde_json::json;
 use super::inference::tests::InterruptionCapture;
 use super::{AgentDaemon, AgentDaemonInit};
 use crate::agent::runtime::StartupBarrier;
-use crate::config::ResolvedAgent;
 use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
-use crate::llm::tool::ToolDyn;
+use crate::inference::llm::tool::ToolDyn;
+use crate::inference::resolved::ResolvedAgent;
 use crate::prompt::LayeredPromptBuilder;
 use crate::watcher::AgentRequest;
 use crate::Collection;
@@ -338,7 +338,9 @@ impl Harness {
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::rendered_request::defra_rendered_request_capture_factory(self.node.clone()),
+                crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                    self.node.clone(),
+                ),
             ),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_execution_registry: executions,

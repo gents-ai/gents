@@ -1,8 +1,8 @@
 use super::change_capture;
 use std::fmt::Write as _;
 
-use crate::llm::tool::Tool;
-use crate::llm::tool::ToolDefinition;
+use crate::inference::llm::tool::Tool;
+use crate::inference::llm::tool::ToolDefinition;
 use anyhow::{anyhow, Result};
 use serde::Serialize;
 
@@ -322,7 +322,7 @@ impl Tool for EditFileTool {
         }
     }
 
-    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+    fn into_dyn_error(error: Self::Error) -> crate::inference::llm::tool::ToolError {
         error.into_dispatch_error()
     }
 }

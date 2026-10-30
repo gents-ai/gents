@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use crate::llm::tool::Tool;
-use crate::llm::tool::ToolDefinition;
+use crate::inference::llm::tool::Tool;
+use crate::inference::llm::tool::ToolDefinition;
 use anyhow::Result;
 
 use super::args::BashArgs;
@@ -231,7 +231,7 @@ impl Tool for ReadOnlyBashTool {
         .await
     }
 
-    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+    fn into_dyn_error(error: Self::Error) -> crate::inference::llm::tool::ToolError {
         error.into_dispatch_error()
     }
 }
@@ -324,7 +324,7 @@ impl Tool for UnrestrictedBashTool {
         .await
     }
 
-    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+    fn into_dyn_error(error: Self::Error) -> crate::inference::llm::tool::ToolError {
         error.into_dispatch_error()
     }
 }
@@ -355,7 +355,7 @@ mod input_tests {
         .unwrap_err()
         .into_dispatch_error();
         match error {
-            crate::llm::tool::ToolError::ReportedFailure { class, text } => {
+            crate::inference::llm::tool::ToolError::ReportedFailure { class, text } => {
                 assert_eq!(
                     class,
                     crate::tool_call_lifecycle::FailureClass::ArgumentInvalid

@@ -238,7 +238,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_installed_wasm_plugin_gets_only_explicitly_granted_tool_calls() {
-        use crate::llm::tool::ToolDyn;
+        use crate::inference::llm::tool::ToolDyn;
         use crate::plugin::tests::executor::{asking_plugin_wat, installed_plugin};
         let request =
             json!({"tool_calls":{"requests":[{"id":"table","tool_name":"query","arguments":{}}]}});
@@ -272,7 +272,7 @@ mod tests {
 
     #[tokio::test]
     async fn receipt_records_effective_tool_service_and_exact_first_guest_input() {
-        use crate::llm::tool::ToolDyn;
+        use crate::inference::llm::tool::ToolDyn;
         use crate::plugin::tests::executor::installed_echo;
         use sha2::{Digest, Sha256};
 

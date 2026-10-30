@@ -12,7 +12,7 @@ use axum::{
 };
 use gents::defra_node::{EmbeddedNode, StorageBackend};
 use gents::ensure_runtime_schemas;
-use gents::rendered_request::RenderedCompletionRequest;
+use gents::inference::rendered_request::RenderedCompletionRequest;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -601,10 +601,11 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
     let mut first_capture_key = String::new();
     for turn in 0..2usize {
         let capture_scope = "inference.1".to_string();
-        let assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
-            gents::rendered_request::AssemblyBuildPath::Budgeted,
-            Vec::new(),
-        );
+        let assembly_trace =
+            gents::inference::rendered_request::AssemblyTrace::from_effective_messages(
+                gents::inference::rendered_request::AssemblyBuildPath::Budgeted,
+                Vec::new(),
+            );
         let mut payload = serde_json::to_value(&assembly_trace)?;
         payload["threaded_tool_results"] = json!([{
             "tool_call_id": "native-result",
@@ -612,7 +613,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
             "padding": "p".repeat(4096 + turn * 512)
         }]);
         let rendered = RenderedCompletionRequest {
-            capture_key: gents::rendered_request::capture_key(
+            capture_key: gents::inference::rendered_request::capture_key(
                 "did:test:amy",
                 "session-cap-v2",
                 "",
@@ -620,7 +621,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
                 turn,
                 0,
             )?,
-            capture_version: gents::rendered_request::CAPTURE_VERSION,
+            capture_version: gents::inference::rendered_request::CAPTURE_VERSION,
             request_doc_id: String::new(),
             request_commit_cid: String::new(),
             request_id: "req-cap-v2".into(),
@@ -632,7 +633,8 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
             agent_id: "amy".into(),
             session_id: "session-cap-v2".into(),
             model_name: "test-model".into(),
-            source: gents::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
+            source:
+                gents::inference::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
             request_json: json!({
                 "model":"test-model",
                 "messages":[{"role":"user","content":"x".repeat(8192 + turn * 512)}]
@@ -642,7 +644,7 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
             tool_choice_json: Value::Null,
             sampling_json: Value::Null,
             provenance_json: serde_json::to_value(
-                gents::rendered_request::ProvenanceManifest::captured_only(
+                gents::inference::rendered_request::ProvenanceManifest::captured_only(
                     capture_scope,
                     None,
                     None,
@@ -655,8 +657,9 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
         if turn == 0 {
             first_capture_key = rendered.capture_key.clone();
         }
-        let canonical_provenance =
-            gents::rendered_request::canonical_json_string(&rendered.provenance_payload_json)?;
+        let canonical_provenance = gents::inference::rendered_request::canonical_json_string(
+            &rendered.provenance_payload_json,
+        )?;
         if turn == 0 {
             let container = json!({
                 "gents_capture_json": 1,
@@ -771,8 +774,8 @@ async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
 
 async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<()> {
     let capture_scope = "inference.1".to_string();
-    let assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
-        gents::rendered_request::AssemblyBuildPath::Budgeted,
+    let assembly_trace = gents::inference::rendered_request::AssemblyTrace::from_effective_messages(
+        gents::inference::rendered_request::AssemblyBuildPath::Budgeted,
         Vec::new(),
     );
     let mut provenance_payload = serde_json::to_value(&assembly_trace)?;
@@ -781,9 +784,9 @@ async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<
         "native_tool_output": {"ok": true, "exit_code": 3},
         "padding": "q".repeat(6 * 1024)
     }]);
-    let sink = gents::rendered_request::DefraRenderedRequestSink::new(Arc::clone(node));
+    let sink = gents::inference::rendered_request::DefraRenderedRequestSink::new(Arc::clone(node));
     sink.capture(RenderedCompletionRequest {
-        capture_key: gents::rendered_request::capture_key(
+        capture_key: gents::inference::rendered_request::capture_key(
             "did:test:amy",
             "session-cap-manifest",
             "",
@@ -791,7 +794,7 @@ async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<
             0,
             0,
         )?,
-        capture_version: gents::rendered_request::CAPTURE_VERSION,
+        capture_version: gents::inference::rendered_request::CAPTURE_VERSION,
         request_doc_id: String::new(),
         request_commit_cid: String::new(),
         request_id: "req-cap-manifest".into(),
@@ -803,7 +806,7 @@ async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<
         agent_id: "amy".into(),
         session_id: "session-cap-manifest".into(),
         model_name: "test-model".into(),
-        source: gents::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
+        source: gents::inference::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
         request_json: json!({
             "model": "test-model",
             "messages": [{"role": "user", "content": "manifest capture"}]
@@ -813,7 +816,7 @@ async fn seed_manifest_rendered_request_row(node: &Arc<EmbeddedNode>) -> Result<
         tool_choice_json: Value::Null,
         sampling_json: Value::Null,
         provenance_json: serde_json::to_value(
-            gents::rendered_request::ProvenanceManifest::captured_only(
+            gents::inference::rendered_request::ProvenanceManifest::captured_only(
                 capture_scope,
                 None,
                 None,

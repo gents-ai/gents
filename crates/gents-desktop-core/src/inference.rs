@@ -83,7 +83,7 @@ pub fn backend_config_view(
         BackendAuth::AwsCredentials { .. } => ("aws_credentials", false, None),
         BackendAuth::GoogleCredentials { .. } => ("google_credentials", false, None),
     };
-    let advertised_models = match gents::config::backend_catalog(row, observation) {
+    let advertised_models = match gents::inference::resolved::backend_catalog(row, observation) {
         Ok(catalog) => catalog,
         Err(error) => {
             tracing::warn!(backend_id = %row.backend_id, node_did = %row.node_did,
@@ -229,7 +229,8 @@ pub fn fast_mode_backend_ids(backends: &[InferenceBackendView]) -> Vec<String> {
         .filter_map(|backend| {
             let kind = gents::BackendProviderKind::parse_optional(backend.provider_kind.as_deref())
                 .ok()?;
-            gents::config::supports_service_tier(kind).then(|| backend.backend_id.clone())
+            gents::inference::resolved::supports_service_tier(kind)
+                .then(|| backend.backend_id.clone())
         })
         .collect()
 }

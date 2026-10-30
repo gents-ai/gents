@@ -1,10 +1,10 @@
-use crate::llm::message::Message;
+use crate::inference::llm::message::Message;
 #[cfg(test)]
-use crate::llm::message::{Text, UserContent};
+use crate::inference::llm::message::{Text, UserContent};
 use anyhow::Result;
 use gents_loop::loop_stream::TaggedMessage;
 
-use crate::config::ResolvedAgent;
+use crate::inference::resolved::ResolvedAgent;
 use crate::tool_surface::ToolSurface;
 
 const TITLE_GENERATION_SUFFIX: &str = "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.";

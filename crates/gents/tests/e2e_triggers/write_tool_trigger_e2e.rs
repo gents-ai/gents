@@ -5,7 +5,7 @@ use gents::defra_node::EmbeddedNode;
 use gents::defra_write::BoundedWriteTool;
 use gents::document_config::{WriteToolDecl, WriteToolField};
 use gents::graphql::escape_graphql_string;
-use gents::llm::tool::Tool;
+use gents::inference::llm::tool::Tool;
 use gents::{Collection, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};

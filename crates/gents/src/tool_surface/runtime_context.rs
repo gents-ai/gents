@@ -9,7 +9,7 @@ use crate::NodeIdentity;
 
 #[derive(Clone)]
 pub struct ToolRuntimeContext {
-    pub(crate) usage_cache: Arc<crate::usage_observation::UsageCache>,
+    pub(crate) usage_cache: Arc<crate::inference::usage_observation::UsageCache>,
     pub(super) node: Arc<EmbeddedNode>,
     pub(super) mcp_pool: McpPool,
     pub(crate) lsp_pool: LspPool,
@@ -82,7 +82,10 @@ impl ToolRuntimeContext {
         }
     }
 
-    pub fn with_usage_cache(mut self, cache: Arc<crate::usage_observation::UsageCache>) -> Self {
+    pub fn with_usage_cache(
+        mut self,
+        cache: Arc<crate::inference::usage_observation::UsageCache>,
+    ) -> Self {
         self.usage_cache = cache;
         self
     }

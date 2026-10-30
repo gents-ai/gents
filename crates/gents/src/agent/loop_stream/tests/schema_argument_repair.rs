@@ -130,7 +130,7 @@ async fn generated_schema_argument_repair_cases_drive_owned_loop() {
         .unwrap()
         .chat_history
         .iter()
-        .map(crate::llm::rig_compat::from_rig_message)
+        .map(crate::inference::llm::rig_compat::from_rig_message)
         .filter_map(|message| match message {
             Message::Assistant { content, .. } => Some(content),
             _ => None,

@@ -267,7 +267,7 @@ async fn notification_updates_reject_route_policy_and_terminal_races() {
 
 #[tokio::test]
 async fn content_tool_stamps_current_request_and_reuses_configured_condition() {
-    use crate::llm::tool::Tool;
+    use crate::inference::llm::tool::Tool;
     use crate::tool_call_lifecycle::runtime::{
         scope_request_tool_execution, scope_tool_request_identity,
     };
@@ -399,7 +399,7 @@ async fn provenance_keeps_execution_owner_resolved_selection() {
 
 #[tokio::test]
 async fn question_files_an_ask_whatever_the_surface_policy_and_refuses_invalid_payloads() {
-    use crate::llm::tool::Tool;
+    use crate::inference::llm::tool::Tool;
     use crate::tool_call_lifecycle::runtime::{
         scope_request_tool_execution, scope_tool_request_identity,
     };

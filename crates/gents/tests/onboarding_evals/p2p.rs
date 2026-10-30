@@ -7,7 +7,7 @@ use gents::config_client::{apply_desired_state_plan, ConfigAccess, DesiredStateA
 use gents::document_config::{DatastoreTools, InferenceSampling};
 use gents::eval::runner::embedded::EmbeddedHome;
 use gents::graphql::escape_graphql_string;
-use gents::llm::tool::Tool;
+use gents::inference::llm::tool::Tool;
 use gents::p2p_tool::P2pTool;
 use gents::pack::{load_pack_config, PackInstallOptions, PackManifest};
 use gents::tool_surface::ToolRuntimeContext;
@@ -296,7 +296,7 @@ async fn engineer_p2p_live_comparison() -> Result<()> {
             gents::default_inference_profile_id_for_agent(&target_ids.1);
         let mut profile = target.profile(&did);
         profile.profile_id = config.agents[0].inference_profile_id.clone();
-        profile.reasoning_effort = Some(gents::config::ReasoningEffort::High);
+        profile.reasoning_effort = Some(gents::inference::resolved::ReasoningEffort::High);
         profile.sampling_id = Some("p2p-eval-sampling".into());
         config.inference_profiles = vec![profile];
         config.inference_sampling = vec![InferenceSampling {

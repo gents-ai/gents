@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use crate::llm::message::Message;
+use crate::inference::llm::message::Message;
 use gents_loop::claude_messages_body::{prepare_replay_checkpoint, ReplayTag, TaggedAssistantRow};
 use gents_loop::loop_stream::TaggedMessage;
 
@@ -393,7 +393,7 @@ pub fn reduction_key(
     turn_index: usize,
     reduction_index: usize,
 ) -> Result<String> {
-    let digest = crate::rendered_request::sha256_canonical_json(&json!([
+    let digest = crate::inference::rendered_request::sha256_canonical_json(&json!([
         node_did,
         session_id,
         request_doc_id,
@@ -493,7 +493,7 @@ pub(crate) fn stage(
         input.request_doc_id,
         input.request_commit_cid,
     )?;
-    let pair_closed = crate::compaction::pair_safe_boundary(
+    let pair_closed = crate::inference::compaction::pair_safe_boundary(
         &[
             input.compacted_prefix.to_vec(),
             input.retained_suffix.to_vec(),
@@ -731,14 +731,20 @@ async fn load_by_key(
 }
 
 async fn hydrate_rows(node: &EmbeddedNode, rows: &mut Vec<ProviderContextReduction>) -> Result<()> {
-    let mut cache = crate::rendered_request::CaptureReadCache::default();
+    let mut cache = crate::inference::rendered_request::CaptureReadCache::default();
     for row in rows {
-        row.compacted_prefix_json =
-            crate::rendered_request::load_shared_json(node, &row.compacted_prefix_json, &mut cache)
-                .await?;
-        row.retained_suffix_json =
-            crate::rendered_request::load_shared_json(node, &row.retained_suffix_json, &mut cache)
-                .await?;
+        row.compacted_prefix_json = crate::inference::rendered_request::load_shared_json(
+            node,
+            &row.compacted_prefix_json,
+            &mut cache,
+        )
+        .await?;
+        row.retained_suffix_json = crate::inference::rendered_request::load_shared_json(
+            node,
+            &row.retained_suffix_json,
+            &mut cache,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -777,17 +783,17 @@ impl IntendedReduction {
             session_id: input.session_id.to_string(),
             request_id: input.request_id.to_string(),
             request_doc_id: input.request_doc_id.to_string(),
-            source_boundary_json: crate::rendered_request::canonical_json_string(
+            source_boundary_json: crate::inference::rendered_request::canonical_json_string(
                 &serde_json::to_value(input.source_boundary)?,
             )?,
-            compacted_prefix_json: crate::rendered_request::canonical_json_string(
+            compacted_prefix_json: crate::inference::rendered_request::canonical_json_string(
                 &serde_json::to_value(input.compacted_prefix)?,
             )?,
-            retained_suffix_json: crate::rendered_request::canonical_json_string(
+            retained_suffix_json: crate::inference::rendered_request::canonical_json_string(
                 &serde_json::to_value(input.retained_suffix)?,
             )?,
             checkpoint_messages_json: encode_checkpoint(input.checkpoint_messages, input.summary)?,
-            replay_associations_json: crate::rendered_request::canonical_json_string(
+            replay_associations_json: crate::inference::rendered_request::canonical_json_string(
                 &serde_json::to_value(input.replay_associations)?,
             )?,
             request_commit_cid: input.request_commit_cid.to_string(),
@@ -920,7 +926,7 @@ fn validate_recoverable_rows(rows: &[ProviderContextReduction]) -> Result<()> {
             .context("decoding ProviderContextReduction retained_suffix_json")?;
         let split = prefix.len();
         let source = [prefix.as_slice(), suffix.as_slice()].concat();
-        if crate::compaction::pair_safe_boundary(&source, split) != split {
+        if crate::inference::compaction::pair_safe_boundary(&source, split) != split {
             anyhow::bail!(
                 "ProviderContextReduction {} stored a split through a tool-call/result pair",
                 row.reduction_key
@@ -1021,7 +1027,7 @@ enum StoredCheckpoint {
 
 fn encode_checkpoint(checkpoint: &[Message], summary: &str) -> Result<String> {
     let prefix_len = usize::from(!summary.trim().is_empty());
-    Ok(crate::rendered_request::canonical_json_string(
+    Ok(crate::inference::rendered_request::canonical_json_string(
         &serde_json::to_value(CheckpointPrefix {
             version: 1,
             prefix: checkpoint
@@ -1120,7 +1126,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::llm::message::{
+    use crate::inference::llm::message::{
         AssistantContent, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent, UserContent,
     };
 

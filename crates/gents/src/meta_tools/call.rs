@@ -1,5 +1,5 @@
-use crate::llm::tool::Tool;
-use crate::llm::tool::ToolDefinition;
+use crate::inference::llm::tool::Tool;
+use crate::inference::llm::tool::ToolDefinition;
 use anyhow::{anyhow, Context as _};
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -39,7 +39,7 @@ pub(crate) fn selected_tool_identity(tool_name: &str, args: &str) -> Option<(Str
     if tool_name != CALL_TOOL_NAME {
         return None;
     }
-    let args = crate::llm::tool::parse_tool_args::<CallToolArgs>(args).ok()?;
+    let args = crate::inference::llm::tool::parse_tool_args::<CallToolArgs>(args).ok()?;
     if args.service_id.trim().is_empty() || args.tool_name.trim().is_empty() {
         return None;
     }
@@ -188,7 +188,7 @@ impl Tool for CallToolTool {
         Ok(capped)
     }
 
-    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+    fn into_dyn_error(error: Self::Error) -> crate::inference::llm::tool::ToolError {
         error.into_dispatch_error()
     }
 }

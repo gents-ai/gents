@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::config::ResolvedAgent;
+use crate::inference::resolved::ResolvedAgent;
 use crate::store::identity::RuntimeNode;
 
 #[derive(Debug)]

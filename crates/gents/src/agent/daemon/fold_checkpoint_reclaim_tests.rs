@@ -49,7 +49,7 @@ async fn create_user_message(
 async fn authored_user_entries(
     node: &Arc<defra_node::EmbeddedNode>,
     request: &AgentRequest,
-) -> Vec<(String, crate::llm::message::Message)> {
+) -> Vec<(String, crate::inference::llm::message::Message)> {
     let response = node
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }}, role: {{ _eq: "user" }} }}, order: {{ sequence: ASC }}) {{ _docID message_key }} }}"#,
@@ -145,7 +145,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         ];
         for (key, content) in input.iter().take(published_before_crash) {
             writer
-                .publish_authored_message(&first, key, &crate::llm::message::Message::user(content))
+                .publish_authored_message(&first, key, &crate::inference::llm::message::Message::user(content))
                 .await
                 .unwrap();
         }
@@ -161,12 +161,12 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             )
             .await
             .unwrap();
-            let prefix = vec![crate::llm::message::Message::user(
+            let prefix = vec![crate::inference::llm::message::Message::user(
                 "an earlier, larger history",
             )];
             let suffix = vec![
-                crate::llm::message::Message::user(head.content.clone()),
-                crate::llm::message::Message::user(folded.content.clone()),
+                crate::inference::llm::message::Message::user(head.content.clone()),
+                crate::inference::llm::message::Message::user(folded.content.clone()),
             ];
             let row = |_| crate::provider_context_reduction::ReplayRowAssociation {
                 source: None,
@@ -252,7 +252,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+                crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
             ),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -292,7 +292,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                 .iter()
                 .map(|(key, content)| (
                     crate::session::canonical_rows::authored_message_key(&head.doc_id, key),
-                    crate::llm::message::Message::user(content.clone()),
+                    crate::inference::llm::message::Message::user(content.clone()),
                 ))
                 .collect::<Vec<_>>(),
             "{case}: each authored key exactly once with its admitted content"
@@ -394,7 +394,7 @@ async fn scripted_daemon(
         prompt_builder,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -482,7 +482,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
                 .publish_authored_message(
                     &failed,
                     "prompt",
-                    &crate::llm::message::Message::user(parent.content.clone()),
+                    &crate::inference::llm::message::Message::user(parent.content.clone()),
                 )
                 .await
                 .unwrap();

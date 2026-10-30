@@ -133,7 +133,7 @@ pub struct MaterializedAgentSession {
     pub tool_names: Vec<String>,
     pub backend_id: String,
     pub model: String,
-    pub effort: Option<crate::config::ReasoningEffort>,
+    pub effort: Option<crate::inference::resolved::ReasoningEffort>,
 }
 
 pub fn materialize_agent(

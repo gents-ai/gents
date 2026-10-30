@@ -13,7 +13,7 @@ use thiserror::Error;
 
 use crate::inference::auth::credential::BearerSource;
 use crate::inference::clients::claude_subscription::ClaudeStreamResponse;
-use crate::rendered_request::RenderedRequestCapturingHttpClient;
+use crate::inference::rendered_request::RenderedRequestCapturingHttpClient;
 
 #[cfg(test)]
 pub(crate) mod fixtures;
@@ -104,7 +104,7 @@ pub async fn stream_messages<S>(
     surface: RapidHashSet<String>,
     bearer: &S,
     http: &ReqwestClient,
-    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
+    usage: Option<Arc<crate::inference::usage_observation::UsageReporter>>,
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
     CompletionError,
@@ -122,7 +122,7 @@ pub(crate) async fn stream_messages_at<S>(
     surface: RapidHashSet<String>,
     bearer: &S,
     http: &ReqwestClient,
-    usage: Option<Arc<crate::usage_observation::UsageReporter>>,
+    usage: Option<Arc<crate::inference::usage_observation::UsageReporter>>,
 ) -> Result<
     impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>,
     CompletionError,

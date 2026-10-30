@@ -1,9 +1,11 @@
 pub use gents_loop::loop_stream::*;
 
 #[cfg(test)]
-use crate::llm::rig_compat;
+use crate::inference::llm::rig_compat;
 #[cfg(test)]
-use crate::rendered_request::{AssemblyBuildPath, AssemblyTrace, ContextCompactionReason};
+use crate::inference::rendered_request::{
+    AssemblyBuildPath, AssemblyTrace, ContextCompactionReason,
+};
 #[cfg(test)]
 use rig::agent::StreamingError;
 #[cfg(test)]

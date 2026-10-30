@@ -35,7 +35,7 @@ pub async fn build_meta_tools(
     node_did: String,
     allowed_mcp_service_ids: Vec<String>,
     remote_tools: crate::document_config::RemoteTools,
-) -> anyhow::Result<Vec<Box<dyn crate::llm::tool::ToolDyn>>> {
+) -> anyhow::Result<Vec<Box<dyn crate::inference::llm::tool::ToolDyn>>> {
     let ctx = MetaToolContext {
         node,
         mcp_pool: mcp_pool.for_agent(&node_did),
@@ -46,7 +46,7 @@ pub async fn build_meta_tools(
         allowed_mcp_service_ids,
         remote_tools,
     };
-    let mut tools: Vec<Box<dyn crate::llm::tool::ToolDyn>> = Vec::new();
+    let mut tools: Vec<Box<dyn crate::inference::llm::tool::ToolDyn>> = Vec::new();
     let mut discovery = false;
     for selection in &ctx.remote_tools.services {
         if selection.tool_names.is_empty()
@@ -82,7 +82,7 @@ pub async fn build_meta_tools(
                 "duplicate flat MCP tool {name}"
             );
             tools.push(Box::new(flat::FlatRemoteTool {
-                definition: crate::llm::tool::ToolDefinition {
+                definition: crate::inference::llm::tool::ToolDefinition {
                     name,
                     description: format!(
                         "{} (service {}, tool {})",

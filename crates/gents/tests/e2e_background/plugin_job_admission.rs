@@ -3,7 +3,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use gents::llm::message::{Message, Text, ToolResultContent, UserContent};
+use gents::inference::llm::message::{Message, Text, ToolResultContent, UserContent};
 use gents::plugin_job::job::{
     JobChildState, JobReadError, JobSpawn, JobState, JobStepOutput, JobView,
 };

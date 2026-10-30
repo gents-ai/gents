@@ -76,7 +76,7 @@ fn tool_config(categories: &[&str], no_lockout: bool, preview: bool) -> SelfConf
 }
 
 async fn call_tool(
-    tools: &[Box<dyn gents::llm::tool::ToolDyn>],
+    tools: &[Box<dyn gents::inference::llm::tool::ToolDyn>],
     name: &str,
     args: Value,
 ) -> Result<String, String> {

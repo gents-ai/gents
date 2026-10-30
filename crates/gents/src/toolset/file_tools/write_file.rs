@@ -1,8 +1,8 @@
 use super::change_capture;
 use std::path::Path;
 
-use crate::llm::tool::Tool;
-use crate::llm::tool::ToolDefinition;
+use crate::inference::llm::tool::Tool;
+use crate::inference::llm::tool::ToolDefinition;
 use anyhow::{anyhow, Result};
 use serde::Serialize;
 
@@ -217,7 +217,7 @@ impl Tool for WriteFileTool {
         )?)
     }
 
-    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+    fn into_dyn_error(error: Self::Error) -> crate::inference::llm::tool::ToolError {
         error.into_dispatch_error()
     }
 }

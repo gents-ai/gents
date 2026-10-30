@@ -3,11 +3,11 @@ use std::time::Duration;
 
 use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
+use gents::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents::lifecycle::{
     pending_steer_edit, pending_user_queue, submit_pending_user_edit, submit_pending_user_steer,
     PendingMessageEdit, PendingQueueEdit,
 };
-use gents::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents::{Gents, NodeIdentity};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::config::ReasoningEffort;
 use crate::inference::backends::provider::BackendProviderKind;
+use crate::inference::resolved::ReasoningEffort;
 use crate::openai_wire::OpenAiWireApi;
 pub use gents_loop::claude_platform::ClaudePlatform;
 

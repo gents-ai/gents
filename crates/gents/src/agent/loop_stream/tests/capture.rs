@@ -459,8 +459,8 @@ async fn capture_seam_reports_the_repair_build_path_from_the_first_poll_branch()
 /// must fail the turn. `ScriptedModel` stands in for exactly that mis-wiring.
 #[tokio::test(start_paused = true)]
 async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
-    use crate::rendered_request::scope::{scope_request, test_scope, CaptureScopeKind};
-    use crate::rendered_request::{RenderedRequestCaptureSink, RenderedRequestContext};
+    use crate::inference::rendered_request::scope::{scope_request, test_scope, CaptureScopeKind};
+    use crate::inference::rendered_request::{RenderedRequestCaptureSink, RenderedRequestContext};
 
     for (request_id, session_id, choices) in [
         (
@@ -493,7 +493,7 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
 
         let mut loop_config = config(0);
         loop_config.on_rendered_request = Some(
-            crate::rendered_request::scope::ambient_arming_sink(CaptureScopeKind::Inference),
+            crate::inference::rendered_request::scope::ambient_arming_sink(CaptureScopeKind::Inference),
         );
 
         let collected = scope_request(scope, async {
@@ -527,8 +527,8 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
 #[tokio::test]
 async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
     use crate::graphql::escape_graphql_string;
-    use crate::rendered_request::capture_key as derive_capture_key;
-    use crate::rendered_request::{
+    use crate::inference::rendered_request::capture_key as derive_capture_key;
+    use crate::inference::rendered_request::{
         DefraRenderedRequestSink, ProvenanceManifest, RenderedRequestSource, CAPTURE_VERSION,
     };
 
@@ -557,16 +557,16 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
         let sink = DefraRenderedRequestSink::new(node.clone());
 
         let rendered_for_witness =
-            |witness: u64| -> crate::rendered_request::RenderedCompletionRequest {
+            |witness: u64| -> crate::inference::rendered_request::RenderedCompletionRequest {
                 let node_did = format!("did:key:z6Mk-sink-{}", case.node_did);
                 let session_id = format!("session-{}", case.session_id);
                 let request_doc_id = format!("bae-request-doc-{}", case.request_id);
                 let assembly_trace =
-                    crate::rendered_request::AssemblyTrace::from_effective_messages(
-                        crate::rendered_request::AssemblyBuildPath::Budgeted,
+                    crate::inference::rendered_request::AssemblyTrace::from_effective_messages(
+                        crate::inference::rendered_request::AssemblyBuildPath::Budgeted,
                         Vec::new(),
                     );
-                crate::rendered_request::RenderedCompletionRequest {
+                crate::inference::rendered_request::RenderedCompletionRequest {
                     capture_key: derive_capture_key(
                         &node_did,
                         &session_id,
@@ -641,11 +641,11 @@ async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
                 .and_then(|value| u32::try_from(value).ok())
                 .expect("numeric capture version");
             Some(
-                crate::rendered_request::decode_capture_json_embedded(
+                crate::inference::rendered_request::decode_capture_json_embedded(
                     node.as_ref(),
                     version,
                     row["request_json"].as_str().expect("request_json string"),
-                    crate::rendered_request::CapturePayloadKind::RequestBody,
+                    crate::inference::rendered_request::CapturePayloadKind::RequestBody,
                 )
                 .await
                 .expect("stored request_json decodes"),

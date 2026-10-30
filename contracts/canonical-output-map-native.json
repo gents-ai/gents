@@ -143,13 +143,13 @@
       "native_owner_paths": [
         "crates/gents/src/provider_input.rs",
         "crates/gents-loop/src/provider_input_budget.rs",
-        "crates/gents/src/compaction.rs",
+        "crates/gents/src/inference/compaction.rs",
         "crates/gents/src/agent/daemon/request.rs",
         "crates/gents-loop/src/loop_stream/request_assembly.rs"
       ],
       "consumer_paths": [
         "crates/gents/src/provider_input/tests.rs",
-        "crates/gents/src/compaction/tests.rs",
+        "crates/gents/src/inference/compaction/tests.rs",
         "crates/gents/tests/conformance/compaction_gate.rs",
         "crates/gents/tests/e2e_runtime/rendered_request_capture.rs"
       ],

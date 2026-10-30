@@ -6,11 +6,11 @@ use gents::config_client::{
     apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use gents::graphql::escape_graphql_string;
+use gents::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
+use gents::inference::rendered_request::{decode_capture_json, CapturePayloadKind};
 use gents::lifecycle::{
     pending_user_queue, submit_pending_user_edit, PendingMessageEdit, PendingQueueEdit,
 };
-use gents::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
-use gents::rendered_request::{decode_capture_json, CapturePayloadKind};
 use gents::{Collection, Gents, ReasoningEffort, SamplingConfig, ToolCeiling};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,

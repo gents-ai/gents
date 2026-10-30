@@ -1,6 +1,6 @@
 use defra_node::EmbeddedNode;
 
-use crate::admission::{InferenceCall, InferenceCallRecoveryReport};
+use crate::inference::admission::{InferenceCall, InferenceCallRecoveryReport};
 use crate::lifecycle::{RecoveryReport, RequestLifecycle};
 use crate::tool_call_lifecycle::{ToolCallLifecycle, ToolCallRecoveryReport};
 

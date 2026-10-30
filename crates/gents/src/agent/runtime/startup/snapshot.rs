@@ -4,8 +4,8 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use tracing::Instrument;
 
-use crate::admission::BackendAdmissionConfig;
 use crate::agent::{DocumentResolveContext, Gents};
+use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::backends::registry;
 use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
 use crate::tool_surface::{ToolRuntimeContext, ToolSurface};
@@ -126,7 +126,7 @@ pub(in crate::agent::runtime) async fn validate_startup_snapshot(
 
 async fn resolve_tool_surfaces(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
-    agents: &[Arc<crate::config::ResolvedAgent>],
+    agents: &[Arc<crate::inference::resolved::ResolvedAgent>],
     plugins: &crate::plugin::executor::PluginExecutor,
 ) -> Result<RapidHashMap<String, Arc<ToolSurface>>> {
     let mut tool_surfaces = RapidHashMap::with_capacity(agents.len());
@@ -167,7 +167,7 @@ pub(in crate::agent::runtime) async fn resolve_startup_snapshot(
 
 async fn resolve_backend_admission_configs(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
-    agents: &[Arc<crate::config::ResolvedAgent>],
+    agents: &[Arc<crate::inference::resolved::ResolvedAgent>],
 ) -> Result<RapidHashMap<String, BackendAdmissionConfig>> {
     let mut configs = RapidHashMap::new();
     for agent in agents {
