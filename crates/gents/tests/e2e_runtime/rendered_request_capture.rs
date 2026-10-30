@@ -2893,7 +2893,12 @@ async fn upsert_capture_backend(node: &Arc<EmbeddedNode>, owner: &str, endpoint:
     })
     .await
     .unwrap();
-    gents::backend_registry::set_backend_probe_status(node, owner, CAPTURE_BACKEND_ID, "healthy")
-        .await
-        .unwrap();
+    gents::inference::backends::registry::set_backend_probe_status(
+        node,
+        owner,
+        CAPTURE_BACKEND_ID,
+        "healthy",
+    )
+    .await
+    .unwrap();
 }

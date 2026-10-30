@@ -103,8 +103,10 @@ pub(crate) async fn load_document_runtime_view(
     )
     .await?;
     for backend_id in view.backends.keys() {
-        if let Some(observation) =
-            crate::backend_registry::lookup_backend_observation(node, node_did, backend_id).await?
+        if let Some(observation) = crate::inference::backends::registry::lookup_backend_observation(
+            node, node_did, backend_id,
+        )
+        .await?
         {
             view.backend_observations
                 .insert(backend_id.clone(), observation);
@@ -200,7 +202,7 @@ where
             .with_context(|| format!("{name} missing logical key"))?
             .to_owned();
         if collection == Collection::InferenceBackend {
-            if let Some(kind) = crate::backend_registry::unknown_provider_kind(&row) {
+            if let Some(kind) = crate::inference::backends::registry::unknown_provider_kind(&row) {
                 tracing::warn!(
                     backend_id = id,
                     provider_kind = kind,

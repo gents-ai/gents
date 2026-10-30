@@ -230,7 +230,7 @@ async fn read_grok_sends_identity_headers_and_credits_query() {
     let cache = UsageCache::default();
     let did = "did:key:z6MkUsageReadGrok";
     let node = node().await;
-    let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+    let provider = crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
     sign_in(&node, did, provider, Utc::now() + Duration::hours(1), None).await;
     let (url, handle) = test_support::one_shot_token_server(
         200,
@@ -423,7 +423,7 @@ async fn read_claude_on_refresh_sends_the_oauth_beta() {
     assert!(
         request.to_ascii_lowercase().contains(&format!(
             "anthropic-beta: {}",
-            crate::claude_messages::OAUTH_BETA
+            crate::inference::clients::claude_messages::OAUTH_BETA
         )),
         "{request}"
     );
@@ -831,7 +831,7 @@ async fn read_guard_unresolvable_key_is_unavailable_with_no_request() {
     never_called(handle).await;
 }
 
-const GROK: &str = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+const GROK: &str = crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
 const CLAUDE: &str = crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 const GROK_BILLING_BODY: &str = r#"{"config":{"creditUsagePercent":30,"currentPeriod":{"start":"2100-01-01T00:00:00Z","end":"2100-01-08T00:00:00Z"}}}"#;
 
@@ -1048,7 +1048,13 @@ async fn node_read_disabled_backend_does_not_hide_the_account() {
         ],
     )
     .await;
-    let url = crate::provider_http::tests::server_for(2, "200 OK", &[], GROK_BILLING_BODY).await;
+    let url = crate::inference::clients::provider_http::tests::server_for(
+        2,
+        "200 OK",
+        &[],
+        GROK_BILLING_BODY,
+    )
+    .await;
 
     let reads = node_read(
         &cache,
@@ -1083,7 +1089,13 @@ async fn node_read_reads_an_enabled_account_no_backend_names() {
         )],
     )
     .await;
-    let url = crate::provider_http::tests::server_for(2, "200 OK", &[], GROK_BILLING_BODY).await;
+    let url = crate::inference::clients::provider_http::tests::server_for(
+        2,
+        "200 OK",
+        &[],
+        GROK_BILLING_BODY,
+    )
+    .await;
 
     let reads = node_read(
         &cache,

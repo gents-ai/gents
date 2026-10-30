@@ -351,7 +351,7 @@ If you receive a message STEERING_NOTE, do not call any tool for it; append STEE
     )
     .await;
 
-    gents::backend_registry::probe_and_promote_enabled_backends(&db.node).await;
+    gents::inference::backends::registry::probe_and_promote_enabled_backends(&db.node).await;
     let loaded_agent = Gents::from_default_agent_documents(
         db.node.clone(),
         identity,

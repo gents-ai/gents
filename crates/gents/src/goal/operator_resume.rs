@@ -331,7 +331,10 @@ async fn stage_resume_inner(
             "target backend {target_backend_id:?} is disabled"
         );
         if let Some(pick) = backend.auth.account_pick() {
-            use crate::backend_provider::BackendProviderOauthExt;
+            use crate::inference::backends::provider::BackendProviderOauthExt;
+=======
+        if let crate::document_config::BackendAuth::NodeOAuth { account_ref } = &backend.auth {
+            use crate::inference::backends::provider::BackendProviderOauthExt;
             let provider = backend
                 .provider_kind
                 .oauth_provider()

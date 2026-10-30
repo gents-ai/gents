@@ -100,7 +100,9 @@ pub(super) async fn insert_backend(
     )
     .await
     .unwrap();
-    crate::backend_registry::set_backend_probe_status(node, node_did, backend_id, "healthy")
-        .await
-        .unwrap();
+    crate::inference::backends::registry::set_backend_probe_status(
+        node, node_did, backend_id, "healthy",
+    )
+    .await
+    .unwrap();
 }

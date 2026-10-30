@@ -422,7 +422,7 @@ async fn from_default_agent_documents_filters_inactive_agent_targets() {
         &DocumentResolveContext::for_tests(
             identity,
             ToolCeiling::readonly(),
-            crate::backend_health::BackendHealthMap::new(),
+            crate::inference::backends::health::BackendHealthMap::new(),
         ),
     )
     .await
@@ -580,7 +580,7 @@ async fn from_default_agent_documents_loads_runnable_agents_and_tracks_unavailab
 }
 
 async fn set_probe_status(node: &Arc<EmbeddedNode>, did: &str, backend_id: &str, status: &str) {
-    crate::backend_registry::set_backend_probe_status(node, did, backend_id, status)
+    crate::inference::backends::registry::set_backend_probe_status(node, did, backend_id, status)
         .await
         .unwrap();
 }

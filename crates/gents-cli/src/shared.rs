@@ -331,7 +331,7 @@ pub(crate) async fn load_backend_observation(
         rows.len() == 1,
         "backend observation is missing or ambiguous"
     );
-    gents::backend_registry::decode_backend_observation(rows[0].clone())
+    gents::inference::backends::registry::decode_backend_observation(rows[0].clone())
 }
 
 #[cfg(test)]

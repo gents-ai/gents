@@ -1,9 +1,9 @@
 use std::io::{IsTerminal, Write};
 
 use anyhow::{Context, Result};
-use gents::backend_provider::BackendProviderOauthExt;
 use gents::document_config::InferenceProfile;
 use gents::inference::auth::credential::{backend_account, AccountSummary};
+use gents::inference::backends::provider::BackendProviderOauthExt;
 use gents::usage_observation::{usage_view, AccountUsageRead, UsageRead, UsageTrigger, UsageView};
 use gents::{BackendProviderKind, InferenceBackend};
 use serde::{Deserialize, Serialize};

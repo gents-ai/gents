@@ -412,7 +412,7 @@ async fn maybe_inline_grok_login(
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return InlineGrokLoginState::Unauthenticated;
     }
-    let provider = gents::xai_grok_oauth::normalize_provider("xai-oauth");
+    let provider = gents::inference::clients::xai_grok::normalize_provider("xai-oauth");
     match gents::inference::auth::credential::resolve_oauth_credential(
         access,
         node_did,
@@ -542,7 +542,7 @@ async fn maybe_inline_codex_login(
     if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
         return InlineCodexLoginState::Unauthenticated;
     }
-    let provider = gents::chatgpt_codex::normalize_provider("chatgpt-codex");
+    let provider = gents::inference::clients::chatgpt_codex::normalize_provider("chatgpt-codex");
     match gents::inference::auth::credential::resolve_oauth_credential(
         access,
         node_did,
@@ -1692,7 +1692,7 @@ mod tests {
         publish_home_config(&access, &owner, "Agent", &agent_id, true, documents)
             .await
             .unwrap();
-        gents::backend_registry::set_backend_probe_status_with_last_probe(
+        gents::inference::backends::registry::set_backend_probe_status_with_last_probe(
             &node,
             &owner,
             &backend_id,
@@ -1743,7 +1743,7 @@ mod tests {
         let summary = initialize_runtime_home(&access, &args, &owner, tool_package)
             .await
             .expect("a fresh home initializes");
-        gents::backend_registry::set_backend_probe_status_with_last_probe(
+        gents::inference::backends::registry::set_backend_probe_status_with_last_probe(
             &node,
             &owner,
             &summary.backend_id,
@@ -1824,7 +1824,7 @@ mod tests {
         let summary = initialize_runtime_home(&access, &args, &owner, tool_package)
             .await
             .expect("a fresh home initializes");
-        gents::backend_registry::set_backend_probe_status_with_last_probe(
+        gents::inference::backends::registry::set_backend_probe_status_with_last_probe(
             &node,
             &owner,
             &summary.backend_id,

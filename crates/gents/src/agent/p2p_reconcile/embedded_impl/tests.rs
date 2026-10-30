@@ -17,10 +17,23 @@ use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 use tokio_util::sync::CancellationToken;
 
 use super::*;
+use crate::agent::completion_retry::CompletionRetryProfileFields;
+use crate::agent::daemon::{AgentDaemon, AgentDaemonInit};
+use crate::agent::p2p_reconcile::templates::{
+    Scope, AGENT_TARGET_CALLER_TEMPLATE, AGENT_TARGET_HOST_TEMPLATE,
+};
+use crate::agent::p2p_reconcile::{combine_filters, equality_filter};
+use crate::agent::p2p_reconcile::{
+    enrollment_authority_channel, run_enrollment_reconciler, GraphqlEnrollmentStore,
+};
+use crate::agent::p2p_reconcile::{resolve_template, scope_filter};
+use crate::agent::runtime::StartupBarrier;
+use crate::config::{ResolvedAgent, SamplingConfig};
 use crate::defra_node::P2PConfig;
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
 use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
+use crate::inference::backends::provider::BackendProviderKind;
 use crate::llm::tool::ToolDyn;
 use crate::prompt::LayeredPromptBuilder;
 use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};

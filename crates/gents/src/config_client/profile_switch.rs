@@ -278,12 +278,13 @@ impl Snapshot {
                 })?;
         let mut backends = Vec::new();
         for backend in super::list_inference_backends_in_txn(txn, node_did).await? {
-            let observation = crate::backend_registry::lookup_backend_observation_in_txn(
-                txn,
-                node_did,
-                &backend.backend_id,
-            )
-            .await?;
+            let observation =
+                crate::inference::backends::registry::lookup_backend_observation_in_txn(
+                    txn,
+                    node_did,
+                    &backend.backend_id,
+                )
+                .await?;
             backends.push((backend, observation));
         }
         Ok(Self {

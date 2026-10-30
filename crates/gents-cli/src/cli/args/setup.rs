@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::ValueEnum;
-use gents::backend_registry::DEFAULT_MAX_QUEUE_DEPTH;
+use gents::inference::backends::registry::DEFAULT_MAX_QUEUE_DEPTH;
 
 use super::{BackendPresetArg, OpenAiWireApiArg, ToolPackageArg};
 

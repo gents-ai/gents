@@ -6,6 +6,11 @@ use crate::documents::{BackendAuth, Tools};
 use crate::inference::backends::provider::BackendProviderOauthExt;
 use crate::store::config_client::patch::SelfConfigTarget;
 use crate::store::config_client::ConfigApplyTxn;
+=======
+use crate::config_client::patch::SelfConfigTarget;
+use crate::config_client::ConfigApplyTxn;
+use crate::document_config::{BackendAuth, Tools};
+use crate::inference::backends::provider::BackendProviderOauthExt;
 
 /// Lean `SelfConfig.keepsReach`.
 pub fn guard_agent_keeps_reach(

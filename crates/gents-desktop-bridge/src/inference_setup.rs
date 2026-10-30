@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use gents::inference::auth::credential::OAuthCredential;
-use gents::inference_setup::{
+use gents::inference::backends::setup::{
     InferenceAuthMethod, InferenceModelOption, InferenceModelRecommendation, InferenceProviderId,
 };
 use serde::{Deserialize, Serialize};
@@ -102,7 +102,7 @@ pub fn inference_model_recommendation(
     if model_name.is_empty() {
         return Err(BridgeError::untyped("model name is required"));
     }
-    gents::inference_setup::recommendation_for_model(
+    gents::inference::backends::setup::recommendation_for_model(
         request.provider,
         request.auth_method,
         &gents::document_config::AdvertisedModel {
@@ -120,7 +120,7 @@ pub fn inference_model_recommendation(
 pub fn inference_backend_recommendation(
     request: InferenceBackendRecommendationRequest,
 ) -> Result<InferenceModelRecommendation, BridgeError> {
-    let (provider, auth_method) = gents::inference_setup::provider_selection_for_backend(
+    let (provider, auth_method) = gents::inference::backends::setup::provider_selection_for_backend(
         request.provider_kind,
         &request.endpoint,
     );
@@ -137,9 +137,9 @@ pub fn inference_backend_recommendation(
 }
 
 fn classify_discovery_failure(error: &anyhow::Error) -> (&'static str, bool, bool) {
-    let http_error = error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<gents::backend_provider::ModelDiscoveryHttpError>());
+    let http_error = error.chain().find_map(|cause| {
+        cause.downcast_ref::<gents::inference::backends::provider::ModelDiscoveryHttpError>()
+    });
     let is_decode = error
         .chain()
         .any(|cause| cause.downcast_ref::<serde_json::Error>().is_some());
@@ -160,7 +160,7 @@ pub async fn discover_inference_models_for_core(
     request: InferenceDiscoveryRequest,
     core: Option<&gents_desktop_core::client::ClientCore>,
 ) -> Result<InferenceDiscoveryResult, BridgeError> {
-    let spec = gents::inference_setup::connection_spec(
+    let spec = gents::inference::backends::setup::connection_spec(
         request.provider,
         request.auth_method,
         &request.endpoint,
@@ -252,7 +252,7 @@ pub async fn discover_inference_models_for_core(
             let models = models
                 .into_iter()
                 .map(|model| {
-                    gents::inference_setup::model_option(
+                    gents::inference::backends::setup::model_option(
                         request.provider,
                         request.auth_method,
                         model,
@@ -278,8 +278,8 @@ pub async fn discover_inference_models_for_core(
 
     Ok(InferenceDiscoveryResult {
         request_key: request.request_key,
-        contract_version: gents::inference_setup::INFERENCE_SETUP_CONTRACT_VERSION,
-        defaults_version: gents::inference_setup::INFERENCE_DEFAULTS_VERSION.into(),
+        contract_version: gents::inference::backends::setup::INFERENCE_SETUP_CONTRACT_VERSION,
+        defaults_version: gents::inference::backends::setup::INFERENCE_DEFAULTS_VERSION.into(),
         requested_endpoint,
         effective_endpoint: spec.endpoint,
         backend_name: spec.backend_name.into(),
@@ -316,7 +316,7 @@ pub(crate) async fn discovery_account(
 async fn publish_discovered_catalog(
     core: &gents_desktop_core::client::ClientCore,
     request: &InferenceDiscoveryRequest,
-    spec: &gents::inference_setup::InferenceConnectionSpec,
+    spec: &gents::inference::backends::setup::InferenceConnectionSpec,
     api_key: Option<&str>,
     oauth_auth: Option<gents::document_config::BackendAuth>,
     models: Vec<gents::document_config::AdvertisedModel>,
@@ -332,7 +332,7 @@ async fn publish_discovered_catalog(
     };
     let result = match core.operator_access(node_did) {
         Ok(access) => {
-            gents::backend_registry::record_connection_catalog_on(
+            gents::inference::backends::registry::record_connection_catalog_on(
                 &access,
                 node_did,
                 spec.provider_kind,

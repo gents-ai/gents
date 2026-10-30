@@ -195,7 +195,7 @@ where
     H: Default + rig::http_client::HttpClientExt + std::fmt::Debug + Clone + Send + Sync + 'static,
 {
     use rig::{client::CompletionClient, completion::CompletionModel};
-    let client = crate::inference_http::build_openai_chat_completions_client(
+    let client = crate::inference::clients::inference_http::build_openai_chat_completions_client(
         "test",
         "https://provider.invalid/v1",
         http,

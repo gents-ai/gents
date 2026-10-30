@@ -119,7 +119,7 @@ fn provider_rejection_errors_carry_no_request_headers() {
     );
     headers.insert("x-api-key", "sk-proj-HEADERSECRET".parse().unwrap());
     headers.insert("retry-after", "30".parse().unwrap());
-    let error = crate::provider_http::rejected_response_error(
+    let error = crate::inference::clients::provider_http::rejected_response_error(
         reqwest::StatusCode::TOO_MANY_REQUESTS,
         &headers,
         r#"{"error":{"type":"rate_limit_error"}}"#,

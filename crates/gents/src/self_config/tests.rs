@@ -218,7 +218,7 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
     );
 
     let rendered = serde_json::to_string(&all_contracts).unwrap();
-    let serialized_values = crate::backend_provider::BackendProviderKind::ALL
+    let serialized_values = crate::inference::backends::provider::BackendProviderKind::ALL
         .into_iter()
         .map(|value| value.as_str())
         .chain(
@@ -4337,7 +4337,7 @@ async fn grok_accounts_core(agent: &str, original: bool, g2: bool) -> SelfConfig
     crate::config_client::write_inference_profile_document(&access, &profile)
         .await
         .unwrap();
-    let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+    let provider = crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
     for (account_ref, enabled) in [(None, original), (Some("g2"), g2)] {
         let original_id = crate::inference::auth::credential::oauth_credential_id(&owner, provider);
         let credential = crate::inference::auth::credential::OAuthCredential {
@@ -4716,7 +4716,7 @@ async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
         "auth": {"kind": "unauthenticated"},
     }))
     .unwrap();
-    crate::backend_registry::record_model_catalog(
+    crate::inference::backends::registry::record_model_catalog(
         &node,
         &backend,
         serde_json::from_value(json!({
@@ -5258,7 +5258,7 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
             .unwrap();
     }
     assert_eq!(
-        crate::backend_registry::record_connection_catalog_on(
+        crate::inference::backends::registry::record_connection_catalog_on(
             &access,
             &owner,
             claude.provider_kind,
@@ -5270,7 +5270,7 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
         .unwrap(),
         1
     );
-    crate::backend_registry::record_discovered_catalog_on(&access, &keyed, models)
+    crate::inference::backends::registry::record_discovered_catalog_on(&access, &keyed, models)
         .await
         .unwrap();
 
@@ -7170,7 +7170,7 @@ async fn install_chat_account_fences(node: &Arc<EmbeddedNode>, owner: &str) {
             .await
             .unwrap();
     }
-    let provider = crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
+    let provider = crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
     let base_id = crate::inference::auth::credential::oauth_credential_id(owner, provider);
     for (account_ref, connected) in [(None, false), (Some("acct-b"), true)] {
         let credential = crate::inference::auth::credential::OAuthCredential {

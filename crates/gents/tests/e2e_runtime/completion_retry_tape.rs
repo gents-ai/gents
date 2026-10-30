@@ -808,9 +808,14 @@ async fn upsert_retry_backend(
     })
     .await
     .unwrap();
-    gents::backend_registry::set_backend_probe_status(node, owner, RETRY_BACKEND_ID, "healthy")
-        .await
-        .unwrap();
+    gents::inference::backends::registry::set_backend_probe_status(
+        node,
+        owner,
+        RETRY_BACKEND_ID,
+        "healthy",
+    )
+    .await
+    .unwrap();
 }
 
 async fn fetch_timeline_request(node: &EmbeddedNode, request_id: &str) -> TimelineRequestRow {

@@ -83,7 +83,7 @@ fn config_from_case(backend_id: &str, desired: &Desired) -> Result<BackendAdmiss
     )?;
     let observation = serde_json::from_value::<crate::document_config::InferenceBackendObservation>(
         serde_json::json!({
-            "backend_id":backend_id, "probe_status":crate::backend_registry::HEALTHY_PROBE_STATUS,
+            "backend_id":backend_id, "probe_status":crate::inference::backends::registry::HEALTHY_PROBE_STATUS,
             "catalogs":[{"node_did":null,"observed_at":"2026-01-01T00:00:00Z",
                 "models":[{"model_name":desired.catalog}]}]
         }),

@@ -34,8 +34,12 @@ async fn usage_wiring_openai_compatible_records_under_the_backend_id() {
         (crate::OpenAiWireApi::ChatCompletions, "backend-usage-chat"),
         (crate::OpenAiWireApi::Responses, "backend-usage-responses"),
     ] {
-        let url =
-            crate::provider_http::tests::one_shot_server("200 OK", OPENAI_USAGE_HEADERS, "").await;
+        let url = crate::inference::clients::provider_http::tests::one_shot_server(
+            "200 OK",
+            OPENAI_USAGE_HEADERS,
+            "",
+        )
+        .await;
         let mut behavior = test_agent(BackendProviderKind::OpenAiCompatible, wire);
         behavior.backend_id = Some(backend_id.to_string());
         behavior.backend_endpoint = format!("{url}/v1");
@@ -52,9 +56,11 @@ async fn usage_wiring_openai_compatible_records_under_the_backend_id() {
         one_openai_completion(client).await;
 
         let account = crate::usage_observation::UsageAccount::for_agent(&behavior).unwrap();
-        let stored = crate::provider_http::tests::stored_usage_eventually(&cache, &node, &account)
-            .await
-            .unwrap_or_else(|| panic!("usage recorded for {backend_id}"));
+        let stored = crate::inference::clients::provider_http::tests::stored_usage_eventually(
+            &cache, &node, &account,
+        )
+        .await
+        .unwrap_or_else(|| panic!("usage recorded for {backend_id}"));
         let window = &stored.report.windows[0];
         assert_eq!((window.label.as_str(), window.used_pct), ("requests", 25.0));
     }
@@ -64,8 +70,12 @@ async fn usage_wiring_openai_compatible_records_under_the_backend_id() {
 async fn usage_wiring_backend_without_id_has_no_reporter() {
     let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
     let node = crate::inference::auth::credential::test_support::test_node().await;
-    let url =
-        crate::provider_http::tests::one_shot_server("200 OK", OPENAI_USAGE_HEADERS, "").await;
+    let url = crate::inference::clients::provider_http::tests::one_shot_server(
+        "200 OK",
+        OPENAI_USAGE_HEADERS,
+        "",
+    )
+    .await;
     let mut behavior = test_agent(
         BackendProviderKind::OpenAiCompatible,
         crate::OpenAiWireApi::ChatCompletions,

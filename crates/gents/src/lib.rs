@@ -9,19 +9,13 @@ pub mod adapter_projection;
 pub(crate) mod admission;
 pub mod agent;
 pub mod application_write;
-pub mod backend_health;
-pub mod backend_provider;
-pub mod backend_registry;
 pub mod background_completion;
 mod background_completion_diagnostics;
 pub mod background_tools;
 pub mod blocked_turn;
 pub(crate) mod callback;
-pub mod chatgpt_codex;
 pub mod claude_gateway_login;
-pub mod claude_messages;
 mod claude_request_context;
-pub mod claude_subscription;
 pub mod codex_shim_binding;
 pub mod compaction;
 pub(crate) mod completion_factory;
@@ -44,9 +38,7 @@ pub mod graphql;
 pub mod health_checker;
 pub mod hook;
 pub mod inference;
-pub mod inference_http;
 pub mod inference_observation;
-pub mod inference_setup;
 pub mod interrupt;
 #[cfg(test)]
 pub(crate) mod lean_vocab_test;
@@ -62,7 +54,6 @@ pub mod pack_resolve;
 pub mod pack_store;
 pub mod plugin;
 pub mod plugin_job;
-pub mod provider_http;
 pub(crate) mod provider_input;
 pub mod ux_data;
 pub mod ux_plugin;
@@ -79,7 +70,6 @@ pub mod startup_readiness;
 pub mod startup_recovery;
 pub mod store;
 pub mod usage_observation;
-pub mod xai_grok_oauth;
 
 #[cfg(test)]
 pub(crate) mod test_support {
@@ -230,9 +220,11 @@ pub(crate) mod test_support {
         })
         .await
         .unwrap();
-        crate::backend_registry::set_backend_probe_status(node, owner, &backend, "healthy")
-            .await
-            .unwrap();
+        crate::inference::backends::registry::set_backend_probe_status(
+            node, owner, &backend, "healthy",
+        )
+        .await
+        .unwrap();
     }
 
     pub(crate) fn fixture_pack_copy(
@@ -377,15 +369,6 @@ pub use agent::{
     AgentBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
     ProcessLifecycleState, RuntimeSnapshotObserver,
 };
-pub use backend_health::{
-    probe_backends_cycle, run_backend_probe_cycle, spawn_backend_prober, BackendHealthMap,
-    BackendHealthSnapshot, BackendHealthState, BackendProberOptions, ProbeCycleOutcome,
-};
-pub use backend_provider::{discover_models as discover_backend_models, BackendProviderKind};
-pub use backend_registry::{
-    record_discovered_catalog_on, record_model_catalog_in_txn, InferenceBackend,
-    HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS,
-};
 pub(crate) use background_completion_diagnostics::load_background_completion_diagnostics_for_session;
 pub use background_completion_diagnostics::{
     load_background_completion_diagnostics, BackgroundCompletionDiagnostics,
@@ -426,6 +409,17 @@ pub use health_checker::{
 };
 pub use hook::{
     BackgroundExecutionRegistry, BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats,
+};
+pub use inference::backends::health::{
+    probe_backends_cycle, run_backend_probe_cycle, spawn_backend_prober, BackendHealthMap,
+    BackendHealthSnapshot, BackendHealthState, BackendProberOptions, ProbeCycleOutcome,
+};
+pub use inference::backends::provider::{
+    discover_models as discover_backend_models, BackendProviderKind,
+};
+pub use inference::backends::registry::{
+    record_discovered_catalog_on, record_model_catalog_in_txn, InferenceBackend,
+    HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS,
 };
 pub use interrupt::{
     fetch_interrupt_requested_at, fetch_interrupt_requested_at_by_doc_id, interrupt_request,

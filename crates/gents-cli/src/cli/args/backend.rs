@@ -89,13 +89,19 @@ impl BackendPresetArg {
             Self::GenericOpenAiCompatible => None,
             Self::OpenAi => Some("https://api.openai.com/v1"),
             Self::OpenRouter => Some("https://openrouter.ai/api/v1"),
-            Self::ChatGptCodex => Some(gents::chatgpt_codex::default_backend_endpoint()),
-            Self::XaiGrokOAuth => Some(gents::xai_grok_oauth::default_backend_endpoint()),
-            Self::XaiApiKey => Some(gents::inference_setup::XAI_API_ENDPOINT),
-            Self::ClaudeCliSubscription => {
-                Some(gents::claude_subscription::default_backend_endpoint())
+            Self::ChatGptCodex => {
+                Some(gents::inference::clients::chatgpt_codex::default_backend_endpoint())
             }
-            Self::Anthropic => Some(gents::claude_subscription::ANTHROPIC_API_ENDPOINT),
+            Self::XaiGrokOAuth => {
+                Some(gents::inference::clients::xai_grok::default_backend_endpoint())
+            }
+            Self::XaiApiKey => Some(gents::inference::backends::setup::XAI_API_ENDPOINT),
+            Self::ClaudeCliSubscription => {
+                Some(gents::inference::clients::claude_subscription::default_backend_endpoint())
+            }
+            Self::Anthropic => {
+                Some(gents::inference::clients::claude_subscription::ANTHROPIC_API_ENDPOINT)
+            }
             Self::Ollama => Some(crate::DEFAULT_OLLAMA_ENDPOINT),
             Self::Vllm => Some("http://127.0.0.1:8000/v1"),
             Self::LlamaCpp => Some("http://127.0.0.1:8080/v1"),
@@ -108,7 +114,9 @@ impl BackendPresetArg {
             Self::LlamaCpp => Some(crate::DEFAULT_INIT_MODEL_NAME),
             Self::ChatGptCodex => Some(crate::DEFAULT_CHATGPT_CODEX_MODEL_NAME),
             Self::XaiGrokOAuth => Some(crate::DEFAULT_XAI_GROK_OAUTH_MODEL_NAME),
-            Self::ClaudeCliSubscription => Some(gents::claude_subscription::default_model_name()),
+            Self::ClaudeCliSubscription => {
+                Some(gents::inference::clients::claude_subscription::default_model_name())
+            }
             Self::GenericOpenAiCompatible
             | Self::OpenAi
             | Self::OpenRouter

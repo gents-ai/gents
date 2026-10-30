@@ -881,9 +881,9 @@ mod tests {
         let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let access = ConfigAccess::local(node.clone());
-        let spec = crate::inference_setup::connection_spec(
-            crate::inference_setup::InferenceProviderId::Anthropic,
-            crate::inference_setup::InferenceAuthMethod::ClaudeOauth,
+        let spec = crate::inference::backends::setup::connection_spec(
+            crate::inference::backends::setup::InferenceProviderId::Anthropic,
+            crate::inference::backends::setup::InferenceAuthMethod::ClaudeOauth,
             "",
         )
         .unwrap();

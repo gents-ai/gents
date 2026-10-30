@@ -4,9 +4,9 @@ use anyhow::Context;
 use std::sync::Arc;
 
 use chrono::Utc;
-use gents::backend_registry::{list_all_backends, lookup_backend_observation};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::inference::backends::registry::{list_all_backends, lookup_backend_observation};
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::job::JobControlOutcome;
 use gents_protocol::process_control::{OperatorProcessControlRequest, ProcessControlOutcome};
