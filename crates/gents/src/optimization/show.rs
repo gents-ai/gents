@@ -99,11 +99,11 @@ mod tests {
     use crate::eval::runner::freeze::tests::OWNER;
     use crate::eval::runner::ScriptedExecutor;
     use crate::optimization::driver::matrix::accepting_harness;
-    use crate::optimization::driver::matrix::{
-        base_executor, budgets, definition, fail, frozen_job, rejecting_harness,
-        repeating_proposer, script, settle, Harness, CANDIDATE_PROMPT, DEFINITION,
-        VALIDATION_CASES,
+    use crate::optimization::driver::matrix::fixtures::{
+        base_executor, budgets, definition, fail, repeating_proposer, script, CANDIDATE_PROMPT,
+        DEFINITION, VALIDATION_CASES,
     };
+    use crate::optimization::driver::matrix::{frozen_job, rejecting_harness, settle, Harness};
     use crate::optimization::policy::{InconclusiveReason, RejectReason};
     use crate::optimization::proposer::ScriptedProposer;
     use crate::Collection;
