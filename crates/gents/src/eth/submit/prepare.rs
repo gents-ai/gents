@@ -92,7 +92,7 @@ where
     let gas_limit = parse_hex_u64(estimate).context("decoding gas estimate")?;
     if let Some(cap) = request.caps.max_gas {
         if gas_limit > cap {
-            return Err(super::EthRefusal::Policy(format!(
+            return Err(super::super::EthRefusal::Policy(format!(
                 "estimated gas {gas_limit} exceeds max_gas {cap}"
             ))
             .into());
@@ -116,7 +116,7 @@ where
         .ok_or_else(|| anyhow!("max fee per gas overflow"))?;
     if let Some(cap) = request.caps.max_fee_per_gas {
         if max_fee > cap {
-            return Err(super::EthRefusal::Policy(format!(
+            return Err(super::super::EthRefusal::Policy(format!(
                 "max fee per gas {max_fee} exceeds cap {cap}"
             ))
             .into());

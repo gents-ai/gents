@@ -1,8 +1,9 @@
+use super::change_capture;
 use std::path::Path;
 
 use crate::llm::tool::Tool;
 use crate::llm::tool::ToolDefinition;
-use anyhow::{anyhow, Context as _, Result};
+use anyhow::{anyhow, Result};
 use serde::Serialize;
 
 use super::super::args::WriteFileArgs;

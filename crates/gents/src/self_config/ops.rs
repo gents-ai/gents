@@ -5,12 +5,10 @@ use defra_node::EmbeddedNode;
 use identity::Did;
 use serde_json::{json, Map, Value};
 
-use crate::store::config_client::patch::{
-    apply_patch, ensure_admissible, FieldDelta, SelfConfigTarget,
-};
-use crate::store::config_client::{apply_desired_state_plan, validate_desired_state_plan};
-use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::tools::surface::SelfConfigProcessCeiling;
+use crate::config_client::patch::{apply_patch, ensure_admissible, FieldDelta, SelfConfigTarget};
+use crate::config_client::{apply_desired_state_plan, validate_desired_state_plan};
+use crate::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::tool_surface::SelfConfigProcessCeiling;
 
 mod documents;
 mod grants;

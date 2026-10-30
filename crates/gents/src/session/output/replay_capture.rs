@@ -6,6 +6,8 @@ use super::access::{rows_value, ReadAccess};
 use super::replay_candidates::SelectedReplayCandidate;
 use super::replay_request::required_row_str;
 use super::{replay_violation, CanonicalProviderCoordinate, CanonicalReplayCapture};
+#[cfg(test)]
+use super::CAPTURE_ROW_QUERIES;
 
 pub(super) fn replay_capture_key(
     node_did: &str,

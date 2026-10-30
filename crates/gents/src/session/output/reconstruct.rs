@@ -10,6 +10,8 @@ use super::super::canonical_rows::{
     decode_output_segment_row, decode_scoped_request_output_segments, AGENT_OUTPUT_SEGMENT_FIELDS,
 };
 use super::access::{rows_value, ReadAccess, ReadCache, RequestOutputRows};
+#[cfg(test)]
+use super::{record_request_output_scan, SOURCE_OUTPUT_QUERIES};
 use super::headers::{load_header, validate_origin_chain};
 use super::ReconstructedScopedMessage;
 
@@ -137,7 +139,7 @@ pub(super) async fn preload_request_output_segments(
     Ok(())
 }
 
-async fn load_referenced_segments(
+pub(super) async fn load_referenced_segments(
     access: ReadAccess<'_, '_>,
     header: &super::super::canonical_rows::TranscriptMessageRow,
     request_hint: Option<&str>,

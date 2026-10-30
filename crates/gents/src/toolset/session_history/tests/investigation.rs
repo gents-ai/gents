@@ -116,7 +116,7 @@ async fn sessions_get_fails_usage_totals_closed_for_partial_rows() {
         .parent_inclusive_audit_usage
         .iter()
         .any(|observation| {
-            matches!(observation, super::super::ParentAuditUsageObservation::Unavailable {
+            matches!(observation, crate::toolset::ParentAuditUsageObservation::Unavailable {
                 parent_request_id, error, ..
             } if parent_request_id == "request-a-new"
                 && error.contains("cache read exceeds"))

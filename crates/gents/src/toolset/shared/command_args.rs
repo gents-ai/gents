@@ -1,5 +1,6 @@
 use super::super::context::ToolError;
-use super::command_validation::{policy_denial, read_only_argument_denial};
+use super::command_validation::{executable_name_lookup_key, policy_denial, read_only_argument_denial};
+use std::path::Path;
 use super::CommandExecutionPolicy;
 use crate::toolset::DenialReason;
 

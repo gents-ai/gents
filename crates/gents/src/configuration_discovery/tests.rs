@@ -68,26 +68,26 @@ fn synthetic_laptop_inventory_is_bounded_inert_and_sanitized() {
     let project = fixture.path().join("project");
     let process_sentinel = fixture.path().join("HOOK_RAN");
     let user_config =
-        include_str!("../tests/fixtures/configuration_discovery/codex-user/config.toml")
+        include_str!("../../tests/fixtures/configuration_discovery/codex-user/config.toml")
             .replace("SHOULD_NEVER_RUN", &process_sentinel.to_string_lossy());
     write(&user.join("config.toml"), &user_config);
     write(
         &user.join("AGENTS.md"),
-        include_str!("../tests/fixtures/configuration_discovery/codex-user/AGENTS.md"),
+        include_str!("../../tests/fixtures/configuration_discovery/codex-user/AGENTS.md"),
     );
     write(
         &user.join("skills/review/SKILL.md"),
         include_str!(
-            "../tests/fixtures/configuration_discovery/codex-user/skills/review/SKILL.md"
+            "../../tests/fixtures/configuration_discovery/codex-user/skills/review/SKILL.md"
         ),
     );
     write(
         &project.join(".codex/config.toml"),
-        include_str!("../tests/fixtures/configuration_discovery/project/.codex/config.toml"),
+        include_str!("../../tests/fixtures/configuration_discovery/project/.codex/config.toml"),
     );
     write(
         &project.join("AGENTS.md"),
-        include_str!("../tests/fixtures/configuration_discovery/project/AGENTS.md"),
+        include_str!("../../tests/fixtures/configuration_discovery/project/AGENTS.md"),
     );
     write(
         &outside.path().join("SKILL.md"),
@@ -453,7 +453,7 @@ fn checked_in_complete_inventory_is_canonical_serializer_output() {
         ],
     );
     let expected =
-        include_str!("../tests/fixtures/configuration_discovery/inventories/complete-v1.json");
+        include_str!("../../tests/fixtures/configuration_discovery/inventories/complete-v1.json");
     assert_eq!(
         format!("{}\n", inventory.to_model_json_pretty().unwrap()),
         expected
@@ -498,7 +498,7 @@ fn checked_in_partial_inventory_is_canonical_serializer_output() {
         ],
     );
     let expected =
-        include_str!("../tests/fixtures/configuration_discovery/inventories/partial-v1.json");
+        include_str!("../../tests/fixtures/configuration_discovery/inventories/partial-v1.json");
     assert_eq!(
         format!("{}\n", inventory.to_model_json_pretty().unwrap()),
         expected

@@ -1,5 +1,3 @@
-use super::*;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoalCreationFingerprint {
     pub owner: String,

@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use super::probe::{
-    probe_selected_backends, probe_timeout, record_probe_event, ProbeEnv, ProbeSchedule,
+    probe_selected_backends, record_probe_event, ProbeEnv, ProbeSchedule,
 };
 use super::prober::run_scheduled_backend_probe_cycle;
 use super::*;

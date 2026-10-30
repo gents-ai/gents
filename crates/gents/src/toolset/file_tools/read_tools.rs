@@ -1,3 +1,4 @@
+use super::change_capture;
 use crate::llm::tool::Tool;
 use crate::llm::tool::ToolDefinition;
 use anyhow::Result;
