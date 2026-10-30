@@ -98,7 +98,9 @@ describe("whether the bridge holds a sent request", () => {
   const read = (
     latestRequestId: string | null,
     items: RenderedTimelineItem[],
-    lists: Partial<Pick<DesktopSessionSnapshot, "queuedTurns" | "foldedInputs">> = {},
+    lists: Partial<
+      Pick<DesktopSessionSnapshot, "queuedTurns" | "pendingQueue" | "foldedInputs">
+    > = {},
   ) =>
     createSessionStore({
       sessionId: "s",
@@ -138,6 +140,16 @@ describe("whether the bridge holds a sent request", () => {
     const queued = { requestId: "r2" } as DesktopSessionSnapshot["queuedTurns"][number];
     expect(
       holdsRequest(read("r1", [user("doc-r1")], { queuedTurns: [queued] }), sent),
+    ).toBe(true);
+  });
+
+  it("once the pending queue holds it, though the queued turns don't list it", () => {
+    const entry = {
+      requestDocId: "doc-r2",
+      requestId: "r2",
+    } as NonNullable<DesktopSessionSnapshot["pendingQueue"]>[number];
+    expect(
+      holdsRequest(read("r1", [user("doc-r1")], { pendingQueue: [entry] }), sent),
     ).toBe(true);
   });
 
