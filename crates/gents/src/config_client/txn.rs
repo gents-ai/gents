@@ -25,6 +25,9 @@ pub use gate::LocalConfigAccess;
 pub use native::{NativeOperationAbandoned, ReentrantEmbeddedWrite};
 pub use transact::IdempotentTransactionRetry;
 
+/// Tracing target of DefraDB transaction and read telemetry; tests observe it by this name.
+pub const TRACING_TARGET: &str = module_path!();
+
 #[cfg(test)]
 use super::write_telemetry::WriteOperation;
 #[cfg(test)]

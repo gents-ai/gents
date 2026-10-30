@@ -16,6 +16,9 @@ use crate::watcher::AgentRequest;
 
 pub(super) mod review;
 
+/// Tracing target of conversation title events; tests observe it by this name.
+pub(crate) const TRACING_TARGET: &str = module_path!();
+
 /// Title generation is auxiliary work: bound its history, retries, elapsed time
 /// and output so naming a session cannot compete indefinitely with requests.
 const RECENT_TITLE_LIMIT: usize = 5;
@@ -113,6 +116,7 @@ where
             .await;
             if let Err(error) = result {
                 tracing::warn!(
+                    target: TRACING_TARGET,
                     error = %error,
                     "failed to create owned conversation title request"
                 );

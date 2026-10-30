@@ -120,7 +120,7 @@ where
         source: RequestInterruptionSource,
     ) {
         tracing::info!(
-            target: "gents::agent::daemon",
+            target: super::TRACING_TARGET,
             agent_id = %self.agent_config.agent_id,
             request_id = %request.request_id,
             session_id = %request.session_id,
