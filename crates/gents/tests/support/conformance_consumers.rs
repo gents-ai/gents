@@ -511,10 +511,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_request_closures_use_exact_database_dependencies",
         },
         ConformanceConsumer::RustTest {
-            id: "client::core::writes::accepted_edit_projection_tests::generated_accepted_receipt_survives_projection_refresh_failure",
+            id: "client::core::writes::pending_queue::tests::generated_accepted_receipt_survives_projection_refresh_failure",
             package: "gents-desktop-core",
-            source_path: "crates/gents-desktop-core/src/client/core/writes.rs",
-            module_path: "client::core::writes::accepted_edit_projection_tests",
+            source_path: "crates/gents-desktop-core/src/client/core/writes/pending_queue/tests.rs",
+            module_path: "client::core::writes::pending_queue::tests",
             function: "generated_accepted_receipt_survives_projection_refresh_failure",
         },
         ConformanceConsumer::RustTest {
@@ -525,10 +525,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_request_identity_cases_preserve_physical_twins_and_fold_owners",
         },
         ConformanceConsumer::RustTest {
-            id: "client::core::writes::request_patch_publication_tests::generated_publication_cases_drive_request_patch_cache_admission",
+            id: "client::core::writes::request_patch::tests::generated_publication_cases_drive_request_patch_cache_admission",
             package: "gents-desktop-core",
-            source_path: "crates/gents-desktop-core/src/client/core/writes.rs",
-            module_path: "client::core::writes::request_patch_publication_tests",
+            source_path: "crates/gents-desktop-core/src/client/core/writes/request_patch/tests.rs",
+            module_path: "client::core::writes::request_patch::tests",
             function: "generated_publication_cases_drive_request_patch_cache_admission",
         },
         ConformanceConsumer::RustTest {

@@ -1211,7 +1211,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "client_request_patch_publication_cases"
       "ClientRequestPatchPublicationCases"
-      "client::core::writes::request_patch_publication_tests::generated_publication_cases_drive_request_patch_cache_admission")
+      "client::core::writes::request_patch::tests::generated_publication_cases_drive_request_patch_cache_admission")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "storage_failure_cases"
@@ -1373,7 +1373,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "session_input_edit_client_observation_cases"
       "SessionInputEditClientObservationCases"
-      "client::core::writes::accepted_edit_projection_tests::generated_accepted_receipt_survives_projection_refresh_failure")
+      "client::core::writes::pending_queue::tests::generated_accepted_receipt_survives_projection_refresh_failure")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "queue_management_cases"
