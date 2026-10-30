@@ -78,7 +78,7 @@ pub(crate) fn truncate_stream(text: &str, max_bytes: usize) -> TruncatedStream {
 }
 
 pub(crate) fn stopped_stream(text: &str, max_bytes: usize) -> TruncatedStream {
-    let tail = crate::tool_call_lifecycle::delivery::terminal_output_tail(text, max_bytes);
+    let tail = crate::tools::call::lifecycle::delivery::terminal_output_tail(text, max_bytes);
     let start = text.len() - tail.len();
     let content = if start == 0 {
         text.to_owned()

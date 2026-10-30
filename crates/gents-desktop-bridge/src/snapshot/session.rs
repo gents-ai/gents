@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use gents::config_client::ConfigAccess;
-use gents::plugin_job::view::{load_job_view, JobKey};
 use gents::session::canonical_rows::TranscriptMessageRow;
+use gents::tools::background::job::view::{load_job_view, JobKey};
 use gents_desktop_core::client::{
     CanonicalTranscriptDependencies, ClientCore, ClientStore, SessionTranscriptQueryPage,
 };
@@ -133,7 +133,7 @@ pub(super) fn message_origin(
     if message.role != gents_protocol::output::MessageRole::User {
         return None;
     }
-    if gents::background_completion::is_background_completion_notification_message_key(
+    if gents::tools::background::completion::is_background_completion_notification_message_key(
         &message.message_key,
     ) {
         return Some(RequestOriginView::BackgroundCompletion);

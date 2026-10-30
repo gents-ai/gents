@@ -134,7 +134,7 @@ fn spawn_background_tool_watcher_handle(
                             };
                             let access = ConfigAccess::local(state.node.clone());
                             let presentation =
-                                match gents::tool_call_lifecycle::load_tool_call_presentation(
+                                match gents::tools::call::lifecycle::load_tool_call_presentation(
                                     &access,
                                     tool_doc_id,
                                     node_did,
@@ -897,10 +897,10 @@ mod tests {
     }
 
     async fn job_state(state: &ShimState, session: &str, call: &str) -> JobState {
-        gents::plugin_job::view::load_job_view(
+        gents::tools::background::job::view::load_job_view(
             &ConfigAccess::local(state.node.clone()),
             None,
-            gents::plugin_job::view::JobKey::Address {
+            gents::tools::background::job::view::JobKey::Address {
                 session_id: session.into(),
                 tool_call_id: call.into(),
             },

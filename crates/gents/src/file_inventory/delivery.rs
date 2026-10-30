@@ -218,7 +218,7 @@ impl VerifiedInventoryResponse {
             return Ok(None);
         };
         let scope = &grant.demand.admission.request;
-        if !crate::tool_call_lifecycle::grant_source_file_read(
+        if !crate::tools::call::lifecycle::grant_source_file_read(
             node.clone(),
             gents_protocol::schemas::FILE_INVENTORY_PAGE_NAME,
             &scope.node_did,

@@ -282,7 +282,7 @@ async fn a_review_that_cancels_the_caller_cannot_release_the_command() {
     });
     scope(
         Some(fixture.context(reviewer)),
-        crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+        crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
             None,
             cancellation,
             async {
@@ -314,7 +314,7 @@ async fn stop_cancels_review_before_a_human_question_can_be_published() {
     let cancellation = tokio_util::sync::CancellationToken::new();
     scope(
         Some(fixture.context(reviewer)),
-        crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+        crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
             None,
             cancellation.clone(),
             async {

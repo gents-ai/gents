@@ -64,7 +64,7 @@ pub(crate) fn effective_command_policy(policy: &CommandExecutionPolicy) -> Comma
     if policy.mode == CommandExecutionMode::ArtifactWrite {
         return policy.clone();
     }
-    match crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+    match crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
         .and_then(|scope| scope.workspace_authority)
     {
         Some(authority) => apply_workspace_authority(policy, authority),

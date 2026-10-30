@@ -4,13 +4,13 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
 use crate::config_client::ConfigApplyTxn;
 use crate::graphql::escape_graphql_string;
 use crate::request::lifecycle::materialize::{
     build_signed_request, ParentLink, RequestIdentity, RequestSigner, RequestSpec, RetryLink,
 };
 use crate::request::lifecycle::ExecutionOrigin;
+use crate::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
 
 use super::queue::{row_queue, RequestQueue};
 use super::{BackgroundWakeRedriveReport, RequestLifecycle};

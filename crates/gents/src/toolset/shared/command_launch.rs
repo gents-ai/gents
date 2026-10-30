@@ -12,7 +12,7 @@ use super::command_validation::policy_denial;
 #[cfg(target_os = "macos")]
 use super::SANDBOX_EXEC;
 use super::{CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode, WorkspaceAuthority};
-use crate::tool_call_lifecycle::FailureClass;
+use crate::tools::call::lifecycle::FailureClass;
 use crate::toolset::DenialReason;
 
 #[cfg(test)]
@@ -91,7 +91,7 @@ pub(super) async fn prepare_command_launch(
 ) -> std::result::Result<CommandLaunch, ToolError> {
     let mut environment = build_shell_env();
     let artifact = if policy.mode == CommandExecutionMode::ArtifactWrite {
-        let scope = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+        let scope = crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
             .ok_or_else(|| {
                 artifact_policy_denial("artifact_write requires a live sealed workspace request")
             })?;

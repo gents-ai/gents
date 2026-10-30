@@ -254,8 +254,9 @@ pub fn is_runtime_control_message(
     input: &gents_protocol::request_input::RequestInput,
     message_key: &str,
 ) -> bool {
-    if crate::background_completion::is_background_completion_notification_message_key(message_key)
-    {
+    if crate::tools::background::completion::is_background_completion_notification_message_key(
+        message_key,
+    ) {
         return true;
     }
     input

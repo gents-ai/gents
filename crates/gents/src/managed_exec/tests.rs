@@ -770,7 +770,7 @@ async fn durable_process_record_survives_a_fresh_store() {
     use ownership::{ProcessObservation, ProcessRecordStore};
 
     let dir = tempfile::tempdir().unwrap();
-    let registry = crate::hook::BackgroundExecutionRegistry::default()
+    let registry = crate::tools::call::hook::BackgroundExecutionRegistry::default()
         .with_process_records(dir.path().to_path_buf());
     let process =
         OwnedTestProcess::spawn(Some(registry.process_recorder("spawned:tool", "tool-doc"))).await;
@@ -793,12 +793,12 @@ async fn reused_call_ids_keep_distinct_durable_process_owners_after_restart() {
     use ownership::test_support::OwnedTestProcess;
     use ownership::ProcessObservation;
     let dir = tempfile::tempdir().unwrap();
-    let registry = crate::hook::BackgroundExecutionRegistry::default()
+    let registry = crate::tools::call::hook::BackgroundExecutionRegistry::default()
         .with_process_records(dir.path().to_path_buf());
     let first = OwnedTestProcess::spawn(Some(registry.process_recorder("call", "first-doc"))).await;
     let sibling =
         OwnedTestProcess::spawn(Some(registry.process_recorder("call", "sibling-doc"))).await;
-    let restarted = crate::hook::BackgroundExecutionRegistry::default()
+    let restarted = crate::tools::call::hook::BackgroundExecutionRegistry::default()
         .with_process_records(dir.path().to_path_buf());
     assert_eq!(restarted.process_record_list().len(), 2);
     assert_eq!(

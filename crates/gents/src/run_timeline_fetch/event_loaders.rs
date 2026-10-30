@@ -467,7 +467,7 @@ pub(super) fn resolve_tool_payloads(
                         name == crate::toolset::SPAWN_PROCESS_TOOL_NAME,
                         "spawned tool parent is not an accepted spawn_process invocation"
                     );
-                    let input: crate::background_tools::BackgroundToolArgs =
+                    let input: crate::tools::background::status::BackgroundToolArgs =
                         serde_json::from_value(native.function.arguments.clone())?;
                     anyhow::ensure!(
                         input.tool_name == row.tool_name,
@@ -510,7 +510,7 @@ pub(super) fn resolve_tool_payloads(
                     .iter()
                     .any(|block| matches!(block, MessageBlock::ToolResult { .. }))
                 {
-                    deliveries.push(crate::tool_call_lifecycle::query::render_tool_result(
+                    deliveries.push(crate::tools::call::lifecycle::query::render_tool_result(
                         &message.message,
                     )?);
                 } else {
@@ -527,7 +527,7 @@ pub(super) fn resolve_tool_payloads(
             &row.tool_call_id,
             &accepted_call_id,
         ) {
-            deliveries.push(crate::tool_call_lifecycle::query::render_tool_result(
+            deliveries.push(crate::tools::call::lifecycle::query::render_tool_result(
                 &message.message,
             )?);
         }

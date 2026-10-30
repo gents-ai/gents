@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
-use gents::tool_call_lifecycle::{
+use gents::tools::call::lifecycle::{
     load_tool_file_change_observation, ToolFileChangeRead, VerifiedFileImageReceipt,
 };
 use gents::NodeIdentity;

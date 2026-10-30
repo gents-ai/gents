@@ -152,7 +152,7 @@
     "native_owner_paths": [
       "crates/gents/src/request/lifecycle/queue/draining.rs",
       "crates/gents/src/request/lifecycle/queue/goal_continuation.rs",
-      "crates/gents/src/background_completion/notification_delivery.rs"
+      "crates/gents/src/tools/background/completion/notification_delivery.rs"
     ],
     "consumer_paths": [
       "crates/gents/src/request/lifecycle/queue/tests/background_completion.rs",
@@ -227,7 +227,7 @@
       "crates/gents/src/request/lifecycle/claim.rs",
       "crates/gents/src/request/lifecycle/queue/atomic_inputs.rs",
       "crates/gents/src/request/lifecycle/execution_lease.rs",
-      "crates/gents/src/background_completion_diagnostics.rs"
+      "crates/gents/src/tools/background/diagnostics.rs"
     ],
     "consumer_paths": ["crates/gents/src/request/lifecycle/queue/tests/background_completion.rs"],
     "native_status": "pending",

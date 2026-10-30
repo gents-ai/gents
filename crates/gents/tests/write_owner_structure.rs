@@ -1472,7 +1472,7 @@ const AMBIENT_CONTEXT_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents/src/managed_exec/ownership.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents/src/plugin/approval.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents/src/plugin/approval/workspace/context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
-    ("crates/gents/src/tool_call_lifecycle/runtime.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
+    ("crates/gents/src/tools/call/lifecycle/runtime.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
 ];
 
 #[derive(Default)]
@@ -1789,7 +1789,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile/inventory.rs", 1),
     ("crates/gents/src/agent/reconcile.rs", 1),
     ("crates/gents/src/plugin/application_write/mod.rs", 1),
-    ("crates/gents/src/background_tools/final_output.rs", 1),
+    ("crates/gents/src/tools/background/status/final_output.rs", 1),
     ("crates/gents/src/config_client/desired_state/plan.rs", 1),
     ("crates/gents/src/config_client/retry.rs", 2),
     ("crates/gents/src/config_client/schema_install.rs", 2),
@@ -1803,8 +1803,8 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/goal/creation.rs", 2),
     ("crates/gents/src/graphql.rs", 1),
     ("crates/gents/src/store/local/home.rs", 3),
-    ("crates/gents/src/hook/persistence/background_tools.rs", 1),
-    ("crates/gents/src/hook/persistence/session_message.rs", 1),
+    ("crates/gents/src/tools/call/hook/persistence/background_tools.rs", 1),
+    ("crates/gents/src/tools/call/hook/persistence/session_message.rs", 1),
     ("crates/gents/src/store/identity/error.rs", 1),
     ("crates/gents/src/request/lifecycle.rs", 1),
     ("crates/gents/src/request/lifecycle/canonical_recovery.rs", 2),
@@ -1823,8 +1823,8 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/plugin/http_calls.rs", 1),
     ("crates/gents/src/plugin/install.rs", 1),
     ("crates/gents/src/plugin/store.rs", 1),
-    ("crates/gents/src/plugin_job/driver.rs", 1),
-    ("crates/gents/src/plugin_job/driver/step.rs", 1),
+    ("crates/gents/src/tools/background/job/driver.rs", 1),
+    ("crates/gents/src/tools/background/job/driver/step.rs", 1),
     ("crates/gents/src/provider_input/replay.rs", 1),
     ("crates/gents/src/inference/rendered_request/mod.rs", 2),
     ("crates/gents/src/request/admission.rs", 2),
@@ -1839,7 +1839,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/store/local/storage_backend.rs", 9),
     ("crates/gents/src/store/local/store_key.rs", 2),
     ("crates/gents/src/request/streaming.rs", 1),
-    ("crates/gents/src/tool_call_lifecycle/delivery/terminalize.rs", 1),
+    ("crates/gents/src/tools/call/lifecycle/delivery/terminalize.rs", 1),
     ("crates/gents/src/triggers/engine/mod.rs", 2),
 ];
 

@@ -12,11 +12,13 @@ use super::inference::tests::InterruptionCapture;
 use super::{AgentDaemon, AgentDaemonInit};
 use crate::agent::runtime::StartupBarrier;
 use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
-use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
 use crate::inference::llm::tool::ToolDyn;
 use crate::inference::resolved::ResolvedAgent;
 use crate::prompt::LayeredPromptBuilder;
 use crate::request::watcher::AgentRequest;
+use crate::tools::call::hook::{
+    BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
+};
 use crate::Collection;
 use tracing::instrument::WithSubscriber;
 

@@ -399,7 +399,7 @@ async fn seed_failed_request(db: &TestDb, request_id: &str) -> String {
 struct GoalBackgroundHandoff {
     runtime: crate::support::accepted_turn::AcceptedTurnRuntime,
     parent_doc_id: String,
-    background_executions: gents::hook::BackgroundExecutionRegistry,
+    background_executions: gents::tools::call::hook::BackgroundExecutionRegistry,
     process_tool_call_id: String,
 }
 
@@ -2388,7 +2388,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             rows[0]["completion_notification_delivered_at"].is_string(),
             "the worker must publish its completion before ownership ends: {delivery}"
         );
-        gents::tool_call_lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, db.node_identity.did()).await.unwrap();
+        gents::tools::call::lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, db.node_identity.did()).await.unwrap();
         let observed = db.node.execute(
             "{ AgentRequest { _docID request_id created_at lifecycle_state execution_origin caused_by_trigger_kind caused_by_parent_request_id } AgentMessage { _docID node_did requester_did request_doc_id } AgentToolCall { _docID tool_name lifecycle_state completion_notification_delivered_at } }",
         ).await;

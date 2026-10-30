@@ -10,10 +10,10 @@ use crate::agent::p2p_reconcile::{
 };
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::store::identity::KeyIdentity;
-use crate::tool_call_lifecycle::admission_fixture::{
+use crate::tools::call::lifecycle::admission_fixture::{
     ensure_fixture_session, publish_accepted_on_claimed_request,
 };
-use crate::tool_call_lifecycle::{AwaitMode, VerifiedFileImageReceipt};
+use crate::tools::call::lifecycle::{AwaitMode, VerifiedFileImageReceipt};
 use gents_loop::live_output::LiveToolOutputRegistry;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,

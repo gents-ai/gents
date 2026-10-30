@@ -4,7 +4,7 @@ use crate::request::lifecycle::{
 };
 use crate::request::streaming::DefraStreamWriter;
 use crate::store::identity::NodeIdentity;
-use crate::tool_call_lifecycle::{AwaitMode, ToolCallLifecycle};
+use crate::tools::call::lifecycle::{AwaitMode, ToolCallLifecycle};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::{
     message::{AssistantContent, Message, ToolCall, ToolFunction},
@@ -396,7 +396,7 @@ impl CanonicalBackgroundFixture {
         tool.start_running().await?;
         let mut tool = tool
             .admit_spawned_background(
-                crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission {
+                crate::tools::call::lifecycle::SpawnedBackgroundToolAdmission {
                     tool_name: "fixture".to_owned(),
                     deadline_at: deadline,
                     selected_tool_identity: None,
@@ -408,7 +408,7 @@ impl CanonicalBackgroundFixture {
         let binding = tool
             .tool_output_binding()
             .context("accepted fixture tool has output binding")?;
-        crate::tool_call_lifecycle::delivery::append_tool_output(&binding, notification_content)
+        crate::tools::call::lifecycle::delivery::append_tool_output(&binding, notification_content)
             .await?;
         anyhow::ensure!(
             tool.complete_owned(notification_content, None).await?,

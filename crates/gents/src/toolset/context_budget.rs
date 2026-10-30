@@ -71,7 +71,7 @@ impl ContextBudgetScope {
     /// Resolve the scope from the in-flight tool call. Fails closed when the
     /// runtime did not install an agent or session identity.
     fn from_tool_runtime(node_did: &str) -> Result<Self> {
-        let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
+        let runtime = crate::tools::call::lifecycle::runtime::current_tool_runtime_context();
         let agent_id = runtime
             .as_ref()
             .and_then(|runtime| runtime.agent_id.clone())
@@ -710,12 +710,12 @@ mod tests {
     }
 
     async fn call_as(tool: &ContextBudgetTool, agent_id: &str, session_id: &str) -> String {
-        crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
+        crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
             None,
             Some("did:key:z-context".into()),
             Some(agent_id.into()),
             Some("caller-request".into()),
-            crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
+            crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_session(
                 None,
                 tokio_util::sync::CancellationToken::new(),
                 None,

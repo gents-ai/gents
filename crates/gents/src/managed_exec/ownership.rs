@@ -40,9 +40,9 @@ pub(crate) const fn may_settle_native(
 }
 
 pub(crate) fn native_terminal_intent(
-    outcome: Option<&crate::tool_call_lifecycle::ToolOutcome>,
+    outcome: Option<&crate::tools::call::lifecycle::ToolOutcome>,
 ) -> NativeTerminalIntent {
-    use crate::tool_call_lifecycle::ToolOutcome;
+    use crate::tools::call::lifecycle::ToolOutcome;
     match outcome {
         Some(ToolOutcome::Completed(_)) => NativeTerminalIntent::Completed,
         Some(ToolOutcome::Cancelled) => NativeTerminalIntent::Cancelled,
@@ -53,7 +53,7 @@ pub(crate) fn native_terminal_intent(
 }
 
 pub(crate) fn native_terminal_needs_confirmation(
-    outcome: Option<&crate::tool_call_lifecycle::ToolOutcome>,
+    outcome: Option<&crate::tools::call::lifecycle::ToolOutcome>,
 ) -> bool {
     !may_settle_native(
         native_terminal_intent(outcome),
@@ -697,7 +697,7 @@ pub(crate) mod test_support {
     }
 
     pub(crate) async fn process_for_generated_outcome(
-        registry: &crate::hook::BackgroundExecutionRegistry,
+        registry: &crate::tools::call::hook::BackgroundExecutionRegistry,
         tool_call_id: &str,
         tool_call_doc_id: &str,
         outcome: &str,
@@ -749,7 +749,7 @@ pub(crate) mod test_support {
     #[tokio::test]
     async fn call_keyed_process_record_remains_cancellable_after_restart() {
         let directory = tempfile::tempdir().unwrap();
-        let registry = crate::hook::BackgroundExecutionRegistry::default()
+        let registry = crate::tools::call::hook::BackgroundExecutionRegistry::default()
             .with_process_records(directory.path().into());
         let process =
             OwnedTestProcess::spawn(Some(registry.process_recorder("old-call", "physical-tool")))
@@ -759,7 +759,7 @@ pub(crate) mod test_support {
             super::record_path(directory.path(), "old-call"),
         )
         .unwrap();
-        let restarted = crate::hook::BackgroundExecutionRegistry::default()
+        let restarted = crate::tools::call::hook::BackgroundExecutionRegistry::default()
             .with_process_records(directory.path().into());
         assert!(restarted.process_record("old-call", "wrong-tool").is_none());
         assert_eq!(

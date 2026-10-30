@@ -4,15 +4,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::background_tools::ProcessControlScope;
 use gents::documents::{AgentTools, IntegrationTools, PluginToolRef, Tools};
 use gents::inference::llm::message::{AssistantContent, Message, UserContent};
-use gents::plugin_job::control::control;
-use gents::plugin_job::job::{
+use gents::tools::background::job::control::control;
+use gents::tools::background::job::job::{
     JobChildState, JobControlKind, JobControlOutcome, JobControlRequest, JobSpawn, JobState,
     PluginJobSettings,
 };
-use gents::tool_control::{
+use gents::tools::background::status::ProcessControlScope;
+use gents::tools::call::control::{
     cancel_background_tool_call, cancel_session_background_process, CancelBackgroundToolCallOutcome,
 };
 use gents::{
@@ -42,7 +42,7 @@ use crate::support::{test_db, test_p2p_db, TestDb};
 const STOP_PROMPT: &str = "plugin-job-stop-prompt";
 const TOOL_CALL: &str = "job-k";
 
-fn entry(when: Value, output: gents::plugin_job::job::JobStepOutput) -> PlanEntry {
+fn entry(when: Value, output: gents::tools::background::job::job::JobStepOutput) -> PlanEntry {
     PlanEntry {
         when,
         output,

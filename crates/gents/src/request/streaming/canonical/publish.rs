@@ -205,9 +205,9 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
             let mut tool_inputs = Vec::with_capacity(encoded.tool_calls.len());
             for tool in &encoded.tool_calls {
                 let await_mode = if background_calls.contains(&tool.id) {
-                    crate::tool_call_lifecycle::AwaitMode::Background
+                    crate::tools::call::lifecycle::AwaitMode::Background
                 } else {
-                    crate::tool_call_lifecycle::AwaitMode::Foreground
+                    crate::tools::call::lifecycle::AwaitMode::Foreground
                 };
                 let tool_call_key = format!("{}:{}:{}", prepared.request_doc_id, message_key, tool.native_index);
                 tool_call_keys.push(tool_call_key.clone());
@@ -283,9 +283,9 @@ pub(in crate::request::streaming) async fn publish_provider_turn_with_time(
                     execution_generation: generation.to_owned(),
                     arguments: PayloadRef { close_doc_id: close_doc_id.clone(), stream: tool.arguments_stream },
                     await_mode: if background_calls.contains(&tool.id) {
-                        crate::tool_call_lifecycle::AwaitMode::Background
+                        crate::tools::call::lifecycle::AwaitMode::Background
                     } else {
-                        crate::tool_call_lifecycle::AwaitMode::Foreground
+                        crate::tools::call::lifecycle::AwaitMode::Foreground
                     },
                 }
             }).collect();
@@ -416,16 +416,16 @@ async fn replay_publication_in_txn(
                     == Some("pending"),
             "publication replay pending tool binding changed"
         );
-        let await_mode = crate::tool_call_lifecycle::AwaitMode::from_persisted(
+        let await_mode = crate::tools::call::lifecycle::AwaitMode::from_persisted(
             tool["await_mode"]
                 .as_str()
                 .context("publication replay lacks await mode")?,
         )
         .context("publication replay has invalid await mode")?;
         let planned = if background_calls.contains(id) {
-            crate::tool_call_lifecycle::AwaitMode::Background
+            crate::tools::call::lifecycle::AwaitMode::Background
         } else {
-            crate::tool_call_lifecycle::AwaitMode::Foreground
+            crate::tools::call::lifecycle::AwaitMode::Foreground
         };
         if await_mode != planned {
             return Err(ProviderReplayRejection::AwaitModeChanged.into());

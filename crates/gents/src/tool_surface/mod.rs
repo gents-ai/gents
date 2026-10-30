@@ -195,8 +195,8 @@ impl ToolSurface {
 
     pub(crate) fn job_tools(
         &self,
-    ) -> rapidhash::RapidHashMap<String, crate::plugin_job::JobBinding> {
-        crate::plugin_job::JobBinding::bind_all(&self.plugin_resolutions)
+    ) -> rapidhash::RapidHashMap<String, crate::tools::background::job::JobBinding> {
+        crate::tools::background::job::JobBinding::bind_all(&self.plugin_resolutions)
     }
 
     pub fn allowed_mcp_service_ids(&self) -> &[String] {

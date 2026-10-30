@@ -187,7 +187,9 @@ impl P2pTool {
             self.node.node_identity_did() == Some(identity.did()),
             "P2P administration requires the running node DID"
         );
-        if let Some(context) = crate::tool_call_lifecycle::runtime::current_tool_runtime_context() {
+        if let Some(context) =
+            crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
+        {
             ensure!(
                 context.node_did.as_deref() == Some(identity.did()),
                 "P2P tool node DID differs from the running request"

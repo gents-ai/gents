@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use crate::background_tools::{DEFAULT_WAIT_PROCESS_TIMEOUT_SECS, MAX_WAIT_PROCESS_TIMEOUT_SECS};
+use crate::tools::background::status::{
+    DEFAULT_WAIT_PROCESS_TIMEOUT_SECS, MAX_WAIT_PROCESS_TIMEOUT_SECS,
+};
 use crate::toolset::lsp::{
     DEFAULT_ACTION_TIMEOUT_SECS, MAX_ACTION_TIMEOUT_SECS, MIN_REQUESTED_ACTION_TIMEOUT_SECS,
 };

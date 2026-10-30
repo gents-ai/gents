@@ -325,12 +325,12 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
         lifecycle.claim_with_identity().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
     );
-    crate::hook::DefraSessionHook::resume_with_identity_policy(
+    crate::tools::call::hook::DefraSessionHook::resume_with_identity_policy(
         node.clone(),
         session_id,
         &owner,
         verified.requester_did.as_deref(),
-        crate::hook::FailurePolicy::FailClosed,
+        crate::tools::call::hook::FailurePolicy::FailClosed,
     )
     .await
     .expect("the fire resumes the paired client's session");

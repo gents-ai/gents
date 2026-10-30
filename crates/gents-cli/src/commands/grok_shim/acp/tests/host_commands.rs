@@ -230,10 +230,10 @@ async fn job_state(
     session: &str,
     call: &str,
 ) -> gents_protocol::job::JobState {
-    gents::plugin_job::view::load_job_view(
+    gents::tools::background::job::view::load_job_view(
         &ConfigAccess::local(service.config.node.clone()),
         None,
-        gents::plugin_job::view::JobKey::Address {
+        gents::tools::background::job::view::JobKey::Address {
             session_id: session.into(),
             tool_call_id: call.into(),
         },

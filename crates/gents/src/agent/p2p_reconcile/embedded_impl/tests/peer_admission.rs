@@ -245,7 +245,7 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
     let mut followup =
-        crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request(
+        crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request(
             coordinator.clone(),
             &mut parent_lifecycle,
             &coordinator_did,
@@ -253,7 +253,7 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
             crate::toolset::AGENT_MESSAGE_TOOL_NAME,
             "peer-interrupt-message",
             serde_json::json!({"session_id": active.session_id, "message": "change direction", "delivery": "interrupt"}),
-            crate::tool_call_lifecycle::AwaitMode::Background,
+            crate::tools::call::lifecycle::AwaitMode::Background,
             false,
         )
         .await

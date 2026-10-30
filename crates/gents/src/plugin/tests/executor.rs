@@ -316,7 +316,7 @@ mod bound {
     use crate::plugin::executor::BindContext;
     use crate::plugin::tests::{create_file_wat, open_and_copy_wat};
     use crate::plugin::{allowed, approval};
-    use crate::tool_call_lifecycle::runtime::{
+    use crate::tools::call::lifecycle::runtime::{
         scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
     };
 
@@ -1055,7 +1055,7 @@ mod bound {
                         Default::default(),
                         false,
                         async move {
-                            crate::tool_call_lifecycle::runtime::call_tool_managed(
+                            crate::tools::call::lifecycle::runtime::call_tool_managed(
                                 tool.as_ref(),
                                 args(&target),
                             )
@@ -1080,7 +1080,7 @@ mod bound {
         };
         let (outcome, ()) = tokio::join!(call, operator);
         assert!(
-            matches!(&outcome, crate::tool_call_lifecycle::ToolOutcome::Completed(text) if text == r#"{"read":true}"#),
+            matches!(&outcome, crate::tools::call::lifecycle::ToolOutcome::Completed(text) if text == r#"{"read":true}"#),
             "{outcome:?}"
         );
     }
@@ -1684,7 +1684,7 @@ mod tool_writes {
 
     use super::*;
     use crate::config_client::ConfigAccess;
-    use crate::tool_call_lifecycle::admission_fixture::published_spawn_parent;
+    use crate::tools::call::lifecycle::admission_fixture::published_spawn_parent;
 
     const NODE: &str = "did:key:z6Mknode";
 
@@ -1824,21 +1824,21 @@ mod tool_writes {
         );
         call.stage_deferred_writes(Some(pending));
         if transient_terminal {
-            crate::tool_call_lifecycle::delivery::fail_next_terminal_for_test(&doc_id);
+            crate::tools::call::lifecycle::delivery::fail_next_terminal_for_test(&doc_id);
         }
         match &result {
             Ok(text) => call.complete(text).await.unwrap(),
             Err(text) => call
                 .fail(
                     text,
-                    crate::tool_call_lifecycle::FailureClass::ToolReturnedError,
+                    crate::tools::call::lifecycle::FailureClass::ToolReturnedError,
                 )
                 .await
                 .unwrap(),
         }
         assert!(
             !transient_terminal
-                || !crate::tool_call_lifecycle::delivery::terminal_failure_pending_for_test(
+                || !crate::tools::call::lifecycle::delivery::terminal_failure_pending_for_test(
                     &doc_id
                 ),
             "the first terminal transaction must have failed before the replay"
@@ -1977,19 +1977,19 @@ mod job_calls {
     use serde_json::{json, Value};
 
     use super::*;
-    use crate::background_tools::ProcessControlScope;
     use crate::config_client::ConfigAccess;
     use crate::plugin::data::StampContext;
     use crate::plugin::executor::PluginCall;
     use crate::plugin::job_calls::JobCaller;
     use crate::plugin::PluginVerdict;
-    use crate::plugin_job::driver::{settle_plugin_job, Settlement};
-    use crate::plugin_job::input::tests::{completed_request, open};
-    use crate::plugin_job::keys::{job_session_id, job_spawn_key};
-    use crate::tool_call_lifecycle::admission_fixture::{
+    use crate::tools::background::job::driver::{settle_plugin_job, Settlement};
+    use crate::tools::background::job::input::tests::{completed_request, open};
+    use crate::tools::background::job::keys::{job_session_id, job_spawn_key};
+    use crate::tools::background::status::ProcessControlScope;
+    use crate::tools::call::lifecycle::admission_fixture::{
         fixture_job_pin, published_admission, PublishedAdmission, PublishedAdmissionOptions,
     };
-    use crate::tool_call_lifecycle::AwaitMode;
+    use crate::tools::call::lifecycle::AwaitMode;
 
     const CHAIN: &str = "chain-row";
 

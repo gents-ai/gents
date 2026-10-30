@@ -4,7 +4,7 @@ use crate::request::lifecycle::{
 };
 use crate::request::streaming::DefraStreamWriter;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
-use crate::tool_call_lifecycle::{AwaitMode, ToolCallLifecycle};
+use crate::tools::call::lifecycle::{AwaitMode, ToolCallLifecycle};
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
@@ -79,7 +79,7 @@ async fn publish_accepted_turn(
     tool_call_id: &str,
     tool_name: &str,
     arguments: &serde_json::Value,
-) -> (crate::tool_call_lifecycle::AcceptedToolCall, String) {
+) -> (crate::tools::call::lifecycle::AcceptedToolCall, String) {
     writer
         .start_provider_attempt(
             &lifecycle.request().doc_id,
@@ -119,7 +119,7 @@ async fn publish_accepted_turn(
 async fn terminalize_accepted_tool(
     node: &Arc<EmbeddedNode>,
     lifecycle: &mut RequestLifecycle,
-    accepted: crate::tool_call_lifecycle::AcceptedToolCall,
+    accepted: crate::tools::call::lifecycle::AcceptedToolCall,
     completed: bool,
 ) -> ToolCallLifecycle {
     let deadline = lifecycle
@@ -141,7 +141,7 @@ async fn terminalize_accepted_tool(
         assert!(tool
             .fail_owned(
                 "write failed",
-                crate::tool_call_lifecycle::FailureClass::External,
+                crate::tools::call::lifecycle::FailureClass::External,
                 None
             )
             .await

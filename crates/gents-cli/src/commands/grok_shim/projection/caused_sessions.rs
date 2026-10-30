@@ -483,7 +483,9 @@ async fn final_output(node: &Arc<EmbeddedNode>, request: &AgentRequestRow) -> Re
         .as_deref()
         .context("terminal caused request omitted physical identity")?;
     match gents::load_caused_request_terminal(node, request_doc_id).await? {
-        Some(gents::tool_call_lifecycle::CausedRequestTerminal::Completed { output }) => Ok(output),
+        Some(gents::tools::call::lifecycle::CausedRequestTerminal::Completed { output }) => {
+            Ok(output)
+        }
         Some(_) => anyhow::bail!("caused request did not complete"),
         None => anyhow::bail!("completed caused request has no replicated terminal output yet"),
     }

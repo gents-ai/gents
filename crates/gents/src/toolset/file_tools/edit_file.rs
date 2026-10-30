@@ -13,7 +13,7 @@ use super::{
     content_hash, deny_workspace_file_writes, file_mutation_lock_for, merge_optional_notes,
     render_tool_output,
 };
-use crate::tool_call_lifecycle::FailureClass;
+use crate::tools::call::lifecycle::FailureClass;
 
 #[derive(Clone)]
 pub(in crate::toolset) struct EditFileTool {

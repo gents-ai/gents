@@ -159,7 +159,7 @@ where
                             escape_graphql_string(parent_doc))).await?;
                         let receipt = receipt.pointer("/data/AgentRequest/0").context("failed wake receipt disappeared")?;
                         let retained = receipt["background_completion_notification_keys_json"].as_str()
-                            .map(crate::background_completion::notification_receipt_keys).transpose()?.unwrap_or_default();
+                            .map(crate::tools::background::completion::notification_receipt_keys).transpose()?.unwrap_or_default();
                         let cutoff = receipt["background_completion_input_through_sequence"].as_u64();
                         anyhow::ensure!(retained.is_empty() || cutoff.zip(through_sequence.map(u64::from)).is_some_and(|(prior,current)| prior <= current),
                             "failed wake receipt has no available revision cutoff");

@@ -319,7 +319,7 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
         ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
     };
     use crate::request::streaming::DefraStreamWriter;
-    use crate::tool_call_lifecycle::runtime::{
+    use crate::tools::call::lifecycle::runtime::{
         scope_request_tool_execution_with_session, scope_tool_request_identity,
     };
     use std::time::Duration;

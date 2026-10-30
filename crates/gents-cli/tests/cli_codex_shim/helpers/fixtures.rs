@@ -290,7 +290,7 @@ async fn seed_canonical_tool_transcript(
         )
         .await?;
     }
-    let presentation = gents::tool_call_lifecycle::load_tool_call_presentation(
+    let presentation = gents::tools::call::lifecycle::load_tool_call_presentation(
         &access,
         tool_call_doc_id,
         node_did,
@@ -628,7 +628,7 @@ pub(super) async fn seed_background_completion_wake(
         node_did,
         agent_id,
         session_id,
-        gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+        gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
         "scheduled",
         &wake_created_at,
         admission,

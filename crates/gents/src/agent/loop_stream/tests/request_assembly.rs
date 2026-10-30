@@ -211,7 +211,7 @@ async fn loop_entry_sanitizes_a_recovered_checkpoint_as_one_projection() {
 
     let collected = collect_scripted_stream(run_loop_stream(
         model.clone(),
-        None::<crate::hook::DefraSessionHook>,
+        None::<crate::tools::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(result),
         (vec![call])
             .into_iter()
@@ -738,7 +738,7 @@ async fn repair_sanitizes_poisoned_tool_args_in_loaded_history() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None::<crate::hook::DefraSessionHook>,
+        None::<crate::tools::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("hi")),
         (history)
             .into_iter()

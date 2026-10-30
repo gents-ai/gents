@@ -7,9 +7,6 @@ pub(crate) mod support;
 
 pub mod adapter_projection;
 pub mod agent;
-pub mod background_completion;
-mod background_completion_diagnostics;
-pub mod background_tools;
 pub mod codex_shim_binding;
 pub(crate) mod completion_factory;
 pub mod config_client;
@@ -27,7 +24,6 @@ pub mod file_lock;
 pub mod goal;
 pub mod graphql;
 pub mod health_checker;
-pub mod hook;
 pub mod inference;
 pub mod inference_observation;
 #[cfg(test)]
@@ -39,7 +35,6 @@ pub mod p2p_observability;
 pub mod p2p_tool;
 pub mod pack;
 pub mod plugin;
-pub mod plugin_job;
 pub(crate) mod provider_input;
 pub mod ux_data;
 pub use gents_loop::provider_input::ProviderInputProfile;
@@ -313,9 +308,8 @@ pub(crate) mod runtime_trace;
 pub mod schema_tool;
 pub mod self_config;
 pub mod session;
-pub mod tool_call_lifecycle;
-pub mod tool_control;
 pub mod tool_surface;
+pub mod tools;
 pub mod toolset;
 pub mod trace_export;
 pub mod triggers;
@@ -337,13 +331,6 @@ pub use agent::{
     AgentBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
     ProcessLifecycleState, RuntimeSnapshotObserver,
 };
-pub(crate) use background_completion_diagnostics::load_background_completion_diagnostics_for_session;
-pub use background_completion_diagnostics::{
-    load_background_completion_diagnostics, BackgroundCompletionDiagnostics,
-    BackgroundCompletionEpochDiagnostic,
-};
-pub use background_tools::load_caused_request_terminal;
-pub use background_tools::status_projection::OutputEvidence;
 pub use config_client::ConfigAccess;
 pub use defra_node;
 pub use documents::template::{
@@ -370,9 +357,6 @@ pub use gents_protocol::client_protocol;
 pub use health_checker::{
     run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthPersistenceContext,
     HealthStatus, MCPServiceHealthSnapshot, McpHealthCheckService, ServiceHealth, ServiceHealthMap,
-};
-pub use hook::{
-    BackgroundExecutionRegistry, BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats,
 };
 pub use inference::admission::call_state_holds_backend_slot;
 pub use inference::admission::BackendAdmissionConfig;
@@ -458,11 +442,21 @@ pub use store::schema::{
     OAUTH_CREDENTIAL_SCHEMA, SCHEDULE_SCHEMA, TASK_SCHEMA, TOOLS_SCHEMA,
     TOOL_SERVICE_HEALTH_STATE_SCHEMA, TOOL_SERVICE_REGISTRY_SCHEMA,
 };
-pub use tool_control::{cancel_background_tool_call, CancelBackgroundToolCallOutcome};
 pub use tool_surface::{
     cli_tool, AgentToolSurfaceConfig, BashMode, CustomToolFactory, FileToolMode,
     ResolvedToolSelection, ToolCeiling, ToolPolicyVersion, ToolRuntimeContext, ToolSurface,
     TOOL_POLICY_V1,
+};
+pub(crate) use tools::background::diagnostics::load_background_completion_diagnostics_for_session;
+pub use tools::background::diagnostics::{
+    load_background_completion_diagnostics, BackgroundCompletionDiagnostics,
+    BackgroundCompletionEpochDiagnostic,
+};
+pub use tools::background::status::load_caused_request_terminal;
+pub use tools::background::status::status_projection::OutputEvidence;
+pub use tools::call::control::{cancel_background_tool_call, CancelBackgroundToolCallOutcome};
+pub use tools::call::hook::{
+    BackgroundExecutionRegistry, BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats,
 };
 pub use toolset::{
     build_native_tools, enable_self_runner, CliToolConfig, CommandExecutionMode,

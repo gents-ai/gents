@@ -812,7 +812,7 @@ pub(crate) async fn issue_creation_receipt_in_txn(
                     let Some(key) = request.retry_key.as_deref() else {
                         return Ok(None);
                     };
-                    if crate::plugin_job::keys::decode_job_retry_key(key).is_none() {
+                    if crate::tools::background::job::keys::decode_job_retry_key(key).is_none() {
                         return Ok(None);
                     }
                     (
@@ -1028,7 +1028,7 @@ pub async fn verified_agent_new_creation(
     if receipt.cause_binding != call_doc {
         return Ok(false);
     }
-    let Ok(read) = crate::tool_call_lifecycle::query::load_tool_call_read(
+    let Ok(read) = crate::tools::call::lifecycle::query::load_tool_call_read(
         access,
         call_doc,
         &caller.node_did,
@@ -1055,7 +1055,7 @@ fn deferred_creation_allowed(kind: bool, receipt: bool, opening: bool, cause: bo
 mod creation_receipt_conformance;
 
 fn agent_receipt_matches(
-    read: &crate::tool_call_lifecycle::query::CanonicalToolCallRead,
+    read: &crate::tools::call::lifecycle::query::CanonicalToolCallRead,
     request: &AgentRequestRow,
     opening: &str,
     call_id: &str,
@@ -1072,7 +1072,7 @@ fn agent_receipt_matches(
     let Some(result) = &read.result else {
         return false;
     };
-    let Ok(text) = crate::tool_call_lifecycle::render_tool_result(result) else {
+    let Ok(text) = crate::tools::call::lifecycle::render_tool_result(result) else {
         return false;
     };
     let Ok(receipt) = serde_json::from_str::<crate::session::message::SessionMessageReceipt>(&text)
@@ -1105,7 +1105,8 @@ where
     ) else {
         return Ok(None);
     };
-    let Some((slot, attempt)) = crate::plugin_job::keys::decode_job_retry_key(key) else {
+    let Some((slot, attempt)) = crate::tools::background::job::keys::decode_job_retry_key(key)
+    else {
         return Ok(None);
     };
     let parents = collection(
@@ -1151,12 +1152,20 @@ where
         && call["session_id"].as_str() == Some(session)
         && call["requester_did"].as_str() == parent.requester_did.as_deref()
         && call["tool_call_id"].as_str() == Some(call_id);
-    let exact_key =
-        key == crate::plugin_job::keys::job_spawn_key(&pin.chain_root_doc_id, &slot, attempt);
+    let exact_key = key
+        == crate::tools::background::job::keys::job_spawn_key(
+            &pin.chain_root_doc_id,
+            &slot,
+            attempt,
+        );
     let exact_spawn = request.session_id.as_deref()
         == Some(
-            crate::plugin_job::keys::job_session_id(&pin.chain_root_doc_id, &slot, attempt)
-                .as_str(),
+            crate::tools::background::job::keys::job_session_id(
+                &pin.chain_root_doc_id,
+                &slot,
+                attempt,
+            )
+            .as_str(),
         );
     if !job_creation_matches(true, exact_job, exact_key, exact_spawn) {
         return Ok(None);
@@ -1211,7 +1220,7 @@ async fn agent_new_binding_in_txn(
     {
         return Ok(None);
     }
-    let Ok(read) = crate::tool_call_lifecycle::query::load_tool_call_read_in_txn(
+    let Ok(read) = crate::tools::call::lifecycle::query::load_tool_call_read_in_txn(
         txn,
         call_doc,
         node,

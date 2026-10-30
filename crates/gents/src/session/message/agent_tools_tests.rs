@@ -1,9 +1,9 @@
 use super::target::session_target_allowed;
 use super::*;
-use crate::tool_call_lifecycle::admission_fixture::{
+use crate::tools::call::lifecycle::admission_fixture::{
     published_session_message, PublishedAdmissionOptions, PublishedSessionMessage,
 };
-use crate::tool_call_lifecycle::AwaitMode;
+use crate::tools::call::lifecycle::AwaitMode;
 
 pub(super) async fn started(
     name: &str,
@@ -571,7 +571,7 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
 #[tokio::test]
 async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() {
     use crate::store::identity::NodeIdentity;
-    use crate::tool_call_lifecycle::admission_fixture::{
+    use crate::tools::call::lifecycle::admission_fixture::{
         materialize_session_message, published_admission_with_owner, test_p2p_config,
     };
     use defra_p2p_adapter::P2pDocumentRequest;
@@ -1243,7 +1243,7 @@ async fn session_listing_pages_by_logical_labels_and_compares_timestamp_instants
 #[tokio::test]
 async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
     let (message, mut caller_owner) =
-        crate::tool_call_lifecycle::admission_fixture::published_session_message_with_owner(
+        crate::tools::call::lifecycle::admission_fixture::published_session_message_with_owner(
             PublishedAdmissionOptions {
                 name: "agent-session-discovery".to_owned(),
                 real_identity: true,
@@ -1343,7 +1343,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
     let identity =
         crate::KeyIdentity::load_or_create(message.admission.path.join("test-agent.key"), None)
             .unwrap();
-    let mut worker = crate::tool_call_lifecycle::admission_fixture::claimed_signed_request_with_trigger_correlation(
+    let mut worker = crate::tools::call::lifecycle::admission_fixture::claimed_signed_request_with_trigger_correlation(
         &node, "trigger-worker-request", "correlated-worker", &identity, None,
         Some("shard-assignment"), Some("R3a"),
     ).await;
@@ -1362,7 +1362,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
         .unwrap()
         .unwrap();
     let mut send_call =
-        crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request(
+        crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request(
             node.clone(),
             &mut caller_owner,
             &caller.node_did,

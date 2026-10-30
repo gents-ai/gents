@@ -538,10 +538,10 @@ mod tests {
     #[tokio::test]
     async fn trigger_worker_inspection_reads_canonical_output_status_and_goal() {
         use crate::store::identity::NodeIdentity;
-        use crate::tool_call_lifecycle::admission_fixture::{
+        use crate::tools::call::lifecycle::admission_fixture::{
             claimed_signed_request_with_trigger_correlation, publish_accepted_on_claimed_request,
         };
-        use crate::tool_call_lifecycle::AwaitMode;
+        use crate::tools::call::lifecycle::AwaitMode;
         let (message, caller, _) =
             super::super::agent_tools_tests::started("agent-session-inspection").await;
         let node = message.admission.node.clone();

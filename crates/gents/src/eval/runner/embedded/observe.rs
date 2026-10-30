@@ -559,10 +559,10 @@ mod tests {
     async fn request_evidence_maps_every_source_it_reads() {
         use crate::request::lifecycle::RequestTerminalOutcome;
         use crate::request::streaming::DefraStreamWriter;
-        use crate::tool_call_lifecycle::admission_fixture::{
+        use crate::tools::call::lifecycle::admission_fixture::{
             claimed_signed_request, publish_accepted_on_claimed_request,
         };
-        use crate::tool_call_lifecycle::{AwaitMode, FailureClass};
+        use crate::tools::call::lifecycle::{AwaitMode, FailureClass};
         use gents_protocol::message::{AssistantContent, Message, Text};
         use gents_protocol::output::TerminalOutput;
         let home = EmbeddedHome::create_temp("observe-evidence").await.unwrap();

@@ -148,10 +148,10 @@ async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_o
     use gents_protocol::message::Message;
     let (node, path, mut lifecycle, writer) = fixture("owned-input").await;
     let request_doc_id = lifecycle.request().doc_id.clone();
-    let hook = crate::hook::DefraSessionHook::with_identity(
+    let hook = crate::tools::call::hook::DefraSessionHook::with_identity(
         node.clone(),
         "did:test:test",
-        crate::hook::FailurePolicy::default(),
+        crate::tools::call::hook::FailurePolicy::default(),
     );
     assert!(
         crate::session::load_history(&node, "session-owned-input", "did:test:test", None)
@@ -1615,22 +1615,22 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
     assert_eq!(a.accepted_header_doc_id, first.message_doc_id);
 
     let deadline = lifecycle.claimed_deadline_at().unwrap();
-    let mut first_dispatch = crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
+    let mut first_dispatch = crate::tools::call::lifecycle::ToolCallLifecycle::from_accepted(
         node.clone(),
         lifecycle.request().node_did.clone(),
         lifecycle.request().requester_did.clone(),
         a.clone(),
         deadline,
-        crate::tool_call_lifecycle::AwaitMode::Foreground,
+        crate::tools::call::lifecycle::AwaitMode::Foreground,
     )
     .unwrap();
-    let mut replay_dispatch = crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
+    let mut replay_dispatch = crate::tools::call::lifecycle::ToolCallLifecycle::from_accepted(
         node.clone(),
         lifecycle.request().node_did.clone(),
         lifecycle.request().requester_did.clone(),
         b.clone(),
         deadline,
-        crate::tool_call_lifecycle::AwaitMode::Foreground,
+        crate::tools::call::lifecycle::AwaitMode::Foreground,
     )
     .unwrap();
     let (first_start, replay_start) = tokio::join!(
@@ -1686,7 +1686,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
     assert_eq!(completed_tools.len(), 1);
     assert_eq!(completed_tools[0]["_docID"], a.tool_call_doc_id);
     assert_eq!(completed_tools[0]["lifecycle_state"], "completed");
-    let output = crate::background_tools::canonical_tool_output(
+    let output = crate::tools::background::status::canonical_tool_output(
         &node,
         &a.tool_call_doc_id,
         &lifecycle.request().doc_id,

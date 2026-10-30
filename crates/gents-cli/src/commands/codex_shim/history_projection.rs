@@ -946,7 +946,7 @@ mod tests {
         };
         let request = request_row(json!({
             "request_id": "wake-1",
-            "content": gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+            "content": gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
             "lifecycle_state": "completed",
             "input": {"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:thread-1"}},
             "execution_origin": "scheduled"

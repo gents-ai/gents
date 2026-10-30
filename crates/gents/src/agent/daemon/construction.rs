@@ -155,7 +155,7 @@ where
 
     pub(in crate::agent) fn with_job_tools(
         mut self,
-        job_tools: rapidhash::RapidHashMap<String, crate::plugin_job::JobBinding>,
+        job_tools: rapidhash::RapidHashMap<String, crate::tools::background::job::JobBinding>,
     ) -> Self {
         self.job_tools = job_tools;
         self
@@ -163,7 +163,7 @@ where
 
     pub(in crate::agent) fn with_job_driver(
         mut self,
-        driver: Arc<crate::plugin_job::driver::JobDriver>,
+        driver: Arc<crate::tools::background::job::driver::JobDriver>,
     ) -> Self {
         self.job_driver = Some(driver);
         self

@@ -1,7 +1,7 @@
 use super::*;
 use crate::lean_vocab_test::{lean_plugin_job_recovery_cases, LeanPluginJobRecoveryRow};
-use gents::plugin_job::admit::{is_stalled, Refusal};
-use gents::plugin_job::recovery::{
+use gents::tools::background::job::admit::{is_stalled, Refusal};
+use gents::tools::background::job::recovery::{
     step_invocation_allowed, tick_action, RecoveryFacts, TickAction,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -149,7 +149,7 @@ async fn generated_plugin_job_recovery_cases_drive_redrive_owner() {
         if case.row.session_stopped {
             assert_eq!(
                 action,
-                TickAction::Kill(gents::plugin_job::control::KillCause::Stop),
+                TickAction::Kill(gents::tools::background::job::control::KillCause::Stop),
                 "{name}"
             );
         }

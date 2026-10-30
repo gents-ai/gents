@@ -63,7 +63,7 @@ type Result<T, E = LiveOutputError> = std::result::Result<T, E>;
 pub const COMMAND_OUTPUT_VOLATILE_FIELDS: [&str; 2] = ["duration_ms", "hint"];
 
 /// Rendered between stdout and stderr when a live buffer's combined stream
-/// starts carrying stderr bytes; shared verbatim with `gents::background_tools`.
+/// starts carrying stderr bytes; shared verbatim with `gents::tools::background::status`.
 pub const STDERR_BOUNDARY: &str = "\n--- stderr ---\n";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

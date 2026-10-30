@@ -435,11 +435,11 @@ fn direct_child_without_tool_lineage_is_valid_but_half_bridge_is_rejected() {
 
 #[tokio::test]
 async fn accepted_tool_arguments_read_only_the_accepted_message() {
-    use crate::tool_call_lifecycle::admission_fixture::{
+    use crate::tools::call::lifecycle::admission_fixture::{
         publish_accepted_on_claimed_request, published_admission_with_owner,
         PublishedAdmissionOptions,
     };
-    use crate::tool_call_lifecycle::AwaitMode;
+    use crate::tools::call::lifecycle::AwaitMode;
     use gents_protocol::output::{
         MessageBlock, MessagePublication, MessageRole, OutputOutcome, PayloadRef, TranscriptMessage,
     };

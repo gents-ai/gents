@@ -727,10 +727,10 @@ mod tests {
 
     #[tokio::test]
     async fn job_rows_keep_child_request_id_none() {
-        use crate::tool_call_lifecycle::admission_fixture::{
+        use crate::tools::call::lifecycle::admission_fixture::{
             claimed_request, publish_accepted_on_claimed_request, write_fixture_job_pin,
         };
-        use crate::tool_call_lifecycle::AwaitMode;
+        use crate::tools::call::lifecycle::AwaitMode;
 
         const NODE_DID: &str = "did:test:job-timeline";
         let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());

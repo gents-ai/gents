@@ -5,7 +5,7 @@ use crate::agent::p2p_reconcile::file_image_hydration::{
     FileImageSelection, FileImageTool,
 };
 use crate::config_client::ConfigAccess;
-use crate::tool_call_lifecycle::{load_tool_file_change_observation, ToolFileChangeRead};
+use crate::tools::call::lifecycle::{load_tool_file_change_observation, ToolFileChangeRead};
 use gents_protocol::file_image_hydration::{
     FileImageHydrationReceipt, FileImageInventoryReference,
 };

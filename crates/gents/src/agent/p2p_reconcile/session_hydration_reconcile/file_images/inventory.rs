@@ -5,7 +5,7 @@ use crate::agent::p2p_reconcile::file_image_hydration::{
 };
 use crate::config_client::ConfigApplyTxn;
 use crate::file_inventory::delivery::load_prepared_in_txn;
-use crate::tool_call_lifecycle::load_tool_file_change_observation_in_txn;
+use crate::tools::call::lifecycle::load_tool_file_change_observation_in_txn;
 
 struct SelectedInventoryImage {
     catalog: HydrationCatalog,

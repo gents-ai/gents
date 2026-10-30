@@ -163,19 +163,20 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     .await
     .unwrap();
     let job_home = tempfile::tempdir().unwrap();
-    let job_driver =
-        gents::plugin_job::driver::JobDriver::new(gents::plugin_job::driver::JobRuntime {
+    let job_driver = gents::tools::background::job::driver::JobDriver::new(
+        gents::tools::background::job::driver::JobRuntime {
             node: db.node.clone(),
             plugins: std::sync::Arc::new(gents::plugin::executor::PluginExecutor::new(None)),
             home: job_home.path().to_path_buf(),
             tool_root: None,
-        });
+        },
+    );
     gents::session::resume_session(
         &db.node,
         node_did,
         &stopped_session,
         None,
-        gents::hook::BackgroundExecutionRegistry::default(),
+        gents::tools::call::hook::BackgroundExecutionRegistry::default(),
         job_driver,
     )
     .await
@@ -261,20 +262,21 @@ async fn generated_resume_after_settlement_stages_the_paused_goal_continuation()
     );
 
     let job_home = tempfile::tempdir().unwrap();
-    let job_driver =
-        gents::plugin_job::driver::JobDriver::new(gents::plugin_job::driver::JobRuntime {
+    let job_driver = gents::tools::background::job::driver::JobDriver::new(
+        gents::tools::background::job::driver::JobRuntime {
             node: db.node.clone(),
             plugins: std::sync::Arc::new(gents::plugin::executor::PluginExecutor::new(None)),
             home: job_home.path().to_path_buf(),
             tool_root: None,
-        });
+        },
+    );
     let resume = || {
         gents::session::resume_session(
             &db.node,
             node_did,
             &session_id,
             Some(node_did),
-            gents::hook::BackgroundExecutionRegistry::default(),
+            gents::tools::call::hook::BackgroundExecutionRegistry::default(),
             job_driver.clone(),
         )
     };

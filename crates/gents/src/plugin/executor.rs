@@ -421,7 +421,7 @@ impl PluginExecutor {
         data: Option<DataCaller>,
         jobs: Option<JobCaller>,
     ) -> Result<PluginCall> {
-        let session = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
+        let session = crate::tools::call::lifecycle::runtime::current_tool_runtime_context();
         let workdir = session
             .as_ref()
             .and_then(|context| context.workspace_cwd.clone())

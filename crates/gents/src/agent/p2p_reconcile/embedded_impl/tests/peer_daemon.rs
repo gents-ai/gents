@@ -124,7 +124,7 @@ pub(super) async fn seed_peer_session_message(
     prompt: &str,
     turn: usize,
 ) -> String {
-    use crate::tool_call_lifecycle::{AwaitMode, ToolCallLifecycle};
+    use crate::tools::call::lifecycle::{AwaitMode, ToolCallLifecycle};
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
     writer
         .start_provider_attempt(

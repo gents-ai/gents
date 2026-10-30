@@ -38,12 +38,12 @@ impl ShutdownDrainFailure {
 }
 
 use super::runtime::StartupBarrier;
-use crate::hook::FailurePolicy;
 use crate::inference::compaction::{ReductionEngine, ReductionOptions};
 use crate::inference::resolved::ResolvedAgent;
 use crate::prompt::LayeredPromptBuilder;
 use crate::request::watcher::AgentRequest;
 use crate::runtime_trace::{record_current_claim_outcome, record_current_request_outcome};
+use crate::tools::call::hook::FailurePolicy;
 
 /// Task hooks and workspace write/integration effects must finish before their
 /// request terminalizes; only requests without such effects may finish inside
@@ -125,12 +125,12 @@ where
     hook_failure_policy: FailurePolicy,
     rendered_request_capture_factory:
         Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
-    background_tool_registry: crate::hook::BackgroundToolRegistry,
-    background_execution_registry: crate::hook::BackgroundExecutionRegistry,
+    background_tool_registry: crate::tools::call::hook::BackgroundToolRegistry,
+    background_execution_registry: crate::tools::call::hook::BackgroundExecutionRegistry,
     inference_observations: crate::inference_observation::InferenceObservationRegistry,
     remote_tools: Option<crate::documents::RemoteTools>,
-    job_tools: rapidhash::RapidHashMap<String, crate::plugin_job::JobBinding>,
-    job_driver: Option<Arc<crate::plugin_job::driver::JobDriver>>,
+    job_tools: rapidhash::RapidHashMap<String, crate::tools::background::job::JobBinding>,
+    job_driver: Option<Arc<crate::tools::background::job::driver::JobDriver>>,
     output_obligations: Arc<Vec<(String, crate::documents::WriteToolOutputObligation)>>,
     startup_barrier: Arc<StartupBarrier>,
     runtime_status: crate::runtime_status::RuntimeStatusHandle,
@@ -193,8 +193,8 @@ where
     pub(super) hook_failure_policy: FailurePolicy,
     pub(super) rendered_request_capture_factory:
         Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
-    pub(super) background_tool_registry: crate::hook::BackgroundToolRegistry,
-    pub(super) background_execution_registry: crate::hook::BackgroundExecutionRegistry,
+    pub(super) background_tool_registry: crate::tools::call::hook::BackgroundToolRegistry,
+    pub(super) background_execution_registry: crate::tools::call::hook::BackgroundExecutionRegistry,
     pub(super) startup_barrier: Arc<StartupBarrier>,
     pub(super) runtime_status: crate::runtime_status::RuntimeStatusHandle,
     pub(super) slot_generation: u64,

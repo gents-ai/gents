@@ -13,7 +13,7 @@ pub(crate) enum CausedObservation {
 
 pub(crate) async fn observe_caused_request(
     node: &std::sync::Arc<EmbeddedNode>,
-    lifecycle: &crate::tool_call_lifecycle::ToolCallLifecycle,
+    lifecycle: &crate::tools::call::lifecycle::ToolCallLifecycle,
 ) -> Result<CausedObservation> {
     let tool_call_doc_id = lifecycle
         .doc_id()
@@ -87,13 +87,14 @@ pub(crate) enum KillOutcome {
 /// (interrupted; a failed peer interrupt is only logged).
 pub(crate) async fn kill_caused_request(
     node: &std::sync::Arc<EmbeddedNode>,
-    lifecycle: &mut crate::tool_call_lifecycle::ToolCallLifecycle,
+    lifecycle: &mut crate::tools::call::lifecycle::ToolCallLifecycle,
     caused: &gents_protocol::row::AgentRequestRow,
 ) -> Result<Option<KillOutcome>> {
     let terminal = caused
         .lifecycle_state
         .is_some_and(gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal);
-    if terminal && crate::background_completion::settle_session_message_row(node, lifecycle).await?
+    if terminal
+        && crate::tools::background::completion::settle_session_message_row(node, lifecycle).await?
     {
         return Ok(Some(KillOutcome::Settled));
     }
@@ -134,7 +135,7 @@ pub(crate) async fn kill_caused_request(
 
 pub(crate) async fn kill(
     node: &std::sync::Arc<EmbeddedNode>,
-    lifecycle: &mut crate::tool_call_lifecycle::ToolCallLifecycle,
+    lifecycle: &mut crate::tools::call::lifecycle::ToolCallLifecycle,
 ) -> Result<KillOutcome> {
     let caused = match observe_caused_request(node, lifecycle).await? {
         CausedObservation::Bound(caused) => Some(caused),
@@ -147,13 +148,13 @@ pub(crate) async fn kill(
     }
     if lifecycle
         .cancel_during_run_owned(
-            crate::tool_call_lifecycle::CancelCause::UserCancelled,
+            crate::tools::call::lifecycle::CancelCause::UserCancelled,
             "explicit_cancel",
         )
         .await?
     {
         let calling_request_id = lifecycle.calling_request_id().await?;
-        crate::background_completion::append_background_tool_completion(
+        crate::tools::background::completion::append_background_tool_completion(
             node,
             lifecycle.session_id(),
             &calling_request_id,

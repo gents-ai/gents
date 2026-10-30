@@ -295,14 +295,14 @@ where
                         .collect::<Result<Vec<_>>>()?,
                 );
                 let workspace = match overlay {
-                    Some(overlay) => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+                    Some(overlay) => crate::tools::call::lifecycle::runtime::ToolWorkspaceScope {
                         runtime_home: None,
                         workspace_cwd: Some(overlay.cwd),
                         workspace_root: Some(overlay.root),
                         workspace_authority: Some(overlay.authority),
                         workspace_artifact: overlay.workspace_artifact,
                     },
-                    None => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope::cwd_only(
+                    None => crate::tools::call::lifecycle::runtime::ToolWorkspaceScope::cwd_only(
                         crate::workspace::request_workspace_cwd(&request),
                     ),
                 };

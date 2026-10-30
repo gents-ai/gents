@@ -87,7 +87,7 @@ fn edit(tool: &str, before: Option<&[u8]>, after: &[u8]) -> ToolFileChanges {
 
 #[tokio::test]
 async fn observations_in_one_session_have_separate_file_documents_and_read_back_exactly() {
-    use crate::tool_call_lifecycle::admission_fixture::{
+    use crate::tools::call::lifecycle::admission_fixture::{
         published_admission, PublishedAdmissionOptions,
     };
     let admission = published_admission(PublishedAdmissionOptions {
@@ -223,7 +223,7 @@ async fn observations_in_one_session_have_separate_file_documents_and_read_back_
 
 #[tokio::test]
 async fn concurrent_edits_of_one_path_keep_observation_documents_distinct() {
-    use crate::tool_call_lifecycle::admission_fixture::{
+    use crate::tools::call::lifecycle::admission_fixture::{
         published_admission, PublishedAdmissionOptions,
     };
     let admission = published_admission(PublishedAdmissionOptions {

@@ -3,7 +3,7 @@ use crate::request::lifecycle::{
     ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
 };
 use crate::store::identity::NodeIdentity;
-use crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request;
+use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
@@ -185,7 +185,7 @@ async fn check_turn_chronology(retry: bool) {
         "write_file",
         "successor-edit",
         serde_json::json!({"path":"repeated.rs"}),
-        crate::tool_call_lifecycle::AwaitMode::Foreground,
+        crate::tools::call::lifecycle::AwaitMode::Foreground,
         true,
     )
     .await

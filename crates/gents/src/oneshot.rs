@@ -10,7 +10,6 @@ use gents_loop::output_obligation::OutputObligationCheck;
 
 use crate::agent::stream_processor::{StreamAction, StreamProcessor};
 use crate::completion_factory::loop_config;
-use crate::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use crate::inference::resolved::ResolvedAgent;
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
 use crate::request::lifecycle::TerminalizeResult;
@@ -19,6 +18,7 @@ use crate::request::lifecycle::{
 };
 use crate::request::streaming::DefraStreamWriter;
 use crate::tool_surface::{self, ToolRuntimeContext};
+use crate::tools::call::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use futures::StreamExt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -364,12 +364,12 @@ where
             "provider stream ended without an explicit terminal response"
         ))
     };
-    let scoped_inference = crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
+    let scoped_inference = crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
         request.requester_did.clone(),
         Some(request.node_did.clone()),
         Some(request.agent_id.clone()),
         Some(request.request_id.clone()),
-        crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+        crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
             deadline,
             tokio_util::sync::CancellationToken::new(),
             None,

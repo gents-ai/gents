@@ -31,7 +31,7 @@ pub(super) struct CredentialProtection {
 }
 
 pub(super) async fn capture() -> Result<CredentialProtection> {
-    let runtime_home = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+    let runtime_home = crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
         .and_then(|context| context.runtime_home);
     let approval_home = crate::plugin::approval::workspace::command_context_home();
     tokio::task::spawn_blocking(move || capture_native(runtime_home, approval_home))

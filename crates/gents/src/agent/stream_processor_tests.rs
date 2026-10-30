@@ -10,11 +10,11 @@ use gents_loop::provider_input::ProviderInputProfile;
 
 use super::*;
 use crate::ensure_runtime_schemas;
-use crate::hook::FailurePolicy;
 use crate::request::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
 use crate::request::streaming::DefraStreamWriter;
 use crate::request::watcher::AgentRequest;
 use crate::test_support::first_content;
+use crate::tools::call::hook::FailurePolicy;
 
 #[path = "stream_cadence_tests.rs"]
 mod cadence;
@@ -934,7 +934,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = crate::hook::DefraSessionHook::with_identity(
+    let hook = crate::tools::call::hook::DefraSessionHook::with_identity(
         node.clone(),
         "did:test:test",
         FailurePolicy::default(),
@@ -1043,7 +1043,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
             Some(model_result_id.to_string()),
             stored_call_id,
             tool_args,
-            &crate::tool_call_lifecycle::ToolOutcome::Completed(tool_result.to_string()),
+            &crate::tools::call::lifecycle::ToolOutcome::Completed(tool_result.to_string()),
         )
         .await,
         HookAction::Continue
@@ -1109,7 +1109,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
     .await
     .unwrap();
     assert_eq!(
-        crate::tool_call_lifecycle::query::render_tool_result(&native).unwrap(),
+        crate::tools::call::lifecycle::query::render_tool_result(&native).unwrap(),
         tool_result
     );
 
@@ -1148,7 +1148,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     let session_id = hook.session_id().await.expect("session id");
 
     let request_id = uuid::Uuid::new_v4().to_string();
-    let mut lifecycle = crate::tool_call_lifecycle::admission_fixture::claimed_signed_request(
+    let mut lifecycle = crate::tools::call::lifecycle::admission_fixture::claimed_signed_request(
         &node,
         &request_id,
         &session_id,
@@ -1277,7 +1277,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
             Some("call-1".to_string()),
             "internal-1",
             r#"{"path":"/work/entry.c"}"#,
-            &crate::tool_call_lifecycle::ToolOutcome::Completed("source bytes".to_string()),
+            &crate::tools::call::lifecycle::ToolOutcome::Completed("source bytes".to_string()),
         )
         .await,
         HookAction::Continue
@@ -1459,7 +1459,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
                 Some(call_id),
                 &internal_id,
                 &args,
-                &crate::tool_call_lifecycle::ToolOutcome::Completed(format!(
+                &crate::tools::call::lifecycle::ToolOutcome::Completed(format!(
                     "source bytes {index}"
                 )),
             )
@@ -1515,7 +1515,7 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = crate::hook::DefraSessionHook::with_identity(
+    let hook = crate::tools::call::hook::DefraSessionHook::with_identity(
         node.clone(),
         "did:test:test",
         FailurePolicy::default(),
@@ -1608,7 +1608,7 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
             None,
             "call-1",
             args,
-            &crate::tool_call_lifecycle::ToolOutcome::Completed(r#"{"hit":1}"#.into())
+            &crate::tools::call::lifecycle::ToolOutcome::Completed(r#"{"hit":1}"#.into())
         )
         .await,
         HookAction::Continue
@@ -1684,7 +1684,7 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let hook = crate::hook::DefraSessionHook::with_identity(
+    let hook = crate::tools::call::hook::DefraSessionHook::with_identity(
         node.clone(),
         "did:test:test",
         FailurePolicy::default(),
@@ -1975,7 +1975,9 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
             Some("call-1".to_string()),
             "internal-1",
             crate::test_support::CORRUPT_TOOL_ARGS_589,
-            &crate::tool_call_lifecycle::ToolOutcome::Completed("described:list_hosts".to_string()),
+            &crate::tools::call::lifecycle::ToolOutcome::Completed(
+                "described:list_hosts".to_string()
+            ),
         )
         .await,
         HookAction::Continue

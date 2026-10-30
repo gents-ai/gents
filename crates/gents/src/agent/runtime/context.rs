@@ -9,18 +9,18 @@ use tokio::sync::{mpsc, watch, Mutex};
 
 use crate::agent::daemon::{AgentDaemon, AgentDaemonInit};
 use crate::completion_factory::build_admitted_model;
-use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
 use crate::inference::admission::AdmissionRegistry;
 use crate::prompt::LayeredPromptBuilder;
 use crate::request::watcher::AgentRequest;
 use crate::tool_surface::{self, ToolRuntimeContext, ToolSurface};
+use crate::tools::call::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
 
 #[derive(Clone)]
 pub(super) struct RuntimeContext {
     pub(super) node: Arc<defra_node::EmbeddedNode>,
     pub(super) tool_runtime: ToolRuntimeContext,
     pub(super) admission_registry: AdmissionRegistry,
-    pub(super) hook_failure_policy: crate::hook::FailurePolicy,
+    pub(super) hook_failure_policy: crate::tools::call::hook::FailurePolicy,
     pub(super) rendered_request_capture_factory:
         Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
     pub(super) background_execution_registry: BackgroundExecutionRegistry,
@@ -30,7 +30,7 @@ pub(super) struct RuntimeContext {
     pub(super) runtime_status: crate::runtime_status::RuntimeStatusHandle,
     pub(super) operator_tool_root: Option<PathBuf>,
     /// The runtime's single job driver, created once in `run_agent_owned`.
-    pub(super) job_driver: Arc<crate::plugin_job::driver::JobDriver>,
+    pub(super) job_driver: Arc<crate::tools::background::job::driver::JobDriver>,
     pub(super) enrollment_authority: crate::agent::p2p_reconcile::EnrollmentAuthorityHandle,
 }
 
@@ -210,7 +210,7 @@ impl RuntimeContext {
         loop_tools: Arc<Vec<Box<dyn ToolDyn>>>,
         background_tool_registry: BackgroundToolRegistry,
         remote_tools: Option<crate::documents::RemoteTools>,
-        job_tools: rapidhash::RapidHashMap<String, crate::plugin_job::JobBinding>,
+        job_tools: rapidhash::RapidHashMap<String, crate::tools::background::job::JobBinding>,
         output_obligations: Vec<(String, crate::documents::WriteToolOutputObligation)>,
         root_execution_guard: Option<crate::tool_surface::RootExecutionGuard>,
         client: C,

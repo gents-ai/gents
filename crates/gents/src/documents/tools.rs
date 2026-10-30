@@ -674,8 +674,8 @@ impl Tools {
                     "host.bash.wait_timeout_secs",
                     bash.wait_timeout_secs,
                     bash.max_wait_timeout_secs,
-                    crate::background_tools::DEFAULT_WAIT_PROCESS_TIMEOUT_SECS as i64,
-                    Some(crate::background_tools::MAX_WAIT_PROCESS_TIMEOUT_SECS as i64),
+                    crate::tools::background::status::DEFAULT_WAIT_PROCESS_TIMEOUT_SECS as i64,
+                    Some(crate::tools::background::status::MAX_WAIT_PROCESS_TIMEOUT_SECS as i64),
                 );
                 positive(
                     &mut errors,
@@ -781,8 +781,8 @@ impl Tools {
                     &format!("{field}.wait_timeout_secs"),
                     service.wait_timeout_secs,
                     service.max_wait_timeout_secs,
-                    crate::background_tools::DEFAULT_WAIT_PROCESS_TIMEOUT_SECS as i64,
-                    Some(crate::background_tools::MAX_WAIT_PROCESS_TIMEOUT_SECS as i64),
+                    crate::tools::background::status::DEFAULT_WAIT_PROCESS_TIMEOUT_SECS as i64,
+                    Some(crate::tools::background::status::MAX_WAIT_PROCESS_TIMEOUT_SECS as i64),
                 );
             }
         }
@@ -856,7 +856,7 @@ impl Tools {
                     ));
                 }
                 if let Some(job) = &plugin.job {
-                    for error in crate::plugin_job::settings::validate(job) {
+                    for error in crate::tools::background::job::settings::validate(job) {
                         errors.push(format!("integrations.plugins[{}].{error}", plugin.plugin));
                     }
                 }
@@ -1038,7 +1038,7 @@ pub fn wire_plugin(
     skill_ids: &[String],
     targets_from: &[(String, Vec<String>, crate::pack::InstalledVia)],
 ) -> anyhow::Result<(Tools, super::AgentContext, WireReport)> {
-    use crate::plugin_job::settings;
+    use crate::tools::background::job::settings;
     use gents_protocol::job::{JobPolicy, PluginJobSettings};
 
     let coordinate = format!("{}/{}", plugin.namespace, plugin.name);
@@ -1199,7 +1199,7 @@ pub fn unwire_plugin(
     skill_ids: &[String],
     targets_from: &[(String, Vec<String>, crate::pack::InstalledVia)],
 ) -> anyhow::Result<(Tools, super::AgentContext, WireReport)> {
-    use crate::plugin_job::settings;
+    use crate::tools::background::job::settings;
 
     let coordinate = format!("{}/{}", plugin.namespace, plugin.name);
     let mut tools = tools.clone();

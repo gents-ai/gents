@@ -15,15 +15,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::data::{Invocation, StampContext};
-use crate::background_tools::{
-    load_caused_request_terminals, read_tool_output_slice, LiveToolOutputRegistry,
-    ProcessControlScope, ReadToolOutputOutcome,
-};
 use crate::config_client::ConfigAccess;
 use crate::defra_node::EmbeddedNode;
 use crate::graphql::{escape_graphql_string, graphql_string_list_literal};
-use crate::plugin_job::input::derive_children;
-use crate::tool_call_lifecycle::{CausedRequestTerminal, ToolCallState};
+use crate::tools::background::job::input::derive_children;
+use crate::tools::background::status::{
+    load_caused_request_terminals, read_tool_output_slice, LiveToolOutputRegistry,
+    ProcessControlScope, ReadToolOutputOutcome,
+};
+use crate::tools::call::lifecycle::{CausedRequestTerminal, ToolCallState};
 
 const MAX_REQUESTS_PER_ROUND: usize = 16;
 

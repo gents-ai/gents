@@ -6,7 +6,7 @@ use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole};
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use serde::Serialize;
 
-use crate::tool_call_lifecycle::ToolCallState;
+use crate::tools::call::lifecycle::ToolCallState;
 
 use super::HydrationSelection;
 

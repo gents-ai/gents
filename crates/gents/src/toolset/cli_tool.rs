@@ -4,7 +4,7 @@ use crate::inference::llm::tool::BoxFuture;
 use crate::inference::llm::tool::ToolDefinition;
 use crate::inference::llm::tool::{ToolDyn, ToolError};
 use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
-use crate::tool_call_lifecycle::runtime::tool_execution_bounds;
+use crate::tools::call::lifecycle::runtime::tool_execution_bounds;
 use anyhow::{bail, Context, Result};
 
 use super::args::CliToolArgs;
@@ -75,7 +75,7 @@ impl ToolDyn for CliTool {
 fn admit_argv_policy(config: &CliToolConfig, argv: &[String]) -> Result<(), LocalToolError> {
     validate_argv_policy(config, argv).map_err(|error| {
         LocalToolError::reported_failure(
-            crate::tool_call_lifecycle::FailureClass::PolicyDenied,
+            crate::tools::call::lifecycle::FailureClass::PolicyDenied,
             format!("{error:#}"),
         )
     })
@@ -117,11 +117,11 @@ fn cli_tool_environment(config: &CliToolConfig) -> RapidHashMap<String, String> 
 }
 
 fn deny_artifact_scope() -> Result<(), LocalToolError> {
-    if crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+    if crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
         .is_some_and(|scope| scope.workspace_artifact.is_some())
     {
         return Err(LocalToolError::reported_failure(
-            crate::tool_call_lifecycle::FailureClass::PolicyDenied,
+            crate::tools::call::lifecycle::FailureClass::PolicyDenied,
             "direct CLI subprocesses are unavailable in artifact-scoped requests; use the sandboxed Bash path".into(),
         ));
     }
@@ -265,7 +265,7 @@ async fn render_cli_outcome(
     }
     if terminal_cause.is_some() {
         return Err(LocalToolError::reported_failure(
-            crate::tool_call_lifecycle::FailureClass::ToolReturnedError,
+            crate::tools::call::lifecycle::FailureClass::ToolReturnedError,
             rendered,
         ));
     }
@@ -298,10 +298,10 @@ mod tests {
         let mut config = config(5);
         config.working_dir = Some(source.clone());
         let tool = CliTool::new(config.clone());
-        crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+        crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
             None,
             tokio_util::sync::CancellationToken::new(),
-            crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+            crate::tools::call::lifecycle::runtime::ToolWorkspaceScope {
                 runtime_home: None,
                 workspace_cwd: Some(source.clone()),
                 workspace_root: Some(source),
@@ -318,14 +318,14 @@ mod tests {
                 let error = run_cli_command(&config, &argv).await.unwrap_err();
                 assert!(error.to_string().contains("artifact-scoped"));
                 let args = serde_json::json!({"argv": argv}).to_string();
-                let outcome = crate::tool_call_lifecycle::ToolOutcome::from_dispatch(
+                let outcome = crate::tools::call::lifecycle::ToolOutcome::from_dispatch(
                     "sh",
                     tool.call(args).await,
                 );
                 assert!(matches!(
                     outcome,
-                    crate::tool_call_lifecycle::ToolOutcome::Failed {
-                        class: crate::tool_call_lifecycle::FailureClass::PolicyDenied,
+                    crate::tools::call::lifecycle::ToolOutcome::Failed {
+                        class: crate::tools::call::lifecycle::FailureClass::PolicyDenied,
                         ..
                     }
                 ));
@@ -394,20 +394,20 @@ mod tests {
         assert!(err.to_string().contains("stderr:\nlast stderr"), "{err}");
         assert!(err.to_string().contains("exit_code: unavailable"), "{err}");
         assert!(matches!(
-            crate::tool_call_lifecycle::ToolOutcome::from_dispatch(
+            crate::tools::call::lifecycle::ToolOutcome::from_dispatch(
                 "cli",
                 Err(err.into_dispatch_error())
             ),
-            crate::tool_call_lifecycle::ToolOutcome::Failed {
+            crate::tools::call::lifecycle::ToolOutcome::Failed {
                 class,
                 ..
-            } if class == crate::tool_call_lifecycle::FailureClass::ToolReturnedError
+            } if class == crate::tools::call::lifecycle::FailureClass::ToolReturnedError
         ));
     }
 
     #[tokio::test]
     async fn request_cancellation_stops_the_command() {
-        use crate::tool_call_lifecycle::runtime::scope_request_tool_execution;
+        use crate::tools::call::lifecycle::runtime::scope_request_tool_execution;
 
         let token = tokio_util::sync::CancellationToken::new();
         let cancel = token.clone();
@@ -445,12 +445,12 @@ mod tests {
         name: &str,
     ) -> (
         std::sync::Arc<defra_node::EmbeddedNode>,
-        crate::tool_call_lifecycle::ToolCallLifecycle,
+        crate::tools::call::lifecycle::ToolCallLifecycle,
         gents_loop::live_output::LiveToolOutputRegistry,
         gents_loop::live_output::LiveToolOutputWriter,
     ) {
         let (node, _path, tool) =
-            crate::tool_call_lifecycle::admission_fixture::published_spawn_parent(name).await;
+            crate::tools::call::lifecycle::admission_fixture::published_spawn_parent(name).await;
         let binding = tool
             .tool_output_binding()
             .expect("running tool output binding");
@@ -466,9 +466,9 @@ mod tests {
 
     async fn presented(
         node: &std::sync::Arc<defra_node::EmbeddedNode>,
-        tool: &crate::tool_call_lifecycle::ToolCallLifecycle,
+        tool: &crate::tools::call::lifecycle::ToolCallLifecycle,
     ) -> String {
-        crate::tool_call_lifecycle::load_tool_call_presentation(
+        crate::tools::call::lifecycle::load_tool_call_presentation(
             &crate::config_client::ConfigAccess::local(node.clone()),
             tool.doc_id().unwrap(),
             tool.node_did(),
@@ -483,9 +483,9 @@ mod tests {
 
     async fn committed_output(
         node: &std::sync::Arc<defra_node::EmbeddedNode>,
-        tool: &crate::tool_call_lifecycle::ToolCallLifecycle,
+        tool: &crate::tools::call::lifecycle::ToolCallLifecycle,
     ) -> String {
-        crate::background_tools::canonical_tool_output(
+        crate::tools::background::status::canonical_tool_output(
             node.as_ref(),
             tool.doc_id().unwrap(),
             tool.request_doc_id().unwrap(),
@@ -518,7 +518,7 @@ mod tests {
         assert!(
             matches!(
                 outcome,
-                crate::tool_call_lifecycle::ToolOutcome::TimedOut { .. }
+                crate::tools::call::lifecycle::ToolOutcome::TimedOut { .. }
             ),
             "{outcome:?}"
         );
@@ -540,7 +540,7 @@ mod tests {
 
     #[tokio::test]
     async fn committed_output_reconstructs_completed_and_stopped_results() {
-        use crate::tool_call_lifecycle::ToolOutcome;
+        use crate::tools::call::lifecycle::ToolOutcome;
 
         for (name, timeout_secs, script) in [
             (

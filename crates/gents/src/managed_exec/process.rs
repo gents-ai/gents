@@ -10,7 +10,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
-use crate::background_tools::LiveToolOutputWriter;
+use crate::tools::background::status::LiveToolOutputWriter;
 
 use super::output::ManagedExecOutcome;
 
@@ -106,18 +106,22 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
     let stdout_task = spawn_optional_capped(
         stdout,
         max_output_bytes,
-        request
-            .live_output
-            .clone()
-            .map(|writer| (writer, crate::background_tools::LiveOutputStream::Stdout)),
+        request.live_output.clone().map(|writer| {
+            (
+                writer,
+                crate::tools::background::status::LiveOutputStream::Stdout,
+            )
+        }),
     );
     let stderr_task = spawn_optional_capped(
         stderr,
         max_output_bytes,
-        request
-            .live_output
-            .clone()
-            .map(|writer| (writer, crate::background_tools::LiveOutputStream::Stderr)),
+        request.live_output.clone().map(|writer| {
+            (
+                writer,
+                crate::tools::background::status::LiveOutputStream::Stderr,
+            )
+        }),
     );
 
     let mut wait = Box::pin(child.inner.wait());
@@ -296,18 +300,22 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
     let stdout_task = spawn_optional_capped(
         stdout,
         max_output_bytes,
-        request
-            .live_output
-            .clone()
-            .map(|writer| (writer, crate::background_tools::LiveOutputStream::Stdout)),
+        request.live_output.clone().map(|writer| {
+            (
+                writer,
+                crate::tools::background::status::LiveOutputStream::Stdout,
+            )
+        }),
     );
     let stderr_task = spawn_optional_capped(
         stderr,
         max_output_bytes,
-        request
-            .live_output
-            .clone()
-            .map(|writer| (writer, crate::background_tools::LiveOutputStream::Stderr)),
+        request.live_output.clone().map(|writer| {
+            (
+                writer,
+                crate::tools::background::status::LiveOutputStream::Stderr,
+            )
+        }),
     );
 
     let job = child.job();

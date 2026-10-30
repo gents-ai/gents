@@ -15,7 +15,7 @@ impl ToolDyn for InvalidProgressProbe {
     }
     fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
-            use crate::tool_call_lifecycle::FailureClass;
+            use crate::tools::call::lifecycle::FailureClass;
             let value: serde_json::Value = serde_json::from_str(&args).unwrap();
             let class = match value["outcome"].as_str().unwrap() {
                 "invalidArguments" => FailureClass::ArgumentInvalid,
@@ -144,7 +144,7 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
             "{name} typed outcome mapping"
         );
         for (index, row) in answered_rows.iter().enumerate() {
-            let output = crate::background_tools::canonical_tool_output(
+            let output = crate::tools::background::status::canonical_tool_output(
                 &node,
                 row["_docID"].as_str().unwrap(),
                 &lifecycle.request().doc_id,
@@ -236,7 +236,7 @@ async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
                 .find(|row| row["tool_call_id"] == format!("invalid-progress-{index}"))
                 .unwrap_or_else(|| panic!("missing durable row {index}"));
             assert_eq!(row["lifecycle_state"], "failed");
-            let output = crate::background_tools::canonical_tool_output(
+            let output = crate::tools::background::status::canonical_tool_output(
                 &node,
                 row["_docID"].as_str().unwrap(),
                 &lifecycle.request().doc_id,
@@ -362,7 +362,7 @@ async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeed
         .find(|row| row["lifecycle_state"] == "completed")
         .and_then(|row| row["_docID"].as_str())
         .unwrap();
-    let output = crate::background_tools::canonical_tool_output(
+    let output = crate::tools::background::status::canonical_tool_output(
         &node,
         tool_doc_id,
         &lifecycle.request().doc_id,
@@ -445,7 +445,7 @@ async fn empty_bash_arguments_exhaust_owned_loop_without_side_effects() {
                 .iter()
                 .find(|row| row["tool_call_id"] == format!("empty-bash-{index}"))
                 .unwrap_or_else(|| panic!("missing durable row {index}"));
-            let output = crate::background_tools::canonical_tool_output(
+            let output = crate::tools::background::status::canonical_tool_output(
                 &node,
                 row["_docID"].as_str().unwrap(),
                 &lifecycle.request().doc_id,

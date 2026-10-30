@@ -1,7 +1,7 @@
 use super::*;
 use crate::config_client::ConfigAccess;
 use crate::inference::llm::tool::Tool;
-use crate::tool_call_lifecycle::admission_fixture::{
+use crate::tools::call::lifecycle::admission_fixture::{
     published_admission_with_owner, PublishedAdmissionOptions,
 };
 use crate::toolset::args::WriteFileArgs;
@@ -70,7 +70,7 @@ async fn plugin_file_effects_retain_exact_images_without_borrowing_parent_order(
             .await
             .unwrap();
         assert_eq!(replayed.doc_id(), Some(document.as_str()));
-        let capture = crate::tool_call_lifecycle::query::load_tool_call_file_changes(
+        let capture = crate::tools::call::lifecycle::query::load_tool_call_file_changes(
             &access,
             &document,
             effect.request_doc_id().unwrap(),

@@ -94,10 +94,10 @@ pub(crate) async fn seed_job_row(
     if lifecycle == "running" {
         seed_background_receipt(node, &request, &doc_id, call).await;
     }
-    gents::plugin_job::view::load_job_view(
+    gents::tools::background::job::view::load_job_view(
         &ConfigAccess::local(node.clone()),
         None,
-        gents::plugin_job::view::JobKey::Address {
+        gents::tools::background::job::view::JobKey::Address {
             session_id: session.into(),
             tool_call_id: call.into(),
         },

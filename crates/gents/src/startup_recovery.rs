@@ -2,7 +2,7 @@ use defra_node::EmbeddedNode;
 
 use crate::inference::admission::{InferenceCall, InferenceCallRecoveryReport};
 use crate::request::lifecycle::{RecoveryReport, RequestLifecycle};
-use crate::tool_call_lifecycle::{ToolCallLifecycle, ToolCallRecoveryReport};
+use crate::tools::call::lifecycle::{ToolCallLifecycle, ToolCallRecoveryReport};
 
 #[derive(Debug)]
 pub struct StartupRecoveryOutcome {
@@ -19,7 +19,7 @@ pub async fn run_startup_recovery(
     run_startup_recovery_with_executions(
         node,
         node_did,
-        &crate::hook::BackgroundExecutionRegistry::default(),
+        &crate::tools::call::hook::BackgroundExecutionRegistry::default(),
     )
     .await
 }
@@ -27,7 +27,7 @@ pub async fn run_startup_recovery(
 pub async fn run_startup_recovery_with_executions(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
-    executions: &crate::hook::BackgroundExecutionRegistry,
+    executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
 ) -> StartupRecoveryOutcome {
     let tool_calls =
         ToolCallLifecycle::recover_all_with_executions(node, node_did, executions).await;

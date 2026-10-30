@@ -1,7 +1,7 @@
 use anyhow::Context as _;
 use serde_json::{json, Value};
 
-use crate::tool_call_lifecycle::FailureClass;
+use crate::tools::call::lifecycle::FailureClass;
 use crate::toolset::shared::{ToolContext, ToolError};
 
 use super::super::auth::LspAction;
@@ -111,7 +111,7 @@ pub(crate) async fn run_linter_diagnostics(
     // Best-effort supplementary probe; deliberately does not thread
     // live_output, which would interleave per-file linter noise into the
     // enclosing tool call's live output.
-    let bounds = crate::tool_call_lifecycle::runtime::tool_execution_bounds(timeout);
+    let bounds = crate::tools::call::lifecycle::runtime::tool_execution_bounds(timeout);
     let outcome = crate::managed_exec::run_managed_exec(crate::managed_exec::ManagedExecRequest {
         argv: full,
         cwd: workspace,

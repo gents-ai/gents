@@ -12,7 +12,7 @@ use super::{
     content_hash, deny_workspace_file_writes, file_mutation_lock_for, merge_optional_notes,
     render_tool_output,
 };
-use crate::tool_call_lifecycle::FailureClass;
+use crate::tools::call::lifecycle::FailureClass;
 
 /// Stale-content guard for write_file, checked under the per-path mutation
 /// lock. No refusal discloses the current hash, so a retry cannot replace

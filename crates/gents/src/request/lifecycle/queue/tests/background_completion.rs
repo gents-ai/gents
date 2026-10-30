@@ -456,12 +456,12 @@ async fn a_returned_result_is_admitted_into_a_paired_client_session() {
         lifecycle.claim_with_identity().await.unwrap(),
         crate::request::lifecycle::ClaimOutcome::Claimed
     );
-    crate::hook::DefraSessionHook::resume_with_identity_policy(
+    crate::tools::call::hook::DefraSessionHook::resume_with_identity_policy(
         db.node.clone(),
         session_id,
         db.node_did(),
         verified.requester_did.as_deref(),
-        crate::hook::FailurePolicy::FailClosed,
+        crate::tools::call::hook::FailurePolicy::FailClosed,
     )
     .await
     .expect("the completion resumes the desktop-owned session");
@@ -962,8 +962,8 @@ async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
 #[tokio::test]
 async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     use crate::request::watcher::{DefraWatcher, Watcher};
-    use crate::tool_call_lifecycle::admission_fixture::complete_child;
-    let (selected, successor_child) = crate::tool_call_lifecycle::completion_owner_conformance::selected_background_wake_with_successor(true).await;
+    use crate::tools::call::lifecycle::admission_fixture::complete_child;
+    let (selected, successor_child) = crate::tools::call::lifecycle::completion_owner_conformance::selected_background_wake_with_successor(true).await;
     let admission = selected.admission;
     let node = admission.node.clone();
     let did = admission.node_did.clone();
@@ -1008,7 +1008,7 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     )
     .await;
     assert_eq!(
-        crate::background_completion::settle_running_session_message_rows(&node, &did)
+        crate::tools::background::completion::settle_running_session_message_rows(&node, &did)
             .await
             .unwrap(),
         1

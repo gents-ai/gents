@@ -95,7 +95,7 @@ mod wire {
     use crate::documents::AgentContext;
     use crate::pack::InstalledVia;
     use crate::plugin::store::InstalledPlugin;
-    use crate::plugin_job::settings;
+    use crate::tools::background::job::settings;
     use gents_protocol::job::{DynamicMode, JobPolicy, PluginJobSettings};
     use serde_json::json;
     use std::collections::BTreeSet;

@@ -28,7 +28,6 @@ use crate::agent::runtime::{
     run_router_with_watcher, RouterInputs, RuntimeAdmissionGate, StartupBarrier,
 };
 use crate::config_client::ConfigAccess;
-use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::inference::resolved::{ResolvedAgent, SamplingConfig};
 use crate::lean_vocab_test::{
@@ -43,6 +42,9 @@ use crate::runtime_status::RuntimeStatusHandle;
 use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
 use crate::tool_surface::AgentToolSurfaceConfig;
+use crate::tools::call::hook::{
+    BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
+};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct ReviewUsage {
@@ -732,7 +734,7 @@ async fn a_lost_review_worker_cancels_the_caller_and_retains_the_fatal_error() {
     .with_reviewer(reviewer.callback.clone());
     let result = workspace::scope(
         Some(context),
-        crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+        crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
             None,
             cancellation.clone(),
             workspace::authorize_command(

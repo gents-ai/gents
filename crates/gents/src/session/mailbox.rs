@@ -672,7 +672,7 @@ impl crate::inference::llm::tool::Tool for MailboxCreateTool {
     }
 
     async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+        let runtime = crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
             .context("file_mailbox_item requires a current AgentRequest context")?;
         let request_id = runtime.request_id.context("missing request_id")?;
         let context = MailboxStampContext {

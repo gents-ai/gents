@@ -119,7 +119,7 @@ pub(super) async fn account_tools_in_txn(
     let timestamp = escape_graphql_string(timestamp);
     for tool in &tools {
         let spawned = tool.row.spawned_by_tool_call_doc_id.as_deref();
-        let plugin_parent = crate::tool_call_lifecycle::PluginEffectBinding::decode(
+        let plugin_parent = crate::tools::call::lifecycle::PluginEffectBinding::decode(
             tool.row.plugin_parent_tool_call_doc_id.as_deref(),
             tool.row.plugin_effect_ordinal,
             spawned.is_some(),
@@ -138,7 +138,7 @@ pub(super) async fn account_tools_in_txn(
             );
             let binding = directly_bound(headers, parent, generation)?;
             if binding.is_some() {
-                crate::tool_call_lifecycle::query::load_tool_call_arguments_in_txn(
+                crate::tools::call::lifecycle::query::load_tool_call_arguments_in_txn(
                     txn,
                     &tool.doc_id,
                     agent,
@@ -147,7 +147,7 @@ pub(super) async fn account_tools_in_txn(
                 )
                 .await?;
                 if completed {
-                    crate::tool_call_lifecycle::query::load_tool_call_read_in_txn(
+                    crate::tools::call::lifecycle::query::load_tool_call_read_in_txn(
                         txn,
                         &tool.doc_id,
                         agent,
@@ -298,15 +298,15 @@ mod tests {
         for case in cases {
             let name = case["name"].as_str().unwrap();
             let (fixture, request_owner) =
-                crate::tool_call_lifecycle::admission_fixture::published_admission_with_owner(
-                    crate::tool_call_lifecycle::admission_fixture::PublishedAdmissionOptions {
+                crate::tools::call::lifecycle::admission_fixture::published_admission_with_owner(
+                    crate::tools::call::lifecycle::admission_fixture::PublishedAdmissionOptions {
                         name: format!("account-{name}"),
                         ..Default::default()
                     },
                 )
                 .await
                 .unwrap();
-            let crate::tool_call_lifecycle::admission_fixture::PublishedAdmission {
+            let crate::tools::call::lifecycle::admission_fixture::PublishedAdmission {
                 node,
                 path,
                 tool: mut parent,

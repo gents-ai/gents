@@ -249,7 +249,7 @@ pub(super) async fn run(
     if action == "help" {
         return Ok(json!({"help":action_help(args.topic.as_deref())?}));
     }
-    let current = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
+    let current = crate::tools::call::lifecycle::runtime::current_tool_runtime_context();
     if let Some(context) = &current {
         anyhow::ensure!(
             context.node_did.as_deref() == Some(tool.node_did.as_str()),
@@ -572,7 +572,7 @@ async fn tool_output(
             "output requires call_id; next call: sessions {{\"action\":\"help\",\"topic\":\"output\"}}"
         ),
     };
-    let read = crate::tool_call_lifecycle::query::load_tool_call_read_in_txn(
+    let read = crate::tools::call::lifecycle::query::load_tool_call_read_in_txn(
         txn,
         &tool_call_doc_id,
         agent,

@@ -146,13 +146,13 @@ impl LspWritethrough {
         if server.is_linter {
             return None;
         }
-        let session_id = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+        let session_id = crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
             .and_then(|scope| scope.session_id)
             .filter(|id| !id.is_empty())
             .unwrap_or_else(|| self.config.session_id.clone());
         let workspace_root = super::overlay_workspace_or(&self.config.workspace);
         let key = PoolKey {
-            runtime_home: crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+            runtime_home: crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
                 .and_then(|context| context.runtime_home),
             session_id,
             agent_id: self.config.agent_id.clone(),

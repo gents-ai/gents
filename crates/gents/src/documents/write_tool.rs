@@ -84,7 +84,7 @@ impl WriteToolFieldFill {
     /// writes use this to omit an unset optional fill; query filters and
     /// plugin inputs keep [`Self::resolve`] so a missing scope fails closed.
     pub fn resolve_optional(&self, field_name: &str) -> Result<Option<String>> {
-        let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+        let runtime = crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "runtime-filled field `{field_name}` requires an active AgentRequest context"

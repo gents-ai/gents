@@ -4,10 +4,10 @@ use std::path::Path;
 use std::time::Duration;
 
 use gents::inference::llm::message::{Message, Text, ToolResultContent, UserContent};
-use gents::plugin_job::job::{
+use gents::tools::background::job::job::{
     JobChildState, JobReadError, JobSpawn, JobState, JobStepOutput, JobView,
 };
-use gents::plugin_job::view::{load_job_view, JobKey};
+use gents::tools::background::job::view::{load_job_view, JobKey};
 use gents::{ConfigAccess, DocumentRuntimeOptions, ToolCeiling};
 use serde_json::{json, Value};
 

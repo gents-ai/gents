@@ -47,7 +47,7 @@ impl crate::config_client::TransactionFailure for CommitError {
 pub(crate) async fn commit(
     node: &Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
-    lifecycle: &mut crate::tool_call_lifecycle::ToolCallLifecycle,
+    lifecycle: &mut crate::tools::call::lifecycle::ToolCallLifecycle,
     plan: Plan,
     report_delivery: bool,
 ) -> std::result::Result<SessionMessageReceipt, CommitError> {
@@ -59,7 +59,7 @@ pub(crate) async fn commit(
         .doc_id()
         .context("session-message row lacks physical identity")?
         .to_owned();
-    let durable = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+    let durable = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
         node.clone(),
         &doc_id,
         lifecycle.node_did(),
@@ -68,7 +68,7 @@ pub(crate) async fn commit(
     )
     .await?
     .context("session-message row disappeared after its commit failed")?;
-    if durable.state() == crate::tool_call_lifecycle::ToolCallState::Pending {
+    if durable.state() == crate::tools::call::lifecycle::ToolCallState::Pending {
         return Err(error);
     }
     let receipt = load_receipt(
@@ -88,7 +88,7 @@ pub(crate) async fn commit(
 async fn commit_once(
     node: &std::sync::Arc<EmbeddedNode>,
     cause: &SessionMessageCause,
-    lifecycle: &mut crate::tool_call_lifecycle::ToolCallLifecycle,
+    lifecycle: &mut crate::tools::call::lifecycle::ToolCallLifecycle,
     plan: Plan,
     report_delivery: bool,
 ) -> std::result::Result<SessionMessageReceipt, CommitError> {
@@ -124,7 +124,7 @@ async fn commit_once(
                 let started_at = start_dispatch(txn, start).await?;
                 let enqueued = stage_planned_write_in_txn(txn, cause, plan).await?;
                 let receipt = receipt_for(&enqueued);
-                crate::tool_call_lifecycle::publish_background_receipt_in_txn(
+                crate::tools::call::lifecycle::publish_background_receipt_in_txn(
                     txn,
                     binding,
                     &serde_json::to_string(&receipt).map_err(anyhow::Error::from)?,
@@ -261,9 +261,9 @@ async fn ensure_planned_hop_current(
 
 async fn start_dispatch(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    start: &crate::tool_call_lifecycle::delivery::DispatchStart,
+    start: &crate::tools::call::lifecycle::delivery::DispatchStart,
 ) -> Result<chrono::DateTime<chrono::Utc>> {
-    crate::tool_call_lifecycle::delivery::start_running_in_txn(txn, start, None)
+    crate::tools::call::lifecycle::delivery::start_running_in_txn(txn, start, None)
         .await?
         .context("session-message row was altered or is no longer pending")
 }
@@ -275,7 +275,7 @@ pub(crate) async fn load_receipt(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<Option<SessionMessageReceipt>> {
-    let read = crate::tool_call_lifecycle::query::load_tool_call_read(
+    let read = crate::tools::call::lifecycle::query::load_tool_call_read(
         &crate::config_client::ConfigAccess::local(node.clone()),
         tool_call_doc_id,
         node_did,
@@ -286,7 +286,7 @@ pub(crate) async fn load_receipt(
     let Some(message) = read.result else {
         return Ok(None);
     };
-    let text = crate::tool_call_lifecycle::query::render_tool_result(&message)?;
+    let text = crate::tools::call::lifecycle::query::render_tool_result(&message)?;
     Ok(serde_json::from_str::<SessionMessageReceipt>(&text)
         .ok()
         .filter(|receipt| receipt.ok))

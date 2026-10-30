@@ -7,8 +7,8 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::request::lifecycle::{ClaimOutcome, RequestTerminalOutcome, TerminalizeResult};
-use crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request;
-use crate::tool_call_lifecycle::{AwaitMode, SpawnedBackgroundToolAdmission};
+use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
+use crate::tools::call::lifecycle::{AwaitMode, SpawnedBackgroundToolAdmission};
 
 use super::super::operator_resume::support::*;
 
@@ -142,7 +142,7 @@ async fn run_generated_running_wait() {
     .is_none());
     assert_eq!(fixture.observe().await, case.expected);
     let report =
-        crate::tool_call_lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(
+        crate::tools::call::lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(
             &fixture.node,
             fixture.identity.did(),
         )
@@ -357,13 +357,16 @@ async fn run_generated_wait_observations() {
                     target.start_running().await.unwrap();
                     if case.name.starts_with("failed_") {
                         target
-                            .fail("failed", crate::tool_call_lifecycle::FailureClass::External)
+                            .fail(
+                                "failed",
+                                crate::tools::call::lifecycle::FailureClass::External,
+                            )
                             .await
                             .unwrap();
                     } else if case.name.starts_with("cancelled_") {
                         target
                             .cancel_during_run(
-                                crate::tool_call_lifecycle::CancelCause::UserCancelled,
+                                crate::tools::call::lifecycle::CancelCause::UserCancelled,
                             )
                             .await
                             .unwrap();

@@ -2872,13 +2872,13 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         let deadline = lifecycle
             .claimed_deadline_at()
             .expect("claimed request deadline");
-        let mut tool = crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
+        let mut tool = crate::tools::call::lifecycle::ToolCallLifecycle::from_accepted(
             node.clone(),
             node_did.to_string(),
             None,
             accepted,
             deadline,
-            crate::tool_call_lifecycle::AwaitMode::Foreground,
+            crate::tools::call::lifecycle::AwaitMode::Foreground,
         )
         .unwrap();
         if turn != 0 {

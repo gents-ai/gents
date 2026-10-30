@@ -1446,7 +1446,7 @@ mod tests {
 
     #[tokio::test]
     async fn selection_carries_running_parents_child_audit_records_but_not_forged_children() {
-        use crate::tool_call_lifecycle::admission_fixture::{
+        use crate::tools::call::lifecycle::admission_fixture::{
             published_admission_with_owner, PublishedAdmission, PublishedAdmissionOptions,
         };
         use gents_protocol::output::{OutputSource, PayloadPresentation, PresentedPayload};

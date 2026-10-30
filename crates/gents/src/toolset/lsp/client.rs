@@ -475,7 +475,7 @@ impl LspClient {
             completed: Arc::new(AtomicBool::new(false)),
             runtime: DropCleanup::current(),
         };
-        let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
+        let runtime = crate::tools::call::lifecycle::runtime::current_tool_runtime_context();
         let cancel = runtime.map(|scope| scope.cancellation_token);
         let outcome = tokio::select! {
             biased;

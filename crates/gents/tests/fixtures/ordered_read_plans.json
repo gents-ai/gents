@@ -339,7 +339,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/background_completion_diagnostics.rs",
+      "path": "crates/gents/src/tools/background/diagnostics.rs",
       "collection": "AgentMessage",
       "arguments": "filter: { node_did: { _eq: \"$GENTS_escaped_node_did$\" }, message_key: { _like: \"background-completion-notification:%\" } }, order: { created_at: DESC }, limit: $GENTS_NOTIFICATION_SCAN_LIMIT$"
     },
@@ -352,7 +352,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/background_completion_diagnostics.rs",
+      "path": "crates/gents/src/tools/background/diagnostics.rs",
       "collection": "AgentMessage",
       "arguments": "filter: { node_did: { _eq: \"$GENTS_node_did$\" }, request_doc_id: { _in: [$GENTS_request_doc_ids$] }, message_key: { _like: \"background-completion-notification:%\" } }, order: { created_at: DESC }, limit: $GENTS_NOTIFICATION_SCAN_LIMIT$"
     },
@@ -366,7 +366,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/background_completion_diagnostics.rs",
+      "path": "crates/gents/src/tools/background/diagnostics.rs",
       "collection": "AgentRequest",
       "arguments": "filter: { node_did: { _eq: \"$GENTS_escaped_node_did$\" }, $GENTS_session_filter$ execution_origin: { _eq: \"scheduled\" } }, order: [{ created_at: DESC }, { request_id: DESC }], limit: $GENTS_WAKE_SCAN_LIMIT$"
     },

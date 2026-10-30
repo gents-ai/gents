@@ -63,7 +63,7 @@ async fn runtime_observation_reads_do_not_wait_for_the_mutation_gate() {
             lookup_backend_observation(&node, &owner, "missing"),
             crate::session::max_sequence(&node, "missing", &owner, None),
             crate::session::load_session_current_hop(&node, &owner, "missing"),
-            crate::background_tools::load_caused_request_terminal(&node, &missing_doc),
+            crate::tools::background::status::load_caused_request_terminal(&node, &missing_doc),
             crate::load_inference_profile(&node, &owner, "missing"),
             Tool::call(&query, query_args),
         )

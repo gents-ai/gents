@@ -1358,7 +1358,7 @@ async fn cycle_failure_diagnostics(
                 ) else {
                     continue;
                 };
-                let result = gents::tool_call_lifecycle::load_tool_call_result(
+                let result = gents::tools::call::lifecycle::load_tool_call_result(
                     access,
                     tool_doc_id,
                     owner,
@@ -1366,7 +1366,7 @@ async fn cycle_failure_diagnostics(
                     request["requester_did"].as_str(),
                 )
                 .await
-                .and_then(|message| gents::tool_call_lifecycle::render_tool_result(&message));
+                .and_then(|message| gents::tools::call::lifecycle::render_tool_result(&message));
                 tool_results.push(json!({
                     "tool": tool,
                     "result": result.unwrap_or_else(|error| format!("<unavailable: {error:#}>") )

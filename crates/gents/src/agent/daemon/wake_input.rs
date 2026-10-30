@@ -47,7 +47,7 @@ fn rows<'a>(response: &'a Value, collection: &str) -> Result<&'a [Value]> {
 }
 
 fn receipt_keys(row: &Value) -> Result<Vec<String>> {
-    crate::background_completion::notification_receipt_keys(
+    crate::tools::background::completion::notification_receipt_keys(
         row["background_completion_notification_keys_json"]
             .as_str()
             .context("wake claim lacks its notification receipt")?,

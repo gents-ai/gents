@@ -207,7 +207,7 @@ fn generated_plugin_job_resource_cases_drive_scratch() {
     for (index, row) in scratch.iter().enumerate() {
         let allowed = row.cwd_allowed;
         assert_eq!(
-            gents::plugin_job::effects::admit_scratch(
+            gents::tools::background::job::effects::admit_scratch(
                 &row.cwd,
                 &|_path: &str| allowed,
                 &row.tool_call_id,

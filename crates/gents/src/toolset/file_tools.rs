@@ -10,10 +10,10 @@ use anyhow::{Context as _, Result};
 use serde::Serialize;
 
 use super::shared::ToolError;
-use crate::tool_call_lifecycle::FailureClass;
+use crate::tools::call::lifecycle::FailureClass;
 
 pub(super) fn deny_workspace_file_writes() -> Result<(), ToolError> {
-    if crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+    if crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
         .and_then(|scope| scope.workspace_authority)
         .is_some_and(|authority| !authority.allows_file_writes())
     {

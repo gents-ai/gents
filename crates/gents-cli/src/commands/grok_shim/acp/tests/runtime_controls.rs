@@ -208,7 +208,7 @@ async fn wait_for_child_request(node: &Arc<EmbeddedNode>) -> gents_protocol::row
                     .and_then(|data| data["AgentRequest"].as_array())
                     .and_then(|rows| rows.first());
                 if let Some(scope) = scope {
-                    gents::tool_call_lifecycle::load_tool_call_presentation(
+                    gents::tools::call::lifecycle::load_tool_call_presentation(
                         &gents::ConfigAccess::local(node.clone()),
                         tool_doc_id,
                         scope["node_did"].as_str().unwrap_or_default(),

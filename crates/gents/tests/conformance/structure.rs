@@ -50,7 +50,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ),
         (
             "CrossMachineComposed",
-            WorkspaceTest("crates/gents/src/tool_call_lifecycle/composed_conformance.rs"),
+            WorkspaceTest("crates/gents/src/tools/call/lifecycle/composed_conformance.rs"),
         ),
         ("DurableLineage", Module("conformance/background.rs")),
         ("EditMatch", Module("conformance/edit_match.rs")),
@@ -146,7 +146,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ),
         (
             "ToolExecution",
-            WorkspaceTest("crates/gents/src/tool_call_lifecycle/admission_fixture.rs"),
+            WorkspaceTest("crates/gents/src/tools/call/lifecycle/admission_fixture.rs"),
         ),
         ("ToolPolicy", Module("conformance/tool_policy.rs")),
         ("Lsp", Module("conformance/lsp.rs")),

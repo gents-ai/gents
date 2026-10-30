@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use gents::plugin_job::job::{JobChildState, JobState};
+use gents::tools::background::job::job::{JobChildState, JobState};
 use gents::ConfigAccess;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
@@ -33,7 +33,7 @@ struct JobCrashReady {
     child_states: Vec<(String, String)>,
 }
 
-fn entry(when: Value, output: gents::plugin_job::job::JobStepOutput) -> PlanEntry {
+fn entry(when: Value, output: gents::tools::background::job::job::JobStepOutput) -> PlanEntry {
     PlanEntry {
         when,
         output,

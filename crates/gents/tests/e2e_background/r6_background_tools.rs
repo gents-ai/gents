@@ -3,7 +3,7 @@ use gents::graphql::escape_graphql_string;
 use gents::inference::llm::message::{
     AssistantContent, Message, Text, ToolResultContent, UserContent,
 };
-use gents::tool_call_lifecycle::{CancelCause, ToolCallLifecycle, ToolCallState};
+use gents::tools::call::lifecycle::{CancelCause, ToolCallLifecycle, ToolCallState};
 use gents::{interrupt_request, BackgroundExecutionRegistry, NodeIdentity};
 use serde::Deserialize;
 use serde_json::Value;
@@ -1027,7 +1027,7 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
     );
 
     let report =
-        gents::tool_call_lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
+        gents::tools::call::lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
             &turn.db.node,
             turn.db.node_identity.did(),
             &BackgroundExecutionRegistry::default(),
@@ -1489,7 +1489,7 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
         observer_case.result.as_deref()
     );
     assert_eq!(row.cancel_cause.as_deref(), None);
-    gents::tool_control::cancel_session_background_process(
+    gents::tools::call::control::cancel_session_background_process(
         turn.db.node.clone(),
         &turn.executions,
         turn.db.node_identity.did(),

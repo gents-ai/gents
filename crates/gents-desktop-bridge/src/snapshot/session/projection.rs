@@ -2041,7 +2041,7 @@ pub(super) fn project_transcript_rows(
                     Some(pin.handle.clone()),
                     row.lifecycle_state
                         .as_deref()
-                        .and_then(gents::tool_call_lifecycle::ToolCallState::from_persisted)
+                        .and_then(gents::tools::call::lifecycle::ToolCallState::from_persisted)
                         .map(|lifecycle| {
                             gents::plugin::job_calls::job_state(
                                 lifecycle,
@@ -2064,7 +2064,7 @@ pub(super) fn project_transcript_rows(
                         && row.plugin_parent_tool_call_doc_id.is_none()
                         && row.spawned_by_tool_call_doc_id.is_none()
                         && row.tool_name.as_deref().is_some_and(
-                            gents::background_tools::supports_foreground_backgrounding,
+                            gents::tools::background::status::supports_foreground_backgrounding,
                         ),
                 ),
                 tool_call_key: row.tool_call_key.clone(),

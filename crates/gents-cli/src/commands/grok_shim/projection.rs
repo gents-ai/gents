@@ -326,7 +326,7 @@ where
 }
 
 pub(crate) struct ProjectionEngine {
-    pub(crate) background_executions: gents::hook::BackgroundExecutionRegistry,
+    pub(crate) background_executions: gents::tools::call::hook::BackgroundExecutionRegistry,
     node: Arc<EmbeddedNode>,
     bound: BoundModelContext,
     sequencer: Arc<ProjectionSequencer>,
@@ -373,7 +373,7 @@ impl ProjectionEngine {
 
     pub(crate) fn with_background_executions(
         mut self,
-        executions: gents::hook::BackgroundExecutionRegistry,
+        executions: gents::tools::call::hook::BackgroundExecutionRegistry,
     ) -> Self {
         self.background_executions = executions;
         self
@@ -673,7 +673,7 @@ impl ProjectionEngine {
                 let chronology = messages.chronology.get(index).copied().flatten();
                 if let messages::MessageUpdate::UserMessage { text } = update {
                     let is_notification = durable_message_key(key, update.session_update_kind())
-                        .is_some_and(gents::background_completion::is_background_completion_notification_message_key);
+                        .is_some_and(gents::tools::background::completion::is_background_completion_notification_message_key);
                     if is_notification {
                         let planned = planned_durable.entry(key.clone()).or_default();
                         let sent_len = text

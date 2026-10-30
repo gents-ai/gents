@@ -239,7 +239,7 @@ async fn configured_cli_tools_keep_the_guard_and_declared_environment() {
 
 #[tokio::test]
 async fn bounded_commands_protect_runtime_keys_without_workspace_consent() {
-    use crate::tool_call_lifecycle::runtime::{
+    use crate::tools::call::lifecycle::runtime::{
         scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
     };
     let directory = tempfile::tempdir().unwrap();

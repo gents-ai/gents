@@ -2,16 +2,16 @@ use crate::inference::llm::tool::Tool;
 use crate::inference::llm::tool::ToolDefinition;
 use anyhow::anyhow;
 
-use crate::background_tools::r4c_args::{ListBackgroundToolsArgs, ReadToolOutputArgs};
-use crate::background_tools::{
-    BackgroundToolArgs, CancelToolArgs, WaitToolArgs, DEFAULT_WAIT_PROCESS_TIMEOUT_SECS,
-    MAX_WAIT_PROCESS_TIMEOUT_SECS,
-};
 use crate::session::message::{
     AgentInterruptArgs, AgentListArgs, AgentMessageArgs, AgentNewArgs, AgentSessionListArgs,
     AgentSessionReadArgs,
 };
 use crate::tool_surface::{AgentToolConfig, BackgroundToolConfig};
+use crate::tools::background::status::r4c_args::{ListBackgroundToolsArgs, ReadToolOutputArgs};
+use crate::tools::background::status::{
+    BackgroundToolArgs, CancelToolArgs, WaitToolArgs, DEFAULT_WAIT_PROCESS_TIMEOUT_SECS,
+    MAX_WAIT_PROCESS_TIMEOUT_SECS,
+};
 
 use super::shared::ToolError;
 use super::{

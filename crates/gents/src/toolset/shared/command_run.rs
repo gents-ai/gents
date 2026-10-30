@@ -12,8 +12,8 @@ use super::command_output::{
 use super::command_validation::validate_command_policy;
 use super::{effective_command_policy, CommandExecutionPolicy};
 use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
-use crate::tool_call_lifecycle::runtime::tool_execution_bounds;
-use crate::tool_call_lifecycle::FailureClass;
+use crate::tools::call::lifecycle::runtime::tool_execution_bounds;
+use crate::tools::call::lifecycle::FailureClass;
 
 #[expect(
     clippy::too_many_arguments,
@@ -151,7 +151,7 @@ pub(crate) async fn run_command(
         stdout_truncation: stdout.metadata,
         stderr_truncation: stderr.metadata,
         hint: (timed_out
-            && !crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+            && !crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
                 .is_some_and(|context| context.background))
         .then(|| foreground_timeout_hint(duration_ms)),
     };

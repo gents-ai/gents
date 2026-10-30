@@ -1,12 +1,12 @@
 use super::plan::PlannedWrite;
 use super::*;
-use crate::tool_call_lifecycle::admission_fixture::{
+use crate::tools::call::lifecycle::admission_fixture::{
     published_session_message, PublishedAdmissionOptions,
 };
-use crate::tool_call_lifecycle::AwaitMode;
+use crate::tools::call::lifecycle::AwaitMode;
 
 pub(super) fn cause(
-    message: &crate::tool_call_lifecycle::admission_fixture::PublishedSessionMessage,
+    message: &crate::tools::call::lifecycle::admission_fixture::PublishedSessionMessage,
     caller_hop: u32,
 ) -> SessionMessageCause {
     SessionMessageCause {
@@ -152,7 +152,7 @@ async fn stage_planned_write_in_txn_creates_the_request_and_leaves_the_tool_row(
         .unwrap()
         .unwrap();
     let load_tool = || {
-        crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+        crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
             node.clone(),
             &tool_doc_id,
             tool.node_did(),

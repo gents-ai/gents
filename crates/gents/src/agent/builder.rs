@@ -12,7 +12,6 @@ pub(crate) type AgentFactory =
 use super::{assemble_node_and_agents, runtime, AgentBuildError, Gents, ProcessLifecycleObserver};
 use crate::agent::completion_retry::CompletionRetryProfileFields;
 use crate::health_checker::HealthCheckerOptions;
-use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
 use crate::inference::admission::BackendAdmissionConfig;
 #[cfg(test)]
 use crate::inference::backends::provider::BackendProviderKind;
@@ -31,6 +30,7 @@ use crate::tool_surface::{
     AgentToolSurfaceConfig, BashMode, CustomToolFactory, FileToolMode, ResolvedToolSelection,
     ToolCeiling,
 };
+use crate::tools::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
 
 #[cfg(test)]
 const TEST_DEFAULT_BACKEND_ENDPOINT: &str = "http://localhost:8000/v1";

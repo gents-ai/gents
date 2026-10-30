@@ -62,7 +62,7 @@ pub(super) fn resolve_command_timeout_in_scope(
     foreground_default: std::time::Duration,
     foreground_max: std::time::Duration,
 ) -> std::time::Duration {
-    let background = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+    let background = crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
         .is_some_and(|context| context.background);
     resolve_command_timeout(
         requested_secs,

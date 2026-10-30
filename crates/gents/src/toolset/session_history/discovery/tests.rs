@@ -118,7 +118,7 @@ async fn call_error(tool: &SessionHistoryTool, params: Value) -> String {
 /// Completes `lifecycle` with a 9 000-line output behind a bounded view
 /// and returns the full output.
 async fn complete_with_large_output(
-    lifecycle: &mut crate::tool_call_lifecycle::ToolCallLifecycle,
+    lifecycle: &mut crate::tools::call::lifecycle::ToolCallLifecycle,
 ) -> String {
     use gents_protocol::output::{PayloadPresentation, PresentationPart};
 
@@ -143,7 +143,7 @@ async fn complete_with_large_output(
 
 #[tokio::test]
 async fn output_pages_a_background_calls_stored_output_past_its_receipt() {
-    use crate::tool_call_lifecycle::admission_fixture::{
+    use crate::tools::call::lifecycle::admission_fixture::{
         published_admission, PublishedAdmissionOptions,
     };
 
@@ -191,7 +191,7 @@ async fn output_pages_a_background_calls_stored_output_past_its_receipt() {
 
 #[tokio::test]
 async fn output_pages_the_full_stored_tool_output_behind_a_bounded_view() {
-    use crate::tool_call_lifecycle::admission_fixture::{
+    use crate::tools::call::lifecycle::admission_fixture::{
         published_admission, PublishedAdmissionOptions,
     };
 

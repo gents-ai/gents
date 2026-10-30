@@ -1273,13 +1273,13 @@ fn external_contract_fixtures_validate_without_runtime_dependencies() {
 
 #[tokio::test]
 async fn an_agent_new_row_links_the_request_it_caused() {
-    use crate::tool_call_lifecycle::admission_fixture::{
+    use crate::tools::call::lifecycle::admission_fixture::{
         published_session_message, PublishedAdmissionOptions,
     };
     let message = published_session_message(PublishedAdmissionOptions {
         name: "timeline-caused-request".to_owned(),
         real_identity: true,
-        await_mode: crate::tool_call_lifecycle::AwaitMode::Background,
+        await_mode: crate::tools::call::lifecycle::AwaitMode::Background,
         ..Default::default()
     })
     .await

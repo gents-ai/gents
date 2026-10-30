@@ -8,7 +8,6 @@ use defra_node::EmbeddedNode;
 use tokio::sync::{watch, OnceCell};
 
 use crate::health_checker::HealthCheckerOptions;
-use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
 use crate::inference::backends::health::{BackendHealthMap, BackendProberOptions};
 use crate::inference::resolved::{
     ResolvedAgent, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
@@ -22,6 +21,7 @@ use crate::store::schema::migration;
 use crate::tool_surface::{
     AgentToolConfig, AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling,
 };
+use crate::tools::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
 use crate::triggers::engine::manual_source::ManualTriggerHandle;
 
 mod builder;
@@ -94,8 +94,9 @@ where
                 node.clone(),
             ),
         ),
-        background_tool_registry: crate::hook::BackgroundToolRegistry::default(),
-        background_execution_registry: crate::hook::BackgroundExecutionRegistry::default(),
+        background_tool_registry: crate::tools::call::hook::BackgroundToolRegistry::default(),
+        background_execution_registry:
+            crate::tools::call::hook::BackgroundExecutionRegistry::default(),
         startup_barrier: Arc::new(runtime::StartupBarrier::ready_for_test()),
         runtime_status,
         slot_generation: 1,
@@ -480,7 +481,7 @@ impl Gents {
         actor: Option<&str>,
         request: &gents_protocol::job::OperatorJobControlRequest,
     ) -> Result<gents_protocol::job::JobControlOutcome, gents_protocol::job::JobReadError> {
-        crate::plugin_job::control::operator_control(
+        crate::tools::background::job::control::operator_control(
             &crate::config_client::ConfigAccess::local(self.node.clone()),
             actor,
             request,
@@ -494,7 +495,7 @@ impl Gents {
         actor: Option<&str>,
         request: &gents_protocol::process_control::OperatorProcessControlRequest,
     ) -> anyhow::Result<gents_protocol::process_control::ProcessControlOutcome> {
-        crate::tool_control::operator_process_control(
+        crate::tools::call::control::operator_process_control(
             self.node.clone(),
             &self.background_execution_registry,
             actor,

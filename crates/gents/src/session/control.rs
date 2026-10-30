@@ -110,8 +110,8 @@ pub async fn resume_session(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-    background_executions: crate::hook::BackgroundExecutionRegistry,
-    job_driver: Arc<crate::plugin_job::driver::JobDriver>,
+    background_executions: crate::tools::call::hook::BackgroundExecutionRegistry,
+    job_driver: Arc<crate::tools::background::job::driver::JobDriver>,
 ) -> Result<()> {
     anyhow::ensure!(
         !session_id.trim().is_empty() && !node_did.trim().is_empty(),
@@ -192,8 +192,8 @@ async fn ensure_session_executions_settled_in_txn(
     node_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-    background_executions: &crate::hook::BackgroundExecutionRegistry,
-    job_driver: &crate::plugin_job::driver::JobDriver,
+    background_executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
+    job_driver: &crate::tools::background::job::driver::JobDriver,
 ) -> Result<()> {
     let scope = crate::session::session_scope_filter(node_did, session_id, requester_did);
     let unsettled = session_tool_call_exists_in_txn(

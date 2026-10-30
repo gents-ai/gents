@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::health_checker::{HealthStatus, ServiceHealth, ServiceHealthMap};
 use crate::mcp_pool::McpPool;
-use crate::tool_call_lifecycle::FailureClass;
+use crate::tools::call::lifecycle::FailureClass;
 
 #[derive(Clone)]
 pub struct MetaToolContext {

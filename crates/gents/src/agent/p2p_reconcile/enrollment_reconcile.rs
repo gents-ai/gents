@@ -211,7 +211,9 @@ pub fn runtime_observation_admitted(
     current: Option<&EnrollmentAuthorizationFence>,
 ) -> bool {
     (!node.is_empty()
-        && crate::plugin_job::control::operator_control_authorized(node, node, node, actor))
+        && crate::tools::background::job::control::operator_control_authorized(
+            node, node, node, actor,
+        ))
         || client_observation_admitted(actor, node, current)
 }
 
