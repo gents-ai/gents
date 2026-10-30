@@ -142,7 +142,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "toolset::shared::command::network_enforcement_disclosure_tests::generated_command_isolation_matches_native_policy",
             package: "gents",
-            source_path: "crates/gents/src/toolset/shared/command.rs",
+            source_path: "crates/gents/src/toolset/shared/command_network_disclosure_tests.rs",
             module_path: "toolset::shared::command::network_enforcement_disclosure_tests",
             function: "generated_command_isolation_matches_native_policy",
         },
