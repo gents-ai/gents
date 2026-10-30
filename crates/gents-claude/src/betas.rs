@@ -187,7 +187,16 @@ pub fn select(model: &ModelTraits<'_>, request: &Request) -> Vec<&'static str> {
     );
 
     // Per-attempt additions (`zN`).
-    push_once(&mut betas, EFFORT, model.has("effort"));
+    // `S8e` pushes the effort beta exactly when `QS` holds.
+    push_once(
+        &mut betas,
+        EFFORT,
+        crate::body::effort_capable(
+            model.canonical,
+            model.has("effort"),
+            request.provider.capability_betas(),
+        ),
+    );
     push_once(&mut betas, STRUCTURED_OUTPUTS, request.output_format);
     // `RR`: latched for first party on the default base URL (`Usn`) while the
     // session's thinking is not disabled.

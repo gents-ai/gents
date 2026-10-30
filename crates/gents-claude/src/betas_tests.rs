@@ -233,3 +233,23 @@ fn no_beta_repeats() {
         }
     }
 }
+
+#[test]
+fn the_effort_beta_follows_the_effort_gate() {
+    let opus_4_5 = ModelTraits {
+        canonical: "claude-opus-4-5",
+        capabilities: &["context_management", "total_tokens_reminder"],
+        native_1m: false,
+        thinking_supported: true,
+    };
+    // First party accepts effort on every model outside the exclusion list,
+    // with or without the catalog capability.
+    assert!(select(&opus_4_5, &MAIN_THREAD).contains(&EFFORT));
+    assert!(!select(&HAIKU_4_5, &MAIN_THREAD).contains(&EFFORT));
+    let vertex = Request {
+        provider: Provider::Vertex,
+        ..MAIN_THREAD
+    };
+    assert!(!select(&opus_4_5, &vertex).contains(&EFFORT));
+    assert!(select(&OPUS_5_5, &vertex).contains(&EFFORT));
+}
