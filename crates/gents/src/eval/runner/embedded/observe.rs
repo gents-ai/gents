@@ -790,9 +790,14 @@ mod tests {
                 .unwrap();
             let request_id = format!("req-unsettled-{state}");
             insert_request(&home, &request_id, state).await;
-            let observed = await_terminal(&home.node, &request_id, Some(Duration::ZERO), Duration::ZERO)
-                .await
-                .unwrap();
+            let observed = await_terminal(
+                &home.node,
+                &request_id,
+                Some(Duration::ZERO),
+                Duration::ZERO,
+            )
+            .await
+            .unwrap();
             let stored = poll_request(&home.node, &request_id)
                 .await
                 .unwrap()
@@ -824,12 +829,7 @@ mod tests {
         };
         let (observed, ()) = tokio::time::timeout(Duration::from_secs(10), async {
             tokio::join!(
-                await_terminal(
-                    &home.node,
-                    "req-later",
-                    None,
-                    Duration::ZERO,
-                ),
+                await_terminal(&home.node, "req-later", None, Duration::ZERO,),
                 writer,
             )
         })

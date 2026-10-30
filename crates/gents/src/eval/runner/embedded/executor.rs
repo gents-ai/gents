@@ -2880,13 +2880,7 @@ mod tests {
                 cancel.cancel();
                 let (terminal, stopped) = tokio::time::timeout(
                     Duration::from_secs(30),
-                    observe_stage_terminal(
-                        &home.node,
-                        &cancel,
-                        &runtime,
-                        &request_id,
-                        None,
-                    ),
+                    observe_stage_terminal(&home.node, &cancel, &runtime, &request_id, None),
                 )
                 .await
                 .expect("stage cancellation must settle active inference");
