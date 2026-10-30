@@ -6,7 +6,6 @@
     {
       "stage_id": "discover",
       "prompt": "I want more careful answers on difficult problems. Check which model we are using and whether it supports a higher thinking effort. Explain the tradeoff and our current limits; do not change anything yet.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",
@@ -133,7 +132,6 @@
     {
       "stage_id": "configure",
       "prompt": "Yes, use high thinking effort with the current model. Allow 40 turns and 300,000 total tokens per request. Keep the existing connection and leave the other settings alone.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",

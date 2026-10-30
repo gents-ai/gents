@@ -217,7 +217,6 @@ fn documents(owner: &str) -> Vec<(Collection, Value)> {
             "stages": [{
                 "stage_id": "check",
                 "prompt": "Run the monitor.",
-                "deadline_secs": 600,
                 "checks": [{
                     "check": "captured_rows_count",
                     "params": {"name": "findings", "min": 1},

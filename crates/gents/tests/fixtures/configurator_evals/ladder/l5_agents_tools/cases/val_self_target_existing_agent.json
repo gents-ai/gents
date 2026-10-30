@@ -6,7 +6,6 @@
     {
       "stage_id": "configure",
       "prompt": "Make it possible for you to delegate to a new conversation running your same role and settings. Call it helper; reuse your existing role.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -127,7 +126,6 @@
     {
       "stage_id": "delegate",
       "prompt": "Ask helper to reply with exactly ECHO-2468 and report its reply when it arrives.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",

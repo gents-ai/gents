@@ -6,7 +6,6 @@
     {
       "stage_id": "setup_partial",
       "prompt": "Prepare recordkeeping for my workflow, for later use. The records are EvalAutomationInput { correlation: string, message: string } and EvalAutomationOutput { correlation: string, result: string }. The correlation is a caller-supplied business key: preserve it exactly, and find records using that key alone. Set up storage and tools to add and find outputs, but do not grant these tools to any assistant yet.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -152,7 +151,6 @@
     {
       "stage_id": "finish_wiring",
       "prompt": "Make those recordkeeping tools available to you now. Reuse what you prepared; do not create another copy.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -289,7 +287,6 @@
     {
       "stage_id": "exercise",
       "prompt": "Save one output for correlation \"val-delta-005\" with result \"resumed\". Then look it up by correlation and tell me what was saved. Use your recordkeeping tools; leave configuration alone.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "captured_rows_count",

@@ -21,7 +21,6 @@
     {
       "stage_id": "inspect",
       "prompt": "A built local plugins-only artifact is available at ./artifacts/native_echo.pack in your granted workspace. Discover native pack help and inspect the artifact and its exact digest. Preview installation. Do not install, select tools, or run anything yet; keep shell off. Use native config, never shell or CLI passthrough.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",
@@ -177,7 +176,6 @@
     {
       "stage_id": "install-select",
       "prompt": "Install the exact sealed local artifact you previewed. Reinspect and preview if necessary, use the returned digest, inspect the installed fixture/native_echo plugin, then explicitly select its pinned digest on your existing Tools while preserving all other fields and entries. Read back Tools and effective configuration. Do not call the plugin in this request; report that a fresh request is needed. Never claim installation alone exposes tools. Keep shell off and the unrelated context unchanged.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",
@@ -342,7 +340,6 @@
     {
       "stage_id": "fresh-call",
       "prompt": "This is the fresh request after explicit Tools selection. Call native_echo with {} and return the actual result. Keep configuration and all unrelated data unchanged; do not use shell.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",

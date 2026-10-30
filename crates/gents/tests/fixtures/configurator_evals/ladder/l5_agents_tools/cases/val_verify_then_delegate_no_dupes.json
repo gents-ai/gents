@@ -6,7 +6,6 @@
     {
       "stage_id": "configure",
       "prompt": "Create a review-helper assistant for short reviews, using our current model, and make it available for you to delegate to.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -127,7 +126,6 @@
     {
       "stage_id": "verify-and-delegate",
       "prompt": "I am back. Check whether the review-helper setup is complete and fix anything missing, without duplicating it. Ask it to reply with exactly FIX2-888 and report its reply when it arrives.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",

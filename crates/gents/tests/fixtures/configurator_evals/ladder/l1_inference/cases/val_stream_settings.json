@@ -6,7 +6,6 @@
     {
       "stage_id": "discover",
       "prompt": "The text arriving from the model feels choppy, and sometimes a request seems to hang. Inspect our current model and streaming settings and explain which waits can be tuned. Do not change anything yet.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",
@@ -133,7 +132,6 @@
     {
       "stage_id": "configure",
       "prompt": "Yes, group incoming text into updates about a quarter of a second apart. If the worker stops renewing its claim to a request, expire that claim after 45 seconds. Allow 2 minutes of provider idle time and 8 minutes overall. Limit each request to 15 turns and 80,000 total tokens. Keep the same model and connection.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",

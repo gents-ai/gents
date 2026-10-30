@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-schema-experience",
-      "comparability_version": 3,
+      "comparability_version": 4,
       "title": "Engineer schema experience",
       "subject": {
         "kind": "agent",

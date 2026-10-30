@@ -6,7 +6,6 @@
     {
       "stage_id": "discover",
       "prompt": "I want a separate set of settings for long research sessions, while keeping my everyday setup available unchanged. What model and limits do we use now, and how would you arrange that? Explain your plan; do not change anything yet.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",
@@ -133,7 +132,6 @@
     {
       "stage_id": "configure",
       "prompt": "Go ahead. Call the separate settings Research and use them for your future work: 60 turns, 400,000 total tokens, and 30 minutes per request. Use the same model and connection. Keep the original settings available unchanged.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",

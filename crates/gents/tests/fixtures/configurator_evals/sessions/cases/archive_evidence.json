@@ -6,7 +6,6 @@
     {
       "stage_id": "record",
       "prompt": "Record this deploy note: The rollout pauses at the first failing health check and leaves the previous image pinned. Reply only Recorded.",
-      "deadline_secs": 300,
       "checks": [
         {
           "check": "final_message_matches",
@@ -24,7 +23,6 @@
     {
       "stage_id": "investigate",
       "prompt": "Find our recorded deployment rollback decision using sessions. Quote the health-check rule and cite the source message ID.",
-      "deadline_secs": 300,
       "checks": [
         {
           "check": "final_message_matches",

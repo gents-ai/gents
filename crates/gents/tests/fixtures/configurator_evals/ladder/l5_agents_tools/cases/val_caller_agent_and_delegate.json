@@ -6,7 +6,6 @@
     {
       "stage_id": "helper-and-target",
       "prompt": "Create a checking-helper assistant for delegated checks, using our current model, and make it available for you to delegate to. Set up the connection without sending a message yet.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -127,7 +126,6 @@
     {
       "stage_id": "caller-selects-target",
       "prompt": "Create Coordinator for organizing checks, with its own instructions and access to the same Checking Helper. Reuse the existing helper connection; keep your own helper list unchanged. Set this up without sending a message yet.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -260,7 +258,6 @@
     {
       "stage_id": "delegate",
       "prompt": "Ask Checking Helper to reply with exactly PONG-7391 and report its reply when it arrives.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",

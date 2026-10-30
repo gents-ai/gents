@@ -6,7 +6,6 @@
     {
       "stage_id": "configure",
       "prompt": "Create an assistant named Analyst for research notes. Give it its own instructions and tool permissions, appropriate for its role: read and summarize local research notes, citing their sources. It must not modify files or run shell commands. Use our existing model settings. Keep your own role and permissions unchanged.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "crew_spec_match",

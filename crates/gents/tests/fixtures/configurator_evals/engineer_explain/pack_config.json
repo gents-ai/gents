@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-explain",
-      "comparability_version": 2,
+      "comparability_version": 3,
       "title": "Native query plans and bounded execution diagnostics",
       "subject": {
         "kind": "agent",

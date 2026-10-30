@@ -5083,7 +5083,6 @@
     {
       "stage_id": "investigate",
       "prompt": "Find my Atlas rollout review session from last year. Tell me its session ID and whether it is closed. Use sessions to investigate past work. Include its canonical session document ID as a source citation.",
-      "deadline_secs": 300,
       "checks": [
         {
           "check": "final_message_matches",

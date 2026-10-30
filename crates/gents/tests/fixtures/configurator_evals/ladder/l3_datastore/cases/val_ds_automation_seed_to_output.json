@@ -6,7 +6,6 @@
     {
       "stage_id": "configure",
       "prompt": "I need you to keep results for my workflow. The records are EvalAutomationInput { correlation: string, message: string } and EvalAutomationOutput { correlation: string, result: string }. The correlation is a caller-supplied business key: preserve it exactly, and find records using that key alone. Set up storage for these record types. Give yourself tools to add and find output records, limited to those records. When an input arrives, handle it yourself and save one output with the same correlation and result \"processed\". Include the input message in the work you receive. Do not submit an input yet.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -153,7 +152,6 @@
           "message": "process this"
         }
       },
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "captured_rows_count",
