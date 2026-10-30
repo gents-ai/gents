@@ -4,7 +4,7 @@ import {
 } from "../../../hooks/useAttachments";
 import { useApp } from "@/app/AppContext";
 import { writeAttachments } from "../../../hooks/draftStore";
-import { withSkillLines } from "../../lib/skillLines";
+import { withCommandLines, withSkillLines } from "../../lib/skillLines";
 import type {
   RequestAttachment,
   AttachmentView,
@@ -33,18 +33,24 @@ export const useComposerEdit = () => useContext(ComposerEditContext);
 export const lastEditable = (queue: readonly PendingQueueEntryView[] | null) =>
   queue?.filter((entry) => entry.editable).slice(-1)[0] ?? null;
 
+const NO_COMMANDS: readonly string[] = [];
+
 export function useComposerEditing({
   queue,
   onEdit,
   setDraft,
   send,
   textarea,
+  commands = NO_COMMANDS,
 }: {
   queue: readonly PendingQueueEntryView[] | null;
   onEdit: ((edit: QueueEdit) => Promise<void>) | undefined;
   setDraft: (update: (current: string) => string) => void;
   send: (text: string, attachments?: RequestAttachment[]) => Promise<boolean>;
   textarea: RefObject<HTMLElement | null>;
+  /** the skills the field draws as chips: a queued message's skills among
+      them return to its text as chips, and the rest stay beside it */
+  commands?: readonly string[];
 }) {
   const { drafts, project } = useApp();
   const loadAttachments = useRequestAttachments();
@@ -68,19 +74,21 @@ export function useComposerEditing({
   const begin = useCallback(
     (entry: PendingQueueEntryView) => {
       setError(null);
+      const skills = entry.selectedSkillIds ?? [];
+      const chips = skills.filter((id) => commands.includes(id));
       setEditing({
         docId: entry.requestDocId,
         requestId: entry.requestId,
         attachments: entry.attachments,
         removedAttachments: [],
         capturedContext: [...(entry.capturedContext ?? [])],
-        skills: [...(entry.selectedSkillIds ?? [])],
-        text: entry.content,
+        skills: skills.filter((id) => !chips.includes(id)),
+        text: withCommandLines(entry.content, chips),
         reached: false,
       });
       focus();
     },
-    [focus],
+    [focus, commands],
   );
   const setText = (text: string) => {
     if (saving) return;
@@ -193,6 +201,7 @@ export function useComposerEditing({
     text: string,
     added: RequestAttachment[] = [],
     preparedText = text,
+    skills = editing?.skills ?? [],
   ) => {
     if (
       !editing ||
@@ -218,7 +227,7 @@ export function useComposerEditing({
     try {
       await onEdit(
         rewriteEdit(queue, entry, preparedText, {
-          selected_skill_ids: editing.skills,
+          selected_skill_ids: skills,
           captured_context: editing.capturedContext,
           attachments: [...(await sourceAttachments()), ...added],
         }),

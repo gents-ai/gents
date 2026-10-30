@@ -1,6 +1,9 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, render, renderHook, waitFor } from "@testing-library/react";
+import { createRef } from "react";
+import { RichComposer, type ComposerHandle } from "@gents/ui/conversation";
 import { describe, expect, it, vi } from "vitest";
 import type { PendingQueueEntryView } from "@source-inc/gents-desktop-client";
+import { chipSkills } from "../src/ui/lib/skillLines";
 import { useComposerEditing } from "../src/ui/screens/session/composerEdit";
 
 const loadAttachments = vi.hoisted(() => vi.fn());
@@ -251,5 +254,58 @@ describe("queued composer edits", () => {
       }),
     );
     expect(setDraft).not.toHaveBeenCalled();
+  });
+
+  it("returns the skills the field offers to the text as chips, and sends the chips' skills", async () => {
+    const entry: PendingQueueEntryView & { selectedSkillIds: string[] } = {
+      requestDocId: "doc",
+      requestId: "request",
+      content: "old",
+      editable: true,
+      steerable: true,
+      editGroup: "group",
+      selectedSkillIds: ["review", "gone"],
+    };
+    const onEdit = vi.fn().mockResolvedValue(undefined);
+    const { result } = renderHook(() =>
+      useComposerEditing({
+        queue: [entry],
+        onEdit,
+        setDraft: vi.fn(),
+        send: vi.fn(),
+        textarea: { current: null },
+        commands: ["review", "plan"],
+      }),
+    );
+    act(() => result.current.begin(entry));
+    expect(result.current.editing).toMatchObject({
+      text: "/review old",
+      skills: ["gone"],
+    });
+
+    const field = createRef<ComposerHandle>();
+    render(
+      <RichComposer
+        value={result.current.editing!.text}
+        onChange={() => {}}
+        onSend={() => {}}
+        models={[]}
+        commands={["review", "plan"]}
+        composerRef={field}
+      />,
+    );
+    await waitFor(() =>
+      expect(chipSkills(field.current!.parts(), ["review", "plan"])).toEqual([
+        "review",
+      ]),
+    );
+    const chips = chipSkills(field.current!.parts(), ["review", "plan"]);
+
+    await act(async () =>
+      result.current.save("changed", [], "changed", ["gone", ...chips]),
+    );
+    expect(
+      onEdit.mock.calls[0]![0].messages[0].authoredInput.selected_skill_ids,
+    ).toEqual(["gone", "review"]);
   });
 });
