@@ -1487,7 +1487,7 @@ mod provider_account_tests {
                     "backend_id": "claude",
                     "name": "Claude",
                     "provider_kind": "ClaudeCliSubscription",
-                    "endpoint": "https://api.anthropic.com",
+                    "endpoint": "claude-cli://subscription",
                     "auth": { "kind": "node_oauth" },
                 }),
             ),
