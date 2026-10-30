@@ -1,5 +1,5 @@
 use super::*;
-use crate::config_client::{
+use crate::store::config_client::{
     validate_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 
@@ -24,7 +24,7 @@ impl ConfigCommandTool {
                             "id": id,
                             "error": format!("{error:#}")
                         });
-                        if let Some(missing) = error.downcast_ref::<crate::document_config::MissingReference>() {
+                        if let Some(missing) = error.downcast_ref::<crate::documents::MissingReference>() {
                             diagnostic["field"] = json!(missing.field);
                             diagnostic["missing"] = json!({"collection":missing.target.graphql_type(),"id":missing.target_id});
                         }
@@ -44,7 +44,7 @@ impl ConfigCommandTool {
                         collection: *collection, add: value.clone(), update: value.clone(),
                     }).collect())?;
                     if let Err(error) = validate_desired_state_plan(txn, &plan).await {
-                        if crate::config_client::is_transaction_step_unavailable(&error) {
+                        if crate::store::config_client::is_transaction_step_unavailable(&error) {
                             return Err(error);
                         }
                         errors.push(json!({"error":format!("{error:#}")}));
@@ -52,26 +52,28 @@ impl ConfigCommandTool {
                 }
                 let selected: std::collections::BTreeSet<String> = references.documents()
                     .filter(|((collection, _), _)| *collection == crate::Collection::Tools)
-                    .filter_map(|(_, value)| serde_json::from_value::<crate::document_config::Tools>(value.clone()).ok())
+                    .filter_map(|(_, value)| serde_json::from_value::<crate::documents::Tools>(value.clone()).ok())
                     .flat_map(|tools| tools.datastore.and_then(|d| d.datastore_tool_surface_ids).unwrap_or_default())
                     .collect();
                 let surfaces = references.documents()
                     .filter(|((collection, id), _)| *collection == crate::Collection::DatastoreToolSurface && selected.contains(id))
-                    .filter_map(|(_, value)| serde_json::from_value::<crate::document_config::DatastoreToolSurfaceDocument>(value.clone()).ok())
+                    .filter_map(|(_, value)| serde_json::from_value::<crate::documents::DatastoreToolSurfaceDocument>(value.clone()).ok())
                     .collect::<Vec<_>>();
                 Ok((counts, errors, surfaces))
             }),
         ).await?;
         for surface in selected_surfaces {
             for entry in surface.entries.unwrap_or_default() {
-                use crate::document_config::SurfaceToolDecl;
+                use crate::documents::SurfaceToolDecl;
                 let (tool_name, collection, result) = match entry {
                     SurfaceToolDecl::Create(decl) => {
-                        let result = if decl.collection == crate::mailbox::MAILBOX_COLLECTION {
-                            crate::mailbox::validate_mailbox_write_decl(&decl)
+                        let result = if decl.collection
+                            == crate::session::mailbox::MAILBOX_COLLECTION
+                        {
+                            crate::session::mailbox::validate_mailbox_write_decl(&decl)
                         } else {
-                            crate::defra_write::BoundedWriteTool::new(
-                                crate::config_client::ConfigAccess::local(self.node.clone()),
+                            crate::tools::builtin::defra_write::BoundedWriteTool::new(
+                                crate::store::config_client::ConfigAccess::local(self.node.clone()),
                                 decl.clone(),
                             )
                             .ensure_well_formed()
@@ -79,8 +81,8 @@ impl ConfigCommandTool {
                         (decl.tool_name, decl.collection, result)
                     }
                     SurfaceToolDecl::Query(decl) => {
-                        let result = crate::defra_query::BoundedQueryTool::new(
-                            crate::config_client::ConfigAccess::local(self.node.clone()),
+                        let result = crate::tools::builtin::defra_query::BoundedQueryTool::new(
+                            crate::store::config_client::ConfigAccess::local(self.node.clone()),
                             decl.clone(),
                         )
                         .validate_schema()

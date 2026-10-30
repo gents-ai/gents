@@ -207,7 +207,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
     Some(match resource {
         "context" => Page {
             what: "a prompt, skills and selected Tools. An agent selects it through context_id.",
-            commands: &[], notes: "If tools_id is set, those Tools must already exist. A Context or Tools that more than one agent selects is refused by default; clone the agent to customize it independently, or pass options.shared = \"acknowledge\" to edit it for every agent that selects it. The receipt then lists those agents and the new sha256.", next: "select it with agent update and set.context_id.",
+            commands: &[], notes: "If tools_id is set, those Tools must already exist. A Context or Tools that more than one agent selects is refused by default; clone the agent to customize it independently, or pass options.shared = \"acknowledge\" to edit it for every agent that selects it. The acknowledgement waives only that refusal: a shared edit still needs the agent catalog grant (category node), because it changes the other agents' configuration too. The receipt then lists those agents and the new sha256.", next: "select it with agent update and set.context_id.",
         },
         "sampling" => Page { what: "temperature and sampling parameters. A profile selects it through sampling_id.", commands: &[], notes: "Editing a shared document affects every profile selecting it. Create a separate document for different settings.", next: "profile update with set.sampling_id." },
         "retry-policy" => Page { what: "retry settings selected by an execution document.", commands: &[], notes: "Create a separate document for different retry settings.", next: "execution update with set.retry_policy_id." },
@@ -291,7 +291,7 @@ pub(super) fn page(resource: &str) -> Option<Page> {
         "tools" => Page {
             what: "an agent's Tools: what it may use, in groups (tools grant).",
             commands: &["tools get|preview|edit  options.agent (default: the invoking agent); set/clear: groups"],
-            notes: "A group in set replaces that whole group: read it with tools get and send back what you keep. host.root is the workspace path alongside host.files and host.bash; active host tools need an admitted root when workspace policy is configured. On your own Tools, a set that would drop existing settings is refused and names them; options.allow-drop with the group names drops them on purpose. Tools that more than one agent reaches are refused by default; options.shared = \"acknowledge\" edits them for every agent that selects them, and the receipt lists those agents and the new sha256. host.bash.mode selects bash (Off by default); execution_mode, argv prefixes and background_enabled only constrain it. For one approved write command use mode Unrestricted with allowed_argv_prefixes holding only that prefix; the process ceiling still applies. integrations.plugins[].job lets a plugin that declares job: true run job steps within its ceiling; absent means non-job verbs only, and a job-capable plugin is called by its plugin name — the name in its namespace/name coordinate — as a model tool. Its bounds, defaults and policy are in tools edit --help, and it is operator-only.",
+            notes: "A group in set replaces that whole group: read it with tools get and send back what you keep. host.root is the workspace path alongside host.files and host.bash; active host tools need an admitted root when workspace policy is configured. On your own Tools, a set that would drop existing settings is refused and names them; options.allow-drop with the group names drops them on purpose. Tools that more than one agent reaches are refused by default; options.shared = \"acknowledge\" edits them for every agent that selects them, and the receipt lists those agents and the new sha256. The acknowledgement waives only the sharing refusal: a shared edit still needs the agent catalog grant (category node). host.bash.mode selects bash (Off by default); execution_mode, argv prefixes and background_enabled only constrain it. For one approved write command use mode Unrestricted with allowed_argv_prefixes holding only that prefix; the process ceiling still applies. integrations.plugins[].job lets a plugin that declares job: true run job steps within its ceiling; absent means non-job verbs only, and a job-capable plugin is called by its plugin name — the name in its namespace/name coordinate — as a model tool. Its bounds, defaults and policy are in tools edit --help, and it is operator-only.",
             next: "verify saved Tools restrictions and runtime_effective with agent get, then test in a fresh session of that agent.",
         },
         "profile" => Page {
@@ -370,8 +370,8 @@ pub(super) fn page(resource: &str) -> Option<Page> {
 
 fn mailbox_values() -> Value {
     json!({
-        "kind": crate::mailbox::MailboxKind::ALL.map(crate::mailbox::MailboxKind::as_str),
-        "action": crate::mailbox::MailboxAction::ALL.map(crate::mailbox::MailboxAction::as_str),
+        "kind": crate::session::mailbox::MailboxKind::ALL.map(crate::session::mailbox::MailboxKind::as_str),
+        "action": crate::session::mailbox::MailboxAction::ALL.map(crate::session::mailbox::MailboxAction::as_str),
         "identity": [{"mode":"event"}, {"mode":"condition","key":"monitor-summary"}],
         "document_response": {"action":"write_document","expected_collection":"COLLECTION","required_schema_field":"mailbox_item_key: String @immutable @index(unique: true)"},
     })
