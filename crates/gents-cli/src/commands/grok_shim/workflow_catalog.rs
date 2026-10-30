@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;
-use gents::document_config::{load_agent_tools_in_txn, PluginToolRef};
+use gents::documents::{load_agent_tools_in_txn, PluginToolRef};
 use gents::plugin::executor::PluginExecutor;
 use gents::plugin::store::InstalledPlugin;
 use serde::Serialize;
@@ -88,7 +88,7 @@ mod tests {
     use std::sync::Arc;
 
     use defra_node::EmbeddedNode;
-    use gents::document_config::{AgentContext, IntegrationTools, PluginToolRef, Tools};
+    use gents::documents::{AgentContext, IntegrationTools, PluginToolRef, Tools};
     use serde_json::{json, Value};
 
     use super::*;

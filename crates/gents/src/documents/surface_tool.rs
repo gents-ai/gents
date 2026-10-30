@@ -346,17 +346,19 @@ pub(crate) fn validate_query_tool_declarations(
             &cli_tool_names,
             &additional_tool_names,
         )?;
-        crate::graphql::validate_collection_identifier(&decl.collection).map_err(|error| {
-            anyhow::anyhow!(
-                "query_tools[{i}] (tool {:?}) has invalid collection {:?}: {error}",
-                decl.tool_name,
-                decl.collection
-            )
-        })?;
+        crate::store::graphql::validate_collection_identifier(&decl.collection).map_err(
+            |error| {
+                anyhow::anyhow!(
+                    "query_tools[{i}] (tool {:?}) has invalid collection {:?}: {error}",
+                    decl.tool_name,
+                    decl.collection
+                )
+            },
+        )?;
         reject_protected_collection_name(&decl.collection)?;
         let mut seen_field_names = rapidhash::RapidHashSet::default();
         for (j, field) in decl.fields.iter().enumerate() {
-            crate::graphql::validate_graphql_name(field).map_err(|error| {
+            crate::store::graphql::validate_graphql_name(field).map_err(|error| {
                 anyhow::anyhow!(
                     "query_tools[{i}] (tool {:?}) fields[{j}] {:?} is not a GraphQL name: {error}",
                     decl.tool_name,
@@ -379,7 +381,7 @@ pub(crate) fn validate_query_tool_declarations(
                     decl.tool_name
                 ));
             }
-            crate::graphql::validate_graphql_name(&field.name).map_err(|error| {
+            crate::store::graphql::validate_graphql_name(&field.name).map_err(|error| {
                 anyhow::anyhow!(
                     "query_tools[{i}] (tool {:?}) filter_fields[{j}] {:?} is not a GraphQL name: {error}",
                     decl.tool_name,
@@ -411,7 +413,7 @@ pub(crate) fn validate_query_tool_declarations(
                 ));
             }
             if let Some(WriteToolFieldFill::SourceField(source_field)) = &field.fill {
-                crate::graphql::validate_graphql_name(source_field).map_err(|error| {
+                crate::store::graphql::validate_graphql_name(source_field).map_err(|error| {
                     anyhow::anyhow!(
                         "query_tools[{i}] (tool {:?}) filter_fields[{j}] has invalid source_field {:?}: {error}",
                         decl.tool_name,

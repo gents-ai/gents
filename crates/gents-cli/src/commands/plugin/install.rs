@@ -304,7 +304,7 @@ mod instruction_tests {
         )));
         let tool = gents::plugin::tool::PluginTool::resolve(
             executor,
-            &gents::document_config::PluginToolRef {
+            &gents::documents::PluginToolRef {
                 tool_calls: false,
                 plugin: "team/echo".into(),
                 digest: None,

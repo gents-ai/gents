@@ -206,7 +206,7 @@ impl CallbackEngine {
     async fn load_cursor(
         &self,
         binding: &CallbackBindingDoc,
-        source: &crate::document_config::EventSource,
+        source: &crate::documents::EventSource,
     ) -> Result<String> {
         let consumer = EventConsumer::CallbackBinding {
             binding_id: binding.binding_id.clone(),
@@ -321,7 +321,7 @@ impl CallbackEngine {
     async fn deliver_binding_arrivals(
         &mut self,
         binding: &CallbackBindingDoc,
-        source: &crate::document_config::EventSource,
+        source: &crate::documents::EventSource,
     ) -> Result<()> {
         let collection = source.source_collection.as_str();
         let mut after = self.load_cursor(binding, source).await?;
@@ -492,7 +492,7 @@ impl CallbackEngine {
             (
                 idempotency_key(&binding.binding_id, collection, doc_id),
                 input,
-                crate::document_config::CallbackInvocationOrigin::Event {
+                crate::documents::CallbackInvocationOrigin::Event {
                     binding_id: binding.binding_id.clone(),
                     source_collection: collection.into(),
                     source_doc_id: doc_id.into(),
@@ -544,7 +544,7 @@ impl CallbackEngine {
     async fn publish_invocation(
         &self,
         invocation: CallbackInvocationDoc,
-        callback: &crate::document_config::Callback,
+        callback: &crate::documents::Callback,
     ) -> Result<bool> {
         let stored = create_pending_invocation(&self.node, &invocation).await?;
         if invocation_is_claimable(&self.node_did, &stored) {
@@ -562,7 +562,7 @@ impl CallbackEngine {
     async fn materialize_group(
         &self,
         binding: &CallbackBindingDoc,
-        source: &crate::document_config::EventSource,
+        source: &crate::documents::EventSource,
         correlation: &str,
     ) -> Result<bool> {
         validate_callback_binding(binding)?;
@@ -619,7 +619,7 @@ impl CallbackEngine {
                 owner_node_did: binding.node_did.clone(),
                 callback_id: binding.callback_id.clone(),
                 input,
-                origin: crate::document_config::CallbackInvocationOrigin::EventGroup {
+                origin: crate::documents::CallbackInvocationOrigin::EventGroup {
                     binding_id: binding.binding_id.clone(),
                     group_key: group_key.clone(),
                 },
@@ -820,7 +820,7 @@ mod grouped_tests {
             assert!(!response.has_errors(), "{:?}", response.errors);
         }
         let binding:CallbackBindingDoc=serde_json::from_value(json!({"node_did":"owner","binding_id":"binding","event_source_id":"source","callback_id":"callback","input_fields":["value"]})).unwrap();
-        let source:crate::document_config::EventSource=serde_json::from_value(json!({"node_did":"owner","event_source_id":"source","source_collection":"CallbackMember","correlation_field":"batch","group":{"expected_count":2}})).unwrap();
+        let source:crate::documents::EventSource=serde_json::from_value(json!({"node_did":"owner","event_source_id":"source","source_collection":"CallbackMember","correlation_field":"batch","group":{"expected_count":2}})).unwrap();
         let engine = CallbackEngine::new(
             node.clone(),
             "owner".into(),

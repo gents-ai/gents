@@ -177,21 +177,6 @@ impl BackendAuth {
         matches!(self, Self::NodeOAuth { .. } | Self::NodeOAuthPool { .. })
     }
 
-    /// How a node OAuth backend resolves one account for readiness, discovery
-    /// and resume: its named account, or for a pool the earliest-connected
-    /// enabled account, so a pool resolves while any of its accounts does.
-    pub fn account_pick(&self) -> Option<crate::oauth_credential::AccountPick<'_>> {
-        match self {
-            Self::NodeOAuth { account_ref } => Some(
-                crate::oauth_credential::AccountPick::Reference(account_ref.as_deref()),
-            ),
-            Self::NodeOAuthPool { .. } => {
-                Some(crate::oauth_credential::AccountPick::ProviderDefault)
-            }
-            _ => None,
-        }
-    }
-
     /// Whether this credential form can authenticate `kind`. The Claude
     /// platforms take a static key or token, or their cloud's credentials; a
     /// cloud credential is refused anywhere else. Other kinds keep their own

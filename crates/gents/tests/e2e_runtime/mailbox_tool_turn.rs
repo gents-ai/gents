@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::document_config::{DatastoreTools, SurfaceToolDecl, Tools};
+use gents::documents::{DatastoreTools, SurfaceToolDecl, Tools};
 use gents::mailbox::{canonical_mailbox_write_decl, list_mailbox_items, MailboxStatus};
 use gents::{Collection, DatastoreToolSurfaceDocument, NodeIdentity};
 
@@ -61,11 +61,11 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
                 datastore_tool_surface_ids: Some(vec![SURFACE.into()]),
                 ..Default::default()
             }),
-            agents: Some(gents::document_config::AgentTools {
+            agents: Some(gents::documents::AgentTools {
                 target_ids: Vec::new(),
                 enabled: Some(true),
             }),
-            built_ins: Some(gents::document_config::BuiltInTools {
+            built_ins: Some(gents::documents::BuiltInTools {
                 enable_session_history_tool: Some(true),
                 ..Default::default()
             }),

@@ -4,7 +4,7 @@ use defra_node::EmbeddedNode;
 use gents::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyPlan,
 };
-use gents::document_config::PackConfig;
+use gents::documents::PackConfig;
 use gents::self_config::build_self_config_tools;
 use gents::tool_surface::{BashMode, FileToolMode, SelfConfigProcessCeiling, SelfConfigToolConfig};
 use gents::Collection;

@@ -75,18 +75,18 @@ pub fn decode_journal(raw: Option<&str>) -> Result<Vec<ActionJournalEntry>> {
 
 #[cfg(test)]
 pub fn emit_plan_from_source(
-    callback: &crate::document_config::Callback,
+    callback: &crate::documents::Callback,
     source: &Value,
 ) -> Result<ActionPlan, String> {
     plan_from_callback(callback, source, None)
 }
 
 pub fn plan_from_callback(
-    callback: &crate::document_config::Callback,
+    callback: &crate::documents::Callback,
     source: &Value,
     module: Option<&CallbackModuleDoc>,
 ) -> Result<ActionPlan, String> {
-    use crate::document_config::{BuiltInCallback, CallbackHandler};
+    use crate::documents::{BuiltInCallback, CallbackHandler};
     let source = strip_secret_fields(source.clone());
     match &callback.handler {
         CallbackHandler::BuiltIn {
@@ -113,9 +113,9 @@ pub fn plan_from_callback(
 
 async fn load_planner_module(
     node: &std::sync::Arc<EmbeddedNode>,
-    callback: &crate::document_config::Callback,
+    callback: &crate::documents::Callback,
 ) -> Result<Option<CallbackModuleDoc>, String> {
-    let crate::document_config::CallbackHandler::Module { module_id } = &callback.handler else {
+    let crate::documents::CallbackHandler::Module { module_id } = &callback.handler else {
         return Ok(None);
     };
     let module = load_callback_module(node, module_id, &callback.node_did)
@@ -260,7 +260,7 @@ fn stored_action_plan(invocation: &CallbackInvocationDoc) -> Result<Option<Actio
 #[cfg(test)]
 pub fn resolve_action_plan(
     invocation: &CallbackInvocationDoc,
-    callback: &crate::document_config::Callback,
+    callback: &crate::documents::Callback,
     source: &Value,
 ) -> Result<ActionPlan, String> {
     resolve_action_plan_with_module(invocation, callback, source, None)
@@ -269,7 +269,7 @@ pub fn resolve_action_plan(
 #[cfg(test)]
 pub fn resolve_action_plan_with_module(
     invocation: &CallbackInvocationDoc,
-    callback: &crate::document_config::Callback,
+    callback: &crate::documents::Callback,
     source: &Value,
     module: Option<&CallbackModuleDoc>,
 ) -> Result<ActionPlan, String> {
@@ -303,7 +303,7 @@ pub(crate) fn apply_planner_deny(invocation: &mut CallbackInvocationDoc, reason:
 pub async fn run_owned_invocation(
     node: &std::sync::Arc<EmbeddedNode>,
     invocation: &CallbackInvocationDoc,
-    callback: &crate::document_config::Callback,
+    callback: &crate::documents::Callback,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
     data_node: Option<&std::sync::Arc<EmbeddedNode>>,
@@ -374,7 +374,7 @@ async fn persist_claimed_to_running(
 async fn execute_running_invocation(
     node: &std::sync::Arc<EmbeddedNode>,
     invocation: &mut CallbackInvocationDoc,
-    callback: &crate::document_config::Callback,
+    callback: &crate::documents::Callback,
     source: &Value,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
@@ -396,7 +396,7 @@ async fn execute_running_invocation(
     if !crate::workspace::action_journal_prefix_legal(&journal) {
         return deny(node, invocation, "illegal action journal prefix").await;
     }
-    if let crate::document_config::CallbackHandler::Plugin {
+    if let crate::documents::CallbackHandler::Plugin {
         plugin,
         digest,
         correlation_field,
@@ -605,7 +605,7 @@ pub(super) async fn persist_journal(
 }
 
 async fn emit_new_plan(
-    callback: &crate::document_config::Callback,
+    callback: &crate::documents::Callback,
     source: &Value,
     module: Option<CallbackModuleDoc>,
 ) -> Result<ActionPlan, String> {
@@ -754,8 +754,7 @@ async fn retry_failed_plugin_invocations(
         else {
             continue;
         };
-        let crate::document_config::CallbackHandler::Plugin { max_attempts, .. } =
-            &callback.handler
+        let crate::documents::CallbackHandler::Plugin { max_attempts, .. } = &callback.handler
         else {
             continue;
         };
@@ -808,7 +807,7 @@ async fn retry_failed_plugin_invocations(
 async fn execute_recovered(
     node: &std::sync::Arc<EmbeddedNode>,
     invocation: &CallbackInvocationDoc,
-    callback: &crate::document_config::Callback,
+    callback: &crate::documents::Callback,
     ceiling: Option<&Path>,
     plugins: &PluginExecutor,
     engine: Option<&super::CallbackEngine>,
@@ -916,7 +915,7 @@ mod path_capability_tests {
 
     #[test]
     fn builtin_requires_capability_in_frozen_projected_input() {
-        let callback: crate::document_config::Callback = serde_json::from_value(json!({
+        let callback: crate::documents::Callback = serde_json::from_value(json!({
             "callback_id":"path-contract", "node_did":"did:key:writer", "handler":{"kind":"built_in","emitter":"create_workspace"}
         })).unwrap();
         let mut source = json!({"work_unit_id":"unit","repository_id":"repo","base_sha":"base","branch":"branch"});

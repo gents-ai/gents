@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use crate::config_client::{
     ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use crate::document_config::PackConfig;
+use crate::documents::PackConfig;
 use crate::graphql::escape_graphql_string;
 use crate::Collection;
 

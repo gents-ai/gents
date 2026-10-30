@@ -638,7 +638,7 @@ fn default_agent_id_does_not_require_a_gossiped_node() {
     let node_did = "did:key:z6MkAmy";
     let agent_id = gents::default_agent_id_for_node(node_did);
     let store = ClientStore::from_rows(ClientStoreRows {
-        agents: vec![gents::document_config::Agent {
+        agents: vec![gents::documents::Agent {
             agent_id: agent_id.clone(),
             node_did: node_did.to_string(),
             display_name: Some("Amy".to_string()),

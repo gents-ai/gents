@@ -97,11 +97,10 @@ pub(super) async fn validate_trigger_document_fields(
     let triggers = references
         .documents()
         .filter(|((collection, _), _)| *collection == Collection::Trigger)
-        .map(|(_, value)| serde_json::from_value::<crate::document_config::Trigger>(value.clone()))
+        .map(|(_, value)| serde_json::from_value::<crate::documents::Trigger>(value.clone()))
         .collect::<std::result::Result<Vec<_>, _>>()?;
     for trigger in triggers {
-        let crate::document_config::TriggerSource::Event { event_source_id } = &trigger.source
-        else {
+        let crate::documents::TriggerSource::Event { event_source_id } = &trigger.source else {
             continue;
         };
         if !written.contains(&(Collection::Trigger, trigger.trigger_id.clone()))
@@ -116,8 +115,8 @@ pub(super) async fn validate_trigger_document_fields(
         ) else {
             continue;
         };
-        let task: crate::document_config::Task = serde_json::from_value(task)?;
-        let source: crate::document_config::EventSource = serde_json::from_value(source)?;
+        let task: crate::documents::Task = serde_json::from_value(task)?;
+        let source: crate::documents::EventSource = serde_json::from_value(source)?;
         let Some(fields) = declared_fields(txn, &source.source_collection, introspected).await?
         else {
             continue;
@@ -128,8 +127,8 @@ pub(super) async fn validate_trigger_document_fields(
 }
 
 fn event_trigger_templates<'a>(
-    trigger: &'a crate::document_config::Trigger,
-    task: &'a crate::document_config::Task,
+    trigger: &'a crate::documents::Trigger,
+    task: &'a crate::documents::Task,
 ) -> [(&'static str, Option<&'a str>); 3] {
     [
         ("prompt_template", Some(task.prompt_template.as_str())),
@@ -145,18 +144,18 @@ fn event_trigger_templates<'a>(
 }
 
 pub fn validate_event_trigger_document_fields(
-    trigger: &crate::document_config::Trigger,
-    task: &crate::document_config::Task,
-    source: &crate::document_config::EventSource,
+    trigger: &crate::documents::Trigger,
+    task: &crate::documents::Task,
+    source: &crate::documents::EventSource,
     declared: &BTreeMap<String, SchemaField>,
 ) -> Result<()> {
     for (field, template) in event_trigger_templates(trigger, task) {
-        let Some(template) =
-            template.filter(|template| !crate::template::template_guards_undefined(template))
+        let Some(template) = template
+            .filter(|template| !crate::documents::template::template_guards_undefined(template))
         else {
             continue;
         };
-        for reference in crate::template::parse_template_for_validation(template)? {
+        for reference in crate::documents::template::parse_template_for_validation(template)? {
             let Some(name) = reference
                 .path
                 .get(1)
@@ -198,17 +197,17 @@ pub fn validate_event_trigger_document_fields(
 }
 
 pub fn event_trigger_document_field_names(
-    trigger: &crate::document_config::Trigger,
-    task: &crate::document_config::Task,
+    trigger: &crate::documents::Trigger,
+    task: &crate::documents::Task,
 ) -> Result<BTreeSet<String>> {
     let mut names = BTreeSet::new();
     for (_, template) in event_trigger_templates(trigger, task) {
-        let Some(template) =
-            template.filter(|template| !crate::template::template_guards_undefined(template))
+        let Some(template) = template
+            .filter(|template| !crate::documents::template::template_guards_undefined(template))
         else {
             continue;
         };
-        for reference in crate::template::parse_template_for_validation(template)? {
+        for reference in crate::documents::template::parse_template_for_validation(template)? {
             if let Some(name) = reference
                 .path
                 .get(1)

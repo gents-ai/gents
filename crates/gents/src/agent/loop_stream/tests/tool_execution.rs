@@ -171,8 +171,8 @@ impl PolicyDeniedOwner {
                         local_subnet: None,
                         node_did: "did:test:test".into(),
                         allowed_mcp_service_ids: vec!["selected-service".into()],
-                        remote_tools: crate::document_config::RemoteTools {
-                            services: vec![crate::document_config::RemoteServiceTools {
+                        remote_tools: crate::documents::RemoteTools {
+                            services: vec![crate::documents::RemoteServiceTools {
                                 mcp_service_id: "selected-service".into(),
                                 tool_names: vec!["selected-tool".into()],
                                 ..Default::default()
@@ -601,7 +601,7 @@ fn plugin_image_tool(image_bytes: usize) -> (tempfile::TempDir, Box<dyn ToolDyn>
     )));
     let tool = crate::plugin::tool::PluginTool::resolve(
         executor,
-        &crate::document_config::PluginToolRef {
+        &crate::documents::PluginToolRef {
             tool_calls: false,
             plugin: "team/plugin".into(),
             digest: Some(record.digest.clone()),
@@ -1376,7 +1376,7 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
         Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
             home.path().to_owned(),
         ))),
-        &crate::document_config::PluginToolRef {
+        &crate::documents::PluginToolRef {
             tool_calls: true,
             plugin: "team/plugin".into(),
             digest: Some(record.digest.clone()),

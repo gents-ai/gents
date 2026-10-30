@@ -434,7 +434,7 @@ fn generated_sibling_tools_cases_drive_production_tools_selection() {
             continue;
         }
 
-        let mut tools = gents::document_config::Tools::default();
+        let mut tools = gents::documents::Tools::default();
         apply_tool_grant_selection(&mut tools, None, Some(existing));
         apply_tool_grant_selection(&mut tools, None, requested);
         let selected = tools
@@ -456,7 +456,7 @@ fn generated_self_config_selection_cases_drive_production_tools_selection() {
     let cases = lean_self_config_selection_cases();
     assert!(!cases.tool_flag_cases.is_empty());
     for case in &cases.tool_flag_cases {
-        let mut tools = gents::document_config::Tools::default();
+        let mut tools = gents::documents::Tools::default();
         apply_tool_grant_selection(&mut tools, Some(case.existing), None);
         apply_tool_grant_selection(&mut tools, case.requested, None);
         assert_eq!(

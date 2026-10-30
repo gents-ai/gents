@@ -18,11 +18,14 @@ mod pack_config;
 mod principal;
 mod references;
 mod schedule;
+pub mod schedule_cron;
 mod serde_helpers;
 mod skill;
+pub mod skills;
 mod surface_tool;
 mod task;
 mod task_validation;
+pub mod template;
 mod tools;
 mod trigger;
 mod write_tool;
@@ -120,15 +123,17 @@ pub fn default_agent_id_for_node(node_did: &str) -> String {
 
 /// Ensure the runtime's node exists without inventing executable configuration.
 pub async fn ensure_node(node: &std::sync::Arc<EmbeddedNode>, node_did: &str) -> Result<Node> {
-    use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
     use crate::store::collection::Collection;
+    use crate::store::config_client::{
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
     anyhow::ensure!(!node_did.trim().is_empty(), "node DID must not be blank");
     let owner = node_did.to_owned();
     let existing: Option<Node> =
         ConfigAccess::transact_local_readonly(node, None, "ensure_node.read", |txn| {
             let owner = &owner;
             Box::pin(async move {
-                crate::config_client::read_desired_state_record_in_txn(
+                crate::store::config_client::read_desired_state_record_in_txn(
                     txn,
                     Collection::Node,
                     owner,
@@ -146,7 +151,7 @@ pub async fn ensure_node(node: &std::sync::Arc<EmbeddedNode>, node_did: &str) ->
     ConfigAccess::transact_local_write(node, None, "ensure_node", move |txn| {
         let owner = owner.clone();
         Box::pin(async move {
-            if let Some((_, value)) = crate::config_client::read_desired_state_record_in_txn(
+            if let Some((_, value)) = crate::store::config_client::read_desired_state_record_in_txn(
                 txn,
                 Collection::Node,
                 &owner,
@@ -172,7 +177,7 @@ pub async fn ensure_node(node: &std::sync::Arc<EmbeddedNode>, node_did: &str) ->
                 add: value.clone(),
                 update: value,
             }])?;
-            crate::config_client::apply_desired_state_plan(txn, &plan).await?;
+            crate::store::config_client::apply_desired_state_plan(txn, &plan).await?;
             Ok(principal)
         })
     })

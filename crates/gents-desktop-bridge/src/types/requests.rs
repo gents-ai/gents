@@ -185,7 +185,7 @@ pub struct SessionArchiveRequest {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct NodeConfigSaveRequest {
-    pub document: gents::document_config::Node,
+    pub document: gents::documents::Node,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -200,7 +200,7 @@ pub struct DefaultAgentSetRequest {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct AgentSaveRequest {
-    pub document: gents::document_config::Agent,
+    pub document: gents::documents::Agent,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -307,7 +307,7 @@ pub struct ToolsSaveRequest {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct ToolServiceSaveRequest {
-    pub document: gents::document_config::ToolServiceRegistry,
+    pub document: gents::documents::ToolServiceRegistry,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -330,14 +330,14 @@ pub struct ToolServiceTestRequest {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct TaskSaveRequest {
-    pub document: gents::document_config::Task,
+    pub document: gents::documents::Task,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct SkillSaveRequest {
-    pub document: gents::document_config::SkillDocument,
+    pub document: gents::documents::SkillDocument,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -356,7 +356,7 @@ pub struct TaskRunRequest {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct ScheduleSaveRequest {
-    pub document: gents::document_config::Schedule,
+    pub document: gents::documents::Schedule,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -372,7 +372,7 @@ pub struct ScheduleRunRequest {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct TriggerSaveRequest {
-    pub document: gents::document_config::Trigger,
+    pub document: gents::documents::Trigger,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -435,7 +435,7 @@ pub struct DesktopProbeMcpServiceRequest {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct EventSourceSaveRequest {
-    pub document: gents::document_config::EventSource,
+    pub document: gents::documents::EventSource,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -452,7 +452,7 @@ pub struct EventSourceDeleteRequest {
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
 pub struct ConfigComponentsApplyRequest {
-    pub document: gents::document_config::PackConfig,
+    pub document: gents::documents::PackConfig,
 }
 
 /// Existing-document edits only; omitted values (including redacted

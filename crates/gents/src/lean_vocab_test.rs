@@ -75,8 +75,8 @@ pub(crate) async fn native_queue_image(
 #[cfg(test)]
 mod task_hook_vocab {
     use super::{LeanCommandResult, LeanTaskHook};
-    pub(crate) fn lean_hook_phase(name: &str) -> crate::document_config::TaskHookPhase {
-        use crate::document_config::TaskHookPhase;
+    pub(crate) fn lean_hook_phase(name: &str) -> crate::documents::TaskHookPhase {
+        use crate::documents::TaskHookPhase;
         match name {
             "before" => TaskHookPhase::Before,
             "after_success" => TaskHookPhase::AfterSuccess,
@@ -87,8 +87,8 @@ mod task_hook_vocab {
     }
 
     impl LeanTaskHook {
-        pub(crate) fn to_task_hook(&self) -> crate::document_config::TaskHook {
-            crate::document_config::TaskHook {
+        pub(crate) fn to_task_hook(&self) -> crate::documents::TaskHook {
+            crate::documents::TaskHook {
                 hook_id: self.hook_id.clone(),
                 phase: lean_hook_phase(&self.phase),
                 command: self.command.clone(),

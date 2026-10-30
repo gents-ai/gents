@@ -79,10 +79,10 @@ pub fn test_agent(
     let mut behavior = test_agent_for_node(name, principal);
     behavior.backend_id = Some(backend_id.to_owned());
     behavior.backend_auth = match backend_api_key_env_var {
-        Some(variable) => gents::document_config::BackendAuth::Environment {
+        Some(variable) => gents::documents::BackendAuth::Environment {
             variable: variable.into(),
         },
-        None => gents::document_config::BackendAuth::Unauthenticated,
+        None => gents::documents::BackendAuth::Unauthenticated,
     };
     behavior
 }
@@ -142,7 +142,7 @@ pub async fn configure_child_agent(
     use gents::config_client::{
         read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
-    use gents::document_config::{AgentContext, AgentTools, Tools};
+    use gents::documents::{AgentContext, AgentTools, Tools};
     use gents::Collection;
 
     gents::ConfigAccess::transact_local_write(node, None, "test.configure_child_agent", |txn| {
@@ -286,13 +286,13 @@ pub async fn configure_agent_tools(
     node_did: &str,
     agent_id: &str,
     system_prompt: Option<String>,
-    tools: gents::document_config::Tools,
+    tools: gents::documents::Tools,
     referenced_documents: Vec<(gents::Collection, serde_json::Value)>,
 ) {
     use gents::config_client::{
         read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
-    use gents::document_config::AgentContext;
+    use gents::documents::AgentContext;
     use gents::Collection;
 
     assert_eq!(tools.node_did, node_did);

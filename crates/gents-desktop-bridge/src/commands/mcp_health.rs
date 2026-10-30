@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Result};
 use chrono::Utc;
-use gents::document_config::ToolServiceRegistry;
+use gents::documents::ToolServiceRegistry;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::{
     run_health_check_cycle, HealthCheckerOptions, McpHealthCheckService, McpPool, ServiceHealthMap,

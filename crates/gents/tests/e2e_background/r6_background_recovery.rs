@@ -86,11 +86,11 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
         &node_did,
         agent_id,
         None,
-        gents::document_config::Tools {
+        gents::documents::Tools {
             tools_id: format!("{agent_id}:tools"),
             node_did: node_did.clone(),
-            host: Some(gents::document_config::HostTools {
-                bash: Some(gents::document_config::BashTools {
+            host: Some(gents::documents::HostTools {
+                bash: Some(gents::documents::BashTools {
                     mode: gents::BashMode::ReadOnly,
                     read_only_commands: Some(vec!["sleep".to_string()]),
                     background_enabled: true,

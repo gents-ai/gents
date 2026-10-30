@@ -713,7 +713,7 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
     .await
     .unwrap()
     .expect("configured backend document");
-    let advertised = |model_name: &str| crate::document_config::AdvertisedModel {
+    let advertised = |model_name: &str| crate::documents::AdvertisedModel {
         model_name: model_name.into(),
         display_name: None,
         context_window: None,
@@ -721,8 +721,8 @@ async fn control_watcher_settles_when_an_unselected_agent_is_permanently_invalid
         max_output_tokens: None,
         reasoning_efforts: None,
     };
-    let catalog = |observed_at: &str, models: Vec<crate::document_config::AdvertisedModel>| {
-        crate::document_config::BackendModelCatalog {
+    let catalog = |observed_at: &str, models: Vec<crate::documents::AdvertisedModel>| {
+        crate::documents::BackendModelCatalog {
             node_did: None,
             observed_at: observed_at.into(),
             models,

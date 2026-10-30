@@ -1245,7 +1245,7 @@ pub struct DefraSessionHook {
     background_executions: BackgroundExecutionRegistry,
     background_live_outputs: BackgroundLiveOutputState,
     operator_tool_root: Option<PathBuf>,
-    remote_tools: Option<crate::document_config::RemoteTools>,
+    remote_tools: Option<crate::documents::RemoteTools>,
     goal_tools_enabled: bool,
     goal_creation_enabled: bool,
     job_tools: RapidHashMap<String, crate::plugin_job::JobBinding>,
@@ -1676,7 +1676,7 @@ impl DefraSessionHook {
 
     pub(crate) fn with_remote_tools(
         mut self,
-        tools: Option<crate::document_config::RemoteTools>,
+        tools: Option<crate::documents::RemoteTools>,
     ) -> Self {
         self.remote_tools = tools;
         self

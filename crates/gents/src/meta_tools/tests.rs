@@ -37,14 +37,11 @@ fn structured_meta_tool_error_becomes_a_typed_dispatch_failure() {
     }
 }
 
-pub(super) fn remote_selection(
-    services: &[&str],
-    names: &[&str],
-) -> crate::document_config::RemoteTools {
-    crate::document_config::RemoteTools {
+pub(super) fn remote_selection(services: &[&str], names: &[&str]) -> crate::documents::RemoteTools {
+    crate::documents::RemoteTools {
         services: services
             .iter()
-            .map(|service| crate::document_config::RemoteServiceTools {
+            .map(|service| crate::documents::RemoteServiceTools {
                 mcp_service_id: service.to_string(),
                 tool_names: names.iter().map(|name| name.to_string()).collect(),
                 ..Default::default()
@@ -54,7 +51,7 @@ pub(super) fn remote_selection(
 }
 
 use super::{CallToolArgs, CallToolTool, MetaToolContext};
-use crate::document_config::RemoteToolStyle;
+use crate::documents::RemoteToolStyle;
 use crate::inference::llm::tool::Tool;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},

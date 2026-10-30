@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 
 use super::documents::definition_ref;
 use super::{refused, RunSidecar};
-use crate::document_config::EvalDefinition;
+use crate::documents::EvalDefinition;
 use crate::eval::runner::executor::Capture;
 use crate::eval::DefinitionRef;
 

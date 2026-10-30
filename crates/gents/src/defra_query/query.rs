@@ -134,7 +134,7 @@ impl CollectionScope {
     }
 
     pub fn ensure_allowed(&self, collection: &str) -> Result<()> {
-        crate::document_config::reject_protected_collection_name(collection)?;
+        crate::documents::reject_protected_collection_name(collection)?;
         match self {
             Self::All => Ok(()),
             Self::Only(allowed) if allowed.contains(collection) => Ok(()),
@@ -217,7 +217,7 @@ mod tests {
 
     #[test]
     fn no_scope_grants_a_protected_collection() {
-        for name in crate::document_config::PROTECTED_DATASTORE_COLLECTIONS {
+        for name in crate::documents::PROTECTED_DATASTORE_COLLECTIONS {
             for scope in [
                 CollectionScope::all(),
                 CollectionScope::restricted(vec![name.to_string()]),

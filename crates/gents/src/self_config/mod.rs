@@ -59,7 +59,7 @@ use ops::{decode_merged, validate_merged_selection, ApplyRequest};
 
 pub const ENGINEER_AGENT_TAG: &str = "gents:engineer";
 
-pub fn engineer_self_config() -> crate::document_config::SelfConfigTools {
+pub fn engineer_self_config() -> crate::documents::SelfConfigTools {
     serde_json::from_str(gents_protocol::ENGINEER_SELF_CONFIG_JSON)
         .expect("bundled Engineer grant must match canonical SelfConfigTools")
 }

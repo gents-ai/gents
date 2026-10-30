@@ -1,4 +1,4 @@
-use gents::document_config::EvalCapture;
+use gents::documents::EvalCapture;
 use gents::eval::checks::CheckRegistry;
 use gents::eval::runner::{CaptureResult, ScriptedExecutor};
 use gents::eval::OutcomeKind;

@@ -1,7 +1,7 @@
 use std::io::{IsTerminal, Write};
 
 use anyhow::{Context, Result};
-use gents::document_config::InferenceProfile;
+use gents::documents::InferenceProfile;
 use gents::inference::auth::credential::{backend_account, AccountSummary};
 use gents::inference::backends::provider::BackendProviderOauthExt;
 use gents::inference::usage_observation::{

@@ -259,7 +259,7 @@
       "generated_groups": [],
       "fixture_status": "not_exported",
       "native_owner_paths": [
-        "crates/gents/src/document_config/projection_acp.rs",
+        "crates/gents/src/documents/projection_acp.rs",
         "crates/gents/src/agent/p2p_reconcile/session_hydration.rs",
         "crates/gents/src/session/fork.rs"
       ],

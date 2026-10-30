@@ -67,7 +67,7 @@ pub struct DesiredStateApplyPlan {
     expected: Vec<DesiredStateExpectation>,
 }
 impl DesiredStateApplyPlan {
-    pub fn from_pack_config(config: &crate::document_config::PackConfig) -> Result<Self> {
+    pub fn from_pack_config(config: &crate::documents::PackConfig) -> Result<Self> {
         let bundle = serde_json::to_value(config)?;
         let mut documents = Vec::new();
         for collection in Collection::ALL {

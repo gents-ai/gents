@@ -5,7 +5,7 @@ use crate::cli::{
 use crate::commands::accounts::{snapshot, Snapshot};
 use crate::config_writes::ConfigAccess;
 use anyhow::{Context, Result};
-use gents::document_config::InferenceProfile;
+use gents::documents::InferenceProfile;
 use gents::inference::auth::credential::{
     backend_account, serving_account, AccountState, AccountSummary, ServingAccount,
 };
@@ -414,7 +414,7 @@ pub(super) async fn profile_effort_warning(
     )
     .await
     .ok()?;
-    let backend = gents::document_config::InferenceBackend::from_value(&backend).ok()?;
+    let backend = gents::documents::InferenceBackend::from_value(&backend).ok()?;
     let observation =
         crate::shared::load_backend_observation(access, node_did, &profile.backend_id)
             .await

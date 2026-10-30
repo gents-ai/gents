@@ -65,9 +65,9 @@ pub enum CallbackHandler {
         )]
         #[cfg_attr(
             feature = "typescript",
-            ts(as = "Option<Vec<crate::document_config::PortSpec>>", optional = nullable)
+            ts(as = "Option<Vec<crate::documents::PortSpec>>", optional = nullable)
         )]
-        outputs: Vec<crate::document_config::PortSpec>,
+        outputs: Vec<crate::documents::PortSpec>,
     },
 }
 

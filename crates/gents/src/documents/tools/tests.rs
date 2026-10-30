@@ -92,10 +92,10 @@ fn a_0_21_job_policy_with_project_roots_still_loads_and_drops_them() {
 
 mod wire {
     use super::super::*;
-    use crate::document_config::AgentContext;
+    use crate::documents::AgentContext;
     use crate::pack::InstalledVia;
     use crate::plugin::store::InstalledPlugin;
-    use crate::plugin_job::settings;
+    use crate::tools::background::job::settings;
     use gents_protocol::job::{DynamicMode, JobPolicy, PluginJobSettings};
     use serde_json::json;
     use std::collections::BTreeSet;

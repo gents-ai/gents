@@ -1,8 +1,8 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::config_client::ConfigAccess;
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::escape_graphql_string;
 
 use super::surface_tool::{
     deserialize_optional_surface_tools, serialize_optional_surface_tools, SurfaceToolDecl,
@@ -50,8 +50,10 @@ pub async fn list_datastore_tool_surfaces(
     node_did: &str,
 ) -> Result<Vec<DatastoreToolSurfaceDocument>> {
     anyhow::ensure!(!node_did.trim().is_empty(), "surface owner is required");
-    let (fields, _) =
-        crate::config_client::config_projection(crate::Collection::DatastoreToolSurface, None)?;
+    let (fields, _) = crate::store::config_client::config_projection(
+        crate::Collection::DatastoreToolSurface,
+        None,
+    )?;
     let owner = escape_graphql_string(node_did);
     let query = format!(
         "{{ DatastoreToolSurface(filter: {{ node_did: {{ _eq: \"{owner}\" }} }}) {{ {} }} }}",

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
-use gents::document_config::{Schedule, Task};
+use gents::documents::{Schedule, Task};
 use gents::lifecycle::TriggerLineage;
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::session::{SessionTitle, SessionTitleSource};

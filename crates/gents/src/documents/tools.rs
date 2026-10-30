@@ -9,8 +9,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::tool_surface::{BashMode, FileToolMode};
-use crate::toolset::{CommandExecutionMode, CommandNetworkMode};
+use crate::tools::native::{CommandExecutionMode, CommandNetworkMode};
+use crate::tools::surface::{BashMode, FileToolMode};
 pub use gents_protocol::row::RetiredKey;
 
 /// Tool capabilities, execution policies, and dependencies referenced by a context.
@@ -590,7 +590,7 @@ impl Tools {
                 errors,
                 field,
                 value,
-                crate::toolset::MAX_CONFIGURED_COMMAND_CHARS,
+                crate::tools::native::MAX_CONFIGURED_COMMAND_CHARS,
             );
         }
         fn bounded(
@@ -635,7 +635,9 @@ impl Tools {
         let mut errors = Vec::new();
         if let Some(built_ins) = &self.built_ins {
             for collection in &built_ins.p2p_collections {
-                if let Err(error) = crate::graphql::validate_collection_identifier(collection) {
+                if let Err(error) =
+                    crate::store::graphql::validate_collection_identifier(collection)
+                {
                     errors.push(format!("built_ins.p2p_collections: {error}"));
                 }
             }
@@ -646,7 +648,7 @@ impl Tools {
                     &mut errors,
                     "host.files.max_read_chars",
                     files.max_read_chars,
-                    crate::toolset::MAX_CONFIGURED_FILE_CHARS,
+                    crate::tools::native::MAX_CONFIGURED_FILE_CHARS,
                 );
                 for (field, value) in [
                     ("host.files.max_list_entries", files.max_list_entries),
@@ -656,7 +658,7 @@ impl Tools {
                         &mut errors,
                         field,
                         value,
-                        crate::toolset::MAX_CONFIGURED_FILE_RESULTS,
+                        crate::tools::native::MAX_CONFIGURED_FILE_RESULTS,
                     );
                 }
             }
@@ -666,7 +668,7 @@ impl Tools {
                     "host.bash.timeout_secs",
                     bash.timeout_secs,
                     bash.max_timeout_secs,
-                    crate::toolset::DEFAULT_COMMAND_TIMEOUT_SECS as i64,
+                    crate::tools::native::DEFAULT_COMMAND_TIMEOUT_SECS as i64,
                     None,
                 );
                 bounded(
@@ -674,8 +676,8 @@ impl Tools {
                     "host.bash.wait_timeout_secs",
                     bash.wait_timeout_secs,
                     bash.max_wait_timeout_secs,
-                    crate::background_tools::DEFAULT_WAIT_PROCESS_TIMEOUT_SECS as i64,
-                    Some(crate::background_tools::MAX_WAIT_PROCESS_TIMEOUT_SECS as i64),
+                    crate::tools::background::status::DEFAULT_WAIT_PROCESS_TIMEOUT_SECS as i64,
+                    Some(crate::tools::background::status::MAX_WAIT_PROCESS_TIMEOUT_SECS as i64),
                 );
                 positive(
                     &mut errors,
@@ -781,8 +783,8 @@ impl Tools {
                     &format!("{field}.wait_timeout_secs"),
                     service.wait_timeout_secs,
                     service.max_wait_timeout_secs,
-                    crate::background_tools::DEFAULT_WAIT_PROCESS_TIMEOUT_SECS as i64,
-                    Some(crate::background_tools::MAX_WAIT_PROCESS_TIMEOUT_SECS as i64),
+                    crate::tools::background::status::DEFAULT_WAIT_PROCESS_TIMEOUT_SECS as i64,
+                    Some(crate::tools::background::status::MAX_WAIT_PROCESS_TIMEOUT_SECS as i64),
                 );
             }
         }
@@ -806,7 +808,9 @@ impl Tools {
                 false,
             );
             for collection in datastore.write_collections.iter().flatten() {
-                if let Err(error) = crate::graphql::validate_collection_identifier(collection) {
+                if let Err(error) =
+                    crate::store::graphql::validate_collection_identifier(collection)
+                {
                     errors.push(format!("datastore.write_collections: {error}"));
                 }
             }
@@ -836,7 +840,7 @@ impl Tools {
             for plugin in integrations.plugins.iter().flatten() {
                 let mut inputs = std::collections::BTreeSet::new();
                 for field in &plugin.input_fields {
-                    if crate::graphql::validate_graphql_name(&field.name).is_err()
+                    if crate::store::graphql::validate_graphql_name(&field.name).is_err()
                         || field.fill.is_none()
                         || field.required
                         || !inputs.insert(&field.name)
@@ -856,7 +860,7 @@ impl Tools {
                     ));
                 }
                 if let Some(job) = &plugin.job {
-                    for error in crate::plugin_job::settings::validate(job) {
+                    for error in crate::tools::background::job::settings::validate(job) {
                         errors.push(format!("integrations.plugins[{}].{error}", plugin.plugin));
                     }
                 }
@@ -876,12 +880,12 @@ impl Tools {
                     "integrations.lsp.timeout_secs",
                     lsp.timeout_secs,
                     lsp.max_timeout_secs,
-                    crate::toolset::lsp::DEFAULT_ACTION_TIMEOUT_SECS as i64,
-                    Some(crate::toolset::lsp::MAX_ACTION_TIMEOUT_SECS as i64),
+                    crate::tools::native::lsp::DEFAULT_ACTION_TIMEOUT_SECS as i64,
+                    Some(crate::tools::native::lsp::MAX_ACTION_TIMEOUT_SECS as i64),
                 );
-                if let Err(error) =
-                    crate::toolset::lsp::LspConfigDocument::parse_operator(lsp.config.as_deref())
-                {
+                if let Err(error) = crate::tools::native::lsp::LspConfigDocument::parse_operator(
+                    lsp.config.as_deref(),
+                ) {
                     errors.push(format!("invalid integrations.lsp.config: {error}"));
                 }
             }
@@ -898,7 +902,8 @@ impl Tools {
                 false,
             );
             for category in self_config.self_config_categories.iter().flatten() {
-                if !crate::config_client::patch::SELF_CONFIG_CATEGORIES.contains(&category.as_str())
+                if !crate::store::config_client::patch::SELF_CONFIG_CATEGORIES
+                    .contains(&category.as_str())
                 {
                     errors.push(format!("unknown self_config category {category:?}"));
                 }
@@ -923,7 +928,7 @@ impl Tools {
 /// context -> `tools_id`. `None` when the agent has no context or the
 /// context selects no Tools; a missing referenced document is an error.
 pub async fn load_agent_tools_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     agent_id: &str,
 ) -> anyhow::Result<Option<Tools>> {
@@ -936,12 +941,12 @@ pub async fn load_agent_tools_in_txn(
 /// context is `None` when the agent has none, the Tools when the context
 /// selects none; a missing referenced document is an error.
 pub async fn load_agent_context_and_tools_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     agent_id: &str,
 ) -> anyhow::Result<(Option<super::AgentContext>, Option<Tools>)> {
-    use crate::config_client::read_desired_state_document_in_txn as read;
     use crate::store::collection::Collection;
+    use crate::store::config_client::read_desired_state_document_in_txn as read;
     use anyhow::Context as _;
     let agent: super::Agent = serde_json::from_value(
         read(txn, Collection::Agent, owner, agent_id)
@@ -1038,7 +1043,7 @@ pub fn wire_plugin(
     skill_ids: &[String],
     targets_from: &[(String, Vec<String>, crate::pack::InstalledVia)],
 ) -> anyhow::Result<(Tools, super::AgentContext, WireReport)> {
-    use crate::plugin_job::settings;
+    use crate::tools::background::job::settings;
     use gents_protocol::job::{JobPolicy, PluginJobSettings};
 
     let coordinate = format!("{}/{}", plugin.namespace, plugin.name);
@@ -1199,7 +1204,7 @@ pub fn unwire_plugin(
     skill_ids: &[String],
     targets_from: &[(String, Vec<String>, crate::pack::InstalledVia)],
 ) -> anyhow::Result<(Tools, super::AgentContext, WireReport)> {
-    use crate::plugin_job::settings;
+    use crate::tools::background::job::settings;
 
     let coordinate = format!("{}/{}", plugin.namespace, plugin.name);
     let mut tools = tools.clone();

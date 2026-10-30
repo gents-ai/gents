@@ -685,7 +685,7 @@ async fn a_retried_over_bound_wake_is_refused_again() {
     let admission = admitted_parent(case, "over-bound-redrive").await;
     let node = &admission.node;
     let did = admission.node_did.as_str();
-    crate::document_config::upsert_node(node, did, None, Some("general"), true, Some(8))
+    crate::documents::upsert_node(node, did, None, Some("general"), true, Some(8))
         .await
         .expect("set node hop cap");
     let session = admission.tool.session_id.as_str();

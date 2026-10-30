@@ -307,7 +307,7 @@ impl CompletionModel for OutputObligationProvider {
 
 #[tokio::test]
 async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger_scope() {
-    use crate::document_config::{
+    use crate::documents::{
         WriteToolDecl, WriteToolField, WriteToolOutputObligation, WriteToolOutputObligationScope,
     };
     use crate::tool_surface::{

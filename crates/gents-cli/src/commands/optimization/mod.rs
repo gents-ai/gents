@@ -2,6 +2,7 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use gents::documents::template::catalog::{default_catalog, Site};
 use gents::eval::checks::CheckRegistry;
 use gents::eval::documents::default_breaker_threshold;
 use gents::eval::runner::embedded::EmbeddedExecutor;
@@ -12,7 +13,6 @@ use gents::optimization::{
     show as show_job, validate_job_id, Budgets, JobOutcome, JobRequest, JobState, PolicyV2,
     Proposal, Proposer, ScriptedProposer,
 };
-use gents::template::catalog::{default_catalog, Site};
 use gents::{default_agent_id_for_node, default_inference_profile_id_for_agent};
 use tokio_util::sync::CancellationToken;
 
@@ -151,7 +151,7 @@ async fn behavior_proposer(
 }
 
 fn ensure_tool_less(
-    config: &gents::document_config::PackConfig,
+    config: &gents::documents::PackConfig,
     owner: &str,
     agent_id: &str,
 ) -> Result<()> {
@@ -167,7 +167,7 @@ fn ensure_tool_less(
             .find(|context| context.context_id == id)
     });
     let tools_id = context.and_then(|context| context.tools_id.as_deref());
-    let no_tools = gents::document_config::Tools::default();
+    let no_tools = gents::documents::Tools::default();
     let tools = match tools_id {
         Some(id) => config
             .tools

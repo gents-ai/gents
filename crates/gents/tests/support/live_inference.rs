@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use gents::config_client::DesiredStateApplyPlan;
 use gents::defra_node::EmbeddedNode;
-use gents::document_config::{
+use gents::documents::{
     Agent, BackendAuth, ConfigReferences, InferenceBackend, InferenceProfile, Node,
 };
 use gents::graphql::escape_graphql_string;

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::defra_query::CollectionScope;
-use crate::document_config::{AgentTargetDocument, QueryToolDecl, WriteToolDecl, WriteToolField};
+use crate::documents::{AgentTargetDocument, QueryToolDecl, WriteToolDecl, WriteToolField};
 use crate::toolset::{CommandExecutionMode, CommandNetworkMode};
 
 use super::modes::{BashMode, FileToolMode};

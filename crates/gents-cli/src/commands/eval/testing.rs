@@ -5,7 +5,7 @@ use clap::Parser;
 use gents::config_client::{
     apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::document_config::EvalSplit;
+use gents::documents::EvalSplit;
 use gents::eval::checks::CheckRegistry;
 use gents::eval::runner::embedded::EmbeddedHome;
 use gents::eval::runner::{

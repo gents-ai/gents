@@ -39,7 +39,7 @@ use super::{
 fn binding() -> CallbackBindingDoc {
     serde_json::from_value(json!({"binding_id":"bind-1","node_did":"did:key:zWriter","event_source_id":"events","callback_id":"cb-1","input_fields":["work_unit_id","repository_id","base_sha","branch","owned_files"]})).unwrap()
 }
-fn callback() -> crate::document_config::Callback {
+fn callback() -> crate::documents::Callback {
     serde_json::from_value(json!({"callback_id":"cb-1","node_did":"did:key:zWriter","handler":{"kind":"built_in","emitter":"create_workspace"},"capabilities":["create_workspace","observe_dirty_base","clone_artifacts"]})).unwrap()
 }
 
@@ -76,7 +76,7 @@ fn generated_recovery_and_denial_match_runtime_owners() {
             owner_node_did: "did:key:zWriter".into(),
             callback_id: "cb-1".into(),
             input: json!({}),
-            origin: crate::document_config::CallbackInvocationOrigin::Event {
+            origin: crate::documents::CallbackInvocationOrigin::Event {
                 binding_id: "bind-1".into(),
                 source_collection: "WorkUnit".into(),
                 source_doc_id: "doc-1".into(),
@@ -211,7 +211,7 @@ fn non_owner_does_not_claim_invocation_or_workspace_request() {
         owner_node_did: "deploy-owner".into(),
         callback_id: "cb-1".into(),
         input: json!({}),
-        origin: crate::document_config::CallbackInvocationOrigin::Event {
+        origin: crate::documents::CallbackInvocationOrigin::Event {
             binding_id: "bind-1".into(),
             source_collection: "WorkUnit".into(),
             source_doc_id: "doc-1".into(),
@@ -272,7 +272,7 @@ fn succeeded_without_result_repair_is_windowed_and_batched() {
         owner_node_did: "deploy-1".into(),
         callback_id: "cb-1".into(),
         input: json!({}),
-        origin: crate::document_config::CallbackInvocationOrigin::Event {
+        origin: crate::documents::CallbackInvocationOrigin::Event {
             binding_id: "bind-1".into(),
             source_collection: "WorkUnit".into(),
             source_doc_id: id.into(),
@@ -318,9 +318,9 @@ fn succeeded_without_result_repair_is_windowed_and_batched() {
 fn callback_handler_accepts_module_and_rejects_mixed_handlers() {
     let mut value = serde_json::to_value(callback()).unwrap();
     value["handler"] = json!({"kind":"module","module_id":"module-1"});
-    assert!(serde_json::from_value::<crate::document_config::Callback>(value.clone()).is_ok());
+    assert!(serde_json::from_value::<crate::documents::Callback>(value.clone()).is_ok());
     value["handler"]["emitter"] = json!("create_workspace");
-    assert!(serde_json::from_value::<crate::document_config::Callback>(value).is_err());
+    assert!(serde_json::from_value::<crate::documents::Callback>(value).is_err());
 }
 
 #[test]
@@ -339,7 +339,7 @@ fn recovery_reuses_stored_action_plan() {
         owner_node_did: "deploy-1".into(),
         callback_id: "cb-1".into(),
         input: json!({}),
-        origin: crate::document_config::CallbackInvocationOrigin::Event {
+        origin: crate::documents::CallbackInvocationOrigin::Event {
             binding_id: "bind-1".into(),
             source_collection: "WorkUnit".into(),
             source_doc_id: "doc-1".into(),
@@ -406,7 +406,7 @@ fn wasm_recovery_reuses_stored_plan_without_reloading_module() {
         owner_node_did: "deploy-1".into(),
         callback_id: "cb-1".into(),
         input: json!({}),
-        origin: crate::document_config::CallbackInvocationOrigin::Event {
+        origin: crate::documents::CallbackInvocationOrigin::Event {
             binding_id: "bind-1".into(),
             source_collection: "WorkUnit".into(),
             source_doc_id: "doc-1".into(),
@@ -423,7 +423,7 @@ fn wasm_recovery_reuses_stored_plan_without_reloading_module() {
         created_at: None,
     };
     let mut module_binding = callback();
-    module_binding.handler = crate::document_config::CallbackHandler::Module {
+    module_binding.handler = crate::documents::CallbackHandler::Module {
         module_id: "mod-gone".into(),
     };
     let mutated = json!({
@@ -1067,7 +1067,7 @@ fn fixture_artifact_emits_valid_create_workspace_plan() {
     plan.validate_against(&caps).expect("capabilities");
 
     let mut module_binding = callback();
-    module_binding.handler = crate::document_config::CallbackHandler::Module {
+    module_binding.handler = crate::documents::CallbackHandler::Module {
         module_id: module.module_id.clone(),
     };
     module_binding.capabilities = vec![CAP_CREATE_WORKSPACE.into(), CAP_OBSERVE_DIRTY_BASE.into()];
@@ -1155,7 +1155,7 @@ fn create_callback_result_mutation_renders_absent_fields_as_null_not_empty_strin
 
 #[test]
 fn update_invocation_mutation_renders_absent_fields_as_null_not_empty_string() {
-    let origin = crate::document_config::CallbackInvocationOrigin::Event {
+    let origin = crate::documents::CallbackInvocationOrigin::Event {
         binding_id: "bind-1".into(),
         source_collection: "WorkUnit".into(),
         source_doc_id: "doc-1".into(),
@@ -1243,7 +1243,7 @@ async fn callback_results_are_selectable_by_their_binding() {
 
 #[test]
 fn every_invocation_origin_names_its_binding() {
-    use crate::document_config::CallbackInvocationOrigin;
+    use crate::documents::CallbackInvocationOrigin;
     let event = CallbackInvocationOrigin::Event {
         binding_id: "one".to_owned(),
         source_collection: "WorkUnit".to_owned(),

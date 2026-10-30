@@ -18,7 +18,7 @@ use rapidhash::RapidHashMap;
 pub use gents_protocol::job;
 use gents_protocol::job::PluginJobSettings;
 
-use crate::document_config::PluginToolRef;
+use crate::documents::PluginToolRef;
 
 /// A Tools plugin entry whose installed plugin declares `job: true`.
 #[derive(Debug, Clone, PartialEq)]

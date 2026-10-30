@@ -17,7 +17,7 @@ pub struct MetaToolContext {
     pub local_subnet: Option<String>,
     pub node_did: String,
     pub allowed_mcp_service_ids: Vec<String>,
-    pub remote_tools: crate::document_config::RemoteTools,
+    pub remote_tools: crate::documents::RemoteTools,
 }
 
 impl MetaToolContext {
@@ -28,7 +28,7 @@ impl MetaToolContext {
     pub(super) fn service_selection(
         &self,
         service_id: &str,
-    ) -> Option<&crate::document_config::RemoteServiceTools> {
+    ) -> Option<&crate::documents::RemoteServiceTools> {
         let mut matches = self
             .remote_tools
             .services

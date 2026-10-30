@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
+use gents::documents::template::{render_template, task_node_ctx, TemplateScope};
 use gents::graphql::escape_graphql_string;
-use gents::template::{render_template, task_node_ctx, TemplateScope};
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::row::AgentRequestRow;
 use serde::Serialize;
@@ -81,7 +81,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
                 )
                 .await?
                 .context("task not found under the selected node")?;
-                let task: gents::document_config::Task = serde_json::from_value(value)?;
+                let task: gents::documents::Task = serde_json::from_value(value)?;
                 anyhow::ensure!(task.enabled, "Task {} is disabled", task.task_id);
                 let (_, value) = gents::config_client::read_desired_state_record_in_txn(
                     txn,
@@ -91,7 +91,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
                 )
                 .await?
                 .context("task agent not found under the selected node")?;
-                let agent: gents::document_config::Agent = serde_json::from_value(value)?;
+                let agent: gents::documents::Agent = serde_json::from_value(value)?;
                 anyhow::ensure!(agent.enabled, "Agent {} is disabled", agent.agent_id);
                 Ok((task_doc_id, task))
             })

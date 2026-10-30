@@ -61,10 +61,10 @@ pub(super) fn resolve_automation(
         let trigger_id = trigger.trigger_id.clone();
         if unavailable_triggers.contains(&trigger_id) {
             match &trigger.source {
-                crate::document_config::TriggerSource::Schedule { .. } => {
+                crate::documents::TriggerSource::Schedule { .. } => {
                     unavailable_schedules.insert(trigger_id);
                 }
-                crate::document_config::TriggerSource::Event { .. } => {
+                crate::documents::TriggerSource::Event { .. } => {
                     unavailable_event_triggers.insert(trigger_id);
                 }
             }
@@ -77,7 +77,7 @@ pub(super) fn resolve_automation(
         let concurrency = trigger.concurrency.unwrap_or_default();
 
         match &trigger.source {
-            crate::document_config::TriggerSource::Schedule { schedule_id } => {
+            crate::documents::TriggerSource::Schedule { schedule_id } => {
                 resolve_schedule_trigger(
                     view,
                     schedule_id,
@@ -89,7 +89,7 @@ pub(super) fn resolve_automation(
                     &mut unavailable_schedules,
                 );
             }
-            crate::document_config::TriggerSource::Event { event_source_id } => {
+            crate::documents::TriggerSource::Event { event_source_id } => {
                 resolve_event_trigger(
                     view,
                     event_source_id,
@@ -119,7 +119,7 @@ pub(super) fn resolve_automation(
     }
 }
 
-fn resolved_task_from(task: &crate::document_config::Task) -> ResolvedTask {
+fn resolved_task_from(task: &crate::documents::Task) -> ResolvedTask {
     ResolvedTask {
         emit_outcome: task.emit_outcome,
         task_id: task.task_id.clone(),
@@ -314,19 +314,19 @@ fn resolve_event_trigger(
 }
 
 fn group_projection(
-    source: &crate::document_config::EventSource,
+    source: &crate::documents::EventSource,
 ) -> (Option<usize>, Option<String>, Option<u64>, usize) {
     let Some(group) = source.group.as_ref() else {
         return (None, None, None, 1);
     };
     let expected_count = match group.expected_count {
-        Some(crate::document_config::EventGroupCount::Fixed(count)) => usize::try_from(count).ok(),
-        Some(crate::document_config::EventGroupCount::SourceField { .. }) => None,
+        Some(crate::documents::EventGroupCount::Fixed(count)) => usize::try_from(count).ok(),
+        Some(crate::documents::EventGroupCount::SourceField { .. }) => None,
         None => None,
     };
     let expected_count_field = match &group.expected_count {
-        Some(crate::document_config::EventGroupCount::Fixed(_)) => None,
-        Some(crate::document_config::EventGroupCount::SourceField { source_field }) => {
+        Some(crate::documents::EventGroupCount::Fixed(_)) => None,
+        Some(crate::documents::EventGroupCount::SourceField { source_field }) => {
             Some(source_field.clone())
         }
         None => None,
@@ -348,7 +348,7 @@ fn group_projection(
 }
 
 fn task_template_references_group(template: &str) -> bool {
-    crate::template::parse_template_for_validation(template).is_ok_and(|refs| {
+    crate::documents::template::parse_template_for_validation(template).is_ok_and(|refs| {
         refs.iter()
             .any(|reference| reference.root() == Some("group"))
     })

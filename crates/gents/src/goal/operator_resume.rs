@@ -310,8 +310,7 @@ async fn stage_resume_inner(
     }
 
     if let Some(target_backend_id) = required_backend {
-        let references =
-            crate::document_config::ConfigReferences::load_in_txn(txn, node_did).await?;
+        let references = crate::documents::ConfigReferences::load_in_txn(txn, node_did).await?;
         let mut call = crate::blocked_turn::last_failed_call_in_txn(txn, node_did, from_request_id)
             .await?
             .context("resume predecessor has no failed call")?;

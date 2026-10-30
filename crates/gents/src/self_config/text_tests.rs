@@ -479,11 +479,7 @@ async fn execution_deadlines_are_bounded_where_a_claim_can_represent_them() {
     let create = |deadline: i64| json!({"argv":["execution","preview","create"],"target_id":"long","set":{"deadline_duration_secs":deadline}});
     let error = refused(&tools, create(i64::MAX)).await;
     assert!(error.contains("at most 3153600000"), "{error}");
-    ok(
-        &tools,
-        create(crate::document_config::MAX_DEADLINE_DURATION_SECS),
-    )
-    .await;
+    ok(&tools, create(crate::documents::MAX_DEADLINE_DURATION_SECS)).await;
 }
 
 #[tokio::test]

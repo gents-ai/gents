@@ -213,7 +213,7 @@ pub fn admit_authored_root(
 /// authored root is that stored value. This mutates only the canonical Tools
 /// document shape; it does not introduce a parallel root field.
 pub fn canonicalize_tools_root(
-    tools: &mut crate::document_config::Tools,
+    tools: &mut crate::documents::Tools,
     policy: &WorkspaceRootPolicy,
     stored_root: Option<&str>,
 ) -> Result<()> {
@@ -605,9 +605,9 @@ mod tests {
             }],
             None,
         );
-        let mut tools = crate::document_config::Tools {
-            host: Some(crate::document_config::HostTools {
-                cli: vec![crate::document_config::CliTool {
+        let mut tools = crate::documents::Tools {
+            host: Some(crate::documents::HostTools {
+                cli: vec![crate::documents::CliTool {
                     name: "git".to_string(),
                     ..Default::default()
                 }],
@@ -668,10 +668,10 @@ mod tests {
         let policy = project_workspace_root_policy(Vec::new(), Some(&project));
         let workspace_root = workspace.path().to_string_lossy().into_owned();
 
-        let mut tools = crate::document_config::Tools {
-            host: Some(crate::document_config::HostTools {
+        let mut tools = crate::documents::Tools {
+            host: Some(crate::documents::HostTools {
                 root: Some(workspace_root.clone()),
-                files: Some(crate::document_config::FileTools {
+                files: Some(crate::documents::FileTools {
                     mode: crate::tool_surface::FileToolMode::ReadOnly,
                     ..Default::default()
                 }),
@@ -765,9 +765,9 @@ mod tests {
         assert!(!policy.configured);
         assert!(policy.published.is_empty());
 
-        let mut tools = crate::document_config::Tools {
-            host: Some(crate::document_config::HostTools {
-                files: Some(crate::document_config::FileTools {
+        let mut tools = crate::documents::Tools {
+            host: Some(crate::documents::HostTools {
+                files: Some(crate::documents::FileTools {
                     mode: crate::tool_surface::FileToolMode::ReadOnly,
                     ..Default::default()
                 }),

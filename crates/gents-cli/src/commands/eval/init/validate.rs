@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use gents::document_config::{EvalCapture, EvalCase, EvalDefinition, EvalSplit};
+use gents::documents::{EvalCapture, EvalCase, EvalDefinition, EvalSplit};
 use gents::eval::checks::CheckRegistry;
 use serde_json::{json, Value};
 

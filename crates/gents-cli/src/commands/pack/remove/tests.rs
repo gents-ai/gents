@@ -735,7 +735,7 @@ async fn wiring_holds_store_lock_through_pin_commit() {
             let owner = &owner;
             let agent = &agent;
             Box::pin(async move {
-                gents::document_config::load_agent_context_and_tools_in_txn(txn, owner, agent).await
+                gents::documents::load_agent_context_and_tools_in_txn(txn, owner, agent).await
             })
         })
         .await

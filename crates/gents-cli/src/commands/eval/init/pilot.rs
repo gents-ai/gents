@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 use std::io::Write;
 
 use anyhow::{anyhow, Context, Result};
-use gents::document_config::EvalSplit;
+use gents::documents::EvalSplit;
 use gents::eval::report::{load_report, EvalReport, SlotClass};
 use gents::eval::runner::{self, Capture, TrialLocator};
 use gents::eval::scoring::PILOT_PURPOSE;

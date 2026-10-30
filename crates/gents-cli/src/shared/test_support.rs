@@ -55,17 +55,16 @@ pub(crate) fn xai_effort_profile(owner: &str) -> Value {
 async fn catalog_freshness_reaches_cli_observation_reader() -> anyhow::Result<()> {
     let node = std::sync::Arc::new(node_builder().build().await?);
     gents::ensure_runtime_schemas(&node).await?;
-    let backend: gents::document_config::InferenceBackend =
-        serde_json::from_value(serde_json::json!({
-            "node_did":"did:key:catalog-owner", "backend_id":"catalog-backend", "name":"Catalog",
-            "provider_kind":"OpenAiCompatible", "endpoint":"http://127.0.0.1:1/v1",
-            "auth":{"kind":"unauthenticated"}
-        }))?;
+    let backend: gents::documents::InferenceBackend = serde_json::from_value(serde_json::json!({
+        "node_did":"did:key:catalog-owner", "backend_id":"catalog-backend", "name":"Catalog",
+        "provider_kind":"OpenAiCompatible", "endpoint":"http://127.0.0.1:1/v1",
+        "auth":{"kind":"unauthenticated"}
+    }))?;
     gents::ensure_node(&node, &backend.node_did).await?;
     let access = gents::ConfigAccess::local(node.clone());
     gents::config_client::write_inference_backend_document(&access, &backend).await?;
     for observed_at in ["2026-10-28T01:00:00Z", "2026-10-28T02:00:00Z"] {
-        let catalog: gents::document_config::BackendModelCatalog =
+        let catalog: gents::documents::BackendModelCatalog =
             serde_json::from_value(serde_json::json!({
                 "node_did":null, "observed_at":observed_at,
                 "models":[{"model_name":"retained-model"}]

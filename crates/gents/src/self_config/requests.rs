@@ -107,12 +107,10 @@ pub(super) fn protect_working_agent(mut request: ApplyRequest<'static>) -> Apply
     request
 }
 fn stored_host_root(stored: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
-    serde_json::from_value::<crate::document_config::Tools>(serde_json::Value::Object(
-        stored.clone(),
-    ))
-    .ok()?
-    .host?
-    .root
+    serde_json::from_value::<crate::documents::Tools>(serde_json::Value::Object(stored.clone()))
+        .ok()?
+        .host?
+        .root
 }
 
 pub(super) fn tools_request(
@@ -131,7 +129,7 @@ pub(super) fn tools_request(
             )
             .await?;
             let stored_root = stored_host_root(stored);
-            let mut tools = decode_merged::<crate::document_config::Tools>("Tools", merged)?;
+            let mut tools = decode_merged::<crate::documents::Tools>("Tools", merged)?;
             crate::tool_surface::canonicalize_tools_root(
                 &mut tools,
                 &policy,
@@ -350,7 +348,7 @@ pub(super) fn local_backend_create_request(
                 backend.provider_kind == crate::BackendProviderKind::OpenAiCompatible
                     && matches!(
                         backend.auth,
-                        crate::document_config::BackendAuth::Unauthenticated
+                        crate::documents::BackendAuth::Unauthenticated
                     ),
                 "model-facing backend creation is limited to unauthenticated OpenAI-compatible local servers"
             );

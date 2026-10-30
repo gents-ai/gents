@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use super::event_source::SourceSchemaCache;
-use crate::document_config::{CallbackBinding, EventGroupCount, EventSource};
+use crate::documents::{CallbackBinding, EventGroupCount, EventSource};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::runtime_snapshot::{ResolvedEventTrigger, MAX_EVENT_TRIGGER_GROUP_DOCS};
 
@@ -573,7 +573,7 @@ mod tests {
             event_kind: "created".into(),
             filter: None,
             enabled: true,
-            concurrency: crate::document_config::ConcurrencyMode::Parallel,
+            concurrency: crate::documents::ConcurrencyMode::Parallel,
             fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
             correlation_field: source.correlation_field.clone(),
             expected_count: None,

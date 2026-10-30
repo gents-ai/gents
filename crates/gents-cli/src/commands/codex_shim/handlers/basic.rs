@@ -288,7 +288,7 @@ mod tests {
         write_inference_backend_document, write_inference_profile_document,
     };
     use gents::defra_node::EmbeddedNode;
-    use gents::document_config::{AdvertisedModel, BackendAuth, BackendModelCatalog};
+    use gents::documents::{AdvertisedModel, BackendAuth, BackendModelCatalog};
     use gents::inference::auth::credential::{
         oauth_credential_id, upsert_oauth_credential, OAuthCredential,
     };

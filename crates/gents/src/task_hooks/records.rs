@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use super::{run_finally, HookCommandResult, ManagedTaskHookExec, TaskHookCancellation};
-use crate::document_config::{TaskHook, TaskHookPhase};
+use crate::documents::{TaskHook, TaskHookPhase};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::managed_exec::ownership::{
     HostRecord, HostRecordStore, ProcessIdentity, ProcessRecorder,

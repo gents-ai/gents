@@ -1,5 +1,5 @@
 use super::{HookCommandResult, ManagedTaskHookExec, TaskHookCancellation, TaskHookExec};
-use crate::document_config::{TaskHook, TaskHookPhase};
+use crate::documents::{TaskHook, TaskHookPhase};
 
 fn hook(hook_id: &str, command: &[&str], timeout_secs: Option<i64>) -> TaskHook {
     phased(hook_id, TaskHookPhase::Before, command, timeout_secs)

@@ -4,7 +4,7 @@ use crate::support::{
     interrupt::{wait_for_runtime_ready, BootedAgent},
     test_db,
 };
-use gents::document_config::{BashTools, FileTools, HostTools, Tools};
+use gents::documents::{BashTools, FileTools, HostTools, Tools};
 use gents::{
     graphql::escape_graphql_string, workspace::*, BashMode, CommandExecutionMode,
     CommandNetworkMode, DocumentRuntimeOptions, FileToolMode, Gents, NodeIdentity, ToolCeiling,

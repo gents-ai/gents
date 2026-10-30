@@ -4,7 +4,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
-use gents::document_config::{Agent, AgentContext, InferenceProfile, InferenceSampling};
+use gents::documents::{Agent, AgentContext, InferenceProfile, InferenceSampling};
 use gents::graphql::escape_graphql_string;
 use gents::session::canonical_rows::{
     decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,

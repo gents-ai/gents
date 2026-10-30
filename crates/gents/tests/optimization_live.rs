@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use gents::config_client::{
     apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::document_config::{EvalDefinition, EvalSplit, InferenceBackend, InferenceProfile};
+use gents::documents::{EvalDefinition, EvalSplit, InferenceBackend, InferenceProfile};
 use gents::eval::checks::CheckRegistry;
 use gents::eval::runner::embedded::{EmbeddedExecutor, EmbeddedHome};
 use gents::eval::runner::{Capture, RunOptions};

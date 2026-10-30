@@ -6,7 +6,7 @@ use serde_json::json;
 
 use super::BoundedWriteTool;
 use crate::config_client::ConfigAccess;
-use crate::document_config::{WriteToolDecl, WriteToolField, WriteToolFieldFill};
+use crate::documents::{WriteToolDecl, WriteToolField, WriteToolFieldFill};
 
 #[test]
 fn native_input_admission_matches_lean() {
@@ -498,7 +498,7 @@ async fn native_schema_and_receipts_preserve_lists_json_and_null() {
 
 #[tokio::test]
 async fn count_field_type_decides_whether_a_refused_obligation_can_register() {
-    use crate::document_config::{WriteToolOutputObligation, WriteToolOutputObligationScope};
+    use crate::documents::{WriteToolOutputObligation, WriteToolOutputObligationScope};
 
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     node.add_collection(

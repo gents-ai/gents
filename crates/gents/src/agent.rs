@@ -530,9 +530,9 @@ pub(crate) async fn resolve_document_runtime_snapshot(
 }
 
 pub(crate) struct AgentDocumentInputs<'a> {
-    pub(crate) agent_config: &'a crate::document_config::Agent,
-    pub(crate) context: Option<&'a crate::document_config::AgentContext>,
-    pub(crate) compaction: Option<crate::document_config::CompactionConfig>,
+    pub(crate) agent_config: &'a crate::documents::Agent,
+    pub(crate) context: Option<&'a crate::documents::AgentContext>,
+    pub(crate) compaction: Option<crate::documents::CompactionConfig>,
     pub(crate) compaction_inference: Option<crate::inference::resolved::ResolvedInference>,
     pub(crate) inference: &'a crate::inference::resolved::ResolvedInference,
     pub(crate) tool_selection: ResolvedToolSelection,
@@ -657,7 +657,7 @@ fn positive_duration_secs_or_default(
 }
 
 pub(crate) fn tool_selection_from_document(
-    selection: &crate::document_config::Tools,
+    selection: &crate::documents::Tools,
 ) -> anyhow::Result<ResolvedToolSelection> {
     ResolvedToolSelection::from_document(selection)
 }

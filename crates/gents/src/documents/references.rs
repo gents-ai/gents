@@ -6,8 +6,8 @@ use anyhow::{ensure, Context, Result};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::config_client::{config_projection, ConfigApplyTxn};
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::{config_projection, ConfigApplyTxn};
+use crate::store::graphql::escape_graphql_string;
 use crate::Collection;
 
 use super::*;
@@ -350,7 +350,7 @@ impl ConfigReferences {
                     .filter(|((collection, _), _)| *collection == Collection::AgentTarget)
                     .map(|(_, value)| decode::<AgentTargetDocument>(value))
                     .collect::<Result<Vec<_>>>()?;
-                crate::tool_surface::AgentToolConfig::from_document_with_targets(&doc, &targets)?;
+                crate::tools::surface::AgentToolConfig::from_document_with_targets(&doc, &targets)?;
                 if let Some(datastore) = doc.datastore {
                     for surface in datastore.datastore_tool_surface_ids.unwrap_or_default() {
                         require(
@@ -433,8 +433,8 @@ impl ConfigReferences {
                         require(Collection::Schedule, schedule_id, "source.schedule_id")?;
                         // The fire-time owner, so publication refuses exactly
                         // what every schedule fire would error on (#2080).
-                        crate::trigger_engine::validate_task_delivery_options(
-                            crate::trigger_engine::TriggerKind::Schedule,
+                        crate::triggers::engine::validate_task_delivery_options(
+                            crate::triggers::engine::TriggerKind::Schedule,
                             task.emit_outcome,
                             doc.concurrency.unwrap_or_default(),
                             doc.session_id_template.is_some(),
@@ -459,7 +459,7 @@ impl ConfigReferences {
                                 .context("trigger event source missing")?,
                         )?;
                         ensure!(
-                            crate::trigger_engine::durable::outcome_source_allowed(
+                            crate::triggers::engine::durable::outcome_source_allowed(
                                 &source.source_collection,
                                 task.emit_outcome,
                             ),
@@ -487,7 +487,9 @@ impl ConfigReferences {
                                 .map(|value| ("session_id_template", value)),
                         )
                 {
-                    for reference in crate::template::parse_template_for_validation(template)? {
+                    for reference in
+                        crate::documents::template::parse_template_for_validation(template)?
+                    {
                         ensure!(
                             !reference
                                 .root()
@@ -510,7 +512,7 @@ impl ConfigReferences {
                     correlation_field,
                     outputs,
                     ..
-                } => crate::callback::plugin::validate_handler(
+                } => crate::triggers::callback::plugin::validate_handler(
                     &plugin,
                     &digest,
                     correlation_field.as_deref(),
@@ -531,7 +533,7 @@ impl ConfigReferences {
                         .get(&(Collection::EventSource, doc.event_source_id.clone()))
                         .context("callback event source missing")?,
                 )?;
-                crate::callback::reject_secret_bearing_callback_fields(
+                crate::triggers::callback::reject_secret_bearing_callback_fields(
                     &doc.binding_id,
                     source.filter.as_deref(),
                     None,

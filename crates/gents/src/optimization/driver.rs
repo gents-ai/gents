@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
 use crate::config_client::ConfigAccess;
-use crate::document_config::{EvalDefinition, EvalSplit};
+use crate::documents::{EvalDefinition, EvalSplit};
 use crate::eval::checks::CheckRegistry;
 use crate::eval::report::load_run_rows;
 use crate::eval::runner::freeze;

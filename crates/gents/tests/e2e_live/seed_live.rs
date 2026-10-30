@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
-use gents::document_config::{AgentContext, CompactionConfig, InferenceSampling};
+use gents::documents::{AgentContext, CompactionConfig, InferenceSampling};
 use gents::graphql::escape_graphql_string;
 use gents::{default_inference_profile_id_for_agent, Collection, CompactionStrategy, NodeIdentity};
 use serde::Deserialize;
@@ -153,7 +153,7 @@ async fn configure_seed_and_compaction(
             let (_, behavior) = read(txn, Collection::Agent, node_did, agent_id)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("default behavior is missing"))?;
-            let mut behavior: gents::document_config::Agent = serde_json::from_value(behavior)?;
+            let mut behavior: gents::documents::Agent = serde_json::from_value(behavior)?;
             let context_id = behavior
                 .context_id
                 .clone()

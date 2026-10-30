@@ -9,7 +9,7 @@ use super::fixtures::{
 };
 use super::journal::{assert_held_out_only_at_finalize, decisions, normalized, runs_started};
 use super::{cancel_while_proposing, drive, journal, settle, Harness};
-use crate::document_config::EvalSplit;
+use crate::documents::EvalSplit;
 use crate::eval::checks::CheckRegistry;
 use crate::eval::load_trials;
 use crate::eval::runner::freeze::tests::OWNER;

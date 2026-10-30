@@ -34,7 +34,7 @@ pub async fn build_meta_tools(
     local_subnet: Option<String>,
     node_did: String,
     allowed_mcp_service_ids: Vec<String>,
-    remote_tools: crate::document_config::RemoteTools,
+    remote_tools: crate::documents::RemoteTools,
 ) -> anyhow::Result<Vec<Box<dyn crate::inference::llm::tool::ToolDyn>>> {
     let ctx = MetaToolContext {
         node,
@@ -54,7 +54,7 @@ pub async fn build_meta_tools(
         {
             continue;
         }
-        if selection.style == crate::document_config::RemoteToolStyle::Discovery {
+        if selection.style == crate::documents::RemoteToolStyle::Discovery {
             discovery = true;
             continue;
         }

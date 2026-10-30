@@ -109,7 +109,7 @@ async fn seed_live_agent_documents(
         apply_desired_state_plan, load_inference_backend_in_txn, ConfigAccess,
         DesiredStateApplyPlan,
     };
-    use gents::document_config::PackConfig;
+    use gents::documents::PackConfig;
     use serde_json::json;
     let inference = inference::LiveInferenceSettings::from_env()?;
     let agent_id = default_agent_id_for_node(node_did);
@@ -203,7 +203,7 @@ fn live_backend_candidate(
     backend_id: &str,
     backend: &LiveBackendConfig,
 ) -> Result<InferenceBackend> {
-    use gents::document_config::BackendAuth;
+    use gents::documents::BackendAuth;
     let auth = match (&backend.api_key, &backend.api_key_env_var) {
         (Some(_), Some(_)) => anyhow::bail!("live backend must select one credential source"),
         (Some(key), None) => BackendAuth::ApiKey { key: key.clone() },

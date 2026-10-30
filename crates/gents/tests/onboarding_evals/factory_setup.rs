@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use gents::document_config::{EvalDefinition, PackConfig, SurfaceToolDecl};
+use gents::documents::{EvalDefinition, PackConfig, SurfaceToolDecl};
 use gents::eval::checks::CheckRegistry;
 use gents::eval::runner::ScriptedExecutor;
 use gents::eval::OutcomeKind;
@@ -167,14 +167,14 @@ fn the_definition_validates_and_every_check_accepts_its_params() {
     assert!(stage.continuation.is_none() && repair.continuation.is_none());
     assert!(stage.checks.iter().all(|c| c.tier
         == if c.check == "crew_spec_match" {
-            gents::document_config::EvalTier::Development
+            gents::documents::EvalTier::Development
         } else {
-            gents::document_config::EvalTier::Acceptance
+            gents::documents::EvalTier::Acceptance
         }));
     assert!(repair
         .checks
         .iter()
-        .all(|c| c.tier == gents::document_config::EvalTier::Acceptance));
+        .all(|c| c.tier == gents::documents::EvalTier::Acceptance));
     let mut evidence =
         ScriptedExecutor::passed_evidence(OWNER, &stage.stage_id, "unused", Vec::new())
             .stages

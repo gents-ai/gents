@@ -5,7 +5,7 @@ use serde_json::{json, Value};
 
 use super::outcome::{classify, EvidenceClass, OutcomeKind, ProviderReason};
 use crate::config_client::ConfigAccess;
-use crate::document_config::{EvalSplit, EvalTier};
+use crate::documents::{EvalSplit, EvalTier};
 use crate::graphql::escape_graphql_string;
 
 pub const DENOMINATOR_POLICY_V1: &str = "exclude_not_evidence_v1";

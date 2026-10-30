@@ -158,9 +158,9 @@ async fn remote_pack_install_update_and_diagnose_keep_plugin_failures_isolated()
     assert_eq!(graphql_query(&graphql, query).await?, installed);
 
     let owner_escaped = escape_graphql_string(&owner);
-    let profile = escape_graphql_string(
-        &gents::document_config::default_inference_profile_id_for_node(&owner),
-    );
+    let profile = escape_graphql_string(&gents::documents::default_inference_profile_id_for_node(
+        &owner,
+    ));
     graphql_query(&graphql, &format!(r#"mutation {{
         create_Tools(input: {{tools_id: "broken-tools", node_did: "{owner_escaped}", integrations: {{plugins: [{{plugin: "private/missing"}}]}}}}) {{_docID}}
         create_AgentContext(input: {{context_id: "broken-context", node_did: "{owner_escaped}", tools_id: "broken-tools"}}) {{_docID}}

@@ -70,7 +70,7 @@ pub(in crate::plugin_job) async fn step_context_for(
         .and_then(|(namespace, name)| read_record(&runtime.home, namespace, name).ok());
     let policy = settings.as_ref().map(|settings| &settings.policy);
     let cwd = Path::new(&facts.cwd);
-    let key = |target: &crate::document_config::AgentTargetDocument| {
+    let key = |target: &crate::documents::AgentTargetDocument| {
         (target.target_node_did.clone(), target.agent_id.clone())
     };
     let job_ids = settings

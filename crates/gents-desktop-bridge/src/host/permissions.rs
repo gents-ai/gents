@@ -287,7 +287,7 @@ mod tests {
 
         let (core, _temp) = crate::tests::support::boot_core().await;
         let owner = core.node_identity().did();
-        let config: gents::document_config::PackConfig = serde_json::from_value(json!({
+        let config: gents::documents::PackConfig = serde_json::from_value(json!({
             "node":{"node_did":owner},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Fixture","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],

@@ -652,7 +652,7 @@ async fn load_repository(
     let response = graphql_with_transaction_retry(node, &format!(
         r#"{{ RepositoryPlacement(filter: {{repository_id: {{_eq:"{}"}},node_did: {{_eq:"{}"}}}},limit:2) {{repository_id node_did host_path enabled}} }}"#,
         escape_graphql_string(repository_id), escape_graphql_string(node_did)), "load scoped RepositoryPlacement").await?;
-    let mut found = crate::graphql::rows::<crate::document_config::RepositoryPlacement>(
+    let mut found = crate::graphql::rows::<crate::documents::RepositoryPlacement>(
         &response,
         "RepositoryPlacement",
     )?;

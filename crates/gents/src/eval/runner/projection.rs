@@ -1,6 +1,6 @@
 use sha2::{Digest, Sha256};
 
-use crate::document_config::{EvalCase, EvalSplit};
+use crate::documents::{EvalCase, EvalSplit};
 use crate::eval::runner::{TrialEvidence, VerdictRow};
 use crate::eval::{OutcomeKind, StageCompletion, TrialCompletion, VerdictDraft};
 

@@ -14,7 +14,7 @@ fn document_explanation_resolves_target_owner_separately_from_destination() {
     let target = serde_json::from_value(json!({"target_id":"target","node_did":"owner",
         "target_node_did":"remote","agent_id":"worker","name":"worker"}))
     .unwrap();
-    let build = |targets: &[crate::document_config::AgentTargetDocument]| {
+    let build = |targets: &[crate::documents::AgentTargetDocument]| {
         AgentToolSurfaceConfig::from_tools_documents(
             "coordinator",
             &tools,

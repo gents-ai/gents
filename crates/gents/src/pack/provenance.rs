@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 
 use super::PackManifest;
 use crate::config_client::ConfigAccess;
-use crate::document_config::PackConfig;
+use crate::documents::PackConfig;
 use crate::Collection;
 
 const PACK_ORIGIN_PREFIX: &str = "gents:pack:";
@@ -94,7 +94,7 @@ pub(crate) async fn prepare_pack_plan_in_txn(
 }
 
 pub fn pack_document_digests(
-    config: &crate::document_config::PackConfig,
+    config: &crate::documents::PackConfig,
 ) -> Result<std::collections::BTreeMap<(String, String), String>> {
     let plan = crate::config_client::DesiredStateApplyPlan::from_pack_config(config)?;
     plan.documents()

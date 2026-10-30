@@ -1055,7 +1055,7 @@ async fn agent_lists_separate_targets_from_messageable_sessions() {
     let node = message.admission.node.clone();
     let tools = AgentToolConfig {
         enabled: true,
-        targets: vec![crate::document_config::AgentTargetDocument {
+        targets: vec![crate::documents::AgentTargetDocument {
             target_id: "worker".to_owned(),
             node_did: caller.node_did.clone(),
             target_node_did: caused.node_did.clone(),
@@ -1133,7 +1133,7 @@ fn session_target_authority_matches_lean_owner() {
         let tools = AgentToolConfig {
             enabled: true,
             targets: if case.allowed_target {
-                vec![crate::document_config::AgentTargetDocument {
+                vec![crate::documents::AgentTargetDocument {
                     target_id: "worker".to_owned(),
                     node_did: "caller".to_owned(),
                     target_node_did: session.node_did.clone(),

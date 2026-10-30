@@ -9,9 +9,7 @@ use gents::config_client::{
     apply_desired_state_plan, read_desired_state_records_in_txn, ConfigAccess,
     DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::document_config::{
-    load_agent_context_and_tools_in_txn, unwire_plugin, wire_plugin, Tools,
-};
+use gents::documents::{load_agent_context_and_tools_in_txn, unwire_plugin, wire_plugin, Tools};
 use gents::pack::home_install::recorded_provenance;
 use gents::pack::{installed_pack_documents, read_home_install, PackKind};
 use gents::plugin::authority::describe_plugin_authority;

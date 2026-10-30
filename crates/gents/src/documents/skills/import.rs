@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::document_config::SkillDocument;
+use crate::documents::SkillDocument;
 
 const MAX_SOURCE_BYTES: u64 = 1024 * 1024;
 

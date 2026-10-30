@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::document_config::TaskHook;
+use crate::documents::TaskHook;
 use crate::hook::BackgroundExecutionRegistry;
 use crate::lean_vocab_test::{
     lean_recovery_sweep_cases, lean_task_hook_recovery_cases, LeanCommandResult, LeanTaskHook,

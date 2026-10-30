@@ -105,7 +105,7 @@ pub fn inference_model_recommendation(
     gents::inference::backends::setup::recommendation_for_model(
         request.provider,
         request.auth_method,
-        &gents::document_config::AdvertisedModel {
+        &gents::documents::AdvertisedModel {
             model_name: model_name.to_string(),
             display_name: request.display_name,
             context_window: request.context_window,
@@ -297,7 +297,7 @@ pub(crate) async fn discovery_account(
     node_did: &str,
     provider: &str,
     account_ref: Option<&str>,
-) -> anyhow::Result<(Option<OAuthCredential>, gents::document_config::BackendAuth)> {
+) -> anyhow::Result<(Option<OAuthCredential>, gents::documents::BackendAuth)> {
     let credential = gents::inference::auth::credential::resolve_oauth_credential(
         access,
         node_did,
@@ -307,7 +307,7 @@ pub(crate) async fn discovery_account(
     .await?;
     Ok((
         credential,
-        gents::document_config::BackendAuth::NodeOAuth {
+        gents::documents::BackendAuth::NodeOAuth {
             account_ref: account_ref.map(str::to_owned),
         },
     ))
@@ -318,10 +318,10 @@ async fn publish_discovered_catalog(
     request: &InferenceDiscoveryRequest,
     spec: &gents::inference::backends::setup::InferenceConnectionSpec,
     api_key: Option<&str>,
-    oauth_auth: Option<gents::document_config::BackendAuth>,
-    models: Vec<gents::document_config::AdvertisedModel>,
+    oauth_auth: Option<gents::documents::BackendAuth>,
+    models: Vec<gents::documents::AdvertisedModel>,
 ) {
-    use gents::document_config::BackendAuth;
+    use gents::documents::BackendAuth;
     let node_did = request.node_did.trim();
     let auth = match (oauth_auth, api_key) {
         (Some(auth), _) => auth,

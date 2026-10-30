@@ -1690,7 +1690,7 @@ mod provider_account_tests {
 
     #[tokio::test]
     async fn discovery_reads_the_account_its_backend_names() {
-        use gents::document_config::BackendAuth;
+        use gents::documents::BackendAuth;
 
         let access = serving_operator().await;
         let node_did = "did:key:zAgent";

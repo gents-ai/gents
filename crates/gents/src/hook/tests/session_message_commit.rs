@@ -33,7 +33,7 @@ async fn enable_agents_tools(node: &Arc<EmbeddedNode>, did: &str) {
     write_config(
         node,
         crate::Collection::AgentTarget,
-        &crate::document_config::AgentTargetDocument {
+        &crate::documents::AgentTargetDocument {
             target_id: "general:general".to_owned(),
             node_did: did.to_owned(),
             target_node_did: did.to_owned(),

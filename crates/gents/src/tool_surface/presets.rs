@@ -54,8 +54,8 @@ pub fn preset_name(fields: &PresetFields) -> Option<&'static str> {
 }
 
 pub fn classify_tools(
-    tools: &crate::document_config::Tools,
-    merged: &crate::document_config::MergedSurfaceTools,
+    tools: &crate::documents::Tools,
+    merged: &crate::documents::MergedSurfaceTools,
 ) -> anyhow::Result<Option<&'static str>> {
     use crate::tool_surface::{BashMode, FileToolMode};
     let host = tools.host.as_ref();
@@ -105,24 +105,22 @@ mod tests {
 
     #[test]
     fn canonical_classifier_includes_expanded_datastore_writes() {
-        let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
+        let tools: crate::documents::Tools = serde_json::from_value(serde_json::json!({
             "node_did":"owner", "tools_id":"tools", "host":{
                 "files":{"mode":"ReadWrite"}, "bash":{"mode":"Unrestricted"}
             }
         }))
         .unwrap();
-        let mut merged = crate::document_config::MergedSurfaceTools::default();
+        let mut merged = crate::documents::MergedSurfaceTools::default();
         assert_eq!(classify_tools(&tools, &merged).unwrap(), Some(PRESET_WRITE));
-        merged
-            .write_tools
-            .push(crate::document_config::WriteToolDecl {
-                notification: None,
-                tool_name: "record_finding".into(),
-                collection: "Finding".into(),
-                description: "Record a finding".into(),
-                fields: vec![],
-                output_obligation: None,
-            });
+        merged.write_tools.push(crate::documents::WriteToolDecl {
+            notification: None,
+            tool_name: "record_finding".into(),
+            collection: "Finding".into(),
+            description: "Record a finding".into(),
+            fields: vec![],
+            output_obligation: None,
+        });
         assert_eq!(classify_tools(&tools, &merged).unwrap(), None);
     }
 }

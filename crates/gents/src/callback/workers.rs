@@ -111,7 +111,7 @@ impl CallbackWorkers {
         &self,
         node: Arc<defra_node::EmbeddedNode>,
         invocation: &CallbackInvocationDoc,
-        callback: &crate::document_config::Callback,
+        callback: &crate::documents::Callback,
         ceiling: Option<std::path::PathBuf>,
         plugins: Arc<crate::plugin::executor::PluginExecutor>,
     ) {
@@ -146,12 +146,12 @@ impl CallbackEngine {
     pub(super) async fn execute_invocation(
         &self,
         invocation: &CallbackInvocationDoc,
-        callback: &crate::document_config::Callback,
+        callback: &crate::documents::Callback,
     ) -> anyhow::Result<()> {
         if let Some(workers) = &self.workers {
             if matches!(
                 callback.handler,
-                crate::document_config::CallbackHandler::Plugin { .. }
+                crate::documents::CallbackHandler::Plugin { .. }
             ) {
                 workers.dispatch(
                     self.node.clone(),

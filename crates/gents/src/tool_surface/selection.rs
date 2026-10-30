@@ -7,7 +7,7 @@ use super::modes::{BashMode, FileToolMode};
 
 use std::path::PathBuf;
 
-use crate::document_config::AgentTargetDocument;
+use crate::documents::AgentTargetDocument;
 use crate::toolset::{
     default_read_only_command_policy, CommandExecutionMode, CommandExecutionPolicy,
     CommandNetworkMode,
@@ -20,7 +20,7 @@ pub(crate) struct AgentToolConfig {
 }
 
 impl AgentToolConfig {
-    pub(crate) fn from_document(tools: &crate::document_config::Tools) -> Result<Self> {
+    pub(crate) fn from_document(tools: &crate::documents::Tools) -> Result<Self> {
         tools.validate()?;
         Ok(Self {
             targets: Vec::new(),
@@ -33,8 +33,8 @@ impl AgentToolConfig {
     }
 
     pub(crate) fn from_document_with_targets<'a>(
-        tools: &crate::document_config::Tools,
-        targets: impl IntoIterator<Item = &'a crate::document_config::AgentTargetDocument>,
+        tools: &crate::documents::Tools,
+        targets: impl IntoIterator<Item = &'a crate::documents::AgentTargetDocument>,
     ) -> Result<Self> {
         let mut resolved = Self::from_document(tools)?;
         let mut by_id = rapidhash::RapidHashMap::default();
@@ -138,7 +138,7 @@ pub struct ResolvedToolSelection {
     pub enable_goal_tools: bool,
     pub enable_goal_creation: bool,
     pub allowed_mcp_service_ids: Vec<String>,
-    pub remote_tools: Option<crate::document_config::RemoteTools>,
+    pub remote_tools: Option<crate::documents::RemoteTools>,
     pub required_mcp_service_ids: Vec<String>,
     pub backgroundable_tool_names: Vec<String>,
     pub enable_memory: bool,
@@ -151,9 +151,9 @@ pub struct ResolvedToolSelection {
     pub enable_defra_query: bool,
     pub defra_query_collections: Vec<String>,
     pub application_write_collections: Vec<String>,
-    pub write_tools: Vec<crate::document_config::WriteToolDecl>,
-    pub query_tools: Vec<crate::document_config::QueryToolDecl>,
-    /// See [`crate::document_config::MergedSurfaceTools::surface_of_tool`].
+    pub write_tools: Vec<crate::documents::WriteToolDecl>,
+    pub query_tools: Vec<crate::documents::QueryToolDecl>,
+    /// See [`crate::documents::MergedSurfaceTools::surface_of_tool`].
     pub surface_of_tool: std::collections::BTreeMap<String, String>,
     pub enable_self_config: bool,
     pub self_config_categories: Option<Vec<String>>,
@@ -162,7 +162,7 @@ pub struct ResolvedToolSelection {
     pub enable_pack_install: bool,
     pub enable_lsp: bool,
     pub lsp_config: Option<String>,
-    pub plugin_tools: Vec<crate::document_config::PluginToolRef>,
+    pub plugin_tools: Vec<crate::documents::PluginToolRef>,
 }
 
 impl Default for ResolvedToolSelection {
@@ -216,7 +216,7 @@ impl ResolvedToolSelection {
             || self.enable_lsp
     }
 
-    pub(crate) fn from_document(tools: &crate::document_config::Tools) -> anyhow::Result<Self> {
+    pub(crate) fn from_document(tools: &crate::documents::Tools) -> anyhow::Result<Self> {
         tools.validate()?;
         let host = tools.host.as_ref();
         let files = host.and_then(|host| host.files.as_ref());
@@ -271,16 +271,15 @@ impl ResolvedToolSelection {
             }
             if !service.background_tool_names.is_empty() {
                 match service.style {
-                    crate::document_config::RemoteToolStyle::Discovery => {
+                    crate::documents::RemoteToolStyle::Discovery => {
                         backgroundable_tool_names.push("call_tool".to_string())
                     }
-                    crate::document_config::RemoteToolStyle::Flat => backgroundable_tool_names
-                        .extend(
-                            service
-                                .background_tool_names
-                                .iter()
-                                .map(|name| crate::meta_tools::flat_tool_name(service_id, name)),
-                        ),
+                    crate::documents::RemoteToolStyle::Flat => backgroundable_tool_names.extend(
+                        service
+                            .background_tool_names
+                            .iter()
+                            .map(|name| crate::meta_tools::flat_tool_name(service_id, name)),
+                    ),
                 }
             }
         }
@@ -379,7 +378,7 @@ impl ResolvedToolSelection {
 }
 
 fn file_limits_from_document(
-    files: Option<&crate::document_config::FileTools>,
+    files: Option<&crate::documents::FileTools>,
 ) -> crate::toolset::FileToolLimits {
     let defaults = crate::toolset::FileToolLimits::default();
     let limit = |value: Option<i64>, fallback: usize| {
@@ -414,7 +413,7 @@ pub fn resolve_goal_capabilities(
 }
 
 fn command_policy_from_document(
-    bash_group: Option<&crate::document_config::BashTools>,
+    bash_group: Option<&crate::documents::BashTools>,
     bash: BashMode,
 ) -> anyhow::Result<Option<CommandExecutionPolicy>> {
     let execution_mode = bash_group.and_then(|bash| bash.execution_mode);

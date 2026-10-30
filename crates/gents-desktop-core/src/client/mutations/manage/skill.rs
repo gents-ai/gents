@@ -4,7 +4,7 @@ use defra_node::EmbeddedNode;
 #[cfg(test)]
 use gents::config_client::apply_desired_state_plan;
 use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::document_config::SkillDocument;
+use gents::documents::SkillDocument;
 use gents::store::collection::Collection;
 #[cfg(test)]
 use std::sync::Arc;

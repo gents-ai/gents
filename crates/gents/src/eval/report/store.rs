@@ -133,7 +133,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::document_config::EvalSplit;
+    use crate::documents::EvalSplit;
     use crate::eval::checks::CheckRegistry;
     use crate::eval::report::{report_refused, SlotClass};
     use crate::eval::runner::freeze::tests::{Launching, OWNER};

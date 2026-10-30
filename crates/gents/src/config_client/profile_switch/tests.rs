@@ -11,7 +11,7 @@ use crate::config_client::{
     apply_desired_state_plan, list_inference_backends_in_txn, read_desired_state_record_in_txn,
     write_inference_backend_document, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use crate::document_config::AdvertisedModel;
+use crate::documents::AdvertisedModel;
 use crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 use crate::inference::auth::credential::{
     preset_account_backend, remove_account_in_txn, set_account_enabled, store_sign_in,

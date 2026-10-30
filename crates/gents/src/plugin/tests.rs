@@ -853,8 +853,8 @@ fn narrow_manifold_always_forces_listen_to_none() {
     );
 }
 
-fn job_tool_ref(job: Option<serde_json::Value>) -> crate::document_config::PluginToolRef {
-    crate::document_config::PluginToolRef {
+fn job_tool_ref(job: Option<serde_json::Value>) -> crate::documents::PluginToolRef {
+    crate::documents::PluginToolRef {
         plugin: "team/plugin".into(),
         digest: None,
         tool_calls: false,
@@ -894,7 +894,7 @@ fn plugin_without_job_block_keeps_the_plugin_tool_path() {
 fn job_resolutions() -> (
     tempfile::TempDir,
     Vec<(
-        crate::document_config::PluginToolRef,
+        crate::documents::PluginToolRef,
         Option<crate::plugin::store::InstalledPlugin>,
     )>,
 ) {

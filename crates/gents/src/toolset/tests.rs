@@ -360,8 +360,8 @@ async fn session_message_tool_definitions_register_expected_surface() {
     assert_eq!(list.parameters["properties"], serde_json::json!({}));
 }
 
-fn agent_targets(name: &str) -> Vec<crate::document_config::AgentTargetDocument> {
-    vec![crate::document_config::AgentTargetDocument {
+fn agent_targets(name: &str) -> Vec<crate::documents::AgentTargetDocument> {
+    vec![crate::documents::AgentTargetDocument {
         target_id: format!("{name}-target"),
         node_did: "did:key:zTest".to_string(),
         target_node_did: "did:key:zTest".to_string(),

@@ -185,7 +185,7 @@ impl Default for ToolTimeouts {
 }
 
 impl ToolTimeouts {
-    pub(crate) fn from_document(tools: &crate::document_config::Tools) -> Self {
+    pub(crate) fn from_document(tools: &crate::documents::Tools) -> Self {
         let host = tools.host.as_ref();
         let bash = host.and_then(|host| host.bash.as_ref());
         let lsp = tools
@@ -246,7 +246,7 @@ mod tests {
         value.as_u64()
     }
 
-    fn document(groups: Value) -> crate::document_config::Tools {
+    fn document(groups: Value) -> crate::documents::Tools {
         let mut value = groups;
         value["tools_id"] = "tools".into();
         value["node_did"] = "owner".into();

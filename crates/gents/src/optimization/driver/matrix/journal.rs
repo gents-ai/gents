@@ -1,4 +1,4 @@
-use crate::document_config::EvalSplit;
+use crate::documents::EvalSplit;
 use crate::optimization::job::JournalEntry;
 use crate::optimization::policy::{Decision, Mode};
 

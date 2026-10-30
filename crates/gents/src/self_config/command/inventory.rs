@@ -190,7 +190,7 @@ impl ConfigCommandTool {
             .clone();
         if target == SelfConfigTarget::InferenceBackend {
             for row in &mut rows {
-                let observation: crate::document_config::InferenceBackendObservation =
+                let observation: crate::documents::InferenceBackendObservation =
                     crate::inference::backends::registry::decode_backend_observation(row.clone())
                         .context("decoding backend observation")?;
                 let provider_kind = serde_json::from_value(

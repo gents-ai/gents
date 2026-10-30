@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use crate::document_config::{
+use crate::documents::{
     EvalDefinition, EvalSplit, EventSource, PackConfig, Trigger, TriggerSource,
 };
 use crate::eval::runner::freeze::pack::{load_pack, write_pack_files};

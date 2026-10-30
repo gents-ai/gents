@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::{build_plugin_pack, ECHO_WAT};
-use crate::document_config::PluginToolRef;
+use crate::documents::PluginToolRef;
 use crate::inference::llm::tool::ToolDyn;
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::store::{self, InstalledPlugin};
@@ -691,7 +691,7 @@ mod bound {
             0,
             Mode::AutoReview,
             Some(&workspace::ReviewTaskSelection::for_task(
-                &crate::document_config::Task {
+                &crate::documents::Task {
                     task_id: "review-task".into(),
                     ..workspace::default_review_task("node", "agent")
                 },

@@ -16,7 +16,7 @@ pub use turns::{
 use rapidhash::{HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
-use gents::document_config::{
+use gents::documents::{
     Agent, AgentContext, AgentTargetDocument, CompactionConfig, DatastoreToolSurfaceDocument,
     EventSource, InferenceBackend, InferenceBackendObservation, InferenceExecution,
     InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation, SkillDocument, Task,

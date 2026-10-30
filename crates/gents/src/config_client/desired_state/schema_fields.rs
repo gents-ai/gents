@@ -11,7 +11,7 @@ pub(super) type IntrospectedFields = BTreeMap<String, Option<BTreeMap<String, Sc
 const INTROSPECTION_PAGE: usize = 64;
 
 fn event_source_schema_fields(
-    source: &crate::document_config::EventSource,
+    source: &crate::documents::EventSource,
 ) -> (Option<&str>, Option<&str>) {
     let correlation = source
         .correlation_field
@@ -23,10 +23,10 @@ fn event_source_schema_fields(
         .as_ref()
         .and_then(|group| group.expected_count.as_ref())
         .and_then(|count| match count {
-            crate::document_config::EventGroupCount::SourceField { source_field } => {
+            crate::documents::EventGroupCount::SourceField { source_field } => {
                 Some(source_field.as_str())
             }
-            crate::document_config::EventGroupCount::Fixed(_) => None,
+            crate::documents::EventGroupCount::Fixed(_) => None,
         })
         .map(str::trim)
         .filter(|field| !field.is_empty());
@@ -34,14 +34,14 @@ fn event_source_schema_fields(
 }
 
 fn obligation_count_fields(candidate: &Value) -> Result<Vec<(String, String, String)>> {
-    let entries = crate::document_config::deserialize_optional_surface_tools(
+    let entries = crate::documents::deserialize_optional_surface_tools(
         candidate.get("entries").cloned().unwrap_or(Value::Null),
     )?;
     Ok(entries
         .unwrap_or_default()
         .into_iter()
         .filter_map(|entry| {
-            let crate::document_config::SurfaceToolDecl::Create(decl) = entry else {
+            let crate::documents::SurfaceToolDecl::Create(decl) = entry else {
                 return None;
             };
             let field = decl
@@ -56,7 +56,7 @@ fn obligation_count_fields(candidate: &Value) -> Result<Vec<(String, String, Str
 fn schema_targets(collection: Collection, candidate: &Value) -> Vec<String> {
     match collection {
         Collection::EventSource => {
-            serde_json::from_value::<crate::document_config::EventSource>(candidate.clone())
+            serde_json::from_value::<crate::documents::EventSource>(candidate.clone())
                 .ok()
                 .filter(|source| event_source_schema_fields(source) != (None, None))
                 .map(|source| source.source_collection)
@@ -188,7 +188,7 @@ pub(super) async fn validate_event_source_live_fields(
     candidate: &Value,
     introspected: &mut IntrospectedFields,
 ) -> Result<()> {
-    let source: crate::document_config::EventSource = serde_json::from_value(candidate.clone())
+    let source: crate::documents::EventSource = serde_json::from_value(candidate.clone())
         .context("decoding EventSource for live-field validation")?;
     let (correlation, count_field) = event_source_schema_fields(&source);
     if correlation.is_none() && count_field.is_none() {

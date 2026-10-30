@@ -84,7 +84,7 @@ pub fn config_projection(
     collection: Collection,
     value: Option<&Value>,
 ) -> Result<(&'static [&'static str], Option<Value>)> {
-    use crate::document_config::*;
+    use crate::documents::*;
     match collection {
         Collection::Node => project::<Node>(value),
         Collection::Agent => project::<Agent>(value),

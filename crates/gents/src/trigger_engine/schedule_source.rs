@@ -8,7 +8,7 @@ use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-use crate::document_config::{
+use crate::documents::{
     load_trigger_next_run_at_batch, update_trigger_runtime_fields, TriggerRuntimeUpdate,
     TRIGGER_CURSOR_BATCH_SIZE,
 };

@@ -99,9 +99,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     let did = message.admission.node_did.clone();
     let session_id = message.admission.tool.session_id().to_owned();
     let caller_doc_id = message.admission.tool.request_doc_id().unwrap().to_owned();
-    crate::document_config::ensure_node(&node, &did)
-        .await
-        .unwrap();
+    crate::documents::ensure_node(&node, &did).await.unwrap();
     let response = node
         .execute(&format!(
             r#"mutation {{ update_Node(filter: {{ node_did: {{ _eq: "{}" }} }}, input: {{ max_request_hop: 1 }}) {{ _docID }} }}"#,

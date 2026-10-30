@@ -1,5 +1,5 @@
 use anyhow::Result;
-use gents::document_config::{
+use gents::documents::{
     Agent, InferenceBackend, InferenceProfile, Node, Schedule, SkillDocument, Task, Tools, Trigger,
 };
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};

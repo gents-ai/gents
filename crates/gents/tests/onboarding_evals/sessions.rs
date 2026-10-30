@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use gents::document_config::EvalSplit;
+use gents::documents::EvalSplit;
 use gents::eval::checks::CheckRegistry;
 use gents::pack::{load_pack_config, PackInstallOptions, PackManifest};
 

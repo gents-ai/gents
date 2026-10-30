@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 
-use crate::document_config::Task;
+use crate::documents::Task;
 use crate::watcher::AgentRequest;
 
 pub(super) struct Policy {

@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use gents::config_client::{
     apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::document_config::{load_agent_context_and_tools_in_txn, AgentTools};
+use gents::documents::{load_agent_context_and_tools_in_txn, AgentTools};
 use gents::{Collection, ConfigAccess};
 use serde_json::{json, Value};
 use std::{path::Path, sync::Arc, time::Duration};

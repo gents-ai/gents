@@ -41,7 +41,7 @@ pub(crate) async fn load_configured_task(
     node: &Arc<EmbeddedNode>,
     caller_node_did: &str,
     task_id: &str,
-) -> Result<Option<crate::document_config::Task>> {
+) -> Result<Option<crate::documents::Task>> {
     let loaded = crate::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
@@ -71,7 +71,7 @@ pub(crate) async fn load_configured_task(
 }
 
 pub(crate) fn render_task_body(
-    task_document: &crate::document_config::Task,
+    task_document: &crate::documents::Task,
     caller_node_did: &str,
     target_agent_id: &str,
     target_session_id: &str,
@@ -79,8 +79,8 @@ pub(crate) fn render_task_body(
 ) -> Result<RenderedBody, String> {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let (node_scope, ctx_scope) =
-        crate::template::task_node_ctx(caller_node_did, target_agent_id, &now);
-    let scope = crate::template::TemplateScope {
+        crate::documents::template::task_node_ctx(caller_node_did, target_agent_id, &now);
+    let scope = crate::documents::template::TemplateScope {
         session: Some(serde_json::json!({"session_id": target_session_id})),
         request: None,
         event: serde_json::Value::Null,
@@ -90,7 +90,7 @@ pub(crate) fn render_task_body(
         node: node_scope,
         ctx: ctx_scope,
     };
-    let (content, objective) = match crate::template::render_task(
+    let (content, objective) = match crate::documents::template::render_task(
         &task_document.prompt_template,
         task_document.goal_objective_template.as_deref(),
         task_document.goal_token_budget,

@@ -334,7 +334,7 @@ fn case_comparison(case: &CaseEvidence) -> CaseComparison {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_config::EvalDefinition;
+    use crate::documents::EvalDefinition;
     use crate::eval::report::build::build;
     use crate::eval::report::evidence::{cell_trial_scores, RunRows};
     use crate::eval::report::fixtures::{at, definition, fail, pass, record, Outcome, Rows, RUN};

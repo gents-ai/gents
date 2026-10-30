@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 
 pub(crate) const TRIGGER_CURSOR_BATCH_SIZE: usize = 64;
 
@@ -64,7 +64,7 @@ pub(crate) async fn load_trigger_next_run_at_batch(
         let query = format!("{{ {} }}", selections.join("\n"));
         #[cfg(test)]
         record_trigger_cursor_batch_query();
-        let response = match crate::graphql::graphql_response_with_transaction_retry(
+        let response = match crate::store::graphql::graphql_response_with_transaction_retry(
             node,
             &query,
             "query Trigger cursor batch",
@@ -220,7 +220,7 @@ pub(crate) async fn update_trigger_runtime_fields(
     let Some(fire_count_delta) = updates.fire_count_delta else {
         let mutation =
             render_trigger_runtime_mutation(&escaped_owner, &escaped_trigger_id, &entries);
-        crate::config_client::ConfigAccess::write_local(
+        crate::store::config_client::ConfigAccess::write_local(
             node,
             "document.update_trigger_runtime",
             &mutation,
@@ -232,7 +232,7 @@ pub(crate) async fn update_trigger_runtime_fields(
     // Read and write in one transaction. Conflict retries rerun this whole
     // read-modify-write against a fresh snapshot, so concurrent committed
     // deltas cannot overwrite one another.
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "document.update_trigger_runtime",
@@ -314,7 +314,7 @@ pub struct EventSource {
     pub group: Option<EventGroup>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub workspace_authority: Option<crate::toolset::WorkspaceAuthority>,
+    pub workspace_authority: Option<crate::tools::native::WorkspaceAuthority>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub created_at: Option<String>,
@@ -364,7 +364,7 @@ pub enum EventGroupCount {
 
 impl EventSource {
     pub fn validate(&self) -> anyhow::Result<()> {
-        crate::graphql::validate_collection_identifier(&self.source_collection)?;
+        crate::store::graphql::validate_collection_identifier(&self.source_collection)?;
         anyhow::ensure!(
             self.event_kind.as_deref().unwrap_or("created") == "created",
             "event source supports only the created event kind"
@@ -374,20 +374,20 @@ impl EventSource {
             .as_deref()
             .filter(|value| !value.trim().is_empty())
         {
-            crate::graphql::validate_graphql_filter_fragment(filter)?;
+            crate::store::graphql::validate_graphql_filter_fragment(filter)?;
         }
         if let Some(field) = self
             .correlation_field
             .as_deref()
             .filter(|value| !value.trim().is_empty())
         {
-            crate::graphql::validate_graphql_name(field)?;
+            crate::store::graphql::validate_graphql_name(field)?;
         }
         self.validate_group()
     }
 
     pub fn validate_group(&self) -> anyhow::Result<()> {
-        use crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS;
+        use crate::runtime::snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS;
         let correlation_field = self
             .correlation_field
             .as_deref()
@@ -401,7 +401,7 @@ impl EventSource {
         }
 
         let expected_count = match &group.expected_count {
-            Some(crate::document_config::EventGroupCount::Fixed(count)) => {
+            Some(crate::documents::EventGroupCount::Fixed(count)) => {
                 let count = usize::try_from(*count)
                     .map_err(|_| anyhow::anyhow!("expected_count must be a positive count"))?;
                 if !(1..=MAX_EVENT_TRIGGER_GROUP_DOCS).contains(&count) {
@@ -412,8 +412,8 @@ impl EventSource {
                 }
                 Some(count)
             }
-            Some(crate::document_config::EventGroupCount::SourceField { source_field }) => {
-                if crate::graphql::validate_graphql_name(source_field).is_err() {
+            Some(crate::documents::EventGroupCount::SourceField { source_field }) => {
+                if crate::store::graphql::validate_graphql_name(source_field).is_err() {
                     anyhow::bail!("count field is not a GraphQL name");
                 }
                 None
@@ -421,7 +421,7 @@ impl EventSource {
             None => None,
         };
         let expected_count_field = match &group.expected_count {
-            Some(crate::document_config::EventGroupCount::SourceField { source_field }) => {
+            Some(crate::documents::EventGroupCount::SourceField { source_field }) => {
                 Some(source_field.clone())
             }
             _ => None,

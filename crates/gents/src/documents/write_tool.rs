@@ -1,6 +1,6 @@
-use crate::defra_query::DEFRA_QUERY_TOOL_NAME;
-use crate::meta_tools::META_TOOL_NAMES;
-use crate::toolset::{
+use crate::tools::builtin::defra_query::DEFRA_QUERY_TOOL_NAME;
+use crate::tools::mcp::meta::META_TOOL_NAMES;
+use crate::tools::native::{
     AGENT_INTERRUPT_TOOL_NAME, AGENT_LIST_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
     CANCEL_PROCESS_TOOL_NAME, CONTEXT_BUDGET_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
     READ_PROCESS_TOOL_NAME, SESSION_HISTORY_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME,
@@ -53,7 +53,8 @@ impl<'de> serde::Deserialize<'de> for WriteToolFieldFill {
                             "fill object must contain exactly one string source_field",
                         )
                     })?;
-                crate::graphql::validate_graphql_name(field).map_err(serde::de::Error::custom)?;
+                crate::store::graphql::validate_graphql_name(field)
+                    .map_err(serde::de::Error::custom)?;
                 Ok(Self::SourceField(field.to_string()))
             }
             _ => Err(serde::de::Error::custom(
@@ -84,7 +85,7 @@ impl WriteToolFieldFill {
     /// writes use this to omit an unset optional fill; query filters and
     /// plugin inputs keep [`Self::resolve`] so a missing scope fails closed.
     pub fn resolve_optional(&self, field_name: &str) -> Result<Option<String>> {
-        let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+        let runtime = crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "runtime-filled field `{field_name}` requires an active AgentRequest context"
@@ -153,7 +154,7 @@ impl<'de> serde::Deserialize<'de> for WriteToolField {
 pub struct WriteToolDecl {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub notification: Option<crate::mailbox::MailboxNotificationPolicy>,
+    pub notification: Option<crate::session::mailbox::MailboxNotificationPolicy>,
     pub tool_name: String,
     pub collection: String,
     #[cfg_attr(feature = "typescript", ts(as = "Option<String>", optional))]
@@ -268,7 +269,7 @@ impl<'de> serde::Deserialize<'de> for WriteToolDecl {
         struct Raw {
             tool_name: String,
             #[serde(default)]
-            notification: Option<crate::mailbox::MailboxNotificationPolicy>,
+            notification: Option<crate::session::mailbox::MailboxNotificationPolicy>,
             collection: String,
             #[serde(default)]
             description: String,
@@ -295,15 +296,15 @@ impl WriteToolDecl {
         if self.tool_name.trim().is_empty() {
             anyhow::bail!("tool_name must be non-empty");
         }
-        crate::graphql::validate_collection_identifier(&self.collection).map_err(|error| {
-            anyhow::anyhow!("invalid collection {:?}: {error}", self.collection)
-        })?;
+        crate::store::graphql::validate_collection_identifier(&self.collection).map_err(
+            |error| anyhow::anyhow!("invalid collection {:?}: {error}", self.collection),
+        )?;
         reject_protected_collection_name(&self.collection)?;
         for (index, field) in self.fields.iter().enumerate() {
             if field.name.trim().is_empty() {
                 anyhow::bail!("invalid field[{index}] name: empty name");
             }
-            crate::graphql::validate_graphql_name(&field.name).map_err(|error| {
+            crate::store::graphql::validate_graphql_name(&field.name).map_err(|error| {
                 anyhow::anyhow!("invalid field[{index}] name {:?}: {error}", field.name)
             })?;
             if field.name == "requester_did" && field.fill.is_none() {
@@ -353,7 +354,7 @@ pub(crate) fn validate_write_tool_declarations(
                 decl.tool_name
             )
         })?;
-        crate::mailbox::validate_mailbox_write_decl(decl).map_err(|error| {
+        crate::session::mailbox::validate_mailbox_write_decl(decl).map_err(|error| {
             anyhow::anyhow!(
                 "write_tools[{i}] (tool {:?}) violates mailbox registration policy: {error}",
                 decl.tool_name
@@ -390,7 +391,7 @@ pub(crate) fn validate_write_tool_declarations(
                 ));
             }
             if let Some(WriteToolFieldFill::SourceField(source_field)) = &field.fill {
-                crate::graphql::validate_graphql_name(source_field).map_err(|error| {
+                crate::store::graphql::validate_graphql_name(source_field).map_err(|error| {
                     anyhow::anyhow!(
                         "write_tools[{i}] (tool {:?}) field[{j}] has invalid source_field {:?}: {error}",
                         decl.tool_name,
@@ -432,22 +433,22 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
     ];
     const SINGLETON_TOOL_NAMES: &[&str] = &[
         DEFRA_QUERY_TOOL_NAME,
-        crate::application_write::WRITE_TOOL_NAME,
+        crate::plugin::application_write::WRITE_TOOL_NAME,
         CONTEXT_BUDGET_TOOL_NAME,
         SESSION_HISTORY_TOOL_NAME,
-        crate::schema_tool::SCHEMA_TOOL_NAME,
+        crate::tools::builtin::schema_help::SCHEMA_TOOL_NAME,
         crate::goal::CREATE_GOAL_TOOL_NAME,
         crate::goal::GET_GOAL_TOOL_NAME,
         crate::goal::UPDATE_GOAL_TOOL_NAME,
         "memory",
     ];
 
-    crate::toolset::NativeTool::ALL_NAMES.contains(&name)
-        || name == crate::toolset::lsp::LSP_TOOL_NAME
+    crate::tools::native::NativeTool::ALL_NAMES.contains(&name)
+        || name == crate::tools::native::lsp::LSP_TOOL_NAME
         || META_TOOL_NAMES.contains(&name)
         || AGENT_TOOL_NAMES.contains(&name)
         || SINGLETON_TOOL_NAMES.contains(&name)
-        || crate::self_config::SELF_CONFIG_TOOL_NAMES.contains(&name)
+        || crate::tools::builtin::self_config::SELF_CONFIG_TOOL_NAMES.contains(&name)
 }
 
 /// Collections no datastore tool may read or write: protected eval material

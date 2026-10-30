@@ -236,7 +236,7 @@ mod invocation_correlation_tests {
                 std::collections::BTreeMap::new(),
                 false,
                 async {
-                    let fill = crate::document_config::WriteToolFieldFill::Correlation;
+                    let fill = crate::documents::WriteToolFieldFill::Correlation;
                     assert_eq!(fill.resolve("correlation").unwrap(), "request-17");
                     scope_background_tool_execution(
                         None,

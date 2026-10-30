@@ -1,7 +1,7 @@
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 
-use crate::document_config::Task;
+use crate::documents::Task;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

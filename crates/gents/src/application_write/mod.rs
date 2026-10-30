@@ -145,8 +145,7 @@ impl WriteTool {
         let managed = crate::store::schema::migration::DEFAULT_REGISTRY
             .managed_names()
             .any(|name| name == collection);
-        let protected =
-            crate::document_config::PROTECTED_DATASTORE_COLLECTIONS.contains(&collection);
+        let protected = crate::documents::PROTECTED_DATASTORE_COLLECTIONS.contains(&collection);
         let credential = gents_protocol::schemas::is_credential_collection(collection);
         ensure!(
             !protected,

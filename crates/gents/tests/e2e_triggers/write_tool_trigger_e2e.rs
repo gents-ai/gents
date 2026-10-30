@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
 use gents::defra_write::BoundedWriteTool;
-use gents::document_config::{WriteToolDecl, WriteToolField};
+use gents::documents::{WriteToolDecl, WriteToolField};
 use gents::graphql::escape_graphql_string;
 use gents::inference::llm::tool::Tool;
 use gents::{Collection, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};

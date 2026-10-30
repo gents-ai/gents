@@ -96,7 +96,7 @@ pub async fn serving_accounts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_config::BackendAuth;
+    use crate::documents::BackendAuth;
     use crate::inference::auth::credential::{set_account_enabled, store_sign_in, AccountState};
     use serde_json::json;
     use std::sync::Arc;

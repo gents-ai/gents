@@ -6,7 +6,7 @@ pub use editor::*;
 use gents::config_client::{
     apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::document_config::Node;
+use gents::documents::Node;
 use gents::store::collection::Collection;
 #[cfg(test)]
 use std::sync::Arc;
@@ -98,7 +98,7 @@ async fn set_default_agent_in_txn(
 #[cfg(test)]
 pub async fn apply_config_components(
     node: &Arc<EmbeddedNode>,
-    document: &gents::document_config::PackConfig,
+    document: &gents::documents::PackConfig,
 ) -> Result<()> {
     use anyhow::Context;
     let (owner, plan) = config_components_plan(document)?;
@@ -123,7 +123,7 @@ pub async fn apply_config_components(
 
 pub async fn apply_config_components_on(
     access: &ConfigAccess,
-    document: &gents::document_config::PackConfig,
+    document: &gents::documents::PackConfig,
 ) -> Result<()> {
     use anyhow::Context;
     let (owner, plan) = config_components_plan(document)?;
@@ -148,7 +148,7 @@ pub async fn apply_config_components_on(
 }
 
 fn config_components_plan(
-    document: &gents::document_config::PackConfig,
+    document: &gents::documents::PackConfig,
 ) -> Result<(String, DesiredStateApplyPlan)> {
     let owner = document.node.node_did.clone();
     let scope: Node = serde_json::from_value(serde_json::json!({"node_did":owner}))?;
@@ -291,7 +291,7 @@ mod tests {
     async fn node_replacement_keeps_authored_metadata_and_scoped_default_binding() -> Result<()> {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
-        let config: gents::document_config::PackConfig = serde_json::from_value(json!({
+        let config: gents::documents::PackConfig = serde_json::from_value(json!({
             "node":{"node_did":"did:test:other"},
             "inference_backends":[{"node_did":"did:test:other","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":"did:test:other","profile_id":"profile","backend_id":"backend","model_name":"model"}],
@@ -338,7 +338,7 @@ mod tests {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:default";
-        let seed: gents::document_config::PackConfig = serde_json::from_value(json!({
+        let seed: gents::documents::PackConfig = serde_json::from_value(json!({
             "node":{"node_did":owner,"default_agent_id":"first","tags":["keep"]},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
@@ -401,7 +401,7 @@ mod tests {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:components";
-        let seed: gents::document_config::PackConfig = serde_json::from_value(json!({
+        let seed: gents::documents::PackConfig = serde_json::from_value(json!({
             "node":{"node_did":owner,"display_name":"Keep name","default_agent_id":"agent","created_at":"2026-01-01T00:00:00Z","created_by":"did:test:creator","tags":["keep"]},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
@@ -514,7 +514,7 @@ mod tests {
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:patch";
         for scope in [owner, "did:test:other-patch"] {
-            let config: gents::document_config::PackConfig = serde_json::from_value(json!({
+            let config: gents::documents::PackConfig = serde_json::from_value(json!({
                 "node":{"node_did":scope},
                 "inference_backends":[{"node_did":scope,"backend_id":" backend ","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"api_key","key":"secret-retained"},"connect_timeout_secs":7,"discovery_timeout_secs":8,"max_queue_depth":0,"tags":["retained"]}],
                 "inference_profiles":[{"node_did":scope,"profile_id":"profile","backend_id":" backend ","model_name":"initial"}]

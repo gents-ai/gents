@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn authored_names_match_pack_config_document_roots() {
-        let pack = include_str!("../document_config/pack_config.rs");
+        let pack = include_str!("../documents/pack_config.rs");
         let roots: BTreeSet<_> = pack
             .lines()
             .filter_map(|line| {

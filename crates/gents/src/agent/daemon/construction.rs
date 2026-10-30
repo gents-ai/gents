@@ -173,7 +173,7 @@ where
 
     pub(in crate::agent) fn with_remote_tools(
         mut self,
-        tools: Option<crate::document_config::RemoteTools>,
+        tools: Option<crate::documents::RemoteTools>,
     ) -> Self {
         self.remote_tools = tools;
         self
@@ -197,7 +197,7 @@ where
 
     pub(in crate::agent) fn with_output_obligations(
         mut self,
-        obligations: Vec<(String, crate::document_config::WriteToolOutputObligation)>,
+        obligations: Vec<(String, crate::documents::WriteToolOutputObligation)>,
     ) -> Self {
         self.output_obligations = Arc::new(obligations);
         self

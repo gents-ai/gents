@@ -1,6 +1,6 @@
 use super::{DocumentRecord, DocumentRuntimeView};
 use crate::config_client::{config_projection, ConfigAccess, ConfigApplyTxn};
-use crate::document_config::ensure_node;
+use crate::documents::ensure_node;
 use crate::graphql::escape_graphql_string;
 use crate::store::collection::Collection;
 use anyhow::{Context, Result};

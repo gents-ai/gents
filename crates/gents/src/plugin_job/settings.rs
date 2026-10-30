@@ -4,7 +4,7 @@ use std::ops::RangeInclusive;
 use anyhow::Context;
 use gents_protocol::job::{DynamicMode, JobCeiling, JobPolicy, PluginJobSettings};
 
-use crate::document_config::{PackConfig, Tools};
+use crate::documents::{PackConfig, Tools};
 use crate::pack::{InstalledVia, PackMetadata};
 
 const MAX_LIVE: RangeInclusive<u32> = 1..=64;

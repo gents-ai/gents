@@ -160,7 +160,7 @@ pub async fn load_dynamic_run(
         .transact_readonly("plugin_job.promote.caller_tools", move |txn| {
             let (owner, agent_id) = (owner.clone(), agent_id.clone());
             Box::pin(async move {
-                crate::document_config::load_agent_tools_in_txn(txn, &owner, &agent_id).await
+                crate::documents::load_agent_tools_in_txn(txn, &owner, &agent_id).await
             })
         })
         .await

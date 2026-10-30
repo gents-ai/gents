@@ -2,11 +2,11 @@ use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use serde_json::Value;
 
+use crate::documents::template::{render_template, task_node_ctx, TemplateScope};
 use crate::lifecycle::{
     write_pending_agent_request_with_lineage_workspace_and_conversation_title, ExecutionOrigin,
     TriggerLineage,
 };
-use crate::template::{render_template, task_node_ctx, TemplateScope};
 
 pub async fn write_manual_agent_request(
     node: &std::sync::Arc<EmbeddedNode>,

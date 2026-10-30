@@ -16,7 +16,7 @@ where
 
 fn configured_context_window(
     store: &gents_desktop_core::client::ClientStore,
-    profile: Option<&gents::document_config::InferenceProfile>,
+    profile: Option<&gents::documents::InferenceProfile>,
 ) -> Result<usize, String> {
     let Some(profile) = profile else {
         return Ok(gents::inference::resolved::DEFAULT_CONTEXT_WINDOW);

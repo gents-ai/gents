@@ -5,7 +5,7 @@
 //! Three owners narrow one call. The manifest says which (surface, tool)
 //! pairs this plugin may name at all; the node's `DatastoreToolSurface`
 //! says what the tool is, with the fail-closed checks
-//! [`crate::document_config::merge_datastore_tool_surfaces`] applies for
+//! [`crate::documents::merge_datastore_tool_surfaces`] applies for
 //! an agent (missing, disabled, foreign, malformed, duplicate); ACP at the
 //! node decides what the principal behind `access` may read or write. A
 //! tool with a runtime-filled field is refused: a page has no triggering
@@ -21,7 +21,7 @@ use crate::config_client::ConfigAccess;
 use crate::defra_query::bounded::BoundedQueryParams;
 use crate::defra_query::BoundedQueryTool;
 use crate::defra_write::{BoundedWriteParams, BoundedWriteTool};
-use crate::document_config::{
+use crate::documents::{
     list_datastore_tool_surfaces, DatastoreToolSurfaceDocument, SurfaceToolDecl,
 };
 use crate::inference::llm::tool::Tool;
