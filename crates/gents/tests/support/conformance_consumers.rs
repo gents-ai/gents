@@ -786,7 +786,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "chatgpt_codex::tests::routing_affinity_matches_lean_owner",
             package: "gents",
-            source_path: "crates/gents/src/chatgpt_codex.rs",
+            source_path: "crates/gents/src/chatgpt_codex/tests.rs",
             module_path: "chatgpt_codex::tests",
             function: "routing_affinity_matches_lean_owner",
         },
