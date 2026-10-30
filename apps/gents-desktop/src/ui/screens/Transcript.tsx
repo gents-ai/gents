@@ -67,6 +67,7 @@ import { sameChangedFiles, turnChanges, type ChangedFile } from "@/lib/turnChang
 import { TurnChanges } from "./TurnChanges";
 import { toastFailure } from "@/lib/failure";
 import { sessionViews } from "@/app/sessionViews";
+import { messagePlaces, usePlaceRequest } from "@/app/messagePlaces";
 import { createHeightLearner, guessHeight, type RowShape } from "@/lib/rowHeights";
 import { useApp, useView } from "@/app/AppContext";
 import {
@@ -103,6 +104,10 @@ function copyActions(text: string | null | undefined) {
 }
 
 const ParentContext = createContext<ParentWork | null>(null);
+
+/* how far below the view's top a place asked for lands, so the reader sees
+   what led up to it */
+const PLACE_OFFSET = 96;
 
 function OwnInput({
   item,
@@ -717,6 +722,8 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   useEffect(() => {
     if (!sessionKey || returning.current === sessionKey || entries.length === 0) return;
     returning.current = sessionKey;
+    /* a place asked for from elsewhere wins over where the reader left it */
+    if (messagePlaces.request()?.sessionId === sessionKey) return;
     const place = sessionViews.placeOf(sessionKey);
     if (!place || indexOf.has(place.key) || place.sequence === null) return;
     rows.jump(place.sequence, () => {
@@ -730,6 +737,51 @@ export const TranscriptPanel = memo(function TranscriptPanel({
       pendingPlace.current = null;
       list.goTo(place);
     }
+  });
+
+  /* a place asked for from elsewhere: its row at once when drawn, else after
+     the page around its message is read; a row that page doesn't hold lands
+     on the message itself */
+  const asked = usePlaceRequest(sessionKey);
+  const jumpedFor = useRef<number | null>(null);
+  /* state, so the read's arrival draws again and settles the request */
+  const [readFor, setReadFor] = useState<number | null>(null);
+  useEffect(() => {
+    if (!asked || entries.length === 0) return;
+    const read = readFor === asked.id;
+    const byItem = asked.itemKey
+      ? entries.find(
+          (entry) => entry.kind === "item" && entry.item.itemKey === asked.itemKey,
+        )
+      : undefined;
+    const byMessage =
+      !asked.itemKey || read
+        ? entries.find(
+            (entry) => (entrySequence(entry, sequences) ?? -1) >= asked.sequence,
+          )
+        : undefined;
+    /* the page read holds neither: the nearest row before the message */
+    const nearest = read
+      ? [...entries]
+          .reverse()
+          .find(
+            (entry) => (entrySequence(entry, sequences) ?? Infinity) <= asked.sequence,
+          )
+      : undefined;
+    const target = byItem ?? byMessage ?? nearest;
+    if (target) {
+      jumpedFor.current = null;
+      list.goTo({ key: entryKey(target), offset: PLACE_OFFSET });
+      messagePlaces.landed(asked.id, target === byItem);
+      return;
+    }
+    if (read) {
+      messagePlaces.landed(asked.id, false);
+      return;
+    }
+    if (jumpedFor.current === asked.id) return;
+    jumpedFor.current = asked.id;
+    rows.jump(asked.sequence, () => setReadFor(asked.id));
   });
 
   /* the reader's place, kept as they read; at the foot there is none */

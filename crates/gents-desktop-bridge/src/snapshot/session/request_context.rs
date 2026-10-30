@@ -594,6 +594,7 @@ mod tests {
                 "compaction_key": "session-entry",
                 "sequence": 1,
                 "messages_compacted": 4,
+                "compacted_through_sequence": 7,
                 "created_at": "2026-10-29T21:20:00Z"
             }))
             .unwrap();
@@ -611,13 +612,39 @@ mod tests {
         assert_eq!(
             keys(session_compaction_views(
                 std::slice::from_ref(&entry),
+                &RapidHashMap::new(),
                 Some(&reductions)
             )),
             ["mid-request", "session-entry"]
         );
+        /* each names the row that marks it and the message it follows, so
+        the meter can open the session there */
+        /* a start-of-request entry is placed at its request's first message */
+        let starts = [("session-entry".to_string(), 20_i64)]
+            .into_iter()
+            .collect();
+        let placed =
+            session_compaction_views(std::slice::from_ref(&entry), &starts, Some(&reductions))
+                .into_iter()
+                .map(|view| (view.item_key, view.message_sequence))
+                .collect::<Vec<_>>();
+        assert_eq!(
+            placed,
+            [
+                (Some("request-compaction:mid-request".to_string()), Some(13)),
+                (
+                    Some("session-compaction:session-entry".to_string()),
+                    Some(20)
+                ),
+            ]
+        );
         /* reductions that failed to load leave the session entries alone */
         assert_eq!(
-            keys(session_compaction_views(std::slice::from_ref(&entry), None)),
+            keys(session_compaction_views(
+                std::slice::from_ref(&entry),
+                &RapidHashMap::new(),
+                None
+            )),
             ["session-entry"]
         );
     }
