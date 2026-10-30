@@ -92,7 +92,7 @@ async fn rejects_raw_mailbox_writer_even_when_declaration_is_canonical() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     let tool = BoundedWriteTool::new(
         ConfigAccess::local(node),
-        crate::mailbox::canonical_mailbox_write_decl(),
+        crate::session::mailbox::canonical_mailbox_write_decl(),
     );
     assert!(!tool.is_well_formed());
 }

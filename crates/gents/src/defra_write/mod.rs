@@ -82,7 +82,7 @@ impl BoundedWriteTool {
     }
 
     fn ensure_declaration(&self) -> Result<()> {
-        if self.decl.collection == crate::mailbox::MAILBOX_COLLECTION {
+        if self.decl.collection == crate::session::mailbox::MAILBOX_COLLECTION {
             bail!(
                 "MailboxItem requires the dedicated stamped mailbox tool and cannot use BoundedWriteTool"
             );

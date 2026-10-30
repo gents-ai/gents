@@ -483,7 +483,7 @@ async fn plugin_replacement_conflict_in_txn(
 ) -> Result<Option<String>> {
     let mut replacements = BTreeMap::new();
     for pack in packs {
-        let (namespace, _) = crate::pack_registry::split_pack_coordinate(&pack.coordinate);
+        let (namespace, _) = crate::pack::registry::split_pack_coordinate(&pack.coordinate);
         for plugin in &pack.plugins {
             let coordinate = format!("{namespace}/{}", plugin.name);
             if let Some(previous) = replacements.insert(coordinate.clone(), plugin.digest.clone()) {
@@ -788,7 +788,7 @@ pub async fn remove_pack(
                     .chain(&report.dependencies)
                     .flat_map(|removed| {
                         let (namespace, _) =
-                            crate::pack_registry::split_pack_coordinate(&removed.pack);
+                            crate::pack::registry::split_pack_coordinate(&removed.pack);
                         removed
                             .documents
                             .plugins

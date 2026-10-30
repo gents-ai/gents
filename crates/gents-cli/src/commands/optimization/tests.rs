@@ -264,7 +264,7 @@ async fn a_refused_job_is_refused_before_the_proposer_is_built() {
     let policy = fixture.ctx.home_dir.join("policy.json");
     std::fs::write(
         &policy,
-        serde_json::to_vec(&gents::optimization::PolicyV2::uncalibrated()).unwrap(),
+        serde_json::to_vec(&gents::eval::optimization::PolicyV2::uncalibrated()).unwrap(),
     )
     .unwrap();
     let policy = policy.display().to_string();
@@ -402,7 +402,7 @@ async fn policy_defaults_is_sized_to_rounds_and_a_policy_file_is_taken_as_writte
     let path = fixture.ctx.home_dir.join("policy.json");
     std::fs::write(
         &path,
-        serde_json::to_vec(&gents::optimization::PolicyV2::uncalibrated()).unwrap(),
+        serde_json::to_vec(&gents::eval::optimization::PolicyV2::uncalibrated()).unwrap(),
     )
     .unwrap();
     let path = path.display().to_string();
@@ -421,10 +421,10 @@ async fn policy_defaults_is_sized_to_rounds_and_a_policy_file_is_taken_as_writte
 
     std::fs::write(
         &path,
-        serde_json::to_vec(&gents::optimization::PolicyV2 {
+        serde_json::to_vec(&gents::eval::optimization::PolicyV2 {
             max_rounds: 2,
             alpha_ppm: 40_000,
-            ..gents::optimization::PolicyV2::uncalibrated()
+            ..gents::eval::optimization::PolicyV2::uncalibrated()
         })
         .unwrap(),
     )
@@ -469,7 +469,7 @@ async fn a_job_id_that_is_not_one_path_component_is_refused_verbatim() {
         refusal,
         "a refusal carries no context"
     );
-    let wrapped = anyhow::Error::from(gents::optimization::JobRefused(refusal.to_owned()))
+    let wrapped = anyhow::Error::from(gents::eval::optimization::JobRefused(refusal.to_owned()))
         .context("driving the job");
     assert_eq!(format!("{:#}", super::surface_refusal(wrapped)), refusal);
 }
@@ -543,7 +543,7 @@ async fn an_interrupted_job_says_how_to_resume_and_the_same_command_finishes_it(
     );
     assert!(!output.contains("stopped before it finished"), "{output}");
     let journal =
-        gents::optimization::load_job(&fixture.ctx.access, &fixture.ctx.owner, "job-stop")
+        gents::eval::optimization::load_job(&fixture.ctx.access, &fixture.ctx.owner, "job-stop")
             .await
             .unwrap()
             .expect("the job")
@@ -551,7 +551,7 @@ async fn an_interrupted_job_says_how_to_resume_and_the_same_command_finishes_it(
     assert_eq!(
         journal
             .iter()
-            .filter(|entry| matches!(entry, gents::optimization::JournalEntry::Frozen))
+            .filter(|entry| matches!(entry, gents::eval::optimization::JournalEntry::Frozen))
             .count(),
         1,
         "the resume froze nothing again: {journal:?}"
@@ -602,12 +602,14 @@ async fn a_failure_before_the_freeze_does_not_say_resume() {
     .await
     .unwrap_err();
     assert!(!format!("{error:#}").contains("resume"), "{error:#}");
-    assert!(
-        gents::optimization::load_job(&fixture.ctx.access, &fixture.ctx.owner, "pre-freeze")
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(gents::eval::optimization::load_job(
+        &fixture.ctx.access,
+        &fixture.ctx.owner,
+        "pre-freeze"
+    )
+    .await
+    .unwrap()
+    .is_none());
 }
 
 #[tokio::test]
@@ -640,19 +642,21 @@ async fn a_script_with_fewer_proposals_than_rounds_is_refused_before_the_freeze(
         format!("proposer script {path} holds 3 proposals, fewer than --rounds 4")
     );
     assert!(!fixture.ctx.jobs_dir().join("short-script").exists());
-    assert!(
-        gents::optimization::load_job(&fixture.ctx.access, &fixture.ctx.owner, "short-script")
-            .await
-            .unwrap()
-            .is_none()
-    );
+    assert!(gents::eval::optimization::load_job(
+        &fixture.ctx.access,
+        &fixture.ctx.owner,
+        "short-script"
+    )
+    .await
+    .unwrap()
+    .is_none());
 }
 
 #[tokio::test]
 async fn promote_refuses_a_wrong_digest_then_promotes_and_revert_closes_the_job() {
     let fixture = Fixture::new().await;
     accepted_job(&fixture, "job-1").await;
-    let view = gents::optimization::show(&fixture.ctx.access, &fixture.ctx.owner, "job-1")
+    let view = gents::eval::optimization::show(&fixture.ctx.access, &fixture.ctx.owner, "job-1")
         .await
         .unwrap();
     let digest = view
@@ -680,7 +684,7 @@ async fn promote_refuses_a_wrong_digest_then_promotes_and_revert_closes_the_job(
             .is_some_and(|line| line.starts_with("promoted job job-1: the target now digests to ")),
         "{promoted}"
     );
-    let target = gents::optimization::show(&fixture.ctx.access, &fixture.ctx.owner, "job-1")
+    let target = gents::eval::optimization::show(&fixture.ctx.access, &fixture.ctx.owner, "job-1")
         .await
         .unwrap()
         .job
@@ -688,7 +692,7 @@ async fn promote_refuses_a_wrong_digest_then_promotes_and_revert_closes_the_job(
         .iter()
         .rev()
         .find_map(|entry| match entry {
-            gents::optimization::JournalEntry::Promoted { target_digest, .. } => {
+            gents::eval::optimization::JournalEntry::Promoted { target_digest, .. } => {
                 Some(target_digest.clone())
             }
             _ => None,
@@ -772,7 +776,7 @@ async fn rm_keeps_running_and_ready_jobs_and_removes_a_reverted_one() {
         "{kept:#}"
     );
 
-    let held = gents::optimization::held_runs(&fixture.ctx.access, &fixture.ctx.owner)
+    let held = gents::eval::optimization::held_runs(&fixture.ctx.access, &fixture.ctx.owner)
         .await
         .unwrap();
     let (run_id, _) = held
@@ -787,11 +791,11 @@ async fn rm_keeps_running_and_ready_jobs_and_removes_a_reverted_one() {
         )
     );
 
-    let view = gents::optimization::show(&fixture.ctx.access, &fixture.ctx.owner, "job-1")
+    let view = gents::eval::optimization::show(&fixture.ctx.access, &fixture.ctx.owner, "job-1")
         .await
         .unwrap();
     let digest = view.checkpoint.expect("a retained checkpoint").pack_digest;
-    let promotion = gents::optimization::promote(
+    let promotion = gents::eval::optimization::promote(
         &fixture.ctx.access,
         &fixture.ctx.owner,
         "job-1",
@@ -800,7 +804,7 @@ async fn rm_keeps_running_and_ready_jobs_and_removes_a_reverted_one() {
     )
     .await
     .unwrap();
-    gents::optimization::revert(
+    gents::eval::optimization::revert(
         &fixture.ctx.access,
         &fixture.ctx.owner,
         "job-1",
@@ -823,7 +827,7 @@ async fn rm_keeps_running_and_ready_jobs_and_removes_a_reverted_one() {
 async fn rm_force_of_a_ready_job_says_a_later_promote_will_refuse() {
     let fixture = Fixture::new().await;
     accepted_job(&fixture, "job-1").await;
-    let digest = gents::optimization::show(&fixture.ctx.access, &fixture.ctx.owner, "job-1")
+    let digest = gents::eval::optimization::show(&fixture.ctx.access, &fixture.ctx.owner, "job-1")
         .await
         .unwrap()
         .checkpoint

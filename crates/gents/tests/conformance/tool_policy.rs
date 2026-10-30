@@ -4,7 +4,7 @@ use crate::lean_vocab_test::{
     LeanPluginDataInsertOutcome, LeanPluginDataInvocation, LeanPluginDataOnConflict,
     LeanPluginDataOperation, LeanPluginDataRefusal, LeanPluginDataStamp, LeanPluginDataWriteFacts,
 };
-use gents::application_write::Observation as WriteFacts;
+use gents::plugin::application_write::Observation as WriteFacts;
 use gents::plugin::data::{
     self as plugin_data, InsertOutcome, Invocation, OnConflict, Stamp, WriteRefusal,
 };
@@ -112,7 +112,7 @@ fn write_facts(op: LeanPluginDataOperation, w: LeanPluginDataWriteFacts) -> Writ
 /// `substituteCallerNodeDid` and `insertNote` through the pure core
 /// `plugin::data::admit_write_observation` beside the frozen owner
 /// `plugin::data::admit_write`, and its siblings, which
-/// `application_write::apply_plugin_writes_in_txn` calls inside the output's
+/// `plugin::application_write::apply_plugin_writes_in_txn` calls inside the output's
 /// transaction. Notes are checked here as the read-then-insert decision the
 /// transaction applies to the row it read.
 #[test]

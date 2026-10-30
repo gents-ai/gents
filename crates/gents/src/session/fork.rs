@@ -20,7 +20,7 @@ use super::sessions::{
     ensure_session_in_txn, load_agent_session_owner_in_txn, load_agent_session_row_in_txn,
 };
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::session_origin::SessionScope;
+use crate::session::origin::SessionScope;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EditForkBinding {

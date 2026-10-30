@@ -2109,12 +2109,10 @@ async fn exercise(root: &Path, journey: Journey) -> Result<()> {
         #[cfg(feature = "editor-e2e")]
         copy_editor_evidence(root, "editor-questions-provider.json")?;
         ensure!(
-            captured
-                .iter()
-                .any(|body| body["tools"]
-                    .as_array()
-                    .is_some_and(|tools| tools.iter().any(|tool| tool["function"]["name"]
-                        == gents::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME))),
+            captured.iter().any(|body| body["tools"]
+                .as_array()
+                .is_some_and(|tools| tools.iter().any(|tool| tool["function"]["name"]
+                    == gents::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME))),
             "the default Engineer must advertise its question tool"
         );
         editor_result?;

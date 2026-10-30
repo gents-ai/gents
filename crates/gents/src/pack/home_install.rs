@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{is_valid_pack_name, InstalledPackPlugin, PackKind};
 use crate::file_lock::FileLock;
-use crate::pack_archive::PackArchive;
+use crate::pack::archive::PackArchive;
 
 /// Who installed a pack: the operator through the CLI, or the model through
 /// self-configuration.
@@ -116,7 +116,7 @@ pub fn materialize_asset_pack(
 }
 
 fn checked_coordinate(coordinate: &str) -> Result<(&str, &str)> {
-    let (namespace, name) = crate::pack_registry::split_pack_coordinate(coordinate);
+    let (namespace, name) = crate::pack::registry::split_pack_coordinate(coordinate);
     anyhow::ensure!(
         is_valid_pack_name(namespace) && is_valid_pack_name(name),
         "invalid pack coordinate {coordinate:?}"

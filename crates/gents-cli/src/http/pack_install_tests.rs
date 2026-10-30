@@ -4,7 +4,7 @@ use crate::commands::pack::test_support::fixture_dir;
 const NODE: &str = "did:key:zRemotePackInstallNode";
 
 fn archive(name: &str) -> Arc<PackArchive> {
-    let (bytes, _) = gents::pack_archive::pack_dir(&fixture_dir(name)).unwrap();
+    let (bytes, _) = gents::pack::archive::pack_dir(&fixture_dir(name)).unwrap();
     Arc::new(PackArchive::from_bytes(&bytes).unwrap())
 }
 
@@ -113,7 +113,7 @@ fn archive_bytes_over_the_shared_pack_bound_are_refused_by_name() {
             && error.contains("nothing was installed"),
         "{error}"
     );
-    assert_eq!(MAX_ARCHIVE_BYTES, gents::pack_archive::MAX_PACK_BYTES);
+    assert_eq!(MAX_ARCHIVE_BYTES, gents::pack::archive::MAX_PACK_BYTES);
     assert!(
         MAX_BODY >= base64::encoded_len(MAX_ARCHIVE_BYTES, true).unwrap() + MAX_FIELD_BYTES,
         "the request body admits every archive closure within the shared bound"

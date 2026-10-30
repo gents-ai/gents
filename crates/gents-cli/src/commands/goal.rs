@@ -42,7 +42,7 @@ async fn goal_show_value(
         .with_context(|| format!("no durable goal for session {session_id}"))?;
     let mut value = serde_json::to_value(gents::goal::snapshot(&goal, now))?;
     value["auto_resume_at_reset"] = goal.auto_resume_at_reset.unwrap_or(false).into();
-    let blocked = gents::blocked_turn::blocked_goal_turn(access, node_did, session_id)
+    let blocked = gents::goal::blocked_turn::blocked_goal_turn(access, node_did, session_id)
         .await
         .unwrap_or_else(|error| {
             tracing::warn!(session_id, error = %format!("{error:#}"), "blocked turn unreadable");

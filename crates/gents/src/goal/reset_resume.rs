@@ -1,5 +1,4 @@
 use super::*;
-use crate::blocked_turn::{goal_stopped_in_txn, served_profile};
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::inference::auth::credential::resolve_oauth_credential_in_txn;
 use crate::store::identity::NodeIdentity;

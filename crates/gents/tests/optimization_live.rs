@@ -7,13 +7,13 @@ use gents::config_client::{
 };
 use gents::documents::{EvalDefinition, EvalSplit, InferenceBackend, InferenceProfile};
 use gents::eval::checks::CheckRegistry;
-use gents::eval::runner::embedded::{EmbeddedExecutor, EmbeddedHome};
-use gents::eval::runner::{Capture, RunOptions};
-use gents::optimization::target::JobTarget;
-use gents::optimization::{
+use gents::eval::optimization::target::JobTarget;
+use gents::eval::optimization::{
     materialize_pack, run_cost, run_job, show, Budgets, Decision, JobOutcome, JobRequest, JobState,
     JobView, Mode, PolicyV2, ScriptedProposer,
 };
+use gents::eval::runner::embedded::{EmbeddedExecutor, EmbeddedHome};
+use gents::eval::runner::{Capture, RunOptions};
 use gents::{Collection, ConfigAccess, DocumentRuntimeOptions};
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -106,7 +106,7 @@ impl Fixture {
             .with_test_writer()
             .with_ansi(false)
             .with_env_filter(tracing_subscriber::EnvFilter::new(
-                "off,optimization_live=info,gents::optimization=info",
+                "off,optimization_live=info,gents::eval::optimization=info",
             ))
             .try_init();
 
@@ -150,7 +150,7 @@ impl Fixture {
         .unwrap_or_else(|error| {
             panic!("assumption failed: the M3 pack loads as the subject of behavior {behavior:?}: {error:#}")
         });
-        let golden_prompt = gents::optimization::baseline_text(&golden).expect(
+        let golden_prompt = gents::eval::optimization::baseline_text(&golden).expect(
             "assumption failed: the M3 pack's subject context carries a readable system prompt",
         );
         let definition = golden

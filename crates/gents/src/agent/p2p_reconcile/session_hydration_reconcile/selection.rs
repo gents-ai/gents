@@ -1,7 +1,7 @@
 use super::*;
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::required_rows;
-use crate::session_origin::SessionScope;
+use crate::session::origin::SessionScope;
 
 pub(super) async fn load_hydration_selection(
     node: &Arc<EmbeddedNode>,

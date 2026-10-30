@@ -751,7 +751,7 @@ pub async fn adopt_step0(
                             job_row_doc_id: row_doc_id.clone(),
                             chain_root_doc_id: pin.chain_root_doc_id.clone(),
                         };
-                        crate::application_write::apply_plugin_writes_in_txn(
+                        crate::plugin::application_write::apply_plugin_writes_in_txn(
                             txn,
                             grant,
                             &stamps,

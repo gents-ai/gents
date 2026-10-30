@@ -1397,7 +1397,7 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
         "ops",
         ResolvedToolSelection {
             enable_defra_query: false,
-            write_tools: vec![crate::mailbox::canonical_mailbox_write_decl()],
+            write_tools: vec![crate::session::mailbox::canonical_mailbox_write_decl()],
             ..Default::default()
         },
         &ToolCeiling::meta_only(),
@@ -1409,13 +1409,13 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
     .unwrap();
     assert!(granted
         .tool_names()
-        .contains(&crate::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string()));
+        .contains(&crate::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string()));
     assert!(granted.source_fill_fields().contains("requester_did"));
     let runtime = ToolRuntimeContext::oneshot_with_node_did(node, "did:key:z-test-agent");
     let built = granted.build_tools(&runtime).await.unwrap();
     assert!(built
         .iter()
-        .any(|tool| tool.name() == crate::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME));
+        .any(|tool| tool.name() == crate::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME));
 
     let without_grant = AgentToolSurfaceConfig::meta_only()
         .resolve(&runtime.node, &runtime.node_did, &Default::default())
@@ -1423,7 +1423,7 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
         .unwrap();
     assert!(!without_grant
         .tool_names()
-        .contains(&crate::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string()));
+        .contains(&crate::session::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string()));
     assert!(!without_grant.source_fill_fields().contains("requester_did"));
 }
 

@@ -16,7 +16,7 @@ use crate::plugin_job::keys::{job_message_key, job_session_id, job_spawn_key};
 use crate::request::lifecycle::{
     next_request_hop, RequestHopCause, SessionMessageCause, SessionMessageTarget,
 };
-use crate::session_origin::SessionScope;
+use crate::session::origin::SessionScope;
 
 const SCRATCH_MAX_BYTES: u64 = 1_048_576;
 const SCRATCH_MAX_FILES: u32 = 32;
@@ -115,11 +115,11 @@ pub async fn interrupt_slots(
 ) -> Result<()> {
     for target in slots {
         if let Some(reason) =
-            crate::session_message::interrupt_refusal(node, caller, target).await?
+            crate::session::message::interrupt_refusal(node, caller, target).await?
         {
             anyhow::bail!(reason);
         }
-        crate::session_message::interrupt_session(node, target).await?;
+        crate::session::message::interrupt_session(node, target).await?;
     }
     Ok(())
 }
@@ -376,8 +376,8 @@ async fn stage_request(
         }
         bail!("job staging integrity error: retry key {retry_key} does not match the admitted request");
     }
-    let plan = crate::session_message::Plan::request(session_id, hop, create.clone());
-    crate::session_message::stage_planned_write_in_txn(txn, cause, &plan).await?;
+    let plan = crate::session::message::Plan::request(session_id, hop, create.clone());
+    crate::session::message::stage_planned_write_in_txn(txn, cause, &plan).await?;
     Ok(create)
 }
 
@@ -450,7 +450,7 @@ mod tests {
 
     use super::{admit_scratch, interrupt_slots, write_scratch};
     use crate::config_client::ConfigAccess;
-    use crate::session_origin::SessionScope;
+    use crate::session::origin::SessionScope;
     use gents_protocol::job::JobScratch;
 
     fn file(name: &str, content: &str) -> JobScratch {

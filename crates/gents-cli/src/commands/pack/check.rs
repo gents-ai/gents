@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use gents::pack_archive::{pack_dir, PackArchive};
+use gents::pack::archive::{pack_dir, PackArchive};
 use gents::NodeIdentity;
 use serde::Serialize;
 use serde_json::json;

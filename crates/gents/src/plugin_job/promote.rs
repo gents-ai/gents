@@ -144,7 +144,7 @@ pub async fn load_dynamic_run(
         .pin
         .ok_or_else(|| PromoteRefusal::Unreadable("the run has no job_pin".into()))?
         .ceiling_at_pin;
-    let session = crate::session_origin::load_session(
+    let session = crate::session::origin::load_session(
         access,
         &view.session_id,
         view.scope.requester_did.as_deref(),

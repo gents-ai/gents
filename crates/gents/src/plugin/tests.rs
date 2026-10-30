@@ -1,5 +1,5 @@
 use super::*;
-use crate::pack_archive::pack_dir;
+use crate::pack::archive::pack_dir;
 
 fn wat(src: &str) -> Vec<u8> {
     wat::parse_str(src).expect("WAT parses")
@@ -115,7 +115,7 @@ pub(crate) fn build_plugin_pack(
     .expect("write");
 
     let (bytes, _) = pack_dir(&root).expect("packing");
-    let pack = crate::pack_archive::PackArchive::from_bytes(&bytes).expect("reading back");
+    let pack = crate::pack::archive::PackArchive::from_bytes(&bytes).expect("reading back");
     let plugin = pack.plugin("plugin").expect("the plugin").clone();
     let afb_bytes = pack
         .plugin_artifact("plugin")

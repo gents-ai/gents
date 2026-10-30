@@ -194,7 +194,9 @@ pub async fn resume_goal_on_account<F>(
 where
     F: Fn(&str) -> Result<Vec<String>> + Sync + ?Sized,
 {
-    use crate::blocked_turn::{blocked_turn_from, stopped_request, BlockedReason, FailedCall};
+    use crate::goal::blocked_turn::{
+        blocked_turn_from, stopped_request, BlockedReason, FailedCall,
+    };
     anyhow::ensure!(
         identity.did() == node_did,
         "goal resume requires the target node's signing identity"
@@ -311,12 +313,13 @@ async fn stage_resume_inner(
 
     if let Some(target_backend_id) = required_backend {
         let references = crate::documents::ConfigReferences::load_in_txn(txn, node_did).await?;
-        let mut call = crate::blocked_turn::last_failed_call_in_txn(txn, node_did, from_request_id)
-            .await?
-            .context("resume predecessor has no failed call")?;
+        let mut call =
+            crate::goal::blocked_turn::last_failed_call_in_txn(txn, node_did, from_request_id)
+                .await?
+                .context("resume predecessor has no failed call")?;
         call.backend_id = Some(target_backend_id.to_owned());
         let agent_id = call.agent_id.as_deref().unwrap_or(parent.agent_id.as_str());
-        let profile_id = crate::blocked_turn::served_profile(&references, agent_id, &call)
+        let profile_id = crate::goal::blocked_turn::served_profile(&references, agent_id, &call)
             .context("profile that hit the limit is unavailable")?;
         let Some((_, backend)) = references.profile_with_backend(&profile_id)? else {
             anyhow::bail!("profile that hit the limit is unavailable");

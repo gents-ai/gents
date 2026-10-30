@@ -113,7 +113,7 @@ impl BackgroundCompletionObserver {
     }
 
     async fn run_reconcilers(&mut self) -> Result<()> {
-        match crate::mailbox::sweep_open_mailbox_items(
+        match crate::session::mailbox::sweep_open_mailbox_items(
             &self.node,
             &self.local_did,
             self.mailbox_cursor.as_deref(),

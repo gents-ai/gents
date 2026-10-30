@@ -1,6 +1,6 @@
 use crate::config_client::ConfigApplyTxn;
 use crate::graphql::escape_graphql_string;
-use crate::session_origin::SessionScope;
+use crate::session::origin::SessionScope;
 use crate::toolset::FileChanges;
 use anyhow::{ensure, Context, Result};
 

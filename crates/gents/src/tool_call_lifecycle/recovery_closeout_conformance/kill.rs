@@ -54,7 +54,7 @@ async fn kill_fixture(observation: &str) -> (PublishedAdmission, Option<String>)
 
 #[tokio::test]
 async fn generated_kill_cases_drive_the_session_message_kill() {
-    use crate::session_message::KillOutcome;
+    use crate::session::message::KillOutcome;
     use crate::tool_call_lifecycle::ToolCallState;
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().session_message_kill_cases;
     assert_eq!(cases.len(), 4);
@@ -64,7 +64,7 @@ async fn generated_kill_cases_drive_the_session_message_kill() {
         let did = admission.node_did.clone();
         let session_id = admission.tool.session_id().to_owned();
         let mut tool = admission.tool;
-        let outcome = crate::session_message::kill(&node, &mut tool)
+        let outcome = crate::session::message::kill(&node, &mut tool)
             .await
             .unwrap();
         let (notifications, _) = completion_obligations(&node, &session_id, &did).await;

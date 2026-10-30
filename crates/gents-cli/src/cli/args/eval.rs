@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use clap::{Subcommand, ValueEnum};
-use gents::optimization::target::JobTarget;
+use gents::eval::optimization::target::JobTarget;
 
 #[derive(clap::Args, Clone, Debug, Default)]
 pub(crate) struct EvalScopeArgs {

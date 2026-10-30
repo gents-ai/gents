@@ -154,7 +154,7 @@ async fn release_archives(
         return Ok(Vec::new());
     }
     let referenced = gents::pack::referenced_pack_digests(home, node).await?;
-    let store = gents::pack_store::PackStore::new(home);
+    let store = gents::pack::store::PackStore::new(home);
     let mut released = Vec::new();
     for digest in digests {
         if referenced.contains(digest) {

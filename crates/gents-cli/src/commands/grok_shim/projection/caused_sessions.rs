@@ -7,7 +7,7 @@ use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents::config_client::ConfigAccess;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use gents::session_origin::load_session;
+use gents::session::origin::load_session;
 use gents_protocol::row::AgentRequestRow;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -386,11 +386,11 @@ async fn cancel(
     context_window: u64,
 ) -> Result<Value> {
     if let Some(refusal) =
-        gents::session_message::interrupt_refusal(node, caller, &session.scope).await?
+        gents::session::message::interrupt_refusal(node, caller, &session.scope).await?
     {
         anyhow::bail!(refusal);
     }
-    if gents::session_message::interrupt_session(node, &session.scope)
+    if gents::session::message::interrupt_session(node, &session.scope)
         .await?
         .is_some()
     {

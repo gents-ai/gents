@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 ///
 /// The caller holds `FileLock::shared(cache_lock(root.parent()))` so prune and
 /// remove cannot delete `root` mid-write.
-pub fn materialize(pack: &crate::pack_archive::PackArchive, root: &std::path::Path) -> Result<()> {
+pub fn materialize(pack: &crate::pack::archive::PackArchive, root: &std::path::Path) -> Result<()> {
     use std::io::Write;
     for path in std::iter::once("manifest.json")
         .chain(pack.manifest().metadata.assets.iter().map(String::as_str))
@@ -175,12 +175,12 @@ pub fn cache_root(
         .join(".materialized")
         .join(namespace)
         .join(name)
-        .join(crate::pack_archive::digest_hex(digest)?))
+        .join(crate::pack::archive::digest_hex(digest)?))
 }
 
 pub fn cached(
     home: &std::path::Path,
-    pack: &crate::pack_archive::PackArchive,
+    pack: &crate::pack::archive::PackArchive,
 ) -> Result<(std::path::PathBuf, crate::file_lock::FileLock)> {
     let root = cache_root(
         home,
@@ -316,11 +316,11 @@ pub fn cache_root_disposition(
 mod tests {
     use super::*;
 
-    fn assets_archive() -> crate::pack_archive::PackArchive {
+    fn assets_archive() -> crate::pack::archive::PackArchive {
         let (_guard, dir) =
             crate::test_support::fixture_pack_copy("assets_fixture", &serde_json::json!({}));
-        let (bytes, _) = crate::pack_archive::pack_dir(&dir).unwrap();
-        crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+        let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
+        crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap()
     }
 
     #[test]

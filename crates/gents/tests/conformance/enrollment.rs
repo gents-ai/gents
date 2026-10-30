@@ -167,7 +167,7 @@ fn generated_causal_hop_cases_match_native_materializer() {
     assert!(!contract.interrupt_cases.is_empty());
     for case in &contract.interrupt_cases {
         assert_eq!(
-            gents::session_message::agent_interrupt_allowed(
+            gents::session::message::agent_interrupt_allowed(
                 &case.caller_session,
                 &case.target_session,
                 case.target_origin_cause.as_deref(),

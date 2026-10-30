@@ -10,8 +10,8 @@ use axum::{
     Json,
 };
 use base64::{display::Base64Display, engine::general_purpose::STANDARD, Engine};
+use gents::pack::archive::PackArchive;
 use gents::pack::PackKind;
-use gents::pack_archive::PackArchive;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::router::RuntimeHttpState;
@@ -22,7 +22,7 @@ use crate::commands::pack::PackSource;
 const PATH: &str = "/packs/install";
 /// The root and its dependencies share one pack's compressed bound, so a
 /// remote install never buffers more archive bytes than one maximal pack.
-pub(crate) const MAX_ARCHIVE_BYTES: usize = gents::pack_archive::MAX_PACK_BYTES;
+pub(crate) const MAX_ARCHIVE_BYTES: usize = gents::pack::archive::MAX_PACK_BYTES;
 /// Room for JSON framing and option strings beside the encoded archives.
 const MAX_FIELD_BYTES: usize = 1024 * 1024;
 pub(crate) const MAX_BODY: usize = MAX_ARCHIVE_BYTES.div_ceil(3) * 4 + MAX_FIELD_BYTES;
@@ -83,7 +83,7 @@ fn pack_archive(archive: &PackArchive) -> Result<Vec<u8>> {
     let temp = tempfile::tempdir()?;
     archive.write_to(temp.path())?;
     let mut bytes = Vec::new();
-    let header = gents::pack_archive::write_pack(temp.path(), &mut bytes)?;
+    let header = gents::pack::archive::write_pack(temp.path(), &mut bytes)?;
     anyhow::ensure!(
         header.digest == archive.digest(),
         "repacked archive digest changed"
@@ -312,7 +312,7 @@ fn ensure_exact_closure(root: &PackSource, dependencies: &[PackSource]) -> Resul
         .dependencies
         .iter()
         .map(|coordinate| {
-            let (namespace, name) = gents::pack_registry::split_pack_coordinate(coordinate);
+            let (namespace, name) = gents::pack::registry::split_pack_coordinate(coordinate);
             format!("{namespace}/{name}")
         })
         .collect::<Vec<_>>();

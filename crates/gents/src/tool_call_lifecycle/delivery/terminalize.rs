@@ -369,7 +369,7 @@ impl ToolCallLifecycle {
                             request_doc_id: request_doc_id.clone(),
                             tool_call_doc_id: doc_id.clone(),
                         };
-                        crate::application_write::apply_plugin_writes_in_txn(
+                        crate::plugin::application_write::apply_plugin_writes_in_txn(
                             txn,
                             &pending.grant,
                             &stamps,
@@ -402,7 +402,7 @@ impl ToolCallLifecycle {
                                     crate::tool_call_lifecycle::file_inventory::Metadata::Unchanged,
                                     &doc_id,
                                     &request_doc_id,
-                                    &crate::session_origin::SessionScope {
+                                    &crate::session::origin::SessionScope {
                                         node_did: node_did.clone(),
                                         session_id: session_id.clone(),
                                         requester_did: requester_did.clone(),

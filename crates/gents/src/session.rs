@@ -7,6 +7,9 @@ use crate::graphql::escape_graphql_string;
 
 mod archive;
 pub mod canonical_rows;
+pub mod mailbox;
+pub mod message;
+pub mod origin;
 pub use archive::{set_session_archived, set_session_archived_on};
 mod compaction_entries;
 mod control;

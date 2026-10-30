@@ -340,10 +340,12 @@ fn format_default_id(definition_id: &str, unix_ms: i64, random: u16) -> String {
 pub(crate) const UNCALIBRATED_BANNER: &str =
     "policy defaults are uncalibrated until an A/A calibration run has set them";
 
-pub(crate) fn load_policy(arg: &crate::cli::PolicyArg) -> Result<gents::optimization::PolicyV2> {
+pub(crate) fn load_policy(
+    arg: &crate::cli::PolicyArg,
+) -> Result<gents::eval::optimization::PolicyV2> {
     use anyhow::Context;
     match arg {
-        crate::cli::PolicyArg::Defaults => Ok(gents::optimization::PolicyV2::uncalibrated()),
+        crate::cli::PolicyArg::Defaults => Ok(gents::eval::optimization::PolicyV2::uncalibrated()),
         crate::cli::PolicyArg::File(path) => {
             let bytes = std::fs::read(path)
                 .with_context(|| format!("reading policy {}", path.display()))?;

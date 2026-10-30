@@ -6,7 +6,7 @@ impl PackInstaller {
             (1..=50).contains(&limit),
             "--limit must be between 1 and 50"
         );
-        let store = self.home.as_deref().map(crate::pack_store::PackStore::new);
+        let store = self.home.as_deref().map(crate::pack::store::PackStore::new);
         let names = match &store {
             Some(store) => store.names()?,
             None => Vec::new(),
@@ -79,8 +79,8 @@ impl PackInstaller {
     }
 
     pub(super) async fn search(&self, query: &str, page: u32) -> anyhow::Result<String> {
-        let registry = crate::pack_registry::resolve_registry_url(None);
-        let response = crate::pack_registry::RegistryClient::new(registry.clone())
+        let registry = crate::pack::registry::resolve_registry_url(None);
+        let response = crate::pack::registry::RegistryClient::new(registry.clone())
             .search(query, page)
             .await?;
         let packs = response["packs"]
@@ -161,7 +161,7 @@ impl PackInstaller {
             expected_digest: None,
         };
         self.validate(&args)?;
-        let spec = crate::pack_resolve::parse_pack_spec(package.trim())?;
+        let spec = crate::pack::resolve::parse_pack_spec(package.trim())?;
         anyhow::ensure!(
             spec.version.is_none(),
             "pack remove takes a coordinate without a version; remove {}/{}",

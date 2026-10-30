@@ -464,7 +464,7 @@ async fn fleet_snapshot_verifies_indexed_starters_once_per_evidence() {
     let load = |session_id: &'static str| {
         let access = access.clone();
         async move {
-            gents::session_origin::load_session(&access, session_id, Some(OPERATOR))
+            gents::session::origin::load_session(&access, session_id, Some(OPERATOR))
                 .await
                 .unwrap()
                 .unwrap_or_else(|| panic!("fixture session {session_id} must load"))
@@ -623,7 +623,7 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
         row["_docID"] = "physical-session".into();
         row["started_by_node_did"] = source.node_did.clone().into();
         row["started_by_session_id"] = source.session_id.clone().into();
-        let scope = gents::session_origin::SessionScope::from(&session);
+        let scope = gents::session::origin::SessionScope::from(&session);
         let candidate = |name: &str| {
             let mut row = row.clone();
             match name {
@@ -665,7 +665,7 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
             let expected = case["accepted"].as_bool().unwrap();
             let candidate = candidate(name);
             let read = SessionRead(candidate.clone(), Default::default());
-            let verified = gents::session_origin::verified_recorded_starter(&read, &scope)
+            let verified = gents::session::origin::verified_recorded_starter(&read, &scope)
                 .await
                 .unwrap();
             assert_eq!(verified.is_some(), expected, "{name}");

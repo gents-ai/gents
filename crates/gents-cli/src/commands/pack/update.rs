@@ -183,7 +183,7 @@ mod tests {
             serde_json::to_vec_pretty(&config).unwrap(),
         )
         .unwrap();
-        let (bytes, _) = gents::pack_archive::pack_dir(&root).unwrap();
+        let (bytes, _) = gents::pack::archive::pack_dir(&root).unwrap();
         let digest = {
             use sha2::Digest;
             format!("{:x}", sha2::Sha256::digest(&bytes))
