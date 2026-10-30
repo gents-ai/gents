@@ -133,7 +133,7 @@ pub(super) async fn run(case: &Value) {
         Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         AgentRequestAdmissionRecord::local_self(identity.did()),
     );
-    initial.input = crate::lifecycle::prepare_user_message_input(
+    initial.input = crate::request::lifecycle::prepare_user_message_input(
         &access,
         identity.did(),
         SESSION,

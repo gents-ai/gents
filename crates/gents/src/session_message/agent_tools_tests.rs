@@ -21,18 +21,20 @@ pub(super) async fn started(
     .await
     .unwrap();
     let node = message.admission.node.clone();
-    let caller = crate::request_binding::load_agent_request_by_doc_id(
+    let caller = crate::request::binding::load_agent_request_by_doc_id(
         &node,
         message.admission.tool.request_doc_id().unwrap(),
     )
     .await
     .unwrap()
     .unwrap();
-    let caused =
-        crate::request_binding::load_agent_request_by_doc_id(&node, &message.caused_request_doc_id)
-            .await
-            .unwrap()
-            .unwrap();
+    let caused = crate::request::binding::load_agent_request_by_doc_id(
+        &node,
+        &message.caused_request_doc_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     materialize_session(&node, &caused).await;
     (message, caller, caused)
 }
@@ -59,7 +61,7 @@ async fn materialize_session_at(
                 &caused.agent_id,
                 caused.requester_did.as_deref(),
                 None,
-                crate::lifecycle::materialize::created_session_provenance(&caused),
+                crate::request::lifecycle::materialize::created_session_provenance(&caused),
                 &created_at,
             )
             .await
@@ -132,7 +134,7 @@ async fn steer_reachability_matches_lean() {
                 }
             })
             .collect();
-        let actual = crate::lifecycle::queue::steer_reachable(
+        let actual = crate::request::lifecycle::queue::steer_reachable(
             &head,
             rows,
             &case.target.to_string(),
@@ -363,7 +365,7 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
         })
         .await
         .expect("compatible steer is published");
-    let row = crate::request_binding::load_agent_request_by_doc_id(&node, &receipt.doc_id)
+    let row = crate::request::binding::load_agent_request_by_doc_id(&node, &receipt.doc_id)
         .await
         .unwrap()
         .unwrap();
@@ -378,7 +380,8 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
         "test.steer.predecessor_order",
         move |txn| {
             Box::pin(async move {
-                crate::lifecycle::queue::pending_rows_in_txn(txn, node_did, session_id).await
+                crate::request::lifecycle::queue::pending_rows_in_txn(txn, node_did, session_id)
+                    .await
             })
         },
     )
@@ -424,18 +427,25 @@ async fn explicit_steer_checks_the_physical_head_at_publication() {
             head.request_id = "a-later-turn".to_owned();
         }
         assert_eq!(
-            crate::lifecycle::queue::steering_compatible(&head, candidate, chrono::Utc::now()),
+            crate::request::lifecycle::queue::steering_compatible(
+                &head,
+                candidate,
+                chrono::Utc::now()
+            ),
             case["expected"].as_bool().unwrap(),
             "{case}"
         );
     }
     for (name, head) in contexts {
-        let disposition =
-            if crate::lifecycle::queue::steering_compatible(&head, candidate, chrono::Utc::now()) {
-                "steer"
-            } else {
-                "refuse"
-            };
+        let disposition = if crate::request::lifecycle::queue::steering_compatible(
+            &head,
+            candidate,
+            chrono::Utc::now(),
+        ) {
+            "steer"
+        } else {
+            "refuse"
+        };
         assert_eq!(disposition, modeled.expected, "{name}");
     }
     node.shutdown().await;
@@ -479,18 +489,20 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
     .await
     .unwrap();
     let node = message.admission.node.clone();
-    let caller = crate::request_binding::load_agent_request_by_doc_id(
+    let caller = crate::request::binding::load_agent_request_by_doc_id(
         &node,
         message.admission.tool.request_doc_id().unwrap(),
     )
     .await
     .unwrap()
     .unwrap();
-    let caused =
-        crate::request_binding::load_agent_request_by_doc_id(&node, &message.caused_request_doc_id)
-            .await
-            .unwrap()
-            .unwrap();
+    let caused = crate::request::binding::load_agent_request_by_doc_id(
+        &node,
+        &message.caused_request_doc_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let access = ConfigAccess::local(node.clone());
     let call_doc = message.admission.tool.doc_id().unwrap();
     let set_name = |name: &str| {
@@ -729,7 +741,7 @@ async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() 
     let query = format!(
         "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
         escape_graphql_string(&receipt.request_doc_id),
-        crate::watcher::AGENT_REQUEST_FIELDS
+        crate::request::watcher::AGENT_REQUEST_FIELDS
     );
     let response = ConfigAccess::local(target.clone())
         .execute(&query)
@@ -737,7 +749,7 @@ async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() 
         .unwrap();
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
-    let mut child = crate::lifecycle::RequestLifecycle::new_with_node_did(
+    let mut child = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         target.clone(),
         "general",
         target_identity.did(),
@@ -746,7 +758,7 @@ async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() 
     );
     assert_eq!(
         child.claim().await.unwrap(),
-        crate::lifecycle::ClaimOutcome::Claimed
+        crate::request::lifecycle::ClaimOutcome::Claimed
     );
     let caller = SessionScope::of_request(owner.request());
     let child_scope = SessionScope::of_request(child.request());
@@ -959,13 +971,15 @@ async fn interrupt_stops_the_turn_and_the_steer_is_a_new_request() {
         interrupt_session(&node, &scope).await.unwrap(),
         Some(caused.request_id.clone())
     );
-    assert!(crate::interrupt::fetch_interrupt_requested_at_by_doc_id(
-        &node,
-        &message.caused_request_doc_id
-    )
-    .await
-    .unwrap()
-    .is_some());
+    assert!(
+        crate::request::interrupt::fetch_interrupt_requested_at_by_doc_id(
+            &node,
+            &message.caused_request_doc_id
+        )
+        .await
+        .unwrap()
+        .is_some()
+    );
     node.shutdown().await;
     std::fs::remove_dir_all(&message.admission.path).unwrap();
 }
@@ -1241,11 +1255,13 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
         .unwrap();
     let caller = caller_owner.request().clone();
     let node = message.admission.node.clone();
-    let caused =
-        crate::request_binding::load_agent_request_by_doc_id(&node, &message.caused_request_doc_id)
-            .await
-            .unwrap()
-            .unwrap();
+    let caused = crate::request::binding::load_agent_request_by_doc_id(
+        &node,
+        &message.caused_request_doc_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
     materialize_session(&node, &caused).await;
     let tools = AgentToolConfig {
         enabled: true,
@@ -1359,7 +1375,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
         )
         .await
         .unwrap();
-    let cause = crate::lifecycle::SessionMessageCause {
+    let cause = crate::request::lifecycle::SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
         caller_agent_id: "caller-agent".to_owned(),
         caller_session_id: "caller-session".to_owned(),
@@ -1391,7 +1407,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
         .unwrap();
     assert_eq!(delivered.session_id, "correlated-worker");
     assert_eq!(delivered.delivery.as_deref(), Some("queue"));
-    let writer = crate::streaming::DefraStreamWriter::new(
+    let writer = crate::request::streaming::DefraStreamWriter::new(
         node.clone(),
         &caller.node_did,
         std::time::Duration::ZERO,
@@ -1399,7 +1415,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
     worker.begin_owned_execution(&writer).await.unwrap();
     worker
         .terminalize_owned(
-            crate::lifecycle::RequestTerminalOutcome::Interrupted,
+            crate::request::lifecycle::RequestTerminalOutcome::Interrupted,
             gents_protocol::output::TerminalOutput::NoMessage,
             None,
         )
@@ -1421,13 +1437,13 @@ async fn caused_session_records_its_opening_request() {
         .execute(&format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
             escape_graphql_string(&caused.doc_id),
-            crate::request_admission::SIGNED_REQUEST_FIELDS,
+            crate::request::admission::SIGNED_REQUEST_FIELDS,
         ))
         .await
         .unwrap();
     let mut signed: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(signed["data"]["AgentRequest"][0].clone()).unwrap();
-    crate::request_admission::verify_request_receipt_signature(&signed).unwrap();
+    crate::request::admission::verify_request_receipt_signature(&signed).unwrap();
     signed
         .input
         .as_mut()
@@ -1436,7 +1452,7 @@ async fn caused_session_records_its_opening_request() {
         .as_mut()
         .unwrap()
         .session_id = "forged".into();
-    assert!(crate::request_admission::verify_request_receipt_signature(&signed).is_err());
+    assert!(crate::request::admission::verify_request_receipt_signature(&signed).is_err());
     let provenance = || async {
         crate::session_origin::load_session(
             &access,
@@ -1479,17 +1495,19 @@ async fn caused_session_records_its_opening_request() {
     let mut without_call = caused.clone();
     without_call.caused_by_parent_tool_call_doc_id = None;
     assert_eq!(
-        crate::lifecycle::materialize::created_session_provenance(&without_call)
+        crate::request::lifecycle::materialize::created_session_provenance(&without_call)
             .unwrap()
             .opening_request_doc_id,
         None
     );
     without_call.caused_by_parent_request_doc_id = None;
-    assert!(crate::lifecycle::materialize::created_session_provenance(&without_call).is_none());
+    assert!(
+        crate::request::lifecycle::materialize::created_session_provenance(&without_call).is_none()
+    );
     without_call.caused_by_trigger_id = Some("task-trigger".to_owned());
     without_call.caused_by_trigger_kind = Some("event".to_owned());
     assert_eq!(
-        crate::lifecycle::materialize::created_session_provenance(&without_call)
+        crate::request::lifecycle::materialize::created_session_provenance(&without_call)
             .unwrap()
             .opening_request_doc_id
             .as_deref(),

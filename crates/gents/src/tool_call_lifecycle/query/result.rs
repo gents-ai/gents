@@ -473,7 +473,7 @@ async fn load_tool_call_read_source(
     };
     let header = &row.message;
     anyhow::ensure!(
-        crate::lifecycle::is_exact_invocation_reply(
+        crate::request::lifecycle::is_exact_invocation_reply(
             header,
             &expected_request_doc_id,
             session_id,

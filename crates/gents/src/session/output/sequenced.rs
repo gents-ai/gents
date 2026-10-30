@@ -30,7 +30,7 @@ pub(super) fn is_current_admission_input(
         }) || header.message_key.starts_with(
             &super::super::canonical_rows::authored_message_key(
                 request_doc_id,
-                &crate::lifecycle::queue::folded_input_key(""),
+                &crate::request::lifecycle::queue::folded_input_key(""),
             ),
         ))
 }

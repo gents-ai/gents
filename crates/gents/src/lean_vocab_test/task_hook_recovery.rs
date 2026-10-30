@@ -7,12 +7,12 @@ use crate::hook::BackgroundExecutionRegistry;
 use crate::lean_vocab_test::{
     lean_recovery_sweep_cases, lean_task_hook_recovery_cases, LeanCommandResult, LeanTaskHook,
 };
-use crate::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
-use crate::store::identity::{KeyIdentity, NodeIdentity};
-use crate::task_hooks::{
+use crate::request::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
+use crate::request::task_hooks::{
     recover_task_hook_records, HookCommandResult, RecordedHookAttempt, TaskHookRecord,
     TaskHookRecordStore,
 };
+use crate::store::identity::{KeyIdentity, NodeIdentity};
 
 const AGENT_ID: &str = "general";
 
@@ -110,8 +110,11 @@ impl Fixture {
     async fn abandoned_request(&self, interrupt_requested: bool) -> String {
         let claim_started = std::time::Instant::now();
         let mut lifecycle = self.claimed(Duration::from_secs(60)).await;
-        let writer =
-            crate::streaming::DefraStreamWriter::new(self.node.clone(), self.did(), Duration::ZERO);
+        let writer = crate::request::streaming::DefraStreamWriter::new(
+            self.node.clone(),
+            self.did(),
+            Duration::ZERO,
+        );
         if let Err(begin_error) = lifecycle.begin_owned_execution(&writer).await {
             let expected_generation = lifecycle
                 .execution_generation()
@@ -129,7 +132,7 @@ impl Fixture {
         }
         let doc_id = lifecycle.request().doc_id.clone();
         if interrupt_requested {
-            crate::interrupt::interrupt_request_by_doc_id(
+            crate::request::interrupt::interrupt_request_by_doc_id(
                 &self.node,
                 &doc_id,
                 self.did(),

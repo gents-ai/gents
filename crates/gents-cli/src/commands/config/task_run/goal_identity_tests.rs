@@ -54,7 +54,7 @@ async fn signed_request(
         gents::RequestSpec {
             input,
             retry_key: Some(fire.fire_key.clone()),
-            trigger_lineage: gents::lifecycle::TriggerLineage {
+            trigger_lineage: gents::request::lifecycle::TriggerLineage {
                 trigger_kind: Some("manual".into()),
                 ..Default::default()
             },
@@ -67,7 +67,7 @@ async fn signed_request(
                     agent_id: "engineer".into(),
                     session_id: fire.session_id.clone(),
                     content: "Task work".into(),
-                    execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
+                    execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
                     created_at: NOW.into(),
                 },
                 gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
@@ -167,7 +167,8 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
         let input = crate::request_helpers::goal_input_tests::authored_input();
         let request = signed_request(&signer, &fire, input.clone()).await?;
         assert_eq!(request.input, input);
-        let admitted = gents::lifecycle::write_task_delivery(&access, &fire, true, &request).await;
+        let admitted =
+            gents::request::lifecycle::write_task_delivery(&access, &fire, true, &request).await;
         assert_eq!(
             admitted.is_ok(),
             case["task_binding_valid"] == true,
@@ -217,7 +218,8 @@ async fn generated_manual_task_identity_is_frozen_before_signed_admission() -> R
                 let retry = signed_request(&signer, &fire, retained).await?;
                 assert_eq!(retry.admission.signature, request.admission.signature);
                 let replay =
-                    gents::lifecycle::write_task_delivery(&access, &fire, true, &retry).await?;
+                    gents::request::lifecycle::write_task_delivery(&access, &fire, true, &retry)
+                        .await?;
                 assert!(replay.duplicate);
                 assert_eq!(Some(replay.request.doc_id), row.doc_id);
                 let persisted = access

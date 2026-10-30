@@ -113,9 +113,9 @@ async fn generated_request_closures_use_exact_database_dependencies() {
                 "superseded_by_request":format!("request-{owner_request}"),
                 "superseded_by_request_doc_id":docs.get(&owner).cloned().unwrap_or_else(|| missing_doc.clone()),
                 "failure_reason":if row["folded_into"].is_number() {
-                    gents::lifecycle::FOLDED_REASON
+                    gents::request::lifecycle::FOLDED_REASON
                 } else {
-                    gents::lifecycle::REPLACED_REASON
+                    gents::request::lifecycle::REPLACED_REASON
                 },
             }))
             .unwrap();
@@ -220,7 +220,7 @@ async fn independent_scopes_share_bounded_query_batches() {
             ),
             superseded_by_request: Some("owner".into()),
             superseded_by_request_doc_id: Some(format!("owner-{index}")),
-            failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+            failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
             ..Default::default()
         })
         .collect::<Vec<_>>();
@@ -326,7 +326,7 @@ async fn malformed_dependency_row_does_not_become_missing_owner() {
         lifecycle_state: Some(gents_protocol::request_lifecycle::RequestLifecycleState::Superseded),
         superseded_by_request: Some("owner".into()),
         superseded_by_request_doc_id: Some("owner-doc".into()),
-        failure_reason: Some(gents::lifecycle::FOLDED_REASON.into()),
+        failure_reason: Some(gents::request::lifecycle::FOLDED_REASON.into()),
         ..Default::default()
     }];
     let error = close_request_rows_with(seeds, |_| {

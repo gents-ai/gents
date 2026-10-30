@@ -101,7 +101,7 @@ impl Fixture {
                 content: "corrected content".into(),
             }],
         };
-        let replacements = crate::lifecycle::queue::prepare_pending_user_edit(
+        let replacements = crate::request::lifecycle::queue::prepare_pending_user_edit(
             &ConfigAccess::local(self.node.clone()),
             self.identity.as_ref(),
             AgentRequestAdmissionRecord::local_self(self.identity.did()),
@@ -159,7 +159,7 @@ struct ModeledQueue {
     request_ids: RapidHashMap<u64, String>,
     doc_ids: RapidHashMap<u64, String>,
     commands: RapidHashMap<(u64, u64), (String, SessionInputEdit)>,
-    active: Option<crate::lifecycle::RequestLifecycle>,
+    active: Option<crate::request::lifecycle::RequestLifecycle>,
     anchor: DateTime<Utc>,
     nows: Vec<u64>,
 }
@@ -224,14 +224,14 @@ impl ModeledQueue {
             queue.doc_ids.insert(entry.request_id, doc);
         }
         if let Some(active) = state.active {
-            let request = crate::request_binding::load_agent_request_by_doc_id(
+            let request = crate::request::binding::load_agent_request_by_doc_id(
                 &queue.fixture.node,
                 &queue.doc_ids[&active],
             )
             .await
             .unwrap()
             .unwrap();
-            let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
+            let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
                 queue.fixture.node.clone(),
                 "general",
                 &did,
@@ -247,7 +247,7 @@ impl ModeledQueue {
             );
             assert_eq!(
                 lifecycle.claim().await.unwrap(),
-                crate::lifecycle::ClaimOutcome::Claimed
+                crate::request::lifecycle::ClaimOutcome::Claimed
             );
             queue.active = Some(lifecycle);
         }
@@ -312,7 +312,7 @@ impl ModeledQueue {
             .unwrap();
             &foreign
         };
-        let pending = crate::lifecycle::pending_user_queue(
+        let pending = crate::request::lifecycle::pending_user_queue(
             &ConfigAccess::local(self.fixture.node.clone()),
             self.fixture.identity.did(),
             SESSION,
@@ -344,7 +344,7 @@ impl ModeledQueue {
                 .collect(),
             selected_request_doc_ids: selected,
         };
-        let mut replacements = crate::lifecycle::queue::prepare_pending_user_edit(
+        let mut replacements = crate::request::lifecycle::queue::prepare_pending_user_edit(
             &ConfigAccess::local(self.fixture.node.clone()),
             self.fixture.identity.as_ref(),
             AgentRequestAdmissionRecord::local_self(self.fixture.identity.did()),

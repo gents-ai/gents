@@ -115,7 +115,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
             node_did.clone(),
         ),
         slot_generation: 1,
-        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
+        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -529,7 +529,7 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
             node_did.clone(),
         ),
         slot_generation: 1,
-        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
+        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -730,7 +730,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
             node_did.clone(),
         ),
         slot_generation: 1,
-        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
+        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -826,7 +826,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
                             "recovery must not steal a silently renewing owner"
                         );
                         observed_renewal = true;
-                        crate::interrupt::interrupt_request_by_doc_id(
+                        crate::request::interrupt::interrupt_request_by_doc_id(
                             &node,
                             &request_doc_id,
                             &node_did,
@@ -974,7 +974,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
             node_did.clone(),
         ),
         slot_generation: 1,
-        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
+        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -1059,7 +1059,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
     .await
     .expect("accepted tool should block after its running state commits");
 
-    crate::interrupt::interrupt_request_by_doc_id(
+    crate::request::interrupt::interrupt_request_by_doc_id(
         &node,
         &request_doc_id,
         &node_did,
@@ -1182,7 +1182,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
             node_did.clone(),
         ),
         slot_generation: 1,
-        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
+        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -1322,7 +1322,7 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
             node_did.clone(),
         ),
         slot_generation: 1,
-        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
+        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,

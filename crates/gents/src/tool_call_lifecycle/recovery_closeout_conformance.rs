@@ -209,7 +209,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                         .execute(&format!(
                             r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}) {{{}}}}}"#,
                             crate::graphql::escape_graphql_string(&message.caused_request_doc_id),
-                            crate::request_admission::SIGNED_REQUEST_FIELDS,
+                            crate::request::admission::SIGNED_REQUEST_FIELDS,
                         ))
                         .await
                         .unwrap();

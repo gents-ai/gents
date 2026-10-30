@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents::config_client::ConfigAccess;
-use gents::lifecycle::TriggerLineage;
+use gents::request::lifecycle::TriggerLineage;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -180,7 +180,8 @@ pub async fn submit_task_request(
         Some(&fire.request_id),
     )
     .await?;
-    let admitted = gents::lifecycle::write_task_delivery(access, fire, false, &create).await?;
+    let admitted =
+        gents::request::lifecycle::write_task_delivery(access, fire, false, &create).await?;
     Ok(SubmittedRequest {
         request_id: admitted.request.request_id,
         session_id: admitted.request.session_id,

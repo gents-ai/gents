@@ -135,7 +135,7 @@ pub async fn await_terminal_with(
         hook.on_tick(elapsed).await;
         if !interrupted_on_deadline && deadline.is_some_and(|deadline| elapsed >= deadline) {
             hook.on_interrupt_requested().await;
-            crate::interrupt::interrupt_request(node, request_id)
+            crate::request::interrupt::interrupt_request(node, request_id)
                 .await
                 .context("interrupt request after evaluation deadline")?;
             interrupted_on_deadline = true;
@@ -456,7 +456,7 @@ mod tests {
         )))
         .unwrap();
         assert_eq!(cases.len(), 656);
-        let native_ownership_loss = crate::lifecycle::ExecutionOwnershipLost.to_string();
+        let native_ownership_loss = crate::request::lifecycle::ExecutionOwnershipLost.to_string();
         assert!(cases.iter().any(|case| {
             case.request_reason.as_deref() == Some(native_ownership_loss.as_str())
                 && case.outcome.as_deref() == Some("infrastructure")
@@ -557,8 +557,8 @@ mod tests {
 
     #[tokio::test]
     async fn request_evidence_maps_every_source_it_reads() {
-        use crate::lifecycle::RequestTerminalOutcome;
-        use crate::streaming::DefraStreamWriter;
+        use crate::request::lifecycle::RequestTerminalOutcome;
+        use crate::request::streaming::DefraStreamWriter;
         use crate::tool_call_lifecycle::admission_fixture::{
             claimed_signed_request, publish_accepted_on_claimed_request,
         };

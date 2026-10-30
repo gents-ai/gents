@@ -158,7 +158,7 @@ async fn generated_goal_starts_commit_the_session_goal_and_first_request_togethe
             time(case.requested["created_at"].as_u64().unwrap()),
             AgentRequestAdmissionRecord::local_self(identity.did()),
         );
-        initial.input = crate::lifecycle::prepare_user_message_input(
+        initial.input = crate::request::lifecycle::prepare_user_message_input(
             &access,
             identity.did(),
             SESSION,

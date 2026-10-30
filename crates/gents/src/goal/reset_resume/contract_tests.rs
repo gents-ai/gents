@@ -1,6 +1,6 @@
 use super::support::*;
 use super::*;
-use crate::lifecycle::queue::goal_continuation_identity;
+use crate::request::lifecycle::queue::goal_continuation_identity;
 use gents_loop::provider_limit::{
     classify_provider_limit, persisted_failure_reason, ProviderLimit, ProviderLimitHeaders,
 };

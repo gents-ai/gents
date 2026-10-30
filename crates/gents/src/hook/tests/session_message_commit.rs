@@ -180,7 +180,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
         "session_message.commit_request",
     )
     .await;
-    let caused_row = crate::request_binding::load_agent_request_by_doc_id(
+    let caused_row = crate::request::binding::load_agent_request_by_doc_id(
         &node,
         caused["_docID"].as_str().unwrap(),
     )
@@ -271,9 +271,9 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
         |txn| {
             let did = &did;
             let session_id = &caused_row.session_id;
-            Box::pin(
-                async move { crate::lifecycle::queue::pending_in_txn(txn, did, session_id).await },
-            )
+            Box::pin(async move {
+                crate::request::lifecycle::queue::pending_in_txn(txn, did, session_id).await
+            })
         },
     )
     .await

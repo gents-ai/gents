@@ -111,7 +111,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         crate::KeyIdentity::load_or_create(message.admission.path.join("test-agent.key"), None)
             .unwrap(),
     );
-    let verifier = crate::request_admission::AgentRequestAdmissionVerifier::new(
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         identity,
         crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -135,7 +135,7 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
         let node = node.clone();
         let verifier = &verifier;
         async move {
-            let request = crate::request_binding::load_agent_request_by_doc_id(&node, &doc_id)
+            let request = crate::request::binding::load_agent_request_by_doc_id(&node, &doc_id)
                 .await
                 .unwrap()
                 .unwrap();
@@ -179,31 +179,32 @@ async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
     let wakes = pending_wakes(node.clone(), session_id.clone()).await;
     assert_eq!(wakes.len(), 1);
 
-    let caller = crate::request_binding::load_agent_request_by_doc_id(&node, &caller_doc_id)
+    let caller = crate::request::binding::load_agent_request_by_doc_id(&node, &caller_doc_id)
         .await
         .unwrap()
         .unwrap();
-    let native = crate::lifecycle::queue::persist_background_completion_with_message_waking(
-        &node,
-        &caller,
-        "process done",
-        "background-completion-notification:process:tool",
-        crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
-        crate::lifecycle::queue::RequestQueue {
-            delivery: Default::default(),
-            position: None,
-            source: crate::lifecycle::queue::QueueSource::BackgroundCompletion,
-            policy: crate::lifecycle::queue::QueuePolicy::Coalesce,
-            key: Some(format!("background_completion:{session_id}")),
-            queued_after_request_id: Some(caller.request_id.clone()),
-            interrupted_request_id: None,
-            background_completion_wake_version: None,
-        },
-        None,
-        crate::lifecycle::RequestHopCause::Continuation,
-    )
-    .await
-    .unwrap();
+    let native =
+        crate::request::lifecycle::queue::persist_background_completion_with_message_waking(
+            &node,
+            &caller,
+            "process done",
+            "background-completion-notification:process:tool",
+            crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+            crate::request::lifecycle::queue::RequestQueue {
+                delivery: Default::default(),
+                position: None,
+                source: crate::request::lifecycle::queue::QueueSource::BackgroundCompletion,
+                policy: crate::request::lifecycle::queue::QueuePolicy::Coalesce,
+                key: Some(format!("background_completion:{session_id}")),
+                queued_after_request_id: Some(caller.request_id.clone()),
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            },
+            None,
+            crate::request::lifecycle::RequestHopCause::Continuation,
+        )
+        .await
+        .unwrap();
     assert!(!native.created_request);
     assert_eq!(pending_wakes(node.clone(), session_id.clone()).await, wakes);
     crate::test_support::install_test_agent(&node, &did, &caller.agent_id).await;
@@ -230,7 +231,7 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     let did = message.admission.node_did.clone();
     let session_id = message.admission.tool.session_id().to_owned();
     let caller_doc_id = message.admission.tool.request_doc_id().unwrap().to_owned();
-    let caller = crate::request_binding::load_agent_request_by_doc_id(&node, &caller_doc_id)
+    let caller = crate::request::binding::load_agent_request_by_doc_id(&node, &caller_doc_id)
         .await
         .unwrap()
         .unwrap();
@@ -262,7 +263,7 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
         .unwrap()
         .clone();
     assert_eq!(wakes.len(), 1, "{wakes:?}");
-    let wake = crate::request_binding::load_agent_request_by_doc_id(
+    let wake = crate::request::binding::load_agent_request_by_doc_id(
         &node,
         wakes[0]["_docID"].as_str().unwrap(),
     )
@@ -273,7 +274,7 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     assert_eq!(wake.request_hop, caller.request_hop);
     calling
         .terminalize_owned(
-            crate::lifecycle::RequestTerminalOutcome::Completed,
+            crate::request::lifecycle::RequestTerminalOutcome::Completed,
             gents_protocol::output::TerminalOutput::Message {
                 message_doc_id: message
                     .admission
@@ -292,7 +293,7 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
         crate::KeyIdentity::load_or_create(message.admission.path.join("test-agent.key"), None)
             .unwrap(),
     );
-    let verifier = crate::request_admission::AgentRequestAdmissionVerifier::new(
+    let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         identity,
         crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -314,7 +315,7 @@ async fn a_paired_client_session_receives_its_agent_new_result() {
     );
     assert_eq!(
         lifecycle.claim_with_identity().await.unwrap(),
-        crate::lifecycle::ClaimOutcome::Claimed
+        crate::request::lifecycle::ClaimOutcome::Claimed
     );
     crate::hook::DefraSessionHook::resume_with_identity_policy(
         node.clone(),

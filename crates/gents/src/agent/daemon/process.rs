@@ -11,12 +11,12 @@ use super::{
 };
 use crate::agent::worker_capacity::{RequestGuard, WorkerTicket};
 use crate::inference::llm::rig_compat::ProviderModel;
-use crate::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome};
+use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome};
+use crate::request::streaming::DefraStreamWriter;
+use crate::request::watcher::AgentRequest;
 use crate::runtime_trace::{
     record_current_claim_outcome, record_current_failure_class, record_current_request_outcome,
 };
-use crate::streaming::DefraStreamWriter;
-use crate::watcher::AgentRequest;
 
 impl<M> AgentDaemon<M>
 where
@@ -63,9 +63,10 @@ where
         else {
             return Ok(());
         };
-        let execution_origin =
-            crate::lifecycle::ExecutionOrigin::from_persisted(request.execution_origin.as_deref())
-                .expect("fresh request admission requires a canonical execution_origin");
+        let execution_origin = crate::request::lifecycle::ExecutionOrigin::from_persisted(
+            request.execution_origin.as_deref(),
+        )
+        .expect("fresh request admission requires a canonical execution_origin");
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             self.node.clone(),
             &self.agent_config.agent_id,
@@ -162,7 +163,8 @@ where
             }
             Err(error) => {
                 record_current_claim_outcome("error");
-                let deterministic_rejection = crate::lifecycle::is_claim_admission_error(&error);
+                let deterministic_rejection =
+                    crate::request::lifecycle::is_claim_admission_error(&error);
                 record_current_request_outcome(if deterministic_rejection {
                     "admission_rejected"
                 } else {
@@ -200,9 +202,9 @@ where
         }
 
         let (interrupt_tx, mut interrupt_rx) =
-            tokio::sync::watch::channel::<Option<crate::interrupt::InterruptIntent>>(None);
+            tokio::sync::watch::channel::<Option<crate::request::interrupt::InterruptIntent>>(None);
         let observer = tokio_util::task::AbortOnDropHandle::new(
-            crate::interrupt::spawn_request_interrupt_observer(
+            crate::request::interrupt::spawn_request_interrupt_observer(
                 self.node.clone(),
                 request.doc_id.clone(),
                 interrupt_tx,
@@ -355,7 +357,7 @@ where
         lifecycle.allow_natural_finish(permits_natural_finish(&request, task_owned));
 
         let ownership_lost = lifecycle.ownership_lost();
-        let hook_cancellation = crate::task_hooks::TaskHookCancellation::default();
+        let hook_cancellation = crate::request::task_hooks::TaskHookCancellation::default();
         let hook_cancellation_follower = (!hooks.is_empty()).then(|| {
             hook_cancellation.follow(
                 interrupt_rx.clone(),
@@ -363,22 +365,23 @@ where
                 ownership_lost.clone(),
             )
         });
-        let hook_exec = crate::task_hooks::ManagedTaskHookExec::new(hook_cwd, hook_cancellation)
-            .with_record(hook_record.clone())
-            .with_execution_lease(
-                self.node.clone(),
-                request.doc_id.clone(),
-                crate::lifecycle::RequestExecutionLease::new(
-                    lifecycle.execution_generation()?.to_owned(),
-                ),
-            );
+        let hook_exec =
+            crate::request::task_hooks::ManagedTaskHookExec::new(hook_cwd, hook_cancellation)
+                .with_record(hook_record.clone())
+                .with_execution_lease(
+                    self.node.clone(),
+                    request.doc_id.clone(),
+                    crate::request::lifecycle::RequestExecutionLease::new(
+                        lifecycle.execution_generation()?.to_owned(),
+                    ),
+                );
 
         let mut owned_work = None;
-        let run = crate::task_hooks::run_task_hooks(&hooks, &hook_exec, || async {
+        let run = crate::request::task_hooks::run_task_hooks(&hooks, &hook_exec, || async {
             if let Some(record) = &hook_record {
                 if let Err(error) = record.work_started().await {
                     let outcome = OwnedWorkOutcome::observed(
-                        crate::task_hooks::TaskAgentResult::Failure,
+                        crate::request::task_hooks::TaskAgentResult::Failure,
                         Some(format!("could not record task hook state: {error}")),
                         true,
                     );
@@ -434,8 +437,8 @@ where
 
         let final_outcome = run.final_outcome();
         let mut reason = match &final_outcome {
-            crate::task_hooks::TaskHookOutcome::Failure(
-                crate::task_hooks::HookPrimaryError::Hook(hook_id),
+            crate::request::task_hooks::TaskHookOutcome::Failure(
+                crate::request::task_hooks::HookPrimaryError::Hook(hook_id),
             ) => Some(run.hook_failure_reason(hook_id)),
             _ => work_reason,
         };
@@ -453,7 +456,7 @@ where
 
         let terminal = final_outcome.terminal_outcome();
         match final_outcome {
-            crate::task_hooks::TaskHookOutcome::Success => {
+            crate::request::task_hooks::TaskHookOutcome::Success => {
                 if skipped_before_work {
                     if let Err(error) = lifecycle.begin_owned_execution(&stream_writer).await {
                         self.finalize_failure_before_work(
@@ -485,7 +488,7 @@ where
                     }
                 }
             }
-            crate::task_hooks::TaskHookOutcome::Failure(_) => {
+            crate::request::task_hooks::TaskHookOutcome::Failure(_) => {
                 let reason = reason.unwrap_or_else(|| "request failed".to_string());
                 if finalize_request_failure(
                     &mut lifecycle,
@@ -499,7 +502,7 @@ where
                     self.release_failed_writer_binding(&request).await;
                 }
             }
-            crate::task_hooks::TaskHookOutcome::Interrupted => {
+            crate::request::task_hooks::TaskHookOutcome::Interrupted => {
                 record_current_request_outcome("interrupted");
                 let reason = reason.unwrap_or_else(|| "interrupted".to_string());
                 match terminalize_request(&mut lifecycle, &stream_writer, terminal, Some(&reason))

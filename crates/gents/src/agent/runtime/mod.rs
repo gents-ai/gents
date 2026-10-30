@@ -8,7 +8,7 @@ pub(in crate::agent) use router::default_hostname;
 pub(super) use startup::run_agent;
 
 #[cfg(test)]
-use crate::watcher::Watcher;
+use crate::request::watcher::Watcher;
 #[cfg(test)]
 use control_watcher::{
     run_control_watcher_with_timing, subscribe_control_changes, ControlWatcherInputs,

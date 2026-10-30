@@ -213,7 +213,7 @@ async fn generated_repeated_tool_failure_cases_drive_owned_loop() {
         if ending == Some("repeatedFailure") {
             lifecycle
                 .terminalize_owned(
-                    crate::lifecycle::RequestTerminalOutcome::Failed,
+                    crate::request::lifecycle::RequestTerminalOutcome::Failed,
                     writer.terminal_output(&lifecycle.request().doc_id).await,
                     error,
                 )

@@ -130,14 +130,14 @@ async fn claim_request_fixture(
 ) {
     let access = ConfigAccess::local(node.clone());
     let response = access.execute(&format!(r#"{{AgentRequest(filter: {{request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{{}}}}}"#,
-        crate::graphql::escape_graphql_string(request_id), crate::graphql::escape_graphql_string(session), crate::request_admission::SIGNED_REQUEST_FIELDS)).await.unwrap();
+        crate::graphql::escape_graphql_string(request_id), crate::graphql::escape_graphql_string(session), crate::request::admission::SIGNED_REQUEST_FIELDS)).await.unwrap();
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(response["data"]["AgentRequest"][0].clone()).unwrap();
     assert_eq!(
         crate::verify_request_receipt_signature(&row).is_ok(),
         signature_valid
     );
-    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
+    let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
         identity_owner(hook),
@@ -146,9 +146,9 @@ async fn claim_request_fixture(
     );
     assert_eq!(
         lifecycle.claim().await.unwrap(),
-        crate::lifecycle::ClaimOutcome::Claimed
+        crate::request::lifecycle::ClaimOutcome::Claimed
     );
-    let writer = crate::streaming::DefraStreamWriter::new(
+    let writer = crate::request::streaming::DefraStreamWriter::new(
         node.clone(),
         identity_owner(hook),
         std::time::Duration::ZERO,

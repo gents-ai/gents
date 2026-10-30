@@ -5,10 +5,10 @@ use anyhow::Result;
 use super::terminal::request_failure_reason;
 use super::{AgentDaemon, HandleRequestOutcome, RequestInterruptionSource, ShutdownDrainFailure};
 use crate::inference::llm::rig_compat::ProviderModel;
-use crate::lifecycle::RequestLifecycle;
+use crate::request::lifecycle::RequestLifecycle;
+use crate::request::streaming::DefraStreamWriter;
+use crate::request::watcher::AgentRequest;
 use crate::runtime_trace::{record_current_failure_class, record_current_request_outcome};
-use crate::streaming::DefraStreamWriter;
-use crate::watcher::AgentRequest;
 
 impl<M> AgentDaemon<M>
 where
@@ -20,11 +20,12 @@ where
     ) -> Result<(
         Vec<crate::documents::TaskHook>,
         PathBuf,
-        Option<crate::task_hooks::TaskHookRecordHandle>,
+        Option<crate::request::task_hooks::TaskHookRecordHandle>,
         bool,
     )> {
         let (hooks, task_owned) =
-            crate::task_hooks::resolve_request_task_hooks(self.node.as_ref(), request).await?;
+            crate::request::task_hooks::resolve_request_task_hooks(self.node.as_ref(), request)
+                .await?;
         if hooks.is_empty() {
             return Ok((hooks, PathBuf::new(), None, task_owned));
         }
@@ -32,7 +33,7 @@ where
         let record = self
             .background_execution_registry
             .task_hook_records()
-            .begin(crate::task_hooks::TaskHookRecord {
+            .begin(crate::request::task_hooks::TaskHookRecord {
                 request_doc_id: request.doc_id.clone(),
                 request_id: request.request_id.clone(),
                 node_did: request.node_did.clone(),
@@ -66,9 +67,11 @@ where
         stream_writer: &DefraStreamWriter,
         request: &AgentRequest,
         shutdown: tokio::sync::watch::Receiver<bool>,
-        interrupt_rx: tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
+        interrupt_rx: tokio::sync::watch::Receiver<
+            Option<crate::request::interrupt::InterruptIntent>,
+        >,
     ) -> OwnedWorkOutcome {
-        use crate::task_hooks::TaskAgentResult;
+        use crate::request::task_hooks::TaskAgentResult;
 
         let result = self
             .handle_request(lifecycle, stream_writer, shutdown, interrupt_rx)
@@ -190,7 +193,7 @@ where
 /// A work failure caused by losing the execution lease is not this execution's
 /// failure to report.
 async fn lost_execution_ownership(lifecycle: &RequestLifecycle, error: &anyhow::Error) -> bool {
-    if error.is::<crate::lifecycle::ExecutionOwnershipLost>() {
+    if error.is::<crate::request::lifecycle::ExecutionOwnershipLost>() {
         return true;
     }
     matches!(lifecycle.owns_execution().await, Ok(false))
@@ -199,7 +202,7 @@ async fn lost_execution_ownership(lifecycle: &RequestLifecycle, error: &anyhow::
 pub(super) enum OwnedWorkOutcome {
     Interrupted(RequestInterruptionSource),
     Observed {
-        observation: crate::task_hooks::TaskAgentResult,
+        observation: crate::request::task_hooks::TaskAgentResult,
         reason: Option<String>,
         release_writer_binding: bool,
     },
@@ -209,7 +212,7 @@ pub(super) enum OwnedWorkOutcome {
 
 impl OwnedWorkOutcome {
     pub(super) fn observed(
-        observation: crate::task_hooks::TaskAgentResult,
+        observation: crate::request::task_hooks::TaskAgentResult,
         reason: Option<String>,
         release_writer_binding: bool,
     ) -> Self {
@@ -220,12 +223,12 @@ impl OwnedWorkOutcome {
         }
     }
 
-    pub(super) fn observation(&self) -> crate::task_hooks::TaskAgentResult {
+    pub(super) fn observation(&self) -> crate::request::task_hooks::TaskAgentResult {
         match self {
-            Self::Interrupted(_) => crate::task_hooks::TaskAgentResult::Cancelled,
+            Self::Interrupted(_) => crate::request::task_hooks::TaskAgentResult::Cancelled,
             Self::Observed { observation, .. } => *observation,
             Self::OwnershipLost | Self::DrainFailed(_) => {
-                crate::task_hooks::TaskAgentResult::Interrupted
+                crate::request::task_hooks::TaskAgentResult::Interrupted
             }
         }
     }

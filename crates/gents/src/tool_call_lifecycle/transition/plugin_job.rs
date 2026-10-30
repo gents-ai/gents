@@ -195,7 +195,7 @@ impl ToolCallLifecycle {
                 status,
                 &terminal.output,
                 terminal.reason.as_deref(),
-                crate::lifecycle::RequestHopCause::Continuation,
+                crate::request::lifecycle::RequestHopCause::Continuation,
             )
             .await?;
         }

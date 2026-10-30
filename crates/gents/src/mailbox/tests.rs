@@ -172,7 +172,8 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
         "source_fields": {"requester_did": identity.did()}
     })
     .to_string();
-    let parsed = crate::lifecycle::TriggerExecutionContext::parse(Some(&trigger_context)).unwrap();
+    let parsed =
+        crate::request::lifecycle::TriggerExecutionContext::parse(Some(&trigger_context)).unwrap();
     let requester_did = parsed
         .source_fields
         .get("requester_did")
@@ -184,14 +185,14 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
     )
     .await
     .unwrap();
-    let enqueued = crate::lifecycle::materialize::write_pending_agent_request_with_lineage_workspace_and_conversation_title(
+    let enqueued = crate::request::lifecycle::materialize::write_pending_agent_request_with_lineage_workspace_and_conversation_title(
         &node,
         ::identity::Did::new(identity.did().to_owned()).expect("fixture creator DID"),
         identity.did(),
         "operator",
         "continue the run",
-        crate::lifecycle::ExecutionOrigin::Scheduled,
-        crate::lifecycle::TriggerLineage {
+        crate::request::lifecycle::ExecutionOrigin::Scheduled,
+        crate::request::lifecycle::TriggerLineage {
             trigger_id: Some("event-trigger-1".into()),
             trigger_kind: Some("event".into()),
             source_doc_id: Some(source_item.doc_id.clone()),
@@ -225,10 +226,10 @@ async fn event_stage_materialization_persists_explicit_requester_lineage() {
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
             escape_graphql_string(&enqueued.doc_id),
-            crate::request_admission::SIGNED_REQUEST_FIELDS,
+            crate::request::admission::SIGNED_REQUEST_FIELDS,
         ))
         .await;
-    let request = crate::watcher::AgentRequest::try_from(
+    let request = crate::request::watcher::AgentRequest::try_from(
         crate::graphql::rows::<gents_protocol::row::AgentRequestRow>(&response, "AgentRequest")
             .unwrap()
             .remove(0),

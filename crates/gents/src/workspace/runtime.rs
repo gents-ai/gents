@@ -5,9 +5,9 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use crate::lifecycle::WorkspaceLineage;
+use crate::request::lifecycle::WorkspaceLineage;
+use crate::request::watcher::AgentRequest;
 use crate::toolset::WorkspaceAuthority;
-use crate::watcher::AgentRequest;
 
 use super::action_plan::{
     emit_cleanup_workspace_plan, emit_integrate_workspace_plan, emit_seal_workspace_plan,

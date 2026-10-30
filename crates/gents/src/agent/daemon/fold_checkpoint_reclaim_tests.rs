@@ -41,7 +41,7 @@ async fn create_user_message(
         .as_str()
         .unwrap()
         .to_owned();
-    crate::request_admission::load_request_for_admission_test(node, &doc_id)
+    crate::request::admission::load_request_for_admission_test(node, &doc_id)
         .await
         .unwrap()
 }
@@ -119,14 +119,14 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
             Some(&head.request_id),
         )
         .await;
-        let folded_key = crate::lifecycle::queue::folded_input_key(&folded.doc_id);
+        let folded_key = crate::request::lifecycle::queue::folded_input_key(&folded.doc_id);
 
-        let writer = crate::streaming::DefraStreamWriter::new(
+        let writer = crate::request::streaming::DefraStreamWriter::new(
             node.clone(),
             agent_config.node_did(),
             Duration::ZERO,
         );
-        let mut first = crate::lifecycle::RequestLifecycle::new_with_node_did(
+        let mut first = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
             node.clone(),
             &agent_config.agent_id,
             agent_config.node_did(),
@@ -136,7 +136,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
         first.set_fold_admitted(vec![folded.doc_id.clone()]);
         assert_eq!(
             first.claim().await.unwrap(),
-            crate::lifecycle::ClaimOutcome::Claimed
+            crate::request::lifecycle::ClaimOutcome::Claimed
         );
         first.begin_owned_execution(&writer).await.unwrap();
         let input = [
@@ -262,7 +262,7 @@ async fn seeded_replay_of_a_folded_turn_keeps_authored_input_through_checkpoint_
                 agent_config.node_did().to_string(),
             ),
             slot_generation: 1,
-            request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
+            request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
                 node.clone(),
                 request_identity,
                 crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -361,7 +361,7 @@ async fn create_retry(
         .as_str()
         .unwrap()
         .to_owned();
-    crate::request_admission::load_request_for_admission_test(node, &doc_id)
+    crate::request::admission::load_request_for_admission_test(node, &doc_id)
         .await
         .unwrap()
 }
@@ -404,7 +404,7 @@ async fn scripted_daemon(
             agent_config.node_did().to_string(),
         ),
         slot_generation: 1,
-        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
+        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             agent_config.node_identity().clone(),
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -460,12 +460,12 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             None,
         )
         .await;
-        let writer = crate::streaming::DefraStreamWriter::new(
+        let writer = crate::request::streaming::DefraStreamWriter::new(
             node.clone(),
             agent_config.node_did(),
             Duration::ZERO,
         );
-        let mut failed = crate::lifecycle::RequestLifecycle::new_with_node_did(
+        let mut failed = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
             node.clone(),
             &agent_config.agent_id,
             agent_config.node_did(),
@@ -474,7 +474,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
         );
         assert_eq!(
             failed.claim().await.unwrap(),
-            crate::lifecycle::ClaimOutcome::Claimed
+            crate::request::lifecycle::ClaimOutcome::Claimed
         );
         failed.begin_owned_execution(&writer).await.unwrap();
         if case.parent_published {
@@ -489,7 +489,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
         }
         failed
             .terminalize_owned(
-                crate::lifecycle::RequestTerminalOutcome::Failed,
+                crate::request::lifecycle::RequestTerminalOutcome::Failed,
                 gents_protocol::output::TerminalOutput::NoMessage,
                 Some("provider unavailable"),
             )
@@ -506,7 +506,7 @@ async fn generated_retry_selection_cases_bind_to_the_daemon() {
             Some(&retry.request_id),
         )
         .await;
-        let queued_key = crate::lifecycle::queue::folded_input_key(&queued.doc_id);
+        let queued_key = crate::request::lifecycle::queue::folded_input_key(&queued.doc_id);
         let provider_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut daemon = scripted_daemon(&node, &agent_config, &provider_inputs).await;
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);

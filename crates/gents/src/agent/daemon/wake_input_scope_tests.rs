@@ -1,5 +1,7 @@
 use super::*;
-use crate::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome};
+use crate::request::lifecycle::{
+    ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome,
+};
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
@@ -35,7 +37,7 @@ async fn write_request(
         .execute(&format!(
             "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
             escape_graphql_string(&doc),
-            crate::request_admission::SIGNED_REQUEST_FIELDS
+            crate::request::admission::SIGNED_REQUEST_FIELDS
         ))
         .await
         .unwrap();
@@ -184,7 +186,7 @@ async fn claim(
         lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
     );
-    let writer = crate::streaming::DefraStreamWriter::new(
+    let writer = crate::request::streaming::DefraStreamWriter::new(
         node.clone(),
         identity.did(),
         std::time::Duration::ZERO,
@@ -342,7 +344,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                     .execute(&format!(
                         "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
                         escape_graphql_string(&doc),
-                        crate::request_admission::SIGNED_REQUEST_FIELDS
+                        crate::request::admission::SIGNED_REQUEST_FIELDS
                     ))
                     .await
                     .unwrap();
@@ -381,7 +383,7 @@ async fn generated_goal_wake_receipts_scope_claims_and_exact_acknowledgement() {
                     .execute(&format!(
                         "{{AgentRequest(filter: {{_docID: {{_eq: \"{}\"}}}}) {{{}}}}}",
                         escape_graphql_string(&doc),
-                        crate::request_admission::SIGNED_REQUEST_FIELDS
+                        crate::request::admission::SIGNED_REQUEST_FIELDS
                     ))
                     .await
                     .unwrap();

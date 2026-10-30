@@ -53,7 +53,7 @@ mod tests;
 #[cfg(test)]
 mod seam_error_tests {
     use super::{processor_failure, RuntimeSeamError, StreamProcessorError};
-    use crate::lifecycle::ExecutionOwnershipLost;
+    use crate::request::lifecycle::ExecutionOwnershipLost;
 
     fn seam(error: anyhow::Error) -> Box<dyn std::error::Error + Send + Sync> {
         RuntimeSeamError::from(error).into()

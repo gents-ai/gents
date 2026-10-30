@@ -147,9 +147,9 @@ fn legacy_invite_metadata_is_wire_only_and_reciprocal_timing_does_not_return() {
 #[test]
 fn production_pending_request_writers_use_the_signed_canonical_builder() {
     let writers = [
-        include_str!("../../src/lifecycle/materialize.rs"),
-        include_str!("../../src/lifecycle/queue/mutation.rs"),
-        include_str!("../../src/lifecycle/queue/goal_continuation.rs"),
+        include_str!("../../src/request/lifecycle/materialize.rs"),
+        include_str!("../../src/request/lifecycle/queue/mutation.rs"),
+        include_str!("../../src/request/lifecycle/queue/goal_continuation.rs"),
         include_str!("../../../gents-cli/src/request_helpers.rs"),
         include_str!("../../../gents-cli/src/commands/config/task_run.rs"),
         include_str!("../../../gents-desktop-core/src/client/mutations/chat/request/prepare.rs"),
@@ -168,11 +168,11 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
         );
     }
 
-    let background = include_str!("../../src/lifecycle/background_wake_recovery.rs");
+    let background = include_str!("../../src/request/lifecycle/background_wake_recovery.rs");
     assert!(background.contains("create.graphql_input_fields()"));
     assert_eq!(background.matches("create_AgentRequest(input:").count(), 1);
 
-    let materialize = include_str!("../../src/lifecycle/materialize.rs");
+    let materialize = include_str!("../../src/request/lifecycle/materialize.rs");
     let oneshot = include_str!("../../src/oneshot.rs");
     let signed_direct_materializer = materialize
         .split("pub async fn materialize_claimed_with_execution_binding")
@@ -234,11 +234,11 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
     for (name, source) in [
         (
             "lifecycle/queue/mutation.rs",
-            include_str!("../../src/lifecycle/queue/mutation.rs"),
+            include_str!("../../src/request/lifecycle/queue/mutation.rs"),
         ),
         (
             "lifecycle/queue/goal_continuation.rs",
-            include_str!("../../src/lifecycle/queue/goal_continuation.rs"),
+            include_str!("../../src/request/lifecycle/queue/goal_continuation.rs"),
         ),
     ] {
         assert!(
@@ -270,7 +270,7 @@ fn clean_break_has_no_legacy_pairing_or_remote_snapshot_authority() {
 
 #[test]
 fn request_admission_has_no_logical_only_recovery_or_terminal_mutation() {
-    let request_admission = include_str!("../../src/request_admission.rs");
+    let request_admission = include_str!("../../src/request/admission.rs");
     let modules = include_str!("../../src/agent/p2p_reconcile/mod.rs");
 
     assert!(!request_admission.contains("parent_authorizes_subagent_target"));
@@ -282,7 +282,7 @@ fn request_admission_has_no_logical_only_recovery_or_terminal_mutation() {
 #[test]
 fn session_message_admission_has_no_child_or_bridge_authority() {
     let protocol = include_str!("../../../gents-protocol/src/request_admission.rs");
-    let verifier = include_str!("../../src/request_admission.rs");
+    let verifier = include_str!("../../src/request/admission.rs");
     let request_schema = include_str!("../../../gents-schemas/schemas/agent/agent_request.graphql");
     let tool_schema = include_str!("../../../gents-schemas/schemas/agent/agent_tool_call.graphql");
 

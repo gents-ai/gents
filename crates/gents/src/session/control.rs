@@ -66,7 +66,7 @@ pub async fn stop_session(
                     "session stop latch was not committed to the selected session"
                 );
                 let drained_request_ids =
-                    crate::lifecycle::queue::drain_all_pending_session_requests_in_txn(
+                    crate::request::lifecycle::queue::drain_all_pending_session_requests_in_txn(
                         txn,
                         &session_id,
                         &node_did,
@@ -74,13 +74,14 @@ pub async fn stop_session(
                         "request interrupted because the owning session was stopped",
                     )
                     .await?;
-                let interrupted_request_id = crate::interrupt::interrupt_active_session_in_txn(
-                    txn,
-                    &session_id,
-                    &node_did,
-                    requester_did.as_deref(),
-                )
-                .await?;
+                let interrupted_request_id =
+                    crate::request::interrupt::interrupt_active_session_in_txn(
+                        txn,
+                        &session_id,
+                        &node_did,
+                        requester_did.as_deref(),
+                    )
+                    .await?;
                 if interrupted_request_id.is_none() {
                     crate::goal::pause_goal_for_interrupt_in_txn(txn, &node_did, &session_id)
                         .await?;

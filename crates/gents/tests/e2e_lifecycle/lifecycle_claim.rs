@@ -1,5 +1,5 @@
-use gents::lifecycle::ClaimOutcome;
-use gents::watcher::{AgentRequest, DefraWatcher};
+use gents::request::lifecycle::ClaimOutcome;
+use gents::request::watcher::{AgentRequest, DefraWatcher};
 use gents::RequestLifecycle;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -324,7 +324,7 @@ async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
                 max_retries: {max_retries}
             }}) {{ _docID }}
         }}"#,
-        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+        max_retries = gents::request::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
     );
     let resp = db.node.execute(&mutation).await;
     assert!(

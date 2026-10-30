@@ -237,7 +237,7 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
         .execute(&format!(
             "{{AgentRequest(docID: \"{}\") {{{}}}}}",
             crate::graphql::escape_graphql_string(&request_doc),
-            crate::request_admission::SIGNED_REQUEST_FIELDS
+            crate::request::admission::SIGNED_REQUEST_FIELDS
         ))
         .await
         .unwrap();

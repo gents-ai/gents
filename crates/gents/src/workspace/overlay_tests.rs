@@ -519,7 +519,7 @@ fn principal_and_placement_identity_mismatches_fail_closed() {
 /// Source files are authored before sealing; consumers must not mutate source.
 pub(crate) struct ArtifactTestFixture {
     pub grant: crate::workspace::ArtifactGrant,
-    pub owner: crate::lifecycle::RequestLifecycle,
+    pub owner: crate::request::lifecycle::RequestLifecycle,
     pub node: std::sync::Arc<defra_node::EmbeddedNode>,
     pub _dir: tempfile::TempDir,
 }
@@ -658,22 +658,22 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
     create.workspace_owner_node_did = Some(workspace_owner.clone());
     create.workspace_authority = Some("readOnly".into());
     create.workspace_seal_hash = sealed.workspace.seal_hash.clone();
-    crate::request_admission::sign_agent_request_create(&identity, &mut create)
+    crate::request::admission::sign_agent_request_create(&identity, &mut create)
         .await
         .unwrap();
     execute(&node, &create.graphql_mutation().unwrap()).await;
     let result = node
         .execute(&format!(
             "{{ AgentRequest {{ {} }} }}",
-            crate::request_admission::SIGNED_REQUEST_FIELDS
+            crate::request::admission::SIGNED_REQUEST_FIELDS
         ))
         .await;
     let row: gents_protocol::row::AgentRequestRow =
         crate::graphql::first_row(&result, "AgentRequest")
             .unwrap()
             .unwrap();
-    let request = crate::watcher::AgentRequest::try_from(row).unwrap();
-    let mut owner = crate::lifecycle::RequestLifecycle::new_with_node_did(
+    let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
+    let mut owner = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
         &did,
@@ -876,7 +876,10 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
         }
         let alternate = artifact_alternate_owner(&fx, name, binding).await;
         let (request_owner, claim_outcome) = alternate.unwrap();
-        if !matches!(claim_outcome, crate::lifecycle::ClaimOutcome::Claimed) {
+        if !matches!(
+            claim_outcome,
+            crate::request::lifecycle::ClaimOutcome::Claimed
+        ) {
             assert_eq!(
                 name, "wrong_owner",
                 "unexpected preclaim denial: {claim_outcome:?}"
@@ -1034,7 +1037,7 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
     assert!(artifact_root.exists());
     owner
         .terminalize_owned(
-            crate::lifecycle::RequestTerminalOutcome::Failed,
+            crate::request::lifecycle::RequestTerminalOutcome::Failed,
             gents_protocol::output::TerminalOutput::NoMessage,
             Some("artifact cleanup fixture completed"),
         )
@@ -1081,8 +1084,8 @@ async fn artifact_alternate_owner(
     name: &str,
     binding: &serde_json::Value,
 ) -> anyhow::Result<(
-    crate::lifecycle::RequestLifecycle,
-    crate::lifecycle::ClaimOutcome,
+    crate::request::lifecycle::RequestLifecycle,
+    crate::request::lifecycle::ClaimOutcome,
 )> {
     use crate::store::identity::NodeIdentity;
     let identity = crate::store::identity::KeyIdentity::load_or_create(
@@ -1122,7 +1125,7 @@ async fn artifact_alternate_owner(
             fx.owner.request().workspace_seal_hash.clone()
         };
     }
-    crate::request_admission::sign_agent_request_create(&identity, &mut create).await?;
+    crate::request::admission::sign_agent_request_create(&identity, &mut create).await?;
     let mutation = fx.node.execute(&create.graphql_mutation().unwrap()).await;
     assert!(!mutation.has_errors(), "{:?}", mutation.errors);
     let id = crate::graphql::escape_graphql_string(name);
@@ -1130,15 +1133,15 @@ async fn artifact_alternate_owner(
         .node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{id}" }} }}) {{ {} }} }}"#,
-            crate::request_admission::SIGNED_REQUEST_FIELDS
+            crate::request::admission::SIGNED_REQUEST_FIELDS
         ))
         .await;
     let row: gents_protocol::row::AgentRequestRow =
         crate::graphql::first_row(&result, "AgentRequest")
             .unwrap()
             .unwrap();
-    let request = crate::watcher::AgentRequest::try_from(row).unwrap();
-    let mut owner = crate::lifecycle::RequestLifecycle::new_with_node_did(
+    let request = crate::request::watcher::AgentRequest::try_from(row).unwrap();
+    let mut owner = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         fx.node.clone(),
         "general",
         did,
@@ -1163,7 +1166,10 @@ async fn artifact_resolver_rejects_missing_or_ready_context_before_binding() {
             .unwrap_or(serde_json::Value::Null);
         let name = authority.unwrap_or("unbound");
         let (owner, claim) = artifact_alternate_owner(&fx, name, &binding).await.unwrap();
-        assert!(matches!(claim, crate::lifecycle::ClaimOutcome::Claimed));
+        assert!(matches!(
+            claim,
+            crate::request::lifecycle::ClaimOutcome::Claimed
+        ));
         for mutation in [
             r#"mutation { update_IsolatedWorkspace(filter: { workspace_id: { _eq: "artifact-workspace" } }, input: { lifecycle_state: "ready" }) { _docID } }"#,
         ] {

@@ -7,8 +7,8 @@ use tracing::Instrument;
 use super::{auxiliary_task_join_result, AgentDaemon};
 use crate::agent::worker_capacity::{RequestGuard, WorkerCapacity};
 use crate::inference::llm::rig_compat::ProviderModel;
+use crate::request::watcher::AgentRequest;
 use crate::runtime_trace::RequestTraceAttrs;
-use crate::watcher::AgentRequest;
 
 impl<M> AgentDaemon<M>
 where
@@ -153,17 +153,18 @@ where
     /// that may fold into `request`'s claim; an unverified message keeps its
     /// own claim, where its admission is decided.
     pub(super) async fn verified_fold_admissions(&self, request: &AgentRequest) -> Vec<String> {
-        let candidates = match crate::lifecycle::queue::fold_candidates(&self.node, request).await {
-            Ok(candidates) => candidates,
-            Err(error) => {
-                tracing::warn!(
-                    request_id = %request.request_id,
-                    error = %format!("{error:#}"),
-                    "could not read queued messages to fold; claiming the request alone"
-                );
-                return Vec::new();
-            }
-        };
+        let candidates =
+            match crate::request::lifecycle::queue::fold_candidates(&self.node, request).await {
+                Ok(candidates) => candidates,
+                Err(error) => {
+                    tracing::warn!(
+                        request_id = %request.request_id,
+                        error = %format!("{error:#}"),
+                        "could not read queued messages to fold; claiming the request alone"
+                    );
+                    return Vec::new();
+                }
+            };
         let mut admitted = Vec::new();
         for candidate in candidates {
             match self

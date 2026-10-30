@@ -428,7 +428,7 @@ async fn failed_background_wake_without_pending_sibling_obeys_persisted_backoff(
         before[0].lifecycle_state,
         Some(RequestLifecycleState::Failed)
     );
-    let next_retry_at = gents::lifecycle::background_wake_next_retry_at(
+    let next_retry_at = gents::request::lifecycle::background_wake_next_retry_at(
         before[0].terminalized_at.as_deref(),
         before[0].retry_count.expect("persisted retry count"),
     )
@@ -660,7 +660,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         failed_wake.lifecycle_state,
         Some(RequestLifecycleState::Failed)
     );
-    let next_retry_at = gents::lifecycle::background_wake_next_retry_at(
+    let next_retry_at = gents::request::lifecycle::background_wake_next_retry_at(
         failed_wake.terminalized_at.as_deref(),
         failed_wake.retry_count.expect("persisted retry count"),
     )
@@ -916,7 +916,7 @@ async fn recover_interrupted_request_after_crash(
         .node_did
         .as_deref()
         .expect("accepted request principal identity");
-    gents::interrupt::interrupt_request_by_doc_id(
+    gents::request::interrupt::interrupt_request_by_doc_id(
         node,
         doc_id,
         node_did,

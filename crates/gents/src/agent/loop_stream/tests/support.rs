@@ -531,8 +531,8 @@ where
 pub(super) async fn collect_owned_scripted_stream<S>(
     stream: S,
     hook: &DefraSessionHook,
-    writer: &crate::streaming::DefraStreamWriter,
-    lifecycle: &mut crate::lifecycle::RequestLifecycle,
+    writer: &crate::request::streaming::DefraStreamWriter,
+    lifecycle: &mut crate::request::lifecycle::RequestLifecycle,
     profile: gents_loop::provider_input::ProviderInputProfile,
 ) -> CollectedScriptedStream
 where
@@ -545,8 +545,8 @@ where
 pub(super) async fn collect_owned_scripted_stream_with_capture_scope<S>(
     stream: S,
     hook: &DefraSessionHook,
-    writer: &crate::streaming::DefraStreamWriter,
-    lifecycle: &mut crate::lifecycle::RequestLifecycle,
+    writer: &crate::request::streaming::DefraStreamWriter,
+    lifecycle: &mut crate::request::lifecycle::RequestLifecycle,
     profile: gents_loop::provider_input::ProviderInputProfile,
     capture_scope: Option<Arc<crate::inference::rendered_request::scope::RequestCaptureScope>>,
 ) -> CollectedScriptedStream
@@ -638,8 +638,8 @@ where
 pub(super) async fn owned_test_hook() -> (
     Arc<defra_node::EmbeddedNode>,
     DefraSessionHook,
-    crate::streaming::DefraStreamWriter,
-    crate::lifecycle::RequestLifecycle,
+    crate::request::streaming::DefraStreamWriter,
+    crate::request::lifecycle::RequestLifecycle,
 ) {
     owned_test_hook_with_policy(FailurePolicy::default()).await
 }
@@ -649,8 +649,8 @@ pub(super) async fn owned_test_hook_with_policy(
 ) -> (
     Arc<defra_node::EmbeddedNode>,
     DefraSessionHook,
-    crate::streaming::DefraStreamWriter,
-    crate::lifecycle::RequestLifecycle,
+    crate::request::streaming::DefraStreamWriter,
+    crate::request::lifecycle::RequestLifecycle,
 ) {
     let (node, hook, writer, lifecycle, _) =
         owned_test_hook_with_identity_policy(None, policy, None).await;
@@ -662,8 +662,8 @@ pub(super) async fn owned_test_hook_with_identity(
 ) -> (
     Arc<defra_node::EmbeddedNode>,
     DefraSessionHook,
-    crate::streaming::DefraStreamWriter,
-    crate::lifecycle::RequestLifecycle,
+    crate::request::streaming::DefraStreamWriter,
+    crate::request::lifecycle::RequestLifecycle,
 ) {
     let (node, hook, writer, lifecycle, _) =
         owned_test_hook_with_identity_policy(Some(identity), FailurePolicy::default(), None).await;
@@ -675,8 +675,8 @@ pub(super) async fn owned_test_hook_with_folded_case(
 ) -> (
     Arc<defra_node::EmbeddedNode>,
     DefraSessionHook,
-    crate::streaming::DefraStreamWriter,
-    crate::lifecycle::RequestLifecycle,
+    crate::request::streaming::DefraStreamWriter,
+    crate::request::lifecycle::RequestLifecycle,
     rapidhash::RapidHashMap<u64, String>,
 ) {
     let key_dir = tempfile::tempdir().unwrap();
@@ -697,8 +697,8 @@ async fn owned_test_hook_with_identity_policy(
 ) -> (
     Arc<defra_node::EmbeddedNode>,
     DefraSessionHook,
-    crate::streaming::DefraStreamWriter,
-    crate::lifecycle::RequestLifecycle,
+    crate::request::streaming::DefraStreamWriter,
+    crate::request::lifecycle::RequestLifecycle,
     rapidhash::RapidHashMap<u64, String>,
 ) {
     let node_did = identity
@@ -727,24 +727,24 @@ async fn owned_test_hook_with_identity_policy(
     .unwrap();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mutation = if let Some(identity) = identity.as_ref() {
-        crate::lifecycle::build_signed_request(
-            crate::lifecycle::RequestSpec::new(
+        crate::request::lifecycle::build_signed_request(
+            crate::request::lifecycle::RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
-                crate::lifecycle::RequestIdentity {
+                crate::request::lifecycle::RequestIdentity {
                     requester_did: requester_did.map(str::to_owned),
                     request_id: request_id.clone(),
                     node_did: node_did.to_owned(),
                     agent_id: "general".to_owned(),
                     session_id: session_id.clone(),
                     content: "owned loop test".to_owned(),
-                    execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
+                    execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
                     created_at: now,
                 },
                 gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
                     node_did,
                 ),
             ),
-            crate::lifecycle::RequestSigner::Identity(identity.as_ref()),
+            crate::request::lifecycle::RequestSigner::Identity(identity.as_ref()),
         )
         .await
         .unwrap()
@@ -774,16 +774,16 @@ async fn owned_test_hook_with_identity_policy(
         let mut predecessor = request_id.clone();
         for folded in &case.folded {
             let id = format!("{request_id}-folded-{}", folded.request_id);
-            let mut spec = crate::lifecycle::RequestSpec::new(
+            let mut spec = crate::request::lifecycle::RequestSpec::new(
                 gents_protocol::request_admission::RequestPurpose::Normal,
-                crate::lifecycle::RequestIdentity {
+                crate::request::lifecycle::RequestIdentity {
                     requester_did: Some(node_did.to_owned()),
                     request_id: id.clone(),
                     node_did: node_did.to_owned(),
                     agent_id: "general".into(),
                     session_id: session_id.clone(),
                     content: folded.content.clone(),
-                    execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
+                    execution_origin: crate::request::lifecycle::ExecutionOrigin::Interactive,
                     created_at: chrono::Utc::now()
                         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                 },
@@ -801,9 +801,9 @@ async fn owned_test_hook_with_identity_policy(
                 interrupted_request_id: None,
                 background_completion_wake_version: None,
             });
-            let create = crate::lifecycle::build_signed_request(
+            let create = crate::request::lifecycle::build_signed_request(
                 spec,
-                crate::lifecycle::RequestSigner::Identity(signer.as_ref()),
+                crate::request::lifecycle::RequestSigner::Identity(signer.as_ref()),
             )
             .await
             .unwrap();
@@ -817,13 +817,13 @@ async fn owned_test_hook_with_identity_policy(
                 .execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                     crate::graphql::escape_graphql_string(&doc),
-                    crate::request_admission::SIGNED_REQUEST_FIELDS,
+                    crate::request::admission::SIGNED_REQUEST_FIELDS,
                 ))
                 .await
                 .unwrap();
             let signed_row =
                 serde_json::from_value(loaded["data"]["AgentRequest"][0].clone()).unwrap();
-            crate::request_admission::verify_request_receipt_signature(&signed_row).unwrap();
+            crate::request::admission::verify_request_receipt_signature(&signed_row).unwrap();
             folded_docs.insert(folded.request_id, doc);
             predecessor = id;
         }
@@ -833,7 +833,7 @@ async fn owned_test_hook_with_identity_policy(
         &format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
             crate::graphql::escape_graphql_string(&request_id),
-            crate::watcher::AGENT_REQUEST_FIELDS,
+            crate::request::watcher::AGENT_REQUEST_FIELDS,
         ),
         "load owned loop test request",
     )
@@ -857,7 +857,7 @@ async fn owned_test_hook_with_identity_policy(
         .unwrap();
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
         .await;
-    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
+    let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         node.clone(),
         "general",
         node_did,
@@ -874,9 +874,10 @@ async fn owned_test_hook_with_identity_policy(
     }
     assert_eq!(
         lifecycle.claim().await.unwrap(),
-        crate::lifecycle::ClaimOutcome::Claimed
+        crate::request::lifecycle::ClaimOutcome::Claimed
     );
-    let writer = crate::streaming::DefraStreamWriter::new(node.clone(), node_did, Duration::ZERO);
+    let writer =
+        crate::request::streaming::DefraStreamWriter::new(node.clone(), node_did, Duration::ZERO);
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     (node, hook, writer, lifecycle, folded_docs)
 }

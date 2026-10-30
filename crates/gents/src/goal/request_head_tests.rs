@@ -1,5 +1,5 @@
 use super::*;
-use crate::lifecycle::queue::prepare_goal_continuation;
+use crate::request::lifecycle::queue::prepare_goal_continuation;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use rapidhash::{HashMapExt, RapidHashMap};
@@ -410,7 +410,7 @@ impl Fixture<'_> {
                 parent.doc_id = model.parent_doc.map(|doc| format!("physical-{doc}"));
                 parent.node_did = Some(self.identity(model.owner).did().into());
                 parent.session_id = Some(format!("session-{}", model.session));
-                let parent = crate::watcher::AgentRequest::try_from(parent).unwrap();
+                let parent = crate::request::watcher::AgentRequest::try_from(parent).unwrap();
                 prepare_goal_continuation(
                     &parent,
                     "head-behavior".into(),
@@ -463,8 +463,8 @@ impl Fixture<'_> {
                     row.lifecycle_state = Some(RequestLifecycleState::Superseded);
                     row.failure_reason = Some(
                         match model.input_disposition {
-                            InputDisposition::Folded => crate::lifecycle::FOLDED_REASON,
-                            _ => crate::lifecycle::REPLACED_REASON,
+                            InputDisposition::Folded => crate::request::lifecycle::FOLDED_REASON,
+                            _ => crate::request::lifecycle::REPLACED_REASON,
                         }
                         .into(),
                     );
@@ -473,7 +473,7 @@ impl Fixture<'_> {
                 }
                 InputDisposition::Removed => {
                     row.lifecycle_state = Some(RequestLifecycleState::Interrupted);
-                    row.failure_reason = Some(crate::lifecycle::REMOVED_REASON.into());
+                    row.failure_reason = Some(crate::request::lifecycle::REMOVED_REASON.into());
                 }
             }
             if !model.receipt_valid {
@@ -545,7 +545,7 @@ async fn generated_goal_request_head_cases_drive_signed_row_selector() {
             verify_request_receipt_signature(&rows[1]).unwrap();
         }
         let (selected, verifications) =
-            crate::request_admission::count_request_receipt_verifications(|| {
+            crate::request::admission::count_request_receipt_verifications(|| {
                 latest_goal_request(&goal, &rows).and_then(|row| row.doc_id.as_deref())
             });
         if let Some(expected_checks) = case.expected_receipt_checks {
@@ -618,7 +618,7 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
     }
     let query = format!(
         "{{AgentRequest(order: {{created_at: DESC}}) {{{}}}}}",
-        crate::request_admission::SIGNED_REQUEST_FIELDS
+        crate::request::admission::SIGNED_REQUEST_FIELDS
     );
     let response = access.execute(&query).await.unwrap();
     let rows: Vec<AgentRequestRow> =
@@ -635,7 +635,7 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
     goal.assignment_root_request_doc_id = Some(new_doc.into());
     access.write("test.assignment_binding", &format!("mutation {{update_Goal(filter: {{_docID: {{_eq: \"{}\"}}}}, input: {{assignment_root_request_doc_id: \"{}\"}}) {{_docID}}}}",
         escape_graphql_string(&goal.doc_id), escape_graphql_string(new_doc))).await.unwrap();
-    let mut parent = crate::watcher::AgentRequest::try_from(old.clone()).unwrap();
+    let mut parent = crate::request::watcher::AgentRequest::try_from(old.clone()).unwrap();
     for sequence in [1, 2] {
         let mut child = prepare_goal_continuation(
             &parent,
@@ -666,7 +666,7 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
             .iter()
             .find(|row| row.request_id == child.request_id)
             .unwrap();
-        let request = crate::watcher::AgentRequest::try_from(old_child.clone()).unwrap();
+        let request = crate::request::watcher::AgentRequest::try_from(old_child.clone()).unwrap();
         let allowed =
             ConfigAccess::transact_local_write(&node, None, "test.late_goal_claim", |txn| {
                 let request = &request;
@@ -687,7 +687,7 @@ async fn task_assignment_root_fences_older_chain_even_when_its_child_is_newer() 
                 .lifecycle_state,
             Some(RequestLifecycleState::Superseded)
         );
-        parent = crate::watcher::AgentRequest::try_from(
+        parent = crate::request::watcher::AgentRequest::try_from(
             rows.iter()
                 .find(|row| row.request_id == child.request_id)
                 .unwrap()

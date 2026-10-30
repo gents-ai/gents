@@ -45,8 +45,8 @@ async fn tool_state(node: &crate::defra_node::EmbeddedNode, tool_id: &str) -> Op
 
 async fn publish_hook_action(
     hook: &crate::hook::DefraSessionHook,
-    writer: &crate::streaming::DefraStreamWriter,
-    owner: &crate::lifecycle::RequestLifecycle,
+    writer: &crate::request::streaming::DefraStreamWriter,
+    owner: &crate::request::lifecycle::RequestLifecycle,
     turn: usize,
     internal_id: &str,
     tool_name: &str,
@@ -96,8 +96,8 @@ async fn publish_hook_action(
 
 async fn publish_hook_call(
     hook: &crate::hook::DefraSessionHook,
-    writer: &crate::streaming::DefraStreamWriter,
-    owner: &crate::lifecycle::RequestLifecycle,
+    writer: &crate::request::streaming::DefraStreamWriter,
+    owner: &crate::request::lifecycle::RequestLifecycle,
     turn: usize,
     internal_id: &str,
     tool_name: &str,
@@ -142,8 +142,11 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
         &node, request_id, session_id, &did,
     )
     .await;
-    let writer =
-        crate::streaming::DefraStreamWriter::new(node.clone(), &did, std::time::Duration::ZERO);
+    let writer = crate::request::streaming::DefraStreamWriter::new(
+        node.clone(),
+        &did,
+        std::time::Duration::ZERO,
+    );
     origin.begin_owned_execution(&writer).await.unwrap();
     let registry = crate::hook::BackgroundToolRegistry::from_tools(
         vec![Box::new(PendingTool)],
@@ -237,7 +240,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
     assert_eq!(
         origin
             .terminalize_owned(
-                crate::lifecycle::RequestTerminalOutcome::Completed,
+                crate::request::lifecycle::RequestTerminalOutcome::Completed,
                 gents_protocol::output::TerminalOutput::Message {
                     message_doc_id: header_doc_id
                 },
@@ -245,7 +248,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
             )
             .await
             .unwrap(),
-        crate::lifecycle::TerminalizeResult::Won
+        crate::request::lifecycle::TerminalizeResult::Won
     );
 
     let next_id = "background-hook-scope-next";
@@ -253,8 +256,11 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
         &node, next_id, session_id, &did,
     )
     .await;
-    let next_writer =
-        crate::streaming::DefraStreamWriter::new(node.clone(), &did, std::time::Duration::ZERO);
+    let next_writer = crate::request::streaming::DefraStreamWriter::new(
+        node.clone(),
+        &did,
+        std::time::Duration::ZERO,
+    );
     next.begin_owned_execution(&next_writer).await.unwrap();
     assert!(absent_case.legal);
     hook.set_active_request_binding(

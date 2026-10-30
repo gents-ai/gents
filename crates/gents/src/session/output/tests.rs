@@ -65,7 +65,9 @@ fn current_input_selection_matches_lean_owner() {
                     publication,
                 );
                 let key = match input.kind.as_str() {
-                    "folded" => crate::lifecycle::queue::folded_input_key("folded-request"),
+                    "folded" => {
+                        crate::request::lifecycle::queue::folded_input_key("folded-request")
+                    }
                     kind => kind.to_owned(),
                 };
                 row.message.message_key =

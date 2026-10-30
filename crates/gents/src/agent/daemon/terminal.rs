@@ -2,10 +2,10 @@ use anyhow::Result;
 
 use super::{AgentDaemon, RequestInterruptionSource};
 use crate::inference::llm::rig_compat::ProviderModel;
-use crate::lifecycle::{RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
+use crate::request::lifecycle::{RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
+use crate::request::streaming::DefraStreamWriter;
+use crate::request::watcher::AgentRequest;
 use crate::runtime_trace::{record_current_failure_class, record_current_request_outcome};
-use crate::streaming::DefraStreamWriter;
-use crate::watcher::AgentRequest;
 
 /// Only the winning terminal CAS authorizes follow-up effects.
 pub(super) async fn terminalize_request(

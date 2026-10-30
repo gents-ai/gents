@@ -215,13 +215,13 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
                 .execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
                     escape_graphql_string(&staged.doc_id),
-                    crate::request_admission::SIGNED_REQUEST_FIELDS,
+                    crate::request::admission::SIGNED_REQUEST_FIELDS,
                 ))
                 .await
                 .unwrap();
             let stored: gents_protocol::row::AgentRequestRow =
                 serde_json::from_value(stored["data"]["AgentRequest"][0].clone()).unwrap();
-            crate::request_admission::verify_request_receipt_signature(&stored).unwrap();
+            crate::request::admission::verify_request_receipt_signature(&stored).unwrap();
             assert_eq!(
                 stored
                     .input

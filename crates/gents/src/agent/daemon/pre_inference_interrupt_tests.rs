@@ -247,7 +247,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
             node_did.clone(),
         ),
         slot_generation: 1,
-        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
+        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -278,7 +278,7 @@ async fn interrupt_while_preparing_provider_input_terminalizes_through_the_owner
             .unwrap();
         assert_eq!(row["lifecycle_state"], "processing");
 
-        crate::interrupt::interrupt_request_by_doc_id(
+        crate::request::interrupt::interrupt_request_by_doc_id(
             &node,
             &request_doc_id,
             &node_did,
@@ -356,7 +356,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
             node_did.clone(),
         ),
         slot_generation: 1,
-        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
+        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -370,15 +370,15 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         .await
         .expect("seed a titled session through the session writer");
 
-    let stream_writer = crate::streaming::DefraStreamWriter::new(
+    let stream_writer = crate::request::streaming::DefraStreamWriter::new(
         node.clone(),
         agent_config.node_did(),
         Duration::from_millis(agent_config.stream_batch_ms),
     );
     let origin =
-        crate::lifecycle::ExecutionOrigin::from_persisted(request.execution_origin.as_deref())
+        crate::request::lifecycle::ExecutionOrigin::from_persisted(request.execution_origin.as_deref())
             .expect("a created request carries a canonical execution origin");
-    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_execution_binding(
+    let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_execution_binding(
         node.clone(),
         &agent_config.agent_id,
         agent_config.node_did(),
@@ -394,7 +394,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
             .claim_with_identity()
             .await
             .expect("claim the fresh request"),
-        crate::lifecycle::ClaimOutcome::Claimed,
+        crate::request::lifecycle::ClaimOutcome::Claimed,
         "this runtime must win the claim to own the pre-execution window"
     );
     let claimed = request_terminal_row(node.as_ref(), &request_doc_id)
@@ -406,17 +406,17 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
     );
 
     let (interrupt_tx, mut interrupt_rx) =
-        tokio::sync::watch::channel::<Option<crate::interrupt::InterruptIntent>>(None);
+        tokio::sync::watch::channel::<Option<crate::request::interrupt::InterruptIntent>>(None);
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let _observer = tokio_util::task::AbortOnDropHandle::new(
-        crate::interrupt::spawn_request_interrupt_observer(
+        crate::request::interrupt::spawn_request_interrupt_observer(
             node.clone(),
             request_doc_id.clone(),
             interrupt_tx,
             shutdown_rx.clone(),
         ),
     );
-    crate::interrupt::interrupt_request_by_doc_id(
+    crate::request::interrupt::interrupt_request_by_doc_id(
         &node,
         &request_doc_id,
         &node_did,
@@ -453,7 +453,7 @@ async fn interrupt_latched_at_the_claim_terminalizes_before_execution_begins() {
         .await;
     assert_eq!(
         outcome.observation(),
-        crate::task_hooks::TaskAgentResult::Cancelled
+        crate::request::task_hooks::TaskAgentResult::Cancelled
     );
     let crate::agent::daemon::owned_work::OwnedWorkOutcome::Interrupted(
         crate::agent::daemon::RequestInterruptionSource::Claimed,
@@ -535,7 +535,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
             node_did.clone(),
         ),
         slot_generation: 1,
-        request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
+        request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
             node.clone(),
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -570,7 +570,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
             .unwrap();
         assert_eq!(row["lifecycle_state"], "processing");
 
-        crate::interrupt::interrupt_request_by_doc_id(
+        crate::request::interrupt::interrupt_request_by_doc_id(
             &node,
             &request_doc_id,
             &node_did,
@@ -651,7 +651,7 @@ async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_inde
     let index_before = std::fs::read(dir.join(".git/index")).unwrap();
 
     let (interrupt_tx, mut interrupt_rx) =
-        tokio::sync::watch::channel::<Option<crate::interrupt::InterruptIntent>>(None);
+        tokio::sync::watch::channel::<Option<crate::request::interrupt::InterruptIntent>>(None);
     let dest = dir.to_path_buf();
     let hashing = tokio::spawn(async move {
         super::super::request::prepare_unless_interrupted(
@@ -678,7 +678,7 @@ async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_inde
 
     let filter = ProcessIdentity::of_live(filter_pid).expect("the parked clean filter is running");
     interrupt_tx
-        .send(Some(crate::interrupt::InterruptIntent {
+        .send(Some(crate::request::interrupt::InterruptIntent {
             at: chrono::Utc::now(),
         }))
         .unwrap();

@@ -221,7 +221,7 @@ async fn clear_indicator(indicator: &mut Option<WorkingIndicator>) {
 }
 
 fn folded_input_completed(state: RequestLifecycleState, reason: &str) -> bool {
-    state == RequestLifecycleState::Superseded && reason == gents::lifecycle::FOLDED_REASON
+    state == RequestLifecycleState::Superseded && reason == gents::request::lifecycle::FOLDED_REASON
 }
 
 #[derive(Clone, Copy)]
@@ -328,11 +328,11 @@ pub(crate) async fn stream_turn_progress(
 
         let folded = request
             .as_ref()
-            .is_some_and(|row| gents::lifecycle::folded_into(row).is_some());
+            .is_some_and(|row| gents::request::lifecycle::folded_into(row).is_some());
         if folded
             || request
                 .as_ref()
-                .is_some_and(|row| gents::lifecycle::replaced_by(row).is_some())
+                .is_some_and(|row| gents::request::lifecycle::replaced_by(row).is_some())
         {
             clear_indicator(&mut indicator).await;
             let envelope = crate::request_helpers::wait_for_terminal_response_with_progress(
@@ -1388,7 +1388,7 @@ mod folded_input_tests {
 
     #[test]
     fn only_owned_fold_supersession_is_an_informational_completion() {
-        let reason = gents::lifecycle::FOLDED_REASON;
+        let reason = gents::request::lifecycle::FOLDED_REASON;
         assert!(folded_input_completed(
             RequestLifecycleState::Superseded,
             reason

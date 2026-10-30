@@ -48,12 +48,12 @@ pub(super) async fn bind_accepted_request(
         .unwrap()
         .to_owned();
     let request_doc = crate::graphql::escape_graphql_string(&request_doc_id);
-    let loaded = db.node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc}" }} }}, limit: 1) {{ {} }} }}"#, crate::watcher::AGENT_REQUEST_FIELDS)).await;
+    let loaded = db.node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc}" }} }}, limit: 1) {{ {} }} }}"#, crate::request::watcher::AGENT_REQUEST_FIELDS)).await;
     let row: gents_protocol::row::AgentRequestRow =
         crate::graphql::first_row(&loaded, "AgentRequest")
             .unwrap()
             .expect("created R4C request row");
-    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_node_did(
+    let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
         db.node.clone(),
         agent_id,
         did,
@@ -62,10 +62,13 @@ pub(super) async fn bind_accepted_request(
     );
     assert_eq!(
         lifecycle.claim().await.unwrap(),
-        crate::lifecycle::ClaimOutcome::Claimed
+        crate::request::lifecycle::ClaimOutcome::Claimed
     );
-    let writer =
-        crate::streaming::DefraStreamWriter::new(db.node.clone(), did, std::time::Duration::ZERO);
+    let writer = crate::request::streaming::DefraStreamWriter::new(
+        db.node.clone(),
+        did,
+        std::time::Duration::ZERO,
+    );
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     hook.set_active_request_lineage(Some(request_id.to_owned()), Some(did.to_owned()))
         .await

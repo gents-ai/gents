@@ -3,7 +3,7 @@ use crate::config_client::ConfigAccess;
 #[cfg(test)]
 use crate::graphql::escape_graphql_string;
 #[cfg(test)]
-use crate::lifecycle::{SessionMessageCause, SessionMessageTarget};
+use crate::request::lifecycle::{SessionMessageCause, SessionMessageTarget};
 #[cfg(test)]
 use crate::session_origin::SessionScope;
 #[cfg(test)]

@@ -246,20 +246,20 @@ async fn desktop_task_run_defers_declared_goal_until_claim() -> Result<()> {
     assert_eq!(fires[0]["goal_objective"], "Finish release");
     assert_eq!(fires[0]["goal_token_budget"], 10_000);
     let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(requests[0].clone())?;
-    let request = gents::watcher::AgentRequest::try_from(row)?;
+    let request = gents::request::watcher::AgentRequest::try_from(row)?;
     let session_id = request.session_id.clone();
-    let mut lifecycle = gents::lifecycle::RequestLifecycle::new_with_execution_binding(
+    let mut lifecycle = gents::request::lifecycle::RequestLifecycle::new_with_execution_binding(
         core.node_arc(),
         "durable",
         &node_did,
         request,
         60,
-        gents::lifecycle::ExecutionOrigin::Interactive,
+        gents::request::lifecycle::ExecutionOrigin::Interactive,
         "local",
     );
     assert_eq!(
         lifecycle.claim().await?,
-        gents::lifecycle::ClaimOutcome::Claimed
+        gents::request::lifecycle::ClaimOutcome::Claimed
     );
     let response = gents::graphql::graphql_with_transaction_retry(
         core.node(),

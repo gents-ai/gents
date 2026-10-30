@@ -101,13 +101,13 @@ async fn dropped_wait_without_volatile_handle_settles_through_terminal_parent_ow
             fixture
                 .lifecycle
                 .terminalize_owned(
-                    crate::lifecycle::RequestTerminalOutcome::Interrupted,
+                    crate::request::lifecycle::RequestTerminalOutcome::Interrupted,
                     selection,
                     Some("wait observer dropped"),
                 )
                 .await
                 .unwrap(),
-            crate::lifecycle::TerminalizeResult::Won,
+            crate::request::lifecycle::TerminalizeResult::Won,
         );
         let report = ToolCallLifecycle::reconcile_terminal_parent_owned_tools(&node, agent)
             .await

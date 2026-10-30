@@ -3905,7 +3905,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         )
         .await
         .expect("enqueue a fresh request for the reconciled agent");
-        let request = crate::request_admission::load_request_for_admission_test(
+        let request = crate::request::admission::load_request_for_admission_test(
             node.as_ref(),
             &request_doc_id,
         )

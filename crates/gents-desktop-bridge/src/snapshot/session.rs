@@ -73,15 +73,15 @@ pub(super) fn message_is_runtime_control(
         .and_then(|request| request.input.as_ref())
         .cloned()
         .unwrap_or_default();
-    gents::lifecycle::is_runtime_control_message(&request_input, &message.message_key)
+    gents::request::lifecycle::is_runtime_control_message(&request_input, &message.message_key)
 }
 
 pub(super) fn request_origin_view(
     store: &ClientStore,
     request: &AgentRequestRow,
 ) -> Option<RequestOriginView> {
-    use gents::lifecycle::RequestOrigin;
-    Some(match gents::lifecycle::request_origin(request) {
+    use gents::request::lifecycle::RequestOrigin;
+    Some(match gents::request::lifecycle::request_origin(request) {
         RequestOrigin::Person => return None,
         RequestOrigin::SessionMessage {
             parent_request_doc_id,
@@ -95,7 +95,7 @@ pub(super) fn request_origin_view(
             RequestOriginView::SessionMessage {
                 display_body: parent
                     .and_then(|parent| {
-                        gents::lifecycle::session_message_display_body(request, parent)
+                        gents::request::lifecycle::session_message_display_body(request, parent)
                     })
                     .map(str::to_owned),
                 sender_node_did: parent
@@ -145,7 +145,7 @@ pub(super) fn request_is_background_completion(request: &AgentRequestRow) -> boo
     request
         .input
         .as_ref()
-        .is_some_and(gents::lifecycle::is_background_completion_request)
+        .is_some_and(gents::request::lifecycle::is_background_completion_request)
 }
 
 pub(super) fn authored_prompt_message_key(request_doc_id: &str) -> String {

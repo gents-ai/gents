@@ -167,7 +167,7 @@
       "generated_groups": [],
       "fixture_status": "not_exported",
       "native_owner_paths": [
-        "crates/gents/src/streaming.rs",
+        "crates/gents/src/request/streaming.rs",
         "crates/gents/src/agent/stream_processor.rs",
         "crates/gents-desktop-core/src/client/observe.rs",
         "crates/gents-desktop-core/src/client/observe/projection_store.rs",

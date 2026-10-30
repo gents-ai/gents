@@ -8,10 +8,10 @@ use super::*;
 
 #[test]
 fn authored_edit_uses_the_send_skill_parser() {
-    let mut edit = gents::lifecycle::PendingQueueEdit {
+    let mut edit = gents::request::lifecycle::PendingQueueEdit {
         expected_request_doc_ids: vec!["request".into()],
         selected_request_doc_ids: vec!["request".into()],
-        messages: vec![gents::lifecycle::PendingMessageEdit {
+        messages: vec![gents::request::lifecycle::PendingMessageEdit {
             request_doc_id: "request".into(),
             content: "/skill review\nPlease review".into(),
             authored_input: Some(Default::default()),

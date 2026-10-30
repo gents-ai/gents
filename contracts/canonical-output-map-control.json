@@ -55,7 +55,7 @@
     "fixture_status": "summary_only",
     "native_owner_paths": [
       "crates/gents/src/agent/completion_retry.rs",
-      "crates/gents/src/streaming.rs"
+      "crates/gents/src/request/streaming.rs"
     ],
     "consumer_paths": ["crates/gents/src/retry/tests.rs"],
     "native_status": "pending",
@@ -87,7 +87,7 @@
     "fixture_status": "not_exported",
     "native_owner_paths": [
       "crates/gents/src/agent/completion_retry.rs",
-      "crates/gents/src/streaming.rs"
+      "crates/gents/src/request/streaming.rs"
     ],
     "consumer_paths": ["crates/gents/src/retry/tests.rs"],
     "native_status": "pending",
@@ -118,11 +118,11 @@
     "generated_groups": ["queue_deadline_conformance_cases"],
     "fixture_status": "summary_only",
     "native_owner_paths": [
-      "crates/gents/src/lifecycle/queue/enqueue.rs",
-      "crates/gents/src/lifecycle/queue/coalescing.rs",
-      "crates/gents/src/lifecycle/queue/mutation.rs"
+      "crates/gents/src/request/lifecycle/queue/enqueue.rs",
+      "crates/gents/src/request/lifecycle/queue/coalescing.rs",
+      "crates/gents/src/request/lifecycle/queue/mutation.rs"
     ],
-    "consumer_paths": ["crates/gents/src/lifecycle/queue/tests.rs"],
+    "consumer_paths": ["crates/gents/src/request/lifecycle/queue/tests.rs"],
     "native_status": "pending",
     "required_cases": [
       "reject foreign agent and foreign requester scopes before queue mutation",
@@ -150,13 +150,13 @@
     "generated_groups": ["queue_deadline_conformance_cases"],
     "fixture_status": "summary_only",
     "native_owner_paths": [
-      "crates/gents/src/lifecycle/queue/draining.rs",
-      "crates/gents/src/lifecycle/queue/goal_continuation.rs",
+      "crates/gents/src/request/lifecycle/queue/draining.rs",
+      "crates/gents/src/request/lifecycle/queue/goal_continuation.rs",
       "crates/gents/src/background_completion/notification_delivery.rs"
     ],
     "consumer_paths": [
-      "crates/gents/src/lifecycle/queue/tests/background_completion.rs",
-      "crates/gents/src/lifecycle/queue/tests/background_goal_repair.rs"
+      "crates/gents/src/request/lifecycle/queue/tests/background_completion.rs",
+      "crates/gents/src/request/lifecycle/queue/tests/background_goal_repair.rs"
     ],
     "native_status": "pending",
     "required_cases": [
@@ -186,8 +186,8 @@
     "constructors": ["SessionQueue.Action.drainObservedAutomated"],
     "generated_groups": ["interrupt_queue_cases"],
     "fixture_status": "concrete_inputs",
-    "native_owner_paths": ["crates/gents/src/interrupt.rs", "crates/gents/src/lifecycle/queue/draining.rs"],
-    "consumer_paths": ["crates/gents/src/lean_vocab_test/support.rs", "crates/gents/src/interrupt/queue_tests.rs"],
+    "native_owner_paths": ["crates/gents/src/request/interrupt.rs", "crates/gents/src/request/lifecycle/queue/draining.rs"],
+    "consumer_paths": ["crates/gents/src/lean_vocab_test/support.rs", "crates/gents/src/request/interrupt/queue_tests.rs"],
     "native_status": "pending",
     "required_cases": [
       "completion_before_interrupt",
@@ -224,12 +224,12 @@
     "generated_groups": [],
     "fixture_status": "not_exported",
     "native_owner_paths": [
-      "crates/gents/src/lifecycle/claim.rs",
-      "crates/gents/src/lifecycle/queue/atomic_inputs.rs",
-      "crates/gents/src/lifecycle/execution_lease.rs",
+      "crates/gents/src/request/lifecycle/claim.rs",
+      "crates/gents/src/request/lifecycle/queue/atomic_inputs.rs",
+      "crates/gents/src/request/lifecycle/execution_lease.rs",
       "crates/gents/src/background_completion_diagnostics.rs"
     ],
-    "consumer_paths": ["crates/gents/src/lifecycle/queue/tests/background_completion.rs"],
+    "consumer_paths": ["crates/gents/src/request/lifecycle/queue/tests/background_completion.rs"],
     "native_status": "pending",
     "required_cases": [
       "derive nonempty wake bindings from canonical notification headers for the exact authenticated physical request, session and captured sequence boundary",
@@ -272,7 +272,7 @@
     "generated_groups": [],
     "fixture_status": "not_exported",
     "native_owner_paths": [
-      "crates/gents/src/streaming.rs",
+      "crates/gents/src/request/streaming.rs",
       "crates/gents/src/graphql.rs",
       "crates/gents/src/config_client/txn.rs"
     ],
@@ -323,15 +323,15 @@
     ],
     "fixture_status": "concrete_inputs",
     "native_owner_paths": [
-      "crates/gents/src/lifecycle/claim.rs",
-      "crates/gents/src/lifecycle/queue/folding.rs",
-      "crates/gents/src/streaming/canonical.rs",
+      "crates/gents/src/request/lifecycle/claim.rs",
+      "crates/gents/src/request/lifecycle/queue/folding.rs",
+      "crates/gents/src/request/streaming/canonical.rs",
       "crates/gents-loop/src/loop_stream.rs",
       "crates/gents/src/agent/daemon/inference.rs"
     ],
     "consumer_paths": [
       "crates/gents/src/lean_vocab_test/support.rs",
-      "crates/gents/src/lifecycle/queue/tests/folding.rs",
+      "crates/gents/src/request/lifecycle/queue/tests/folding.rs",
       "crates/gents/src/agent/loop_stream/tests/request_assembly.rs"
     ],
     "native_status": "pending",

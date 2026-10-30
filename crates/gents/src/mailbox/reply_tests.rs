@@ -1,7 +1,7 @@
 use super::*;
 use crate::config_client::ConfigAccess;
+use crate::request::watcher::AgentRequest;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
-use crate::watcher::AgentRequest;
 
 async fn signed_reply(
     node: &EmbeddedNode,
@@ -69,7 +69,7 @@ async fn persisted_request(
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
         escape_graphql_string(doc_id),
-        crate::request_admission::SIGNED_REQUEST_FIELDS
+        crate::request::admission::SIGNED_REQUEST_FIELDS
     );
     let response = node.execute(&query).await;
     let record = rows::<gents_protocol::row::AgentRequestRow>(&response, "AgentRequest")
@@ -116,7 +116,7 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
     .unwrap();
     let request = signed_reply(&node, &identity, &item, "approved-request").await;
     let forged = persisted_reply(&node, &identity, &item, "forged-request", true).await;
-    assert!(crate::lifecycle::is_claim_admission_error(
+    assert!(crate::request::lifecycle::is_claim_admission_error(
         &claim(&node, &forged, false).await.unwrap_err()
     ));
     assert_eq!(stored_lifecycle(&node, &forged).await, "pending");
@@ -142,7 +142,7 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
     claim(&node, &request, false).await.unwrap();
     let replay = signed_reply(&node, &identity, &item, "replayed-request").await;
     let error = claim(&node, &replay, false).await.unwrap_err();
-    assert!(crate::lifecycle::is_claim_admission_error(&error));
+    assert!(crate::request::lifecycle::is_claim_admission_error(&error));
     assert_eq!(stored_lifecycle(&node, &replay).await, "pending");
     let stored = load_mailbox_item(&node, &item.doc_id)
         .await
@@ -163,7 +163,7 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
     dismiss_mailbox_item(&node, &declined.doc_id, identity.did())
         .await
         .unwrap();
-    assert!(crate::lifecycle::is_claim_admission_error(
+    assert!(crate::request::lifecycle::is_claim_admission_error(
         &claim(&node, &denied, false).await.unwrap_err()
     ));
     assert_eq!(
@@ -315,10 +315,10 @@ async fn modern_questions_require_correlated_replies_and_preserve_skip_claims() 
 #[tokio::test]
 async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
     use crate::inference::llm::tool::Tool;
-    use crate::lifecycle::{
+    use crate::request::lifecycle::{
         ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
     };
-    use crate::streaming::DefraStreamWriter;
+    use crate::request::streaming::DefraStreamWriter;
     use crate::tool_call_lifecycle::runtime::{
         scope_request_tool_execution_with_session, scope_tool_request_identity,
     };

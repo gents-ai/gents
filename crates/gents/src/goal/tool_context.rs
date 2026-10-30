@@ -61,7 +61,7 @@ pub(super) async fn load_goal_tool_context_in_txn(
             escape_graphql_string(owner),
             escape_graphql_string(session),
             escape_graphql_string(request_id),
-            crate::request_admission::SIGNED_REQUEST_FIELDS,
+            crate::request::admission::SIGNED_REQUEST_FIELDS,
         ))
         .await?;
     let mut requests: Vec<AgentRequestRow> = serde_json::from_value(

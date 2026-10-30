@@ -460,7 +460,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/lifecycle/claim.rs",
+      "path": "crates/gents/src/request/lifecycle/claim.rs",
       "collection": "AgentMessage",
       "arguments": "filter: { $GENTS_scope$ }, order: { sequence: DESC }, limit: 1"
     },
@@ -475,7 +475,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/lifecycle/queue/atomic_inputs.rs",
+      "path": "crates/gents/src/request/lifecycle/queue/atomic_inputs.rs",
       "collection": "AgentMessage",
       "arguments": "filter: { session_id: { _eq: \"$GENTS_escaped_session_id$\" }, node_did: { _eq: \"$GENTS_escaped_node_did$\" } }, order: [{ node_did: DESC }, { session_id: DESC }, { sequence: DESC }], limit: 1"
     },
@@ -488,7 +488,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/lifecycle/recovery.rs",
+      "path": "crates/gents/src/request/lifecycle/recovery.rs",
       "collection": "AgentRequest",
       "arguments": "filter: { node_did: { _eq: \"$GENTS_escaped_node_did$\" }, _and: [ { requester_did: { _neq: null } }, { requester_did: { _neq: \"$GENTS_escaped_node_did$\" } } ], lifecycle_state: { _in: $GENTS_terminal_states$ }, terminal_redrive_attempts: { _lt: $GENTS_cap$ } }, order: [{ terminalized_at: ASC }, { request_id: ASC }], limit: $GENTS_limit$"
     },

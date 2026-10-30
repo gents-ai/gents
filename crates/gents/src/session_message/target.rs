@@ -4,7 +4,7 @@ use defra_node::EmbeddedNode;
 use std::sync::Arc;
 
 use crate::config_client::ConfigAccess;
-use crate::lifecycle::SessionMessageTarget;
+use crate::request::lifecycle::SessionMessageTarget;
 use crate::session_origin::SessionScope;
 use crate::tool_surface::AgentToolConfig;
 
@@ -14,7 +14,7 @@ pub(crate) async fn load_caller_session_tools(
     agent_id: &str,
 ) -> Result<AgentToolConfig> {
     let (_, tools, targets) =
-        crate::request_admission::load_request_context(node, node_did, agent_id).await?;
+        crate::request::admission::load_request_context(node, node_did, agent_id).await?;
     tools
         .map(|tools| AgentToolConfig::from_document_with_targets(&tools, &targets))
         .transpose()

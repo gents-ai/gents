@@ -8,7 +8,7 @@ use gents::config_client::{
 use gents::graphql::escape_graphql_string;
 use gents::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents::inference::rendered_request::{decode_capture_json, CapturePayloadKind};
-use gents::lifecycle::{
+use gents::request::lifecycle::{
     pending_user_queue, submit_pending_user_edit, PendingMessageEdit, PendingQueueEdit,
 };
 use gents::{Collection, Gents, ReasoningEffort, SamplingConfig, ToolCeiling};
@@ -79,7 +79,7 @@ async fn enqueue(db: &TestDb, id: &str, content: &str) -> Result<String> {
         chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         AgentRequestAdmissionRecord::local_self(did),
     );
-    create.input = gents::lifecycle::prepare_user_message_input(
+    create.input = gents::request::lifecycle::prepare_user_message_input(
         &ConfigAccess::local(db.node.clone()),
         did,
         SESSION,

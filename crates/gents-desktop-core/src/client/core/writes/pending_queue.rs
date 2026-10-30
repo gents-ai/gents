@@ -63,7 +63,7 @@ async fn merge_accepted_edit_projection(
     receipt
 }
 
-fn normalize_pending_edit_skills(edit: &mut gents::lifecycle::PendingQueueEdit) {
+fn normalize_pending_edit_skills(edit: &mut gents::request::lifecycle::PendingQueueEdit) {
     for message in &mut edit.messages {
         if let Some(authored) = &mut message.authored_input {
             let selection =
@@ -100,7 +100,7 @@ impl ClientCore {
         delivery: gents_protocol::request_input::QueueDelivery,
     ) -> Result<gents_protocol::request_input::RequestInput> {
         let input = self.prepare_goal_input(node_did, session_id, input).await?;
-        gents::lifecycle::prepare_user_message_input(
+        gents::request::lifecycle::prepare_user_message_input(
             &self
                 .operator_observation_graphql(node_did)
                 .map(ConfigAccess::Graphql)
@@ -117,7 +117,7 @@ impl ClientCore {
         &self,
         node_did: &str,
         session_id: &str,
-    ) -> Result<gents::lifecycle::PendingQueueSnapshot> {
+    ) -> Result<gents::request::lifecycle::PendingQueueSnapshot> {
         Ok(self
             .pending_user_queue_projection(node_did, session_id, &[])
             .await?
@@ -129,14 +129,14 @@ impl ClientCore {
         node_did: &str,
         session_id: &str,
         observed_doc_ids: &[String],
-    ) -> Result<gents::lifecycle::PendingQueueProjection> {
+    ) -> Result<gents::request::lifecycle::PendingQueueProjection> {
         let record = self
             .sync_state
             .records()
             .into_iter()
             .find(|record| record.node_did == node_did)
             .context("no saved deployment route owns this node")?;
-        gents::lifecycle::pending_user_queue_projection(
+        gents::request::lifecycle::pending_user_queue_projection(
             &self
                 .operator_observation_graphql(node_did)
                 .map(ConfigAccess::Graphql)
@@ -153,7 +153,7 @@ impl ClientCore {
         &self,
         node_did: &str,
         session_id: &str,
-        mut edit: gents::lifecycle::PendingQueueEdit,
+        mut edit: gents::request::lifecycle::PendingQueueEdit,
     ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
         normalize_pending_edit_skills(&mut edit);
         self.apply_pending_queue_edit(node_did, session_id, edit, None, None)
@@ -169,7 +169,7 @@ impl ClientCore {
         request_id: Option<&str>,
     ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
         let snapshot = self.pending_user_queue(node_did, session_id).await?;
-        let edit = gents::lifecycle::pending_steer_edit(
+        let edit = gents::request::lifecycle::pending_steer_edit(
             &snapshot,
             expected_request_doc_ids,
             request_doc_id,
@@ -182,7 +182,7 @@ impl ClientCore {
         &self,
         node_did: &str,
         session_id: &str,
-        edit: gents::lifecycle::PendingQueueEdit,
+        edit: gents::request::lifecycle::PendingQueueEdit,
         steer: Option<&str>,
         request_id: Option<&str>,
     ) -> Result<gents_protocol::session_input_edit::SessionInputEditReceipt> {
@@ -202,7 +202,7 @@ impl ClientCore {
         let access = self.session_queue_access(node_did);
         let result = match steer {
             Some(request_doc_id) => {
-                gents::lifecycle::submit_pending_user_steer(
+                gents::request::lifecycle::submit_pending_user_steer(
                     &access,
                     signer.as_ref(),
                     admission,
@@ -216,7 +216,7 @@ impl ClientCore {
                 .await
             }
             None => {
-                gents::lifecycle::submit_pending_user_edit(
+                gents::request::lifecycle::submit_pending_user_edit(
                     &access,
                     signer.as_ref(),
                     admission,

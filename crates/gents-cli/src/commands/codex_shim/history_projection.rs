@@ -494,9 +494,9 @@ fn project_turn_group(
         request: &'a AgentRequestRow,
         requests: &[AgentRequestRow],
     ) -> Option<&'a str> {
-        gents::lifecycle::folded_into(request).filter(|head| {
+        gents::request::lifecycle::folded_into(request).filter(|head| {
             requests.iter().any(|other| {
-                other.request_id == *head && gents::lifecycle::folded_into(other).is_none()
+                other.request_id == *head && gents::request::lifecycle::folded_into(other).is_none()
             })
         })
     }
@@ -1002,7 +1002,7 @@ mod tests {
             "content": "we should move faster",
             "lifecycle_state": "superseded",
             "superseded_by_request": "head",
-            "failure_reason": gents::lifecycle::FOLDED_REASON,
+            "failure_reason": gents::request::lifecycle::FOLDED_REASON,
             "input": queued,
             "execution_origin": "interactive"
         }));

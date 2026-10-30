@@ -24,7 +24,7 @@ fn snapshot_with_active_task(task: ResolvedTask) -> Arc<ActiveRuntimeSnapshot> {
         RapidHashMap::new(),
         RapidHashMap::new(),
     )
-    .with_automation(crate::runtime::snapshot::ResolvedAutomation {
+    .with_automation(crate::runtime_snapshot::ResolvedAutomation {
         tasks,
         ..Default::default()
     })
@@ -85,17 +85,16 @@ async fn production_materializer_persists_event_source_document_lineage() {
         "event_sources":[{"node_did":owner,"event_source_id":"source","source_collection":"AgentRequest","event_kind":"created"}],
         "triggers":[{"node_did":owner,"trigger_id":"event-trigger","task_id":"task-event","source":{"kind":"event","event_source_id":"source"}}]
     })).unwrap();
-    let plan =
-        crate::store::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
-    let trigger_doc_id = crate::store::config_client::ConfigAccess::transact_local_write(
+    let plan = crate::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+    let trigger_doc_id = crate::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.manual_source.fixture",
         |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await?;
-                let (id, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                crate::config_client::apply_desired_state_plan(txn, plan).await?;
+                let (id, _) = crate::config_client::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Trigger,
                     owner,
@@ -174,8 +173,7 @@ async fn production_materializer_persists_event_source_document_lineage() {
         crate::request::admission::load_request_for_admission_test(node.as_ref(), request_doc_id)
             .await
             .unwrap();
-    let (_authority_owner, authority) =
-        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let (_authority_owner, authority) = crate::agent::p2p_reconcile::enrollment_authority_channel();
     let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         identity,
@@ -199,9 +197,8 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
         "event_sources":[{"node_did":owner,"event_source_id":"outcomes","source_collection":"AgentRequest","event_kind":"created"}],
         "triggers":[{"node_did":owner,"trigger_id":"lead-outcomes","task_id":"task-lead","source":{"kind":"event","event_source_id":"outcomes"},"session_id_template":"{{ doc.session_id }}"}]
     })).unwrap();
-    let plan =
-        crate::store::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
-    let trigger_doc_id = crate::store::config_client::ConfigAccess::transact_local_write(
+    let plan = crate::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+    let trigger_doc_id = crate::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.paired_session_fire.fixture",
@@ -209,8 +206,8 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
             let plan = &plan;
             let owner = &owner;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await?;
-                let (id, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                crate::config_client::apply_desired_state_plan(txn, plan).await?;
+                let (id, _) = crate::config_client::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Trigger,
                     owner,
@@ -306,8 +303,7 @@ async fn production_event_fire_into_a_paired_client_session_adopts_its_requester
     )
     .await
     .unwrap();
-    let (_authority_owner, authority) =
-        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let (_authority_owner, authority) = crate::agent::p2p_reconcile::enrollment_authority_channel();
     let verified = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         identity,
@@ -354,17 +350,16 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
         "schedules":[{"node_did":owner,"schedule_id":"source","cadence":{"kind":"interval","interval_secs":60}}],
         "triggers":[{"node_did":owner,"trigger_id":"schedule-trigger","task_id":"task-schedule","source":{"kind":"schedule","schedule_id":"source"}}]
     })).unwrap();
-    let plan =
-        crate::store::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
-    let trigger_doc_id = crate::store::config_client::ConfigAccess::transact_local_write(
+    let plan = crate::config_client::DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+    let trigger_doc_id = crate::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.manual_source.fixture",
         |txn| {
             let plan = &plan;
             Box::pin(async move {
-                crate::store::config_client::apply_desired_state_plan(txn, plan).await?;
-                let (id, _) = crate::store::config_client::read_desired_state_record_in_txn(
+                crate::config_client::apply_desired_state_plan(txn, plan).await?;
+                let (id, _) = crate::config_client::read_desired_state_record_in_txn(
                     txn,
                     crate::Collection::Trigger,
                     owner,
@@ -419,8 +414,7 @@ async fn production_schedule_materialization_passes_final_exact_config_admission
     )
     .await
     .unwrap();
-    let (_authority_owner, authority) =
-        crate::runtime::agent::p2p_reconcile::enrollment_authority_channel();
+    let (_authority_owner, authority) = crate::agent::p2p_reconcile::enrollment_authority_channel();
     let verifier = crate::request::admission::AgentRequestAdmissionVerifier::new(
         node.clone(),
         identity,

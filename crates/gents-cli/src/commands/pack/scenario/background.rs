@@ -121,7 +121,7 @@ async fn load_background_completion_evidence(
             .context("decoding background-completion request input")?
             .unwrap_or_default();
         if row.get("execution_origin").and_then(Value::as_str) == Some("scheduled")
-            && gents::lifecycle::is_background_completion_request(&input)
+            && gents::request::lifecycle::is_background_completion_request(&input)
             && RequestLifecycleState::parse_opt(Some(lifecycle_state))
                 == Some(RequestLifecycleState::Completed)
         {

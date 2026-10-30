@@ -502,7 +502,7 @@ fn folded_user_input_stays_visible_when_a_runtime_request_consumes_it() {
             .unwrap(),
         );
         input_request.lifecycle_state = Some(RequestLifecycleState::Superseded);
-        input_request.failure_reason = Some(gents::lifecycle::FOLDED_REASON.into());
+        input_request.failure_reason = Some(gents::request::lifecycle::FOLDED_REASON.into());
         input_request.superseded_by_request = Some("req-1".into());
         input_request.superseded_by_request_doc_id = Some("req-1".into());
         rows.requests[0].input = Some(

@@ -1103,7 +1103,7 @@ fn generated_authored_key(
     match key {
         Key::Context => "context".to_owned(),
         Key::Prompt => "prompt".to_owned(),
-        Key::Folded { request_id } => crate::lifecycle::queue::folded_input_key(&docs[request_id]),
+        Key::Folded { request_id } => crate::request::lifecycle::queue::folded_input_key(&docs[request_id]),
     }
 }
 
@@ -1136,7 +1136,7 @@ async fn drive_generated_turn_input(
         .folded
         .iter()
         .map(|folded| crate::agent::loop_stream::FoldedPrompt {
-            key: crate::lifecycle::queue::folded_input_key(&docs[&folded.request_id]),
+            key: crate::request::lifecycle::queue::folded_input_key(&docs[&folded.request_id]),
             message: Message::user(folded.content.clone()),
         })
         .collect();

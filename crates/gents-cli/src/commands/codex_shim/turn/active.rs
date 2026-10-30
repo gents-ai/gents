@@ -185,7 +185,9 @@ pub(super) async fn next_steering_request_after(
         "codex.active.steering_order",
         |txn| {
             let ids = &ids;
-            Box::pin(async move { gents::lifecycle::request_arrival_order(txn, ids).await })
+            Box::pin(
+                async move { gents::request::lifecycle::request_arrival_order(txn, ids).await },
+            )
         },
     )
     .await?;
@@ -242,7 +244,8 @@ fn next_steering_request(row: &AgentRequestRow) -> NextSteeringRequest {
 }
 
 fn steering_request_is_transparent(row: &AgentRequestRow) -> bool {
-    gents::lifecycle::folded_into(row).is_some() || gents::lifecycle::replaced_by(row).is_some()
+    gents::request::lifecycle::folded_into(row).is_some()
+        || gents::request::lifecycle::replaced_by(row).is_some()
 }
 
 pub(super) async fn steering_request_ids_for_turn_interrupt_cleanup(

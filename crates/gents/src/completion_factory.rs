@@ -10,10 +10,10 @@ use crate::inference::admission::{AdmissionRegistry, AdmittedCompletionModel};
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::inference::rendered_request::CaptureScopeKind;
 use crate::inference::resolved::{ReasoningEffort, ResolvedAgent};
-use crate::lifecycle::ExecutionOrigin;
 use crate::openai_wire::OpenAiWireApi;
 use crate::provider_usage;
-use crate::watcher::AgentRequest;
+use crate::request::lifecycle::ExecutionOrigin;
+use crate::request::watcher::AgentRequest;
 
 pub(crate) fn effective_max_tokens(
     max_output_tokens: usize,

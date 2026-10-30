@@ -206,7 +206,7 @@ async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
         assert_eq!(model.seen_requests().await.len(), 1);
         lifecycle
             .terminalize_owned(
-                crate::lifecycle::RequestTerminalOutcome::Failed,
+                crate::request::lifecycle::RequestTerminalOutcome::Failed,
                 writer.terminal_output(&lifecycle.request().doc_id).await,
                 Some(&error),
             )

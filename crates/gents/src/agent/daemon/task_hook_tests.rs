@@ -16,7 +16,7 @@ use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePo
 use crate::inference::llm::tool::ToolDyn;
 use crate::inference::resolved::ResolvedAgent;
 use crate::prompt::LayeredPromptBuilder;
-use crate::watcher::AgentRequest;
+use crate::request::watcher::AgentRequest;
 use crate::Collection;
 use tracing::instrument::WithSubscriber;
 
@@ -209,7 +209,7 @@ impl Harness {
                 source_doc_id: uuid::Uuid::new_v4().to_string(),
             };
             gents_protocol::trigger_delivery::TriggerFire {
-                fire_key: crate::lifecycle::task_fire_key(&identity),
+                fire_key: crate::request::lifecycle::task_fire_key(&identity),
                 request_id: identity.request_id(),
                 session_id: identity.session_id(),
                 identity,
@@ -277,7 +277,7 @@ impl Harness {
         let doc_id = match &fire {
             Some(fire) => {
                 let access = ConfigAccess::local(self.node.clone());
-                crate::lifecycle::write_task_delivery(&access, fire, false, &create)
+                crate::request::lifecycle::write_task_delivery(&access, fire, false, &create)
                     .await
                     .expect("admit the manual Task fire and its request")
                     .request
@@ -294,7 +294,7 @@ impl Harness {
                 crate::graphql::created_doc_id(&response, "AgentRequest").unwrap()
             }
         };
-        crate::request_admission::load_request_for_admission_test(self.node.as_ref(), &doc_id)
+        crate::request::admission::load_request_for_admission_test(self.node.as_ref(), &doc_id)
             .await
             .unwrap()
     }
@@ -350,7 +350,7 @@ impl Harness {
                 self.owner().to_string(),
             ),
             slot_generation: 1,
-            request_admission: crate::request_admission::AgentRequestAdmissionVerifier::new(
+            request_admission: crate::request::admission::AgentRequestAdmissionVerifier::new(
                 self.node.clone(),
                 self.agent_config.node_identity().clone(),
                 crate::agent::p2p_reconcile::enrollment_authority_channel().1,
@@ -406,7 +406,7 @@ impl Harness {
             while !marker.exists() {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            crate::interrupt::interrupt_request_by_doc_id(
+            crate::request::interrupt::interrupt_request_by_doc_id(
                 &self.node,
                 &doc_id,
                 self.owner(),
@@ -725,7 +725,7 @@ async fn materialize_writer_binding(harness: &Harness, request: &AgentRequest) {
         &request.request_id,
         &request.doc_id,
         harness.owner(),
-        &crate::lifecycle::WorkspaceLineage {
+        &crate::request::lifecycle::WorkspaceLineage {
             workspace_id: request.workspace_id.clone(),
             workspace_authority: request.workspace_authority.clone(),
             workspace_owner_node_did: request.workspace_owner_node_did.clone(),
@@ -1119,7 +1119,7 @@ async fn workspace_seal_completes_before_the_after_phase_is_selected() {
         &request.request_id,
         &request.doc_id,
         harness.owner(),
-        &crate::lifecycle::WorkspaceLineage {
+        &crate::request::lifecycle::WorkspaceLineage {
             workspace_id: request.workspace_id.clone(),
             workspace_authority: request.workspace_authority.clone(),
             workspace_owner_node_did: request.workspace_owner_node_did.clone(),

@@ -133,7 +133,7 @@ pub fn validate_task_goal_declaration(
 
 pub(crate) async fn apply_claimed_task_goal_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    request: &crate::watcher::AgentRequest,
+    request: &crate::request::watcher::AgentRequest,
     now: &str,
 ) -> Result<()> {
     let owner = escape_graphql_string(&request.node_did);

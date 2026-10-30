@@ -155,7 +155,7 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
     assert_eq!(redrive.post_retry_count, Some(2));
     assert_eq!(redrive.retry_delay_seconds, Some(10));
     assert_eq!(
-        gents::lifecycle::background_wake_retry_delay(redrive.retry_count.unwrap() as i64)
+        gents::request::lifecycle::background_wake_retry_delay(redrive.retry_count.unwrap() as i64)
             .num_seconds(),
         redrive.retry_delay_seconds.unwrap() as i64
     );

@@ -7,7 +7,7 @@ use crate::lean_vocab_test::{
     lean_task_hook_run_cases, LeanCommandResult, LeanHookAttempt, LeanHookInvocation,
     LeanTaskHookRunCase, LeanTaskOutcome, LeanTaskPrimaryError,
 };
-use crate::task_hooks::{
+use crate::request::task_hooks::{
     effective_timeout_secs, run_task_hooks, HookAttempt, HookPrimaryError, ManagedTaskHookExec,
     TaskAgentResult, TaskHookCancellation, TaskHookExec, TaskHookOutcome,
 };
@@ -187,7 +187,7 @@ async fn generated_task_hook_run_cases_drive_real_host_commands() {
                 .with_execution_lease(
                     fixture.node.clone(),
                     lifecycle.request().doc_id.clone(),
-                    crate::lifecycle::RequestExecutionLease::new(
+                    crate::request::lifecycle::RequestExecutionLease::new(
                         lifecycle.execution_generation().unwrap().to_owned(),
                     ),
                 ),

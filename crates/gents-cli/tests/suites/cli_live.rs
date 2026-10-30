@@ -1452,7 +1452,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         assert_eq!(row["lifecycle_state"], "superseded", "{row}");
         assert_eq!(
             row["failure_reason"],
-            gents::lifecycle::FOLDED_REASON,
+            gents::request::lifecycle::FOLDED_REASON,
             "{row}"
         );
         assert_eq!(

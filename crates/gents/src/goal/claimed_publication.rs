@@ -2,11 +2,11 @@ mod wait_observation;
 
 use super::*;
 use crate::config_client::ConfigApplyTxn;
-use crate::lifecycle::materialize::{sign_request, RequestSigner};
-use crate::lifecycle::queue::{
+use crate::request::admission::{verify_runtime_local_control_receipt, SIGNED_REQUEST_FIELDS};
+use crate::request::lifecycle::materialize::{sign_request, RequestSigner};
+use crate::request::lifecycle::queue::{
     goal_continuation_agent, goal_continuation_identity, prepare_goal_continuation,
 };
-use crate::request_admission::{verify_runtime_local_control_receipt, SIGNED_REQUEST_FIELDS};
 use crate::store::identity::{NodeIdentity, RegisteredIdentity};
 use gents_protocol::row::AgentRequestRow;
 
@@ -184,7 +184,7 @@ async fn stage_claimed_continuation(
         "claimed predecessor must uniquely belong to the goal owner and session"
     );
     let parent_row = parents[0];
-    let parent = crate::watcher::AgentRequest::try_from(parent_row.clone())?;
+    let parent = crate::request::watcher::AgentRequest::try_from(parent_row.clone())?;
     let behavior = goal_continuation_agent(txn, &parent).await?;
     let sequence = observed.continuation_sequence();
     let now = Utc::now();

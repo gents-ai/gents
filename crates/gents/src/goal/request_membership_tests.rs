@@ -31,7 +31,7 @@ async fn generated_membership_observations_keep_model_roots_and_linear_receipt_w
         let session = format!("session-{}", case.scope.session);
         let current = format!("physical-{}", value["membership_current"].as_u64().unwrap());
         let (observed, checks) =
-            crate::request_admission::count_request_receipt_verifications(|| {
+            crate::request::admission::count_request_receipt_verifications(|| {
                 authenticated_goal_request_members(owner, &session, &current, &rows)
             });
         if let Some(root) = value["membership_entry"].as_u64() {

@@ -519,7 +519,7 @@ pub(super) fn resolve_tool_payloads(
                     );
                 }
             }
-        } else if crate::lifecycle::is_exact_invocation_reply(
+        } else if crate::request::lifecycle::is_exact_invocation_reply(
             header,
             request_doc,
             &row.session_id,

@@ -66,10 +66,12 @@ impl Hint<'_> {
                     && request.node_did.as_deref() == Some(message.node_did.as_str())
                     && request.session_id.as_deref() == Some(message.session_id.as_str())
                     && request.requester_did == message.requester_did
-                    && crate::lifecycle::input_message_owner(request).is_some_and(|(doc, key)| {
-                        Some(doc.as_str()) == message.request_doc_id.as_deref()
-                            && key == message.message_key
-                    })
+                    && crate::request::lifecycle::input_message_owner(request).is_some_and(
+                        |(doc, key)| {
+                            Some(doc.as_str()) == message.request_doc_id.as_deref()
+                                && key == message.message_key
+                        },
+                    )
             }
         }
     }

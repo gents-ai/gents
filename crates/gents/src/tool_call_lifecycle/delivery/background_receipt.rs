@@ -2,7 +2,7 @@ use crate::config_client::ConfigApplyTxn;
 #[cfg(test)]
 use crate::config_client::{ConfigAccess, IdempotentTransactionRetry};
 use crate::graphql::{created_doc_id, escape_graphql_string};
-use crate::lifecycle::queue::next_append_sequence_in_transaction;
+use crate::request::lifecycle::queue::next_append_sequence_in_transaction;
 use crate::session::canonical_rows::{
     decode_output_segment_row, decode_transcript_message_row, output_segment_create_variables,
     transcript_message_create_variables, AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS,

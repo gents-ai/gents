@@ -120,7 +120,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
         source_collection: "Task".into(),
         source_doc_id: task_doc_id,
     };
-    let fire_key = gents::lifecycle::task_fire_key(&identity);
+    let fire_key = gents::request::lifecycle::task_fire_key(&identity);
     let request_id = format!("trigger-request:{fire_key}");
     anyhow::ensure!(goal_objective_template.is_some() || args.session_id.is_none() || args.continue_session.is_none(),
         "ordinary Tasks accept either --session-id for a session label or --continue-session for an existing session, not both");
@@ -210,7 +210,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     let create = gents::build_signed_request(
         gents::RequestSpec {
             input: input.clone(),
-            trigger_lineage: gents::lifecycle::TriggerLineage {
+            trigger_lineage: gents::request::lifecycle::TriggerLineage {
                 trigger_kind: Some("manual".to_string()),
                 ..Default::default()
             },
@@ -224,7 +224,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
                     agent_id: agent_id.clone(),
                     session_id: session_id.clone(),
                     content: content.clone(),
-                    execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
+                    execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
                     created_at: now.clone(),
                 },
                 admission,
@@ -251,7 +251,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
         attempt: None,
         created_at: now,
     };
-    let admitted = gents::lifecycle::write_task_delivery(
+    let admitted = gents::request::lifecycle::write_task_delivery(
         &access,
         &fire,
         args.continue_session.is_some(),
@@ -451,7 +451,7 @@ mod tests {
                         agent_id: "engineer".into(),
                         session_id: "chat".into(),
                         content: "Continue the Task".into(),
-                        execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
+                        execution_origin: gents::request::lifecycle::ExecutionOrigin::Interactive,
                         created_at: "2026-10-21T00:00:00Z".into(),
                     },
                     gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(

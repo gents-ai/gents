@@ -259,7 +259,7 @@ impl ClientCore {
                 && answer.requester_did == row.requester_did,
             "request answer crossed its admitted scope"
         );
-        if !answer.is_terminal() || gents::lifecycle::folded_into(answer).is_some() {
+        if !answer.is_terminal() || gents::request::lifecycle::folded_into(answer).is_some() {
             return Ok(None);
         }
         let access = match self.operator_observation_graphql(node_did) {

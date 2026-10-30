@@ -107,7 +107,7 @@ pub(crate) async fn kill_caused_request(
         .context("caused request lacks node_did")?;
     let local = node_did == lifecycle.node_did();
     if !terminal {
-        let interrupted = crate::interrupt::interrupt_request_by_doc_id(
+        let interrupted = crate::request::interrupt::interrupt_request_by_doc_id(
             node,
             doc_id,
             node_did,
@@ -164,7 +164,7 @@ pub(crate) async fn kill(
             "cancelled",
             "",
             Some("explicit_cancel"),
-            crate::lifecycle::RequestHopCause::Continuation,
+            crate::request::lifecycle::RequestHopCause::Continuation,
         )
         .await?;
     }

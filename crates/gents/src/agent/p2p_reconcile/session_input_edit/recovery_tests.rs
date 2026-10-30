@@ -77,7 +77,7 @@ async fn edit_command(home: &EmbeddedHome, issued_at: DateTime<Utc>) -> SessionI
             content: "corrected content".into(),
         }],
     };
-    let replacements = crate::lifecycle::queue::prepare_pending_user_edit(
+    let replacements = crate::request::lifecycle::queue::prepare_pending_user_edit(
         &access,
         home.identity.as_ref(),
         AgentRequestAdmissionRecord::local_self(did),

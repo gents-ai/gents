@@ -71,8 +71,8 @@ pub(crate) async fn request_preview_in_txn<'a>(
         ..Default::default()
     };
     if !matches!(
-        crate::lifecycle::request_origin(&row),
-        crate::lifecycle::RequestOrigin::SessionMessage { .. }
+        crate::request::lifecycle::request_origin(&row),
+        crate::request::lifecycle::RequestOrigin::SessionMessage { .. }
     ) {
         return Ok(&request.content);
     }
@@ -89,8 +89,12 @@ pub(crate) async fn request_preview_in_txn<'a>(
         return Ok(&request.content);
     };
     Ok(
-        crate::lifecycle::session_message_display_body_with_content(&row, parent, &request.content)
-            .unwrap_or(&request.content),
+        crate::request::lifecycle::session_message_display_body_with_content(
+            &row,
+            parent,
+            &request.content,
+        )
+        .unwrap_or(&request.content),
     )
 }
 

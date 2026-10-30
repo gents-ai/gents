@@ -57,7 +57,7 @@ pub async fn interrupt_session(
                 let node_did = node_did.clone();
                 let requester_did = requester_did.clone();
                 Box::pin(async move {
-                    let active = crate::interrupt::interrupt_active_session_in_txn(
+                    let active = crate::request::interrupt::interrupt_active_session_in_txn(
                         txn,
                         &session_id,
                         &node_did,
@@ -75,7 +75,7 @@ pub async fn interrupt_session(
         .await;
     }
 
-    let Some(active) = crate::interrupt::active_session_request(
+    let Some(active) = crate::request::interrupt::active_session_request(
         node,
         &target.session_id,
         &target.node_did,
@@ -85,7 +85,7 @@ pub async fn interrupt_session(
     else {
         return Ok(None);
     };
-    crate::interrupt::interrupt_request_by_doc_id(
+    crate::request::interrupt::interrupt_request_by_doc_id(
         node,
         active
             .doc_id
