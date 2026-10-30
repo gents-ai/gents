@@ -302,16 +302,19 @@ test.describe("desktop live browser smoke", () => {
       const completion = liveRunner.waitForRequestCompletion(submitted);
 
       const liveAssistant = page.getByTestId("live-assistant");
-      const liveProse = () =>
-        liveAssistant.locator('[data-slot="assistant-message"]').evaluate((element) => {
-          const prose = element.cloneNode(true) as HTMLElement;
-          prose
-            .querySelectorAll(
-              ':scope > [data-slot="collapsible"], [data-testid="activity-status"]',
-            )
-            .forEach((node) => node.remove());
-          return (prose.textContent ?? "").trim();
-        });
+      const liveMessage = liveAssistant.locator('[data-slot="assistant-message"]');
+      const liveProse = async () =>
+        (await liveMessage.count()) === 0
+          ? ""
+          : liveMessage.evaluate((element) => {
+              const prose = element.cloneNode(true) as HTMLElement;
+              prose
+                .querySelectorAll(
+                  ':scope > [data-slot="collapsible"], [data-testid="activity-status"]',
+                )
+                .forEach((node) => node.remove());
+              return (prose.textContent ?? "").trim();
+            });
       await expect
         .poll(async () => (await liveProse()).length, { timeout: 120_000 })
         .toBeGreaterThanOrEqual(60);
