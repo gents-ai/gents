@@ -7,9 +7,13 @@ use tauri::Manager;
 use tokio_util::codec::LengthDelimitedCodec;
 
 use super::*;
+use tokio::sync::watch;
+
+use super::single_flight::run_detached_client_start;
 use crate::config::{BootstrapPolicy, BridgeConfig, HomePolicy};
 use crate::host::{local, protocol};
 use crate::state::resolve_policy;
+use crate::state::ClientStartProgress;
 
 #[tokio::test]
 async fn an_existing_listener_reservation_prevents_desktop_from_opening_the_store() {
