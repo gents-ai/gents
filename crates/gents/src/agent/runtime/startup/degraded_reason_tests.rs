@@ -1,4 +1,4 @@
-use super::is_degraded_startup_unavailable_reason;
+use super::snapshot::is_degraded_startup_unavailable_reason;
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
 
 #[test]
