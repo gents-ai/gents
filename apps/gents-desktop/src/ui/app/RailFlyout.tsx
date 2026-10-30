@@ -69,10 +69,13 @@ export function NavPanel({
   route,
   settings,
   syncRow,
+  overRail = false,
 }: {
   route: Route;
   settings: ReactNode;
   syncRow: boolean;
+  /** drawn over the rail, so each row's icon sits where the rail's is */
+  overRail?: boolean;
 }) {
   const online = useOnline();
   const mailboxCount = useMailboxCount();
@@ -121,7 +124,8 @@ export function NavPanel({
           title={`${selected.node.displayName ?? selected.label} · ${selected.nodeDid}`}
           data-testid="working-node"
           className={cn(
-            "group mr-3 mb-2 ml-[14px] flex h-9 items-center gap-3 rounded-lg text-sm transition-colors",
+            "group mr-3 ml-[14px] flex h-9 items-center gap-3 rounded-lg text-sm transition-colors",
+            overRail ? "mb-1" : "mb-2",
             selectedCurrent && "text-ink",
           )}
         >
@@ -157,7 +161,10 @@ export function NavPanel({
         <a
           href={href({ name: "nodes" })}
           data-testid="no-working-node"
-          className="group mr-3 mb-2 ml-[14px] flex h-9 items-center gap-3 rounded-lg text-sm text-muted-foreground transition-colors hover:text-foreground"
+          className={cn(
+            "group mr-3 ml-[14px] flex h-9 items-center gap-3 rounded-lg text-sm text-muted-foreground transition-colors hover:text-foreground",
+            overRail ? "mb-1" : "mb-2",
+          )}
         >
           <span className="grid size-7 shrink-0 place-items-center rounded-full ring-1 ring-dashed ring-border">
             <Waypoints className="size-3.5" />
@@ -323,8 +330,9 @@ export function RailFlyout({
         <div
           aria-hidden={!shown}
           className={cn(
-            "absolute top-1 bottom-2 left-2 flex w-72 flex-col gap-2 overflow-hidden bg-raised pb-2",
-            hover ? "pt-2" : "pt-3.5",
+            "absolute top-1 bottom-2 flex w-72 flex-col gap-2 overflow-hidden bg-raised pb-2",
+            /* over the rail, its icons stay where the rail's were */
+            hover ? "-left-px rounded-l-none pt-[3px]" : "left-2 pt-3.5",
             "rounded-2xl border border-border/60",
             hover
               ? "z-30 shadow-lg transition-[opacity,transform] duration-200 ease-out"
@@ -335,7 +343,12 @@ export function RailFlyout({
                 : "pointer-events-none -translate-x-2 opacity-0"),
           )}
         >
-          <NavPanel route={route} settings={settings} syncRow={!hover} />
+          <NavPanel
+            route={route}
+            settings={settings}
+            syncRow={!hover}
+            overRail={hover}
+          />
         </div>
       </PortalContainerProvider>
     </div>
