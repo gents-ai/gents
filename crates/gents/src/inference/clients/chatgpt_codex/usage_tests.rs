@@ -100,16 +100,15 @@ async fn usage_wiring_codex_key_backfill_lands_under_the_key() {
     if let Ok(mut stream) = model.stream(model.completion_request("hi").build()).await {
         let _ = futures::StreamExt::next(&mut stream).await;
     }
-    let backend: crate::document_config::InferenceBackend =
-        serde_json::from_value(serde_json::json!({
-            "node_did": did,
-            "backend_id": "backend-usage-a",
-            "name": "backend-usage-a",
-            "provider_kind": "ChatGptCodex",
-            "endpoint": url,
-            "auth": { "kind": "node_oauth" },
-        }))
-        .unwrap();
+    let backend: crate::documents::InferenceBackend = serde_json::from_value(serde_json::json!({
+        "node_did": did,
+        "backend_id": "backend-usage-a",
+        "name": "backend-usage-a",
+        "provider_kind": "ChatGptCodex",
+        "endpoint": url,
+        "auth": { "kind": "node_oauth" },
+    }))
+    .unwrap();
     let stored = crate::inference::usage_observation::usage_for_backend(
         &cache,
         &crate::config_client::ConfigAccess::local(node.clone()),

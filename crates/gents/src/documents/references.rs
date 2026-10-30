@@ -487,7 +487,9 @@ impl ConfigReferences {
                                 .map(|value| ("session_id_template", value)),
                         )
                 {
-                    for reference in crate::template::parse_template_for_validation(template)? {
+                    for reference in
+                        crate::documents::template::parse_template_for_validation(template)?
+                    {
                         ensure!(
                             !reference
                                 .root()

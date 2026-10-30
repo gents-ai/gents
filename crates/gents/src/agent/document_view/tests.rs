@@ -53,9 +53,7 @@ async fn existing_document_runtime_view_does_not_wait_for_mutation_gate() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let owner = "did:key:runtime-view-reader";
-    let principal = crate::document_config::ensure_node(&node, owner)
-        .await
-        .unwrap();
+    let principal = crate::documents::ensure_node(&node, owner).await.unwrap();
     let response = crate::config_client::ConfigAccess::write_local_response(
         &node,
         "test.runtime_view_skill",
@@ -144,11 +142,10 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     let tools_id = format!("{default_agent_id}:tools");
     let tools_doc_id = view.tools[&tools_id].doc_id.clone();
     let mut tools_doc = view.tools[&tools_id].value.clone();
-    tools_doc.host.get_or_insert_with(Default::default).files =
-        Some(crate::document_config::FileTools {
-            mode: crate::tool_surface::FileToolMode::ReadOnly,
-            ..Default::default()
-        });
+    tools_doc.host.get_or_insert_with(Default::default).files = Some(crate::documents::FileTools {
+        mode: crate::tool_surface::FileToolMode::ReadOnly,
+        ..Default::default()
+    });
     crate::config_client::write_tools_document(
         &crate::config_client::ConfigAccess::local(node.clone()),
         &tools_doc,
@@ -156,12 +153,11 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     .await
     .expect("write read-only Tools patch");
 
-    let behavior_doc_id =
-        crate::document_config::load_agent_record(node.as_ref(), &default_agent_id)
-            .await
-            .unwrap()
-            .expect("agent record")
-            .0;
+    let behavior_doc_id = crate::documents::load_agent_record(node.as_ref(), &default_agent_id)
+        .await
+        .unwrap()
+        .expect("agent record")
+        .0;
 
     assert!(
         apply_control_update(identity.did(), "Tools", &tools_doc_id, &mut view,)
@@ -286,10 +282,12 @@ async fn resolve_composes_explicitly_selected_skill_into_prompt() {
         "skill BODY must NOT be in the catalog (loaded on demand): {preamble}"
     );
 
-    let ceiling = crate::skills::skill_tool_ceiling(tool_surface.tool_names(), &[], false);
-    let load_skill = crate::skills::LoadSkillTool::new(agent_config.skills.clone(), ceiling);
+    let ceiling =
+        crate::documents::skills::skill_tool_ceiling(tool_surface.tool_names(), &[], false);
+    let load_skill =
+        crate::documents::skills::LoadSkillTool::new(agent_config.skills.clone(), ceiling);
     let loaded = load_skill
-        .call(crate::skills::LoadSkillArgs {
+        .call(crate::documents::skills::LoadSkillArgs {
             name: "Research".to_string(),
         })
         .await
@@ -803,7 +801,7 @@ async fn load_document_runtime_view_populates_tasks_and_schedules() {
         .expect("schedule-alpha present");
     assert_eq!(
         schedule_record.value.cadence,
-        crate::document_config::ScheduleCadence::Interval { interval_secs: 60 },
+        crate::documents::ScheduleCadence::Interval { interval_secs: 60 },
         "schedule carries its interval cadence"
     );
     assert_eq!(view.triggers.len(), 1, "expected one Trigger document");
@@ -816,7 +814,7 @@ async fn load_document_runtime_view_populates_tasks_and_schedules() {
         "trigger references task-alpha"
     );
     match &trigger_record.value.source {
-        crate::document_config::TriggerSource::Schedule { schedule_id } => {
+        crate::documents::TriggerSource::Schedule { schedule_id } => {
             assert_eq!(
                 schedule_id, "schedule-alpha",
                 "trigger references schedule-alpha"
@@ -873,7 +871,7 @@ async fn load_document_runtime_view_populates_event_triggers() {
         .expect("trig-1 present in triggers");
     assert_eq!(trigger_record.value.task_id, "task-1");
     match &trigger_record.value.source {
-        crate::document_config::TriggerSource::Event { event_source_id } => {
+        crate::documents::TriggerSource::Event { event_source_id } => {
             assert_eq!(event_source_id, "trig-1:source");
         }
         other => panic!("trigger must carry an event source, got {other:?}"),
@@ -946,7 +944,7 @@ async fn resolve_produces_active_schedule_when_task_and_behavior_exist() {
     );
     assert_eq!(
         resolved.concurrency,
-        crate::document_config::ConcurrencyMode::Serial
+        crate::documents::ConcurrencyMode::Serial
     );
 }
 
@@ -1014,7 +1012,7 @@ async fn resolve_produces_active_event_trigger_when_task_and_behavior_exist() {
     assert_eq!(resolved.event_kind, "created");
     assert_eq!(
         resolved.concurrency,
-        crate::document_config::ConcurrencyMode::Serial
+        crate::documents::ConcurrencyMode::Serial
     );
 }
 
@@ -1550,7 +1548,7 @@ async fn readiness_follows_the_backend_account_reference() {
         .await
         .expect("document view");
     for backend in view.backends.values_mut() {
-        backend.value.auth = crate::document_config::BackendAuth::NodeOAuth {
+        backend.value.auth = crate::documents::BackendAuth::NodeOAuth {
             account_ref: Some("acct-x".to_string()),
         };
     }
@@ -1645,7 +1643,7 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
                 .await
                 .expect("document view");
             for backend in view.backends.values_mut() {
-                backend.value.auth = crate::document_config::BackendAuth::NodeOAuth {
+                backend.value.auth = crate::documents::BackendAuth::NodeOAuth {
                     account_ref: account_ref.clone(),
                 };
             }
@@ -1758,7 +1756,7 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
             view.agents.insert(y.clone(), y_record);
             let x_record = view.agents.get_mut(&x).unwrap();
             if compaction_on_b {
-                let compaction: crate::document_config::CompactionConfig =
+                let compaction: crate::documents::CompactionConfig =
                     serde_json::from_value(serde_json::json!({
                         "compaction_id": "compaction-b", "node_did": did,
                         "inference_profile_id": on_b,
@@ -2020,29 +2018,29 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
     );
 }
 
-fn finding_decl() -> crate::document_config::WriteToolDecl {
-    crate::document_config::WriteToolDecl {
+fn finding_decl() -> crate::documents::WriteToolDecl {
+    crate::documents::WriteToolDecl {
         notification: None,
         tool_name: "write_experiment_finding".to_string(),
         collection: "ExperimentFinding".to_string(),
         description: "Record a finding document for the next pipeline stage.".to_string(),
         fields: vec![
-            crate::document_config::WriteToolField {
+            crate::documents::WriteToolField {
                 name: "job_id".to_string(),
                 required: true,
                 fill: None,
             },
-            crate::document_config::WriteToolField {
+            crate::documents::WriteToolField {
                 name: "finding_id".to_string(),
                 required: true,
                 fill: None,
             },
-            crate::document_config::WriteToolField {
+            crate::documents::WriteToolField {
                 name: "content".to_string(),
                 required: true,
                 fill: None,
             },
-            crate::document_config::WriteToolField {
+            crate::documents::WriteToolField {
                 name: "stage".to_string(),
                 required: true,
                 fill: None,

@@ -694,7 +694,7 @@ async fn write_inference(job: &Job) {
 }
 
 pub(crate) async fn write_step_tools(job: &Job, settings: Option<&PluginJobSettings>) {
-    let tools: crate::document_config::Tools = serde_json::from_value(json!({
+    let tools: crate::documents::Tools = serde_json::from_value(json!({
         "tools_id": "tools",
         "node_did": node_did(),
         "agents": {"enabled": true, "target_ids": ["t-a", "t-b"]},

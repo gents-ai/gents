@@ -740,11 +740,11 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     let mut agent_config = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("rotation-general"));
     agent_config.backend_id = Some("backend-general".to_string());
-    agent_config.backend_auth = crate::document_config::BackendAuth::ApiKey {
+    agent_config.backend_auth = crate::documents::BackendAuth::ApiKey {
         key: "fixture-old-key".into(),
     };
     let mut rotated = agent_config.clone();
-    rotated.backend_auth = crate::document_config::BackendAuth::ApiKey {
+    rotated.backend_auth = crate::documents::BackendAuth::ApiKey {
         key: "fixture-new-key".into(),
     };
     assert_eq!(format!("{agent_config:?}"), format!("{rotated:?}"));
@@ -786,7 +786,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
         let built_tx = built_tx.clone();
         async move {
             let key = match &agent_config.backend_auth {
-                crate::document_config::BackendAuth::ApiKey { key } => key.clone(),
+                crate::documents::BackendAuth::ApiKey { key } => key.clone(),
                 _ => String::new(),
             };
             let _ = built_tx.send((generation, key));
@@ -881,7 +881,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
 
 #[tokio::test]
 async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
-    use crate::document_config::BackendAuth;
+    use crate::documents::BackendAuth;
 
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -1950,7 +1950,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
-        backend_auth: crate::document_config::BackendAuth::Unauthenticated,
+        backend_auth: crate::documents::BackendAuth::Unauthenticated,
         model_name: "default".to_string(),
         service_tier: None,
         resolved_reasoning_efforts: None,
@@ -1976,7 +1976,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         completion_retry: crate::agent::completion_retry::CompletionRetryProfileFields::default(),
         sampling: crate::inference::resolved::SamplingConfig::default(),
     });
-    let updated_tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
+    let updated_tools: crate::documents::Tools = serde_json::from_value(serde_json::json!({
         "tools_id": "general-tools",
         "node_did": runtime_node.node_did,
         "host": {"files": {"mode": "ReadOnly"}},
@@ -2201,7 +2201,7 @@ async fn plugin_resolution_surfaces(
 ) -> (Arc<ResolvedAgent>, Arc<ToolSurface>, Arc<ToolSurface>) {
     let mut agent_config = PendingAgent::new("general")
         .build_with_identity_for_test(test_identity("plugin-resolution-fingerprint"));
-    let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
+    let tools: crate::documents::Tools = serde_json::from_value(serde_json::json!({
         "tools_id": format!("{}:tools", agent_config.agent_id),
         "node_did": agent_config.node_did(),
         "integrations": {"plugins": [{"plugin": "fixture/list_files"}]},
@@ -2255,7 +2255,7 @@ async fn plugin_resolution_surfaces(
             .await
             .unwrap(),
     );
-    let plugin_ref = crate::document_config::PluginToolRef {
+    let plugin_ref = crate::documents::PluginToolRef {
         tool_calls: false,
         plugin: "fixture/list_files".to_string(),
         digest: None,

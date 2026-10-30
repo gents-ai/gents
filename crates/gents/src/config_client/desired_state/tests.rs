@@ -502,7 +502,7 @@ async fn generated_default_replacements_preserve_runtime_startup_selection() -> 
         if !case["candidate"].is_null() {
             requested["node"]["default_agent_id"] = case["candidate"].clone();
         }
-        let pack: crate::document_config::PackConfig = serde_json::from_value(requested)?;
+        let pack: crate::documents::PackConfig = serde_json::from_value(requested)?;
         let mut replacement = DesiredStateApplyPlan::from_pack_config(&pack)?
             .documents()
             .first()
@@ -1011,9 +1011,9 @@ fn rule_documents(
     group: Option<Value>,
     source_collection: &str,
 ) -> Result<(
-    crate::document_config::Trigger,
-    crate::document_config::Task,
-    crate::document_config::EventSource,
+    crate::documents::Trigger,
+    crate::documents::Task,
+    crate::documents::EventSource,
 )> {
     let owner = "did:key:template-rule";
     let mut source = json!({
@@ -1058,7 +1058,7 @@ async fn preview_rejects_a_context_window_above_the_advertised_maximum() -> Resu
         vec![document(backend(owner, "backend")), profile(Value::Null)],
     )
     .await?;
-    let typed: crate::document_config::InferenceBackend =
+    let typed: crate::documents::InferenceBackend =
         serde_json::from_value(backend(owner, "backend"))?;
     crate::inference::backends::registry::record_model_catalog(
         &node,
@@ -1121,7 +1121,7 @@ fn obligation_surface(
             },
         }]},
     });
-    let surface: crate::document_config::DatastoreToolSurfaceDocument =
+    let surface: crate::documents::DatastoreToolSurfaceDocument =
         serde_json::from_value(surface).expect("canonical surface");
     let value = serde_json::to_value(surface).expect("canonical surface value");
     DesiredStateApplyDocument {
@@ -1326,7 +1326,7 @@ async fn published_count_field(
         .into_iter()
         .find(|surface| surface.surface_id == surface_id)
         .expect("surface is published");
-    let Some(crate::document_config::SurfaceToolDecl::Create(decl)) =
+    let Some(crate::documents::SurfaceToolDecl::Create(decl)) =
         surface.entries.unwrap_or_default().into_iter().next()
     else {
         panic!("surface publishes its create tool");

@@ -1430,7 +1430,7 @@ pub(crate) mod tests {
     use gents_protocol::plugin::{PluginExecutionReceipt, PluginExecutionVerdict};
 
     use super::{build_step_input, StepKind};
-    use crate::document_config::Tools;
+    use crate::documents::Tools;
     use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
     use crate::plugin::executor::PluginExecutor;
     use crate::plugin::store::InstalledPlugin;

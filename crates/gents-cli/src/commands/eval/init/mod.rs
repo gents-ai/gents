@@ -398,10 +398,7 @@ pub(crate) async fn install_pack_slot(
     .with_context(|| format!("installing the {} pack", manifest.name))
 }
 
-pub(crate) fn pack_config(
-    pack: &PackSource,
-    owner: &str,
-) -> Result<gents::document_config::PackConfig> {
+pub(crate) fn pack_config(pack: &PackSource, owner: &str) -> Result<gents::documents::PackConfig> {
     gents::pack::load_pack_config(
         pack.manifest(),
         &gents::pack::PackInstallOptions {
@@ -490,7 +487,7 @@ mod tests {
         assert_eq!(outcome.rounds, 1);
         let definition = outcome.assembled.unwrap().definition;
         assert!(definition.cases.iter().all(|case| {
-            matches!(&case.stages[0].capture[0], gents::document_config::EvalCapture::Documents {
+            matches!(&case.stages[0].capture[0], gents::documents::EvalCapture::Documents {
                 collection, fields, ..
             } if collection == "AgentRequest" && fields.iter().any(|field| field == "request_id"))
         }));

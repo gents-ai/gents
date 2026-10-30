@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::defra_node::EmbeddedNode;
-use crate::document_config::TriggerObservation;
+use crate::documents::TriggerObservation;
 use crate::eval::runner::embedded::observe::{
     classify_request_outcome, RequestEvidence, TerminalObservation,
 };

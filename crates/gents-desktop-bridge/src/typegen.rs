@@ -737,7 +737,7 @@ fn media_commands_preserve_the_native_tag_in_generated_types() {
 
 #[test]
 fn eval_capture_types_preserve_native_wire_tags() {
-    use gents::document_config::EvalCapture;
+    use gents::documents::EvalCapture;
     let declaration = EvalCapture::decl();
     for capture in [
         EvalCapture::Schema {
@@ -788,14 +788,14 @@ fn canonical_config_requests_preserve_compact_authoring_and_auth_wire_tags() {
     assert!(effort.contains("high") && effort.contains("none"));
     let auth = std::fs::read_to_string(dir.path().join("BackendAuth.ts")).unwrap();
     for configured in [
-        gents::document_config::BackendAuth::Unauthenticated,
-        gents::document_config::BackendAuth::ApiKey {
+        gents::documents::BackendAuth::Unauthenticated,
+        gents::documents::BackendAuth::ApiKey {
             key: "secret".into(),
         },
-        gents::document_config::BackendAuth::Environment {
+        gents::documents::BackendAuth::Environment {
             variable: "API_KEY".into(),
         },
-        gents::document_config::BackendAuth::NodeOAuth { account_ref: None },
+        gents::documents::BackendAuth::NodeOAuth { account_ref: None },
     ] {
         let wire = serde_json::to_value(configured).unwrap();
         assert!(auth.contains(wire["kind"].as_str().unwrap()));

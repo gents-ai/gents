@@ -27,7 +27,7 @@ pub struct BackendAuthenticationSaveRequest {
     pub node_did: String,
     pub backend_id: String,
     pub revision: gents_desktop_core::client::ConfigEditorRevision,
-    pub auth: gents::document_config::BackendAuth,
+    pub auth: gents::documents::BackendAuth,
 }
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
@@ -46,7 +46,7 @@ impl BackendAuthenticationView {
         revision: gents_desktop_core::client::ConfigEditorRevision,
         backend: &gents::InferenceBackend,
     ) -> Self {
-        use gents::document_config::BackendAuth;
+        use gents::documents::BackendAuth;
         use gents::inference::backends::provider::BackendProviderOauthExt;
         let (kind, variable, account_ref) = match &backend.auth {
             BackendAuth::Unauthenticated => ("unauthenticated", None, None),

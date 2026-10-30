@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
 use crate::config_client::config_projection;
-use crate::document_config::{Task, TaskHook, TaskHookPhase};
+use crate::documents::{Task, TaskHook, TaskHookPhase};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::lifecycle::RequestTerminalOutcome;
 use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};

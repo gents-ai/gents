@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use gents::document_config::{EvalSplit, EvalTier};
+use gents::documents::{EvalSplit, EvalTier};
 use gents::eval::checks::verdict_detail;
 use gents::eval::report::build::reason_code;
 use gents::eval::report::{

@@ -56,7 +56,7 @@ fn backend_document(
     capacity: usize,
     queue_depth: usize,
     name: &str,
-) -> Result<crate::document_config::InferenceBackend> {
+) -> Result<crate::documents::InferenceBackend> {
     Ok(serde_json::from_value(serde_json::json!({
         "node_did":"did:test:registry", "backend_id":backend_id, "name":name,
         "provider_kind":"OpenAiCompatible",
@@ -81,7 +81,7 @@ fn config_from_case(backend_id: &str, desired: &Desired) -> Result<BackendAdmiss
         desired.queue_depth,
         &desired.name,
     )?;
-    let observation = serde_json::from_value::<crate::document_config::InferenceBackendObservation>(
+    let observation = serde_json::from_value::<crate::documents::InferenceBackendObservation>(
         serde_json::json!({
             "backend_id":backend_id, "probe_status":crate::inference::backends::registry::HEALTHY_PROBE_STATUS,
             "catalogs":[{"node_did":null,"observed_at":"2026-01-01T00:00:00Z",

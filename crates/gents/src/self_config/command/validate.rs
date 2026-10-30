@@ -24,7 +24,7 @@ impl ConfigCommandTool {
                             "id": id,
                             "error": format!("{error:#}")
                         });
-                        if let Some(missing) = error.downcast_ref::<crate::document_config::MissingReference>() {
+                        if let Some(missing) = error.downcast_ref::<crate::documents::MissingReference>() {
                             diagnostic["field"] = json!(missing.field);
                             diagnostic["missing"] = json!({"collection":missing.target.graphql_type(),"id":missing.target_id});
                         }
@@ -52,19 +52,19 @@ impl ConfigCommandTool {
                 }
                 let selected: std::collections::BTreeSet<String> = references.documents()
                     .filter(|((collection, _), _)| *collection == crate::Collection::Tools)
-                    .filter_map(|(_, value)| serde_json::from_value::<crate::document_config::Tools>(value.clone()).ok())
+                    .filter_map(|(_, value)| serde_json::from_value::<crate::documents::Tools>(value.clone()).ok())
                     .flat_map(|tools| tools.datastore.and_then(|d| d.datastore_tool_surface_ids).unwrap_or_default())
                     .collect();
                 let surfaces = references.documents()
                     .filter(|((collection, id), _)| *collection == crate::Collection::DatastoreToolSurface && selected.contains(id))
-                    .filter_map(|(_, value)| serde_json::from_value::<crate::document_config::DatastoreToolSurfaceDocument>(value.clone()).ok())
+                    .filter_map(|(_, value)| serde_json::from_value::<crate::documents::DatastoreToolSurfaceDocument>(value.clone()).ok())
                     .collect::<Vec<_>>();
                 Ok((counts, errors, surfaces))
             }),
         ).await?;
         for surface in selected_surfaces {
             for entry in surface.entries.unwrap_or_default() {
-                use crate::document_config::SurfaceToolDecl;
+                use crate::documents::SurfaceToolDecl;
                 let (tool_name, collection, result) = match entry {
                     SurfaceToolDecl::Create(decl) => {
                         let result = if decl.collection == crate::mailbox::MAILBOX_COLLECTION {

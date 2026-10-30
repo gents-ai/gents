@@ -343,7 +343,7 @@ impl Check for CrewSpecMatch {
                 tally.expectations(category, &format!("{id} context"), context, &context_tests);
                 tally.expectations(category, &format!("{id} tools"), tools_row, &tools_tests);
                 if let Some(expected) = spec.datastore {
-                    use crate::document_config::{DatastoreToolSurfaceDocument, SurfaceToolDecl};
+                    use crate::documents::{DatastoreToolSurfaceDocument, SurfaceToolDecl};
                     let selected =
                         tools_row.map(|t| lookup(t, "datastore.datastore_tool_surface_ids"));
                     let mut creates = BTreeSet::new();

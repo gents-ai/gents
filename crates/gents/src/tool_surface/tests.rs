@@ -3,16 +3,16 @@ use super::*;
 #[test]
 fn empty_mcp_tool_selection_explains_why_no_tools_are_attached() {
     for style in [
-        crate::document_config::RemoteToolStyle::Discovery,
-        crate::document_config::RemoteToolStyle::Flat,
+        crate::documents::RemoteToolStyle::Discovery,
+        crate::documents::RemoteToolStyle::Flat,
     ] {
         let config = AgentToolSurfaceConfig::from_selection(
             "worker",
             ResolvedToolSelection {
                 enable_meta_tools: true,
                 allowed_mcp_service_ids: vec!["research".into()],
-                remote_tools: Some(crate::document_config::RemoteTools {
-                    services: vec![crate::document_config::RemoteServiceTools {
+                remote_tools: Some(crate::documents::RemoteTools {
+                    services: vec![crate::documents::RemoteServiceTools {
                         mcp_service_id: "research".into(),
                         style,
                         ..Default::default()
@@ -928,8 +928,8 @@ async fn required_mcp_service_needs_agent_scoped_measured_availability() {
             enable_goal_creation: false,
             allowed_mcp_service_ids: vec!["research".to_string()],
             required_mcp_service_ids: vec!["research".to_string()],
-            remote_tools: Some(crate::document_config::RemoteTools {
-                services: vec![crate::document_config::RemoteServiceTools {
+            remote_tools: Some(crate::documents::RemoteTools {
+                services: vec![crate::documents::RemoteServiceTools {
                     mcp_service_id: "research".into(),
                     tool_names: vec!["search".into()],
                     required: true,
@@ -1234,7 +1234,7 @@ async fn context_budget_tool_gated_by_selection() {
 
 #[tokio::test]
 async fn write_tools_register_under_declared_names() {
-    use crate::document_config::{WriteToolDecl, WriteToolField};
+    use crate::documents::{WriteToolDecl, WriteToolField};
 
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
@@ -1284,7 +1284,7 @@ async fn write_tools_register_under_declared_names() {
 
 #[tokio::test]
 async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registration() {
-    use crate::document_config::{
+    use crate::documents::{
         WriteToolDecl, WriteToolField, WriteToolOutputObligation, WriteToolOutputObligationScope,
     };
 
@@ -1341,7 +1341,7 @@ async fn write_tool_whose_count_field_resolves_no_schema_is_refused_at_registrat
 
 #[tokio::test]
 async fn plugin_only_bindings_are_captured_for_trigger_execution() {
-    use crate::document_config::{PluginToolRef, WriteToolField, WriteToolFieldFill};
+    use crate::documents::{PluginToolRef, WriteToolField, WriteToolFieldFill};
 
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
@@ -1429,7 +1429,7 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
 
 #[tokio::test]
 async fn query_tool_is_advertised_and_registered() {
-    use crate::document_config::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
+    use crate::documents::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
 
     let keys = tempfile::tempdir().unwrap();
     let identity = std::sync::Arc::new(
@@ -1496,7 +1496,7 @@ async fn query_tool_is_advertised_and_registered() {
 
 #[test]
 fn document_tool_config_expands_linked_datastore_surfaces() {
-    use crate::document_config::{DatastoreToolSurfaceDocument, QueryToolDecl, SurfaceToolDecl};
+    use crate::documents::{DatastoreToolSurfaceDocument, QueryToolDecl, SurfaceToolDecl};
 
     let node_did = "did:key:zToolExplainSurface";
     let selection = tools_document(serde_json::json!({
@@ -1550,7 +1550,7 @@ fn document_tool_config_expands_linked_datastore_surfaces() {
 
 #[test]
 fn malformed_write_tool_is_rejected_during_configuration() {
-    use crate::document_config::WriteToolDecl;
+    use crate::documents::WriteToolDecl;
 
     let error = AgentToolSurfaceConfig::from_selection(
         "ops",
@@ -1574,7 +1574,7 @@ fn malformed_write_tool_is_rejected_during_configuration() {
 
 #[test]
 fn write_tool_colliding_with_builtin_is_rejected_during_configuration() {
-    use crate::document_config::{WriteToolDecl, WriteToolField};
+    use crate::documents::{WriteToolDecl, WriteToolField};
 
     let error = AgentToolSurfaceConfig::from_selection(
         "ops",
@@ -1826,7 +1826,7 @@ fn query_decls_for_runtime_drops_tool_when_filled_filter_would_be_stripped() {
     use std::collections::{BTreeMap, BTreeSet};
 
     use super::policy::{EndpointScope, ToolPolicySurface};
-    use crate::document_config::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
+    use crate::documents::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
 
     let decl = QueryToolDecl {
         tool_name: "query_candidate_finding".to_string(),
@@ -1945,7 +1945,7 @@ fn absent_groups_grant_nothing_and_goal_controls_are_independent() {
     assert!(independent.enable_goal_tools);
     assert!(independent.enable_goal_creation);
     assert!(
-        serde_json::from_value::<crate::document_config::Tools>(serde_json::json!({
+        serde_json::from_value::<crate::documents::Tools>(serde_json::json!({
             "tools_id":"legacy", "node_did":"did:test:test", "tool_policy_version":"v1"
         }))
         .is_err()
@@ -1997,7 +1997,7 @@ async fn session_history_tool_follows_selection() {
         .contains(&crate::toolset::SESSION_HISTORY_TOOL_NAME.to_string()));
 }
 
-fn tools_document(mut value: serde_json::Value) -> crate::document_config::Tools {
+fn tools_document(mut value: serde_json::Value) -> crate::documents::Tools {
     let fields = value.as_object_mut().unwrap();
     fields
         .entry("tools_id")
@@ -2014,7 +2014,7 @@ fn preset_tools_document(
     bash_mode: &str,
     background: bool,
     query: bool,
-) -> crate::document_config::Tools {
+) -> crate::documents::Tools {
     tools_document(serde_json::json!({
         "tools_id":format!("{name}-tools"), "display_name":name,
         "host": {"files":{"mode":file_mode},
@@ -2135,7 +2135,7 @@ fn explanation_category_contains(
 fn explain_init_package_document_matrix_resolves_expected_surfaces() {
     struct Case {
         name: &'static str,
-        selection: crate::document_config::Tools,
+        selection: crate::documents::Tools,
         ceiling: ToolCeiling,
         mcp_services_online: bool,
         expected_tool_names: Vec<&'static str>,
@@ -2290,7 +2290,7 @@ fn explain_complex_document_combination_filters_agents_and_groups_surface() {
         "built_ins":{"enable_memory":true,"enable_context_budget":true},
         "datastore":{"enable_defra_query":true,"defra_query_collections":["AgentRequest","AgentResponse"]}
     }));
-    let targets: Vec<crate::document_config::AgentTargetDocument> = [
+    let targets: Vec<crate::documents::AgentTargetDocument> = [
         ("worker", own_node_did, "worker", "local worker"),
         (
             "inactive",
@@ -2728,7 +2728,7 @@ async fn configured_command_output_caps_bound_bash_and_cli_results() {
     let ceiling = ToolCeiling::readwrite(root)
         .with_cli_tool(cli_tool("sh", "/bin/sh", "shell"))
         .with_cli_tool(cli_tool("sh_default", "/bin/sh", "shell"));
-    let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
+    let tools: crate::documents::Tools = serde_json::from_value(serde_json::json!({
         "tools_id": "capped", "node_did": "did:key:example",
         "host": {
             "bash": {"mode": "Unrestricted", "max_output_chars": 10},
@@ -2849,7 +2849,7 @@ fn configured_tool_timeouts_reach_built_tools_within_host_ceilings() {
         .with_cli_tool(cli_tool("git", "/usr/bin/git", "git"))
         .with_cli_tool(cli_tool("rg", "/usr/bin/rg", "search"))
         .with_cli_tool(cli_tool("jq", "/usr/bin/jq", "json"));
-    let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
+    let tools: crate::documents::Tools = serde_json::from_value(serde_json::json!({
         "tools_id": "timed", "node_did": "did:key:example",
         "host": {
             "files": {"mode": "ReadOnly"},
@@ -2925,7 +2925,7 @@ fn unconfigured_tool_timeouts_keep_host_defaults() {
     let ceiling = ToolCeiling::readwrite(root)
         .with_command_timeout_secs(200)
         .with_cli_tool(cli_tool("git", "/usr/bin/git", "git"));
-    let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
+    let tools: crate::documents::Tools = serde_json::from_value(serde_json::json!({
         "tools_id": "plain", "node_did": "did:key:example",
         "host": {"bash": {"mode": "ReadOnly"}, "cli": [{"name": "git"}]}
     }))
@@ -2959,7 +2959,7 @@ async fn bash_schema_advertises_the_configured_background_lifetime() {
     let root = temp_root("gents-background-lifetime-schema");
     let ceiling = ToolCeiling::readwrite(root);
     for (lifetime, expected) in [(Some(90), 90), (Some(36_001), 36_000), (None, 36_000)] {
-        let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
+        let tools: crate::documents::Tools = serde_json::from_value(serde_json::json!({
             "tools_id": "timed", "node_did": "did:key:example",
             "host": {"bash": {"mode": "Unrestricted", "background_enabled": true,
                 "background_timeout_secs": lifetime}}
@@ -2998,7 +2998,7 @@ async fn configured_file_limits_reach_file_tools_as_default_and_maximum() {
         std::fs::write(root.join(format!("f{index}.rs")), "fn main() {}\n").unwrap();
     }
     let ceiling = ToolCeiling::readwrite(root);
-    let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
+    let tools: crate::documents::Tools = serde_json::from_value(serde_json::json!({
         "tools_id": "files", "node_did": "did:key:example",
         "host": {"files": {"mode": "ReadOnly", "max_read_chars": 10,
             "max_list_entries": 3, "max_matches": 2}}
@@ -3049,7 +3049,7 @@ async fn configured_file_limits_reach_file_tools_as_default_and_maximum() {
         );
     }
 
-    let unconfigured: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
+    let unconfigured: crate::documents::Tools = serde_json::from_value(serde_json::json!({
         "tools_id": "files", "node_did": "did:key:example",
         "host": {"files": {"mode": "ReadOnly"}}
     }))

@@ -1725,7 +1725,7 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
 
 #[tokio::test]
 async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias() {
-    use crate::document_config::{RemoteServiceTools, RemoteToolStyle, RemoteTools};
+    use crate::documents::{RemoteServiceTools, RemoteToolStyle, RemoteTools};
 
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
@@ -3654,7 +3654,7 @@ async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
 
 #[tokio::test]
 async fn remote_presentations_persist_the_same_selected_identity() {
-    use crate::document_config::{RemoteServiceTools, RemoteToolStyle, RemoteTools};
+    use crate::documents::{RemoteServiceTools, RemoteToolStyle, RemoteTools};
     let temp = tempfile::tempdir().unwrap();
     let node = Arc::new(
         crate::test_support::node_builder()
@@ -4034,7 +4034,7 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     let identity =
         KeyIdentity::load_or_create(identity_dir.path().join("owner.key"), None).unwrap();
     use crate::agent::output_obligation::{ActiveOutputObligation, OutputObligationGate};
-    use crate::document_config::{WriteToolOutputObligation, WriteToolOutputObligationScope};
+    use crate::documents::{WriteToolOutputObligation, WriteToolOutputObligationScope};
     use crate::goal::{load_canonical_goal, set_goal, GoalStatus};
 
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
@@ -4577,7 +4577,7 @@ async fn plugin_child_naming_a_job_tool_is_refused_and_persisted_as_policy_denie
     ensure_runtime_schemas(&node).await.unwrap();
     let binding = crate::plugin_job::JobBinding {
         tool_name: "workflow_run".into(),
-        plugin: crate::document_config::PluginToolRef {
+        plugin: crate::documents::PluginToolRef {
             plugin: "team/plugin".into(),
             digest: None,
             tool_calls: false,

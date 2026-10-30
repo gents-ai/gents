@@ -3,7 +3,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use tracing::Instrument;
 
-use crate::document_config::AdvertisedModel;
+use crate::documents::AdvertisedModel;
 
 pub use gents_loop::backend_provider::BackendProviderKind;
 

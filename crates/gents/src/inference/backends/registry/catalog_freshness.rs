@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::document_config::{BackendModelCatalog, InferenceBackendObservation};
+use crate::documents::{BackendModelCatalog, InferenceBackendObservation};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -142,7 +142,7 @@ mod tests {
         BackendModelCatalog {
             node_did: scope.map(str::to_owned),
             observed_at: "2026-10-28T01:00:00Z".into(),
-            models: vec![crate::document_config::AdvertisedModel {
+            models: vec![crate::documents::AdvertisedModel {
                 model_name: name.into(),
                 display_name: None,
                 context_window: None,

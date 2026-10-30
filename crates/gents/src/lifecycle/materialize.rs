@@ -231,7 +231,7 @@ pub(crate) fn pending_agent_request_spec(
         "retry_key must be non-empty when supplied"
     );
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let prompt_selection = crate::skills::prompt_slash_skill_selection(content);
+    let prompt_selection = crate::documents::skills::prompt_slash_skill_selection(content);
     let content = prompt_selection.prompt.as_str();
     let initial_lifecycle_state = if workspace_lineage.is_some_and(WorkspaceLineage::is_bound) {
         RequestLifecycleState::WorkspaceBindingPending
@@ -630,7 +630,7 @@ pub(crate) async fn build_session_message_request_with_input(
             && !cause.tool_call_doc_id.trim().is_empty(),
         "session-message lineage requires the full calling request and tool call edge"
     );
-    let prompt_selection = crate::skills::prompt_slash_skill_selection(content);
+    let prompt_selection = crate::documents::skills::prompt_slash_skill_selection(content);
     let admission = if target.node_did == cause.caller_node_did {
         AgentRequestAdmissionRecord::local_self(&cause.caller_node_did)
     } else {

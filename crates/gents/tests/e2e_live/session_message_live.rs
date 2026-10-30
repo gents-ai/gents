@@ -11,7 +11,7 @@ use gents::agent::p2p_reconcile::templates::{
 };
 use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
-use gents::document_config::{
+use gents::documents::{
     Agent, AgentContext, AgentTools, BashTools, HostTools, InferenceProfile, InferenceSampling,
     Tools,
 };

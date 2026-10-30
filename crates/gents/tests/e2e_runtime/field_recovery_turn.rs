@@ -5,7 +5,7 @@ use crate::support::{
     streaming_backend::StreamChunk,
     test_db,
 };
-use gents::document_config::{DatastoreTools, QueryToolDecl, SurfaceToolDecl, Tools};
+use gents::documents::{DatastoreTools, QueryToolDecl, SurfaceToolDecl, Tools};
 use gents::{Collection, DatastoreToolSurfaceDocument, NodeIdentity};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};

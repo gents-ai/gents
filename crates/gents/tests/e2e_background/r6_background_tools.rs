@@ -106,14 +106,13 @@ async fn boot_background_turn_with_bounds(
                     .expect("R6 inference profile");
                     let execution_id = format!("{R6_AGENT_ID}-deadline");
                     profile["execution_id"] = execution_id.clone().into();
-                    let execution =
-                        serde_json::to_value(gents::document_config::InferenceExecution {
-                            node_did: node_did.to_string(),
-                            execution_id,
-                            stream_liveness_timeout_secs: Some(deadline_duration_secs - 1),
-                            deadline_duration_secs: Some(deadline_duration_secs),
-                            ..Default::default()
-                        })?;
+                    let execution = serde_json::to_value(gents::documents::InferenceExecution {
+                        node_did: node_did.to_string(),
+                        execution_id,
+                        stream_liveness_timeout_secs: Some(deadline_duration_secs - 1),
+                        deadline_duration_secs: Some(deadline_duration_secs),
+                        ..Default::default()
+                    })?;
                     let plan = DesiredStateApplyPlan::new(vec![
                         DesiredStateApplyDocument {
                             collection: gents::Collection::InferenceProfile,
@@ -141,11 +140,11 @@ async fn boot_background_turn_with_bounds(
         db.node_identity.did(),
         R6_AGENT_ID,
         None,
-        gents::document_config::Tools {
+        gents::documents::Tools {
             tools_id: format!("{R6_AGENT_ID}:tools"),
             node_did: db.node_identity.did().to_string(),
-            host: Some(gents::document_config::HostTools {
-                bash: Some(gents::document_config::BashTools {
+            host: Some(gents::documents::HostTools {
+                bash: Some(gents::documents::BashTools {
                     mode: gents::BashMode::ReadOnly,
                     read_only_commands: Some(vec![
                         "sleep".to_string(),
@@ -1649,11 +1648,11 @@ async fn second_signed_principal_runtime_is_denied_foreign_process_handle() {
         foreign.did(),
         foreign_behavior,
         None,
-        gents::document_config::Tools {
+        gents::documents::Tools {
             tools_id: format!("{foreign_behavior}:tools"),
             node_did: foreign.did().to_string(),
-            host: Some(gents::document_config::HostTools {
-                bash: Some(gents::document_config::BashTools {
+            host: Some(gents::documents::HostTools {
+                bash: Some(gents::documents::BashTools {
                     mode: gents::BashMode::ReadOnly,
                     read_only_commands: Some(vec!["sleep".to_string()]),
                     background_enabled: true,

@@ -745,9 +745,7 @@ async fn read_installed_pack_fails_loudly_on_more_than_one_record() {
 async fn dependency_fixture() -> (Arc<defra_node::EmbeddedNode>, ConfigAccess) {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::document_config::ensure_node(&node, OWNER)
-        .await
-        .unwrap();
+    crate::documents::ensure_node(&node, OWNER).await.unwrap();
     for profile in ["claude", "glm", "grok"] {
         crate::test_support::install_test_agent(&node, OWNER, profile).await;
     }
@@ -1561,7 +1559,7 @@ async fn self_config_install_succeeds_without_a_home() {
     self_config_install(&archive, None).await;
 }
 
-fn job_tools(job: serde_json::Value) -> crate::document_config::Tools {
+fn job_tools(job: serde_json::Value) -> crate::documents::Tools {
     serde_json::from_value(json!({
         "tools_id": "engine-tools",
         "node_did": OWNER,
@@ -1621,9 +1619,7 @@ async fn pack_job_block_is_refused_on_a_self_config_install() {
     config.agent_targets = shipping(&["wf-run"]).agent_targets;
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::document_config::ensure_node(&node, OWNER)
-        .await
-        .unwrap();
+    crate::documents::ensure_node(&node, OWNER).await.unwrap();
     let access = ConfigAccess::local(node);
     let requested = Default::default();
     let home = tempfile::tempdir().unwrap();
@@ -2045,9 +2041,7 @@ async fn prepare_naming_plugin(
 ) -> Result<PreparedDocumentPackInstall> {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::document_config::ensure_node(&node, OWNER)
-        .await
-        .unwrap();
+    crate::documents::ensure_node(&node, OWNER).await.unwrap();
     prepare_document_pack_install(
         &ConfigAccess::local(node),
         OWNER,
@@ -2102,7 +2096,7 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    crate::document_config::ensure_node(&node, identity.did())
+    crate::documents::ensure_node(&node, identity.did())
         .await
         .unwrap();
     let access = ConfigAccess::graphql_as(endpoint, identity.did());

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents::{graphql::escape_graphql_string, skills::prompt_slash_skill_selection};
+use gents::{documents::skills::prompt_slash_skill_selection, graphql::escape_graphql_string};
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::graphql::GraphqlRequestOptions;
 use gents_protocol::request_admission::AgentRequestCreate;

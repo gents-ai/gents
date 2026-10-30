@@ -70,11 +70,11 @@ async fn boot_running_recovery_bash(
         db.node_identity.did(),
         AGENT_NAME,
         None,
-        gents::document_config::Tools {
+        gents::documents::Tools {
             tools_id: format!("{AGENT_NAME}:recovery-tools"),
             node_did: db.node_identity.did().to_string(),
-            host: Some(gents::document_config::HostTools {
-                bash: Some(gents::document_config::BashTools {
+            host: Some(gents::documents::HostTools {
+                bash: Some(gents::documents::BashTools {
                     mode: gents::BashMode::ReadOnly,
                     read_only_commands: Some(vec!["sleep".into()]),
                     ..Default::default()
@@ -523,11 +523,11 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         db.node_identity.did(),
         AGENT_NAME,
         None,
-        gents::document_config::Tools {
+        gents::documents::Tools {
             tools_id: format!("{AGENT_NAME}:wake-backoff-tools"),
             node_did: db.node_identity.did().to_string(),
-            host: Some(gents::document_config::HostTools {
-                bash: Some(gents::document_config::BashTools {
+            host: Some(gents::documents::HostTools {
+                bash: Some(gents::documents::BashTools {
                     mode: gents::BashMode::ReadOnly,
                     read_only_commands: Some(vec!["sh".into()]),
                     background_enabled: true,
@@ -1738,11 +1738,11 @@ async fn recover_all_repairs_terminal_background_tool_notification_once() {
         &node_did,
         agent_id,
         None,
-        gents::document_config::Tools {
+        gents::documents::Tools {
             tools_id: format!("{agent_id}:notification-tools"),
             node_did: node_did.clone(),
-            host: Some(gents::document_config::HostTools {
-                bash: Some(gents::document_config::BashTools {
+            host: Some(gents::documents::HostTools {
+                bash: Some(gents::documents::BashTools {
                     mode: gents::BashMode::ReadOnly,
                     read_only_commands: Some(vec!["printf".into()]),
                     background_enabled: true,

@@ -10,7 +10,7 @@ use serde_json::{json, Map, Value};
 use tokio::sync::Semaphore;
 
 use crate::config_client::ConfigAccess;
-use crate::document_config::{InferenceBackend, InferenceProfile};
+use crate::documents::{InferenceBackend, InferenceProfile};
 use crate::openai_wire::OpenAiWireApi;
 use crate::Collection;
 

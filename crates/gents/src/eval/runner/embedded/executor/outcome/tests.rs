@@ -199,11 +199,11 @@ async fn a_seed_ignores_unrelated_and_stale_trigger_failures() {
             attempted,
         )
         .await;
-        crate::document_config::update_trigger_runtime_fields(
+        crate::documents::update_trigger_runtime_fields(
             &home.node,
             home.did(),
             trigger_id,
-            crate::document_config::TriggerRuntimeUpdate {
+            crate::documents::TriggerRuntimeUpdate {
                 last_fired_source_doc_id: Some(doc_id.into()),
                 ..Default::default()
             },
@@ -216,11 +216,11 @@ async fn a_seed_ignores_unrelated_and_stale_trigger_failures() {
         None,
         "another document's fire, and one attempted before the stage, is not this stage's"
     );
-    crate::document_config::update_trigger_runtime_fields(
+    crate::documents::update_trigger_runtime_fields(
         &home.node,
         home.did(),
         "stale",
-        crate::document_config::TriggerRuntimeUpdate {
+        crate::documents::TriggerRuntimeUpdate {
             last_attempt_at: Some(since.into()),
             ..Default::default()
         },
@@ -270,11 +270,11 @@ async fn a_seed_unacknowledged_trigger_is_infrastructure() {
         since,
     )
     .await;
-    crate::document_config::update_trigger_runtime_fields(
+    crate::documents::update_trigger_runtime_fields(
         &home.node,
         home.did(),
         "unacknowledged",
-        crate::document_config::TriggerRuntimeUpdate {
+        crate::documents::TriggerRuntimeUpdate {
             last_fired_source_doc_id: Some(source.into()),
             ..Default::default()
         },
@@ -308,11 +308,11 @@ async fn an_unacknowledged_seed_fire_does_not_downgrade_a_recorded_error() {
             since,
         )
         .await;
-        crate::document_config::update_trigger_runtime_fields(
+        crate::documents::update_trigger_runtime_fields(
             &home.node,
             home.did(),
             trigger_id,
-            crate::document_config::TriggerRuntimeUpdate {
+            crate::documents::TriggerRuntimeUpdate {
                 last_fired_source_doc_id: Some(source.into()),
                 ..Default::default()
             },

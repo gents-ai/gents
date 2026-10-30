@@ -876,12 +876,12 @@ pub async fn create_compaction_entry(
 
 pub async fn create_agent(node: &EmbeddedNode, agent_id: &str, node_did: &str) {
     let profile_id = format!("{agent_id}-inference");
-    let profile: gents::document_config::InferenceProfile = serde_json::from_value(
+    let profile: gents::documents::InferenceProfile = serde_json::from_value(
         serde_json::json!({"node_did": node_did, "profile_id": profile_id,
             "backend_id": BACKEND_ID, "model_name": "test-model"}),
     )
     .expect("canonical inference fixture");
-    let agent: gents::document_config::Agent = serde_json::from_value(
+    let agent: gents::documents::Agent = serde_json::from_value(
         serde_json::json!({"node_did": node_did, "agent_id": agent_id,
             "display_name": "test behavior", "inference_profile_id": profile_id,
             "created_at": "2026-04-21T00:00:00Z"}),

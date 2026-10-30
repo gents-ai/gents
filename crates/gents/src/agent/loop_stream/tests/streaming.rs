@@ -19,8 +19,8 @@ async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_remi
             "request-doc-unmet",
             vec![crate::agent::output_obligation::ActiveOutputObligation {
                 tool_name: "write_result".to_string(),
-                contract: crate::document_config::WriteToolOutputObligation {
-                    scope: crate::document_config::WriteToolOutputObligationScope::Request,
+                contract: crate::documents::WriteToolOutputObligation {
+                    scope: crate::documents::WriteToolOutputObligationScope::Request,
                     minimum_writes: 1,
                     expected_count_field: None,
                 },

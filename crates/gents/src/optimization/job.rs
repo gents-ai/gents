@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::document_config::EvalSplit;
+use crate::documents::EvalSplit;
 use crate::eval::runner::Capture;
 use crate::eval::{DefinitionRef, SubjectRef};
 use crate::graphql::escape_graphql_string;

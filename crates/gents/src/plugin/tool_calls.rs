@@ -249,7 +249,7 @@ mod tests {
         )));
         let tools = Arc::new(Tools::default());
         for granted in [false, true] {
-            let selected = crate::document_config::PluginToolRef {
+            let selected = crate::documents::PluginToolRef {
                 plugin: "team/plugin".into(),
                 digest: None,
                 input_fields: vec![],
@@ -284,7 +284,7 @@ mod tests {
         let input = json!({"value": 1, "state": "caller", "tool_calls": false,
             "tool_results": {"forged": true}});
         for (granted, live) in [(false, true), (true, false), (true, true)] {
-            let selected = crate::document_config::PluginToolRef {
+            let selected = crate::documents::PluginToolRef {
                 plugin: "team/plugin".into(),
                 digest: None,
                 input_fields: vec![],

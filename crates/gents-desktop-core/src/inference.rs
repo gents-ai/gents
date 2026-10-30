@@ -48,7 +48,7 @@ pub struct InferenceBackendView {
     pub enabled: Option<bool>,
     pub tags: Vec<String>,
     pub models: Vec<String>,
-    pub advertised_models: Vec<gents::document_config::AdvertisedModel>,
+    pub advertised_models: Vec<gents::documents::AdvertisedModel>,
     pub probe_status: Option<String>,
     /// The account a subscription backend runs on; `None` is the original.
     pub account_ref: Option<String>,
@@ -61,17 +61,17 @@ pub struct InferenceSetupState {
     pub node_did: String,
     pub node: NodeView,
     pub agents: Vec<AgentView>,
-    pub agent_configs: Vec<gents::document_config::Agent>,
+    pub agent_configs: Vec<gents::documents::Agent>,
     pub inference_backends: Vec<InferenceBackendView>,
-    pub inference_profiles: Vec<gents::document_config::InferenceProfile>,
+    pub inference_profiles: Vec<gents::documents::InferenceProfile>,
     pub fast_mode_backend_ids: Vec<String>,
 }
 
 pub fn backend_config_view(
-    row: &gents::document_config::InferenceBackend,
-    observation: Option<&gents::document_config::InferenceBackendObservation>,
+    row: &gents::documents::InferenceBackend,
+    observation: Option<&gents::documents::InferenceBackendObservation>,
 ) -> InferenceBackendView {
-    use gents::document_config::BackendAuth;
+    use gents::documents::BackendAuth;
     let (auth_kind, api_key_configured, api_key_env_var) = match &row.auth {
         BackendAuth::Unauthenticated => ("unauthenticated", false, None),
         BackendAuth::ApiKey { .. } => ("api_key", true, None),
@@ -591,7 +591,7 @@ mod tests {
 
     #[test]
     fn inference_metadata_never_exports_backend_credentials() {
-        let backend: gents::document_config::InferenceBackend = serde_json::from_value(json!({
+        let backend: gents::documents::InferenceBackend = serde_json::from_value(json!({
             "node_did": "did:runtime", "backend_id": "backend", "name": "Provider",
             "provider_kind": "OpenAiCompatible", "openai_wire_api": "chat_completions",
             "endpoint": "https://user:private-url-password@example.com/v1?key=private-query-key",

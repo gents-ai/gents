@@ -6,7 +6,7 @@ use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 
-use crate::document_config::Agent as AgentDocument;
+use crate::documents::Agent as AgentDocument;
 use crate::inference::admission::BackendAvailability;
 use crate::inference::resolved::ResolvedAgent;
 use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
@@ -253,11 +253,14 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                     .as_ref()
                     .map(|context| context.skill_ids.as_slice())
                     .unwrap_or(&[]);
-                let behavior_skills =
-                    crate::skills::effective_skills(&all_skills, &agent_config.node_did, skill_ids)
-                        .into_iter()
-                        .cloned()
-                        .collect::<Vec<_>>();
+                let behavior_skills = crate::documents::skills::effective_skills(
+                    &all_skills,
+                    &agent_config.node_did,
+                    skill_ids,
+                )
+                .into_iter()
+                .cloned()
+                .collect::<Vec<_>>();
                 let factory: AgentFactory = Box::new(move |principal| {
                     agent_config_from_documents(
                         principal,
@@ -406,7 +409,7 @@ fn ensure_inference_available(
     if admission.availability() != BackendAvailability::Disabled
         && matches!(
             backend.auth,
-            crate::document_config::BackendAuth::NodeOAuth { .. }
+            crate::documents::BackendAuth::NodeOAuth { .. }
         )
     {
         let provider = match backend.provider_kind {
@@ -488,11 +491,11 @@ pub(super) fn collect_unresolved_behavior_references(
 }
 
 struct SelectedInferenceDocuments<'a> {
-    profile: &'a crate::document_config::InferenceProfile,
-    backend: &'a crate::document_config::InferenceBackend,
-    sampling: Option<&'a crate::document_config::InferenceSampling>,
-    execution: Option<&'a crate::document_config::InferenceExecution>,
-    retry_policy: Option<&'a crate::document_config::InferenceRetryPolicy>,
+    profile: &'a crate::documents::InferenceProfile,
+    backend: &'a crate::documents::InferenceBackend,
+    sampling: Option<&'a crate::documents::InferenceSampling>,
+    execution: Option<&'a crate::documents::InferenceExecution>,
+    retry_policy: Option<&'a crate::documents::InferenceRetryPolicy>,
 }
 
 /// Resolves the documents one inference selection names, without judging
@@ -590,7 +593,7 @@ fn resolve_inference(
 
 // Skills are the one value vector embedded in ResolvedAgent's Debug value;
 // canonicalize before both prompt construction and fingerprinting.
-pub(super) fn sorted_skills(view: &DocumentRuntimeView) -> Vec<crate::skills::Skill> {
+pub(super) fn sorted_skills(view: &DocumentRuntimeView) -> Vec<crate::documents::skills::Skill> {
     let mut skills = view
         .skills
         .values()
@@ -600,8 +603,8 @@ pub(super) fn sorted_skills(view: &DocumentRuntimeView) -> Vec<crate::skills::Sk
     skills
 }
 
-fn skill_from_document(doc: &crate::document_config::SkillDocument) -> crate::skills::Skill {
-    crate::skills::Skill {
+fn skill_from_document(doc: &crate::documents::SkillDocument) -> crate::documents::skills::Skill {
+    crate::documents::skills::Skill {
         skill_id: doc.skill_id.clone(),
         node_did: doc.node_did.clone(),
         name: doc.name.clone().unwrap_or_default(),
@@ -637,7 +640,7 @@ mod advertised_context_override_tests {
         }
     }
 
-    fn profile(context_window: i64) -> crate::document_config::InferenceProfile {
+    fn profile(context_window: i64) -> crate::documents::InferenceProfile {
         serde_json::from_value(serde_json::json!({
             "node_did": "did:test:owner",
             "profile_id": "profile",
@@ -648,11 +651,8 @@ mod advertised_context_override_tests {
         .unwrap()
     }
 
-    fn advertised(
-        default: Option<i64>,
-        maximum: Option<i64>,
-    ) -> crate::document_config::AdvertisedModel {
-        crate::document_config::AdvertisedModel {
+    fn advertised(default: Option<i64>, maximum: Option<i64>) -> crate::documents::AdvertisedModel {
+        crate::documents::AdvertisedModel {
             model_name: "gpt-5.6-sol".into(),
             display_name: None,
             context_window: default,

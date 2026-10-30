@@ -46,7 +46,7 @@ use crate::defra_query::{
     build_defra_query_tool, BoundedQueryTool, CollectionScope, DEFRA_QUERY_TOOL_NAME,
 };
 use crate::defra_write::BoundedWriteTool;
-use crate::document_config::{AgentTargetDocument, QueryToolDecl, WriteToolDecl};
+use crate::documents::{AgentTargetDocument, QueryToolDecl, WriteToolDecl};
 use crate::meta_tools::build_meta_tools;
 use crate::toolset::{
     agent_tool_names, background_tool_names, build_agent_tools, build_background_tools,
@@ -66,7 +66,7 @@ pub struct ToolSurface {
     include_goal_tools: bool,
     include_goal_creation: bool,
     allowed_mcp_service_ids: Vec<String>,
-    remote_tools: Option<crate::document_config::RemoteTools>,
+    remote_tools: Option<crate::documents::RemoteTools>,
     agent_tools: AgentToolConfig,
     background_tools: BackgroundToolConfig,
     custom_tools: Vec<CustomToolFactory>,
@@ -83,7 +83,7 @@ pub struct ToolSurface {
     pub(super) write_tools: Vec<WriteToolDecl>,
     pub(super) query_tools: Vec<QueryToolDecl>,
     pub(super) surface_of_tool: std::collections::BTreeMap<String, String>,
-    pub(super) plugin_tools: Vec<crate::document_config::PluginToolRef>,
+    pub(super) plugin_tools: Vec<crate::documents::PluginToolRef>,
     /// The plugin tools above resolved against the host plugin store when the
     /// surface was resolved. It feeds the runtime configuration fingerprint and
     /// slot comparison through this struct's Debug, so installing, removing or
@@ -91,7 +91,7 @@ pub struct ToolSurface {
     /// tool. `None` records a not-installed or pin-mismatched plugin and never
     /// makes an Agent unavailable: building tools stays the fail-closed gate.
     pub(super) plugin_resolutions: Vec<(
-        crate::document_config::PluginToolRef,
+        crate::documents::PluginToolRef,
         Option<crate::plugin::store::InstalledPlugin>,
     )>,
     pub(super) enable_skills: bool,
@@ -138,7 +138,7 @@ impl ToolSurface {
                     .flat_map(|plugin| plugin.input_fields.iter()),
             )
             .filter_map(|field| match &field.fill {
-                Some(crate::document_config::WriteToolFieldFill::SourceField(source)) => {
+                Some(crate::documents::WriteToolFieldFill::SourceField(source)) => {
                     Some(source.clone())
                 }
                 _ => None,
@@ -158,7 +158,7 @@ impl ToolSurface {
 
     pub(crate) fn output_obligations(
         &self,
-    ) -> Vec<(String, crate::document_config::WriteToolOutputObligation)> {
+    ) -> Vec<(String, crate::documents::WriteToolOutputObligation)> {
         self.write_tools
             .iter()
             .filter_map(|decl| {
@@ -189,7 +189,7 @@ impl ToolSurface {
         self.enable_skills
     }
 
-    pub(crate) fn remote_tools(&self) -> Option<&crate::document_config::RemoteTools> {
+    pub(crate) fn remote_tools(&self) -> Option<&crate::documents::RemoteTools> {
         self.remote_tools.as_ref()
     }
 
@@ -207,7 +207,7 @@ impl ToolSurface {
     pub(crate) fn plugin_resolutions(
         &self,
     ) -> &[(
-        crate::document_config::PluginToolRef,
+        crate::documents::PluginToolRef,
         Option<crate::plugin::store::InstalledPlugin>,
     )] {
         &self.plugin_resolutions

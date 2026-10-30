@@ -201,10 +201,10 @@ fn generated_root_admission_cases_drive_production_root_policy() {
                         Some(ceiling),
                     ),
                     None => {
-                        let mut tools = gents::document_config::Tools {
-                            host: Some(gents::document_config::HostTools {
+                        let mut tools = gents::documents::Tools {
+                            host: Some(gents::documents::HostTools {
                                 root: Some(case.authored.clone()),
-                                files: Some(gents::document_config::FileTools {
+                                files: Some(gents::documents::FileTools {
                                     mode: gents::tool_surface::FileToolMode::ReadOnly,
                                     ..Default::default()
                                 }),

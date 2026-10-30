@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
-use gents::document_config::{BackendAuth, InferenceBackend};
+use gents::documents::{BackendAuth, InferenceBackend};
 use serde_json::{json, Value};
 
 use crate::shared::ConfigExportBundle;

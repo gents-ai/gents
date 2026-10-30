@@ -543,7 +543,7 @@ mod tests {
             let mut agent = test_agent(kind, wire);
             seed_oauth_account(&node, &agent, provider, None).await;
             seed_oauth_account(&node, &agent, provider, Some("acct-b")).await;
-            agent.backend_auth = crate::document_config::BackendAuth::NodeOAuth {
+            agent.backend_auth = crate::documents::BackendAuth::NodeOAuth {
                 account_ref: Some("acct-b".into()),
             };
             let client = build_backend_client(
@@ -607,7 +607,7 @@ mod tests {
             seed_oauth_account(&node, &on_a, provider, None).await;
             seed_oauth_account(&node, &on_a, provider, Some("acct-b")).await;
             let mut on_b = on_a.clone();
-            on_b.backend_auth = crate::document_config::BackendAuth::NodeOAuth {
+            on_b.backend_auth = crate::documents::BackendAuth::NodeOAuth {
                 account_ref: Some("acct-b".into()),
             };
             let original =
@@ -649,7 +649,7 @@ mod tests {
             crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
         )
         .await;
-        codex.backend_auth = crate::document_config::BackendAuth::NodeOAuth {
+        codex.backend_auth = crate::documents::BackendAuth::NodeOAuth {
             account_ref: Some("acct-b".into()),
         };
         let error = build_backend_client(

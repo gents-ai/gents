@@ -1137,7 +1137,7 @@ async fn install_failure_inbox_triggers(access: &ConfigAccess, owner: &str) {
             }
         ]
     });
-    let config: gents::document_config::PackConfig =
+    let config: gents::documents::PackConfig =
         serde_json::from_value(config).expect("test event and Task documents deserialize");
     let plan = DesiredStateApplyPlan::from_pack_config(&config)
         .expect("test event and Task documents validate");

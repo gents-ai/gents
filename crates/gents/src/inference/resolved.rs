@@ -32,7 +32,7 @@ pub struct ResolvedAgent {
     pub backend_provider_kind: BackendProviderKind,
     pub openai_wire_api: OpenAiWireApi,
     pub backend_endpoint: String,
-    pub backend_auth: crate::document_config::BackendAuth,
+    pub backend_auth: crate::documents::BackendAuth,
     pub model_name: String,
     pub profile_id: Option<String>,
     pub service_tier: Option<ServiceTier>,
@@ -45,7 +45,7 @@ pub struct ResolvedAgent {
     pub max_turns_provenance: MaxTurnsProvenance,
     pub system_prompt: String,
     pub tools: AgentToolSurfaceConfig,
-    pub compaction: Option<crate::document_config::CompactionConfig>,
+    pub compaction: Option<crate::documents::CompactionConfig>,
     pub compaction_inference: Option<ResolvedInference>,
     pub max_total_tokens: Option<u64>,
     pub stream_batch_ms: u64,
@@ -55,18 +55,18 @@ pub struct ResolvedAgent {
     pub completion_retry: CompletionRetryProfileFields,
     pub sampling: SamplingConfig,
     /// Effective skill set for this agent. Their tool deps are intersected with
-    /// the tool ceiling and never widen it. See `crate::skills`.
-    pub skills: Vec<crate::skills::Skill>,
+    /// the tool ceiling and never widen it. See `crate::documents::skills`.
+    pub skills: Vec<crate::documents::skills::Skill>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ResolvedInference {
-    pub backend: crate::document_config::InferenceBackend,
-    pub profile: crate::document_config::InferenceProfile,
-    pub sampling: Option<crate::document_config::InferenceSampling>,
-    pub execution: Option<crate::document_config::InferenceExecution>,
-    pub retry_policy: Option<crate::document_config::InferenceRetryPolicy>,
-    pub advertised_model: Option<crate::document_config::AdvertisedModel>,
+    pub backend: crate::documents::InferenceBackend,
+    pub profile: crate::documents::InferenceProfile,
+    pub sampling: Option<crate::documents::InferenceSampling>,
+    pub execution: Option<crate::documents::InferenceExecution>,
+    pub retry_policy: Option<crate::documents::InferenceRetryPolicy>,
+    pub advertised_model: Option<crate::documents::AdvertisedModel>,
 }
 
 impl ResolvedInference {
@@ -442,8 +442,8 @@ pub fn resolve_backend_api_key(
 }
 
 pub fn validate_advertised_context_override(
-    profile: &crate::document_config::InferenceProfile,
-    model: &crate::document_config::AdvertisedModel,
+    profile: &crate::documents::InferenceProfile,
+    model: &crate::documents::AdvertisedModel,
 ) -> anyhow::Result<()> {
     let Some(selected) = profile.context_window else {
         return Ok(());
@@ -468,12 +468,12 @@ pub fn validate_advertised_context_override(
 }
 
 pub fn backend_catalog<'a>(
-    backend: &crate::document_config::InferenceBackend,
-    observation: Option<&'a crate::document_config::InferenceBackendObservation>,
-) -> anyhow::Result<Option<&'a crate::document_config::BackendModelCatalog>> {
+    backend: &crate::documents::InferenceBackend,
+    observation: Option<&'a crate::documents::InferenceBackendObservation>,
+) -> anyhow::Result<Option<&'a crate::documents::BackendModelCatalog>> {
     let credential_scope = matches!(
         backend.auth,
-        crate::document_config::BackendAuth::NodeOAuth { .. }
+        crate::documents::BackendAuth::NodeOAuth { .. }
     )
     .then_some(backend.node_did.as_str());
     Ok(observation
@@ -484,7 +484,7 @@ pub fn backend_catalog<'a>(
 }
 
 pub fn admits_reasoning_effort(
-    backend: &crate::document_config::InferenceBackend,
+    backend: &crate::documents::InferenceBackend,
     effort: ReasoningEffort,
     advertised: &[ReasoningEffort],
 ) -> bool {
@@ -494,9 +494,9 @@ pub fn admits_reasoning_effort(
 }
 
 pub fn unsent_reasoning_effort(
-    backend: &crate::document_config::InferenceBackend,
-    profile: &crate::document_config::InferenceProfile,
-    observation: Option<&crate::document_config::InferenceBackendObservation>,
+    backend: &crate::documents::InferenceBackend,
+    profile: &crate::documents::InferenceProfile,
+    observation: Option<&crate::documents::InferenceBackendObservation>,
 ) -> Option<String> {
     let effort = profile.reasoning_effort?;
     let fields = backend.backend_fields();
@@ -545,10 +545,10 @@ pub fn unsent_reasoning_effort(
 }
 
 pub fn advertised_model_for_profile(
-    backend: &crate::document_config::InferenceBackend,
-    profile: &crate::document_config::InferenceProfile,
-    observation: Option<&crate::document_config::InferenceBackendObservation>,
-) -> anyhow::Result<Option<crate::document_config::AdvertisedModel>> {
+    backend: &crate::documents::InferenceBackend,
+    profile: &crate::documents::InferenceProfile,
+    observation: Option<&crate::documents::InferenceBackendObservation>,
+) -> anyhow::Result<Option<crate::documents::AdvertisedModel>> {
     validate_service_tier(backend.provider_kind, profile.service_tier)?;
     let Some(catalog) = backend_catalog(backend, observation)? else {
         return Ok(None);
@@ -613,7 +613,7 @@ mod tests {
             backend_provider_kind: BackendProviderKind::OpenAiCompatible,
             openai_wire_api,
             backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
-            backend_auth: crate::document_config::BackendAuth::Unauthenticated,
+            backend_auth: crate::documents::BackendAuth::Unauthenticated,
             model_name: DEFAULT_MODEL_NAME.to_string(),
             service_tier: None,
             resolved_reasoning_efforts: None,
@@ -640,7 +640,7 @@ mod tests {
     fn resolve_backend_api_key_errors_when_env_var_named_but_unset() {
         let mut agent = agent_with_wire(OpenAiWireApi::ChatCompletions);
         agent.agent_id = "agent-alpha".to_string();
-        agent.backend_auth = crate::document_config::BackendAuth::Environment {
+        agent.backend_auth = crate::documents::BackendAuth::Environment {
             variable: "GENTS_CONFIG_TEST_KEY_MISSING_1338_NEVER_SET".into(),
         };
 

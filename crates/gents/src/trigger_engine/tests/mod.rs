@@ -578,7 +578,7 @@ fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://localhost:0/v1".to_string(),
-        backend_auth: crate::document_config::BackendAuth::Unauthenticated,
+        backend_auth: crate::documents::BackendAuth::Unauthenticated,
         model_name: crate::inference::resolved::DEFAULT_MODEL_NAME.to_string(),
         service_tier: None,
         resolved_reasoning_efforts: None,

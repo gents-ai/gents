@@ -2,7 +2,7 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::outcome::{classify, EvidenceClass, OutcomeKind, ProviderReason};
-use crate::document_config::{EvalReducer, EvalSplit, EvalTier};
+use crate::documents::{EvalReducer, EvalSplit, EvalTier};
 
 pub const SCORE_BP_MAX: u32 = 10_000;
 
@@ -252,7 +252,7 @@ pub fn exposure(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_config::EvalTier;
+    use crate::documents::EvalTier;
 
     fn v(
         id: &str,

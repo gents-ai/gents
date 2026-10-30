@@ -74,7 +74,7 @@ impl ClientCore {
         node_did: &str,
         id: &str,
         revision: &mutations::ConfigEditorRevision,
-        auth: &gents::document_config::BackendAuth,
+        auth: &gents::documents::BackendAuth,
     ) -> Result<()> {
         let access = self
             .operator_graphql(node_did)
@@ -112,7 +112,7 @@ impl ClientCore {
 
     pub async fn apply_config_components(
         &self,
-        document: &gents::document_config::PackConfig,
+        document: &gents::documents::PackConfig,
     ) -> Result<()> {
         let access = self.operator_access(&document.node.node_did)?;
         match mutations::apply_config_components_on(&access, document).await {
@@ -125,7 +125,7 @@ impl ClientCore {
         }
     }
 
-    pub async fn save_node(&self, row: &gents::document_config::Node) -> Result<()> {
+    pub async fn save_node(&self, row: &gents::documents::Node) -> Result<()> {
         let access = self.operator_access(&row.node_did)?;
         let result = mutations::upsert_node_on(&access, row).await;
         match result {
@@ -195,7 +195,7 @@ impl ClientCore {
 
     pub async fn save_tool_service_registry(
         &self,
-        row: &gents::document_config::ToolServiceRegistry,
+        row: &gents::documents::ToolServiceRegistry,
     ) -> Result<()> {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_tool_service_registry_on(&access, row).await {
@@ -282,7 +282,7 @@ impl ClientCore {
         mutations::prepare_access_review_task_on(&access, node, agent, preferred).await
     }
 
-    pub async fn save_task(&self, row: &gents::document_config::Task) -> Result<()> {
+    pub async fn save_task(&self, row: &gents::documents::Task) -> Result<()> {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_task_on(&access, row).await {
             Ok(()) => {
@@ -300,7 +300,7 @@ impl ClientCore {
         }
     }
 
-    pub async fn save_skill(&self, row: &gents::document_config::SkillDocument) -> Result<()> {
+    pub async fn save_skill(&self, row: &gents::documents::SkillDocument) -> Result<()> {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_skill_on(&access, row).await {
             Ok(()) => {
@@ -318,7 +318,7 @@ impl ClientCore {
         }
     }
 
-    pub async fn save_schedule(&self, row: &gents::document_config::Schedule) -> Result<()> {
+    pub async fn save_schedule(&self, row: &gents::documents::Schedule) -> Result<()> {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_schedule_on(&access, row).await {
             Ok(()) => {
@@ -336,7 +336,7 @@ impl ClientCore {
         }
     }
 
-    pub async fn save_trigger(&self, row: &gents::document_config::Trigger) -> Result<()> {
+    pub async fn save_trigger(&self, row: &gents::documents::Trigger) -> Result<()> {
         let access = self.operator_access(&row.node_did)?;
         match mutations::upsert_trigger_on(&access, row).await {
             Ok(()) => {
@@ -354,10 +354,7 @@ impl ClientCore {
         }
     }
 
-    pub async fn save_event_source(
-        &self,
-        document: &gents::document_config::EventSource,
-    ) -> Result<()> {
+    pub async fn save_event_source(&self, document: &gents::documents::EventSource) -> Result<()> {
         let access = self.operator_access(&document.node_did)?;
         match mutations::upsert_event_source_on(&access, document).await {
             Ok(()) => {

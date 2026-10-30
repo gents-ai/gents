@@ -3,9 +3,7 @@ use crate::config_client::{
     apply_desired_state_plan, validate_desired_state_plan, ConfigAccess, DesiredStateApplyDocument,
     DesiredStateApplyPlan,
 };
-use crate::document_config::{
-    Agent, AgentContext, BashTools, BuiltInTools, FileTools, HostTools, Tools,
-};
+use crate::documents::{Agent, AgentContext, BashTools, BuiltInTools, FileTools, HostTools, Tools};
 
 fn catalog_from_documents(refs: &crate::ConfigReferences) -> Result<agent::AgentCatalogView> {
     let mut view = agent::AgentCatalogView::default();

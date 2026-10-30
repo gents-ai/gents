@@ -1167,7 +1167,7 @@ async fn node_read_skips_accounts_not_on_this_node_and_filters_by_provider() {
                 true,
             ),
             InferenceBackend {
-                auth: crate::document_config::BackendAuth::Unauthenticated,
+                auth: crate::documents::BackendAuth::Unauthenticated,
                 ..backend(
                     did,
                     "OpenAiCompatible",

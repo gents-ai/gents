@@ -513,7 +513,7 @@ mod tests {
 
     #[test]
     fn a_pack_config_carries_eval_definitions() {
-        let pack: crate::document_config::PackConfig = serde_json::from_value(json!({
+        let pack: crate::documents::PackConfig = serde_json::from_value(json!({
             "node": {"node_did": "did:key:owner"},
             "eval_definitions": [definition()]
         }))

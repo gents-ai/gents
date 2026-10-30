@@ -545,7 +545,7 @@ fn binding_slots_survives_a_reinstall_and_unbinding_clears_it() {
 
 #[tokio::test]
 async fn a_model_tool_gets_its_model_answers_through_the_same_path() {
-    use crate::document_config::PluginToolRef;
+    use crate::documents::PluginToolRef;
     use crate::inference::llm::tool::ToolDyn;
     use crate::plugin::tool::PluginTool;
 

@@ -6,7 +6,7 @@ use gents::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
     DesiredStateApplyPlan,
 };
-use gents::document_config::{BackendAuth, InferenceBackend};
+use gents::documents::{BackendAuth, InferenceBackend};
 use gents::{discover_backend_models, BackendProviderKind, Collection};
 use serde_json::json;
 

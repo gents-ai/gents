@@ -274,7 +274,7 @@ async fn cycle_probes_anthropic_key_backends_independently() {
         let mut backend = backend(backend_id, endpoint);
         backend.provider_kind =
             crate::inference::backends::provider::BackendProviderKind::AnthropicApiKey;
-        backend.auth = crate::document_config::BackendAuth::ApiKey {
+        backend.auth = crate::documents::BackendAuth::ApiKey {
             key: "placeholder-key".to_string(),
         };
         backend
@@ -422,7 +422,7 @@ async fn cycle_never_probes_or_demotes_chatgpt_codex_backends() {
 
     let mut codex = backend("codex", "http://127.0.0.1:1/v1".to_string());
     codex.provider_kind = crate::inference::backends::provider::BackendProviderKind::ChatGptCodex;
-    codex.auth = crate::document_config::BackendAuth::NodeOAuth { account_ref: None };
+    codex.auth = crate::documents::BackendAuth::NodeOAuth { account_ref: None };
     let outcome = probe_backends_cycle(
         &node,
         &client,

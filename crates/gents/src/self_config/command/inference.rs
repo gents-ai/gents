@@ -149,10 +149,7 @@ impl ConfigCommandTool {
             );
             let backend = &matches[0];
             if backend.provider_kind != crate::BackendProviderKind::OpenAiCompatible
-                || !matches!(
-                    backend.auth,
-                    crate::document_config::BackendAuth::Unauthenticated
-                )
+                || !matches!(backend.auth, crate::documents::BackendAuth::Unauthenticated)
             {
                 let observation = self
                     .backend_observation_view(backend_id, backend.provider_kind)

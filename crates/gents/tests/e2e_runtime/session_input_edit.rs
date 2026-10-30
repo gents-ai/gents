@@ -93,10 +93,10 @@ async fn generated_remote_edits_replicate_signed_effect_and_receipt() {
     let client = support::test_p2p_db("input-edit-client").await;
     let did = runtime.node_identity.did();
     let requester = client.node_identity.did();
-    gents::document_config::ensure_node(&runtime.node, did)
+    gents::documents::ensure_node(&runtime.node, did)
         .await
         .unwrap();
-    gents::document_config::ensure_node(&client.node, requester)
+    gents::documents::ensure_node(&client.node, requester)
         .await
         .unwrap();
     let (peer, address) = support::enrollment::wait_for_peer_identity(&client.node).await;
@@ -656,9 +656,7 @@ impl RemoteEdit<'_> {
 async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempotent() {
     let mut db = support::test_db("input-edit-reopen").await;
     let did = db.node_identity.did().to_owned();
-    gents::document_config::ensure_node(&db.node, &did)
-        .await
-        .unwrap();
+    gents::documents::ensure_node(&db.node, &did).await.unwrap();
     let session = "edit-reopen-session";
     ConfigAccess::local(db.node.clone()).write("test.edit_reopen.session", &format!(
         r#"mutation {{ create_AgentSession(input: {{ session_id: "{}", node_did: "{}", requester_did: "{}", agent_id: "general", created_at: "2026-10-10T00:00:00Z" }}) {{ _docID }} }}"#,

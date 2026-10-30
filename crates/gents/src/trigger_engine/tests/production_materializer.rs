@@ -132,7 +132,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
     caller_request.session_id = caller.session_id.clone();
     let tools = crate::tool_surface::AgentToolConfig {
         enabled: true,
-        targets: vec![crate::document_config::AgentTargetDocument {
+        targets: vec![crate::documents::AgentTargetDocument {
             target_id: "worker".into(),
             node_did: owner.clone(),
             target_node_did: owner.clone(),

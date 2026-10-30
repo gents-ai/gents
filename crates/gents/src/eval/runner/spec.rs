@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::document_config::{EvalCase, EvalFixtures};
+use crate::documents::{EvalCase, EvalFixtures};
 use crate::eval::runner::{
     review, Capture, FixtureDocument, FixtureFile, FrozenCell, FrozenRun, PlannedTrial, ScriptKey,
     StageProgress, StageSpec, TrialFixtures, TrialSpec,

@@ -48,10 +48,10 @@ impl Fixture {
                         gents::record_model_catalog_in_txn(
                             txn,
                             backend,
-                            gents::document_config::BackendModelCatalog {
+                            gents::documents::BackendModelCatalog {
                                 node_did: backend.catalog_scope().map(str::to_owned),
                                 observed_at: chrono::Utc::now().to_rfc3339(),
-                                models: vec![gents::document_config::AdvertisedModel {
+                                models: vec![gents::documents::AdvertisedModel {
                                     model_name: model.into(),
                                     display_name: None,
                                     context_window: None,

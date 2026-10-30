@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::config_client::{ConfigAccess, SchemaInstallPlan};
-use crate::document_config::PackConfig;
+use crate::documents::PackConfig;
 use crate::pack_archive::PackArchive;
 
 use super::super::home_install::materialize_asset_pack;

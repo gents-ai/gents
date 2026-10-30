@@ -87,11 +87,11 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
         since,
     )
     .await;
-    crate::document_config::update_trigger_runtime_fields(
+    crate::documents::update_trigger_runtime_fields(
         &home.node,
         home.did(),
         "seed-trigger",
-        crate::document_config::TriggerRuntimeUpdate {
+        crate::documents::TriggerRuntimeUpdate {
             last_fired_source_doc_id: Some(doc_id.clone()),
             ..Default::default()
         },

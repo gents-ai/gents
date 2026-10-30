@@ -77,7 +77,7 @@ pub async fn delete_inference_backend_on(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::document_config::{BackendAuth, BackendModelCatalog, InferenceProfile};
+    use gents::documents::{BackendAuth, BackendModelCatalog, InferenceProfile};
     use serde_json::json;
     use std::sync::Arc;
 

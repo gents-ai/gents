@@ -387,8 +387,8 @@ impl DeniedTarget {
                         local_subnet: None,
                         node_did: "did:test:test".into(),
                         allowed_mcp_service_ids: vec!["selected-service".into()],
-                        remote_tools: crate::document_config::RemoteTools {
-                            services: vec![crate::document_config::RemoteServiceTools {
+                        remote_tools: crate::documents::RemoteTools {
+                            services: vec![crate::documents::RemoteServiceTools {
                                 mcp_service_id: "selected-service".into(),
                                 tool_names: vec!["selected-tool".into()],
                                 ..Default::default()

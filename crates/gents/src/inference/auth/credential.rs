@@ -651,7 +651,7 @@ pub(crate) fn preset_account_backend(
         provider_kind: spec.provider_kind,
         openai_wire_api: spec.openai_wire_api,
         endpoint: spec.endpoint,
-        auth: crate::document_config::BackendAuth::NodeOAuth {
+        auth: crate::documents::BackendAuth::NodeOAuth {
             account_ref: account_ref.map(str::to_owned),
         },
         connect_timeout_secs: None,
@@ -928,7 +928,7 @@ async fn original_account_profiles(
             .filter(|backend| {
                 matches!(
                     backend.auth,
-                    crate::document_config::BackendAuth::NodeOAuth { account_ref: None }
+                    crate::documents::BackendAuth::NodeOAuth { account_ref: None }
                 ) && backend.provider_kind.oauth_provider() == Some(credential.provider.as_str())
             })
             .map(|backend| backend.backend_id)
@@ -962,7 +962,7 @@ pub fn backend_account<'a>(
     accounts: &'a [AccountSummary],
 ) -> Option<Option<&'a AccountSummary>> {
     use crate::inference::backends::provider::BackendProviderOauthExt;
-    let crate::document_config::BackendAuth::NodeOAuth { account_ref } = &backend.auth else {
+    let crate::documents::BackendAuth::NodeOAuth { account_ref } = &backend.auth else {
         return None;
     };
     let provider = backend.provider_kind.oauth_provider()?;
@@ -1021,7 +1021,7 @@ pub fn serving_account(
     use crate::inference::backends::provider::BackendProviderOauthExt;
     let provider = matches!(
         backend.auth,
-        crate::document_config::BackendAuth::NodeOAuth { .. }
+        crate::documents::BackendAuth::NodeOAuth { .. }
     )
     .then(|| backend.provider_kind.oauth_provider())
     .flatten();
@@ -2252,7 +2252,7 @@ mod tests {
 #[cfg(test)]
 mod serving_account_tests {
     use super::*;
-    use crate::document_config::BackendAuth;
+    use crate::documents::BackendAuth;
 
     fn account(account_ref: Option<&str>, label: &str, enabled: bool) -> AccountSummary {
         AccountSummary {
@@ -3439,7 +3439,7 @@ mod lifecycle_tests {
             assert_eq!(Some(backend.name.clone()), b.credential.label);
             assert_eq!(
                 backend.auth,
-                crate::document_config::BackendAuth::NodeOAuth {
+                crate::documents::BackendAuth::NodeOAuth {
                     account_ref: Some(reference.clone())
                 }
             );
@@ -3485,7 +3485,7 @@ mod lifecycle_tests {
                 provider_kind: spec.provider_kind,
                 openai_wire_api: spec.openai_wire_api,
                 endpoint: spec.endpoint.clone(),
-                auth: crate::document_config::BackendAuth::NodeOAuth { account_ref: None },
+                auth: crate::documents::BackendAuth::NodeOAuth { account_ref: None },
                 connect_timeout_secs: None,
                 discovery_timeout_secs: None,
                 max_concurrent: None,
@@ -3504,16 +3504,15 @@ mod lifecycle_tests {
                 .find(|backend| backend.backend_id != original.backend_id)
                 .expect("the added account's backend");
             for (backend, model) in [(&original, "model-a"), (&added, "model-b")] {
-                let advertised: crate::document_config::AdvertisedModel =
-                    serde_json::from_value(json!({
-                        "model_name": model,
-                        "display_name": null,
-                        "context_window": null,
-                        "max_context_window": null,
-                        "max_output_tokens": null,
-                        "reasoning_efforts": null,
-                    }))
-                    .unwrap();
+                let advertised: crate::documents::AdvertisedModel = serde_json::from_value(json!({
+                    "model_name": model,
+                    "display_name": null,
+                    "context_window": null,
+                    "max_context_window": null,
+                    "max_output_tokens": null,
+                    "reasoning_efforts": null,
+                }))
+                .unwrap();
                 crate::inference::backends::registry::record_discovered_catalog_on(
                     &access,
                     backend,
@@ -3794,7 +3793,7 @@ mod lifecycle_tests {
                 provider_kind: spec.provider_kind,
                 openai_wire_api: spec.openai_wire_api,
                 endpoint: spec.endpoint,
-                auth: crate::document_config::BackendAuth::NodeOAuth { account_ref: None },
+                auth: crate::documents::BackendAuth::NodeOAuth { account_ref: None },
                 connect_timeout_secs: None,
                 discovery_timeout_secs: None,
                 max_concurrent: None,

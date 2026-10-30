@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 
 use crate::config_client::ConfigAccess;
-use crate::document_config::{EvalCase, EvalDefinition};
+use crate::documents::{EvalCase, EvalDefinition};
 use crate::eval::{
     case_trial_score, latest_verdicts, load_run, load_trials, load_verdicts, pair_trials,
     PairedEvidence, TrialRecord, TrialScore, TrialUsage, VerdictRecord, VerdictView,
@@ -206,7 +206,7 @@ pub fn cell_usage(rows: &RunRows, cell_id: &str) -> CellUsage {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::document_config::EvalTier;
+    use crate::documents::EvalTier;
     use crate::eval::{
         Anchor, CaseTrialScore, OutcomeKind, StageCompletion, TrialCompletion, TrialIdentity,
     };

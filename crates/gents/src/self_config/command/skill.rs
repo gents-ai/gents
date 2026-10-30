@@ -32,7 +32,7 @@ impl ConfigCommandTool {
             .and_then(Value::as_str)
             .context("skill import requires an effective tool root")?;
         let context = crate::toolset::ToolContext::new(root.into(), false)?;
-        let document = crate::skills::import::load_skill_source(
+        let document = crate::documents::skills::import::load_skill_source(
             std::path::Path::new(&argv[2]),
             &argv[1],
             &self.node_did,

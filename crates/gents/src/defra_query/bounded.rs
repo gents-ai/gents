@@ -2,7 +2,7 @@ use anyhow::{anyhow, bail, ensure, Result};
 use serde_json::{json, Map, Value};
 
 use crate::config_client::ConfigAccess;
-use crate::document_config::QueryToolDecl;
+use crate::documents::QueryToolDecl;
 use crate::inference::llm::tool::{Tool, ToolDefinition};
 
 use super::query::{self, CollectionScope, DefraQueryParams, MAX_LIMIT};
@@ -110,7 +110,7 @@ impl BoundedQueryTool {
             )),
             "filter field collides with a reserved query argument"
         );
-        crate::document_config::reject_protected_collection_name(&self.decl.collection)
+        crate::documents::reject_protected_collection_name(&self.decl.collection)
     }
 
     async fn filter_parameters(&self) -> Result<Map<String, Value>> {
@@ -145,16 +145,14 @@ impl BoundedQueryTool {
             .collect()
     }
 
-    fn model_filter_fields(&self) -> impl Iterator<Item = &crate::document_config::WriteToolField> {
+    fn model_filter_fields(&self) -> impl Iterator<Item = &crate::documents::WriteToolField> {
         self.decl
             .filter_fields
             .iter()
             .filter(|field| field.fill.is_none())
     }
 
-    fn filled_filter_fields(
-        &self,
-    ) -> impl Iterator<Item = &crate::document_config::WriteToolField> {
+    fn filled_filter_fields(&self) -> impl Iterator<Item = &crate::documents::WriteToolField> {
         self.decl
             .filter_fields
             .iter()
@@ -306,7 +304,7 @@ impl BoundedQueryTool {
             {
                 bail!(
                     "{}",
-                    crate::document_config::runtime_filled_refusal(
+                    crate::documents::runtime_filled_refusal(
                         "filter",
                         key,
                         &self.decl.tool_name,
@@ -318,7 +316,7 @@ impl BoundedQueryTool {
             if !self.model_filter_fields().any(|field| field.name == *key) {
                 bail!(
                     "{}",
-                    crate::document_config::undeclared_field_refusal(
+                    crate::documents::undeclared_field_refusal(
                         "filter",
                         key,
                         &self.decl.tool_name,
@@ -548,7 +546,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::document_config::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
+    use crate::documents::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
     use crate::inference::llm::tool::Tool;
     use defra_node::EmbeddedNode;
 

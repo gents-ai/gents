@@ -8,7 +8,7 @@ use super::{
     INFERENCE_SLOT_REFERENCE_PREFIX,
 };
 use crate::config_client::ConfigAccess;
-use crate::document_config::{InferenceBackend, InferenceProfile, PackConfig};
+use crate::documents::{InferenceBackend, InferenceProfile, PackConfig};
 use crate::Collection;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -352,9 +352,7 @@ mod tests {
         let owner = "did:key:preview-owner";
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        crate::document_config::ensure_node(&node, owner)
-            .await
-            .unwrap();
+        crate::documents::ensure_node(&node, owner).await.unwrap();
         crate::test_support::install_test_agent(&node, owner, "only").await;
         let access = ConfigAccess::local(node);
         let one = manifest(json!([
@@ -376,13 +374,11 @@ mod tests {
         let owner = "did:key:binding-owner";
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
-        crate::document_config::ensure_node(&node, owner)
-            .await
-            .unwrap();
+        crate::documents::ensure_node(&node, owner).await.unwrap();
         crate::test_support::install_test_agent(&node, owner, "claude").await;
         crate::test_support::install_test_agent(&node, owner, "glm").await;
         let foreign_owner = "did:key:foreign-owner";
-        crate::document_config::ensure_node(&node, foreign_owner)
+        crate::documents::ensure_node(&node, foreign_owner)
             .await
             .unwrap();
         crate::test_support::install_test_agent(&node, foreign_owner, "foreign").await;

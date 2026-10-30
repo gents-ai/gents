@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 
-use crate::document_config::InferenceProfile;
+use crate::documents::InferenceProfile;
 use crate::inference::auth::credential::ServingAccount;
 use crate::store::collection::Collection;
 
@@ -62,17 +62,17 @@ pub async fn agent_accounts(
     let profile_backends = access
         .transact_readonly("config.agent_accounts", |txn| {
             Box::pin(async move {
-                let agent: crate::document_config::Agent =
+                let agent: crate::documents::Agent =
                     read(txn, Collection::Agent, node_did, agent_id)
                         .await?
                         .with_context(|| format!("agent {agent_id:?} not found"))?;
                 let mut profile_ids = vec![agent.inference_profile_id];
-                let context: Option<crate::document_config::AgentContext> =
+                let context: Option<crate::documents::AgentContext> =
                     match agent.context_id.as_deref() {
                         Some(id) => read(txn, Collection::AgentContext, node_did, id).await?,
                         None => None,
                     };
-                let compaction: Option<crate::document_config::CompactionConfig> =
+                let compaction: Option<crate::documents::CompactionConfig> =
                     match context.and_then(|context| context.compaction_id) {
                         Some(id) => read(txn, Collection::Compaction, node_did, &id).await?,
                         None => None,
@@ -237,7 +237,7 @@ mod tests {
             provider_kind: spec.provider_kind,
             openai_wire_api: spec.openai_wire_api,
             endpoint: spec.endpoint,
-            auth: crate::document_config::BackendAuth::NodeOAuth { account_ref: None },
+            auth: crate::documents::BackendAuth::NodeOAuth { account_ref: None },
             connect_timeout_secs: None,
             discovery_timeout_secs: None,
             max_concurrent: None,

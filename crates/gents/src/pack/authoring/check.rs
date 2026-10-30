@@ -161,7 +161,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
     Ok(())
 }
 
-pub fn load_config(archive: &PackArchive) -> Result<crate::document_config::PackConfig> {
+pub fn load_config(archive: &PackArchive) -> Result<crate::documents::PackConfig> {
     let config = crate::pack::load_pack_config(
         archive.manifest(),
         &crate::pack::PackInstallOptions {

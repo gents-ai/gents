@@ -8,7 +8,7 @@ use crate::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
     DesiredStateApplyPlan,
 };
-use crate::document_config::{ensure_node, EvalSplit};
+use crate::documents::{ensure_node, EvalSplit};
 use crate::eval::invalidate_run;
 use crate::eval::runner::embedded::EmbeddedHome;
 use crate::eval::scoring::PILOT_PURPOSE;

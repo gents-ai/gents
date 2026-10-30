@@ -29,7 +29,7 @@ pub(super) struct ScenarioManifest {
     pub(super) plugins: Vec<gents::pack::PackPlugin>,
 
     #[serde(skip)]
-    pub(super) config: Option<gents::document_config::PackConfig>,
+    pub(super) config: Option<gents::documents::PackConfig>,
 }
 
 #[derive(Debug, Deserialize)]

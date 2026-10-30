@@ -10,7 +10,7 @@ use super::data::DataCaller;
 use super::executor::PluginExecutor;
 use super::store::InstalledPlugin;
 use super::PluginVerdict;
-use crate::document_config::{PluginToolRef, WriteToolField};
+use crate::documents::{PluginToolRef, WriteToolField};
 use crate::inference::llm::tool::{
     BoxFuture, ToolDefinition, ToolDispatchResult, ToolDyn, ToolError,
 };
@@ -251,7 +251,7 @@ fn fill_inputs(input: &mut serde_json::Value, fields: &[WriteToolField]) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_config::WriteToolFieldFill;
+    use crate::documents::WriteToolFieldFill;
     use serde_json::json;
 
     fn fields() -> Vec<WriteToolField> {

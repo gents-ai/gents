@@ -87,13 +87,13 @@ fn read_manifest(dir: &Path) -> Result<gents::pack::PackManifest> {
     gents::pack::authoring::read_manifest(dir)
 }
 
-fn load_config(archive: &PackArchive) -> Result<gents::document_config::PackConfig> {
+fn load_config(archive: &PackArchive) -> Result<gents::documents::PackConfig> {
     gents::pack::authoring::load_config(archive)
 }
 
 async fn check_filters(
     dir: &Path,
-    config: &gents::document_config::PackConfig,
+    config: &gents::documents::PackConfig,
     problems: &mut Vec<String>,
 ) -> Result<()> {
     if config

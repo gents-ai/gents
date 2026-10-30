@@ -441,8 +441,11 @@ impl TriggerEngine {
         };
 
         let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let (node_scope, ctx_scope) =
-            crate::template::task_node_ctx(&snapshot.local_did, &intent.task.agent_id, &now);
+        let (node_scope, ctx_scope) = crate::documents::template::task_node_ctx(
+            &snapshot.local_did,
+            &intent.task.agent_id,
+            &now,
+        );
         let schedule = (intent.trigger_kind == TriggerKind::Schedule)
             .then(|| {
                 intent
@@ -508,7 +511,7 @@ impl TriggerEngine {
         } else {
             None
         };
-        let mut scope = crate::template::TemplateScope {
+        let mut scope = crate::documents::template::TemplateScope {
             session: prepared_ids
                 .as_ref()
                 .map(|(_, session)| serde_json::json!({"session_id": session})),
@@ -584,7 +587,7 @@ impl TriggerEngine {
                 let key = durable::fire_key(&identity);
                 let session_id = match session_template {
                     Some(template) => {
-                        let value = crate::template::render_template(template, &scope)?;
+                        let value = crate::documents::template::render_template(template, &scope)?;
                         anyhow::ensure!(
                             !value.trim().is_empty(),
                             "session template rendered an empty ID"
@@ -665,7 +668,7 @@ impl TriggerEngine {
         } else {
             None
         };
-        let (rendered, rendered_goal_objective) = match crate::template::render_task(
+        let (rendered, rendered_goal_objective) = match crate::documents::template::render_task(
             &intent.task.prompt_template,
             intent.task.goal_objective_template.as_deref(),
             intent.task.goal_token_budget,

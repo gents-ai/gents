@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 use super::{read_owned_doc, SelfConfigCore};
 use crate::config_client::patch::SelfConfigTarget;
 use crate::config_client::ConfigApplyTxn;
-use crate::document_config::{IntegrationTools, SelfConfigTools};
+use crate::documents::{IntegrationTools, SelfConfigTools};
 
 /// Operator-managed grants carried by a Tools document (Lean
 /// `SelfConfig.Grants`).

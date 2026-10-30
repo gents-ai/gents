@@ -18,7 +18,7 @@ where
         &self,
         request: &AgentRequest,
     ) -> Result<(
-        Vec<crate::document_config::TaskHook>,
+        Vec<crate::documents::TaskHook>,
         PathBuf,
         Option<crate::task_hooks::TaskHookRecordHandle>,
         bool,

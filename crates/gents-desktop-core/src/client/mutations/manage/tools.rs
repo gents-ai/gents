@@ -4,7 +4,7 @@ use defra_node::EmbeddedNode;
 #[cfg(test)]
 use gents::config_client::read_desired_state_record_in_txn;
 use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::document_config::ToolServiceRegistry;
+use gents::documents::ToolServiceRegistry;
 use gents::store::collection::Collection;
 use gents::Tools;
 #[cfg(test)]

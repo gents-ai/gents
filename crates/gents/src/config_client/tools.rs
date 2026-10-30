@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 
-use crate::document_config::Tools;
+use crate::documents::Tools;
 use crate::store::collection::Collection;
 
 use super::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};

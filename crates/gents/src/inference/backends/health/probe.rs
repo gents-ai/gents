@@ -75,9 +75,9 @@ async fn record_discovered_catalog(
     node: &Arc<EmbeddedNode>,
     backend: &InferenceBackend,
     node_did: Option<&str>,
-    models: Vec<crate::document_config::AdvertisedModel>,
+    models: Vec<crate::documents::AdvertisedModel>,
 ) {
-    let catalog = crate::document_config::BackendModelCatalog {
+    let catalog = crate::documents::BackendModelCatalog {
         node_did: node_did.map(str::to_string),
         observed_at: Utc::now().to_rfc3339(),
         models,

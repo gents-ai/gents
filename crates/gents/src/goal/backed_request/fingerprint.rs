@@ -31,7 +31,7 @@ pub(crate) struct GoalBackedRequestFingerprint {
     content: String,
     #[serde(
         default,
-        deserialize_with = "crate::document_config::deserialize_default_on_null"
+        deserialize_with = "crate::documents::deserialize_default_on_null"
     )]
     input: gents_protocol::request_input::RequestInput,
     execution_origin: String,

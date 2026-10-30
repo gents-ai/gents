@@ -6,7 +6,7 @@ use crate::config_client::{
     read_desired_state_record_in_txn, ConfigApplyTxn, DesiredStateApplyDocument,
     DesiredStateApplyPlan,
 };
-use crate::document_config::Tools;
+use crate::documents::Tools;
 use crate::toolset::CommandNetworkMode;
 
 pub fn apply_tool_grant_selection(

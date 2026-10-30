@@ -113,7 +113,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("SessionRecovery", WorkspaceTest("crates/gents-desktop-core/src/client/mutations/chat/request/tests.rs")),
         (
             "Skills",
-            WorkspaceTest("crates/gents/src/skills.rs"),
+            WorkspaceTest("crates/gents/src/documents/skills.rs"),
         ),
         ("StorageFailure", Module("storage_failure.rs")),
         (

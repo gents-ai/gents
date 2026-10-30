@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::config_client::ConfigAccess;
-use crate::document_config::{EvalDefinition, EvalSplit};
+use crate::documents::{EvalDefinition, EvalSplit};
 use crate::eval::checks::CHECK_REGISTRY_VERSION;
 use crate::eval::runner::executor::{Capture, InferenceBinding, Isolation};
 use crate::eval::{

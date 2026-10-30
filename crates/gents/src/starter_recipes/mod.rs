@@ -5,7 +5,7 @@ use std::str::FromStr;
 use anyhow::{anyhow, bail, ensure, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::document_config::{BashTools, FileTools, HostTools, Tools};
+use crate::documents::{BashTools, FileTools, HostTools, Tools};
 use crate::tool_surface::{BashMode, FileToolMode};
 use crate::toolset::{CommandExecutionMode, CommandNetworkMode};
 

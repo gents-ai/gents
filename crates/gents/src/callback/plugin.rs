@@ -24,7 +24,7 @@ use super::documents::{
 };
 use super::run::{deny, encode_journal, persist_journal};
 use super::{LIFECYCLE_FAILED, LIFECYCLE_RUNNING, LIFECYCLE_SUCCEEDED};
-use crate::document_config::{PortCardinality, PortSpec};
+use crate::documents::{PortCardinality, PortSpec};
 use crate::plugin::data::{DataCaller, PluginData, StampContext};
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::PluginVerdict;
@@ -39,7 +39,7 @@ pub(crate) fn writable_output_collection(collection: &str) -> Result<()> {
         !gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&collection),
         "a plugin cannot write {collection}, which belongs to the runtime"
     );
-    crate::document_config::reject_protected_collection_name(collection)
+    crate::documents::reject_protected_collection_name(collection)
 }
 
 pub fn validate_handler(

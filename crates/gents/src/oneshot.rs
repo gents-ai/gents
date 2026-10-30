@@ -96,7 +96,7 @@ struct OneshotInputs<'a> {
     replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
     prompt: &'a str,
     prompt_builder: LayeredPromptBuilder,
-    output_obligations: &'a [(String, crate::document_config::WriteToolOutputObligation)],
+    output_obligations: &'a [(String, crate::documents::WriteToolOutputObligation)],
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     background_tool_registry: BackgroundToolRegistry,
     lsp_pool: crate::toolset::lsp::LspPool,
@@ -182,7 +182,7 @@ async fn run_oneshot_owned<M>(
     prompt: &str,
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     mut config: crate::agent::loop_stream::LoopConfig,
-    output_obligations: &[(String, crate::document_config::WriteToolOutputObligation)],
+    output_obligations: &[(String, crate::documents::WriteToolOutputObligation)],
     background_tool_registry: BackgroundToolRegistry,
     lsp_pool: crate::toolset::lsp::LspPool,
 ) -> Result<OneshotRunResult>

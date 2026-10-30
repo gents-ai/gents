@@ -211,7 +211,7 @@ impl SpeechClient {
 async fn services(
     core: &ClientCore,
     node_did: &str,
-) -> Result<Vec<gents::document_config::ToolServiceRegistry>> {
+) -> Result<Vec<gents::documents::ToolServiceRegistry>> {
     let records = core.peer_records().await;
     ensure!(records.iter().filter(|record| record.node_did == node_did).count() == 1,
         "Choose a connected runtime with an operator configuration route to configure speech services.");

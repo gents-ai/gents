@@ -1,8 +1,8 @@
 mod catalog_freshness;
 pub use catalog_freshness::decode_backend_observation;
 
-pub use crate::document_config::InferenceBackend;
-use crate::document_config::{
+pub use crate::documents::InferenceBackend;
+use crate::documents::{
     AdvertisedModel, BackendAuth, BackendModelCatalog, InferenceBackendObservation,
 };
 use crate::graphql::escape_graphql_string;

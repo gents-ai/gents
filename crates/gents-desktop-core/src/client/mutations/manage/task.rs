@@ -4,7 +4,7 @@ use chrono::{SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
 use gents::config_client::{apply_desired_state_plan, read_desired_state_record_in_txn};
 use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::document_config::{EventSource, Schedule, Task, Trigger};
+use gents::documents::{EventSource, Schedule, Task, Trigger};
 use gents::store::collection::Collection;
 use gents::task_session_title;
 use serde::de::DeserializeOwned;
@@ -452,7 +452,8 @@ fn render_task_invocation(
         task.goal_token_budget,
     )?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
-    let (node_scope, ctx_scope) = gents::template::task_node_ctx(node_did, agent_id, &now);
+    let (node_scope, ctx_scope) =
+        gents::documents::template::task_node_ctx(node_did, agent_id, &now);
     let invocation_key = uuid::Uuid::new_v4().to_string();
     let identity = gents_protocol::trigger_delivery::FireIdentity {
         owner_did: node_did.into(),
@@ -651,7 +652,7 @@ pub async fn fire_schedule_now(
             trigger.enabled
                 && matches!(
                     &trigger.source,
-                    gents::document_config::TriggerSource::Schedule { schedule_id: id }
+                    gents::documents::TriggerSource::Schedule { schedule_id: id }
                         if id == schedule_id
                 )
         });
@@ -770,7 +771,7 @@ pub async fn resolve_schedule_now_on(
         trigger.enabled
             && matches!(
                 &trigger.source,
-                gents::document_config::TriggerSource::Schedule { schedule_id: id }
+                gents::documents::TriggerSource::Schedule { schedule_id: id }
                     if id == schedule_id
             )
     });
@@ -800,7 +801,7 @@ mod tests {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         let owner = "did:test:access-review-setup";
-        let config: gents::document_config::PackConfig = serde_json::from_value(json!({
+        let config: gents::documents::PackConfig = serde_json::from_value(json!({
             "node":{"node_did":owner},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Fixture","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
@@ -871,7 +872,7 @@ mod tests {
         gents::ensure_runtime_schemas(operator.as_ref()).await?;
         gents::ensure_runtime_schemas(&desktop).await?;
         let owner = "did:test:canonical-task-run";
-        let config: gents::document_config::PackConfig = serde_json::from_value(json!({
+        let config: gents::documents::PackConfig = serde_json::from_value(json!({
             "node":{"node_did":owner},
             "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
             "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
@@ -1029,7 +1030,7 @@ mod tests {
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         for owner in ["did:test:automation-a", "did:test:automation-b"] {
-            let config: gents::document_config::PackConfig = serde_json::from_value(json!({
+            let config: gents::documents::PackConfig = serde_json::from_value(json!({
                 "node":{"node_did":owner},
                 "inference_backends":[{"node_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
                 "inference_profiles":[{"node_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
@@ -1078,7 +1079,7 @@ mod tests {
             json!({"node_did":owner,"schedule_id":"schedule","cadence":{"kind":"interval","interval_secs":60}}),
         )?;
         upsert_schedule(&node, &schedule).await?;
-        trigger.source = gents::document_config::TriggerSource::Schedule {
+        trigger.source = gents::documents::TriggerSource::Schedule {
             schedule_id: "schedule".into(),
         };
         upsert_trigger(&node, &trigger).await?;

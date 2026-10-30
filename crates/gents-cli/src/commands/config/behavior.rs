@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::document_config::Agent;
+use gents::documents::Agent;
 use gents::graphql::escape_graphql_string;
 use gents::self_config::{configure_agent, ConfigureAgentParams, StringUpdate};
 use gents::tool_surface::presets;
@@ -177,9 +177,7 @@ async fn load_document(
 }
 
 async fn classify_preset(access: &ConfigAccess, value: &Value) -> Result<Option<&'static str>> {
-    use gents::document_config::{
-        merge_datastore_tool_surfaces, DatastoreToolSurfaceDocument, Tools,
-    };
+    use gents::documents::{merge_datastore_tool_surfaces, DatastoreToolSurfaceDocument, Tools};
     let tools: Tools = serde_json::from_value(value.clone())?;
     tools.validate()?;
     let mut surfaces = Vec::<DatastoreToolSurfaceDocument>::new();
@@ -316,7 +314,7 @@ mod tests {
     use std::sync::Arc;
 
     use defra_node::EmbeddedNode;
-    use gents::document_config::Tools;
+    use gents::documents::Tools;
     use gents::{ensure_runtime_schemas, upsert_agent};
     use serde_json::Value;
 

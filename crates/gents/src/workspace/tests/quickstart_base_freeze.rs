@@ -19,7 +19,7 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         None,
     )
     .unwrap();
-    crate::document_config::ensure_node(&node, identity.did())
+    crate::documents::ensure_node(&node, identity.did())
         .await
         .unwrap();
     let access = crate::ConfigAccess::local(node.clone());

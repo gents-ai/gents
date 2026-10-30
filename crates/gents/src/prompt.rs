@@ -70,8 +70,8 @@ pub trait PromptBuilder: Send + Sync {
 
 pub struct LayeredPromptBuilder {
     preamble: String,
-    skills: Vec<crate::skills::Skill>,
-    skill_ceiling: crate::skills::SkillToolCeiling,
+    skills: Vec<crate::documents::skills::Skill>,
+    skill_ceiling: crate::documents::skills::SkillToolCeiling,
 }
 
 impl LayeredPromptBuilder {
@@ -89,12 +89,12 @@ impl LayeredPromptBuilder {
             tool_surface.includes_meta_tools(),
             allowed_targets,
         );
-        if let Some(catalog) = crate::skills::render_skill_catalog(&agent.skills) {
+        if let Some(catalog) = crate::documents::skills::render_skill_catalog(&agent.skills) {
             builder.preamble.push_str("\n\n");
             builder.preamble.push_str(&catalog);
         }
         builder.skills = agent.skills.clone();
-        builder.skill_ceiling = crate::skills::skill_tool_ceiling(
+        builder.skill_ceiling = crate::documents::skills::skill_tool_ceiling(
             tool_names.iter().cloned(),
             tool_surface.allowed_mcp_service_ids(),
             tool_surface.includes_meta_tools(),
@@ -110,8 +110,9 @@ impl LayeredPromptBuilder {
             if id.is_empty() || !seen.insert(id.to_string()) {
                 continue;
             }
-            if let Some(skill) = crate::skills::find_skill(&self.skills, id) {
-                let body = crate::skills::render_activated_skill(skill, &self.skill_ceiling);
+            if let Some(skill) = crate::documents::skills::find_skill(&self.skills, id) {
+                let body =
+                    crate::documents::skills::render_activated_skill(skill, &self.skill_ceiling);
                 reminders.push(Self::system_reminder(&body));
             }
         }
@@ -135,7 +136,7 @@ impl LayeredPromptBuilder {
         Self {
             preamble,
             skills: Vec::new(),
-            skill_ceiling: crate::skills::SkillToolCeiling::default(),
+            skill_ceiling: crate::documents::skills::SkillToolCeiling::default(),
         }
     }
 

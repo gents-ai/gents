@@ -213,7 +213,7 @@ async fn step0(output: Value, options: Options) -> Step0 {
                "agent_id": "worker", "name": "worker"}),
     )
     .await;
-    let tools: crate::document_config::Tools = serde_json::from_value(json!({
+    let tools: crate::documents::Tools = serde_json::from_value(json!({
         "tools_id": "general:tools",
         "node_did": identity.did(),
         "agents": {"enabled": true, "target_ids": ["t-worker"]},

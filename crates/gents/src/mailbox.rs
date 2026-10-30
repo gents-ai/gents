@@ -8,7 +8,7 @@ use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::document_config::{WriteToolDecl, WriteToolField};
+use crate::documents::{WriteToolDecl, WriteToolField};
 use crate::graphql::{
     escape_graphql_string, graphql_with_transaction_retry, rows, single_mutation_document,
     validate_collection_identifier, validate_graphql_name,

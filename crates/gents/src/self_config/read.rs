@@ -17,7 +17,7 @@ pub(super) fn execution_settings(document: Option<&Value>) -> Result<Value> {
     if let Some(object) = document.as_object_mut() {
         object.remove("_docID");
     }
-    let execution: crate::document_config::InferenceExecution = serde_json::from_value(document)?;
+    let execution: crate::documents::InferenceExecution = serde_json::from_value(document)?;
     execution.validate()?;
     Ok(json!({
         "max_turns": execution.max_turns.unwrap_or(DEFAULT_MAX_TURNS as i64),
@@ -89,7 +89,7 @@ impl SelfConfigCore {
         let tools = documents.get(SelfConfigTarget::Tools.collection_name());
         let mut canonical_tools = tools
             .cloned()
-            .map(serde_json::from_value::<crate::document_config::Tools>)
+            .map(serde_json::from_value::<crate::documents::Tools>)
             .transpose()?;
         let selection = canonical_tools
             .as_ref()

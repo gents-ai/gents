@@ -8,7 +8,7 @@ use crate::config_client::{
     apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::defra_node::EmbeddedNode;
-use crate::document_config::{InferenceSampling, PackConfig};
+use crate::documents::{InferenceSampling, PackConfig};
 use crate::eval::runner::embedded::home::EmbeddedHome;
 use crate::eval::runner::executor::{InferenceBinding, TrialFixtures, TrialSpec};
 use crate::graphql::{escape_graphql_string, validate_collection_identifier};

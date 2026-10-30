@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::document_config::TaskHookPhase;
+use crate::documents::TaskHookPhase;
 use crate::lean_vocab_test::{
     lean_task_hook_run_cases, LeanCommandResult, LeanHookAttempt, LeanHookInvocation,
     LeanTaskHookRunCase, LeanTaskOutcome, LeanTaskPrimaryError,
@@ -123,7 +123,7 @@ struct RevokingExec<'a> {
 
 #[async_trait::async_trait]
 impl TaskHookExec for RevokingExec<'_> {
-    async fn attempt(&self, hook: &crate::document_config::TaskHook) -> HookAttempt {
+    async fn attempt(&self, hook: &crate::documents::TaskHook) -> HookAttempt {
         if self.revoked.contains(&hook.hook_id) {
             crate::config_client::ConfigAccess::write_local(
                 self.node,

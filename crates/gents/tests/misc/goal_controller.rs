@@ -454,11 +454,11 @@ async fn boot_goal_background_handoff_with_plans(
         did,
         behavior,
         None,
-        gents::document_config::Tools {
+        gents::documents::Tools {
             tools_id: format!("{behavior}:tools"),
             node_did: did.to_string(),
-            host: Some(gents::document_config::HostTools {
-                bash: Some(gents::document_config::BashTools {
+            host: Some(gents::documents::HostTools {
+                bash: Some(gents::documents::BashTools {
                     mode: gents::BashMode::ReadOnly,
                     read_only_commands: Some(vec!["sh".into()]),
                     background_enabled: true,

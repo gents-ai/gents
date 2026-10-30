@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
-use gents::document_config::{FileTools, HostTools, IntegrationTools, LspTools, Tools};
+use gents::documents::{FileTools, HostTools, IntegrationTools, LspTools, Tools};
 use gents::{DocumentRuntimeOptions, FileToolMode, Gents, ToolCeiling};
 
 use gents::NodeIdentity;

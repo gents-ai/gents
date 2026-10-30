@@ -125,7 +125,7 @@ impl RuntimeContext {
     ) -> Result<()> {
         let tool_names = tool_surface.tool_names();
         let api_key = match &agent_config.backend_auth {
-            crate::document_config::BackendAuth::NodeOAuth { .. } => "no-key".to_owned(),
+            crate::documents::BackendAuth::NodeOAuth { .. } => "no-key".to_owned(),
             _ => agent_config.completion_client_api_key()?,
         };
         let allowed_targets =
@@ -138,12 +138,12 @@ impl RuntimeContext {
         let preamble = prompt_builder.preamble().to_string();
         let mut loop_tools = tool_surface.build_tools(&self.tool_runtime).await?;
         if tool_surface.includes_skills() && !agent_config.skills.is_empty() {
-            let ceiling = crate::skills::skill_tool_ceiling(
+            let ceiling = crate::documents::skills::skill_tool_ceiling(
                 tool_surface.tool_names(),
                 tool_surface.allowed_mcp_service_ids(),
                 tool_surface.includes_meta_tools(),
             );
-            loop_tools.push(Box::new(crate::skills::LoadSkillTool::new(
+            loop_tools.push(Box::new(crate::documents::skills::LoadSkillTool::new(
                 agent_config.skills.clone(),
                 ceiling,
             )));
@@ -209,9 +209,9 @@ impl RuntimeContext {
         preamble: String,
         loop_tools: Arc<Vec<Box<dyn ToolDyn>>>,
         background_tool_registry: BackgroundToolRegistry,
-        remote_tools: Option<crate::document_config::RemoteTools>,
+        remote_tools: Option<crate::documents::RemoteTools>,
         job_tools: rapidhash::RapidHashMap<String, crate::plugin_job::JobBinding>,
-        output_obligations: Vec<(String, crate::document_config::WriteToolOutputObligation)>,
+        output_obligations: Vec<(String, crate::documents::WriteToolOutputObligation)>,
         root_execution_guard: Option<crate::tool_surface::RootExecutionGuard>,
         client: C,
     ) -> Result<()>

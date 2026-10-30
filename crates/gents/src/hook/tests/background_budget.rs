@@ -246,7 +246,7 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     crate::test_support::install_test_agent(&node, identity.did(), "general").await;
-    let tools: crate::document_config::Tools = serde_json::from_value(json!({
+    let tools: crate::documents::Tools = serde_json::from_value(json!({
         "tools_id": "timed", "node_did": identity.did(),
         "host": {"bash": {"mode": "ReadOnly", "background_enabled": true,
             "background_timeout_secs": 60}},

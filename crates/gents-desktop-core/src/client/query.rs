@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
-use gents::document_config::{
+use gents::documents::{
     Agent, AgentContext, AgentTargetDocument, CompactionConfig, DatastoreToolSurfaceDocument,
     EventSource, InferenceBackend, InferenceBackendObservation, InferenceExecution,
     InferenceProfile, InferenceSampling, Node, Schedule, ScheduleObservation, SkillDocument, Task,

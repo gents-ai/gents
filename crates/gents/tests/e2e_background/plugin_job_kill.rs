@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::background_tools::ProcessControlScope;
-use gents::document_config::{AgentTools, IntegrationTools, PluginToolRef, Tools};
+use gents::documents::{AgentTools, IntegrationTools, PluginToolRef, Tools};
 use gents::inference::llm::message::{AssistantContent, Message, UserContent};
 use gents::plugin_job::control::control;
 use gents::plugin_job::job::{

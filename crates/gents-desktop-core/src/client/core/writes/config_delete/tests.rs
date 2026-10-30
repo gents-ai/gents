@@ -1,6 +1,6 @@
 use super::*;
 use anyhow::anyhow;
-use gents::document_config::Task;
+use gents::documents::Task;
 use serde_json::json;
 
 fn task(task_id: &str) -> Task {

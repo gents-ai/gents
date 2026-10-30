@@ -91,7 +91,7 @@ pub(super) fn config(categories: &[&str]) -> SelfConfigToolConfig {
 fn every_tool_name_is_reserved_builtin() {
     for name in SELF_CONFIG_TOOL_NAMES {
         assert!(
-            crate::document_config::is_reserved_builtin_tool_name(name),
+            crate::documents::is_reserved_builtin_tool_name(name),
             "{name} must be reserved so write_tools declarations cannot shadow it"
         );
     }
@@ -158,7 +158,7 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
         assert_eq!(described, canonical, "{name} nested help drift");
     };
     use crate::config_client::canonical_struct_fields;
-    use crate::document_config::*;
+    use crate::documents::*;
     assert_fields(
         &shapes["host"],
         canonical_struct_fields::<HostTools>().unwrap(),
@@ -256,12 +256,12 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
                 .map(|value| serde_json::to_value(value).unwrap()),
         )
         .chain(
-            crate::document_config::RemoteToolStyle::ALL
+            crate::documents::RemoteToolStyle::ALL
                 .into_iter()
                 .map(|value| serde_json::to_value(value).unwrap()),
         )
         .chain(
-            crate::document_config::ConcurrencyMode::ALL
+            crate::documents::ConcurrencyMode::ALL
                 .into_iter()
                 .map(|value| serde_json::to_value(value).unwrap()),
         )
@@ -3094,7 +3094,7 @@ async fn agent_default_commits_through_the_agent_owner() {
     for agent in ["seed", "working"] {
         crate::test_support::install_test_agent(&node, &node_did, agent).await;
     }
-    crate::document_config::upsert_node(&node, &node_did, None, Some("seed"), true, None)
+    crate::documents::upsert_node(&node, &node_did, None, Some("seed"), true, None)
         .await
         .unwrap();
     let mut tool_config = config(&["node"]);
@@ -3676,7 +3676,7 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
         .await
         .expect("apply admits the selected root");
     let tools_id = format!("{agent_id}:tools");
-    let persisted: crate::document_config::Tools =
+    let persisted: crate::documents::Tools =
         crate::config_client::ConfigAccess::local(node.clone())
             .transact_write("test.self_config.read_tools", |txn| {
                 let owner = owner.clone();
@@ -4204,7 +4204,7 @@ async fn account_choice_core(
         ("p-chat-b".into(), "chat-b"),
         ("p-grok".into(), "grok-original"),
     ] {
-        let profile: crate::document_config::InferenceProfile = serde_json::from_value(json!({
+        let profile: crate::documents::InferenceProfile = serde_json::from_value(json!({
             "node_did": owner, "profile_id": id, "backend_id": backend,
             "model_name": "test-model",
         }))
@@ -4329,7 +4329,7 @@ async fn grok_accounts_core(agent: &str, original: bool, g2: bool) -> SelfConfig
     crate::config_client::write_inference_backend_document(&access, &backend)
         .await
         .unwrap();
-    let profile: crate::document_config::InferenceProfile = serde_json::from_value(json!({
+    let profile: crate::documents::InferenceProfile = serde_json::from_value(json!({
         "node_did": owner, "profile_id": "p-grok-g2", "backend_id": "grok-g2",
         "model_name": "test-model",
     }))
@@ -4710,7 +4710,7 @@ async fn profile_edit_rejects_a_context_window_above_the_advertised_maximum() {
     let identity = node_identity("profile-context-window");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "setup").await;
-    let backend: crate::document_config::InferenceBackend = serde_json::from_value(json!({
+    let backend: crate::documents::InferenceBackend = serde_json::from_value(json!({
         "node_did": owner, "backend_id": "setup:backend", "name": "Test inference",
         "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1",
         "auth": {"kind": "unauthenticated"},
@@ -5229,7 +5229,7 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "setup").await;
     let access = crate::config_client::ConfigAccess::local(node.clone());
-    let backend = |id: &str, kind: &str, auth: Value| -> crate::document_config::InferenceBackend {
+    let backend = |id: &str, kind: &str, auth: Value| -> crate::documents::InferenceBackend {
         serde_json::from_value(json!({
             "node_did": owner, "backend_id": id, "name": id, "provider_kind": kind,
             "endpoint": "http://127.0.0.1:1/v1", "auth": auth,
@@ -5246,7 +5246,7 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
         "OpenAiCompatible",
         json!({"kind": "api_key", "key": SECRET}),
     );
-    let models: Vec<crate::document_config::AdvertisedModel> = serde_json::from_value(json!([{
+    let models: Vec<crate::documents::AdvertisedModel> = serde_json::from_value(json!([{
         "model_name": "claude-opus-5-5", "display_name": "Claude Opus 5.5",
         "context_window": 1_000_000, "max_context_window": null, "max_output_tokens": 128_000,
         "reasoning_efforts": ["low", "high"],
@@ -5953,7 +5953,7 @@ async fn no_lockout_rejects_current_agent_disable_in_preview_and_commit() {
     for id in ["current", "default"] {
         crate::test_support::install_test_agent(&node, &owner, id).await;
     }
-    crate::document_config::upsert_node(&node, &owner, None, Some("default"), true, None)
+    crate::documents::upsert_node(&node, &owner, None, Some("default"), true, None)
         .await
         .unwrap();
     let mut grants = config(&["node"]);
@@ -6658,7 +6658,7 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
         .unwrap();
     let readback = config_call(&tools, &["tools", "get"]).await.unwrap();
     assert!(readback.contains("fixture/native_echo"));
-    let persisted: crate::document_config::Tools =
+    let persisted: crate::documents::Tools =
         crate::config_client::ConfigAccess::local(node.clone())
             .transact_readonly("test.self_config.read_native_pack_tools", |txn| {
                 let did = did.clone();
@@ -7165,7 +7165,7 @@ async fn install_chat_account_fences(node: &Arc<EmbeddedNode>, owner: &str) {
             .unwrap();
     }
     for (id, backend) in [("p-default", "chat-original"), ("p-other", "chat-b")] {
-        let profile: crate::document_config::InferenceProfile = serde_json::from_value(json!({
+        let profile: crate::documents::InferenceProfile = serde_json::from_value(json!({
             "node_did": owner, "profile_id": id, "backend_id": backend,
             "model_name": "test-model",
         }))

@@ -115,15 +115,15 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
 
     // The receiving node's own agent configures the request; the Peer
     // branch reads only the requester's ACP authority.
-    let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
+    let tools: crate::documents::Tools = serde_json::from_value(serde_json::json!({
         "tools_id":"host-tools","node_did":host_did
     }))
     .unwrap();
-    let context: crate::document_config::AgentContext = serde_json::from_value(serde_json::json!({
+    let context: crate::documents::AgentContext = serde_json::from_value(serde_json::json!({
         "context_id":"host-context","node_did":host_did,"tools_id":"host-tools"
     }))
     .unwrap();
-    let behavior: crate::document_config::Agent = serde_json::from_value(serde_json::json!({
+    let behavior: crate::documents::Agent = serde_json::from_value(serde_json::json!({
         "agent_id":"behavior-1","node_did":host_did,"context_id":"host-context",
         "inference_profile_id":"host-profile"
     }))

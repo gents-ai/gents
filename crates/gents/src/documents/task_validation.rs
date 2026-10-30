@@ -1,5 +1,5 @@
 use super::{Task, TaskHookPhase};
-use crate::template::{
+use crate::documents::template::{
     catalog::{default_catalog, Site},
     check_template_vocabulary, parse_template_for_validation, TemplateError,
 };

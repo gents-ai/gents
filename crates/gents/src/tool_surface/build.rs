@@ -337,8 +337,8 @@ pub fn resolve_effective_tool_root(
 }
 
 pub(super) fn dedupe_agent_targets(
-    values: Vec<crate::document_config::AgentTargetDocument>,
-) -> Vec<crate::document_config::AgentTargetDocument> {
+    values: Vec<crate::documents::AgentTargetDocument>,
+) -> Vec<crate::documents::AgentTargetDocument> {
     use rapidhash::{HashSetExt, RapidHashSet};
     let mut seen = RapidHashSet::new();
     let mut deduped = Vec::with_capacity(values.len());
@@ -413,7 +413,7 @@ pub(crate) async fn measured_available_mcp_service_ids(
 pub async fn measured_mcp_services_for_access(
     access: &crate::config_client::ConfigAccess,
     node_did: &str,
-    services: &[crate::document_config::ToolServiceRegistry],
+    services: &[crate::documents::ToolServiceRegistry],
 ) -> Result<Vec<String>> {
     if services.is_empty() {
         return Ok(Vec::new());
@@ -437,7 +437,7 @@ fn mcp_health_query(node_did: &str) -> String {
 
 fn project_measured_mcp_services(
     node_did: &str,
-    services: &[crate::document_config::ToolServiceRegistry],
+    services: &[crate::documents::ToolServiceRegistry],
     response: &serde_json::Value,
     local_hostname: Option<&str>,
 ) -> Result<Vec<String>> {

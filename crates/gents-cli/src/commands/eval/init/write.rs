@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use gents::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyPlan,
 };
-use gents::document_config::{EvalDefinition, EvalSplit};
+use gents::documents::{EvalDefinition, EvalSplit};
 use gents::eval::runner::embedded::EmbeddedHome;
 use gents::pack::{
     interpolate, is_valid_pack_name, load_pack_config, PackInstallOptions, PackManifest,

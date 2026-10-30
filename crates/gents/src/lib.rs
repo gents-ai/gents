@@ -19,7 +19,7 @@ pub mod config_client;
 pub mod configuration_discovery;
 pub mod defra_query;
 pub mod defra_write;
-pub mod document_config;
+pub mod documents;
 pub mod drop_cleanup;
 pub mod error;
 pub mod eval;
@@ -324,16 +324,13 @@ pub mod runtime_service;
 pub(crate) mod runtime_snapshot;
 pub(crate) mod runtime_status;
 pub(crate) mod runtime_trace;
-pub mod schedule_cron;
 pub mod schema_tool;
 pub mod self_config;
 pub mod session;
 pub mod session_message;
 pub mod session_origin;
-pub mod skills;
 pub mod streaming;
 pub(crate) mod task_hooks;
-pub mod template;
 pub mod tool_call_lifecycle;
 pub mod tool_control;
 pub mod tool_surface;
@@ -369,9 +366,13 @@ pub use background_tools::status_projection::OutputEvidence;
 pub use callback::reject_secret_bearing_callback_fields;
 pub use config_client::ConfigAccess;
 pub use defra_node;
+pub use documents::template::{
+    check_template_vocabulary, parse_template_for_validation, render_template, TemplateError,
+    TemplateScope, VariableRef,
+};
 #[cfg(test)]
-pub(crate) use document_config::upsert_node;
-pub use document_config::{
+pub(crate) use documents::upsert_node;
+pub use documents::{
     default_agent_id_for_node, default_inference_profile_id_for_agent,
     default_inference_profile_id_for_node, deserialize_dual_shape, ensure_node,
     is_reserved_builtin_tool_name, list_agents, list_datastore_tool_surfaces,
@@ -476,10 +477,6 @@ pub use store::schema::{
     TOOL_SERVICE_HEALTH_STATE_SCHEMA, TOOL_SERVICE_REGISTRY_SCHEMA,
 };
 pub use streaming::{DefraStreamWriter, StreamWriter, MAX_LIVE_REASONING_BYTES};
-pub use template::{
-    check_template_vocabulary, parse_template_for_validation, render_template, TemplateError,
-    TemplateScope, VariableRef,
-};
 pub use tool_control::{cancel_background_tool_call, CancelBackgroundToolCallOutcome};
 pub use tool_surface::{
     cli_tool, AgentToolSurfaceConfig, BashMode, CustomToolFactory, FileToolMode,

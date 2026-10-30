@@ -1514,11 +1514,11 @@ async fn concurrent_trigger_fire_count_updates_are_not_lost() {
             let node = node.clone();
             let node_did = node_did.clone();
             tokio::spawn(async move {
-                crate::document_config::update_trigger_runtime_fields(
+                crate::documents::update_trigger_runtime_fields(
                     &node,
                     &node_did,
                     trigger_id,
-                    crate::document_config::TriggerRuntimeUpdate {
+                    crate::documents::TriggerRuntimeUpdate {
                         last_attempt_at: Some(format!("2026-01-01T00:00:{index:02}Z")),
                         last_status: Some("fired".to_owned()),
                         fire_count_delta: Some(1),

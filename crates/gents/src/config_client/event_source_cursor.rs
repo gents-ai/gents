@@ -16,10 +16,7 @@ async fn trigger_binding(
     txn: &ConfigApplyTxn<'_>,
     owner: &str,
     trigger_id: &str,
-) -> Result<(
-    crate::document_config::Trigger,
-    crate::document_config::EventSource,
-)> {
+) -> Result<(crate::documents::Trigger, crate::documents::EventSource)> {
     let value = super::read_desired_state_document_in_txn(
         txn,
         crate::Collection::Trigger,
@@ -28,8 +25,8 @@ async fn trigger_binding(
     )
     .await?
     .context("cursor trigger disappeared")?;
-    let trigger: crate::document_config::Trigger = serde_json::from_value(value)?;
-    let crate::document_config::TriggerSource::Event { event_source_id } = &trigger.source else {
+    let trigger: crate::documents::Trigger = serde_json::from_value(value)?;
+    let crate::documents::TriggerSource::Event { event_source_id } = &trigger.source else {
         anyhow::bail!("arrival cursor requires an event trigger")
     };
     let source = super::read_desired_state_document_in_txn(
@@ -39,7 +36,7 @@ async fn trigger_binding(
         event_source_id,
     )
     .await?
-    .ok_or_else(|| crate::document_config::MissingReference {
+    .ok_or_else(|| crate::documents::MissingReference {
         collection: crate::Collection::Trigger,
         id: trigger_id.to_owned(),
         field: "source.event_source_id".into(),
@@ -53,7 +50,7 @@ async fn trigger_binding(
 struct ConsumerBinding {
     enabled: bool,
     serial: bool,
-    source: crate::document_config::EventSource,
+    source: crate::documents::EventSource,
 }
 
 async fn callback_binding(
@@ -61,8 +58,8 @@ async fn callback_binding(
     owner: &str,
     binding_id: &str,
 ) -> Result<(
-    crate::document_config::CallbackBinding,
-    crate::document_config::EventSource,
+    crate::documents::CallbackBinding,
+    crate::documents::EventSource,
 )> {
     let value = super::read_desired_state_document_in_txn(
         txn,
@@ -72,7 +69,7 @@ async fn callback_binding(
     )
     .await?
     .context("cursor callback binding disappeared")?;
-    let binding: crate::document_config::CallbackBinding = serde_json::from_value(value)?;
+    let binding: crate::documents::CallbackBinding = serde_json::from_value(value)?;
     let source = super::read_desired_state_document_in_txn(
         txn,
         crate::Collection::EventSource,
@@ -80,7 +77,7 @@ async fn callback_binding(
         &binding.event_source_id,
     )
     .await?
-    .ok_or_else(|| crate::document_config::MissingReference {
+    .ok_or_else(|| crate::documents::MissingReference {
         collection: crate::Collection::CallbackBinding,
         id: binding_id.to_owned(),
         field: "event_source_id".into(),
@@ -101,8 +98,7 @@ async fn event_binding(
             let (trigger, source) = trigger_binding(txn, owner, trigger_id).await?;
             Ok(ConsumerBinding {
                 enabled: trigger.enabled,
-                serial: trigger.concurrency
-                    == Some(crate::document_config::ConcurrencyMode::Serial),
+                serial: trigger.concurrency == Some(crate::documents::ConcurrencyMode::Serial),
                 source,
             })
         }
@@ -115,7 +111,7 @@ async fn event_binding(
                 &binding.callback_id,
             )
             .await?
-            .map(serde_json::from_value::<crate::document_config::Callback>)
+            .map(serde_json::from_value::<crate::documents::Callback>)
             .transpose()?;
             Ok(ConsumerBinding {
                 enabled: binding.enabled && callback.is_some_and(|callback| callback.enabled),
@@ -535,13 +531,13 @@ async fn admitted_callback_arrival(
     let Some(row) = rows.first() else {
         return Ok(false);
     };
-    let origin: crate::document_config::CallbackInvocationOrigin =
+    let origin: crate::documents::CallbackInvocationOrigin =
         serde_json::from_value(row["origin"].clone()).context("invalid callback receipt origin")?;
     anyhow::ensure!(
         rows.len() == 1
             && matches!(
                 origin,
-                crate::document_config::CallbackInvocationOrigin::Event {
+                crate::documents::CallbackInvocationOrigin::Event {
                     binding_id: ref binding,
                     source_collection: ref collection,
                     source_doc_id: ref doc,

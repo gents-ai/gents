@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use crate::config_client::ConfigAccess;
-use crate::document_config::EvalSplit;
+use crate::documents::EvalSplit;
 use crate::eval::report::{load_report, EvalReport};
 use crate::eval::{
     append_verdict, complete_trial, create_trial, load_trials, TrialCompletion, TrialIdentity,
@@ -100,7 +100,7 @@ impl Recorder for DocumentRecorder<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document_config::EvalTier;
+    use crate::documents::EvalTier;
     use crate::eval::{load_verdicts, Anchor, OutcomeKind, TrialUsage};
     use futures::{stream, StreamExt, TryStreamExt};
     use serde_json::json;

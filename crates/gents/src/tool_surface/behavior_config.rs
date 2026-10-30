@@ -15,7 +15,7 @@ use super::selection::{
     AgentToolConfig, BackgroundToolConfig, CustomToolFactory, ResolvedToolSelection,
 };
 use super::ToolSurface;
-use crate::document_config::{QueryToolDecl, WriteToolDecl};
+use crate::documents::{QueryToolDecl, WriteToolDecl};
 
 #[derive(Clone)]
 pub struct AgentToolSurfaceConfig {
@@ -25,7 +25,7 @@ pub struct AgentToolSurfaceConfig {
     enable_goal_tools: bool,
     enable_goal_creation: bool,
     allowed_mcp_service_ids: Vec<String>,
-    remote_tools: Option<crate::document_config::RemoteTools>,
+    remote_tools: Option<crate::documents::RemoteTools>,
     required_mcp_service_ids: Vec<String>,
     agent_tools: AgentToolConfig,
     background_tools: BackgroundToolConfig,
@@ -40,7 +40,7 @@ pub struct AgentToolSurfaceConfig {
     write_tools: Vec<WriteToolDecl>,
     query_tools: Vec<QueryToolDecl>,
     surface_of_tool: std::collections::BTreeMap<String, String>,
-    plugin_tools: Vec<crate::document_config::PluginToolRef>,
+    plugin_tools: Vec<crate::documents::PluginToolRef>,
     self_config: super::SelfConfigToolConfig,
     agent_policy: ToolPolicySurface,
     ceiling_policy: ToolPolicySurface,
@@ -116,7 +116,7 @@ impl AgentToolSurfaceConfig {
 
     pub fn from_tools_document(
         agent_name: &str,
-        tools: &crate::document_config::Tools,
+        tools: &crate::documents::Tools,
         ceiling: &ToolCeiling,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
@@ -125,8 +125,8 @@ impl AgentToolSurfaceConfig {
 
     pub fn from_tools_document_with_surfaces(
         agent_name: &str,
-        tools: &crate::document_config::Tools,
-        surfaces: &[crate::document_config::DatastoreToolSurfaceDocument],
+        tools: &crate::documents::Tools,
+        surfaces: &[crate::documents::DatastoreToolSurfaceDocument],
         ceiling: &ToolCeiling,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
@@ -135,13 +135,13 @@ impl AgentToolSurfaceConfig {
 
     pub fn from_tools_documents(
         agent_name: &str,
-        tools: &crate::document_config::Tools,
-        surfaces: &[crate::document_config::DatastoreToolSurfaceDocument],
-        targets: &[crate::document_config::AgentTargetDocument],
+        tools: &crate::documents::Tools,
+        surfaces: &[crate::documents::DatastoreToolSurfaceDocument],
+        targets: &[crate::documents::AgentTargetDocument],
         ceiling: &ToolCeiling,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
-        let merged = crate::document_config::merge_datastore_tool_surfaces(tools, surfaces)?;
+        let merged = crate::documents::merge_datastore_tool_surfaces(tools, surfaces)?;
         let mut resolved = ResolvedToolSelection::from_document(tools)?;
         resolved.write_tools = merged.write_tools;
         resolved.query_tools = merged.query_tools;
@@ -166,7 +166,7 @@ impl AgentToolSurfaceConfig {
             .iter()
             .map(|tool| tool.name().to_string())
             .collect::<Vec<_>>();
-        crate::document_config::validate_surface_tool_names(
+        crate::documents::validate_surface_tool_names(
             &selection.write_tools,
             &selection.query_tools,
             &selection.cli_tool_names,
@@ -290,10 +290,10 @@ impl AgentToolSurfaceConfig {
                         static_policy.mcp_services.permits(&service.mcp_service_id)
                             && effective_allowed_mcp_service_ids.contains(&service.mcp_service_id)
                             && match service.style {
-                                crate::document_config::RemoteToolStyle::Discovery => {
+                                crate::documents::RemoteToolStyle::Discovery => {
                                     name == "call_tool" && !service.background_tool_names.is_empty()
                                 }
-                                crate::document_config::RemoteToolStyle::Flat => {
+                                crate::documents::RemoteToolStyle::Flat => {
                                     service.background_tool_names.iter().any(|tool| {
                                         crate::meta_tools::flat_tool_name(
                                             &service.mcp_service_id,
@@ -408,7 +408,7 @@ impl AgentToolSurfaceConfig {
         self.enable_context_budget_tool
     }
 
-    pub(crate) fn remote_tools(&self) -> Option<&crate::document_config::RemoteTools> {
+    pub(crate) fn remote_tools(&self) -> Option<&crate::documents::RemoteTools> {
         self.remote_tools.as_ref()
     }
 
@@ -649,9 +649,9 @@ impl Default for AgentToolSurfaceConfig {
 
 fn resolve_plugin_identities(
     plugins: &crate::plugin::executor::PluginExecutor,
-    plugin_tools: &[crate::document_config::PluginToolRef],
+    plugin_tools: &[crate::documents::PluginToolRef],
 ) -> Vec<(
-    crate::document_config::PluginToolRef,
+    crate::documents::PluginToolRef,
     Option<crate::plugin::store::InstalledPlugin>,
 )> {
     plugin_tools

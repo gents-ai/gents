@@ -8,7 +8,7 @@ use super::{
     apply_desired_state_plan, ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument,
     DesiredStateApplyPlan,
 };
-use crate::document_config::{ConfigReferences, InferenceBackendObservation, InferenceProfile};
+use crate::documents::{ConfigReferences, InferenceBackendObservation, InferenceProfile};
 use crate::inference::auth::credential::{
     backend_account, enabled_accounts_note, list_accounts, no_switch_candidate_note, provider_name,
     serving_account, AccountState, AccountSummary, ServingAccount,

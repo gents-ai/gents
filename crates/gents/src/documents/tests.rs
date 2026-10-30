@@ -870,16 +870,15 @@ async fn inference_retry_policy_fields_round_trip() {
         interactive_max_retries: Some(2),
         ..Default::default()
     };
-    let backend: crate::document_config::InferenceBackend =
-        serde_json::from_value(serde_json::json!({
-            "node_did": "did:key:z-test-retry",
-            "backend_id": "backend",
-            "name": "Local",
-            "provider_kind": "OpenAiCompatible",
-            "endpoint": "http://127.0.0.1:1/v1",
-            "auth": {"kind": "unauthenticated"}
-        }))
-        .unwrap();
+    let backend: crate::documents::InferenceBackend = serde_json::from_value(serde_json::json!({
+        "node_did": "did:key:z-test-retry",
+        "backend_id": "backend",
+        "name": "Local",
+        "provider_kind": "OpenAiCompatible",
+        "endpoint": "http://127.0.0.1:1/v1",
+        "auth": {"kind": "unauthenticated"}
+    }))
+    .unwrap();
     let profile = InferenceProfile {
         node_did: "did:key:z-test-retry".to_string(),
         profile_id: "retry-profile".to_string(),

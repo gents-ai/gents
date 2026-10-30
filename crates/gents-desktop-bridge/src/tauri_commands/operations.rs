@@ -336,7 +336,7 @@ pub async fn list_backends_with_health_for_core(
             .map_err(|error| format!("invalid backend display state: {error}"))?;
         let catalog_scope = matches!(
             backend.auth,
-            gents::document_config::BackendAuth::NodeOAuth { .. }
+            gents::documents::BackendAuth::NodeOAuth { .. }
         )
         .then_some(backend.node_did.as_str());
         let models = observation

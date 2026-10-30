@@ -319,8 +319,7 @@ pub fn admit_write(
                 application: !crate::store::schema::migration::DEFAULT_REGISTRY
                     .managed_names()
                     .any(|name| name == collection),
-                protected: crate::document_config::PROTECTED_DATASTORE_COLLECTIONS
-                    .contains(&collection),
+                protected: crate::documents::PROTECTED_DATASTORE_COLLECTIONS.contains(&collection),
                 credential: gents_protocol::schemas::is_credential_collection(collection),
                 bounded: targeted,
                 targets: usize::from(targeted),

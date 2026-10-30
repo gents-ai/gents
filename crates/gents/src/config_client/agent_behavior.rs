@@ -49,7 +49,7 @@ async fn load_agent_in_txn(
 mod tests {
     use super::*;
     use crate::config_client::write_inference_profile_document;
-    use crate::document_config::InferenceProfile;
+    use crate::documents::InferenceProfile;
 
     use serde_json::json;
     use std::sync::Arc;

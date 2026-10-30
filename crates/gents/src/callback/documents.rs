@@ -53,7 +53,7 @@ const PLACEMENT_FIELDS: &str = r#"
     observed_tree_hash
 "#;
 
-pub use crate::document_config::{
+pub use crate::documents::{
     CallbackBinding as CallbackBindingDoc, CallbackModule as CallbackModuleDoc,
 };
 
@@ -73,7 +73,7 @@ pub struct CallbackInvocationDoc {
     pub invocation_id: String,
     pub owner_node_did: String,
     pub callback_id: String,
-    pub origin: crate::document_config::CallbackInvocationOrigin,
+    pub origin: crate::documents::CallbackInvocationOrigin,
     pub idempotency_key: String,
     #[serde(default)]
     pub caused_by_correlation: Option<String>,
@@ -352,7 +352,7 @@ pub async fn load_callback(
     node: &std::sync::Arc<EmbeddedNode>,
     callback_id: &str,
     owner: &str,
-) -> Result<Option<crate::document_config::Callback>> {
+) -> Result<Option<crate::documents::Callback>> {
     load_config(node, crate::Collection::Callback, owner, callback_id).await
 }
 pub async fn load_binding(
@@ -366,7 +366,7 @@ pub async fn load_event_source(
     node: &std::sync::Arc<EmbeddedNode>,
     source_id: &str,
     owner: &str,
-) -> Result<Option<crate::document_config::EventSource>> {
+) -> Result<Option<crate::documents::EventSource>> {
     load_config(node, crate::Collection::EventSource, owner, source_id).await
 }
 
@@ -810,7 +810,7 @@ pub async fn load_repository_placement(
     repository_id: &str,
     owner: &str,
 ) -> Result<Option<RepositoryPlacementRef>> {
-    let row: Option<crate::document_config::RepositoryPlacement> = load_config(
+    let row: Option<crate::documents::RepositoryPlacement> = load_config(
         node,
         crate::Collection::RepositoryPlacement,
         owner,

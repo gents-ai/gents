@@ -58,7 +58,7 @@ pub(crate) async fn validate_manifest_against_live(
         for trigger in &manifest.triggers {
             if trigger.node_did != source.node_did
                 || !matches!(&trigger.source,
-                    gents::document_config::TriggerSource::Event { event_source_id }
+                    gents::documents::TriggerSource::Event { event_source_id }
                     if event_source_id == &source.event_source_id)
             {
                 continue;
@@ -77,10 +77,10 @@ pub(crate) async fn validate_manifest_against_live(
             .as_ref()
             .and_then(|group| group.expected_count.as_ref())
             .and_then(|count| match count {
-                gents::document_config::EventGroupCount::SourceField { source_field } => {
+                gents::documents::EventGroupCount::SourceField { source_field } => {
                     Some(source_field.as_str())
                 }
-                gents::document_config::EventGroupCount::Fixed(_) => None,
+                gents::documents::EventGroupCount::Fixed(_) => None,
             });
         if source.correlation_field.is_none() && expected_count_field.is_none() {
             let mut walks_templates = false;

@@ -2,7 +2,7 @@ use super::*;
 use crate::config_writes::write_agent_document;
 use gents::config_client::{write_inference_backend_document, write_inference_profile_document};
 use gents::defra_node::EmbeddedNode;
-use gents::document_config::AdvertisedModel;
+use gents::documents::AdvertisedModel;
 use gents::{record_model_catalog_in_txn, BackendProviderKind};
 use gents_protocol::row::{
     AgentReadinessEntry, AgentReadinessState, AgentReadinessUnavailableReason,

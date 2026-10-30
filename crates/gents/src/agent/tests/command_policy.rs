@@ -1,5 +1,5 @@
 use crate::agent::tool_selection_from_document;
-use crate::document_config::Tools;
+use crate::documents::Tools;
 use crate::toolset::CommandExecutionMode;
 
 fn tools_doc(bash_mode: &str) -> Tools {

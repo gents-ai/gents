@@ -10,7 +10,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
-use crate::document_config::EvalCapture;
+use crate::documents::EvalCapture;
 use crate::eval::runner::embedded::observe::{
     InferenceCallEvidence, MessageEvidence, ToolCallEvidence,
 };
@@ -112,7 +112,7 @@ pub struct StageSpec {
     #[serde(default)]
     pub settle: bool,
     #[serde(default)]
-    pub continuation: Option<crate::document_config::EvalContinuation>,
+    pub continuation: Option<crate::documents::EvalContinuation>,
     #[serde(default)]
     pub review_previous: bool,
     pub captures: Vec<Capture>,

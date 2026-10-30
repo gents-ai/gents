@@ -648,7 +648,7 @@ mod tests {
         assert!(ask.selection.revision > full.selection.revision);
         assert!(save_mode(&home, &key, ask.selection.revision, Mode::AutoReview, None).is_err());
         assert_eq!(get(&home, &key)?.unwrap().selection.mode, Mode::Ask);
-        let selected = ReviewTaskSelection::for_task(&crate::document_config::Task {
+        let selected = ReviewTaskSelection::for_task(&crate::documents::Task {
             task_id: "review-task".into(),
             ..default_review_task("node", "agent")
         });

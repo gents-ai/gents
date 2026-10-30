@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::config_client::ConfigAccess;
-use crate::document_config::{BackendAuth, InferenceBackend};
+use crate::documents::{BackendAuth, InferenceBackend};
 use crate::inference::auth::credential::{
     resolve_oauth_credential, AccountPick, BearerSource, OAuthCredential,
 };

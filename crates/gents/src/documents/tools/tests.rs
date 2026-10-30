@@ -92,7 +92,7 @@ fn a_0_21_job_policy_with_project_roots_still_loads_and_drops_them() {
 
 mod wire {
     use super::super::*;
-    use crate::document_config::AgentContext;
+    use crate::documents::AgentContext;
     use crate::pack::InstalledVia;
     use crate::plugin::store::InstalledPlugin;
     use crate::plugin_job::settings;

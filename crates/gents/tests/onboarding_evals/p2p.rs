@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{ensure, Result};
 use gents::config_client::{apply_desired_state_plan, ConfigAccess, DesiredStateApplyPlan};
-use gents::document_config::{DatastoreTools, InferenceSampling};
+use gents::documents::{DatastoreTools, InferenceSampling};
 use gents::eval::runner::embedded::EmbeddedHome;
 use gents::graphql::escape_graphql_string;
 use gents::inference::llm::tool::Tool;

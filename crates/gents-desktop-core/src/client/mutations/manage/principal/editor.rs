@@ -127,7 +127,7 @@ pub async fn save_backend_authentication_on(
     node_did: &str,
     id: &str,
     expected: &ConfigEditorRevision,
-    auth: &gents::document_config::BackendAuth,
+    auth: &gents::documents::BackendAuth,
 ) -> Result<()> {
     let patch = vec![("auth".to_owned(), Some(serde_json::to_value(auth)?))];
     access.transact_write("client.backend.authentication.save", |txn| {
@@ -352,7 +352,7 @@ mod tests {
         let access = fixture().await?;
         let (revision, original) =
             read_backend_authentication_on(&access, "did:test:editor", "backend").await?;
-        let replacement = gents::document_config::BackendAuth::ApiKey {
+        let replacement = gents::documents::BackendAuth::ApiKey {
             key: "replacement-private-key".into(),
         };
         save_backend_authentication_on(
@@ -373,7 +373,7 @@ mod tests {
             "did:test:editor",
             "backend",
             &revision,
-            &gents::document_config::BackendAuth::Unauthenticated
+            &gents::documents::BackendAuth::Unauthenticated
         )
         .await
         .is_err());

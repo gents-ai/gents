@@ -517,7 +517,7 @@ where
 }
 
 fn parse_agents(response: &QueryResponse) -> Result<BTreeMap<String, Vec<AgentInfo>>> {
-    let documents = config_documents::<crate::document_config::Agent>(
+    let documents = config_documents::<crate::documents::Agent>(
         response,
         crate::store::collection::Collection::Agent,
     )?;

@@ -1,5 +1,5 @@
 use super::{CallToolArgs, CallToolTool, MetaToolContext};
-use crate::document_config::{RemoteToolStyle, RemoteTools};
+use crate::documents::{RemoteToolStyle, RemoteTools};
 use crate::inference::llm::tool::{BoxFuture, Tool, ToolDefinition, ToolDyn, ToolError};
 
 pub(crate) fn flat_tool_name(service: &str, tool: &str) -> String {

@@ -870,7 +870,7 @@ mod tests {
                     )
                     .await?
                     .context("fixture context is missing")?;
-                    let mut context: gents::document_config::AgentContext =
+                    let mut context: gents::documents::AgentContext =
                         serde_json::from_value(context)?;
                     context.skill_ids = vec![skill_id.to_owned()];
                     let value = serde_json::to_value(context)?;

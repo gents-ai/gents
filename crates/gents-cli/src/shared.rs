@@ -219,7 +219,7 @@ pub(crate) struct ConfigExportBundle {
     pub(crate) exported_at: String,
     pub(crate) access_mode: String,
     #[serde(flatten)]
-    pub(crate) config: gents::document_config::PackConfig,
+    pub(crate) config: gents::documents::PackConfig,
 }
 
 impl ConfigExportBundle {
@@ -255,7 +255,7 @@ impl Serialize for ConfigApplyCounts {
 }
 
 impl ConfigApplyCounts {
-    pub(crate) fn from_config(config: &gents::document_config::PackConfig) -> anyhow::Result<Self> {
+    pub(crate) fn from_config(config: &gents::documents::PackConfig) -> anyhow::Result<Self> {
         let value = serde_json::to_value(config)?;
         let mut counts = Self::default();
         for collection in Collection::ALL {
@@ -320,7 +320,7 @@ pub(crate) async fn load_backend_observation(
     access: &gents::config_client::ConfigAccess,
     node_did: &str,
     backend_id: &str,
-) -> anyhow::Result<gents::document_config::InferenceBackendObservation> {
+) -> anyhow::Result<gents::documents::InferenceBackendObservation> {
     let query = format!(
         "{{ InferenceBackend(filter: {{node_did: {{_eq: \"{}\"}}, backend_id: {{_eq: \"{}\"}}}}, limit: 2) {{backend_id catalogs catalog_freshness probe_status last_probe}} }}",
         gents::graphql::escape_graphql_string(node_did),

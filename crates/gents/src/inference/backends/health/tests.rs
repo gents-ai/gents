@@ -150,7 +150,7 @@ fn backend_fields_refine_the_modeled_probe_revision() {
         (
             "auth",
             |value| {
-                value.auth = crate::document_config::BackendAuth::ApiKey {
+                value.auth = crate::documents::BackendAuth::ApiKey {
                     key: "test-key".into(),
                 }
             },
@@ -308,7 +308,7 @@ fn backend(backend_id: &str, endpoint: String) -> InferenceBackend {
         provider_kind: crate::inference::backends::provider::BackendProviderKind::OpenAiCompatible,
         openai_wire_api: None,
         endpoint,
-        auth: crate::document_config::BackendAuth::Unauthenticated,
+        auth: crate::documents::BackendAuth::Unauthenticated,
         connect_timeout_secs: None,
         discovery_timeout_secs: None,
         max_concurrent: Some(1),

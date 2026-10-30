@@ -506,7 +506,7 @@ pub(crate) struct PendingAgent {
     provider_idle_timeout: Duration,
     deadline_duration: Duration,
     sampling: SamplingConfig,
-    skills: Vec<crate::skills::Skill>,
+    skills: Vec<crate::documents::skills::Skill>,
 }
 
 impl PendingAgent {
@@ -607,7 +607,7 @@ impl PendingAgent {
             backend_fields.openai_wire_api,
         )?;
 
-        let compaction = crate::document_config::CompactionConfig {
+        let compaction = crate::documents::CompactionConfig {
             compaction_id: self.name.clone(),
             node_did: principal.node_did.clone(),
             display_name: None,
@@ -689,7 +689,7 @@ impl PendingAgent {
                     None,
                 ),
                 backend_endpoint,
-                backend_auth: crate::document_config::BackendAuth::Unauthenticated,
+                backend_auth: crate::documents::BackendAuth::Unauthenticated,
             },
             &ToolCeiling::meta_only(),
         )

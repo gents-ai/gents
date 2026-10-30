@@ -1580,7 +1580,7 @@ impl EventSource {
                     ("error", Some(error.clone()), None)
                 }
             };
-            let update = crate::document_config::TriggerRuntimeUpdate {
+            let update = crate::documents::TriggerRuntimeUpdate {
                 next_run_at: None,
                 last_attempt_at: Some(now),
                 last_fired_source_doc_id: Some(source_doc_id),
@@ -1588,7 +1588,7 @@ impl EventSource {
                 last_error: error_value,
                 fire_count_delta: fire_delta,
             };
-            if let Err(error) = crate::document_config::update_trigger_runtime_fields(
+            if let Err(error) = crate::documents::update_trigger_runtime_fields(
                 &node,
                 &node_did,
                 &trigger_id,
@@ -1617,7 +1617,7 @@ impl EventSource {
     ) {
         runtime.spawn(async move {
             let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-            let update = crate::document_config::TriggerRuntimeUpdate {
+            let update = crate::documents::TriggerRuntimeUpdate {
                 last_attempt_at: Some(now),
                 last_fired_source_doc_id: Some(source_doc_id),
                 last_status: Some(crate::trigger_engine::UNACKNOWLEDGED_STATUS.to_string()),
@@ -1627,7 +1627,7 @@ impl EventSource {
                 ),
                 ..Default::default()
             };
-            if let Err(error) = crate::document_config::update_trigger_runtime_fields(
+            if let Err(error) = crate::documents::update_trigger_runtime_fields(
                 &node,
                 &node_did,
                 &trigger_id,

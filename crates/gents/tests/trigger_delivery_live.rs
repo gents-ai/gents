@@ -221,7 +221,7 @@ async fn configure(
         support::fixtures::configure_agent_tools(
             node, owner, behavior,
             Some("Follow the requested exact one-line response. This is a delivery qualification; never call tools.".into()),
-            gents::document_config::Tools {
+            gents::documents::Tools {
                 tools_id: format!("{behavior}:tools"), node_did: owner.into(), ..Default::default()
             }, Vec::new(),
         ).await;

@@ -47,9 +47,7 @@ async fn load_command_output_limits(
             let owner = owner.clone();
             let agent_id = agent_id.clone();
             Box::pin(async move {
-                match crate::document_config::load_agent_tools_in_txn(txn, &owner, &agent_id)
-                    .await?
-                {
+                match crate::documents::load_agent_tools_in_txn(txn, &owner, &agent_id).await? {
                     Some(tools) => {
                         Ok(super::ResolvedToolSelection::from_document(&tools)?
                             .command_output_limits)

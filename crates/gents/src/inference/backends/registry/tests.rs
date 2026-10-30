@@ -541,7 +541,7 @@ async fn discovery_rejects_wrong_scope_and_stale_connection_without_losing_catal
     let catalog = BackendModelCatalog {
         node_did: None,
         observed_at: "2026-09-09T10:00:00Z".into(),
-        models: vec![crate::document_config::AdvertisedModel {
+        models: vec![crate::documents::AdvertisedModel {
             model_name: "advertised-model".into(),
             display_name: None,
             context_window: Some(524288),
@@ -598,7 +598,7 @@ async fn catalog_transaction_preserves_explicit_empty_lists_and_rollback() -> Re
     let catalog = BackendModelCatalog {
         node_did: None,
         observed_at: "2026-09-09T10:00:00Z".into(),
-        models: vec![crate::document_config::AdvertisedModel {
+        models: vec![crate::documents::AdvertisedModel {
             model_name: "exact-model".into(),
             display_name: None,
             context_window: None,
@@ -803,7 +803,7 @@ fn catalog_action(
 ) -> Result<BackendModelCatalog> {
     use chrono::TimeZone as _;
     let payload = action["payload"].as_str().unwrap();
-    let models = serde_json::from_str::<Vec<crate::document_config::AdvertisedModel>>(payload)?;
+    let models = serde_json::from_str::<Vec<crate::documents::AdvertisedModel>>(payload)?;
     assert_eq!(
         serde_json::to_string(&models)?,
         payload,

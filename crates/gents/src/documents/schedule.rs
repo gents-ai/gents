@@ -38,7 +38,7 @@ pub enum ScheduleCadence {
         expression: String,
         timezone: String,
         #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-        missed_run_policy: Option<crate::schedule_cron::CronMissedRunPolicy>,
+        missed_run_policy: Option<crate::documents::schedule_cron::CronMissedRunPolicy>,
     },
 }
 
@@ -71,11 +71,13 @@ impl ScheduleCadence {
                     !timezone.trim().is_empty(),
                     "cron schedule requires timezone"
                 );
-                crate::schedule_cron::validate_cron_schedule(
+                crate::documents::schedule_cron::validate_cron_schedule(
                     expression,
                     timezone,
                     missed_run_policy.map(|policy| match policy {
-                        crate::schedule_cron::CronMissedRunPolicy::LatestOnly => "latest_only",
+                        crate::documents::schedule_cron::CronMissedRunPolicy::LatestOnly => {
+                            "latest_only"
+                        }
                     }),
                 )
             }

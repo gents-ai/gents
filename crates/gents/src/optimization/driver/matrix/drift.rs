@@ -8,7 +8,7 @@ use super::journal::runs_started;
 use super::{
     accepting_harness, cancel_while_proposing, drive, frozen_job, journal, settle, Harness,
 };
-use crate::document_config::EvalSplit;
+use crate::documents::EvalSplit;
 use crate::eval::checks::CheckRegistry;
 use crate::eval::runner::freeze::tests::OWNER;
 use crate::eval::runner::ScriptedExecutor;

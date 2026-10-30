@@ -1,7 +1,7 @@
 use super::*;
 
 fn missing_reference_next_step(
-    missing: &crate::document_config::MissingReference,
+    missing: &crate::documents::MissingReference,
     deleting: bool,
 ) -> String {
     let target = missing.target.graphql_type();
@@ -22,7 +22,7 @@ impl ConfigCommandTool {
         argv: &[String],
         deleting: bool,
     ) -> (String, Value) {
-        let missing = error.downcast_ref::<crate::document_config::MissingReference>();
+        let missing = error.downcast_ref::<crate::documents::MissingReference>();
         let message = missing.map_or_else(
             || format!("{error:#}"),
             |missing| {

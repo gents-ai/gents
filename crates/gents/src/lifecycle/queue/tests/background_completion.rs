@@ -1314,7 +1314,7 @@ async fn a_lower_hop_wake_never_consumes_a_higher_hop_notification() {
 #[tokio::test]
 async fn a_returned_result_keeps_the_callers_hop_until_the_session_is_refused() {
     let db = test_db("wake-hop-refusal").await;
-    crate::document_config::upsert_node(
+    crate::documents::upsert_node(
         &db.node,
         db.node_did(),
         None,

@@ -24,7 +24,7 @@ impl Fixture {
             0,
             Mode::AutoReview,
             Some(&workspace::ReviewTaskSelection::for_task(
-                &crate::document_config::Task {
+                &crate::documents::Task {
                     task_id: "review".into(),
                     ..workspace::default_review_task("node", "agent")
                 },

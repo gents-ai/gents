@@ -58,7 +58,7 @@ pub(super) fn recent_runs_for_task_views(
             .filter(|trigger| {
                 matches!(
                     trigger.config.source,
-                    gents::document_config::TriggerSource::Schedule { .. }
+                    gents::documents::TriggerSource::Schedule { .. }
                 )
             })
             .count(),
@@ -67,7 +67,7 @@ pub(super) fn recent_runs_for_task_views(
             .filter(|trigger| {
                 matches!(
                     trigger.config.source,
-                    gents::document_config::TriggerSource::Event { .. }
+                    gents::documents::TriggerSource::Event { .. }
                 )
             })
             .count(),

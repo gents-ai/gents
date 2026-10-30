@@ -7,7 +7,7 @@ fn claude_backend() -> InferenceBackend {
     );
     claude.provider_kind =
         crate::inference::backends::provider::BackendProviderKind::ClaudeCliSubscription;
-    claude.auth = crate::document_config::BackendAuth::NodeOAuth { account_ref: None };
+    claude.auth = crate::documents::BackendAuth::NodeOAuth { account_ref: None };
     claude
 }
 
@@ -18,7 +18,7 @@ fn oauth_backend(
 ) -> InferenceBackend {
     let mut backend = backend(id, endpoint.to_string());
     backend.provider_kind = kind;
-    backend.auth = crate::document_config::BackendAuth::NodeOAuth { account_ref: None };
+    backend.auth = crate::documents::BackendAuth::NodeOAuth { account_ref: None };
     backend
 }
 
@@ -100,7 +100,7 @@ async fn oauth_account_reference_is_probed_with_its_own_account() {
         "https://cli-chat-proxy.grok.com/v1",
     );
     grok.node_did = did.to_string();
-    grok.auth = crate::document_config::BackendAuth::NodeOAuth {
+    grok.auth = crate::documents::BackendAuth::NodeOAuth {
         account_ref: Some("acct-b".into()),
     };
     let models = ModelsListener::start();
@@ -151,7 +151,7 @@ async fn oauth_account_reference_without_its_row_is_not_probed() {
         "https://cli-chat-proxy.grok.com/v1",
     );
     grok.node_did = did.to_string();
-    grok.auth = crate::document_config::BackendAuth::NodeOAuth {
+    grok.auth = crate::documents::BackendAuth::NodeOAuth {
         account_ref: Some("acct-b".into()),
     };
     let models = ModelsListener::start();
@@ -564,7 +564,7 @@ async fn subscription_probe_preserves_typed_refresh_rejections() {
 async fn subscription_probe_account_changes_retire_previous_measurement() {
     let node = test_node().await;
     let mut backend = claude_backend();
-    backend.auth = crate::document_config::BackendAuth::NodeOAuth {
+    backend.auth = crate::documents::BackendAuth::NodeOAuth {
         account_ref: Some("account-one".into()),
     };
     let health = BackendHealthMap::new();
@@ -588,7 +588,7 @@ async fn subscription_probe_account_changes_retire_previous_measurement() {
     assert_modeled_probe(None, &rejected, "credentialsRejected");
     assert!(rejected.state_for(&backend).unwrap().blocks_routing());
 
-    backend.auth = crate::document_config::BackendAuth::NodeOAuth {
+    backend.auth = crate::documents::BackendAuth::NodeOAuth {
         account_ref: Some("account-two".into()),
     };
     assert_eq!(

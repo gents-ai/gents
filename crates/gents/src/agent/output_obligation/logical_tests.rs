@@ -403,11 +403,11 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
         assert!(writes_by_request.is_empty());
         let configured = vec![(
             "write_result".into(),
-            crate::document_config::WriteToolOutputObligation {
+            crate::documents::WriteToolOutputObligation {
                 scope: if case["request_scope"].as_bool().unwrap() {
-                    crate::document_config::WriteToolOutputObligationScope::Request
+                    crate::documents::WriteToolOutputObligationScope::Request
                 } else {
-                    crate::document_config::WriteToolOutputObligationScope::Trigger
+                    crate::documents::WriteToolOutputObligationScope::Trigger
                 },
                 minimum_writes: case["minimum"].as_u64().unwrap() as usize,
                 expected_count_field: (case["expected_count"].is_number()
@@ -498,8 +498,8 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
                 .expect("persisted physical request ID"),
             vec![ActiveOutputObligation {
                 tool_name: "write_result".to_string(),
-                contract: crate::document_config::WriteToolOutputObligation {
-                    scope: crate::document_config::WriteToolOutputObligationScope::Trigger,
+                contract: crate::documents::WriteToolOutputObligation {
+                    scope: crate::documents::WriteToolOutputObligationScope::Trigger,
                     minimum_writes: 1,
                     expected_count_field: Some("expected_total".to_string()),
                 },
@@ -621,8 +621,8 @@ async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
         lifecycle.request().doc_id.clone(),
         vec![ActiveOutputObligation {
             tool_name: "write_result".to_string(),
-            contract: crate::document_config::WriteToolOutputObligation {
-                scope: crate::document_config::WriteToolOutputObligationScope::Trigger,
+            contract: crate::documents::WriteToolOutputObligation {
+                scope: crate::documents::WriteToolOutputObligationScope::Trigger,
                 minimum_writes: 1,
                 expected_count_field: Some("expected_total".to_string()),
             },

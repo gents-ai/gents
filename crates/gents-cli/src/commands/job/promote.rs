@@ -5,7 +5,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
-use gents::document_config::Tools;
+use gents::documents::Tools;
 use gents::pack::authoring::check_dir;
 use gents::pack::authoring::test::run_plugin_cases;
 use gents::plugin_job::promote::{
@@ -188,7 +188,7 @@ pub async fn promote(
             .transact_readonly("job.promote.agent_tools", move |txn| {
                 let (owner, agent_id) = (owner.clone(), agent_id.clone());
                 Box::pin(async move {
-                    gents::document_config::load_agent_tools_in_txn(txn, &owner, &agent_id).await
+                    gents::documents::load_agent_tools_in_txn(txn, &owner, &agent_id).await
                 })
             })
             .await

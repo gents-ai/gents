@@ -7,7 +7,7 @@ pub(crate) use apply::{apply_control_update, control_collection_names};
 pub(crate) use load::load_document_runtime_view;
 pub(crate) use snapshot::resolve_document_runtime_snapshot_from_view;
 
-use crate::document_config::*;
+use crate::documents::*;
 use crate::inference::auth::credential::OAuthCredential;
 use rapidhash::RapidHashMap;
 
@@ -98,8 +98,8 @@ mod tests;
 pub(crate) fn merge_surface_tools(
     tools: &Tools,
     view: &DocumentRuntimeView,
-) -> anyhow::Result<crate::document_config::MergedSurfaceTools> {
-    crate::document_config::merge_datastore_tool_surfaces(
+) -> anyhow::Result<crate::documents::MergedSurfaceTools> {
+    crate::documents::merge_datastore_tool_surfaces(
         tools,
         view.datastore_tool_surfaces
             .values()

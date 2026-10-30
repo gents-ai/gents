@@ -73,14 +73,14 @@ pub struct PackMetadata {
     pub authors: Vec<String>,
     #[serde(
         default,
-        deserialize_with = "crate::document_config::deserialize_default_on_null",
+        deserialize_with = "crate::documents::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
     pub tags: Vec<String>,
     pub assets: Vec<String>,
     #[serde(
         default,
-        deserialize_with = "crate::document_config::deserialize_default_on_null",
+        deserialize_with = "crate::documents::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
     pub dependencies: Vec<String>,
@@ -133,13 +133,13 @@ pub struct PackManifest {
     pub config: Option<String>,
     #[serde(
         default,
-        deserialize_with = "crate::document_config::deserialize_default_on_null",
+        deserialize_with = "crate::documents::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
     pub schemas: Vec<String>,
     #[serde(
         default,
-        deserialize_with = "crate::document_config::deserialize_default_on_null",
+        deserialize_with = "crate::documents::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
     pub external_dependencies: Vec<PackageExternalDependency>,

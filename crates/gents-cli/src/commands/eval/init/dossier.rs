@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
-use gents::document_config::{Agent, PackConfig};
+use gents::documents::{Agent, PackConfig};
 use gents::pack::{
     declared_paths, digest_declared_assets, interpolate, load_pack_config, PackInstallOptions,
     PackManifest,

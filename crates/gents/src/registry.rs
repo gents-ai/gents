@@ -19,7 +19,7 @@ where
 pub(crate) async fn configured_mcp_services(
     node: &defra_node::EmbeddedNode,
     node_did: &str,
-) -> anyhow::Result<Vec<crate::document_config::ToolServiceRegistry>> {
+) -> anyhow::Result<Vec<crate::documents::ToolServiceRegistry>> {
     let query = services_query(node_did)?;
     let response =
         crate::graphql::graphql_with_transaction_retry(node, &query, "configured_mcp_services")
@@ -30,7 +30,7 @@ pub(crate) async fn configured_mcp_services(
 pub async fn configured_mcp_services_on(
     access: &crate::ConfigAccess,
     node_did: &str,
-) -> anyhow::Result<Vec<crate::document_config::ToolServiceRegistry>> {
+) -> anyhow::Result<Vec<crate::documents::ToolServiceRegistry>> {
     let response = access.execute(&services_query(node_did)?).await?;
     parse_services(response.get("data"), node_did)
 }
@@ -53,7 +53,7 @@ fn services_query(node_did: &str) -> anyhow::Result<String> {
 fn parse_services(
     data: Option<&serde_json::Value>,
     node_did: &str,
-) -> anyhow::Result<Vec<crate::document_config::ToolServiceRegistry>> {
+) -> anyhow::Result<Vec<crate::documents::ToolServiceRegistry>> {
     let rows = data
         .and_then(|data| data.get("ToolServiceRegistry"))
         .and_then(serde_json::Value::as_array)
@@ -61,8 +61,7 @@ fn parse_services(
     let mut names = rapidhash::RapidHashSet::default();
     let mut services = Vec::with_capacity(rows.len());
     for row in rows {
-        let service: crate::document_config::ToolServiceRegistry =
-            serde_json::from_value(row.clone())?;
+        let service: crate::documents::ToolServiceRegistry = serde_json::from_value(row.clone())?;
         anyhow::ensure!(
             service.node_did == node_did && !service.service_id.trim().is_empty(),
             "MCP registry returned an invalid scoped identity"
@@ -83,7 +82,7 @@ pub struct ResolvedMcpService {
 }
 
 pub fn resolve_mcp_service(
-    entry: &crate::document_config::ToolServiceRegistry,
+    entry: &crate::documents::ToolServiceRegistry,
     hostname: &str,
     subnet: Option<&str>,
 ) -> anyhow::Result<ResolvedMcpService> {

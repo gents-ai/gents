@@ -138,7 +138,7 @@ impl UnresolvedSubmission {
         if content.trim().is_empty() {
             return true;
         }
-        let selected = gents::skills::prompt_slash_skill_selection(content.trim());
+        let selected = gents::documents::skills::prompt_slash_skill_selection(content.trim());
         selected.prompt.trim() == self.create.content.trim()
             && (selected.selected_skill_ids.is_empty()
                 || selected.selected_skill_ids == self.create.input.selected_skill_ids)

@@ -69,7 +69,7 @@ pub struct BackendAdmissionConfig {
 impl BackendAdmissionConfig {
     pub(crate) fn from_backend(
         backend: &InferenceBackend,
-        observation: &crate::document_config::InferenceBackendObservation,
+        observation: &crate::documents::InferenceBackendObservation,
     ) -> Result<Self> {
         backend.validate()?;
         anyhow::ensure!(

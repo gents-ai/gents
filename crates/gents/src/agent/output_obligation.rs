@@ -5,7 +5,7 @@ use anyhow::{bail, Context, Result};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
-use crate::document_config::OutputObligationDecision;
+use crate::documents::OutputObligationDecision;
 use crate::graphql::{
     canonical_positive_count, escape_graphql_string, graphql_with_transaction_retry,
 };
@@ -16,11 +16,11 @@ pub(crate) use gents_loop::output_obligation::{continuation_message, UnmetOutput
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ActiveOutputObligation {
     pub(crate) tool_name: String,
-    pub(crate) contract: crate::document_config::WriteToolOutputObligation,
+    pub(crate) contract: crate::documents::WriteToolOutputObligation,
 }
 
 fn active_for_request(
-    configured: &[(String, crate::document_config::WriteToolOutputObligation)],
+    configured: &[(String, crate::documents::WriteToolOutputObligation)],
     has_automated_trigger_lineage: bool,
 ) -> Vec<ActiveOutputObligation> {
     configured
@@ -73,7 +73,7 @@ impl OutputObligationGate {
     pub(crate) async fn for_request(
         node: Arc<EmbeddedNode>,
         request: &crate::watcher::AgentRequest,
-        configured: &[(String, crate::document_config::WriteToolOutputObligation)],
+        configured: &[(String, crate::documents::WriteToolOutputObligation)],
     ) -> Result<Option<Self>> {
         if configured.is_empty() {
             return Ok(None);

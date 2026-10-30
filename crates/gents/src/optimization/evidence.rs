@@ -1,6 +1,6 @@
 use sha2::{Digest, Sha256};
 
-use crate::document_config::{EvalDefinition, EvalTier};
+use crate::documents::{EvalDefinition, EvalTier};
 use crate::eval::report::{
     cell_usage, concat_paired, counted_verdicts, paired_evidence, CellUsage, RunRows,
 };

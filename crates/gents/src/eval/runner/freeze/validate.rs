@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::Result;
 
 use super::{refused, RunRequest};
-use crate::document_config::EvalDefinition;
+use crate::documents::EvalDefinition;
 use crate::eval::scoring::PILOT_PURPOSE;
 
 pub(super) fn validate_purpose(purpose: &str) -> Result<()> {

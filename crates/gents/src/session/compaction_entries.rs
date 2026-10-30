@@ -47,7 +47,7 @@ struct PromptCompactionRow {
 pub(super) struct CompactionGenerationRow {
     #[serde(
         default,
-        deserialize_with = "crate::document_config::deserialize_default_on_null"
+        deserialize_with = "crate::documents::deserialize_default_on_null"
     )]
     compaction_key: String,
     sequence: u32,
@@ -57,12 +57,12 @@ pub(super) struct CompactionGenerationRow {
     compacted_through_sequence: Option<u32>,
     #[serde(
         default,
-        deserialize_with = "crate::document_config::deserialize_default_on_null"
+        deserialize_with = "crate::documents::deserialize_default_on_null"
     )]
     files_read: String,
     #[serde(
         default,
-        deserialize_with = "crate::document_config::deserialize_default_on_null"
+        deserialize_with = "crate::documents::deserialize_default_on_null"
     )]
     files_modified: String,
     #[serde(default)]

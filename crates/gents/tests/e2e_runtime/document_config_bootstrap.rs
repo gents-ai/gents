@@ -1,7 +1,7 @@
 use gents::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyPlan,
 };
-use gents::document_config::PackConfig;
+use gents::documents::PackConfig;
 use gents::{ensure_node, Collection};
 use serde_json::json;
 

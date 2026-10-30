@@ -19,7 +19,7 @@ use self::fixtures::{
 };
 use self::journal::runs_started;
 use crate::config_client::ConfigAccess;
-use crate::document_config::EvalSplit;
+use crate::documents::EvalSplit;
 use crate::eval::checks::CheckRegistry;
 use crate::eval::runner::freeze::tests::{Launching, OWNER};
 use crate::eval::runner::{Capture, RunOptions, ScriptedExecutor, TrialExecutor};

@@ -7,7 +7,7 @@ async fn read_trigger_cursor(
     owner_did: &str,
     trigger_id: &str,
 ) -> anyhow::Result<Option<String>> {
-    let mut results = crate::document_config::load_trigger_next_run_at_batch(
+    let mut results = crate::documents::load_trigger_next_run_at_batch(
         node,
         &[(owner_did.to_owned(), trigger_id.to_owned())],
     )
@@ -213,8 +213,7 @@ async fn schedule_cursor_batch_matches_exact_owner_reads_and_isolates_scope_erro
         (owner_b.to_owned(), "shared-trigger-id".to_owned()),
         (String::new(), "shared-trigger-id".to_owned()),
     ];
-    let batch =
-        crate::document_config::load_trigger_next_run_at_batch(node.as_ref(), &scopes).await;
+    let batch = crate::documents::load_trigger_next_run_at_batch(node.as_ref(), &scopes).await;
     assert_eq!(batch.len(), 3);
     assert_eq!(batch[0].as_ref().unwrap().as_deref(), Some(cursor_a));
     assert_eq!(batch[1].as_ref().unwrap().as_deref(), Some(cursor_b));
@@ -233,8 +232,8 @@ async fn schedule_cursor_batches_more_than_one_chunk() {
     let scopes = (0..128)
         .map(|index| (owner.clone(), format!("missing-schedule-trigger-{index}")))
         .collect::<Vec<_>>();
-    let (cursors, query_count) = crate::document_config::count_trigger_cursor_batch_queries(
-        crate::document_config::load_trigger_next_run_at_batch(node.as_ref(), &scopes),
+    let (cursors, query_count) = crate::documents::count_trigger_cursor_batch_queries(
+        crate::documents::load_trigger_next_run_at_batch(node.as_ref(), &scopes),
     )
     .await;
 
@@ -286,7 +285,7 @@ async fn schedule_source_stops_loading_chunks_after_first_due_trigger() {
     let mut source = ScheduleSource::new(snapshot_rx, node.clone(), cancel.clone())
         .with_tick_every(Duration::from_millis(1));
     let (intent, query_count) =
-        crate::document_config::count_trigger_cursor_batch_queries(source.next_fire()).await;
+        crate::documents::count_trigger_cursor_batch_queries(source.next_fire()).await;
 
     let intent = intent.expect("first active schedule is due");
     assert_eq!(
@@ -882,7 +881,9 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
         cadence: ScheduleCadence::Cron {
             expression: "30 0 * * *".to_string(),
             timezone: "America/Los_Angeles".to_string(),
-            missed_run_policy: Some(crate::schedule_cron::CronMissedRunPolicy::LatestOnly),
+            missed_run_policy: Some(
+                crate::documents::schedule_cron::CronMissedRunPolicy::LatestOnly,
+            ),
         },
         enabled: true,
         concurrency: ConcurrencyMode::Serial,
@@ -927,7 +928,7 @@ async fn schedule_source_seeds_cron_next_run_at_without_immediate_fire() {
         parsed > started_at,
         "cron first seed should be in the future, got {seeded}"
     );
-    let timezone = crate::schedule_cron::parse_timezone("America/Los_Angeles").unwrap();
+    let timezone = crate::documents::schedule_cron::parse_timezone("America/Los_Angeles").unwrap();
     let local = parsed.with_timezone(&timezone);
     assert_eq!(local.hour(), 0);
     assert_eq!(local.minute(), 30);

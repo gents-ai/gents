@@ -734,7 +734,7 @@ pub(crate) async fn max_request_hop(
     node: &EmbeddedNode,
     node_did: &str,
 ) -> anyhow::Result<Option<u32>> {
-    Ok(crate::document_config::load_node(node, node_did)
+    Ok(crate::documents::load_node(node, node_did)
         .await?
         .and_then(|node_doc| node_doc.max_request_hop))
 }
@@ -836,9 +836,9 @@ pub(crate) async fn load_request_context(
     node_did: &str,
     agent_id: &str,
 ) -> AdmissionResult<(
-    Option<crate::document_config::AgentContext>,
-    Option<crate::document_config::Tools>,
-    Vec<crate::document_config::AgentTargetDocument>,
+    Option<crate::documents::AgentContext>,
+    Option<crate::documents::Tools>,
+    Vec<crate::documents::AgentTargetDocument>,
 )> {
     use crate::config_client::ConfigAccess;
     let owner = node_did.to_owned();
@@ -866,12 +866,12 @@ pub(crate) async fn load_request_context_in_txn(
     owner: &str,
     agent_id: &str,
 ) -> anyhow::Result<(
-    Option<crate::document_config::AgentContext>,
-    Option<crate::document_config::Tools>,
-    Vec<crate::document_config::AgentTargetDocument>,
+    Option<crate::documents::AgentContext>,
+    Option<crate::documents::Tools>,
+    Vec<crate::documents::AgentTargetDocument>,
 )> {
     use crate::config_client::read_desired_state_document_in_txn as read;
-    use crate::document_config::{Agent, AgentContext, AgentTargetDocument, Tools};
+    use crate::documents::{Agent, AgentContext, AgentTargetDocument, Tools};
     use crate::store::collection::Collection;
     let agent: Agent = serde_json::from_value(
         read(txn, Collection::Agent, owner, agent_id)
@@ -931,7 +931,7 @@ async fn verify_automated_trigger_source(
         trigger_id: String,
         node_did: String,
         task_id: String,
-        source: crate::document_config::TriggerSource,
+        source: crate::documents::TriggerSource,
         enabled: bool,
     }
     #[derive(Deserialize)]
@@ -957,11 +957,8 @@ async fn verify_automated_trigger_source(
             && trigger.node_did == node_did
             && matches!(
                 (&trigger.source, kind),
-                (crate::document_config::TriggerSource::Event { .. }, "event")
-                    | (
-                        crate::document_config::TriggerSource::Schedule { .. },
-                        "schedule"
-                    )
+                (crate::documents::TriggerSource::Event { .. }, "event")
+                    | (crate::documents::TriggerSource::Schedule { .. }, "schedule")
             ),
         "runtime trigger physical source, node, kind, or availability changed",
     )?;

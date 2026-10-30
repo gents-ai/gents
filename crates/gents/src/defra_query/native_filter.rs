@@ -125,7 +125,7 @@ fn validate_value<'a>(
             .context("filter condition must be an object")?;
         if !fields.iter().any(|field| field.name == "_eq") {
             if let Some(collection) = name.strip_suffix("FilterArg") {
-                crate::document_config::reject_protected_collection_name(collection)?;
+                crate::documents::reject_protected_collection_name(collection)?;
             }
         }
         for (key, operand) in object {

@@ -401,7 +401,7 @@ impl EventSource {
         }
 
         let expected_count = match &group.expected_count {
-            Some(crate::document_config::EventGroupCount::Fixed(count)) => {
+            Some(crate::documents::EventGroupCount::Fixed(count)) => {
                 let count = usize::try_from(*count)
                     .map_err(|_| anyhow::anyhow!("expected_count must be a positive count"))?;
                 if !(1..=MAX_EVENT_TRIGGER_GROUP_DOCS).contains(&count) {
@@ -412,7 +412,7 @@ impl EventSource {
                 }
                 Some(count)
             }
-            Some(crate::document_config::EventGroupCount::SourceField { source_field }) => {
+            Some(crate::documents::EventGroupCount::SourceField { source_field }) => {
                 if crate::graphql::validate_graphql_name(source_field).is_err() {
                     anyhow::bail!("count field is not a GraphQL name");
                 }
@@ -421,7 +421,7 @@ impl EventSource {
             None => None,
         };
         let expected_count_field = match &group.expected_count {
-            Some(crate::document_config::EventGroupCount::SourceField { source_field }) => {
+            Some(crate::documents::EventGroupCount::SourceField { source_field }) => {
                 Some(source_field.clone())
             }
             _ => None,

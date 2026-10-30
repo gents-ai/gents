@@ -1284,7 +1284,7 @@ pub(super) mod tests {
             backend_provider_kind: BackendProviderKind::OpenAiCompatible,
             openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
             backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
-            backend_auth: crate::document_config::BackendAuth::Unauthenticated,
+            backend_auth: crate::documents::BackendAuth::Unauthenticated,
             model_name: "scripted".to_string(),
             service_tier: None,
             resolved_reasoning_efforts: None,

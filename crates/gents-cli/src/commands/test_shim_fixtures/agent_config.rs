@@ -15,7 +15,7 @@ pub(crate) async fn configure_runtime_agent(
     agents_enabled: bool,
 ) {
     use gents::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-    use gents::document_config::{AgentContext, AgentTools, BashTools, HostTools, Tools};
+    use gents::documents::{AgentContext, AgentTools, BashTools, HostTools, Tools};
     use gents::Collection;
 
     seed_test_agent_configuration(node, node_did, agent_id, agent_id, model, true).await;

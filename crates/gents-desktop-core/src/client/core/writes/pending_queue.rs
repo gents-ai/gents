@@ -66,7 +66,8 @@ async fn merge_accepted_edit_projection(
 fn normalize_pending_edit_skills(edit: &mut gents::lifecycle::PendingQueueEdit) {
     for message in &mut edit.messages {
         if let Some(authored) = &mut message.authored_input {
-            let selection = gents::skills::prompt_slash_skill_selection(&message.content);
+            let selection =
+                gents::documents::skills::prompt_slash_skill_selection(&message.content);
             if !selection.selected_skill_ids.is_empty() {
                 authored.selected_skill_ids = selection.selected_skill_ids;
                 message.content = selection.prompt;

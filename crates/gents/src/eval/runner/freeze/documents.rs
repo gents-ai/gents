@@ -4,7 +4,7 @@ use super::refused;
 use crate::config_client::{
     desired_state_document_digest, read_desired_state_record_in_txn, ConfigAccess,
 };
-use crate::document_config::{
+use crate::documents::{
     BackendAuth, EvalDefinition, InferenceBackend, InferenceExecution, InferenceProfile,
     InferenceRetryPolicy, InferenceSampling,
 };

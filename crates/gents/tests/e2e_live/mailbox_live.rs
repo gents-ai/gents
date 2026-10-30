@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::document_config::{DatastoreTools, SurfaceToolDecl, Tools};
+use gents::documents::{DatastoreTools, SurfaceToolDecl, Tools};
 use gents::graphql::escape_graphql_string;
 use gents::mailbox::{canonical_mailbox_write_decl, list_mailbox_items, MailboxStatus};
 use gents::{Collection, DatastoreToolSurfaceDocument, NodeIdentity};

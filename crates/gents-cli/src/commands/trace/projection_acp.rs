@@ -275,7 +275,7 @@ pub(super) fn projection_binding_label(row: &ProjectionAcpBindingRow) -> &str {
     normalize_projection_binding_field(Some(&row.binding_id)).unwrap_or("<unnamed>")
 }
 
-use gents::document_config::parse_projection_resource_map;
+use gents::documents::parse_projection_resource_map;
 
 pub(super) async fn apply_projection_acp_read_filter(
     rows: RunTimelineRows,

@@ -12,7 +12,7 @@ use super::journal::{
 use super::{
     accepting_harness, drive, findings_capture, journal, rejecting_harness, settle, Harness,
 };
-use crate::document_config::EvalSplit;
+use crate::documents::EvalSplit;
 use crate::eval::checks::CheckRegistry;
 use crate::eval::report::load_run_rows;
 use crate::eval::runner::freeze::tests::OWNER;

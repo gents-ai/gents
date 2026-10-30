@@ -99,7 +99,7 @@ pub struct TimelineRequestRow {
     pub max_total_tokens: Option<i64>,
     #[serde(
         default,
-        deserialize_with = "crate::document_config::deserialize_default_on_null"
+        deserialize_with = "crate::documents::deserialize_default_on_null"
     )]
     pub input: gents_protocol::request_input::RequestInput,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -5,16 +5,14 @@ use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 
 use super::super::*;
 use super::support::*;
-use crate::document_config::{default_agent_id_for_node, Agent, AgentTargetDocument, Tools};
+use crate::documents::{default_agent_id_for_node, Agent, AgentTargetDocument, Tools};
 use crate::ensure_runtime_schemas;
 use crate::tool_surface::ToolCeiling;
 use crate::toolset::ToolSet;
 
 async fn install_default_behavior_chain(node: &Arc<EmbeddedNode>, did: &str, agent_id: &str) {
     crate::test_support::install_test_agent(node, did, agent_id).await;
-    crate::document_config::ensure_node(node, did)
-        .await
-        .unwrap();
+    crate::documents::ensure_node(node, did).await.unwrap();
 }
 
 #[tokio::test]
@@ -44,9 +42,7 @@ async fn from_default_agent_documents_preserves_identity_only_principal() {
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("bootstrap-profile"));
     let did = identity.did().to_string();
-    crate::document_config::ensure_node(&node, &did)
-        .await
-        .unwrap();
+    crate::documents::ensure_node(&node, &did).await.unwrap();
     let agent = Gents::from_default_agent_documents(
         node,
         identity,
@@ -76,7 +72,7 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
     write_document(
         &node,
         crate::Collection::InferenceSampling,
-        &crate::document_config::InferenceSampling {
+        &crate::documents::InferenceSampling {
             node_did: did.clone(),
             sampling_id: sampling_id.clone(),
             temperature: Some(0.2),
@@ -100,14 +96,14 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
     profile.reasoning_effort = Some(crate::inference::resolved::ReasoningEffort::Max);
     profile.context_window = Some(32768);
     profile.max_output_tokens = Some(4096);
-    crate::document_config::upsert_inference_profile(&node, &profile)
+    crate::documents::upsert_inference_profile(&node, &profile)
         .await
         .unwrap();
     let execution_id = format!("{default_agent_id}:execution");
     write_document(
         &node,
         crate::Collection::InferenceExecution,
-        &crate::document_config::InferenceExecution {
+        &crate::documents::InferenceExecution {
             node_did: did.clone(),
             execution_id: execution_id.clone(),
             max_turns: Some(8),
@@ -124,14 +120,14 @@ async fn from_default_agent_documents_composes_behavior_and_inference_profile() 
         .unwrap()
         .expect("installed chain profile");
     profile.execution_id = Some(execution_id);
-    crate::document_config::upsert_inference_profile(&node, &profile)
+    crate::documents::upsert_inference_profile(&node, &profile)
         .await
         .unwrap();
     let mut context = load_installed_context(&node, &did, &default_agent_id).await;
     context.system_prompt = Some("You are precise.".to_string());
     upsert_context(&node, &context).await;
 
-    let backend: crate::document_config::InferenceBackend = read_document(
+    let backend: crate::documents::InferenceBackend = read_document(
         &node,
         &did,
         crate::Collection::InferenceBackend,
@@ -265,7 +261,7 @@ async fn load_installed_context(
     node: &Arc<EmbeddedNode>,
     did: &str,
     agent_id: &str,
-) -> crate::document_config::AgentContext {
+) -> crate::documents::AgentContext {
     let behavior: Agent = read_document(node, did, crate::Collection::Agent, agent_id).await;
     read_document(
         node,
@@ -276,7 +272,7 @@ async fn load_installed_context(
     .await
 }
 
-async fn upsert_context(node: &Arc<EmbeddedNode>, context: &crate::document_config::AgentContext) {
+async fn upsert_context(node: &Arc<EmbeddedNode>, context: &crate::documents::AgentContext) {
     write_document(node, crate::Collection::AgentContext, context)
         .await
         .unwrap();
@@ -314,7 +310,7 @@ async fn from_default_agent_documents_resolves_tool_selection_with_ceiling() {
         )
         .unwrap(),
     );
-    tools.agents = Some(crate::document_config::AgentTools {
+    tools.agents = Some(crate::documents::AgentTools {
         target_ids: vec![format!("{default_agent_id}:researcher")],
         enabled: Some(true),
     });
@@ -411,7 +407,7 @@ async fn from_default_agent_documents_filters_inactive_agent_targets() {
     .await
     .unwrap();
     let mut tools = load_installed_tools(&node, &did, &default_agent_id).await;
-    tools.agents = Some(crate::document_config::AgentTools {
+    tools.agents = Some(crate::documents::AgentTools {
         target_ids: vec![format!("{default_agent_id}:disabled-researcher")],
         enabled: Some(true),
     });
@@ -469,7 +465,7 @@ async fn from_default_agent_documents_rejects_unresolved_agent_target() {
     .await
     .unwrap();
     let mut tools = load_installed_tools(&node, &did, &default_agent_id).await;
-    tools.agents = Some(crate::document_config::AgentTools {
+    tools.agents = Some(crate::documents::AgentTools {
         target_ids: vec![format!("{default_agent_id}:missing-behavior")],
         enabled: Some(true),
     });
@@ -512,9 +508,7 @@ async fn from_default_agent_documents_loads_runnable_agents_and_tracks_unavailab
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("behavior-catalog"));
     let did = identity.did().to_string();
-    crate::document_config::ensure_node(&node, &did)
-        .await
-        .unwrap();
+    crate::documents::ensure_node(&node, &did).await.unwrap();
     for name in ["code", "broken", "disabled", "unhealthy"] {
         crate::test_support::install_test_agent(&node, &did, name).await;
     }

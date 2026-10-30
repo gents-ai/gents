@@ -4,7 +4,7 @@ pub(super) fn mailbox_entries(policy: crate::mailbox::MailboxNotificationPolicy)
     policy.validate()?;
     let mut declaration = crate::mailbox::canonical_mailbox_write_decl();
     declaration.notification = Some(policy);
-    Ok(json!([crate::document_config::SurfaceToolDecl::Create(
+    Ok(json!([crate::documents::SurfaceToolDecl::Create(
         declaration
     )]))
 }
@@ -40,7 +40,7 @@ fn mailbox_option_uses_canonical_declaration_and_rejects_ambiguous_patches() {
     canonical.notification = Some(serde_json::from_value(policy).unwrap());
     assert!(patch.contains(&(
         "entries".into(),
-        Some(json!([crate::document_config::SurfaceToolDecl::Create(
+        Some(json!([crate::documents::SurfaceToolDecl::Create(
             canonical
         )]))
     )));

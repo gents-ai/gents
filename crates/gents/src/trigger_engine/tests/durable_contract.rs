@@ -930,7 +930,7 @@ async fn admit_callback_arrival(
             invocation_id: uuid::Uuid::new_v4().to_string(),
             owner_node_did: "owner-a".into(),
             callback_id: "callback".into(),
-            origin: crate::document_config::CallbackInvocationOrigin::Event {
+            origin: crate::documents::CallbackInvocationOrigin::Event {
                 binding_id: "handoff".into(),
                 source_collection: "Work".into(),
                 source_doc_id: doc_id.into(),

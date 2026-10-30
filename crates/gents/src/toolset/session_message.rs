@@ -628,9 +628,7 @@ impl Tool for CancelProcessTool {
     }
 }
 
-fn agent_target_name_description(
-    targets: &[crate::document_config::AgentTargetDocument],
-) -> String {
+fn agent_target_name_description(targets: &[crate::documents::AgentTargetDocument]) -> String {
     let mut description = String::from(
         "Friendly name of the agent to start a session with, from this agent's allowed targets.",
     );

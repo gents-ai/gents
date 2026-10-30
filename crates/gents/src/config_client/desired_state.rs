@@ -123,11 +123,11 @@ pub async fn apply_desired_state_plan(
                 super::event_source_cursor::seed_referencing_consumers(txn, owner, id).await?;
             }
             Collection::Trigger => {
-                let trigger: crate::document_config::Trigger =
+                let trigger: crate::documents::Trigger =
                     serde_json::from_value(document.update.clone())?;
                 if matches!(
                     trigger.source,
-                    crate::document_config::TriggerSource::Event { .. }
+                    crate::documents::TriggerSource::Event { .. }
                 ) {
                     let consumer = gents_protocol::event_delivery::EventConsumer::Trigger {
                         trigger_id: id.to_owned(),

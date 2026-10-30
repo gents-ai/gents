@@ -3,7 +3,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Map, Value};
 
 use crate::config_client::ConfigAccess;
-use crate::document_config::WriteToolDecl;
+use crate::documents::WriteToolDecl;
 
 mod input;
 
@@ -160,7 +160,7 @@ impl BoundedWriteTool {
             if field.is_none() {
                 bail!(
                     "{}",
-                    crate::document_config::undeclared_field_refusal(
+                    crate::documents::undeclared_field_refusal(
                         "field",
                         key,
                         &self.decl.tool_name,
@@ -178,7 +178,7 @@ impl BoundedWriteTool {
             if let Some(fill) = field.and_then(|field| field.fill.as_ref()) {
                 bail!(
                     "{}",
-                    crate::document_config::runtime_filled_refusal(
+                    crate::documents::runtime_filled_refusal(
                         "field",
                         key,
                         &self.decl.tool_name,
