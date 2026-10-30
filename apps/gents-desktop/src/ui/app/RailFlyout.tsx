@@ -332,9 +332,7 @@ export function RailFlyout({
           aria-hidden={!shown}
           className={cn(
             "absolute top-1 bottom-2 flex w-72 flex-col gap-2 overflow-hidden bg-raised pb-2",
-            /* over the rail, its icons stay where the rail's were */
-            hover ? "-left-px rounded-l-none" : "left-2",
-            "pt-3.5",
+            "left-1.5 pt-3.5",
             "rounded-2xl border border-border/60",
             hover
               ? "z-30 shadow-lg transition-[opacity,transform] duration-200 ease-out"
@@ -345,7 +343,12 @@ export function RailFlyout({
                 : "pointer-events-none -translate-x-2 opacity-0"),
           )}
         >
-          <NavPanel route={route} settings={settings} syncRow={!hover} railAligned />
+          {/* the panel keeps its margin from the window's edge, and its
+              content moves left by the rest, so each icon sits where the
+              rail's does */}
+          <div className="-mx-[7px] flex min-h-0 flex-1 flex-col gap-2">
+            <NavPanel route={route} settings={settings} syncRow={!hover} railAligned />
+          </div>
         </div>
       </PortalContainerProvider>
     </div>
