@@ -69,10 +69,14 @@ export function NavPanel({
   route,
   settings,
   syncRow,
+  railAligned = false,
 }: {
   route: Route;
   settings: ReactNode;
   syncRow: boolean;
+  /** beside the rail, over it or pinned in its place: each row's icon
+      sits at the rail's height for it */
+  railAligned?: boolean;
 }) {
   const online = useOnline();
   const mailboxCount = useMailboxCount();
@@ -121,7 +125,8 @@ export function NavPanel({
           title={`${selected.node.displayName ?? selected.label} · ${selected.nodeDid}`}
           data-testid="working-node"
           className={cn(
-            "group mr-3 mb-2 ml-[14px] flex h-9 items-center gap-3 rounded-lg text-sm transition-colors",
+            "group mr-3 ml-[14px] flex h-9 items-center gap-3 rounded-lg text-sm transition-colors",
+            railAligned ? "mb-1" : "mb-2",
             selectedCurrent && "text-ink",
           )}
         >
@@ -157,7 +162,10 @@ export function NavPanel({
         <a
           href={href({ name: "nodes" })}
           data-testid="no-working-node"
-          className="group mr-3 mb-2 ml-[14px] flex h-9 items-center gap-3 rounded-lg text-sm text-muted-foreground transition-colors hover:text-foreground"
+          className={cn(
+            "group mr-3 ml-[14px] flex h-9 items-center gap-3 rounded-lg text-sm text-muted-foreground transition-colors hover:text-foreground",
+            railAligned ? "mb-1" : "mb-2",
+          )}
         >
           <span className="grid size-7 shrink-0 place-items-center rounded-full ring-1 ring-dashed ring-border">
             <Waypoints className="size-3.5" />
@@ -323,19 +331,24 @@ export function RailFlyout({
         <div
           aria-hidden={!shown}
           className={cn(
-            "absolute top-1 bottom-2 left-2 flex w-72 flex-col gap-2 overflow-hidden bg-raised pb-2",
-            hover ? "pt-2" : "pt-3.5",
+            "absolute top-1 bottom-2 flex w-72 flex-col gap-2 overflow-hidden bg-raised pb-2",
+            "left-1.5 pt-3.5",
             "rounded-2xl border border-border/60",
             hover
-              ? "z-30 shadow-lg transition-[opacity,transform] duration-200 ease-out"
+              ? "z-30 shadow-lg transition-opacity duration-200 ease-out"
               : "shadow-xs",
             hover &&
-              (open
-                ? "translate-x-0 opacity-100"
-                : "pointer-events-none -translate-x-2 opacity-0"),
+              /* a fade, not a slide: its icons sit over the rail's and must
+                 not move while it opens or closes */
+              (open ? "opacity-100" : "pointer-events-none opacity-0"),
           )}
         >
-          <NavPanel route={route} settings={settings} syncRow={!hover} />
+          {/* the panel keeps its margin from the window's edge, and its
+              content moves left by the rest, so each icon sits where the
+              rail's does */}
+          <div className="-mx-[7px] flex min-h-0 flex-1 flex-col gap-2">
+            <NavPanel route={route} settings={settings} syncRow={!hover} railAligned />
+          </div>
         </div>
       </PortalContainerProvider>
     </div>
@@ -355,7 +368,7 @@ function SessionLink({
         href={href({ name: "session", sessionId: c.sessionId, nodeDid: c.nodeDid })}
         aria-current={current === c.sessionId ? "page" : undefined}
         className={cn(
-          "flex h-8 items-center gap-2.5 rounded-lg px-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+          "flex h-8 items-center gap-2.5 rounded-lg px-2 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
           current === c.sessionId && "text-foreground",
         )}
       >
