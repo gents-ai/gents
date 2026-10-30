@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { ChevronRight, FoldVertical } from "lucide-react";
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
 import { compactTokens } from "@/lib/tokens";
@@ -9,6 +9,7 @@ import {
   sectionLabel,
   type CheckpointSection,
 } from "@/lib/checkpoint";
+import { messagePlaces, useOpening } from "@/app/messagePlaces";
 import { Markdown } from "./Markdown";
 
 /** A rule across the transcript naming something that happened between
@@ -165,6 +166,13 @@ export function CompactionMarker({
       ? Math.round(((before - after) / before) * 100)
       : null;
   const [open, setOpen] = useState(false);
+  /* opened from elsewhere, such as the context meter's compactions */
+  const opening = useOpening(item.itemKey);
+  useEffect(() => {
+    if (!opening) return;
+    setOpen(true);
+    messagePlaces.opened(item.itemKey);
+  }, [opening, item.itemKey]);
   const panel = useId();
   const summary = item.summary?.trim() || null;
   const filesRead = item.filesRead ?? [];

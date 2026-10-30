@@ -373,6 +373,40 @@ describe("session context meter (#1618)", () => {
       "2026-10-29T21:14:59.563619Z",
     );
   });
+  it("opens a compaction it can place, and leaves one it can't as text", () => {
+    const opened = vi.fn();
+    const compaction = (key: string, messageSequence: number | null) => ({
+      compactionKey: key,
+      sequence: null,
+      messagesCompacted: 12,
+      originalTokens: 16_523,
+      compactedTokens: 516,
+      createdAt: null,
+      itemKey: `request-compaction:${key}`,
+      messageSequence,
+    });
+    render(
+      <SessionContext
+        context={context({
+          sessionCompactionCount: 2,
+          compactions: [compaction("unplaced", null), compaction("placed", 13)],
+        })}
+        onOpenCompaction={opened}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("context-meter"));
+    const list = screen.getByRole("list", { name: "Recent session compactions" });
+    const [placed, unplaced] = within(list).getAllByRole("listitem");
+    expect(within(unplaced).queryByRole("button")).toBeNull();
+    fireEvent.click(within(placed).getByRole("button", { name: /16.5k → 516/ }));
+    expect(opened).toHaveBeenCalledWith(
+      expect.objectContaining({ compactionKey: "placed", messageSequence: 13 }),
+    );
+    expect(screen.getByTestId("context-meter")).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
   it("draws one bar over the window with a segment and legend row per part", () => {
     render(
       <SessionContext
