@@ -1,4 +1,7 @@
+use super::presentation::{append_json_channel, append_plain_channel, channel_plan, push_literal};
+use super::writer::drain_utf8;
 use super::*;
+use gents_protocol::output::PresentationPart;
 
 #[tokio::test]
 async fn deferred_host_batches_keep_distinct_producers_and_replace_only_their_own_type() {
