@@ -336,7 +336,8 @@ describe("session context meter (#1618)", () => {
     expect(screen.getByTestId("context-footer")).toHaveTextContent(
       "500k window · 1 compaction",
     );
-    expect(compactions).toHaveTextContent("12 messages");
+    /* the runtime counts what the model was sent, so no count is shown */
+    expect(compactions).not.toHaveTextContent("12 messages");
     expect(compactions).toHaveTextContent("900 → 300");
     expect(screen.getByTestId("context-meter")).toHaveTextContent("1 compaction");
     expect(screen.queryByTestId("last-context-dispatch")).not.toBeInTheDocument();
@@ -364,7 +365,7 @@ describe("session context meter (#1618)", () => {
     const [entry] = within(
       screen.getByRole("list", { name: "Recent session compactions" }),
     ).getAllByRole("listitem");
-    expect(entry).toHaveTextContent("1 message");
+    expect(entry).not.toHaveTextContent("message");
     expect(entry).toHaveTextContent("16.5k → 516");
     expect(entry).not.toHaveTextContent("T21:14:59");
     expect(entry.querySelector("time")).toHaveAttribute(

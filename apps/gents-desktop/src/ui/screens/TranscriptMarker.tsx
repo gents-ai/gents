@@ -159,11 +159,7 @@ export function CompactionMarker({
 }: {
   item: Extract<RenderedTimelineItem, { kind: "sessionCompaction" }>;
 }) {
-  const {
-    messagesCompacted: messages,
-    originalTokens: before,
-    compactedTokens: after,
-  } = item;
+  const { originalTokens: before, compactedTokens: after } = item;
   const saved =
     before != null && after != null && before > 0
       ? Math.round(((before - after) / before) * 100)
@@ -173,10 +169,9 @@ export function CompactionMarker({
   const summary = item.summary?.trim() || null;
   const filesRead = item.filesRead ?? [];
   const filesModified = item.filesModified ?? [];
-  const title =
-    messages == null
-      ? "Compacted"
-      : `Compacted ${messages.toLocaleString()} ${messages === 1 ? "message" : "messages"}`;
+  /* the runtime counts what the model was sent, not the transcript's
+     messages, so the marker names no count */
+  const title = "Compacted";
   return (
     <div data-testid="session-compaction-event" data-compaction-key={item.itemKey}>
       <TranscriptMarker

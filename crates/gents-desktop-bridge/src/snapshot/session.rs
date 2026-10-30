@@ -485,10 +485,7 @@ pub(crate) async fn attach_context_history_rows(
     )
     .await
     {
-        Ok(entries) => {
-            attach_session_compaction_timeline_events(items, &entries, &page_sequences);
-            Some(entries)
-        }
+        Ok(entries) => Some(entries),
         Err(error) => {
             tracing::warn!(
                 target: "gents_desktop::chat",
@@ -504,10 +501,7 @@ pub(crate) async fn attach_context_history_rows(
         match request_context::load_session_reductions(access, node_did, session_id, requester_did)
             .await
         {
-            Ok(reductions) => {
-                attach_reduction_compaction_timeline_events(items, &reductions, &page_sequences);
-                Some(reductions)
-            }
+            Ok(reductions) => Some(reductions),
             Err(error) => {
                 tracing::warn!(
                     target: "gents_desktop::chat",
@@ -519,6 +513,37 @@ pub(crate) async fn attach_context_history_rows(
                 None
             }
         };
+    let starts = match &compactions {
+        Some(entries) if !entries.is_empty() => request_context::load_compaction_request_starts(
+            access,
+            node_did,
+            session_id,
+            requester_did,
+        )
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(
+                target: "gents_desktop::chat",
+                session_id,
+                node_did,
+                error = %error,
+                "loading where session compactions ran failed"
+            );
+            RapidHashMap::new()
+        }),
+        _ => RapidHashMap::new(),
+    };
+    let mut markers = compactions
+        .iter()
+        .flat_map(|entries| session_compaction_markers(entries, &starts, &page_sequences))
+        .chain(
+            reductions
+                .iter()
+                .flat_map(|reductions| reduction_compaction_markers(reductions, &page_sequences)),
+        )
+        .collect::<Vec<_>>();
+    fill_marker_summaries(access, session_id, node_did, requester_did, &mut markers).await;
+    attach_compaction_markers(items, markers);
     let compactions =
         compactions.map(|entries| session_compaction_views(&entries, reductions.as_deref()));
     let request_doc_ids = messages
@@ -609,11 +634,23 @@ fn compaction_time(view: &SessionCompactionView) -> Option<DateTime<Utc>> {
         .map(|value| value.with_timezone(&Utc))
 }
 
+#[cfg(test)]
 fn attach_reduction_compaction_timeline_events(
     items: &mut Vec<RenderedTimelineItem>,
     reductions: &[LoadedReduction],
     page_sequences: &RapidHashSet<i64>,
 ) {
+    attach_compaction_markers(
+        items,
+        reduction_compaction_markers(reductions, page_sequences),
+    );
+}
+
+fn reduction_compaction_markers(
+    reductions: &[LoadedReduction],
+    page_sequences: &RapidHashSet<i64>,
+) -> Vec<(i64, RenderedTimelineItem)> {
+    let mut markers = Vec::new();
     for reduction in reductions {
         let Some(sequence) = reduction
             .anchor_sequence
@@ -635,8 +672,9 @@ fn attach_reduction_compaction_timeline_events(
             files_read: None,
             files_modified: None,
         };
-        insert_timeline_item_by_sequence(items, item, sequence);
+        markers.push((sequence, item));
     }
+    markers
 }
 
 /// `compactions_shown` means the reductions loaded and each compaction already
@@ -795,15 +833,41 @@ async fn fill_job_outcomes(core: &ClientCore, snapshot: &mut DesktopSessionSnaps
     }
 }
 
+#[cfg(test)]
 pub(super) fn attach_session_compaction_timeline_events(
     items: &mut Vec<RenderedTimelineItem>,
     entries: &[gents_protocol::row::CompactionEntryRow],
     page_sequences: &RapidHashSet<i64>,
 ) {
+    attach_compaction_markers(
+        items,
+        session_compaction_markers(entries, &RapidHashMap::new(), page_sequences),
+    );
+}
+
+/// A start-of-request compaction is drawn where it happened: after the first
+/// message of the request it ran for. Without that request (a fork's copy),
+/// it falls back to the last message it compacted.
+fn session_compaction_anchor(
+    entry: &gents_protocol::row::CompactionEntryRow,
+    starts: &RapidHashMap<String, i64>,
+) -> Option<i64> {
+    starts
+        .get(&entry.compaction_key)
+        .copied()
+        .or(entry.compacted_through_sequence)
+        .filter(|sequence| *sequence >= 0)
+}
+
+fn session_compaction_markers(
+    entries: &[gents_protocol::row::CompactionEntryRow],
+    starts: &RapidHashMap<String, i64>,
+    page_sequences: &RapidHashSet<i64>,
+) -> Vec<(i64, RenderedTimelineItem)> {
+    let mut markers = Vec::new();
     for entry in entries {
-        let Some(sequence) = entry
-            .compacted_through_sequence
-            .filter(|sequence| *sequence >= 0 && page_sequences.contains(sequence))
+        let Some(sequence) = session_compaction_anchor(entry, starts)
+            .filter(|sequence| page_sequences.contains(sequence))
         else {
             continue;
         };
@@ -821,6 +885,102 @@ pub(super) fn attach_session_compaction_timeline_events(
             files_read: compaction_files(entry.files_read.as_deref()),
             files_modified: compaction_files(entry.files_modified.as_deref()),
         };
+        markers.push((sequence, item));
+    }
+    markers
+}
+
+/// Only the markers a read draws carry their summaries and file lists.
+async fn fill_marker_summaries(
+    access: &ConfigAccess,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    markers: &mut [(i64, RenderedTimelineItem)],
+) {
+    let keys = |prefix: &str| {
+        markers
+            .iter()
+            .filter_map(|(_, item)| match item {
+                RenderedTimelineItem::SessionCompaction { item_key, .. } => {
+                    item_key.strip_prefix(prefix).map(str::to_owned)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let (entry_keys, reduction_keys) = (keys("session-compaction:"), keys("request-compaction:"));
+    let summaries = match request_context::load_marker_summaries(
+        access,
+        node_did,
+        session_id,
+        requester_did,
+        &entry_keys,
+        &reduction_keys,
+    )
+    .await
+    {
+        Ok(summaries) => summaries,
+        Err(error) => {
+            tracing::warn!(
+                target: "gents_desktop::chat",
+                session_id,
+                node_did,
+                error = %error,
+                "loading compaction summaries failed"
+            );
+            return;
+        }
+    };
+    let kept =
+        |summary: &Option<String>| summary.clone().filter(|summary| !summary.trim().is_empty());
+    for (_, item) in markers.iter_mut() {
+        let RenderedTimelineItem::SessionCompaction {
+            item_key,
+            summary,
+            files_read,
+            files_modified,
+            ..
+        } = item
+        else {
+            continue;
+        };
+        if let Some(entry) = item_key
+            .strip_prefix("session-compaction:")
+            .and_then(|key| summaries.entries.get(key))
+        {
+            *summary = kept(&entry.summary);
+            *files_read = compaction_files(entry.files_read.as_deref());
+            *files_modified = compaction_files(entry.files_modified.as_deref());
+        } else if let Some(text) = item_key
+            .strip_prefix("request-compaction:")
+            .and_then(|key| summaries.reductions.get(key))
+        {
+            *summary = kept(text);
+        }
+    }
+}
+
+/// Compactions are drawn after the message they cover through; two after the
+/// same message (one at a request's start and one between model calls of
+/// another) read in the order they happened.
+fn attach_compaction_markers(
+    items: &mut Vec<RenderedTimelineItem>,
+    mut markers: Vec<(i64, RenderedTimelineItem)>,
+) {
+    let time = |item: &RenderedTimelineItem| match item {
+        RenderedTimelineItem::SessionCompaction { timestamp, .. } => timestamp
+            .as_deref()
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&Utc)),
+        _ => None,
+    };
+    markers.sort_by(|(left_at, left), (right_at, right)| {
+        left_at
+            .cmp(right_at)
+            .then_with(|| time(left).cmp(&time(right)))
+    });
+    for (sequence, item) in markers {
         insert_timeline_item_by_sequence(items, item, sequence);
     }
 }
