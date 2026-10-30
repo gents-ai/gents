@@ -9,7 +9,8 @@ use crate::run_timeline::{
     RunTimeline, RunTimelineEvent, TimelineMessageEvent, TimelineToolCallEvent,
 };
 
-use super::{redact_json_value, redact_option, redact_str, ProjectionContext};
+use super::redaction::{redact_json_value, redact_option, redact_str};
+use super::ProjectionContext;
 
 pub const ATIF_SCHEMA_VERSION: &str = "ATIF-v1.7";
 
