@@ -751,14 +751,14 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "tool_call_lifecycle::delivery::spawned_background_tests::generated_terminal_diagnostic_replay_cases_bind_native_replay",
             package: "gents",
-            source_path: "crates/gents/src/tool_call_lifecycle/delivery.rs",
+            source_path: "crates/gents/src/tool_call_lifecycle/delivery/spawned_background_tests.rs",
             module_path: "tool_call_lifecycle::delivery::spawned_background_tests",
             function: "generated_terminal_diagnostic_replay_cases_bind_native_replay",
         },
         ConformanceConsumer::RustTest {
             id: "tool_call_lifecycle::delivery::spawned_background_tests::generated_terminal_diagnostic_cases_bind_native_presentation",
             package: "gents",
-            source_path: "crates/gents/src/tool_call_lifecycle/delivery.rs",
+            source_path: "crates/gents/src/tool_call_lifecycle/delivery/spawned_background_tests.rs",
             module_path: "tool_call_lifecycle::delivery::spawned_background_tests",
             function: "generated_terminal_diagnostic_cases_bind_native_presentation",
         },

@@ -1832,7 +1832,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/storage_backend.rs", 9),
     ("crates/gents/src/store_key.rs", 2),
     ("crates/gents/src/streaming.rs", 1),
-    ("crates/gents/src/tool_call_lifecycle/delivery.rs", 1),
+    ("crates/gents/src/tool_call_lifecycle/delivery/terminalize.rs", 1),
     ("crates/gents/src/trigger_engine/mod.rs", 2),
 ];
 
