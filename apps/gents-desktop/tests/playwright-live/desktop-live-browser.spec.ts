@@ -11,9 +11,11 @@ import {
   type SubmittedRequest,
 } from "./liveSmokeEvidence";
 import {
+  composer,
   expect,
   gotoLiveHarness,
   openChat,
+  sendButton,
   test,
   type Page,
   type TestInfo,
@@ -43,12 +45,12 @@ test.describe("desktop live browser smoke", () => {
       await gotoLiveHarness(second, liveRunner.baseUrl);
       for (const view of [page, second]) {
         await openChat(view);
-        await expect(view.getByRole("textbox", { name: "Message" })).toBeVisible();
+        await expect(composer(view)).toBeVisible();
       }
-      const firstEditor = page.getByRole("textbox", { name: "Message" });
-      const secondEditor = second.getByRole("textbox", { name: "Message" });
+      const firstEditor = composer(page);
+      const secondEditor = composer(second);
       await firstEditor.fill("Unsent draft in the first Gents view");
-      await expect(secondEditor).toHaveValue("");
+      await expect(secondEditor).toHaveText("");
 
       const deployment = await firstDeployment(liveRunner);
       const previousRequestIds = new Set(
@@ -57,7 +59,7 @@ test.describe("desktop live browser smoke", () => {
         ),
       );
       await secondEditor.fill("Reply with exactly: SECOND_VIEW_CONFIRMED");
-      await second.getByRole("button", { name: "Send" }).click();
+      await sendButton(second).click();
       const submitted = await waitForSubmittedRequest(liveRunner, {
         nodeDid: deployment.nodeDid,
         previousRequestIds,
@@ -65,11 +67,11 @@ test.describe("desktop live browser smoke", () => {
       await second.close();
       const completed = await liveRunner.waitForRequestCompletion(submitted);
       expect(completed.turnState).toBe("completed");
-      await expect(firstEditor).toHaveValue("Unsent draft in the first Gents view");
+      await expect(firstEditor).toHaveText("Unsent draft in the first Gents view");
 
       await firstEditor.fill("Reply with exactly: FIRST_VIEW_CONFIRMED");
       previousRequestIds.add(submitted.requestId);
-      await page.getByRole("button", { name: "Send" }).click();
+      await sendButton(page).click();
       const firstSubmitted = await waitForSubmittedRequest(liveRunner, {
         nodeDid: deployment.nodeDid,
         previousRequestIds,
@@ -122,7 +124,7 @@ test.describe("desktop live browser smoke", () => {
       await expect(page.getByTestId("app-shell")).toBeVisible();
 
       await openChat(page);
-      await expect(page.getByRole("textbox", { name: "Message" })).toBeVisible();
+      await expect(composer(page)).toBeVisible();
       const deployment = await firstDeployment(liveRunner);
       const previousRequestIds = new Set(
         deployment.sessions
@@ -130,11 +132,9 @@ test.describe("desktop live browser smoke", () => {
           .filter((requestId): requestId is string => Boolean(requestId)),
       );
 
-      await page
-        .getByRole("textbox", { name: "Message" })
-        .fill(
-          "Reply with a desktop live browser smoke confirmation in exactly twenty numbered paragraphs, with two complete sentences in each paragraph.",
-        );
+      await composer(page).fill(
+        "Reply with a desktop live browser smoke confirmation in exactly twenty numbered paragraphs, with two complete sentences in each paragraph.",
+      );
       await page.evaluate(() => {
         const state = { observed: false, maxTextLength: 0 };
         Object.assign(window, { __gentsLiveAssistantWitness: state });
@@ -154,7 +154,7 @@ test.describe("desktop live browser smoke", () => {
         });
         record();
       });
-      await page.getByRole("button", { name: "Send" }).click();
+      await sendButton(page).click();
 
       submitted = await waitForSubmittedRequest(liveRunner, {
         nodeDid: deployment.nodeDid,
@@ -282,7 +282,7 @@ test.describe("desktop live browser smoke", () => {
       await expect(page.getByTestId("app-shell")).toBeVisible();
 
       await page.getByRole("button", { name: "New", exact: true }).click();
-      await expect(page.getByRole("textbox", { name: "Message" })).toBeVisible();
+      await expect(composer(page)).toBeVisible();
       const deployment = await firstDeployment(liveRunner);
       const previousRequestIds = new Set(
         deployment.sessions
@@ -290,12 +290,10 @@ test.describe("desktop live browser smoke", () => {
           .filter((requestId): requestId is string => Boolean(requestId)),
       );
 
-      await page
-        .getByRole("textbox", { name: "Message" })
-        .fill(
-          "Reply with a desktop live browser cancel confirmation in exactly forty numbered paragraphs, with two complete sentences in each paragraph.",
-        );
-      await page.getByRole("button", { name: "Send" }).click();
+      await composer(page).fill(
+        "Reply with a desktop live browser cancel confirmation in exactly forty numbered paragraphs, with two complete sentences in each paragraph.",
+      );
+      await sendButton(page).click();
 
       submitted = await waitForSubmittedRequest(liveRunner, {
         nodeDid: deployment.nodeDid,
@@ -344,9 +342,9 @@ test.describe("desktop live browser smoke", () => {
 
       const followupPrompt =
         "Reply with one short sentence confirming the desktop live browser followup completed after a cancel.";
-      await expect(page.getByRole("textbox", { name: "Message" })).toBeVisible();
-      await page.getByRole("textbox", { name: "Message" }).fill(followupPrompt);
-      await page.getByRole("button", { name: "Send" }).click();
+      await expect(composer(page)).toBeVisible();
+      await composer(page).fill(followupPrompt);
+      await sendButton(page).click();
 
       const followup = await waitForSubmittedRequest(liveRunner, {
         nodeDid: deployment.nodeDid,

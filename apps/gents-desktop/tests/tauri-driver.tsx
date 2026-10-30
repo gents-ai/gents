@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { expect } from "vitest";
 
 import App from "../src/App";
+import { typeText } from "./composer-field";
 import { setTimingForTests } from "../src/hooks/timing";
 import { navigate, pathFor } from "../src/ui/lib/router";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
@@ -85,7 +86,10 @@ export function renderTauriAppDriverWithBridge(
     bridge,
     user,
     composer() {
-      return screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
+      return screen.getByRole("textbox", { name: "Message" });
+    },
+    composerPlaceholder() {
+      return this.composer().getAttribute("aria-placeholder");
     },
     sendButton() {
       return screen.getByRole("button", { name: "Send" });
@@ -187,12 +191,12 @@ export function renderTauriAppDriverWithBridge(
       });
     },
     async typeComposer(value: string) {
-      await user.type(this.composer(), value);
+      await typeText(this.composer(), value);
     },
     async clickSend() {
       const button = this.sendButton();
       if (button.hasAttribute("disabled")) {
-        throw new Error(`send disabled: ${this.composer().placeholder}`);
+        throw new Error(`send disabled: ${this.composerPlaceholder()}`);
       }
       await user.click(button);
     },
@@ -253,12 +257,9 @@ export function renderTauriAppDriverWithBridge(
     async pressEnter() {
       const button = this.sendButton();
       if (button.hasAttribute("disabled")) {
-        throw new Error(`send disabled: ${this.composer().placeholder}`);
+        throw new Error(`send disabled: ${this.composerPlaceholder()}`);
       }
-      await user.type(this.composer(), "{enter}");
-    },
-    async pressShiftEnter() {
-      await user.type(this.composer(), "{shift>}{enter}{/shift}");
+      await typeText(this.composer(), "{Enter}");
     },
     cancelButton() {
       return screen.queryByRole("button", { name: "Stop" });
