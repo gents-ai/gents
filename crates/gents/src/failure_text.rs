@@ -83,7 +83,7 @@ pub fn redact(text: &str) -> String {
     });
     let authorization = AUTHORIZATION.get_or_init(|| {
         Regex::new(
-            r#"(?i)(\\?["']?\b(?:proxy-)?authorization\b\\?["']?\s*[:=]\s*)(\\"(?:[^"\\\r\n]|\\[^"])*\\"|"[^"\r\n]*"|'[^'\r\n]*'|[A-Za-z][A-Za-z0-9_-]*[ \t]+([A-Za-z0-9._~+/=-]+))"#,
+            r#"(?i)(\\?["']?\b(?:proxy-)?authorization\b\\?["']?\s*[:=]\s*)(\\"(?:[^"\\\r\n]|\\[^"])*\\"|"[^"\r\n]*"|'[^'\r\n]*'|([A-Za-z][A-Za-z0-9_-]*)[ \t]+([A-Za-z0-9._~+/=-]+))"#,
         )
         .expect("valid authorization redactor")
     });
@@ -101,24 +101,62 @@ pub fn redact(text: &str) -> String {
     let text = url_secrets.replace_all(text, "$1://$2$3");
     let text = header.replace_all(&text, format!("${{1}}{REDACTED}"));
     let text = authorization.replace_all(&text, |captures: &regex::Captures<'_>| {
-        match captures.get(3) {
-            Some(credential) if !token_like(credential.as_str(), 8) => captures[0].to_string(),
+        match (captures.get(3), captures.get(4)) {
+            (Some(scheme), Some(credential))
+                if !token_like(credential.as_str(), 8)
+                    && !scheme_credential(scheme.as_str(), credential.as_str()) =>
+            {
+                captures[0].to_string()
+            }
             _ => format!("{}{REDACTED}", &captures[1]),
         }
     });
     let text = scheme.replace_all(&text, |captures: &regex::Captures<'_>| {
-        let minimum = if captures[1].eq_ignore_ascii_case("bearer") {
-            16
-        } else {
-            8
-        };
-        if token_like(&captures[2], minimum) {
+        if scheme_credential(&captures[1], &captures[2]) {
             format!("{} {REDACTED}", &captures[1])
         } else {
             captures[0].to_string()
         }
     });
     prefixed_key.replace_all(&text, REDACTED).into_owned()
+}
+
+/// Whether `candidate`, the word after the `scheme` (`Bearer` or `Basic`),
+/// is a credential rather than prose such as "Bearer authentication" or
+/// "basic configuration". A Bearer word is one if [`token_like`] at 16 bytes
+/// or, whatever its case, at least [`BEARER_PLAIN_MINIMUM`] bytes; a Basic
+/// word if [`token_like`] at 8 bytes or [`basic_user_pass`]. Other schemes
+/// are never credentials here.
+fn scheme_credential(scheme: &str, candidate: &str) -> bool {
+    if scheme.eq_ignore_ascii_case("bearer") {
+        token_like(candidate, 16) || candidate.len() >= BEARER_PLAIN_MINIMUM
+    } else if scheme.eq_ignore_ascii_case("basic") {
+        token_like(candidate, 8) || basic_user_pass(candidate)
+    } else {
+        false
+    }
+}
+
+/// Bytes from which a Bearer word of any case is a credential: random
+/// lowercase tokens are at least this long, while English words that follow
+/// "Bearer" in prose ("token", "auth", "authentication") are well short.
+const BEARER_PLAIN_MINIMUM: usize = 20;
+
+/// Whether `candidate` is RFC 7617 Basic credentials: standard base64, padded
+/// or not, of `user:pass` text. Prose words that happen to be valid base64
+/// decode to bytes that are not control-free text containing `:`.
+fn basic_user_pass(candidate: &str) -> bool {
+    use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
+    use base64::Engine as _;
+    const STANDARD_ANY_PADDING: GeneralPurpose = GeneralPurpose::new(
+        &base64::alphabet::STANDARD,
+        GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::Indifferent),
+    );
+    STANDARD_ANY_PADDING
+        .decode(candidate)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .is_some_and(|text| text.contains(':') && !text.chars().any(char::is_control))
 }
 
 /// A credential-shaped word: long enough, and not a plain lowercase or
