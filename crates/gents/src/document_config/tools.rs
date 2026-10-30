@@ -940,8 +940,8 @@ pub async fn load_agent_context_and_tools_in_txn(
     owner: &str,
     agent_id: &str,
 ) -> anyhow::Result<(Option<super::AgentContext>, Option<Tools>)> {
-    use crate::collection::Collection;
     use crate::config_client::read_desired_state_document_in_txn as read;
+    use crate::store::collection::Collection;
     use anyhow::Context as _;
     let agent: super::Agent = serde_json::from_value(
         read(txn, Collection::Agent, owner, agent_id)

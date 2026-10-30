@@ -46,7 +46,7 @@ pub struct ManagedServerState {
     pub start_wait: Option<crate::tauri_commands::managed_server::start_wait::StartWait>,
     pub crash_loop: crate::tauri_commands::managed_server::status::CrashLoopWatch,
     pub approval_refused: bool,
-    pub incompatible_store: Option<gents::storage_backend::IncompatibleStore>,
+    pub incompatible_store: Option<gents::store::local::storage_backend::IncompatibleStore>,
 }
 
 pub struct ProviderLoginWait {
@@ -70,7 +70,7 @@ pub struct DesktopBridge {
     /// Shared progress for an in-flight client start; waiters must not open a
     /// second node.
     pub start_inflight: Option<watch::Sender<ClientStartProgress>>,
-    pub incompatible_client_store: Option<gents::storage_backend::IncompatibleStore>,
+    pub incompatible_client_store: Option<gents::store::local::storage_backend::IncompatibleStore>,
 }
 
 impl DesktopBridge {

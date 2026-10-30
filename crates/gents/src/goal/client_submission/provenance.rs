@@ -9,7 +9,7 @@ use serde::Deserialize;
 use super::{SessionGoalControl, SessionGoalControlReceipt};
 use crate::config_client::ConfigRead;
 use crate::graphql::escape_graphql_string;
-use crate::identity::verify_did_signature;
+use crate::store::identity::verify_did_signature;
 
 const PAGE_SIZE: usize = 32;
 

@@ -4,7 +4,7 @@ use super::*;
 use crate::agent::DocumentResolveContext;
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
-use crate::identity::{KeyIdentity, NodeIdentity};
+use crate::store::identity::{KeyIdentity, NodeIdentity};
 use crate::tool_surface::ToolCeiling;
 
 async fn test_node() -> Arc<defra_node::EmbeddedNode> {

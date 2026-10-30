@@ -320,7 +320,7 @@ async fn find_version(access: &ConfigAccess, id: &str) -> Result<Value> {
 
 fn ensure_application_collection(name: &str) -> Result<()> {
     crate::graphql::validate_collection_identifier(name)?;
-    ensure!(!crate::migration::DEFAULT_REGISTRY.managed_names().any(|n| n==name), "{name} is a Gents-managed schema; its evolution belongs to the product migration registry. Use config for its documents");
+    ensure!(!crate::store::schema::migration::DEFAULT_REGISTRY.managed_names().any(|n| n==name), "{name} is a Gents-managed schema; its evolution belongs to the product migration registry. Use config for its documents");
     Ok(())
 }
 

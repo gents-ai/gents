@@ -193,12 +193,12 @@ fn find_incompatible<'a>(
             .or_else(|| cause.downcast_ref::<StorageBackendError>()?.incompatible())
             .or_else(|| {
                 cause
-                    .downcast_ref::<crate::store_key::StoreKeyError>()?
+                    .downcast_ref::<crate::store::local::store_key::StoreKeyError>()?
                     .incompatible()
             })
             .or_else(|| {
                 cause
-                    .downcast_ref::<crate::store_key::upgrade::UpgradeError>()?
+                    .downcast_ref::<crate::store::local::store_key::upgrade::UpgradeError>()?
                     .incompatible()
             })
     })
@@ -206,18 +206,18 @@ fn find_incompatible<'a>(
 
 fn find_insecure_key<'a>(
     error: &'a (dyn std::error::Error + 'static),
-) -> Option<&'a crate::identity::InsecureKeyPermissions> {
+) -> Option<&'a crate::store::identity::InsecureKeyPermissions> {
     find_map_source(error, |cause| {
         cause
-            .downcast_ref::<crate::identity::InsecureKeyPermissions>()
+            .downcast_ref::<crate::store::identity::InsecureKeyPermissions>()
             .or_else(|| {
                 cause
-                    .downcast_ref::<crate::identity::IdentityError>()?
+                    .downcast_ref::<crate::store::identity::IdentityError>()?
                     .insecure_key()
             })
             .or_else(|| {
                 cause
-                    .downcast_ref::<crate::store_key::StoreKeyError>()?
+                    .downcast_ref::<crate::store::local::store_key::StoreKeyError>()?
                     .insecure_key()
             })
             .or_else(|| {
@@ -288,9 +288,9 @@ mod tests {
 
     #[test]
     fn store_refusals_classify_through_every_owner_wrapper() {
-        use crate::identity::{IdentityError, InsecureKeyPermissions};
-        use crate::store_key::upgrade::UpgradeError;
-        use crate::store_key::StoreKeyError;
+        use crate::store::identity::{IdentityError, InsecureKeyPermissions};
+        use crate::store::local::store_key::upgrade::UpgradeError;
+        use crate::store::local::store_key::StoreKeyError;
         let store = || IncompatibleStore {
             kind: IncompatibleStoreKind::LegacyLark,
             data_path: "/data".into(),
@@ -331,7 +331,9 @@ mod tests {
 
     #[test]
     fn unavailable_store_keys_classify_through_their_owner() {
-        use crate::store_key::{store_key_unavailable, StoreKeyError, StoreKeyUnavailable};
+        use crate::store::local::store_key::{
+            store_key_unavailable, StoreKeyError, StoreKeyUnavailable,
+        };
         let unavailable = || StoreKeyUnavailable {
             data_path: "/data".into(),
             code: -25293,
@@ -462,7 +464,7 @@ mod tests {
         .unwrap();
         assert_eq!(incompatible_store_kind(&data).unwrap(), None);
 
-        let error = crate::migration::ensure_all_runtime_migrations(node.clone())
+        let error = crate::store::schema::migration::ensure_all_runtime_migrations(node.clone())
             .await
             .expect_err("an older lineage must not open");
         let store = incompatible_store(&error, &data).expect("typed refusal");
@@ -482,10 +484,10 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir().unwrap();
         let key = temp.path().join("keys/local.key");
-        crate::identity::load_or_create_file_identity(&key).unwrap();
+        crate::store::identity::load_or_create_file_identity(&key).unwrap();
         std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
 
-        let error = crate::identity::KeyIdentity::load_existing(&key, None)
+        let error = crate::store::identity::KeyIdentity::load_existing(&key, None)
             .map(|_| ())
             .unwrap_err();
         let store = incompatible_store(&error, &temp.path().join("data")).expect("typed");

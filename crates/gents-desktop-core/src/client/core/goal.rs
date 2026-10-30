@@ -117,7 +117,7 @@ impl ClientCore {
         mut input: RequestInput,
         command_id: String,
     ) -> Result<(
-        std::sync::Arc<dyn gents::identity::NodeIdentity>,
+        std::sync::Arc<dyn gents::store::identity::NodeIdentity>,
         SessionGoalControl,
     )> {
         let peer = self
@@ -290,7 +290,7 @@ mod tests {
         let root = tempfile::tempdir()?;
         let source_key = root.path().join("source.key");
         let source = tokio::task::spawn_blocking(move || {
-            gents::identity::KeyIdentity::load_or_create(source_key, None)
+            gents::store::identity::KeyIdentity::load_or_create(source_key, None)
         })
         .await??;
         let core = ClientCore::start_with_paths_and_options(
@@ -468,7 +468,7 @@ mod tests {
         let key = root.path().join("runtime.key");
         let source_key = key.clone();
         let did = tokio::task::spawn_blocking(move || -> Result<String> {
-            let identity = gents::identity::load_or_create_file_identity(&source_key)?;
+            let identity = gents::store::identity::load_or_create_file_identity(&source_key)?;
             Ok(identity.did()?.to_string())
         })
         .await??;
@@ -491,7 +491,7 @@ mod tests {
         )
         .await?;
         let original_key = tokio::fs::read(&key).await?;
-        assert!(!gents::identity::can_mint_defradb_bearer(&did));
+        assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
         Mock::given(method("POST"))
             .and(path("/api/v0/tx"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id":"goal-read"})))
@@ -527,7 +527,7 @@ mod tests {
         let cold = core
             .session_goal_observation(&did, "cold-goal-session")
             .await;
-        let remained_cold = !gents::identity::can_mint_defradb_bearer(&did);
+        let remained_cold = !gents::store::identity::can_mint_defradb_bearer(&did);
         let cold_reads = server
             .received_requests()
             .await
@@ -537,10 +537,10 @@ mod tests {
             .count();
         let source_key = key.clone();
         let _unlocked = tokio::task::spawn_blocking(move || {
-            gents::identity::KeyIdentity::load_or_create(source_key, None)
+            gents::store::identity::KeyIdentity::load_or_create(source_key, None)
         })
         .await??;
-        assert!(gents::identity::can_mint_defradb_bearer(&did));
+        assert!(gents::store::identity::can_mint_defradb_bearer(&did));
         let warm = core
             .session_goal_observation(&did, "warm-goal-session")
             .await;

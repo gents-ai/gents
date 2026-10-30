@@ -525,7 +525,7 @@ pub(crate) struct ArtifactTestFixture {
 }
 
 pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTestFixture {
-    use crate::identity::NodeIdentity;
+    use crate::store::identity::NodeIdentity;
     use crate::workspace::*;
     use std::{collections::BTreeSet, sync::Arc};
     fn git(root: &std::path::Path, args: &[&str]) -> String {
@@ -566,10 +566,10 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-m", "fixture"]);
     let identity =
-        crate::identity::KeyIdentity::load_or_create(root.join("agent.key"), None).unwrap();
+        crate::store::identity::KeyIdentity::load_or_create(root.join("agent.key"), None).unwrap();
     let did = identity.did().to_owned();
     let workspace_identity =
-        crate::identity::KeyIdentity::load_or_create(root.join("workspace-owner.key"), None)
+        crate::store::identity::KeyIdentity::load_or_create(root.join("workspace-owner.key"), None)
             .unwrap();
     let workspace_owner = workspace_identity.did().to_owned();
     assert_ne!(workspace_owner, did);
@@ -1084,8 +1084,8 @@ async fn artifact_alternate_owner(
     crate::lifecycle::RequestLifecycle,
     crate::lifecycle::ClaimOutcome,
 )> {
-    use crate::identity::NodeIdentity;
-    let identity = crate::identity::KeyIdentity::load_or_create(
+    use crate::store::identity::NodeIdentity;
+    let identity = crate::store::identity::KeyIdentity::load_or_create(
         fx._dir.path().join(if binding["owner_matches"] == false {
             "foreign.key"
         } else {

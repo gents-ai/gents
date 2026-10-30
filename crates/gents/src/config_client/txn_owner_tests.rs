@@ -23,7 +23,7 @@ use super::{
     ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry, TransactionOutcome, TxnBackend,
 };
 use crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET;
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 
 fn transaction_id(txn: &ConfigApplyTxn<'_>) -> String {
     match &txn.backend {
@@ -668,8 +668,9 @@ async fn cancellation_after_embedded_begin_abandons_before_releasing_the_gate() 
 #[tokio::test]
 async fn abandoned_signed_statement_abandons_registry_but_holds_gate_until_drained() {
     let dir = tempfile::tempdir().unwrap();
-    let identity = crate::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None)
-        .expect("signing identity");
+    let identity =
+        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None)
+            .expect("signing identity");
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(dir.path())
@@ -805,8 +806,9 @@ async fn abandoned_signed_statement_abandons_registry_but_holds_gate_until_drain
 #[tokio::test]
 async fn swallowed_abandoned_statement_cannot_start_another_statement_or_commit() {
     let dir = tempfile::tempdir().unwrap();
-    let identity = crate::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None)
-        .expect("signing identity");
+    let identity =
+        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None)
+            .expect("signing identity");
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(dir.path())
@@ -1571,7 +1573,7 @@ async fn lean_write_admission_traces_match_native_independent_leases_and_capacit
             Some(
                 ConfigAccess::claimed_local(
                     Arc::clone(&node),
-                    crate::home::lock_store(home.path(), &data).unwrap(),
+                    crate::store::local::home::lock_store(home.path(), &data).unwrap(),
                 )
                 .unwrap(),
             )

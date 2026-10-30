@@ -1696,10 +1696,10 @@ mod tests {
 
     async fn signed_background_claim_fixture(
         node: &Arc<EmbeddedNode>,
-        identity: &crate::identity::KeyIdentity,
+        identity: &crate::store::identity::KeyIdentity,
         session: &str,
     ) -> (AgentRequest, String) {
-        use crate::identity::NodeIdentity;
+        use crate::store::identity::NodeIdentity;
         use gents_protocol::request_admission::{
             AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
         };
@@ -1790,10 +1790,10 @@ mod tests {
     #[tokio::test]
     async fn background_claim_snapshots_transcript_before_successor_input() {
         let node = test_node().await;
-        use crate::identity::NodeIdentity;
+        use crate::store::identity::NodeIdentity;
         let dir = tempfile::tempdir().unwrap();
         let identity =
-            crate::identity::KeyIdentity::load_or_create(dir.path().join("owner.key"), None)
+            crate::store::identity::KeyIdentity::load_or_create(dir.path().join("owner.key"), None)
                 .unwrap();
         let session_id = "background-claim-snapshot";
         let (request, source_doc) =
@@ -1901,10 +1901,10 @@ mod tests {
     #[tokio::test]
     async fn background_claim_keeps_fork_imports_out_of_notification_input() {
         let node = test_node().await;
-        use crate::identity::NodeIdentity;
+        use crate::store::identity::NodeIdentity;
         let dir = tempfile::tempdir().unwrap();
         let identity =
-            crate::identity::KeyIdentity::load_or_create(dir.path().join("owner.key"), None)
+            crate::store::identity::KeyIdentity::load_or_create(dir.path().join("owner.key"), None)
                 .unwrap();
         let session_id = "background-import-snapshot";
         let origin_key = "background-completion-notification:owned:tool";

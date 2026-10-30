@@ -40,7 +40,8 @@ pub(crate) struct InitSummary {
     pub(crate) created_default_agent: bool,
 }
 
-pub(crate) type StoredInitConfig = gents::home::StoredInitConfig<ToolPackageArg, ToolCeilingArg>;
+pub(crate) type StoredInitConfig =
+    gents::store::local::home::StoredInitConfig<ToolPackageArg, ToolCeilingArg>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CodexShimHealth {

@@ -10,7 +10,7 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 
 #[derive(Deserialize)]
 pub(super) struct CommandRow {
@@ -300,7 +300,7 @@ mod notification_tests;
 mod tests {
     use super::*;
     use crate::config_client::ConfigAccess;
-    use crate::identity::KeyIdentity;
+    use crate::store::identity::KeyIdentity;
     use gents_protocol::goal_control::{
         GoalOperation, GoalRevision, SessionGoalControl, SESSION_GOAL_CONTROL_VERSION,
     };

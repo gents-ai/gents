@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts() {
-    use crate::identity::NodeIdentity;
+    use crate::store::identity::NodeIdentity;
     use std::sync::Arc;
 
     let fx = Fixture::new();
@@ -14,9 +14,11 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
             .unwrap(),
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let identity =
-        crate::identity::KeyIdentity::load_or_create(fx._root.path().join("operator.key"), None)
-            .unwrap();
+    let identity = crate::store::identity::KeyIdentity::load_or_create(
+        fx._root.path().join("operator.key"),
+        None,
+    )
+    .unwrap();
     crate::document_config::ensure_node(&node, identity.did())
         .await
         .unwrap();

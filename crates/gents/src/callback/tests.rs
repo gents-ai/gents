@@ -1259,7 +1259,7 @@ fn every_invocation_origin_names_its_binding() {
 }
 
 struct Backlog {
-    _identity: crate::identity::KeyIdentity,
+    _identity: crate::store::identity::KeyIdentity,
     _home: TempDir,
     node: Arc<defra_node::EmbeddedNode>,
     access: crate::config_client::ConfigAccess,

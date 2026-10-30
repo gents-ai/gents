@@ -255,7 +255,7 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
                 let key_path = fixture.path.join("foreign-projection.key");
                 Some(
                     tokio::task::spawn_blocking(move || {
-                        crate::identity::KeyIdentity::load_or_create(key_path, None)
+                        crate::store::identity::KeyIdentity::load_or_create(key_path, None)
                     })
                     .await
                     .unwrap()

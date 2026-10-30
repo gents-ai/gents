@@ -21,7 +21,7 @@ use serde_json::{json, Value};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 
 use super::enrollment::{
     AuthorizationRevision, AuthorizationRevisionKind, DurableEnrollmentDocuments,
@@ -581,7 +581,8 @@ impl GraphqlEnrollmentStore {
         &self,
         request: &EnrollmentRequestRecord,
     ) -> Result<DateTime<Utc>> {
-        let p2p = crate::identity::node_p2p(&self.node).context("runtime P2P is unavailable")?;
+        let p2p =
+            crate::store::identity::node_p2p(&self.node).context("runtime P2P is unavailable")?;
         let local_peer = timeout(Duration::from_secs(20), p2p.local_peer_id())
             .await
             .context("timed out reading the enrollment server peer identity")?
@@ -753,7 +754,7 @@ impl GraphqlEnrollmentStore {
                 "suppressed stale enrollment terminal delivery");
             return true;
         }
-        let Some(p2p) = crate::identity::node_p2p(&self.node) else {
+        let Some(p2p) = crate::store::identity::node_p2p(&self.node) else {
             return true;
         };
         let documents = terminal_documents(decision_doc_id, revision_doc_id, route_receipt_doc_id);

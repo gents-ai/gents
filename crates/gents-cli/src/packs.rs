@@ -261,7 +261,9 @@ pub async fn wire_sources(home: PathBuf) -> Result<Value> {
         let targets = gents::pack::installed_pack_documents(&access, &owner, &pack.coordinate)
             .await?
             .into_iter()
-            .filter(|(collection, _)| *collection == gents::collection::Collection::AgentTarget)
+            .filter(|(collection, _)| {
+                *collection == gents::store::collection::Collection::AgentTarget
+            })
             .map(|(_, id)| id)
             .collect::<Vec<_>>();
         if !targets.is_empty() {
@@ -500,7 +502,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let dev = home
             .path()
-            .join(gents::home::UX_PLUGINS_DIR_NAME)
+            .join(gents::store::local::home::UX_PLUGINS_DIR_NAME)
             .join("loose");
         std::fs::create_dir_all(&dev).unwrap();
         std::fs::write(dev.join(gents::ux_plugin::DEV_ENTRY), "export default {}").unwrap();

@@ -208,8 +208,8 @@ mod tests {
     #[test]
     fn insecure_identity_keys_classify_through_access_wrappers() {
         let identity = || {
-            ConfigClientError::from(crate::identity::IdentityError::InsecureKey(
-                crate::identity::InsecureKeyPermissions {
+            ConfigClientError::from(crate::store::identity::IdentityError::InsecureKey(
+                crate::store::identity::InsecureKeyPermissions {
                     path: "/k".into(),
                     mode: 0o644,
                 },

@@ -24,7 +24,7 @@ pub struct StoredInitConfig<ToolPackage = String, ToolCeiling = String> {
     pub tool_ceiling: ToolCeiling,
     pub tool_root: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub store_encryption: Option<crate::store_key::StoreEncryption>,
+    pub store_encryption: Option<crate::store::local::store_key::StoreEncryption>,
 }
 
 pub fn default_key_path(home_dir: &Path, node_name: &str) -> PathBuf {

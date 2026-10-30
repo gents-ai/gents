@@ -1,5 +1,5 @@
 use super::*;
-use crate::identity::{KeyIdentity, NodeIdentity};
+use crate::store::identity::{KeyIdentity, NodeIdentity};
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicUsize, Ordering};
 

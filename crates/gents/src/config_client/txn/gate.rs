@@ -26,7 +26,7 @@ pub(super) const MUTATION_WRITE_GATE_CAPACITY: usize = 64;
 
 pub(super) struct StoreClaim {
     pub(super) node: Arc<EmbeddedNode>,
-    _lock: crate::home::StoreLock,
+    _lock: crate::store::local::home::StoreLock,
 }
 
 /// Embedded access plus a node-scoped store claim held across Gents-owned native operations.
@@ -42,7 +42,10 @@ impl LocalConfigAccess {
         Self { node, gate }
     }
 
-    pub(crate) fn claimed(node: Arc<EmbeddedNode>, lock: crate::home::StoreLock) -> Result<Self> {
+    pub(crate) fn claimed(
+        node: Arc<EmbeddedNode>,
+        lock: crate::store::local::home::StoreLock,
+    ) -> Result<Self> {
         let gate = mutation_write_gate(&node);
         gate.attach_store_claim(Arc::clone(&node), lock)?;
         Ok(Self { node, gate })
@@ -192,7 +195,7 @@ impl MutationWriteGate {
     fn attach_store_claim(
         &self,
         node: Arc<EmbeddedNode>,
-        lock: crate::home::StoreLock,
+        lock: crate::store::local::home::StoreLock,
     ) -> Result<()> {
         let mut claim = self
             .store_claim

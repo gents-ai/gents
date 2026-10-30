@@ -39,7 +39,7 @@ pub async fn run_openai_oneshot_with_tools(
     extra_tools: Vec<Box<dyn ToolDyn>>,
     prompt: &str,
 ) -> Result<OneshotRunResult> {
-    crate::migration::ensure_all_runtime_migrations(node.clone()).await?;
+    crate::store::schema::migration::ensure_all_runtime_migrations(node.clone()).await?;
 
     let api_key = agent.completion_client_api_key()?;
     let tool_runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), agent.node_did());

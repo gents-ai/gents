@@ -1,6 +1,6 @@
 use super::*;
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 use std::io::Write;
 use std::sync::{Arc, Mutex};
 

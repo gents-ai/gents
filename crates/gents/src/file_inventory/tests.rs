@@ -1,5 +1,5 @@
 use super::*;
-use crate::identity::KeyIdentity;
+use crate::store::identity::KeyIdentity;
 use gents_protocol::file_changes::{FileChangeImages, FileImage, FilePermissions, ImageFailure};
 use gents_protocol::file_image_hydration::FileImageScope;
 use gents_protocol::file_inventory::{

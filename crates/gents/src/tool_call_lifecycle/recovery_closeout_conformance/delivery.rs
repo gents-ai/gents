@@ -1,4 +1,4 @@
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 use crate::tool_call_lifecycle::admission_fixture::{
     complete_child, published_session_message, published_session_message_with_owner,
     PublishedAdmissionOptions,
@@ -86,7 +86,7 @@ async fn caused_result_is_delivered_after_the_row_outlives_its_stored_deadline()
 
 #[tokio::test]
 async fn a_completion_at_the_bound_returns_at_the_callers_hop() {
-    use crate::identity::NodeIdentity;
+    use crate::store::identity::NodeIdentity;
     let message = published_session_message(PublishedAdmissionOptions {
         name: "session-message-wake-at-bound".to_owned(),
         real_identity: true,

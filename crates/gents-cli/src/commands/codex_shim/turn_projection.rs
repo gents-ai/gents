@@ -1034,7 +1034,7 @@ pub(in crate::commands::codex_shim) mod tests {
                 .await
                 .expect("embedded node"),
         );
-        gents::schema::ensure_runtime_schemas(&node)
+        gents::store::schema::ensure_runtime_schemas(&node)
             .await
             .expect("runtime schemas");
         ShimState {

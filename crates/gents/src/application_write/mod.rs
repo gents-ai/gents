@@ -142,7 +142,7 @@ impl WriteTool {
             .as_deref()
             .context("collection is required; discover fields with query argv:[fields]")?;
         crate::graphql::validate_collection_identifier(collection)?;
-        let managed = crate::migration::DEFAULT_REGISTRY
+        let managed = crate::store::schema::migration::DEFAULT_REGISTRY
             .managed_names()
             .any(|name| name == collection);
         let protected =

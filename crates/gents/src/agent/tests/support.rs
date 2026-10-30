@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::super::*;
-use crate::identity::KeyIdentity;
+use crate::store::identity::KeyIdentity;
 
 pub(super) async fn test_node() -> Arc<EmbeddedNode> {
     let identity = test_identity("agent-test-node");

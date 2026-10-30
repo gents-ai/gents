@@ -15,7 +15,7 @@ async fn test_service_with_graphql(node: Arc<EmbeddedNode>, graphql: String) -> 
         grok_home: None,
         plugin_home: std::path::PathBuf::new(),
     };
-    gents::schema::ensure_runtime_schemas(config.node.as_ref())
+    gents::store::schema::ensure_runtime_schemas(config.node.as_ref())
         .await
         .expect("runtime schemas");
     crate::commands::grok_shim::seed_test_agent_configuration(
@@ -50,7 +50,7 @@ async fn test_service_with_graphql(node: Arc<EmbeddedNode>, graphql: String) -> 
 #[tokio::test]
 async fn delegate_streams_updates_live_before_the_response() {
     let (_staging, config) = config().await;
-    gents::schema::ensure_runtime_schemas(config.node.as_ref())
+    gents::store::schema::ensure_runtime_schemas(config.node.as_ref())
         .await
         .expect("runtime schemas");
     let graphql = spawn_mock_graphql(config.node.clone()).await;

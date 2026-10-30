@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 pub(crate) async fn plugin_notification_scope(
     home: &std::path::Path,
 ) -> Result<Option<(gents::ConfigAccess, String)>> {
-    if !gents::home::init_config_path(home).is_file() {
+    if !gents::store::local::home::init_config_path(home).is_file() {
         return Ok(None);
     }
     resolve_scope_owner(&ScopeArgs {
@@ -25,7 +25,7 @@ pub(crate) async fn record_plugin_store_change(
     coordinate: &str,
     installed: Option<&gents::pack::PackIdentity>,
 ) -> Result<()> {
-    if !gents::home::init_config_path(home).is_file() {
+    if !gents::store::local::home::init_config_path(home).is_file() {
         return Ok(());
     }
     let (access, owner) = resolve_scope_owner(&ScopeArgs {

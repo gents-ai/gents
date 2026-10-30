@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use gents::config_client::GraphqlEndpoint;
-use gents::identity::{
+use gents::store::identity::{
     load_macos_keychain_identity, load_macos_secure_enclave_identity, KeyIdentity, NodeIdentity,
 };
 
@@ -19,7 +19,7 @@ pub(crate) fn resolve_home_dir(explicit: Option<&Path>) -> PathBuf {
 }
 
 fn default_home_dir() -> PathBuf {
-    gents::home::default_home_dir().unwrap_or_else(|_| PathBuf::from(".gents"))
+    gents::store::local::home::default_home_dir().unwrap_or_else(|_| PathBuf::from(".gents"))
 }
 
 pub(crate) fn is_default_home(home_dir: &Path) -> bool {
@@ -28,15 +28,15 @@ pub(crate) fn is_default_home(home_dir: &Path) -> bool {
 }
 
 pub(crate) fn default_data_dir(home_dir: &Path) -> PathBuf {
-    gents::home::default_data_dir(home_dir)
+    gents::store::local::home::default_data_dir(home_dir)
 }
 
 pub(crate) fn default_key_path(home_dir: &Path, node_name: &str) -> PathBuf {
-    gents::home::default_key_path(home_dir, node_name)
+    gents::store::local::home::default_key_path(home_dir, node_name)
 }
 
 pub(crate) fn init_config_path(home_dir: &Path) -> PathBuf {
-    gents::home::init_config_path(home_dir)
+    gents::store::local::home::init_config_path(home_dir)
 }
 
 pub(crate) fn runtime_state_path(home_dir: &Path) -> PathBuf {
@@ -44,11 +44,13 @@ pub(crate) fn runtime_state_path(home_dir: &Path) -> PathBuf {
 }
 
 pub(crate) fn write_init_config(home_dir: &Path, state: &StoredInitConfig) -> Result<()> {
-    Ok(gents::home::write_init_config(home_dir, state)?)
+    Ok(gents::store::local::home::write_init_config(
+        home_dir, state,
+    )?)
 }
 
 pub(crate) fn read_init_config(home_dir: &Path) -> Result<Option<StoredInitConfig>> {
-    Ok(gents::home::read_init_config(home_dir)?)
+    Ok(gents::store::local::home::read_init_config(home_dir)?)
 }
 
 /// Load and register the signer recorded by an initialized home; every
@@ -210,7 +212,7 @@ pub(crate) fn home_graphql_endpoint(home_dir: &Path, url: impl Into<String>) -> 
                 .map(|identity| identity.did().to_string())
                 .map_err(|error| format!("{error:#}"))
                 .and_then(|did| {
-                    gents::identity::can_mint_defradb_bearer(&did)
+                    gents::store::identity::can_mint_defradb_bearer(&did)
                         .then_some(did)
                         .ok_or_else(|| "identity has no exportable signing key".to_string())
                 })

@@ -1,6 +1,6 @@
 use super::*;
-use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome};
+use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };

@@ -1,7 +1,7 @@
 use super::contract_tests::{entry, goal};
 use super::*;
 use crate::config_client::ConfigAccess;
-use crate::identity::{KeyIdentity, NodeIdentity};
+use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };

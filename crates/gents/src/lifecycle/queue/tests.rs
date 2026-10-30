@@ -1,8 +1,8 @@
 use super::*;
-use crate::identity::NodeIdentity;
 use crate::lifecycle::{
     extract_single_doc_id, ClaimOutcome, RequestLifecycle, DEFAULT_REQUEST_MAX_RETRIES,
 };
+use crate::store::identity::NodeIdentity;
 use crate::streaming::DefraStreamWriter;
 use crate::tool_call_lifecycle::{AwaitMode, ToolCallLifecycle};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -25,7 +25,7 @@ const TEST_AGENT_ID: &str = "general";
 
 struct TestDb {
     node: Arc<EmbeddedNode>,
-    identity: Arc<crate::identity::KeyIdentity>,
+    identity: Arc<crate::store::identity::KeyIdentity>,
     _tempdir: TempDir,
 }
 
@@ -134,7 +134,7 @@ async fn test_db(name: &str) -> TestDb {
         .tempdir()
         .expect("tempdir");
     let identity = Arc::new(
-        crate::identity::KeyIdentity::load_or_create(tempdir.path().join("agent.key"), None)
+        crate::store::identity::KeyIdentity::load_or_create(tempdir.path().join("agent.key"), None)
             .expect("test identity"),
     );
     let node = Arc::new(
@@ -145,7 +145,7 @@ async fn test_db(name: &str) -> TestDb {
             .await
             .expect("embedded node"),
     );
-    crate::schema::ensure_runtime_schemas(&node)
+    crate::store::schema::ensure_runtime_schemas(&node)
         .await
         .expect("runtime schemas");
     crate::test_support::install_test_agent(&node, identity.did(), TEST_AGENT_ID).await;

@@ -118,7 +118,7 @@ impl Services {
                 input,
             ).map(|_| ());
         }
-        let root = home.join(crate::home::PLUGIN_SERVICES_DIR_NAME);
+        let root = home.join(crate::store::local::home::PLUGIN_SERVICES_DIR_NAME);
         std::fs::create_dir_all(&root)?;
         let state = tempfile::Builder::new()
             .prefix("run-")
@@ -567,7 +567,7 @@ wait"#
             .contains("service exited"));
         assert!(!home
             .path()
-            .join(crate::home::PLUGIN_SERVICES_DIR_NAME)
+            .join(crate::store::local::home::PLUGIN_SERVICES_DIR_NAME)
             .exists());
     }
 
@@ -653,7 +653,7 @@ wait"#
         }
         assert!(!home
             .path()
-            .join(crate::home::PLUGIN_SERVICES_DIR_NAME)
+            .join(crate::store::local::home::PLUGIN_SERVICES_DIR_NAME)
             .exists());
     }
 

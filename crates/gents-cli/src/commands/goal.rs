@@ -91,7 +91,8 @@ async fn goal_resume(args: GoalResumeArgs) -> Result<()> {
         .ensure_supported("goal resume-request", &[OutputFormat::Json])?;
     let (access, node_did) = access_and_did(&args.scope).await?;
     crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &node_did)?;
-    let identity = gents::identity::RegisteredIdentity::from_registered_did(&node_did, None)?;
+    let identity =
+        gents::store::identity::RegisteredIdentity::from_registered_did(&node_did, None)?;
     let receipt = gents::goal::resume_goal_request(
         &access,
         &identity,
@@ -108,7 +109,8 @@ async fn goal_resume_on(args: GoalResumeOnArgs) -> Result<()> {
         .ensure_supported("goal resume-on", &[OutputFormat::Json])?;
     let (access, node_did) = access_and_did(&args.scope).await?;
     crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &node_did)?;
-    let identity = gents::identity::RegisteredIdentity::from_registered_did(&node_did, None)?;
+    let identity =
+        gents::store::identity::RegisteredIdentity::from_registered_did(&node_did, None)?;
     let backend_id = crate::commands::config::profile::backend_for_account(
         &access,
         &node_did,

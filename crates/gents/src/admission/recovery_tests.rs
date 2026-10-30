@@ -6,7 +6,9 @@ const NODE_DID: &str = "did:test:inference-recovery-cas";
 
 async fn fixture(initial_state: &str) -> (std::sync::Arc<EmbeddedNode>, StaleInferenceCallRow) {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    crate::store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     let snapshot = seed_call(&node, initial_state, NODE_DID, "recovery-cas-request-doc").await;
     (node, snapshot)
 }
@@ -228,7 +230,9 @@ async fn physical_call_updates_preserve_identity_and_state_predicates() {
 async fn recovered_queued_call_cannot_acquire_provider_permit() {
     use super::super::controller::BackendAdmissionController;
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    crate::store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     let controller = BackendAdmissionController::new(
         1,
         super::super::BackendAdmissionConfig {
@@ -354,7 +358,9 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
     use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    crate::store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     let controller = BackendAdmissionController::new(
         1,
         super::super::BackendAdmissionConfig {
@@ -471,16 +477,19 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
 /// late_usage_preserves_terminal_projection / late_usage_is_recorded.
 #[tokio::test]
 async fn recovery_winner_preserves_terminal_stamp_and_rehydrates_late_usage() {
-    use crate::identity::NodeIdentity;
+    use crate::store::identity::NodeIdentity;
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };
 
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    crate::store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     let keys = tempfile::tempdir().unwrap();
     let identity =
-        crate::identity::KeyIdentity::load_or_create(keys.path().join("node.key"), None).unwrap();
+        crate::store::identity::KeyIdentity::load_or_create(keys.path().join("node.key"), None)
+            .unwrap();
     crate::test_support::install_test_agent(&node, identity.did(), "test").await;
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,

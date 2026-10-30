@@ -1433,9 +1433,10 @@ async fn query_tool_is_advertised_and_registered() {
 
     let keys = tempfile::tempdir().unwrap();
     let identity = std::sync::Arc::new(
-        crate::identity::KeyIdentity::load_or_create(keys.path().join("query.key"), None).unwrap(),
+        crate::store::identity::KeyIdentity::load_or_create(keys.path().join("query.key"), None)
+            .unwrap(),
     );
-    let node_did = crate::identity::NodeIdentity::did(&*identity).to_owned();
+    let node_did = crate::store::identity::NodeIdentity::did(&*identity).to_owned();
     let node = std::sync::Arc::new(
         defra_node::EmbeddedNode::builder()
             .with_node_identity_did(&node_did)

@@ -38,7 +38,7 @@ pub fn verify_control_receipt(
 ) -> anyhow::Result<()> {
     receipt.validate_for(command, chrono::Utc::now())?;
     anyhow::ensure!(
-        crate::identity::verify_did_signature(
+        crate::store::identity::verify_did_signature(
             &command.node_did,
             &receipt.signing_payload()?,
             &receipt.signature,
@@ -49,7 +49,7 @@ pub fn verify_control_receipt(
 }
 
 pub async fn sign_control_receipt(
-    identity: &dyn crate::identity::NodeIdentity,
+    identity: &dyn crate::store::identity::NodeIdentity,
     receipt: &mut gents_protocol::serve_lifecycle::control::RuntimeControlReceipt,
 ) -> anyhow::Result<()> {
     anyhow::ensure!(

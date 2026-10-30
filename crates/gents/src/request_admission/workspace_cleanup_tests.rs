@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use crate::identity::{KeyIdentity, NodeIdentity};
+use crate::store::identity::{KeyIdentity, NodeIdentity};
 use crate::workspace::WorkspaceBindingDoc;
 
 #[derive(Clone, Copy, Debug)]

@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::identity::{KeyIdentity, NodeIdentity};
+use crate::store::identity::{KeyIdentity, NodeIdentity};
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -493,7 +493,7 @@ pub(super) async fn create_agent_request_for_agent(
     session_id: &str,
     content: &str,
 ) -> String {
-    let identity = crate::identity::RegisteredIdentity::from_registered_did(node_did, None)
+    let identity = crate::store::identity::RegisteredIdentity::from_registered_did(node_did, None)
         .expect("registered runtime test identity");
     let agent_id = agent_id
         .map(ToOwned::to_owned)

@@ -78,7 +78,7 @@ async fn check_shared_installation(home: &str) {
         }
     };
     assert!(
-        gents::home::store_lock_held(error.as_ref()).is_some(),
+        gents::store::local::home::store_lock_held(error.as_ref()).is_some(),
         "{error:#}"
     );
     first.close().await;
@@ -233,7 +233,7 @@ async fn updated_attachment_retires_the_previous_build_and_preserves_history() {
             frame.unwrap();
         }
         loop {
-            match gents::home::lock_store(paths.root(), paths.node_data_dir()) {
+            match gents::store::local::home::lock_store(paths.root(), paths.node_data_dir()) {
                 Ok(lock) => {
                     drop(lock);
                     break;

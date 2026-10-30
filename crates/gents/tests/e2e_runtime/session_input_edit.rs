@@ -884,7 +884,7 @@ async fn local_edit_command(db: &TestDb, suffix: &str) -> (SessionInputEdit, Str
 
 async fn local_edit_command_as(
     db: &TestDb,
-    identity: &dyn gents::identity::NodeIdentity,
+    identity: &dyn gents::store::identity::NodeIdentity,
     suffix: &str,
 ) -> (SessionInputEdit, String) {
     let did = identity.did();

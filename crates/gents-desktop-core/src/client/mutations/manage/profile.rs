@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 #[cfg(test)]
 use defra_node::EmbeddedNode;
-use gents::collection::Collection;
 use gents::config_client::{
     apply_desired_state_plan, list_inference_profiles_in_txn, read_desired_state_record_in_txn,
 };
 use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::store::collection::Collection;
 use gents::InferenceProfile;
 #[cfg(test)]
 use std::sync::Arc;

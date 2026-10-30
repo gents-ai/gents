@@ -90,7 +90,7 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
             assert_eq!(case.outcome, "rolled_back");
         } else {
             let foreign_temp = tempfile::tempdir().unwrap();
-            let foreign = crate::identity::KeyIdentity::load_or_create(
+            let foreign = crate::store::identity::KeyIdentity::load_or_create(
                 foreign_temp.path().join("foreign.key"),
                 None,
             )

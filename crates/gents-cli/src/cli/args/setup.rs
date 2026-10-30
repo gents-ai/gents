@@ -64,7 +64,7 @@ pub(crate) enum IdentityBackendArg {
     MacosSecureEnclave,
 }
 
-/// Custody of a new home's store encryption key (`gents::store_key`).
+/// Custody of a new home's store encryption key (`gents::store::local::store_key`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum StoreKeyCustodyArg {
     File,
@@ -73,11 +73,15 @@ pub(crate) enum StoreKeyCustodyArg {
 
 pub(crate) fn store_key_custody(
     arg: Option<StoreKeyCustodyArg>,
-) -> gents::store_key::StoreKeyCustodyChoice {
+) -> gents::store::local::store_key::StoreKeyCustodyChoice {
     match arg {
-        Some(StoreKeyCustodyArg::File) => gents::store_key::StoreKeyCustodyChoice::File,
-        Some(StoreKeyCustodyArg::Keychain) => gents::store_key::StoreKeyCustodyChoice::Keychain,
-        None => gents::store_key::StoreKeyCustodyChoice::default(),
+        Some(StoreKeyCustodyArg::File) => {
+            gents::store::local::store_key::StoreKeyCustodyChoice::File
+        }
+        Some(StoreKeyCustodyArg::Keychain) => {
+            gents::store::local::store_key::StoreKeyCustodyChoice::Keychain
+        }
+        None => gents::store::local::store_key::StoreKeyCustodyChoice::default(),
     }
 }
 

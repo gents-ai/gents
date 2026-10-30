@@ -6,7 +6,7 @@ use defra_node::EmbeddedNode;
 use futures::{stream, StreamExt};
 use tokio_util::sync::CancellationToken;
 
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 
 use super::super::enrollment_reconcile::EnrollmentAuthorityHandle;
 use super::super::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};

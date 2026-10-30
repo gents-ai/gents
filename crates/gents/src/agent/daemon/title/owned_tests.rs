@@ -31,7 +31,6 @@ use crate::backend_provider::BackendProviderKind;
 use crate::config::{ResolvedAgent, SamplingConfig};
 use crate::config_client::ConfigAccess;
 use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
-use crate::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
 use crate::lean_vocab_test::{
     LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation, LeanCanonicalSource,
     LeanPayloadKind, LeanTerminalSelection,
@@ -41,6 +40,7 @@ use crate::prompt::LayeredPromptBuilder;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::runtime_status::RuntimeStatusHandle;
 use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
+use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
 use crate::tool_surface::AgentToolSurfaceConfig;
 use crate::watcher::{AgentRequest, DefraWatcher};
 

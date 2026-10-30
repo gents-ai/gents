@@ -1,7 +1,7 @@
 use super::*;
-use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use crate::llm::tool::Tool;
+use crate::store::identity::{KeyIdentity, NodeIdentity};
 use std::sync::Arc;
 
 async fn seed(
@@ -50,7 +50,7 @@ resources:
         .await
         .unwrap();
     ConfigAccess::local(node.clone())
-        .add_collection(&crate::schema::AGENT_SESSION_SCHEMA.replace(
+        .add_collection(&crate::store::schema::AGENT_SESSION_SCHEMA.replace(
             "type AgentSession ",
             &format!("type AgentSession @policy(id: \"{policy}\", resource: \"sessions\") "),
         ))

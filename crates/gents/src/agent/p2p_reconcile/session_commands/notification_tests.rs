@@ -57,7 +57,8 @@ impl Stream for ObservedChanges {
 async fn collection_block_notifications_never_enter_the_command_retry_queue() {
     let temp = tempfile::tempdir().unwrap();
     let identity: Arc<dyn NodeIdentity> = Arc::new(
-        crate::identity::KeyIdentity::load_or_create(temp.path().join("node.key"), None).unwrap(),
+        crate::store::identity::KeyIdentity::load_or_create(temp.path().join("node.key"), None)
+            .unwrap(),
     );
     let node = Arc::new(
         EmbeddedNode::builder()

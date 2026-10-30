@@ -4,9 +4,9 @@ use crate::config_client::{
     apply_desired_state_plan, write_inference_backend_document, ConfigAccess,
     DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use crate::identity::KeyIdentity;
 use crate::oauth_credential::{preset_account_backend, store_sign_in};
 use crate::request_admission::verify_runtime_local_control_receipt;
+use crate::store::identity::KeyIdentity;
 use crate::Collection;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use serde_json::{json, Value};
@@ -55,7 +55,9 @@ impl Fixture {
                 .await
                 .unwrap(),
         );
-        crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+        crate::store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
         crate::test_support::install_test_agent(&node, identity.did(), "contract-behavior").await;
         let goal = set_goal(
             &node,

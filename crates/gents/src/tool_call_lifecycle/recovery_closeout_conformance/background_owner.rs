@@ -1,4 +1,4 @@
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 use crate::tool_call_lifecycle::admission_fixture::{
     published_admission, PublishedAdmissionOptions,
 };
@@ -50,7 +50,9 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 .await
                 .unwrap(),
         );
-        crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+        crate::store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
         crate::test_support::install_test_agent(&node, &node_did, "general").await;
         let session_id = format!("session-{name}");
         let mut parent =

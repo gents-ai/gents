@@ -1,6 +1,6 @@
 use super::*;
-use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
+use crate::store::identity::{KeyIdentity, NodeIdentity};
 use crate::streaming::DefraStreamWriter;
 use crate::tool_call_lifecycle::{AwaitMode, ToolCallLifecycle};
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};

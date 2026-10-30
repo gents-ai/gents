@@ -61,7 +61,7 @@ async fn service_over(signing_node: bool) -> (tempfile::TempDir, AcpService) {
     if signing_node {
         config.node_did = Arc::from(gents::NodeIdentity::did(&identity));
     }
-    gents::schema::ensure_runtime_schemas(config.node.as_ref())
+    gents::store::schema::ensure_runtime_schemas(config.node.as_ref())
         .await
         .expect("runtime schemas");
     let turns = Arc::new(TurnManager::new(

@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 fn plugins_root(home: &Path) -> PathBuf {
-    home.join(crate::home::PLUGINS_DIR_NAME)
+    home.join(crate::store::local::home::PLUGINS_DIR_NAME)
 }
 
 fn store_dir(home: &Path) -> PathBuf {

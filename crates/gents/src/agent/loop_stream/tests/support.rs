@@ -679,8 +679,11 @@ pub(super) async fn owned_test_hook_with_folded_case(
 ) {
     let key_dir = tempfile::tempdir().unwrap();
     let identity = Arc::new(
-        crate::identity::KeyIdentity::load_or_create(key_dir.path().join("folded.key"), None)
-            .unwrap(),
+        crate::store::identity::KeyIdentity::load_or_create(
+            key_dir.path().join("folded.key"),
+            None,
+        )
+        .unwrap(),
     );
     owned_test_hook_with_identity_policy(Some(identity), FailurePolicy::default(), Some(case)).await
 }

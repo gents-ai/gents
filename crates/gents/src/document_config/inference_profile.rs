@@ -115,7 +115,7 @@ pub(crate) async fn load_inference_profile_record(
             Box::pin(async move {
                 crate::config_client::read_desired_state_record_in_txn(
                     txn,
-                    crate::collection::Collection::InferenceProfile,
+                    crate::store::collection::Collection::InferenceProfile,
                     node_did,
                     profile_id,
                 )
@@ -134,7 +134,7 @@ pub async fn list_inference_profile_records(
 ) -> Result<Vec<(String, InferenceProfile)>> {
     let escaped_node_did = escape_graphql_string(node_did);
     let (fields, _) = crate::config_client::config_projection(
-        crate::collection::Collection::InferenceProfile,
+        crate::store::collection::Collection::InferenceProfile,
         None,
     )?;
     let fields = fields.join(" ");
@@ -190,7 +190,7 @@ pub async fn upsert_inference_profile(
     let value = serde_json::to_value(profile)?;
     let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
         crate::config_client::DesiredStateApplyDocument {
-            collection: crate::collection::Collection::InferenceProfile,
+            collection: crate::store::collection::Collection::InferenceProfile,
             add: value.clone(),
             update: value,
         },

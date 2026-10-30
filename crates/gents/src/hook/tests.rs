@@ -3,12 +3,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::llm::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResultContent,
     UserContent,
 };
 use crate::llm::{HookAction, ToolCallHookAction};
+use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_loop::provider_input::ProviderInputProfile;
 use serde_json::json;
 
@@ -1120,8 +1120,9 @@ async fn bind_signed_hook_request(
     request_id: &str,
     deadline_at: chrono::DateTime<chrono::Utc>,
 ) {
-    let identity = crate::identity::RegisteredIdentity::from_registered_did(&hook.node_did, None)
-        .expect("the hook fixture has a registered signing identity");
+    let identity =
+        crate::store::identity::RegisteredIdentity::from_registered_did(&hook.node_did, None)
+            .expect("the hook fixture has a registered signing identity");
     let session_id = hook.session_id().await.expect("hook session");
     let lifecycle = crate::tool_call_lifecycle::admission_fixture::claimed_signed_request(
         &hook.node,

@@ -101,7 +101,7 @@ fn assert_observation(
     data: &std::path::Path,
     node: &EmbeddedNode,
 ) {
-    let claim_held = crate::home::lock_store(home, data).is_err();
+    let claim_held = crate::store::local::home::lock_store(home, data).is_err();
     let gate = mutation_write_gate(node);
     let mutation_gate_held = gate.permits.available_permits() < super::MUTATION_WRITE_GATE_CAPACITY;
     assert_eq!(
@@ -155,7 +155,7 @@ async fn signed_claimed_access(
             .await
             .unwrap(),
     );
-    let claim = crate::home::lock_store(home, data).unwrap();
+    let claim = crate::store::local::home::lock_store(home, data).unwrap();
     let access = ConfigAccess::claimed_local(node.clone(), claim).unwrap();
     access
         .add_collection("type NativeClaimLifetimeProbe { value: String }")
@@ -168,7 +168,7 @@ async fn shutdown_then_reacquire_store_lock(
     node: Arc<EmbeddedNode>,
     home: &std::path::Path,
     data: &std::path::Path,
-) -> crate::home::StoreLock {
+) -> crate::store::local::home::StoreLock {
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             if super::existing_mutation_write_gate(&node).is_none() {
@@ -181,7 +181,7 @@ async fn shutdown_then_reacquire_store_lock(
     .expect("the Gents-owned native operation drops its claimed gate");
     node.shutdown().await;
     drop(node);
-    crate::home::lock_store(home, data)
+    crate::store::local::home::lock_store(home, data)
         .expect("the store lock is reacquirable after the owned node shuts down")
 }
 

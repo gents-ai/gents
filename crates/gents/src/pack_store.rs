@@ -88,7 +88,7 @@ impl PackStore {
     pub fn new(home: &Path) -> Self {
         Self {
             root: home
-                .join(crate::home::PACKS_DIR_NAME)
+                .join(crate::store::local::home::PACKS_DIR_NAME)
                 .join("store")
                 .join("sha256"),
         }

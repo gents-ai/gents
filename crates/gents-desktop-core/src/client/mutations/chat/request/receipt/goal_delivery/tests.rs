@@ -1,6 +1,6 @@
 use super::*;
 use anyhow::{Context, Result};
-use gents::identity::{KeyIdentity, NodeIdentity};
+use gents::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::goal_control::{
     GoalControlOutcome, GoalOperation, GoalRevision, SESSION_GOAL_CONTROL_VERSION,
 };

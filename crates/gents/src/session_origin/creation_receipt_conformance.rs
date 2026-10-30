@@ -1,5 +1,5 @@
 use super::*;
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 use gents_protocol::session::{SessionCreationCause, SessionCreationReceipt};
 
 #[test]

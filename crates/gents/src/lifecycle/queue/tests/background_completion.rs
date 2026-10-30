@@ -57,15 +57,17 @@ async fn desktop_owned_session(
     db: &TestDb,
     session_id: &str,
 ) -> (
-    crate::identity::KeyIdentity,
+    crate::store::identity::KeyIdentity,
     gents_protocol::request_admission::AgentRequestCreate,
     AgentRequest,
     crate::streaming::DefraStreamWriter,
 ) {
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
-    let desktop =
-        crate::identity::KeyIdentity::load_or_create(db._tempdir.path().join("desktop.key"), None)
-            .unwrap();
+    let desktop = crate::store::identity::KeyIdentity::load_or_create(
+        db._tempdir.path().join("desktop.key"),
+        None,
+    )
+    .unwrap();
     let mut create = AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         "desktop-parent",

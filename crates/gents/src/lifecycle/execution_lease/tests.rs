@@ -45,11 +45,11 @@ where
 struct LeaseTestIdentity;
 
 #[async_trait::async_trait]
-impl crate::identity::NodeIdentity for LeaseTestIdentity {
+impl crate::store::identity::NodeIdentity for LeaseTestIdentity {
     fn did(&self) -> &str {
         "did:test:execution-lease"
     }
-    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, crate::identity::IdentityError> {
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, crate::store::identity::IdentityError> {
         use sha2::Digest;
         Ok(sha2::Sha512::digest(payload).to_vec())
     }
@@ -58,10 +58,10 @@ impl crate::identity::NodeIdentity for LeaseTestIdentity {
         did: &str,
         payload: &[u8],
         signature: &[u8],
-    ) -> Result<bool, crate::identity::IdentityError> {
+    ) -> Result<bool, crate::store::identity::IdentityError> {
         Ok(did == self.did() && self.sign(payload).await? == signature)
     }
-    fn service_account(&self) -> Option<&crate::identity::ServiceAccount> {
+    fn service_account(&self) -> Option<&crate::store::identity::ServiceAccount> {
         None
     }
 }

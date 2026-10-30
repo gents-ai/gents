@@ -78,7 +78,7 @@ pub(in crate::agent) async fn run_agent(
     agent: Gents,
     external_shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
-    crate::migration::ensure_all_runtime_migrations(agent.node.clone())
+    crate::store::schema::migration::ensure_all_runtime_migrations(agent.node.clone())
         .await
         .context("ensure runtime schema migrations")?;
     let (runtime_status_owner, runtime_status) =
@@ -119,7 +119,7 @@ pub(super) async fn run_agent_with_readiness_writer_and_slot_runner(
     retry_delay: std::time::Duration,
     slot_runner: Option<TestSlotRunner>,
 ) -> Result<()> {
-    crate::migration::ensure_all_runtime_migrations(agent.node.clone())
+    crate::store::schema::migration::ensure_all_runtime_migrations(agent.node.clone())
         .await
         .context("ensure runtime schema migrations")?;
     let (runtime_status_owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(

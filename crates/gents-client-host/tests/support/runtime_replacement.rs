@@ -89,8 +89,11 @@ impl Fixture<'_> {
         let config: Value = serde_json::from_slice(&init)?;
         let key_path = Path::new(config["key_path"].as_str().context("runtime key path")?);
         let key = tokio::fs::read(key_path).await?;
-        let p2p_secret =
-            tokio::fs::read(self.home.join(gents::home::P2P_SECRET_KEY_FILE_NAME)).await?;
+        let p2p_secret = tokio::fs::read(
+            self.home
+                .join(gents::store::local::home::P2P_SECRET_KEY_FILE_NAME),
+        )
+        .await?;
         let provider_query = format!("{{ InferenceBackend(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ _docID backend_id provider_kind endpoint }} }}", gents::graphql::escape_graphql_string(self.node_did));
         let providers = rows(
             self.access.execute(&provider_query).await?,
@@ -219,7 +222,11 @@ impl Fixture<'_> {
         ensure!(tokio::fs::read(self.home.join("init.json")).await? == init);
         ensure!(tokio::fs::read(key_path).await? == key);
         ensure!(
-            tokio::fs::read(self.home.join(gents::home::P2P_SECRET_KEY_FILE_NAME)).await?
+            tokio::fs::read(
+                self.home
+                    .join(gents::store::local::home::P2P_SECRET_KEY_FILE_NAME)
+            )
+            .await?
                 == p2p_secret
         );
         let reused = Command::new(self.binary)

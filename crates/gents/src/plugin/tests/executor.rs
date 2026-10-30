@@ -163,7 +163,9 @@ async fn installed_filesystem_grants_cannot_expose_operator_aliases() {
         } else {
             assert_eq!(first.outcome.output, serde_json::json!({"read":true}));
         }
-        let permissions = home.path().join(crate::home::ALLOWED_DIRS_FILE_NAME);
+        let permissions = home
+            .path()
+            .join(crate::store::local::home::ALLOWED_DIRS_FILE_NAME);
         std::fs::write(&permissions, "operator state").unwrap();
         std::fs::hard_link(&permissions, root.join("operator-alias")).unwrap();
         let error = executor

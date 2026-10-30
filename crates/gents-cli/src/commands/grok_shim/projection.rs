@@ -1453,7 +1453,7 @@ mod tests {
                 .await
                 .expect("embedded node"),
         );
-        gents::schema::ensure_runtime_schemas(node.as_ref())
+        gents::store::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .expect("runtime schemas");
 
@@ -1522,7 +1522,7 @@ mod tests {
                 .await
                 .expect("embedded node"),
         );
-        gents::schema::ensure_runtime_schemas(node.as_ref())
+        gents::store::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .expect("runtime schemas");
         let engine = ProjectionEngine::new(

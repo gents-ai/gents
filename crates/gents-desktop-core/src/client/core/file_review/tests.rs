@@ -1,5 +1,5 @@
 use super::*;
-use gents::identity::KeyIdentity;
+use gents::store::identity::KeyIdentity;
 use serde_json::json;
 
 fn demand(node: &str) -> FileImageDemand {

@@ -111,7 +111,7 @@ struct ProducedModule {
 }
 
 fn dev_root(home: &Path) -> PathBuf {
-    home.join(crate::home::UX_PLUGINS_DIR_NAME)
+    home.join(crate::store::local::home::UX_PLUGINS_DIR_NAME)
 }
 
 /// A dev plugin's folder name doubles as its listing id and lands in a

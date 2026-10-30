@@ -1,6 +1,5 @@
 use super::*;
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::lean_vocab_test::{
     LeanInterruptQueueCase, LeanInterruptQueueEntry, LeanInterruptQueueInput,
 };
@@ -9,6 +8,7 @@ use crate::lifecycle::queue::{
     RequestQueue,
 };
 use crate::lifecycle::ExecutionOrigin;
+use crate::store::identity::{KeyIdentity, NodeIdentity};
 use crate::watcher::AgentRequest;
 use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use serde_json::{json, Value};

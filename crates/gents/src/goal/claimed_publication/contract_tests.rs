@@ -1,7 +1,7 @@
 use super::*;
-use crate::identity::NodeIdentity;
 use crate::lifecycle::queue::goal_continuation_identity;
 use crate::request_admission::SIGNED_REQUEST_FIELDS;
+use crate::store::identity::NodeIdentity;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::json;

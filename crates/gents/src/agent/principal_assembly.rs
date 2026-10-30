@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::config::ResolvedAgent;
-use crate::identity::RuntimeNode;
+use crate::store::identity::RuntimeNode;
 
 #[derive(Debug)]
 pub struct AgentBuildError {

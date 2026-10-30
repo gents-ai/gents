@@ -371,7 +371,7 @@ async fn inference_settings_read_survives_a_concurrent_projection_replacement() 
     let home = directory.path().join("runtime");
     std::fs::create_dir_all(&home).unwrap();
     let key_path = home.join("node.key");
-    let identity = gents::identity::load_or_create_file_identity(&key_path).unwrap();
+    let identity = gents::store::identity::load_or_create_file_identity(&key_path).unwrap();
     let did = identity.did().unwrap().to_string();
     std::fs::write(
         home.join("init.json"),
@@ -447,7 +447,7 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     let home = directory.path().join("runtime");
     std::fs::create_dir_all(&home).unwrap();
     let key_path = home.join("node.key");
-    let identity = gents::identity::load_or_create_file_identity(&key_path).unwrap();
+    let identity = gents::store::identity::load_or_create_file_identity(&key_path).unwrap();
     let did = identity.did().unwrap().to_string();
     std::fs::write(
         home.join("init.json"),
@@ -472,7 +472,7 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     )
     .await
     .unwrap();
-    assert!(!gents::identity::can_mint_defradb_bearer(&did));
+    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
     let host = ClientHost::new(core.clone());
     let approvals = super::approvals::AttachmentApprovals::default();
     assert_eq!(
@@ -511,7 +511,7 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
     let _ = core
         .pending_user_queue_projection(&did, "unavailable-session", &[])
         .await;
-    assert!(!gents::identity::can_mint_defradb_bearer(&did));
+    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
     let requests = server.received_requests().await.unwrap();
     assert!(!requests.is_empty());
     assert!(requests
@@ -546,7 +546,7 @@ async fn passive_snapshots_keep_the_runtime_identity_locked() {
         .await
         .unwrap();
     assert_eq!(settings["nodeDid"], did);
-    assert!(!gents::identity::can_mint_defradb_bearer(&did));
+    assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
     let requests = server.received_requests().await.unwrap();
     let settings_read = requests
         .iter()

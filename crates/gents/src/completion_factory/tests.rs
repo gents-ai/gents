@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::agent::completion_retry::CompletionRetryProfileFields;
 use crate::config::SamplingConfig;
-use crate::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
+use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
 use crate::tool_surface::AgentToolSurfaceConfig;
 use crate::watcher::AgentRequest;
 

@@ -419,7 +419,9 @@ pub(super) async fn harness() -> (
             .await
             .unwrap(),
     );
-    gents::schema::ensure_runtime_schemas(&node).await.unwrap();
+    gents::store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     let projections = ProjectionEngine::new(
         node,
         BoundModelContext::new("model".into(), "Model".into(), 1000),

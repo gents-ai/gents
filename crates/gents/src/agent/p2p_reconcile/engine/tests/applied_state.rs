@@ -39,7 +39,7 @@ async fn applied_state_persist_collapses_duplicates_and_recovers_a_missing_row()
 
     let tempdir = tempfile::tempdir().unwrap();
     let identity = Arc::new(
-        crate::identity::KeyIdentity::load_or_create(tempdir.path().join("agent.key"), None)
+        crate::store::identity::KeyIdentity::load_or_create(tempdir.path().join("agent.key"), None)
             .unwrap(),
     );
     let store = GraphqlPairingStateStore::for_explicit_desired(node.clone(), identity);

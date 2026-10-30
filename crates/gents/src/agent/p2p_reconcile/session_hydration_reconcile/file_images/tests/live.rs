@@ -8,8 +8,8 @@ use crate::agent::p2p_reconcile::{
     enrollment_authority_channel, run_enrollment_reconciler, run_pairing_reconciler,
     EmbeddedRemoteP2pAdmin, GraphqlEnrollmentStore, PairingFilters, RemoteP2pAdmin,
 };
-use crate::identity::KeyIdentity;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
+use crate::store::identity::KeyIdentity;
 use crate::tool_call_lifecycle::admission_fixture::{
     ensure_fixture_session, publish_accepted_on_claimed_request,
 };

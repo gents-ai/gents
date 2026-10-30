@@ -120,8 +120,8 @@ pub fn default_agent_id_for_node(node_did: &str) -> String {
 
 /// Ensure the runtime's node exists without inventing executable configuration.
 pub async fn ensure_node(node: &std::sync::Arc<EmbeddedNode>, node_did: &str) -> Result<Node> {
-    use crate::collection::Collection;
     use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use crate::store::collection::Collection;
     anyhow::ensure!(!node_did.trim().is_empty(), "node DID must not be blank");
     let owner = node_did.to_owned();
     let existing: Option<Node> =

@@ -150,7 +150,7 @@ async fn attach_inner(paths: DesktopPaths, editor_store: bool, interactive: bool
                 bail!(message);
             }
             retire_installation(&paths, &previous).await?;
-            gents::home::wait_for_store_release(paths.root(), paths.node_data_dir()).await?;
+            gents::store::local::home::wait_for_store_release(paths.root(), paths.node_data_dir()).await?;
             gents_protocol::client_installation::State {
                 phase: gents_protocol::client_installation::Phase::Released,
                 attachments: 0,

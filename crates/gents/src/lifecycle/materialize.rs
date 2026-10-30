@@ -358,7 +358,7 @@ impl RequestSpec {
 
 pub enum RequestSigner<'a> {
     RegisteredTarget,
-    Identity(&'a dyn crate::identity::NodeIdentity),
+    Identity(&'a dyn crate::store::identity::NodeIdentity),
 }
 
 pub(crate) fn build_request(
@@ -680,7 +680,7 @@ pub(crate) async fn build_session_message_request_with_input(
         retry_key,
         ..RequestSpec::new(RequestPurpose::Normal, identity, admission)
     };
-    let signer = crate::identity::RegisteredIdentity::from_registered_did(
+    let signer = crate::store::identity::RegisteredIdentity::from_registered_did(
         cause.caller_node_did.clone(),
         None,
     )
@@ -811,7 +811,7 @@ impl RequestLifecycle {
     pub async fn materialize_claimed_with_execution_binding(
         node: Arc<EmbeddedNode>,
         agent_id: &str,
-        identity: Arc<dyn crate::identity::NodeIdentity>,
+        identity: Arc<dyn crate::store::identity::NodeIdentity>,
         content: &str,
         deadline_duration_secs: u64,
         execution_origin: ExecutionOrigin,
@@ -841,7 +841,7 @@ impl RequestLifecycle {
     pub(crate) async fn materialize_pending_with_execution_binding(
         node: Arc<EmbeddedNode>,
         agent_id: &str,
-        identity: Arc<dyn crate::identity::NodeIdentity>,
+        identity: Arc<dyn crate::store::identity::NodeIdentity>,
         content: &str,
         deadline_duration_secs: u64,
         execution_origin: ExecutionOrigin,

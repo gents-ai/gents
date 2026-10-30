@@ -133,7 +133,7 @@ pub use write::{
 /// before a fresh continuation can be staged.
 pub(crate) async fn stage_session_resume_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    identity: &dyn crate::identity::NodeIdentity,
+    identity: &dyn crate::store::identity::NodeIdentity,
     node_did: &str,
     session_id: &str,
 ) -> Result<()> {

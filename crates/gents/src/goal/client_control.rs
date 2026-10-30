@@ -9,7 +9,7 @@ mod receipt_tests;
 #[cfg(test)]
 mod start_tests;
 use crate::config_client::ConfigApplyTxn;
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 
 pub(crate) enum PreparedGoalControl {
     Create {

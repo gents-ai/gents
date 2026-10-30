@@ -765,7 +765,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        gents::schema::ensure_runtime_schemas(node.as_ref())
+        gents::store::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .unwrap();
         let did = crate::caused_sessions::fixtures::FIXTURE_DID;
@@ -797,7 +797,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        gents::schema::ensure_runtime_schemas(node.as_ref())
+        gents::store::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .unwrap();
         node

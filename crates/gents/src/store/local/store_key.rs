@@ -29,7 +29,9 @@ use k256::elliptic_curve::rand_core::{OsRng, RngCore};
 use k256::elliptic_curve::zeroize::Zeroizing;
 use serde::{Deserialize, Serialize};
 
-use crate::storage_backend::{IncompatibleStore, IncompatibleStoreKind, StorageBackendError};
+use crate::store::local::storage_backend::{
+    IncompatibleStore, IncompatibleStoreKind, StorageBackendError,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreKeyError {
@@ -40,7 +42,7 @@ pub enum StoreKeyError {
     #[error(transparent)]
     Unavailable(#[from] StoreKeyUnavailable),
     #[error(transparent)]
-    Identity(#[from] crate::identity::IdentityError),
+    Identity(#[from] crate::store::identity::IdentityError),
     #[error(transparent)]
     Storage(#[from] StorageBackendError),
     #[error("unrecorded file at {}; refusing to replace it with a store key", path.display())]
@@ -61,13 +63,13 @@ pub enum StoreKeyError {
     KeychainStore {
         label: String,
         #[source]
-        source: Box<crate::identity::IdentityError>,
+        source: Box<crate::store::identity::IdentityError>,
     },
     #[error("removing store key {label} from the macOS keychain")]
     KeychainDelete {
         label: String,
         #[source]
-        source: Box<crate::identity::IdentityError>,
+        source: Box<crate::store::identity::IdentityError>,
     },
     #[error("Keychain store keys are only available on macOS; use file custody")]
     KeychainUnsupported,
@@ -78,7 +80,7 @@ pub enum StoreKeyError {
     #[error("store upgrade custody does not match init.json")]
     UpgradeCustodyMismatch,
     #[error(transparent)]
-    Home(#[from] crate::home::HomeError),
+    Home(#[from] crate::store::local::home::HomeError),
     #[error(transparent)]
     Upgrade(#[from] upgrade::UpgradeError),
 }
@@ -93,7 +95,7 @@ impl StoreKeyError {
         }
     }
 
-    pub fn insecure_key(&self) -> Option<&crate::identity::InsecureKeyPermissions> {
+    pub fn insecure_key(&self) -> Option<&crate::store::identity::InsecureKeyPermissions> {
         match self {
             Self::Identity(error) => error.insecure_key(),
             _ => None,
@@ -107,7 +109,7 @@ impl StoreKeyError {
         }
     }
 
-    pub fn lock_held(&self) -> Option<&crate::home::StoreLockHeld> {
+    pub fn lock_held(&self) -> Option<&crate::store::local::home::StoreLockHeld> {
         match self {
             Self::Home(error) => error.lock_held(),
             _ => None,
@@ -260,7 +262,7 @@ impl StoreEncryption {
                 keychain::store(keychain_label, key.0.as_ref())?;
             }
             StoreKeyCustody::File => {
-                if !crate::identity::publish_private_key_file(key_file, key.0.as_ref())? {
+                if !crate::store::identity::publish_private_key_file(key_file, key.0.as_ref())? {
                     return self.load(key_file, data_path);
                 }
             }
@@ -284,7 +286,8 @@ impl StoreEncryption {
                     Err(code) => Err(keychain_failure(code, data_path)),
                 }
             }
-            StoreKeyCustody::File => match crate::identity::read_private_key_file(key_file)? {
+            StoreKeyCustody::File => match crate::store::identity::read_private_key_file(key_file)?
+            {
                 Some(bytes) => {
                     let bytes = Zeroizing::new(bytes);
                     StoreKey::from_slice(&bytes, &key_file.display().to_string())
@@ -333,7 +336,7 @@ fn require_unoccupied_key_file(key_file: &Path) -> Result<()> {
 /// A gents home's store key file. Node identity names always end in `.key`,
 /// so the encryption key uses a separate filename namespace.
 pub fn home_key_file(home_dir: &Path) -> PathBuf {
-    crate::home::keys_dir(home_dir).join("store.aes256")
+    crate::store::local::home::keys_dir(home_dir).join("store.aes256")
 }
 
 /// Opens a home's store key, upgrading an earlier plaintext store without
@@ -349,11 +352,13 @@ pub async fn open_home_store_key_with_custody(
     data_path: &Path,
     choice: StoreKeyCustodyChoice,
 ) -> Result<StoreKey> {
-    let mut config =
-        crate::home::read_init_config::<serde_json::Value, serde_json::Value>(home_dir)?
-            .ok_or_else(|| StoreKeyError::HomeNotInitialized {
-                home: home_dir.to_path_buf(),
-            })?;
+    let mut config = crate::store::local::home::read_init_config::<
+        serde_json::Value,
+        serde_json::Value,
+    >(home_dir)?
+    .ok_or_else(|| StoreKeyError::HomeNotInitialized {
+        home: home_dir.to_path_buf(),
+    })?;
     let key_file = home_key_file(home_dir);
     let pending = upgrade::pending_record(data_path)?;
     if let Some(record) = config.store_encryption.as_ref() {
@@ -368,7 +373,7 @@ pub async fn open_home_store_key_with_custody(
     if pending.is_none() && !data_path.join("MANIFEST").exists() {
         let record = StoreEncryption::prepare(choice, &key_file, data_path)?;
         config.store_encryption = Some(record.clone());
-        crate::home::write_init_config(home_dir, &config)?;
+        crate::store::local::home::write_init_config(home_dir, &config)?;
         return record.initialize(&key_file, data_path);
     }
     let record = match pending {
@@ -383,17 +388,17 @@ pub async fn open_home_store_key_with_custody(
     let key = record.initialize(&key_file, &upgrade::key_store_path(data_path)?)?;
     upgrade::encrypt_existing(data_path, &record, &key).await?;
     config.store_encryption = Some(record);
-    crate::home::write_init_config(home_dir, &config)?;
+    crate::store::local::home::write_init_config(home_dir, &config)?;
     Ok(key)
 }
 
 pub fn persistent_builder(data_path: &Path, key: &StoreKey) -> Result<defra_node::NodeBuilder> {
-    crate::storage_backend::reject_legacy_store(data_path)?;
+    crate::store::local::storage_backend::reject_legacy_store(data_path)?;
     Ok(key.encrypt(
         defra_node::EmbeddedNode::builder()
             .data_path(data_path)
             .with_storage_backend(defra_node::StorageBackend::Regolith)
-            .with_regolith_options(crate::storage_backend::regolith_options()),
+            .with_regolith_options(crate::store::local::storage_backend::regolith_options()),
     ))
 }
 
@@ -412,7 +417,7 @@ fn missing_key(data_path: &Path) -> StoreKeyError {
 }
 
 fn keychain_failure(code: i32, data_path: &Path) -> StoreKeyError {
-    if code == crate::identity::macos::ERR_SEC_ITEM_NOT_FOUND {
+    if code == crate::store::identity::macos::ERR_SEC_ITEM_NOT_FOUND {
         missing_key(data_path)
     } else {
         StoreKeyError::Unavailable(StoreKeyUnavailable {
@@ -443,7 +448,7 @@ mod keychain {
 
     #[cfg(target_os = "macos")]
     pub(super) fn store(label: &str, bytes: &[u8]) -> Result<()> {
-        crate::identity::macos::macos_keychain_set(SERVICE, label, bytes).map_err(|source| {
+        crate::store::identity::macos::macos_keychain_set(SERVICE, label, bytes).map_err(|source| {
             StoreKeyError::KeychainStore {
                 label: label.to_owned(),
                 source: Box::new(source),
@@ -453,12 +458,14 @@ mod keychain {
 
     #[cfg(target_os = "macos")]
     pub(super) fn load(label: &str) -> Result<std::result::Result<Zeroizing<Vec<u8>>, i32>> {
-        Ok(crate::identity::macos::macos_keychain_find(SERVICE, label)?)
+        Ok(crate::store::identity::macos::macos_keychain_find(
+            SERVICE, label,
+        )?)
     }
 
     #[cfg(target_os = "macos")]
     pub(super) fn delete(label: &str) -> Result<()> {
-        crate::identity::macos::macos_keychain_delete(SERVICE, label).map_err(|source| {
+        crate::store::identity::macos::macos_keychain_delete(SERVICE, label).map_err(|source| {
             StoreKeyError::KeychainDelete {
                 label: label.to_owned(),
                 source: Box::new(source),

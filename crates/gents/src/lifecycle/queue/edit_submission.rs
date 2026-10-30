@@ -1,6 +1,6 @@
 use super::*;
 use crate::config_client::ConfigAccess;
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::session_input_edit::{
     PendingQueueEdit, SessionInputEdit, SessionInputEditOutcome, SessionInputEditReceipt,
@@ -173,7 +173,7 @@ async fn answered(
             .and_then(|raw| serde_json::from_str::<SessionInputEditReceipt>(raw).ok())
             .filter(|receipt| {
                 receipt.validate_for(command).is_ok()
-                    && crate::identity::verify_did_signature(
+                    && crate::store::identity::verify_did_signature(
                         &command.node_did,
                         &receipt.signing_payload(),
                         &receipt.signature,

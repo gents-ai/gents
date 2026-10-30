@@ -808,7 +808,7 @@ pub(crate) async fn issue_creation_receipt_in_txn(
     agent_id: &str,
     opening: Option<&str>,
 ) -> Result<Option<gents_protocol::session::SessionCreationReceipt>> {
-    use crate::identity::NodeIdentity;
+    use crate::store::identity::NodeIdentity;
     use gents_protocol::session::{SessionCreationCause, SessionCreationReceipt};
     let Some(opening) = opening else {
         return Ok(None);
@@ -887,7 +887,8 @@ pub(crate) async fn issue_creation_receipt_in_txn(
         } else {
             return Ok(None);
         };
-    let Ok(identity) = crate::identity::RegisteredIdentity::from_registered_did(node_did, None)
+    let Ok(identity) =
+        crate::store::identity::RegisteredIdentity::from_registered_did(node_did, None)
     else {
         return Ok(None);
     };
@@ -933,7 +934,7 @@ fn verified_creation_receipt<'a>(
         || receipt.requester_did != session.requester_did
         || receipt.agent_id != session.agent_id
         || receipt.cause != cause
-        || !crate::identity::verify_did_signature(
+        || !crate::store::identity::verify_did_signature(
             &session.node_did,
             &receipt.signing_payload(),
             &receipt.signature,

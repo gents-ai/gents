@@ -65,13 +65,13 @@ pub enum UpgradeError {
     #[error(transparent)]
     Persist(#[from] tempfile::PersistError),
     #[error(transparent)]
-    StorageBackend(#[from] crate::storage_backend::StorageBackendError),
+    StorageBackend(#[from] crate::store::local::storage_backend::StorageBackendError),
     #[error(transparent)]
     Storage(#[from] storage::Error),
 }
 
 impl UpgradeError {
-    pub fn incompatible(&self) -> Option<&crate::storage_backend::IncompatibleStore> {
+    pub fn incompatible(&self) -> Option<&crate::store::local::storage_backend::IncompatibleStore> {
         match self {
             Self::StorageBackend(error) => error.incompatible(),
             _ => None,
@@ -253,7 +253,7 @@ pub fn begin(data: &Path, record: &StoreEncryption) -> Result<()> {
             data: data.to_path_buf(),
         });
     }
-    crate::storage_backend::reject_legacy_store(data)?;
+    crate::store::local::storage_backend::reject_legacy_store(data)?;
     save(
         data,
         &Journal {
@@ -382,15 +382,17 @@ async fn copy_and_verify(
     key: &StoreKey,
     progress: &mut (dyn FnMut(&'static str) + Send),
 ) -> Result<()> {
-    let source =
-        RegolithStore::open_with_options(data, crate::storage_backend::regolith_options())?;
+    let source = RegolithStore::open_with_options(
+        data,
+        crate::store::local::storage_backend::regolith_options(),
+    )?;
     let result = async {
         if exists(stage)? {
             fs::remove_dir_all(stage)?;
         }
         fs::create_dir(stage)?;
         fs::set_permissions(stage, fs::metadata(data)?.permissions())?;
-        let target_options = crate::storage_backend::regolith_options()
+        let target_options = crate::store::local::storage_backend::regolith_options()
             .with_encryption_key(*key.0)
             .with_isolation(regolith::IsolationLevel::SnapshotIsolation);
         let destination = RegolithStore::open_with_options(stage, target_options)?;
@@ -401,7 +403,7 @@ async fn copy_and_verify(
         closed?;
         let destination = RegolithStore::open_with_options(
             stage,
-            crate::storage_backend::regolith_options().with_encryption_key(*key.0),
+            crate::store::local::storage_backend::regolith_options().with_encryption_key(*key.0),
         )?;
         let verified = verify_values(&source, &destination, progress).await;
         let closed = destination.close().await;
@@ -462,12 +464,14 @@ async fn recheck_source(
     key: &StoreKey,
     progress: &mut (dyn FnMut(&'static str) + Send),
 ) -> Result<bool> {
-    let source =
-        RegolithStore::open_with_options(data, crate::storage_backend::regolith_options())?;
+    let source = RegolithStore::open_with_options(
+        data,
+        crate::store::local::storage_backend::regolith_options(),
+    )?;
     let result = async {
         let destination = RegolithStore::open_with_options(
             stage,
-            crate::storage_backend::regolith_options().with_encryption_key(*key.0),
+            crate::store::local::storage_backend::regolith_options().with_encryption_key(*key.0),
         )?;
         let equal = values_equal(&source, &destination, progress).await;
         let closed = destination.close().await;

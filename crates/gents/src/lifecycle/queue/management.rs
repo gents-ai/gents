@@ -1,8 +1,8 @@
 use super::intake::pending_in_txn;
 use super::*;
 use crate::config_client::ConfigAccess;
-use crate::identity::NodeIdentity;
 use crate::lifecycle::{RequestIdentity, RequestSigner, RequestSpec, WorkspaceLineage};
+use crate::store::identity::NodeIdentity;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -508,7 +508,7 @@ mod input_reissuance_tests {
     async fn generated_reissued_inputs_keep_reordered_messages_goal_and_captures() {
         let temp = tempfile::tempdir().unwrap();
         let signer =
-            crate::identity::KeyIdentity::load_or_create(temp.path().join("node.key"), None)
+            crate::store::identity::KeyIdentity::load_or_create(temp.path().join("node.key"), None)
                 .unwrap();
         let cases = &crate::lean_vocab_test::lean_contract_snapshot().request_input_cases;
         let mut exercised = 0;
@@ -563,7 +563,7 @@ mod input_reissuance_tests {
                 crate::lifecycle::build_signed_request(spec, RequestSigner::Identity(&signer))
                     .await
                     .unwrap();
-            assert!(crate::identity::verify_did_signature(
+            assert!(crate::store::identity::verify_did_signature(
                 signer.did(),
                 &create.signing_payload(),
                 &create.admission.signature,
@@ -640,7 +640,7 @@ pub(crate) async fn validate_pending_user_edit_in_txn(
             );
             create.graphql_input_fields().map_err(anyhow::Error::msg)?;
             anyhow::ensure!(
-                crate::identity::verify_did_signature(
+                crate::store::identity::verify_did_signature(
                     requester_did,
                     &create.signing_payload(),
                     &create.admission.signature

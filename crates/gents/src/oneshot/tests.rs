@@ -92,11 +92,11 @@ impl CompletionModel for PartialThenEmptyProvider {
 async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
     let dir = tempfile::tempdir().unwrap();
     let identity =
-        crate::identity::KeyIdentity::load_or_create(dir.path().join("identity.key"), None)
+        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("identity.key"), None)
             .unwrap();
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
-            .with_node_identity_did(crate::identity::NodeIdentity::did(&identity))
+            .with_node_identity_did(crate::store::identity::NodeIdentity::did(&identity))
             .data_path(dir.path())
             .build()
             .await
@@ -314,12 +314,14 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
 
     for request_scoped in [true, false] {
         let dir = tempfile::tempdir().unwrap();
-        let identity =
-            crate::identity::KeyIdentity::load_or_create(dir.path().join("identity.key"), None)
-                .unwrap();
+        let identity = crate::store::identity::KeyIdentity::load_or_create(
+            dir.path().join("identity.key"),
+            None,
+        )
+        .unwrap();
         let node = Arc::new(
             defra_node::EmbeddedNode::builder()
-                .with_node_identity_did(crate::identity::NodeIdentity::did(&identity))
+                .with_node_identity_did(crate::store::identity::NodeIdentity::did(&identity))
                 .data_path(dir.path())
                 .build()
                 .await
@@ -508,10 +510,11 @@ impl CompletionModel for OneshotBashProvider {
 async fn oneshot_bash_uses_owned_request_context() {
     let dir = tempfile::tempdir().unwrap();
     let identity =
-        crate::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
+        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("node.key"), None)
+            .unwrap();
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
-            .with_node_identity_did(crate::identity::NodeIdentity::did(&identity))
+            .with_node_identity_did(crate::store::identity::NodeIdentity::did(&identity))
             .data_path(dir.path().join("db"))
             .build()
             .await

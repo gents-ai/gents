@@ -12,7 +12,7 @@ use gents_protocol::output::{
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 
 use crate::lean_vocab_test::{
     CanonicalExecutionAdapter, ExecutionFuture, LeanAuxiliaryKind,

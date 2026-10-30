@@ -12,11 +12,11 @@ type ControlState = (Arc<KeyIdentity>, SeenCommands);
 #[test]
 fn custody_refusals_preserve_key_access_without_reclassifying_authorization() {
     for error in [
-        anyhow::Error::new(gents::store_key::StoreKeyUnavailable {
+        anyhow::Error::new(gents::store::local::store_key::StoreKeyUnavailable {
             data_path: std::path::PathBuf::from("fixture/data"),
             code: -25308,
         }),
-        anyhow::Error::new(gents::identity::IdentityKeyUnavailable {
+        anyhow::Error::new(gents::store::identity::IdentityKeyUnavailable {
             label: "fixture-identity".to_owned(),
             code: -25308,
         }),
@@ -218,7 +218,7 @@ async fn preparation_busy_refusal_leaves_identity_store_and_saved_route_unchange
     let init_before = std::fs::read(home.join("init.json")).unwrap();
     let state_before = std::fs::read(home.join("runtime.json")).unwrap();
     let key_before = std::fs::read(&key).unwrap();
-    let store_claim = gents::home::lock_home_store(&home).unwrap();
+    let store_claim = gents::store::local::home::lock_home_store(&home).unwrap();
     let cli = crate::cli::Cli::try_parse_from([
         "gents",
         "prepare-runtime",
@@ -295,9 +295,9 @@ async fn preparation_missing_store_key_refuses_before_requesting_retirement() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().canonicalize().unwrap();
     let mut config = record_home(&node, &home);
-    config.store_encryption = Some(gents::store_key::StoreEncryption {
-        version: gents::store_key::STORE_ENCRYPTION_VERSION,
-        custody: gents::store_key::StoreKeyCustody::File,
+    config.store_encryption = Some(gents::store::local::store_key::StoreEncryption {
+        version: gents::store::local::store_key::STORE_ENCRYPTION_VERSION,
+        custody: gents::store::local::store_key::StoreKeyCustody::File,
     });
     crate::home_state::write_init_config(&home, &config).unwrap();
     let init_before = std::fs::read(home.join("init.json")).unwrap();
@@ -325,6 +325,6 @@ async fn preparation_missing_store_key_refuses_before_requesting_retirement() {
         std::fs::read(home.join("runtime.json")).unwrap(),
         state_before
     );
-    assert!(!gents::store_key::home_key_file(&home).exists());
+    assert!(!gents::store::local::store_key::home_key_file(&home).exists());
     assert!(!home.join("data").exists());
 }

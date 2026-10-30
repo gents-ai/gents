@@ -1,5 +1,5 @@
 use super::*;
-use crate::identity::KeyIdentity;
+use crate::store::identity::KeyIdentity;
 use serde_json::{json, Value};
 
 async fn fixture() -> (

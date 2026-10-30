@@ -101,7 +101,7 @@ async fn canonical_segment_genesis_is_immutable_under_concurrent_and_repeated_cr
             .build()
             .await?,
     );
-    gents::schema::ensure_runtime_schemas(&node).await?;
+    gents::store::schema::ensure_runtime_schemas(&node).await?;
     let original = segment("original");
 
     let (first, second) = tokio::join!(create(&node, &original), create(&node, &original));

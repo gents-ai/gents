@@ -677,12 +677,15 @@ mod tests {
     struct MaterializationTestIdentity;
 
     #[async_trait::async_trait]
-    impl crate::identity::NodeIdentity for MaterializationTestIdentity {
+    impl crate::store::identity::NodeIdentity for MaterializationTestIdentity {
         fn did(&self) -> &str {
             "did:test:test"
         }
 
-        async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, crate::identity::IdentityError> {
+        async fn sign(
+            &self,
+            payload: &[u8],
+        ) -> Result<Vec<u8>, crate::store::identity::IdentityError> {
             Ok(Sha512::digest(payload).to_vec())
         }
 
@@ -691,16 +694,16 @@ mod tests {
             did: &str,
             payload: &[u8],
             signature: &[u8],
-        ) -> Result<bool, crate::identity::IdentityError> {
+        ) -> Result<bool, crate::store::identity::IdentityError> {
             Ok(did == self.did() && signature == Sha512::digest(payload).as_slice())
         }
 
-        fn service_account(&self) -> Option<&crate::identity::ServiceAccount> {
+        fn service_account(&self) -> Option<&crate::store::identity::ServiceAccount> {
             None
         }
     }
 
-    fn materialization_identity() -> Arc<dyn crate::identity::NodeIdentity> {
+    fn materialization_identity() -> Arc<dyn crate::store::identity::NodeIdentity> {
         Arc::new(MaterializationTestIdentity)
     }
 

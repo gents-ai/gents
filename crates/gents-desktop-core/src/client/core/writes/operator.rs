@@ -174,7 +174,7 @@ impl ClientCore {
     pub fn operator_signer(
         &self,
         node_did: &str,
-    ) -> Result<std::sync::Arc<dyn gents::identity::NodeIdentity>> {
+    ) -> Result<std::sync::Arc<dyn gents::store::identity::NodeIdentity>> {
         let record = self
             .sync_state
             .records()
