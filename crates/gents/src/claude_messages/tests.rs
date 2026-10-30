@@ -7,6 +7,8 @@ use rig::http_client;
 use rig::streaming::RawStreamingChoice;
 use serde_json::{json, Value};
 
+use super::fixtures::*;
+use super::sse_body::{stream_sse_body, stream_sse_body_observed};
 use super::*;
 use crate::llm::message::{
     AssistantContent, Image, Message, ReasoningContent, ToolCall, ToolFunction, ToolResultContent,
