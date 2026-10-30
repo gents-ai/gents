@@ -450,7 +450,7 @@ pub async fn wait_for_completed_tool_calls(
 /// delivery briefly, so wait for the addressed reply to become visible.
 pub async fn canonical_tool_result_text(graphql: &str, call: &Value) -> Result<String> {
     use gents::config_client::ConfigAccess;
-    use gents::tool_call_lifecycle::{load_tool_call_result, render_tool_result};
+    use gents::tools::call::lifecycle::{load_tool_call_result, render_tool_result};
 
     let required = |field: &str| -> Result<&str> {
         call.get(field)

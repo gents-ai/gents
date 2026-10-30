@@ -441,7 +441,7 @@ impl ToolCallSnapshot {
         &self,
         node: std::sync::Arc<EmbeddedNode>,
     ) -> anyhow::Result<String> {
-        let message = gents::tool_call_lifecycle::load_tool_call_result(
+        let message = gents::tools::call::lifecycle::load_tool_call_result(
             &gents::config_client::ConfigAccess::local(node),
             &self.doc_id,
             &self.node_did,
@@ -449,14 +449,14 @@ impl ToolCallSnapshot {
             self.requester_did.as_deref(),
         )
         .await?;
-        gents::tool_call_lifecycle::render_tool_result(&message)
+        gents::tools::call::lifecycle::render_tool_result(&message)
     }
 
     pub async fn try_load_arguments(
         &self,
         node: std::sync::Arc<EmbeddedNode>,
     ) -> anyhow::Result<String> {
-        gents::tool_call_lifecycle::load_tool_call_arguments(
+        gents::tools::call::lifecycle::load_tool_call_arguments(
             &gents::config_client::ConfigAccess::local(node),
             &self.doc_id,
             &self.node_did,

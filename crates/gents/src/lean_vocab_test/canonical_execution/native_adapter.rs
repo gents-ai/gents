@@ -384,9 +384,9 @@ impl NativeCanonicalExecution {
             },
         };
         let rendered =
-            crate::tool_call_lifecycle::delivery::render_presentation(&raw, &presentation)?;
+            crate::tools::call::lifecycle::delivery::render_presentation(&raw, &presentation)?;
         let physical = self.physical_tool(document)?.to_owned();
-        let mut tool = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+        let mut tool = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
             self.node.clone(),
             &physical,
             &self.node_did,
@@ -1700,7 +1700,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     );
                     let physical = native.physical_tool(*document)?.to_owned();
                     let prepared = native.tool_output_segment(record, *document, &physical)?;
-                    let tool = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+                    let tool = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
                         native.node.clone(),
                         &physical,
                         &native.node_did,
@@ -1710,7 +1710,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     .await?
                     .context("accepted physical tool disappeared before output append")?;
                     let binding = tool.tool_output_binding()?;
-                    let receipt = crate::tool_call_lifecycle::delivery::append_tool_output_at(
+                    let receipt = crate::tools::call::lifecycle::delivery::append_tool_output_at(
                         &binding,
                         &prepared.payload,
                         native.fixture_time(record.created_at)?,
@@ -1721,7 +1721,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         Ok(receipt) => receipt,
                         Err(error)
                             if error
-                                .downcast_ref::<crate::tool_call_lifecycle::delivery::ToolOutputAppendRejection>()
+                                .downcast_ref::<crate::tools::call::lifecycle::delivery::ToolOutputAppendRejection>()
                                 .is_some() =>
                         {
                             return native.observe(false).await;
@@ -1827,15 +1827,16 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         "native dispatch adapter has no external denial injection"
                     );
                     let physical = native.physical_tool(*call)?.to_owned();
-                    let mut tool = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
-                        native.node.clone(),
-                        &physical,
-                        &native.node_did,
-                        &native.session_id,
-                        Some(&native.node_did),
-                    )
-                    .await?
-                    .context("accepted physical tool disappeared before dispatch")?;
+                    let mut tool =
+                        crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
+                            native.node.clone(),
+                            &physical,
+                            &native.node_did,
+                            &native.session_id,
+                            Some(&native.node_did),
+                        )
+                        .await?
+                        .context("accepted physical tool disappeared before dispatch")?;
                     match tool
                         .start_running_at(native.fixture_time(*now)?, &symbolic_generation(*generation))
                         .await
@@ -1843,7 +1844,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         Ok(()) => native.observe(true).await,
                         Err(error)
                             if error
-                                .downcast_ref::<crate::tool_call_lifecycle::delivery::ToolDispatchRejection>()
+                                .downcast_ref::<crate::tools::call::lifecycle::delivery::ToolDispatchRejection>()
                                 .is_some() =>
                         {
                             native.observe(false).await
@@ -1960,15 +1961,16 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     let physical_parent = native
                         .physical_tool(admission.parent_tool_document)?
                         .to_owned();
-                    let mut parent = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
-                        Arc::clone(&native.node),
-                        &physical_parent,
-                        &native.node_did,
-                        &native.session_id,
-                        Some(&native.node_did),
-                    )
-                    .await?
-                    .context("spawned admission parent disappeared")?;
+                    let mut parent =
+                        crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
+                            Arc::clone(&native.node),
+                            &physical_parent,
+                            &native.node_did,
+                            &native.session_id,
+                            Some(&native.node_did),
+                        )
+                        .await?
+                        .context("spawned admission parent disappeared")?;
                     anyhow::ensure!(
                         parent.execution_generation()
                             == Some(symbolic_generation(*generation).as_str()),
@@ -1976,7 +1978,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     );
                     let child = parent
                         .admit_spawned_background_child_at(
-                            crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission {
+                            crate::tools::call::lifecycle::SpawnedBackgroundToolAdmission {
                                 tool_name: admission.operation.clone(),
                                 deadline_at: native.fixture_time(admission.deadline)?,
                                 selected_tool_identity: None,
@@ -3039,7 +3041,7 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
     let prepared = native
         .tool_output_segment(record, *document, &physical)
         .unwrap();
-    let tool = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+    let tool = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
         native.node.clone(),
         &physical,
         &native.node_did,
@@ -3081,7 +3083,7 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
             Some(1),
             "{label} deadline fixture must update exactly one physical tool"
         );
-        let error = crate::tool_call_lifecycle::delivery::append_tool_output_at(
+        let error = crate::tools::call::lifecycle::delivery::append_tool_output_at(
             &binding,
             &prepared.payload,
             native.fixture_time(record.created_at).unwrap(),
@@ -3095,7 +3097,8 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
         );
         assert!(
             error
-                .downcast_ref::<crate::tool_call_lifecycle::delivery::ToolOutputAppendRejection>()
+                .downcast_ref::<crate::tools::call::lifecycle::delivery::ToolOutputAppendRejection>(
+                )
                 .is_none(),
             "{label} deadline is an integrity error, not a modeled rejection: {error:#}"
         );
@@ -3431,7 +3434,7 @@ async fn canonical_tool_output_uses_modeled_physical_source_facts() {
                 response.errors
             );
         }
-        let actual = crate::background_tools::canonical_tool_output(
+        let actual = crate::tools::background::status::canonical_tool_output(
             &native.node,
             &physical_tool,
             &native.request_doc_id,

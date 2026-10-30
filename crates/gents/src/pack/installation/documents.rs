@@ -335,7 +335,7 @@ pub async fn prepare_document_pack_install(
         )
         .collect();
     for tools in &config.tools {
-        crate::plugin_job::settings::pack_job_block_admissible(
+        crate::tools::background::job::settings::pack_job_block_admissible(
             tools,
             &manifest.metadata,
             &coordinate,

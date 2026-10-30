@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::session::SequencedMessage;
-use crate::tool_call_lifecycle::ToolCallState;
+use crate::tools::call::lifecycle::ToolCallState;
 
-pub use crate::tool_call_lifecycle::FailureClass as ToolFailureClass;
+pub use crate::tools::call::lifecycle::FailureClass as ToolFailureClass;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

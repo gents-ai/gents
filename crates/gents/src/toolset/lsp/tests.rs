@@ -1063,7 +1063,7 @@ async fn simultaneous_first_calls_share_one_process() {
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn runtime_home_changes_exclude_cached_servers_without_workspace_consent() {
-    use crate::tool_call_lifecycle::runtime::{
+    use crate::tools::call::lifecycle::runtime::{
         scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
     };
     let directory = tempfile::tempdir().unwrap();
@@ -1156,7 +1156,7 @@ async fn runtime_home_changes_exclude_cached_servers_without_workspace_consent()
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn pooled_server_restarts_when_same_runtime_home_credential_path_changes() {
-    use crate::tool_call_lifecycle::runtime::{
+    use crate::tools::call::lifecycle::runtime::{
         scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
     };
 
@@ -2649,7 +2649,7 @@ exec sleep 30
         trigger.cancel();
     };
     let servers = [server];
-    let result = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+    let result = crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
         None,
         cancellation,
         super::actions::diagnostics::run_linter_diagnostics(
@@ -3064,10 +3064,10 @@ async fn overlay_read_write_meets_unrestricted_lsp_sandbox_to_workspace_write() 
         deny_git_metadata_writes: false,
     };
     let met =
-        crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+        crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
             None,
             tokio_util::sync::CancellationToken::new(),
-            crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+            crate::tools::call::lifecycle::runtime::ToolWorkspaceScope {
                 runtime_home: None,
                 workspace_cwd: None,
                 workspace_root: Some(std::env::temp_dir()),
@@ -3175,10 +3175,10 @@ pub(crate) async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispa
         config_digest: config.digest.clone(),
         operator_guard_home: None,
     };
-    crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+    crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
         None,
         tokio_util::sync::CancellationToken::new(),
-        crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+        crate::tools::call::lifecycle::runtime::ToolWorkspaceScope {
             runtime_home: None,
             workspace_cwd: Some(source.clone()),
             workspace_root: Some(source.clone()),

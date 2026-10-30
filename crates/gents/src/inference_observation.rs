@@ -208,7 +208,7 @@ async fn observation_visible(
     actor: &identity::Did,
     key: &InferenceKey,
 ) -> anyhow::Result<bool> {
-    let scope = if crate::plugin_job::control::operator_control_authorized(
+    let scope = if crate::tools::background::job::control::operator_control_authorized(
         &key.node,
         &key.node,
         &key.node,

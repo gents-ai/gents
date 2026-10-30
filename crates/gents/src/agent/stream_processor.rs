@@ -44,7 +44,7 @@ pub(crate) fn processor_failure(error: StreamProcessorError) -> anyhow::Error {
 #[cfg(test)]
 use crate::agent::loop_stream::LoopStreamItem;
 #[cfg(test)]
-use crate::hook::DefraSessionHook;
+use crate::tools::call::hook::DefraSessionHook;
 
 #[cfg(test)]
 #[path = "stream_processor_tests.rs"]

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use crate::tool_call_lifecycle::FailureClass;
+use crate::tools::call::lifecycle::FailureClass;
 use crate::toolset::CommandPolicyDenial;
 
 #[derive(Clone)]
@@ -184,14 +184,14 @@ impl ToolContext {
     }
 
     fn effective_root(&self) -> PathBuf {
-        crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+        crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
             .and_then(|runtime| runtime.workspace_root)
             .unwrap_or_else(|| (*self.root).clone())
     }
 
     fn effective_base(&self) -> PathBuf {
         let root = self.effective_root();
-        let runtime_base = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+        let runtime_base = crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
             .and_then(|runtime| runtime.workspace_cwd)
             .and_then(|base| resolve_base_dir(&root, Some(base)).ok());
         runtime_base

@@ -30,7 +30,7 @@ async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_remi
         as Arc<dyn gents_loop::output_obligation::OutputObligationCheck>);
     let stream = run_loop_stream(
         model.clone(),
-        None::<crate::hook::DefraSessionHook>,
+        None::<crate::tools::call::hook::DefraSessionHook>,
         TaggedMessage::unassociated(Message::user("do the work")),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -118,7 +118,7 @@ async fn managed_terminal_tool_result_terminates_loop() {
         owned_config(4),
     );
 
-    let collected = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+    let collected = crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
         Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
         tokio_util::sync::CancellationToken::new(),
         Box::pin(collect_owned_scripted_stream(

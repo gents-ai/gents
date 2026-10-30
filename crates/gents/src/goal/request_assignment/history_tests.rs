@@ -262,10 +262,10 @@ async fn persisted_history(case: &Value, identities: &[KeyIdentity]) {
         "{}: retained history in the caller's transaction",
         case["name"]
     );
-    let handoff = crate::background_completion::turn_assignment_handoff(
+    let handoff = crate::tools::background::completion::turn_assignment_handoff(
         &node,
         &rows[0],
-        &crate::tool_call_lifecycle::CausedRequestTerminal::Completed {
+        &crate::tools::call::lifecycle::CausedRequestTerminal::Completed {
             output: "turn finished".into(),
         },
     )

@@ -130,7 +130,7 @@ pub async fn promote(
 /// runs and the tools it was promoted to. Runs that failed, were cancelled or
 /// timed out are not promotable (`promote::gate`) and are left out.
 pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
-    use gents::plugin_job::view::{list_jobs, JobFilter, StateFilter};
+    use gents::tools::background::job::view::{list_jobs, JobFilter, StateFilter};
     use gents_protocol::job::{JobState, JobView};
     let (access, home) = crate::resolve_config_access(Some(&home), None).await?;
     let views = list_jobs(
@@ -144,11 +144,11 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
     )
     .await
     .map_err(crate::commands::job::read_error)?;
-    let promotions = gents::plugin_job::promote::list_promotions(&home)?;
+    let promotions = gents::tools::background::job::promote::list_promotions(&home)?;
     let mut scripts: std::collections::BTreeMap<&str, Vec<&JobView>> = Default::default();
     for view in views
         .iter()
-        .filter(|view| gents::plugin_job::promote::gate(view).is_ok())
+        .filter(|view| gents::tools::background::job::promote::gate(view).is_ok())
     {
         scripts.entry(&view.pin.script_id).or_default().push(view);
     }
@@ -198,12 +198,12 @@ pub async fn dynamic_workflow(home: PathBuf, selector: String) -> Result<Value> 
     let actor = crate::home_state::resolve_node_did(Some(&home), None)?;
     let (access, home) = crate::resolve_config_access(Some(&home), None).await?;
     let view = crate::commands::job::resolve_job(&access, &actor, &selector, None).await?;
-    let run = gents::plugin_job::promote::load_dynamic_run(
+    let run = gents::tools::background::job::promote::load_dynamic_run(
         &access,
-        gents::plugin_job::view::JobKey::RowDocId(view.row_doc_id),
+        gents::tools::background::job::view::JobKey::RowDocId(view.row_doc_id),
     )
     .await?;
-    let promotions = gents::plugin_job::promote::list_promotions(&home)?;
+    let promotions = gents::tools::background::job::promote::list_promotions(&home)?;
     Ok(serde_json::json!({
         "promoted_as": promoted_as(&promotions, &run.view.pin.script_id),
         "view": run.view,
@@ -212,7 +212,7 @@ pub async fn dynamic_workflow(home: PathBuf, selector: String) -> Result<Value> 
 }
 
 fn promoted_as(
-    promotions: &[gents::plugin_job::promote::PromotionRecord],
+    promotions: &[gents::tools::background::job::promote::PromotionRecord],
     script_id: &str,
 ) -> Vec<String> {
     promotions

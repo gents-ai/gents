@@ -33,7 +33,7 @@ pub struct PoolKey {
 
 impl PoolKey {
     fn validate_operator_guard(&self) -> Result<(), String> {
-        let runtime_home = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+        let runtime_home = crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
             .and_then(|context| context.runtime_home);
         if runtime_home != self.runtime_home {
             return Err("language-server runtime protection changed; retry the action".into());
@@ -671,7 +671,7 @@ impl LspPool {
         workspace: &std::path::Path,
         digest: &str,
     ) -> Result<RapidHashMap<String, PoolServerState>, String> {
-        let runtime_home = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+        let runtime_home = crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
             .and_then(|context| context.runtime_home);
         let operator_guard_home = crate::plugin::approval::workspace::command_guard_home()
             .map_err(|error| format!("{error:#}"))?;

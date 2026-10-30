@@ -28,8 +28,8 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::inference::llm::tool::{Tool, ToolDefinition};
-use crate::tool_call_lifecycle::FailureClass;
 use crate::tool_surface::{FileToolMode, ToolPolicyBash, ToolPolicySurface};
+use crate::tools::call::lifecycle::FailureClass;
 use crate::toolset::shared::{ToolContext, ToolError};
 use crate::toolset::{lsp_sandbox_for_effective, CommandConstraints, CommandNetworkMode};
 
@@ -134,7 +134,7 @@ pub fn constraints_from_effective_bash(
 // Persistent clients are shared across request lifetimes. Until they support
 // per-request artifact authority, neither starting nor borrowing one is legal.
 fn artifact_scope_denied() -> bool {
-    crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+    crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
         .is_some_and(|scope| scope.workspace_artifact.is_some())
 }
 const ARTIFACT_SCOPE_DENIAL: &str = "persistent LSP and supplementary linters are unavailable in artifact-scoped requests; use the sandboxed Bash compiler path";
@@ -161,7 +161,7 @@ impl LspTool {
     }
 
     fn effective_file_mode(&self) -> FileToolMode {
-        crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+        crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
             .and_then(|scope| scope.workspace_authority)
             .map(|authority| {
                 self.config
@@ -353,13 +353,13 @@ impl Tool for LspTool {
             };
             if let Some(server) = server {
                 let session_id =
-                    crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+                    crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
                         .and_then(|scope| scope.session_id)
                         .filter(|id| !id.is_empty())
                         .unwrap_or_else(|| self.config.session_id.clone());
                 let key = PoolKey {
                     runtime_home:
-                        crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+                        crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
                             .and_then(|context| context.runtime_home),
                     session_id,
                     agent_id: self.config.agent_id.clone(),
@@ -432,13 +432,13 @@ impl Tool for LspTool {
 }
 
 pub(crate) fn overlay_workspace_or(fallback: &Path) -> PathBuf {
-    crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+    crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
         .and_then(|scope| scope.workspace_root)
         .unwrap_or_else(|| fallback.to_path_buf())
 }
 
 pub(crate) fn overlay_lsp_constraints(base: &CommandConstraints) -> CommandConstraints {
-    let Some(authority) = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+    let Some(authority) = crate::tools::call::lifecycle::runtime::current_tool_runtime_context()
         .and_then(|scope| scope.workspace_authority)
     else {
         return base.clone();

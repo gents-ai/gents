@@ -188,7 +188,7 @@ async fn denied_native_file_changes_have_no_effects() {
         assert!(matches!(
             &result,
             Err(ToolError::ReportedFailure {
-                class: crate::tool_call_lifecycle::FailureClass::PolicyDenied,
+                class: crate::tools::call::lifecycle::FailureClass::PolicyDenied,
                 ..
             })
         ));
@@ -332,7 +332,7 @@ async fn full_access_file_changes_still_obey_the_configured_tool_root() {
 
 #[tokio::test]
 async fn full_access_cannot_widen_read_only_workspace_authority() {
-    use crate::tool_call_lifecycle::runtime::{
+    use crate::tools::call::lifecycle::runtime::{
         scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
     };
     let fixture = Fixture::new(Some(workspace::Mode::FullAccess));
@@ -358,7 +358,7 @@ async fn full_access_cannot_widen_read_only_workspace_authority() {
     assert!(matches!(
         result,
         Err(ToolError::ReportedFailure {
-            class: crate::tool_call_lifecycle::FailureClass::PolicyDenied,
+            class: crate::tools::call::lifecycle::FailureClass::PolicyDenied,
             ..
         })
     ));

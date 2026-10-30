@@ -8,11 +8,11 @@ use gents::config_client::ConfigAccess;
 use gents::documents::Tools;
 use gents::pack::authoring::check_dir;
 use gents::pack::authoring::test::run_plugin_cases;
-use gents::plugin_job::promote::{
+use gents::tools::background::job::promote::{
     generate_pack, load_dynamic_run, validate_name, write_promotion, PromoteRefusal,
     PromotionRecord,
 };
-use gents::plugin_job::view::JobKey;
+use gents::tools::background::job::view::JobKey;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -313,7 +313,7 @@ pub async fn promote(
 mod tests {
     use super::*;
     use gents::config_client::GraphqlEndpoint;
-    use gents::plugin_job::promote::gate;
+    use gents::tools::background::job::promote::gate;
     use gents_protocol::job::{JobOrigin, JobPinSummary, JobScope, JobState, JobView};
 
     fn view(state: JobState, origin: JobOrigin) -> JobView {

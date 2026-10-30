@@ -34,7 +34,7 @@ mod tests;
 #[cfg(test)]
 pub(crate) use tests::import_history_observation;
 
-pub use crate::tool_call_lifecycle::query::{
+pub use crate::tools::call::lifecycle::query::{
     load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,
     CanonicalToolCallPresentation,
 };

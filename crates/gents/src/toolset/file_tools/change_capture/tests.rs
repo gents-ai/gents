@@ -2,7 +2,7 @@ use super::*;
 use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
 use crate::inference::llm::tool::Tool;
-use crate::tool_call_lifecycle::admission_fixture::{
+use crate::tools::call::lifecycle::admission_fixture::{
     published_admission, PublishedAdmissionOptions,
 };
 use crate::toolset::args::WriteFileArgs;
@@ -161,7 +161,7 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
         let access = access.clone();
         let doc_id = doc_id.clone();
         async move {
-            crate::tool_call_lifecycle::query::load_tool_call_file_changes(
+            crate::tools::call::lifecycle::query::load_tool_call_file_changes(
                 &access,
                 &doc_id,
                 &request,
@@ -182,7 +182,7 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     .unwrap()
     .is_none());
     assert!(matches!(
-        crate::tool_call_lifecycle::load_tool_file_change_observation(
+        crate::tools::call::lifecycle::load_tool_file_change_observation(
             &access,
             &doc_id,
             &request_doc_id,
@@ -192,11 +192,11 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
         )
         .await
         .unwrap(),
-        crate::tool_call_lifecycle::ToolFileChangeRead::Pending
+        crate::tools::call::lifecycle::ToolFileChangeRead::Pending
     ));
     call.stage_deferred_writes(registry.deferred_writes(&doc_id).await);
-    crate::tool_call_lifecycle::delivery::fail_next_terminal_for_test(&doc_id);
-    crate::tool_call_lifecycle::file_inventory::fail_next_publication(&doc_id);
+    crate::tools::call::lifecycle::delivery::fail_next_terminal_for_test(&doc_id);
+    crate::tools::call::lifecycle::file_inventory::fail_next_publication(&doc_id);
     call.complete(&output).await.unwrap();
     let row = ConfigAccess::local(admission.node.clone())
         .execute(&format!(
@@ -361,11 +361,11 @@ async fn native_images_commit_with_their_physical_terminal_and_stay_out_of_tool_
     .unwrap()
     .unwrap();
     assert_eq!(serde_json::to_value(&retained).unwrap(), wire);
-    let crate::tool_call_lifecycle::ToolFileChangeRead::Retained {
+    let crate::tools::call::lifecycle::ToolFileChangeRead::Retained {
         document_id,
         changes,
         ..
-    } = crate::tool_call_lifecycle::load_tool_file_change_observation(
+    } = crate::tools::call::lifecycle::load_tool_file_change_observation(
         &access,
         &doc_id,
         &request_doc_id,
@@ -444,7 +444,7 @@ async fn maximum_images_survive_the_terminal_transaction_and_scoped_read() {
     ).await.unwrap();
     call.stage_deferred_writes(registry.deferred_writes(&doc_id).await);
     call.complete(&output).await.unwrap();
-    let retained = crate::tool_call_lifecycle::load_tool_call_file_changes(
+    let retained = crate::tools::call::lifecycle::load_tool_call_file_changes(
         &ConfigAccess::local(admission.node.clone()),
         &doc_id,
         call.request_doc_id().unwrap(),
@@ -557,7 +557,7 @@ async fn previews_and_rejected_edits_do_not_publish_file_images() {
 
 #[tokio::test]
 async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
-    use crate::tool_call_lifecycle::FailureClass;
+    use crate::tools::call::lifecycle::FailureClass;
     let admission = published_admission(PublishedAdmissionOptions {
         name: "file-change-failed-terminal".into(),
         real_identity: true,
@@ -627,7 +627,7 @@ async fn failed_tool_retains_partial_effects_and_rejects_foreign_images() {
     assert_eq!(row["AgentToolCall"][0]["lifecycle_state"], "failed");
     assert_stored_versions(&row["ToolFileChange"][0]["file_changes"]);
     let wire = serde_json::to_value(
-        crate::tool_call_lifecycle::query::load_tool_call_file_changes(
+        crate::tools::call::lifecycle::query::load_tool_call_file_changes(
             &access,
             &doc_id,
             call.request_doc_id().unwrap(),
@@ -787,7 +787,7 @@ async fn readonly_receipts_commit_without_images_and_survive_terminal_retry() {
     };
     assert!(!output.contains("verified_unchanged"));
     call.stage_deferred_writes(registry.deferred_writes(&doc_id).await);
-    let mut replay = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+    let mut replay = crate::tools::call::lifecycle::ToolCallLifecycle::load_by_doc_id(
         admission.node.clone(),
         &doc_id,
         &admission.node_did,
@@ -798,8 +798,8 @@ async fn readonly_receipts_commit_without_images_and_survive_terminal_retry() {
     .unwrap()
     .unwrap();
     replay.stage_deferred_writes(registry.deferred_writes(&doc_id).await);
-    crate::tool_call_lifecycle::delivery::fail_next_terminal_for_test(&doc_id);
-    crate::tool_call_lifecycle::file_inventory::fail_next_publication(&doc_id);
+    crate::tools::call::lifecycle::delivery::fail_next_terminal_for_test(&doc_id);
+    crate::tools::call::lifecycle::file_inventory::fail_next_publication(&doc_id);
     call.complete(&output).await.unwrap();
     replay.complete(&output).await.unwrap();
     let row = ConfigAccess::local(admission.node.clone()).execute(&format!(

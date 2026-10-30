@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::documents::TaskHook;
-use crate::hook::BackgroundExecutionRegistry;
 use crate::lean_vocab_test::{
     lean_recovery_sweep_cases, lean_task_hook_recovery_cases, LeanCommandResult, LeanTaskHook,
 };
@@ -13,6 +12,7 @@ use crate::request::task_hooks::{
     TaskHookRecordStore,
 };
 use crate::store::identity::{KeyIdentity, NodeIdentity};
+use crate::tools::call::hook::BackgroundExecutionRegistry;
 
 const AGENT_ID: &str = "general";
 

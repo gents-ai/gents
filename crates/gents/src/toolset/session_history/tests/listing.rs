@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn sessions_marks_only_the_callers_own_session_in_concurrent_tool_scopes() {
     use crate::config_client::ConfigAccess;
-    use crate::tool_call_lifecycle::runtime::{
+    use crate::tools::call::lifecycle::runtime::{
         scope_request_tool_execution_with_session, scope_tool_request_identity,
     };
 

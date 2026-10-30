@@ -1,5 +1,5 @@
 use super::*;
-use crate::tool_call_lifecycle::admission_fixture::{
+use crate::tools::call::lifecycle::admission_fixture::{
     ensure_fixture_session, published_admission_with_owner, PublishedAdmissionOptions,
 };
 
@@ -370,10 +370,10 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
                     );
                 }
                 if let Some(issued) = issued {
-                    crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request(
+                    crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request(
                         node.clone(), &mut request_owner, &scope.node_did, 1, "write_file",
                         "later-inventory-tool", json!({"path": "later.rs"}),
-                        crate::tool_call_lifecycle::AwaitMode::Foreground, true,
+                        crate::tools::call::lifecycle::AwaitMode::Foreground, true,
                     ).await.unwrap();
                     let changed = FileInventorySnapshot::load(&node, &admission)
                         .await
@@ -394,7 +394,7 @@ async fn generated_projection_cases_use_native_owners_and_scopes() {
 
 async fn retain_fork_fixture_capture(
     node: &Arc<EmbeddedNode>,
-    tool: &crate::tool_call_lifecycle::ToolCallLifecycle,
+    tool: &crate::tools::call::lifecycle::ToolCallLifecycle,
     path: &str,
 ) {
     use base64::Engine as _;
@@ -450,7 +450,7 @@ async fn retain_fork_fixture_capture(
 #[tokio::test]
 async fn generated_fork_inventory_retains_only_selected_native_origins() {
     use crate::session::{fork, ForkBoundary, ForkParams};
-    use crate::tool_call_lifecycle::admission_fixture::{
+    use crate::tools::call::lifecycle::admission_fixture::{
         claimed_signed_request, publish_accepted_on_claimed_request,
     };
     use serde_json::Value;
@@ -574,7 +574,7 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             "write_file",
             "later-parent-tool",
             serde_json::json!({"path": "selected.rs"}),
-            crate::tool_call_lifecycle::AwaitMode::Foreground,
+            crate::tools::call::lifecycle::AwaitMode::Foreground,
             true,
         )
         .await
@@ -696,7 +696,7 @@ async fn generated_fork_inventory_retains_only_selected_native_origins() {
             "external_tool",
             "uncaptured-tool",
             serde_json::json!({}),
-            crate::tool_call_lifecycle::AwaitMode::Foreground,
+            crate::tools::call::lifecycle::AwaitMode::Foreground,
             true,
         )
         .await
@@ -791,7 +791,7 @@ async fn completion_notification_orders_real_inventory_rows() {
 }
 
 async fn check_real_inventory_chronology(background: bool, notify: bool) {
-    use crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request;
+    use crate::tools::call::lifecycle::admission_fixture::publish_accepted_on_claimed_request;
     let contracts: serde_json::Value = tokio::task::spawn_blocking(
         gents_lean_contract::load_contract_snapshot::<serde_json::Value>,
     )
@@ -818,9 +818,9 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
         name: "inventory-terminal-chronology".into(),
         real_identity: true,
         await_mode: if background {
-            crate::tool_call_lifecycle::AwaitMode::Background
+            crate::tools::call::lifecycle::AwaitMode::Background
         } else {
-            crate::tool_call_lifecycle::AwaitMode::Foreground
+            crate::tools::call::lifecycle::AwaitMode::Foreground
         },
         ..Default::default()
     })
@@ -836,7 +836,7 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
     }
     first.complete("first retained output").await.unwrap();
     if notify {
-        crate::background_completion::append_background_tool_completion(
+        crate::tools::background::completion::append_background_tool_completion(
             &node,
             first.session_id(),
             &request.request().request_id,
@@ -859,7 +859,7 @@ async fn check_real_inventory_chronology(background: bool, notify: bool) {
         "write_file",
         "second-chronology-tool",
         serde_json::json!({"path":"repeated.rs"}),
-        crate::tool_call_lifecycle::AwaitMode::Foreground,
+        crate::tools::call::lifecycle::AwaitMode::Foreground,
         true,
     )
     .await

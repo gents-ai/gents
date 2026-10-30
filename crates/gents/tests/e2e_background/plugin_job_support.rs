@@ -8,11 +8,11 @@ use gents::pack::{
     install_prepared_document_pack, load_pack_config, prepare_document_pack_install, DriftPolicy,
     InstalledVia, PackInferenceBindings, PackInstallOptions,
 };
-use gents::plugin_job::job::{
+use gents::tools::background::job::job::{
     JobChildState, JobControlRequest, JobEffects, JobGuestPin, JobPolicy, JobReadError, JobSpawn,
     JobState, JobStepOutput, JobView, PluginJobSettings,
 };
-use gents::plugin_job::view::{load_job_view, JobKey};
+use gents::tools::background::job::view::{load_job_view, JobKey};
 use gents::{ConfigAccess, DocumentRuntimeOptions, Gents, NodeIdentity};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};

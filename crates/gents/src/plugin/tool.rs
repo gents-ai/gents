@@ -14,7 +14,7 @@ use crate::documents::{PluginToolRef, WriteToolField};
 use crate::inference::llm::tool::{
     BoxFuture, ToolDefinition, ToolDispatchResult, ToolDyn, ToolError,
 };
-use crate::tool_call_lifecycle::delivery::PluginToolWrites;
+use crate::tools::call::lifecycle::delivery::PluginToolWrites;
 use gents_loop::live_output::DeferredToolWrites;
 use gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context;
 

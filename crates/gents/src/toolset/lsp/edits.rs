@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 use super::super::file_tools::{content_hash, file_content_hash, file_mutation_lock_for};
-use crate::tool_call_lifecycle::FailureClass;
+use crate::tools::call::lifecycle::FailureClass;
 use crate::toolset::shared::{ToolContext, ToolError};
 
 use super::client::LspClient;

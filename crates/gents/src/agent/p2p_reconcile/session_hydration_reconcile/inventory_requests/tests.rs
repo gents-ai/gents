@@ -12,10 +12,10 @@ use crate::file_inventory::{
 };
 use crate::request::lifecycle::{ClaimOutcome, RequestLifecycle};
 use crate::store::identity::KeyIdentity;
-use crate::tool_call_lifecycle::admission_fixture::{
+use crate::tools::call::lifecycle::admission_fixture::{
     ensure_fixture_session, publish_accepted_on_claimed_request,
 };
-use crate::tool_call_lifecycle::AwaitMode;
+use crate::tools::call::lifecycle::AwaitMode;
 use gents_loop::live_output::LiveToolOutputRegistry;
 use gents_protocol::file_inventory::FileInventoryAdmission;
 use gents_protocol::request_admission::{

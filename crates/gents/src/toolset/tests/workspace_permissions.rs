@@ -137,7 +137,7 @@ async fn denied_command_cannot_execute() {
     assert!(matches!(
         result,
         Err(ToolError::ReportedFailure {
-            class: crate::tool_call_lifecycle::FailureClass::PolicyDenied,
+            class: crate::tools::call::lifecycle::FailureClass::PolicyDenied,
             ..
         })
     ));
@@ -324,7 +324,7 @@ async fn workspace_command_sandbox_tracks_the_selected_permission_mode() {
                 let output: serde_json::Value = match result {
                     Ok(output) if allowed => serde_json::from_str(&output).unwrap(),
                     Err(ToolError::ReportedFailure {
-                        class: crate::tool_call_lifecycle::FailureClass::ToolReturnedError,
+                        class: crate::tools::call::lifecycle::FailureClass::ToolReturnedError,
                         text,
                     }) if !allowed => serde_json::from_str(&text).unwrap(),
                     other => panic!("unexpected command result: {other:?}"),

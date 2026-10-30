@@ -12,13 +12,13 @@ use super::{AgentDaemon, HandleRequestOutcome, ShutdownDrainFailure};
 use crate::agent::loop_stream::{LoopReplayInput, TaggedMessage};
 use crate::agent::stream_processor::{processor_failure, RuntimeSeamError};
 use crate::error::LoopFailureCause;
-use crate::hook::DefraSessionHook;
 use crate::inference::admission::{self, CallKind};
 use crate::inference::compaction::ReductionOptions;
 use crate::inference::llm::message::Message;
 use crate::inference::resolved::{MaxTurnsProvenance, ResolvedAgent};
 use crate::request::streaming::StreamWriter;
 use crate::request::watcher::AgentRequest;
+use crate::tools::call::hook::DefraSessionHook;
 
 type RequestDeadline = Option<DateTime<Utc>>;
 
@@ -36,7 +36,9 @@ const BACKGROUND_WAKE_RESULT_FRAMING: &str = "Review the background execution re
 fn wake_frontier_message(authored: &Message, wake_notifications: &[TaggedMessage]) -> Message {
     if !wake_notifications.is_empty()
         && *authored
-            == Message::user(crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT)
+            == Message::user(
+                crate::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+            )
     {
         Message::user(BACKGROUND_WAKE_RESULT_FRAMING)
     } else {
@@ -186,7 +188,7 @@ where
         request_token: &tokio_util::sync::CancellationToken,
         aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
         effective_seed: Option<i64>,
-        mut workspace: crate::tool_call_lifecycle::runtime::ToolWorkspaceScope,
+        mut workspace: crate::tools::call::lifecycle::runtime::ToolWorkspaceScope,
         request_context_message: Option<crate::inference::llm::message::Message>,
         resume_from_history: bool,
         consumed_prompts: Vec<crate::agent::loop_stream::FoldedPrompt>,
@@ -740,7 +742,7 @@ where
                                     }
                                 } => {
                                     let progress = async {
-                                        crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                                        crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
                                             request_deadline,
                                             request_token.clone(),
                                             None,
@@ -766,7 +768,7 @@ where
                                 }
                                 result = await_with_request_deadline(
                                     request_deadline,
-                                    crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+                                    crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
                                         request_deadline,
                                         request_token.clone(),
                                         None,
@@ -968,12 +970,12 @@ where
                 retry_attempt = false,
             )));
 
-        let outcome = crate::tool_call_lifecycle::runtime::scope_tool_request_identity(
+        let outcome = crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
             request.requester_did.clone(),
             Some(request.node_did.clone()),
             Some(agent_id.to_string()),
             Some(request.request_id.clone()),
-            crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+            crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
                 request_deadline,
                 request_token.clone(),
                 workspace,
@@ -1014,7 +1016,6 @@ pub(super) mod tests {
     use crate::agent::daemon::AgentDaemonInit;
     use crate::agent::runtime::StartupBarrier;
     use crate::error::LoopFailureCause;
-    use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
     use crate::inference::backends::provider::BackendProviderKind;
     use crate::inference::llm::tool::ToolDyn;
     use crate::inference::resolved::{ResolvedAgent, SamplingConfig};
@@ -1022,6 +1023,9 @@ pub(super) mod tests {
     use crate::request::watcher::AgentRequest;
     use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
     use crate::tool_surface::AgentToolSurfaceConfig;
+    use crate::tools::call::hook::{
+        BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
+    };
     use anyhow::Context;
     use futures::stream;
     use rig::completion::{
@@ -1149,7 +1153,7 @@ pub(super) mod tests {
                     };
                     if first {
                         if let Some((node, request_id, did)) = &self.successor {
-                            crate::tool_call_lifecycle::admission_fixture::complete_child(
+                            crate::tools::call::lifecycle::admission_fixture::complete_child(
                                 node,
                                 request_id,
                                 did,
@@ -1157,7 +1161,7 @@ pub(super) mod tests {
                             )
                             .await;
                             assert_eq!(
-                                crate::background_completion::settle_running_session_message_rows(
+                                crate::tools::background::completion::settle_running_session_message_rows(
                                     node, did
                                 )
                                 .await
@@ -1442,8 +1446,8 @@ pub(super) mod tests {
         use super::{
             request_entry, wake_frontier_message, TaggedMessage, BACKGROUND_WAKE_RESULT_FRAMING,
         };
-        use crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
         use crate::inference::llm::message::Message;
+        use crate::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
 
         let notification = TaggedMessage::unassociated(Message::user(
             "<tool-completion tool_call_id=\"c1\" status=\"completed\">".to_owned(),
@@ -1768,7 +1772,7 @@ pub(super) mod tests {
         use gents_protocol::request_lifecycle::RequestLifecycleState;
 
         let (selected, successor) =
-            crate::tool_call_lifecycle::completion_owner_conformance::selected_background_wake_with_successor(true)
+            crate::tools::call::lifecycle::completion_owner_conformance::selected_background_wake_with_successor(true)
                 .await;
         let admission = selected.admission;
         let wake = selected.wake;

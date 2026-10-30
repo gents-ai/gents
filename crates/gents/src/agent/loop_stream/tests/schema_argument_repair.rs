@@ -108,7 +108,7 @@ async fn generated_schema_argument_repair_cases_drive_owned_loop() {
             .iter()
             .find(|row| row["tool_call_id"] == format!("repair-{index}"))
             .unwrap();
-        let arguments = crate::tool_call_lifecycle::load_tool_call_arguments(
+        let arguments = crate::tools::call::lifecycle::load_tool_call_arguments(
             &access,
             row["_docID"].as_str().unwrap(),
             "did:test:test",

@@ -6,8 +6,8 @@ use gents_fs_runner::protocol::{NativeFsRunnerRequest, NativeFsRunnerResponse};
 
 use super::shared::{ToolContext, ToolError};
 use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
-use crate::tool_call_lifecycle::runtime::current_tool_runtime_context;
-use crate::tool_call_lifecycle::FailureClass;
+use crate::tools::call::lifecycle::runtime::current_tool_runtime_context;
+use crate::tools::call::lifecycle::FailureClass;
 
 const MAX_NATIVE_RUNNER_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 // The runner truncates its own results; an oversized response fails to decode.
@@ -424,7 +424,7 @@ mod tests {
         let original = std::fs::read(source.join("README.md")).unwrap();
         let context = ToolContext::new(source.clone(), false).unwrap();
         let runner = NativeFsRunner::new(&context);
-        let scope = crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+        let scope = crate::tools::call::lifecycle::runtime::ToolWorkspaceScope {
             runtime_home: None,
             workspace_cwd: Some(source.clone()),
             workspace_root: Some(source.clone()),
@@ -452,7 +452,7 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
             ],
             cwd: source.clone(),
         };
-        let output = crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+        let output = crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
             None, tokio_util::sync::CancellationToken::new(), scope.clone(),
             None, None, None, Default::default(), false,
             runner.run_resolved(request(), "glob", command()),
@@ -473,7 +473,7 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
             )
             .await
             .unwrap();
-        let error = crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+        let error = crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
             None, tokio_util::sync::CancellationToken::new(), scope,
             None, None, None, Default::default(), false,
             runner.run_resolved(request(), "glob", command()),
@@ -502,10 +502,10 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
         let now = Utc::now();
         let dispatch_error = fs_runner_timed_out_error("grep", None, now).into_dispatch_error();
         let outcome =
-            crate::tool_call_lifecycle::ToolOutcome::from_dispatch("grep", Err(dispatch_error));
+            crate::tools::call::lifecycle::ToolOutcome::from_dispatch("grep", Err(dispatch_error));
         assert!(matches!(
             outcome,
-            crate::tool_call_lifecycle::ToolOutcome::Failed {
+            crate::tools::call::lifecycle::ToolOutcome::Failed {
                 class: FailureClass::External,
                 ..
             }

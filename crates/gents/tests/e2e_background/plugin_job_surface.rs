@@ -3,10 +3,10 @@
 
 use std::time::Duration;
 
-use gents::background_tools::ProcessControlScope;
 use gents::plugin::data::StampContext;
 use gents::plugin::job_calls::{result as read_result, JobCaller};
-use gents::plugin_job::job::JobState;
+use gents::tools::background::job::job::JobState;
+use gents::tools::background::status::ProcessControlScope;
 use gents::ConfigAccess;
 use gents_protocol::job::JobResultRequest;
 use serde_json::{json, Value};
@@ -21,7 +21,7 @@ use crate::support::test_db;
 const TOOL_CALL: &str = "job-s";
 const CHILD_PROMPT: &str = "surface child a";
 
-fn entry(when: Value, output: gents::plugin_job::job::JobStepOutput) -> PlanEntry {
+fn entry(when: Value, output: gents::tools::background::job::job::JobStepOutput) -> PlanEntry {
     PlanEntry {
         when,
         output,

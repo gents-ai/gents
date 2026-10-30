@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents::config_client::ConfigAccess;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use gents::tool_call_lifecycle::{load_tool_call_presentation, CanonicalToolCallPresentation};
+use gents::tools::call::lifecycle::{load_tool_call_presentation, CanonicalToolCallPresentation};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 

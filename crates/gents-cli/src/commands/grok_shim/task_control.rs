@@ -1,7 +1,7 @@
 //! Stock task-button control, delegated to the runtime's process owner.
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
-use gents::{graphql::escape_graphql_string, hook::BackgroundExecutionRegistry};
+use gents::{graphql::escape_graphql_string, tools::call::hook::BackgroundExecutionRegistry};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -92,7 +92,7 @@ pub(super) async fn kill(
     };
     let outcome = if let Some((owner_session, agent, requester)) = scope {
         use gents::CancelBackgroundToolCallOutcome as Outcome;
-        match gents::tool_control::cancel_session_background_process(
+        match gents::tools::call::control::cancel_session_background_process(
             node,
             executions,
             &agent,

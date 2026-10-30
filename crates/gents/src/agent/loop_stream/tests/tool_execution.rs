@@ -418,7 +418,7 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
         .find(|row| row["tool_name"] == "echo")
         .and_then(|row| row["_docID"].as_str())
         .unwrap();
-    let output = crate::background_tools::canonical_tool_output(
+    let output = crate::tools::background::status::canonical_tool_output(
         &node,
         tool_doc_id,
         &lifecycle.request().doc_id,
@@ -826,14 +826,14 @@ async fn dispatch_tool_types_unparseable_args_as_argument_invalid() {
     for case in cases {
         let result = super::dispatch_tool(&tools, "strict", case.arguments, None, None).await;
         match &result {
-            crate::tool_call_lifecycle::ToolOutcome::Failed {
+            crate::tools::call::lifecycle::ToolOutcome::Failed {
                 class,
                 denial: None,
                 text,
             } => {
                 assert_eq!(
                     *class,
-                    crate::tool_call_lifecycle::FailureClass::ArgumentInvalid
+                    crate::tools::call::lifecycle::FailureClass::ArgumentInvalid
                 );
                 assert!(
                     text.contains(&format!("arguments were rejected ({})", case.kind)),
@@ -1284,7 +1284,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
                 .as_u64()
                 .expect("execution must report index work"),
         );
-        let output = crate::background_tools::canonical_tool_output(
+        let output = crate::tools::background::status::canonical_tool_output(
             &node,
             "tool-doc",
             &request_id,
@@ -1296,7 +1296,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
         .unwrap();
         assert_eq!(output, "output");
         assert_eq!(
-            crate::background_tools::observe_canonical_tool_output_with_access(
+            crate::tools::background::status::observe_canonical_tool_output_with_access(
                 &crate::config_client::ConfigAccess::local(node.clone()),
                 "tool-doc",
                 &request_id,
@@ -1306,7 +1306,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
             )
             .await
             .unwrap(),
-            crate::background_tools::CanonicalToolOutputObservation::Closed(output)
+            crate::tools::background::status::CanonicalToolOutputObservation::Closed(output)
         );
     }
     assert_eq!(
@@ -1350,7 +1350,7 @@ impl ToolDyn for ComposedChild {
                 tokio::time::timeout(Duration::from_millis(50), std::future::pending::<()>()).await;
             assert!(local.is_err());
             Err(ToolError::ReportedFailure {
-                class: crate::tool_call_lifecycle::FailureClass::External,
+                class: crate::tools::call::lifecycle::FailureClass::External,
                 text: "late timed out after 50ms".into(),
             })
         })
@@ -1399,7 +1399,7 @@ async fn composed_children_outlast_the_guest_clock_and_fail_without_ending_the_p
         Arc::new(tools),
         owned_config(4),
     );
-    let collected = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+    let collected = crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
         Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
         tokio_util::sync::CancellationToken::new(),
         Box::pin(collect_owned_scripted_stream(
@@ -1473,7 +1473,7 @@ impl ToolDyn for ComposingParent {
                 );
                 let completed = matches!(
                     outcome,
-                    Ok(crate::tool_call_lifecycle::ToolOutcome::Completed(_))
+                    Ok(crate::tools::call::lifecycle::ToolOutcome::Completed(_))
                 );
                 self.completed.lock().unwrap().push((*ordinal, completed));
             }
@@ -1508,7 +1508,7 @@ impl ToolDyn for AdmissionChild {
             return Ok(());
         }
         Err(ToolError::ReportedFailure {
-            class: crate::tool_call_lifecycle::FailureClass::PolicyDenied,
+            class: crate::tools::call::lifecycle::FailureClass::PolicyDenied,
             text: "admission refused".into(),
         })
     }
@@ -1531,7 +1531,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
         ["child_admission"]
         .as_array()
         .unwrap();
-    let hook_owned = crate::hook::persistence::HookOwnedTool::ROUTES.map(|(name, _)| name);
+    let hook_owned = crate::tools::call::hook::persistence::HookOwnedTool::ROUTES.map(|(name, _)| name);
     for selected in [false, true] {
         let mut children = Vec::new();
         let mut expected = std::collections::BTreeMap::new();
@@ -1571,7 +1571,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
             Arc::new(tools),
             owned_config(4),
         );
-        let collected = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+        let collected = crate::tools::call::lifecycle::runtime::scope_request_tool_execution(
             Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
             tokio_util::sync::CancellationToken::new(),
             Box::pin(collect_owned_scripted_stream(
@@ -1649,7 +1649,7 @@ impl ToolDyn for ParallelReadProbe {
                 self.second_finished.notified().await;
                 if self.fail_first {
                     return Err(ToolError::ReportedFailure {
-                        class: crate::tool_call_lifecycle::FailureClass::External,
+                        class: crate::tools::call::lifecycle::FailureClass::External,
                         text: "first read failed".into(),
                     });
                 }

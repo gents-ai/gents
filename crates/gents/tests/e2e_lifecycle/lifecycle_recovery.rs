@@ -5,7 +5,7 @@ use gents::{
         AGENT_OUTPUT_SEGMENT_FIELDS, CREATE_AGENT_MESSAGE_MUTATION,
         CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     },
-    tool_call_lifecycle::ToolCallLifecycle,
+    tools::call::lifecycle::ToolCallLifecycle,
     RequestLifecycle,
 };
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
@@ -349,7 +349,7 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
     assert_eq!(successor.retry_root_request.as_deref(), Some("failed-wake"));
     assert_eq!(
         successor.content.as_deref(),
-        Some(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT)
+        Some(gents::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT)
     );
     assert_eq!(successor.retry_count, Some(2));
     assert_eq!(successor.max_retries, Some(3));

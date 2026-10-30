@@ -11,11 +11,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
-use gents::plugin_job::keys::{job_session_id, job_spawn_key};
 use gents::session::canonical_rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
+use gents::tools::background::job::keys::{job_session_id, job_spawn_key};
 use gents_protocol::job::{
     JobBudget, JobCeiling, JobEffects, JobGuestPin, JobOrigin, JobPauseReason, JobPin, JobProgress,
     JobSpawn, JobState, JobStepOutput,

@@ -4,7 +4,7 @@ use defra_node::EmbeddedNode;
 use crate::inference::admission::{InferenceCall, InferenceCallRecoveryReport};
 use crate::inference::llm::tool::BoxFuture;
 use crate::request::lifecycle::{RequestLifecycle, TerminalRepairReport};
-use crate::tool_call_lifecycle::{
+use crate::tools::call::lifecycle::{
     BackgroundCompletionSideEffectReport, OrphanedBackgroundToolReport, TerminalParentToolReport,
     ToolCallLifecycle,
 };
@@ -67,7 +67,7 @@ impl PeriodicRecoverySweepRun {
 type PeriodicRecoverySweepFn = for<'a> fn(
     &'a std::sync::Arc<EmbeddedNode>,
     &'a str,
-    &'a crate::hook::BackgroundExecutionRegistry,
+    &'a crate::tools::call::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>>;
 
 struct PeriodicRecoverySweepExecutor {
@@ -152,7 +152,7 @@ pub fn periodic_recovery_sweep_metadata() -> &'static [PeriodicRecoverySweepMeta
 pub async fn run_periodic_recovery_sweeps(
     node: &std::sync::Arc<EmbeddedNode>,
     node_did: &str,
-    background_executions: &crate::hook::BackgroundExecutionRegistry,
+    background_executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
 ) -> Result<Vec<PeriodicRecoverySweepRun>> {
     let mut runs = Vec::with_capacity(PERIODIC_RECOVERY_SWEEP_EXECUTORS.len());
     for executor in PERIODIC_RECOVERY_SWEEP_EXECUTORS {
@@ -175,7 +175,7 @@ pub async fn run_periodic_recovery_sweeps(
 fn reconcile_terminal_parent_owned_tools<'a>(
     node: &'a std::sync::Arc<EmbeddedNode>,
     node_did: &'a str,
-    background_executions: &'a crate::hook::BackgroundExecutionRegistry,
+    background_executions: &'a crate::tools::call::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         ToolCallLifecycle::reconcile_terminal_parent_owned_tools_with_executions(
@@ -191,7 +191,7 @@ fn reconcile_terminal_parent_owned_tools<'a>(
 fn reconcile_orphaned_background_tools<'a>(
     node: &'a std::sync::Arc<EmbeddedNode>,
     node_did: &'a str,
-    background_executions: &'a crate::hook::BackgroundExecutionRegistry,
+    background_executions: &'a crate::tools::call::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         ToolCallLifecycle::reconcile_orphaned_background_tools(
@@ -207,7 +207,7 @@ fn reconcile_orphaned_background_tools<'a>(
 fn reconcile_background_completion_side_effects<'a>(
     node: &'a std::sync::Arc<EmbeddedNode>,
     node_did: &'a str,
-    _background_executions: &'a crate::hook::BackgroundExecutionRegistry,
+    _background_executions: &'a crate::tools::call::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         ToolCallLifecycle::reconcile_background_completion_side_effects(node, node_did)
@@ -219,7 +219,7 @@ fn reconcile_background_completion_side_effects<'a>(
 fn repair_terminal_requests<'a>(
     node: &'a std::sync::Arc<EmbeddedNode>,
     node_did: &'a str,
-    _background_executions: &'a crate::hook::BackgroundExecutionRegistry,
+    _background_executions: &'a crate::tools::call::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         RequestLifecycle::repair_terminal_requests(node, node_did)
@@ -231,7 +231,7 @@ fn repair_terminal_requests<'a>(
 fn recover_inference_calls<'a>(
     node: &'a std::sync::Arc<EmbeddedNode>,
     node_did: &'a str,
-    _background_executions: &'a crate::hook::BackgroundExecutionRegistry,
+    _background_executions: &'a crate::tools::call::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         InferenceCall::recover_all(node, node_did)
@@ -243,10 +243,10 @@ fn recover_inference_calls<'a>(
 fn settle_session_message_rows<'a>(
     node: &'a std::sync::Arc<EmbeddedNode>,
     node_did: &'a str,
-    _background_executions: &'a crate::hook::BackgroundExecutionRegistry,
+    _background_executions: &'a crate::tools::call::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
-        crate::background_completion::settle_running_session_message_rows(node, node_did)
+        crate::tools::background::completion::settle_running_session_message_rows(node, node_did)
             .await
             .map(PeriodicRecoverySweepOutcome::SessionMessageRows)
     })
@@ -255,7 +255,7 @@ fn settle_session_message_rows<'a>(
 fn recover_task_hook_records<'a>(
     node: &'a std::sync::Arc<EmbeddedNode>,
     node_did: &'a str,
-    background_executions: &'a crate::hook::BackgroundExecutionRegistry,
+    background_executions: &'a crate::tools::call::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
     Box::pin(async move {
         crate::request::task_hooks::recover_task_hook_records(

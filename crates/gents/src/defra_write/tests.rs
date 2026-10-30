@@ -357,7 +357,7 @@ async fn runtime_fills_are_hidden_rejected_from_model_input_and_stamped_at_call_
 
     let mut source_fields = std::collections::BTreeMap::new();
     source_fields.insert("expected_total".to_string(), "3".to_string());
-    crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+    crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
         None,
         tokio_util::sync::CancellationToken::new(),
         None,
@@ -413,7 +413,7 @@ async fn uncaptured_optional_source_fill_is_omitted_from_the_write() {
             output_obligation: None,
         },
     );
-    crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
+    crate::tools::call::lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
         None,
         tokio_util::sync::CancellationToken::new(),
         None,

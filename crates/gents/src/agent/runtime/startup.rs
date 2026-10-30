@@ -321,8 +321,8 @@ async fn run_agent_owned(
         Some(enrollment_handle.clone());
     let lsp_pool = tool_runtime.lsp_pool.clone();
     let control_tool_runtime = tool_runtime.clone();
-    let job_driver = crate::plugin_job::driver::JobDriver::with_service_admission(
-        crate::plugin_job::driver::JobRuntime {
+    let job_driver = crate::tools::background::job::driver::JobDriver::with_service_admission(
+        crate::tools::background::job::driver::JobRuntime {
             node: agent.node.clone(),
             plugins: agent.plugins().clone(),
             home: agent
@@ -629,7 +629,7 @@ async fn run_agent_owned(
     let completion_cancel = cancel.child_token();
     background_tasks.spawn(async move {
         BackgroundTaskResult::BackgroundCompletion(
-            crate::background_completion::run_background_completion_observer(
+            crate::tools::background::completion::run_background_completion_observer(
                 completion_node,
                 completion_node_did,
                 completion_background_executions,

@@ -393,7 +393,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use chrono::Duration;
-use gents::plugin_job::view::{JobFilter, StateFilter};
+use gents::tools::background::job::view::{JobFilter, StateFilter};
 use gents_protocol::job::JobReadError;
 
 use super::super::observation_cursor::{ABANDONED_REVISION, MAX_RETRY_DELAY_SECS};

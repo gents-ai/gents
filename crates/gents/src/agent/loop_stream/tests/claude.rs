@@ -114,7 +114,7 @@ async fn signed_claude_tool_round_trip_with_scope(
         .unwrap();
     let accepted = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        crate::tool_call_lifecycle::ToolCallLifecycle::load_accepted_for_dispatch(
+        crate::tools::call::lifecycle::ToolCallLifecycle::load_accepted_for_dispatch(
             &node,
             &tool_doc_id,
             "did:test:test",
@@ -162,7 +162,7 @@ async fn signed_claude_tool_round_trip_with_scope(
     .await
     .expect("delivered tool result");
     assert_eq!(
-        crate::tool_call_lifecycle::query::render_tool_result(&native).unwrap(),
+        crate::tools::call::lifecycle::query::render_tool_result(&native).unwrap(),
         "ECHOED",
     );
 }

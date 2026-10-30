@@ -2,7 +2,7 @@ pub(super) async fn log_recovery(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     node_did: &str,
     default_agent_id: &str,
-    executions: &crate::hook::BackgroundExecutionRegistry,
+    executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
 ) {
     // The inference-call sweep is parent-gated and must run after request repair.
     let outcome =

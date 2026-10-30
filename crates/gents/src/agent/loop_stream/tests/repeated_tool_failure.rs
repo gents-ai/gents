@@ -20,7 +20,7 @@ impl ToolDyn for RepeatProbe {
     }
     fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
-            use crate::tool_call_lifecycle::FailureClass;
+            use crate::tools::call::lifecycle::FailureClass;
             let args: serde_json::Value = serde_json::from_str(&args).unwrap();
             let event = self
                 .script
@@ -189,7 +189,7 @@ async fn generated_repeated_tool_failure_cases_drive_owned_loop() {
             if *action == "suppress" {
                 assert_eq!(row["lifecycle_state"], "failed", "{name}: {row}");
                 assert_eq!(row["tool_failure_class"], "policyDenied", "{name}: {row}");
-                let output = crate::background_tools::canonical_tool_output(
+                let output = crate::tools::background::status::canonical_tool_output(
                     &node,
                     row["_docID"].as_str().unwrap(),
                     &lifecycle.request().doc_id,
@@ -307,7 +307,7 @@ impl ToolDyn for EnvelopeShapedTool {
         Box::pin(async move {
             let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Err(ToolError::ReportedFailure {
-                class: crate::tool_call_lifecycle::FailureClass::ToolReturnedError,
+                class: crate::tools::call::lifecycle::FailureClass::ToolReturnedError,
                 text: format!(
                     "gents_exec: {{\"ok\":false,\"duration_ms\":1,\"hint\":\"step {call}\"}}\nstdout:\n(empty)\nstderr:\nfailed"
                 ),

@@ -151,7 +151,7 @@ pub(super) async fn load_canonical_selection_in_txn(
     let effect_requests = effects
         .iter()
         .filter(|row| {
-            crate::tool_call_lifecycle::PluginEffectBinding::decode(
+            crate::tools::call::lifecycle::PluginEffectBinding::decode(
                 row.plugin_parent_tool_call_doc_id.as_deref(),
                 row.plugin_effect_ordinal,
                 row.spawned,

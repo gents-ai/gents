@@ -653,7 +653,7 @@ async fn generated_refusals_verify_exact_demand() {
 #[tokio::test]
 async fn generated_reply_journals_preserve_immutable_outcomes() {
     use crate::config_client::ConfigAccess;
-    use crate::tool_call_lifecycle::admission_fixture::{
+    use crate::tools::call::lifecycle::admission_fixture::{
         published_admission_with_owner, PublishedAdmissionOptions,
     };
     use gents_protocol::file_inventory::FileInventoryReply;
@@ -952,7 +952,7 @@ async fn generated_page_grants_bind_only_the_exact_metadata_document() {
 #[tokio::test]
 async fn native_inventory_admission_and_response_commit_preserve_attempts_and_rollback() {
     use crate::config_client::ConfigAccess;
-    use crate::tool_call_lifecycle::admission_fixture::{
+    use crate::tools::call::lifecycle::admission_fixture::{
         published_admission_with_owner, PublishedAdmissionOptions,
     };
     use gents_protocol::file_inventory::{FileInventoryReply, FileInventoryResponse};
@@ -1076,7 +1076,7 @@ async fn native_inventory_admission_and_response_commit_preserve_attempts_and_ro
 #[tokio::test]
 async fn generated_preparation_retries_keep_the_original_snapshot() {
     use crate::config_client::ConfigAccess;
-    use crate::tool_call_lifecycle::admission_fixture::{
+    use crate::tools::call::lifecycle::admission_fixture::{
         published_admission_with_owner, PublishedAdmissionOptions,
     };
     use gents_protocol::file_inventory::FileInventoryReply;
@@ -1177,7 +1177,7 @@ async fn generated_preparation_retries_keep_the_original_snapshot() {
 #[tokio::test]
 async fn generated_client_scope_requires_a_unique_retained_admission() {
     use crate::config_client::ConfigAccess;
-    use crate::tool_call_lifecycle::admission_fixture::{
+    use crate::tools::call::lifecycle::admission_fixture::{
         published_admission_with_owner, PublishedAdmissionOptions,
     };
     use serde_json::json;
@@ -1282,7 +1282,7 @@ async fn generated_client_scope_requires_a_unique_retained_admission() {
 #[tokio::test]
 async fn generated_client_progress_survives_reload_and_rollback() {
     use crate::config_client::ConfigAccess;
-    use crate::tool_call_lifecycle::admission_fixture::{
+    use crate::tools::call::lifecycle::admission_fixture::{
         published_admission_with_owner, PublishedAdmissionOptions,
     };
     use gents_protocol::file_inventory::{FileInventoryPageDemand, FileInventoryReply};
@@ -1589,7 +1589,7 @@ async fn generated_client_progress_survives_reload_and_rollback() {
 #[tokio::test]
 async fn generated_operator_inventory_requires_the_native_owner() {
     use crate::config_client::ConfigAccess;
-    use crate::tool_call_lifecycle::admission_fixture::{
+    use crate::tools::call::lifecycle::admission_fixture::{
         ensure_fixture_session, published_admission_with_owner, PublishedAdmissionOptions,
     };
     use gents_protocol::file_inventory::{

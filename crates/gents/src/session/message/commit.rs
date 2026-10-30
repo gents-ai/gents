@@ -5,8 +5,8 @@ use serde::Deserialize;
 
 use std::sync::Arc;
 
+use crate::graphql::escape_graphql_string;
 use crate::request::lifecycle::SessionMessageCause;
-use crate::store::graphql::escape_graphql_string;
 
 use super::plan::{Plan, PlannedWrite};
 
@@ -28,17 +28,17 @@ pub(crate) enum CommitError {
     #[error(transparent)]
     Steer(#[from] crate::request::lifecycle::queue::SteerAdmissionRefusal),
     #[error(transparent)]
-    Access(#[from] crate::store::config_client::ConfigClientError),
+    Access(#[from] crate::config_client::ConfigClientError),
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
 
-impl crate::store::config_client::TransactionFailure for CommitError {
-    fn config_client_error(&self) -> Option<&crate::store::config_client::ConfigClientError> {
+impl crate::config_client::TransactionFailure for CommitError {
+    fn config_client_error(&self) -> Option<&crate::config_client::ConfigClientError> {
         match self {
             Self::Access(error) => Some(error),
             Self::Other(error) => {
-                crate::store::config_client::TransactionFailure::config_client_error(error)
+                crate::config_client::TransactionFailure::config_client_error(error)
             }
             Self::Steer(_) => None,
         }
@@ -119,11 +119,8 @@ async fn commit_once(
             "session_message.commit_goal",
         ),
     };
-    let (receipt, started_at) = crate::store::config_client::ConfigAccess::transact_local_write(
-        node,
-        actor,
-        label,
-        move |txn| {
+    let (receipt, started_at) =
+        crate::config_client::ConfigAccess::transact_local_write(node, actor, label, move |txn| {
             Box::pin(async move {
                 let started_at = start_dispatch(txn, start).await?;
                 let enqueued = stage_planned_write_in_txn(txn, cause, plan).await?;
@@ -136,9 +133,8 @@ async fn commit_once(
                 .await?;
                 Ok::<_, CommitError>((receipt, started_at))
             })
-        },
-    )
-    .await?;
+        })
+        .await?;
     lifecycle.mark_started(started_at);
     Ok(receipt)
 }
@@ -146,7 +142,7 @@ async fn commit_once(
 /// Create the planned request, or stage the Goal with it, in the caller's
 /// transaction. It writes no tool row.
 pub(crate) async fn stage_planned_write_in_txn(
-    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
     cause: &SessionMessageCause,
     plan: &Plan,
 ) -> std::result::Result<crate::request::lifecycle::EnqueuedAgentRequest, CommitError> {
@@ -171,7 +167,7 @@ pub(crate) async fn stage_planned_write_in_txn(
             ensure_planned_hop_current(txn, create).await?;
             let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
             let response = txn.execute(&mutation).await?;
-            let doc_id = crate::store::graphql::created_doc_id(&response, "AgentRequest")
+            let doc_id = crate::graphql::created_doc_id(&response, "AgentRequest")
                 .map_err(anyhow::Error::from)?;
             if let Some(expected_head) = &plan.steer_head {
                 validate_steer_in_txn(txn, create, &doc_id, expected_head.as_deref()).await??;
@@ -207,7 +203,7 @@ pub(crate) async fn stage_planned_write_in_txn(
 }
 
 async fn validate_steer_in_txn(
-    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
     create: &gents_protocol::request_admission::AgentRequestCreate,
     candidate_doc_id: &str,
     expected_head: Option<&str>,
@@ -251,7 +247,7 @@ async fn validate_steer_in_txn(
 }
 
 async fn ensure_planned_hop_current(
-    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<()> {
     let current =
@@ -265,7 +261,7 @@ async fn ensure_planned_hop_current(
 }
 
 async fn start_dispatch(
-    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
     start: &crate::tools::call::lifecycle::delivery::DispatchStart,
 ) -> Result<chrono::DateTime<chrono::Utc>> {
     crate::tools::call::lifecycle::delivery::start_running_in_txn(txn, start, None)
@@ -281,7 +277,7 @@ pub(crate) async fn load_receipt(
     requester_did: Option<&str>,
 ) -> Result<Option<SessionMessageReceipt>> {
     let read = crate::tools::call::lifecycle::query::load_tool_call_read(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         tool_call_doc_id,
         node_did,
         session_id,
