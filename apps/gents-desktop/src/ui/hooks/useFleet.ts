@@ -4,7 +4,7 @@ import type { SessionSummary } from "@source-inc/gents-desktop-client";
 
 import { sessionKeyOf, type FleetState } from "../../hooks/fleetStore";
 import { useApp } from "../app/AppContext";
-import { isLive } from "../lib/live";
+import { isLive, stateOf, turnLabel } from "../lib/live";
 
 export const NO_SESSIONS: readonly SessionSummary[] = [];
 
@@ -23,16 +23,32 @@ export function workersOfId(state: FleetState, sessionId: string | null | undefi
   return session ? workersOf(state, session) : NO_SESSIONS;
 }
 
-/** Of the sessions `session` started, the ones working, or with work running
-    anywhere under them. */
-export function runningUnder(state: FleetState, session: SessionSummary): number {
+/* how many of the sessions `session` started hold, themselves or through
+   a session under them */
+function countUnder(
+  state: FleetState,
+  session: SessionSummary,
+  holds: (s: SessionSummary) => boolean,
+): number {
   const seen = new Set<string>();
-  const working = (s: SessionSummary): boolean => {
+  const under = (s: SessionSummary): boolean => {
     const key = sessionKeyOf(s);
     if (seen.has(key)) return false;
     seen.add(key);
-    return isLive(s.turnState) || workersOf(state, s).some(working);
+    return holds(s) || workersOf(state, s).some(under);
   };
   seen.add(sessionKeyOf(session));
-  return workersOf(state, session).filter(working).length;
+  return workersOf(state, session).filter(under).length;
 }
+
+/** Of the sessions `session` started, the ones working, or with work running
+    anywhere under them. */
+export const runningUnder = (state: FleetState, session: SessionSummary) =>
+  countUnder(state, session, (s) => isLive(s.turnState));
+
+export const failedUnder = (state: FleetState, session: SessionSummary) =>
+  countUnder(state, session, (s) => stateOf(s.turnState) === "failed");
+
+/* stopped by someone, not replaced by an edit */
+export const stoppedUnder = (state: FleetState, session: SessionSummary) =>
+  countUnder(state, session, (s) => turnLabel(s.turnState) === "Stopped");

@@ -54,7 +54,7 @@ import { sessionKeyOf } from "../../hooks/fleetStore";
 import { nodeOfSession } from "@/lib/nodes";
 import { NodeAgentStack } from "./NodeBehaviorStack";
 import { ListedSessionStatus } from "./SessionStatus";
-import { StartedCount } from "./StartedCount";
+import { StartedCount, startedCount } from "./StartedCount";
 import { SessionFilters, matchesView } from "./SessionFilters";
 import { emptyFilter, hasFilter } from "@/lib/session-filter";
 import { sessionRows, type SessionRow as Row } from "@/lib/session-rows";
@@ -616,14 +616,12 @@ const SessionRow = memo(function SessionRow({
   /** its place in a group just opened, for a short staggered entrance */
   enter: number | null;
 }) {
-  const { session, path, depth, started, running, open } = row;
+  const { session, path, depth, started, running, failed, stopped, open } = row;
   const { actions } = useApp();
   const [renaming, setRenaming] = useState(false);
   const startRename = useCallback(() => setRenaming(true), []);
   const condensed = depth > 0;
-  const count =
-    `${started} started session${started === 1 ? "" : "s"}` +
-    (running > 0 ? ` · ${running} running` : "");
+  const count = startedCount({ started, running, failed, stopped });
   return (
     <li
       {...attributes}
@@ -739,7 +737,13 @@ const SessionRow = memo(function SessionRow({
         </div>
         {/* a column of its own, so counts line up down the list */}
         <span className="flex w-16 justify-end">
-          <StartedCount session={session} started={started} running={running} />
+          <StartedCount
+            session={session}
+            started={started}
+            running={running}
+            failed={failed}
+            stopped={stopped}
+          />
         </span>
         {/* a slot that fits the agent and its node, so the counts before it
             line up down the list */}
