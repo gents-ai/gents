@@ -47,7 +47,7 @@ where
     serde_path_to_error::deserialize(Value::Object(merged.clone())).map_err(|error| {
         let path = error.path().to_string();
         let inner = error.inner().to_string();
-        match super::super::command::field_shape(collection, &path) {
+        match super::super::command::contracts::field_shape(collection, &path) {
             Some(shape) => {
                 let found = inner.split(", expected ").next().unwrap_or(&inner);
                 let shape = shape

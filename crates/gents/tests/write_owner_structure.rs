@@ -1831,7 +1831,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/rendered_request/mod.rs", 2),
     ("crates/gents/src/request_admission.rs", 2),
     ("crates/gents/src/schema_tool/mod.rs", 2),
-    ("crates/gents/src/self_config/command.rs", 5),
+    ("crates/gents/src/self_config/command/guidance.rs", 5),
     ("crates/gents/src/self_config/command/validate.rs", 1),
     ("crates/gents/src/session/fork.rs", 1),
     ("crates/gents/src/session/output/replay_candidates.rs", 1),
@@ -2001,7 +2001,7 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // DefraDB SDL parser messages (help page choice)
     ("crates/gents/src/schema_tool/mod.rs", 6),
     // serde `invalid type: string` message
-    ("crates/gents/src/self_config/command.rs", 1),
+    ("crates/gents/src/self_config/command/patch.rs", 1),
     // display only: appends a next-call hint when absent
     ("crates/gents/src/toolset/session_history.rs", 1),
     // persisted AgentRequest failure_reason
