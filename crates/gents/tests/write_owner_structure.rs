@@ -7,12 +7,14 @@ use syn::{Expr, ExprCall, ExprMethodCall, ItemConst, ItemFn, ItemImpl, ItemMod};
 const OWNER_FILES: &[&str] = &[
     "crates/gents/src/config_client/graphql.rs",
     "crates/gents/src/config_client/retry.rs",
-    "crates/gents/src/config_client/txn.rs",
+    "crates/gents/src/config_client/txn/auto_commit.rs",
+    "crates/gents/src/config_client/txn/execute.rs",
+    "crates/gents/src/config_client/txn/transact_entry.rs",
     "crates/gents-protocol/src/graphql.rs",
 ];
 
 const READ_OWNER_FILES: &[&str] = &[
-    "crates/gents/src/config_client/txn.rs",
+    "crates/gents/src/config_client/txn/auto_commit.rs",
     "crates/gents/src/graphql.rs",
 ];
 
@@ -1463,7 +1465,7 @@ const AMBIENT_CONTEXT_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-loop/src/tool_call_lifecycle/runtime.rs", 2, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents-loop/src/tool_effects.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents/src/admission/client.rs", 1, "request context read inside Rig's CompletionModel and HTTP client; thread through a per-call provider client"),
-    ("crates/gents/src/config_client/txn.rs", 1, "re-entrant write fence inside a transaction callback; the handle itself is passed explicitly"),
+    ("crates/gents/src/config_client/txn/native.rs", 1, "re-entrant write fence inside a transaction callback; the handle itself is passed explicitly"),
     ("crates/gents/src/managed_exec/ownership.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents/src/plugin/approval.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents/src/plugin/approval/workspace/context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
