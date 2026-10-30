@@ -83,6 +83,22 @@ pub(crate) fn include_existing(
     baseline: &mut [BaselineCollection<'static>],
     steps: &mut Vec<MigrationStep<'static>>,
 ) -> Result<()> {
+    include_existing_by_version(
+        &|name| {
+            node.get_collection(name)
+                .map(|current| current.map(|current| current.version_id))
+                .map_err(|error| Error::Node(error.into()))
+        },
+        baseline,
+        steps,
+    )
+}
+
+pub(crate) fn include_existing_by_version(
+    get_version: &impl Fn(&str) -> Result<Option<String>>,
+    baseline: &mut [BaselineCollection<'static>],
+    steps: &mut Vec<MigrationStep<'static>>,
+) -> Result<()> {
     for (name, root, target, id, patch, fields) in [
         (
             "InferenceBackend",
@@ -203,16 +219,13 @@ pub(crate) fn include_existing(
             "bafyreigvksodxohqggry2u7dr65xak5kvlyp65rvfm62pgxvp4vlnfgody"
         ),
     ] {
-        let Some(current) = node
-            .get_collection(name)
-            .map_err(|error| Error::Node(error.into()))?
-        else {
+        let Some(current) = get_version(name)? else {
             continue;
         };
         let current_version = if name == "AgentSession" {
-            session_before_starter(&current.version_id)
+            session_before_starter(&current)
         } else {
-            &current.version_id
+            &current
         };
         let after_job_patch =
             name == "AgentToolCall" && root == TOOL_TARGET && current_version == TOOL_ROOT;
@@ -244,11 +257,8 @@ pub(crate) fn include_existing(
             });
         }
     }
-    if let Some(current) = node
-        .get_collection("NodeMemory")
-        .map_err(|error| Error::Node(error.into()))?
-    {
-        if [NODE_MEMORY_ROOT, NODE_MEMORY_TEXT_TARGET].contains(&current.version_id.as_str()) {
+    if let Some(current) = get_version("NodeMemory")? {
+        if [NODE_MEMORY_ROOT, NODE_MEMORY_TEXT_TARGET].contains(&current.as_str()) {
             if let Some(entry) = baseline.iter_mut().find(|entry| entry.name == "NodeMemory") {
                 entry.expected_version = Some(NODE_MEMORY_ROOT);
                 steps.push(MigrationStep::PatchVersioned {
@@ -263,23 +273,20 @@ pub(crate) fn include_existing(
             }
         }
     }
-    include_session_archive(node, baseline, steps)?;
-    include_session_starter(node, baseline, steps)?;
+    include_session_archive(get_version, baseline, steps)?;
+    include_session_starter(get_version, baseline, steps)?;
     Ok(())
 }
 
 fn include_session_archive(
-    node: &EmbeddedNode,
+    get_version: &impl Fn(&str) -> Result<Option<String>>,
     baseline: &mut [BaselineCollection<'static>],
     steps: &mut Vec<MigrationStep<'static>>,
 ) -> Result<()> {
-    let Some(current) = node
-        .get_collection("AgentSession")
-        .map_err(|error| Error::Node(error.into()))?
-    else {
+    let Some(current) = get_version("AgentSession")? else {
         return Ok(());
     };
-    let target = match session_before_starter(&current.version_id) {
+    let target = match session_before_starter(&current) {
         SESSION_ROOT | SESSION_TARGET | SESSION_ARCHIVE_AFTER_STOP => SESSION_ARCHIVE_AFTER_STOP,
         SESSION_CURRENT_ROOT | SESSION_ARCHIVE_CURRENT => {
             if let Some(entry) = baseline
@@ -305,14 +312,11 @@ fn include_session_archive(
 }
 
 fn include_session_starter(
-    node: &EmbeddedNode,
+    get_version: &impl Fn(&str) -> Result<Option<String>>,
     baseline: &mut [BaselineCollection<'static>],
     steps: &mut Vec<MigrationStep<'static>>,
 ) -> Result<()> {
-    let Some(current) = node
-        .get_collection("AgentSession")
-        .map_err(|error| Error::Node(error.into()))?
-    else {
+    let Some(current) = get_version("AgentSession")? else {
         return Ok(());
     };
     let preceding = steps.iter().rev().find_map(|step| match step {
@@ -323,7 +327,7 @@ fn include_session_starter(
         } => *expected_version,
         _ => None,
     });
-    let source = preceding.unwrap_or_else(|| session_before_starter(&current.version_id));
+    let source = preceding.unwrap_or_else(|| session_before_starter(&current));
     let (source, target) = match source {
         SESSION_PRE_STARTER => (SESSION_PRE_STARTER, SESSION_STARTER_CURRENT),
         SESSION_ARCHIVE_CURRENT => (SESSION_ARCHIVE_CURRENT, SESSION_STARTER_AFTER_ARCHIVE),

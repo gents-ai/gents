@@ -97,6 +97,9 @@ fn standard_runtime_credentials(home: &Path) -> Vec<PathBuf> {
         crate::home::keys_dir(home),
         home.join(crate::home::P2P_SECRET_KEY_FILE_NAME),
         crate::home::init_config_path(home),
+        // Maintenance plans/binaries act as the operator and cold backups
+        // contain identity keys. Bounded commands cannot inspect or alter them.
+        home.join(crate::home::SERVICE_UPDATES_DIR_NAME),
     ]
 }
 

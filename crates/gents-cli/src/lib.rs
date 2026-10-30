@@ -38,6 +38,7 @@ mod process_resources;
 mod request_helpers;
 mod resolve_helpers;
 pub mod server_host;
+mod service_update;
 mod shared;
 mod telemetry;
 
@@ -66,8 +67,14 @@ const DEFAULT_XAI_GROK_OAUTH_MODEL_NAME: &str = "grok-4.7";
 const DEFAULT_HTTP_PORT: u16 = 9191;
 #[cfg(all(debug_assertions, feature = "native-e2e"))]
 const DEFAULT_HTTP_PORT: u16 = 21919;
+#[cfg(not(all(debug_assertions, feature = "native-e2e")))]
 const DEFAULT_CODEX_SHIM_PORT: u16 = 9292;
+#[cfg(all(debug_assertions, feature = "native-e2e"))]
+const DEFAULT_CODEX_SHIM_PORT: u16 = 21929;
+#[cfg(not(all(debug_assertions, feature = "native-e2e")))]
 const DEFAULT_CODEX_REMOTE: &str = "ws://127.0.0.1:9292/";
+#[cfg(all(debug_assertions, feature = "native-e2e"))]
+const DEFAULT_CODEX_REMOTE: &str = "ws://127.0.0.1:21929/";
 const DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS: u64 = 86_400;
 const DEFAULT_CODEX_SHIM_TIMEOUT_SECS: u64 = DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS;
 const TOKIO_WORKER_STACK_SIZE: usize = 16 * 1024 * 1024;
@@ -450,11 +457,7 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
         Command::Reset(args) => commands::reset::reset(args).await,
         Command::Server(args) => commands::serve::serve(args, runtime).await,
         Command::PrepareRuntime(args) => commands::prepare_runtime::prepare(args, runtime).await,
-        Command::Service { command } => {
-            tokio::task::spawn_blocking(move || service_command(command))
-                .await
-                .context("running the service command")?
-        }
+        Command::Service { command } => service_command(command).await,
         Command::Chat(args) => commands::chat::chat(args).await,
         Command::Codex(_) => unreachable!("codex dispatches before telemetry init"),
         Command::CodexLogin(args) => commands::codex_login::codex_login(args).await,
@@ -498,45 +501,60 @@ async fn async_main(runtime: tokio::runtime::Handle) -> Result<()> {
     result
 }
 
-fn service_command(command: ServiceCommand) -> Result<()> {
+async fn service_command(command: ServiceCommand) -> Result<()> {
+    let command = match command {
+        ServiceCommand::Update(args) => return service_update::submit(args).await,
+        ServiceCommand::UpdateStatus { home, operation_id } => {
+            return service_update::status(home, operation_id).await
+        }
+        ServiceCommand::UpdateRun { home, operation_id } => {
+            return service_update::run(home, operation_id).await
+        }
+        ServiceCommand::UpdateCheck { home } => return service_update::check(home).await,
+        command => command,
+    };
     use native_service::{NativeServiceConfig, NativeServiceManager};
 
-    let (home, executable, action) = command.into_parts();
-    let home = absolutize(resolve_home_dir(home.as_deref()))?;
-    let executable = match executable {
-        Some(path) => absolutize(path)?,
-        None => std::env::current_exe().context("resolving the gents executable")?,
-    };
-    let config = NativeServiceConfig::new(home, executable)?;
-    let home = config.home.clone();
-    let manager = NativeServiceManager::new(config)?;
-    match action {
-        ServiceAction::Install {
-            network,
-            environment_file,
-        } => {
-            let environment = environment_file
-                .as_deref()
-                .map(native_service::read_environment_file)
-                .transpose()?;
-            network_settings::install_service(&manager, &home, &network, environment.as_ref())
-                .map(drop)
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        let (home, executable, action) = command.into_parts();
+        let home = absolutize(resolve_home_dir(home.as_deref()))?;
+        let executable = match executable {
+            Some(path) => absolutize(path)?,
+            None => std::env::current_exe().context("resolving the gents executable")?,
+        };
+        let config = NativeServiceConfig::new(home, executable)?;
+        let home = config.home.clone();
+        let manager = NativeServiceManager::new(config)?;
+        service_update::refuse_self_disruption(&home, &action)?;
+        match action {
+            ServiceAction::Install {
+                network,
+                environment_file,
+            } => {
+                let environment = environment_file
+                    .as_deref()
+                    .map(native_service::read_environment_file)
+                    .transpose()?;
+                network_settings::install_service(&manager, &home, &network, environment.as_ref())
+                    .map(drop)
+            }
+            ServiceAction::Start { enable } => manager.start(enable),
+            ServiceAction::Stop { keep_enabled } => manager.stop(!keep_enabled),
+            ServiceAction::Restart => manager.restart(),
+            ServiceAction::Enable => manager.set_enabled(true),
+            ServiceAction::Disable => manager.set_enabled(false),
+            ServiceAction::Status => {
+                print!(
+                    "{}\n{}\n",
+                    manager.status()?.summary(),
+                    network_settings::NetworkSettings::read(&home)?.summary()
+                );
+                Ok(())
+            }
+            ServiceAction::Uninstall => manager.uninstall(),
         }
-        ServiceAction::Start { enable } => manager.start(enable),
-        ServiceAction::Stop { keep_enabled } => manager.stop(!keep_enabled),
-        ServiceAction::Restart => manager.restart(),
-        ServiceAction::Enable => manager.set_enabled(true),
-        ServiceAction::Disable => manager.set_enabled(false),
-        ServiceAction::Status => {
-            print!(
-                "{}\n{}\n",
-                manager.status()?.summary(),
-                network_settings::NetworkSettings::read(&home)?.summary()
-            );
-            Ok(())
-        }
-        ServiceAction::Uninstall => manager.uninstall(),
-    }
+    })
+    .await?
 }
 
 fn absolutize(path: PathBuf) -> Result<PathBuf> {

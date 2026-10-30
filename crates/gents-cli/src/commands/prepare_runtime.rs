@@ -335,7 +335,7 @@ fn local_endpoint(raw: &str) -> Result<reqwest::Url> {
     Ok(endpoint)
 }
 
-async fn control(
+pub(crate) async fn control(
     client: &reqwest::Client,
     endpoint: &reqwest::Url,
     node_did: &str,

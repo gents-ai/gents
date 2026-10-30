@@ -248,6 +248,27 @@ pub(crate) enum Command {
 #[derive(Subcommand)]
 pub(crate) enum ServiceCommand {
     #[command(
+        about = "Hand a verified update to an independent native supervisor; return acceptance, then finish your turn"
+    )]
+    Update(ServiceUpdateArgs),
+    #[command(about = "Read the durable outcome of a managed service update")]
+    UpdateStatus {
+        #[arg(long)]
+        home: Option<PathBuf>,
+        operation_id: uuid::Uuid,
+    },
+    #[command(hide = true)]
+    UpdateRun {
+        #[arg(long)]
+        home: PathBuf,
+        operation_id: uuid::Uuid,
+    },
+    #[command(hide = true)]
+    UpdateCheck {
+        #[arg(long)]
+        home: Option<PathBuf>,
+    },
+    #[command(
         about = "Write the native user-service definition without starting it",
         long_about = "Write the native user-service definition without starting it. The definition runs `gents server --home <HOME>`; network flags persist into <HOME>/network.json, which `gents server` reads for every flag it is not given, so the settings survive reinstalls and desktop-managed updates and apply at the next start"
     )]
@@ -284,6 +305,34 @@ pub(crate) enum ServiceCommand {
     Status(ServiceTargetArgs),
     #[command(about = "Remove the service definition while preserving runtime data")]
     Uninstall(ServiceTargetArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct ServiceUpdateArgs {
+    #[arg(long)]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Local verified Gents executable to stage; omit for configuration-only updates"
+    )]
+    pub(crate) executable: Option<PathBuf>,
+    #[arg(
+        long,
+        requires = "executable",
+        help = "Expected SHA-256 of --executable, obtained from a trusted source"
+    )]
+    pub(crate) sha256: Option<String>,
+    #[arg(
+        long,
+        help = "Idempotency key; reuse the same UUID only for the same update"
+    )]
+    pub(crate) operation_id: Option<uuid::Uuid>,
+    #[command(flatten)]
+    pub(crate) network: ServiceNetworkArgs,
+    #[arg(long)]
+    pub(crate) environment_file: Option<PathBuf>,
+    #[arg(long, default_value_t = 300, value_parser = clap::value_parser!(u64).range(1..=3600))]
+    pub(crate) drain_timeout_secs: u64,
 }
 
 #[derive(clap::Args)]
@@ -339,6 +388,12 @@ pub(crate) enum ServiceAction {
 impl ServiceCommand {
     pub(crate) fn into_parts(self) -> (Option<PathBuf>, Option<PathBuf>, ServiceAction) {
         let (target, action) = match self {
+            Self::Update(_)
+            | Self::UpdateStatus { .. }
+            | Self::UpdateRun { .. }
+            | Self::UpdateCheck { .. } => {
+                unreachable!("managed update commands are routed asynchronously")
+            }
             Self::Install {
                 target,
                 network,

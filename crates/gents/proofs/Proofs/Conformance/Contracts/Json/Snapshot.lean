@@ -1,3 +1,4 @@
+import Proofs.Conformance.UpdateHandoff
 import Proofs.Conformance.Contracts.Json.TerminalSelection
 import Proofs.Conformance.WorkspaceCommandGrants
 import Proofs.Conformance.StorageFailure
@@ -462,6 +463,7 @@ def snapshotJson : String :=
       ++ Conformance.ClientInstallation.casesJson ++ ","
     ++ "\"client_installation_compatibility_cases\":"
       ++ Conformance.ClientInstallation.compatibilityCasesJson ++ ","
+    ++ "\"update_handoff_cases\":" ++ Conformance.UpdateHandoff.casesJson ++ ","
     ++ "\"runtime_service_replacement_cases\":"
       ++ Conformance.RuntimeServiceReplacement.casesJson ++ ","
     ++ "\"client_telemetry_cases\":" ++ Conformance.ClientTelemetry.casesJson ++ ","
