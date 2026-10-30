@@ -578,6 +578,14 @@ pub struct SessionCompactionView {
     pub original_tokens: Option<i64>,
     pub compacted_tokens: Option<i64>,
     pub created_at: Option<String>,
+    /// The transcript row that marks this compaction, and the message it is
+    /// drawn after, so a list of compactions can open the session there.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub item_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub message_sequence: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

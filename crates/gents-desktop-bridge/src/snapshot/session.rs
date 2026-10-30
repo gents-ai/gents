@@ -544,8 +544,8 @@ pub(crate) async fn attach_context_history_rows(
         .collect::<Vec<_>>();
     fill_marker_summaries(access, session_id, node_did, requester_did, &mut markers).await;
     attach_compaction_markers(items, markers);
-    let compactions =
-        compactions.map(|entries| session_compaction_views(&entries, reductions.as_deref()));
+    let compactions = compactions
+        .map(|entries| session_compaction_views(&entries, &starts, reductions.as_deref()));
     let request_doc_ids = messages
         .iter()
         .filter_map(|row| row.message.request_doc_id.clone())
@@ -591,17 +591,14 @@ pub(crate) async fn attach_context_history_rows(
 /// reductions, only the session entries are known.
 fn session_compaction_views(
     entries: &[gents_protocol::row::CompactionEntryRow],
+    starts: &RapidHashMap<String, i64>,
     reductions: Option<&[LoadedReduction]>,
 ) -> Vec<SessionCompactionView> {
     let mut views = entries
         .iter()
         .map(|entry| SessionCompactionView {
-            compaction_key: entry.compaction_key.clone(),
-            sequence: entry.sequence,
-            messages_compacted: entry.messages_compacted.map(|value| value.max(0)),
-            original_tokens: entry.original_tokens,
-            compacted_tokens: entry.compacted_tokens,
-            created_at: entry.created_at.clone(),
+            message_sequence: session_compaction_anchor(entry, starts),
+            ..session_compaction_view(entry)
         })
         .chain(
             reductions
@@ -614,6 +611,8 @@ fn session_compaction_views(
                     original_tokens: reduction.original_tokens,
                     compacted_tokens: reduction.compacted_tokens,
                     created_at: reduction.created_at.clone(),
+                    item_key: Some(reduction_item_key(&reduction.reduction_key)),
+                    message_sequence: reduction.anchor_sequence,
                 }),
         )
         .collect::<Vec<_>>();
@@ -623,6 +622,31 @@ fn session_compaction_views(
             .then_with(|| left.compaction_key.cmp(&right.compaction_key))
     });
     views
+}
+
+pub(super) fn session_compaction_view(
+    entry: &gents_protocol::row::CompactionEntryRow,
+) -> SessionCompactionView {
+    SessionCompactionView {
+        compaction_key: entry.compaction_key.clone(),
+        sequence: entry.sequence,
+        messages_compacted: entry.messages_compacted.map(|value| value.max(0)),
+        original_tokens: entry.original_tokens,
+        compacted_tokens: entry.compacted_tokens,
+        created_at: entry.created_at.clone(),
+        item_key: Some(session_compaction_item_key(&entry.compaction_key)),
+        message_sequence: entry
+            .compacted_through_sequence
+            .filter(|sequence| *sequence >= 0),
+    }
+}
+
+fn session_compaction_item_key(compaction_key: &str) -> String {
+    format!("session-compaction:{compaction_key}")
+}
+
+fn reduction_item_key(reduction_key: &str) -> String {
+    format!("request-compaction:{reduction_key}")
 }
 
 /// Session entries and reductions write `created_at` with different
@@ -659,7 +683,7 @@ fn reduction_compaction_markers(
             continue;
         };
         let item = RenderedTimelineItem::SessionCompaction {
-            item_key: format!("request-compaction:{}", reduction.reduction_key),
+            item_key: reduction_item_key(&reduction.reduction_key),
             sequence,
             messages_compacted: reduction.messages_compacted.map(|value| value.max(0)),
             original_tokens: reduction.original_tokens,
@@ -872,7 +896,7 @@ fn session_compaction_markers(
             continue;
         };
         let item = RenderedTimelineItem::SessionCompaction {
-            item_key: format!("session-compaction:{}", entry.compaction_key),
+            item_key: session_compaction_item_key(&entry.compaction_key),
             sequence,
             messages_compacted: entry.messages_compacted.map(|value| value.max(0)),
             original_tokens: entry.original_tokens,

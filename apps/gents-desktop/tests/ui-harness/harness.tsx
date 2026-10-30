@@ -24,6 +24,10 @@ const harness =
     ? createLiveDesktopUiHarness({ bridgeUrl: params.get("bridgeUrl") })
     : createDesktopUiHarness({
         scenario: params.get("scenario"),
+        compactionUnmarked: params.has("compactionUnmarked"),
+        compactionAt: params.has("compactionAt")
+          ? Number(params.get("compactionAt"))
+          : undefined,
         sessionIndexCount: params.has("sessions")
           ? Number(params.get("sessions"))
           : undefined,

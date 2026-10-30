@@ -201,12 +201,8 @@ pub(super) fn build_session_context_view(
     let compactions = compaction_rows
         .into_iter()
         .map(|row| SessionCompactionView {
-            compaction_key: row.compaction_key.clone(),
-            sequence: row.sequence,
-            messages_compacted: row.messages_compacted.map(|value| value.max(0)),
-            original_tokens: row.original_tokens,
-            compacted_tokens: row.compacted_tokens,
             created_at: normalize_optional(row.created_at.as_deref()),
+            ..super::session_compaction_view(row)
         })
         .collect();
 

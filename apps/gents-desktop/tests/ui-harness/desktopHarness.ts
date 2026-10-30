@@ -196,6 +196,10 @@ export type DesktopUiHarnessScenario =
 export type DesktopUiHarnessOptions = {
   scenario?: string | null;
   sessionIndexCount?: number;
+  /* the large session's message a compaction is marked after */
+  compactionAt?: number;
+  /* list that compaction in the meter but draw no marker for it */
+  compactionUnmarked?: boolean;
 };
 
 export type MobilePerformanceBridgeCall = {
@@ -305,7 +309,11 @@ function harnessSequenceOf(item: RenderedTimelineItem): number | null {
     ? (item.messageSequence ?? null)
     : item.kind === "userMessage" ||
         item.kind === "assistantMessage" ||
-        item.kind === "automatedInput"
+        item.kind === "automatedInput" ||
+        /* a rows read carries the context events anchored to its messages,
+           as the bridge attaches them */
+        item.kind === "sessionCompaction" ||
+        item.kind === "requestContextReductionSummary"
       ? (item.sequence ?? null)
       : null;
 }
@@ -811,7 +819,14 @@ export function createDesktopUiHarness(
     });
   }
   if (scenario === "mobile-performance") {
-    sessions.set("session-large", createLargePerformanceSession());
+    sessions.set(
+      "session-large",
+      createLargePerformanceSession(
+        undefined,
+        options.compactionAt,
+        options.compactionUnmarked,
+      ),
+    );
     for (let index = 2; index < performanceFixture.sessionIndexCount; index += 1) {
       const sessionId = `session-index-${String(index).padStart(3, "0")}`;
       sessions.set(sessionId, {
@@ -3476,6 +3491,8 @@ export function createDesktopUiHarness(
 
 function createLargePerformanceSession(
   items: number = MOBILE_PERFORMANCE_FIXTURE.largeSessionTimelineItems,
+  compactionAt?: number,
+  compactionUnmarked = false,
 ): DesktopSessionSnapshot {
   const filler =
     "bounded durable transcript fixture with markdown `code`, stable prose, and comparable byte shape";
@@ -3524,8 +3541,46 @@ function createLargePerformanceSession(
     pendingTurn: null,
     queuedTurns: [],
     foldedInputs: [],
-    context: harnessSessionContext(),
-    timelineItems,
+    context:
+      compactionAt === undefined
+        ? harnessSessionContext()
+        : harnessSessionContext({
+            sessionCompactionCount: 1,
+            compactions: [
+              {
+                compactionKey: "large-compaction",
+                sequence: 1,
+                messagesCompacted: compactionAt + 1,
+                originalTokens: 90_000,
+                compactedTokens: 3_000,
+                createdAt: STARTED_AT,
+                itemKey: "large-compaction",
+                messageSequence: compactionAt,
+              },
+            ],
+          }),
+    timelineItems:
+      compactionAt === undefined || compactionUnmarked
+        ? timelineItems
+        : timelineItems.flatMap<DesktopSessionSnapshot["timelineItems"][number]>(
+            (item) =>
+              "sequence" in item && item.sequence === compactionAt
+                ? [
+                    item,
+                    {
+                      kind: "sessionCompaction" as const,
+                      itemKey: "large-compaction",
+                      sequence: compactionAt,
+                      messagesCompacted: compactionAt + 1,
+                      originalTokens: 90_000,
+                      compactedTokens: 3_000,
+                      timestamp: STARTED_AT,
+                      summary:
+                        "# Continuation checkpoint\n\n## Goal\n\nKeep the large fixture going.",
+                    },
+                  ]
+                : [item],
+          ),
   };
 }
 
