@@ -116,12 +116,14 @@ impl ConfigAccess {
         let elapsed = started.elapsed();
         if elapsed > Duration::from_secs(1) {
             tracing::warn!(
+                target: "gents::config_client::txn",
                 operation,
                 elapsed_ms = elapsed.as_millis() as u64,
                 "DefraDB GraphQL completed"
             );
         } else {
             tracing::debug!(
+                target: "gents::config_client::txn",
                 operation,
                 elapsed_ms = elapsed.as_millis() as u64,
                 "DefraDB GraphQL completed"
