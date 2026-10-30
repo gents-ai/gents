@@ -134,8 +134,7 @@ async fn capture_and_context_accounting_commit_together() {
             compaction_reason: ContextCompactionReason::BelowThreshold,
             pre_compaction_input_tokens: None,
         });
-        rendered.provenance_payload_json =
-            serde_json::to_value(&rendered.assembly_trace).unwrap();
+        rendered.provenance_payload_json = serde_json::to_value(&rendered.assembly_trace).unwrap();
         rendered.provenance_json = serde_json::to_value(ProvenanceManifest::captured_only(
             rendered.capture_scope.clone(),
             None,
@@ -168,8 +167,7 @@ async fn capture_and_context_accounting_commit_together() {
     .unwrap();
     assert_eq!(
         stored,
-        serde_json::to_value(first.assembly_trace.context_accounting.as_ref().unwrap())
-            .unwrap()
+        serde_json::to_value(first.assembly_trace.context_accounting.as_ref().unwrap()).unwrap()
     );
     let original_blocks = block_rows(&node).await.len();
     for rejected in [
@@ -363,8 +361,7 @@ async fn a_reused_block_pins_the_existing_row_field_commit() {
         json!({"model": "m", "messages": [{"role": "user", "content": body}]}),
     );
     sink.capture(first).await.expect("first capture");
-    let first_row =
-        stored_capture(node.as_ref(), &rendered_turn(0, json!({})).capture_key).await;
+    let first_row = stored_capture(node.as_ref(), &rendered_turn(0, json!({})).capture_key).await;
     let first_entries = manifest_entries(
         node.as_ref(),
         first_row["request_json"].as_str().unwrap(),
@@ -506,8 +503,7 @@ async fn shared_manifest_roots_stay_small_and_reconstruct_after_reopen() {
         if turn == 6 {
             sink = DefraRenderedRequestSink::new(Arc::clone(&node));
         }
-        messages
-            .push(json!({"role": "user", "content": capture_text(100 + turn as u64, 4096)}));
+        messages.push(json!({"role": "user", "content": capture_text(100 + turn as u64, 4096)}));
         let rendered = rendered_turn(turn, json!({"model":"m","messages":messages}));
         sink.capture(rendered.clone()).await.unwrap();
         let row = stored_capture(node.as_ref(), &rendered.capture_key).await;

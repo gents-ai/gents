@@ -97,12 +97,14 @@ pub(super) fn latest_context_from_detail_rows(
         return Ok(None);
     };
     let encoded = row.context_accounting_json.as_deref().unwrap_or_default();
-    Ok(Some(super::super::context_budget::LastRequestContextSnapshot {
-        request_id: row.request_id.clone(),
-        call_id: row.call_id.clone(),
-        call_sequence: row.call_seq,
-        queued_at: row.queued_at.clone(),
-        accounting: serde_json::from_str(encoded)
-            .with_context(|| format!("decoding context accounting for call {}", row.call_id))?,
-    }))
+    Ok(Some(
+        super::super::context_budget::LastRequestContextSnapshot {
+            request_id: row.request_id.clone(),
+            call_id: row.call_id.clone(),
+            call_sequence: row.call_seq,
+            queued_at: row.queued_at.clone(),
+            accounting: serde_json::from_str(encoded)
+                .with_context(|| format!("decoding context accounting for call {}", row.call_id))?,
+        },
+    ))
 }

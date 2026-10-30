@@ -20,7 +20,10 @@ pub(super) fn string_list(value: &Value) -> Vec<String> {
     }
 }
 
-pub(super) fn collect_disabled_skills(object: &Map<String, Value>, disabled: &mut BTreeSet<String>) {
+pub(super) fn collect_disabled_skills(
+    object: &Map<String, Value>,
+    disabled: &mut BTreeSet<String>,
+) {
     if let Some(values) = object
         .get("skills")
         .and_then(Value::as_object)

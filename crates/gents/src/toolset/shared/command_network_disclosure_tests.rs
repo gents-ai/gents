@@ -1,6 +1,5 @@
-use super::*;
 use super::command_validation::validate_network_mode;
-
+use super::*;
 
 #[test]
 fn generated_command_isolation_matches_native_policy() {

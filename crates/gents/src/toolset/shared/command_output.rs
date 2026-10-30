@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 
 use super::{CommandExecutionMode, CommandNetworkMode};
-use gents_loop::live_output::COMMAND_OUTPUT_META_PREFIX as OUTPUT_META_PREFIX;
 use crate::truncation::{truncate, TruncationLimits, TruncationMode};
+use gents_loop::live_output::COMMAND_OUTPUT_META_PREFIX as OUTPUT_META_PREFIX;
 
 #[derive(Serialize)]
 pub(super) struct CommandOutput {

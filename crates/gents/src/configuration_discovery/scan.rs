@@ -199,7 +199,11 @@ impl Scanner {
         ));
     }
 
-    pub(super) fn read_allowlisted(&mut self, source: &mut SourceScan, relative: &Path) -> Option<String> {
+    pub(super) fn read_allowlisted(
+        &mut self,
+        source: &mut SourceScan,
+        relative: &Path,
+    ) -> Option<String> {
         if source.observed_files >= self.limits.max_files_per_source {
             source.partial = true;
             self.truncation(

@@ -55,18 +55,17 @@ pub async fn load_session_investigation(
 
     let mut audit_usage = Vec::with_capacity(envelope.requests.len());
     for request in &envelope.requests {
-        let observation = match super::super::title_audit_usage::load_parent_inclusive_audit_usage(
-            node, request,
-        )
-        .await
-        {
-            Ok(usage) => super::super::ParentAuditUsageObservation::Available { usage },
-            Err(error) => super::super::ParentAuditUsageObservation::Unavailable {
-                parent_request_doc_id: request.doc_id.clone(),
-                parent_request_id: request.request_id.clone(),
-                error: format!("{error:#}"),
-            },
-        };
+        let observation =
+            match super::super::title_audit_usage::load_parent_inclusive_audit_usage(node, request)
+                .await
+            {
+                Ok(usage) => super::super::ParentAuditUsageObservation::Available { usage },
+                Err(error) => super::super::ParentAuditUsageObservation::Unavailable {
+                    parent_request_doc_id: request.doc_id.clone(),
+                    parent_request_id: request.request_id.clone(),
+                    error: format!("{error:#}"),
+                },
+            };
         audit_usage.push(observation);
     }
     let mut snapshot = build_session_investigation(node_did, session_id, envelope, calls)?;

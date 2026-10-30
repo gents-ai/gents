@@ -83,11 +83,9 @@ async fn stamping_is_owner_scoped_idempotent_and_never_reopens() {
     .unwrap_err();
     assert!(collision.to_string().contains("collision"));
 
-    assert!(
-        dismiss_mailbox_item(&node, &first.doc_id, "did:test:other")
-            .await
-            .is_err()
-    );
+    assert!(dismiss_mailbox_item(&node, &first.doc_id, "did:test:other")
+        .await
+        .is_err());
     dismiss_mailbox_item(&node, &first.doc_id, "did:test:owner-a")
         .await
         .unwrap();
@@ -137,13 +135,11 @@ async fn stamping_rejects_missing_context_unknown_fields_and_unsupported_domain_
             .await
             .is_err()
     );
-    assert!(
-        serde_json::from_value::<FileMailboxItemArgs>(json!({
-            "kind": "ask", "action": "ack", "title": "x", "source_kind": "session",
-            "source_id": "wait-2", "requester_did": "did:test:forged"
-        }))
-        .is_err()
-    );
+    assert!(serde_json::from_value::<FileMailboxItemArgs>(json!({
+        "kind": "ask", "action": "ack", "title": "x", "source_kind": "session",
+        "source_id": "wait-2", "requester_did": "did:test:forged"
+    }))
+    .is_err());
     let mut unsupported = args(MailboxAction::WriteDocument, "wait-3");
     unsupported.expected_collection = Some("MissingMailboxResponse".into());
     assert!(
@@ -151,13 +147,11 @@ async fn stamping_rejects_missing_context_unknown_fields_and_unsupported_domain_
             .await
             .is_err()
     );
-    assert!(
-        validate_close_collections(&[MailboxCloseCollection {
-            collection: "Bad) { hacked",
-            correlation_field: "mailbox_item_key",
-        }])
-        .is_err()
-    );
+    assert!(validate_close_collections(&[MailboxCloseCollection {
+        collection: "Bad) { hacked",
+        correlation_field: "mailbox_item_key",
+    }])
+    .is_err());
 }
 
 #[tokio::test]

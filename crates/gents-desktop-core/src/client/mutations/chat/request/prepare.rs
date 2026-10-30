@@ -17,7 +17,10 @@ use super::super::super::graphql::{
 use super::super::binding::resolve_agent_binding;
 use super::{SubmitRequestOptions, SubmittedRequest};
 
-pub(super) fn normalize_authored_content<'a>(input: &RequestInput, content: &'a str) -> Result<&'a str> {
+pub(super) fn normalize_authored_content<'a>(
+    input: &RequestInput,
+    content: &'a str,
+) -> Result<&'a str> {
     anyhow::ensure!(
         input.has_authored_input(content),
         "content must not be empty"
@@ -270,7 +273,9 @@ async fn fetch_retry_lineage(
     })
 }
 
-pub(super) fn canonical_request_created_at_after(parent_created_at: Option<&str>) -> Result<String> {
+pub(super) fn canonical_request_created_at_after(
+    parent_created_at: Option<&str>,
+) -> Result<String> {
     let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let now = DateTime::parse_from_rfc3339(&now)
         .expect("UTC RFC3339 seconds formatter must parse")

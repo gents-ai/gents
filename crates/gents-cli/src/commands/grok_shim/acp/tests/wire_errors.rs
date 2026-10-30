@@ -93,8 +93,9 @@ fn internal_and_param_errors_map_to_their_codes() {
     assert_eq!(error_code_for(&internal_looking), -32603);
     let typed = invalid_params("any message");
     assert_eq!(error_code_for(&typed), -32602);
-    let parser_error = crate::commands::grok_shim::turn::wire::parse_prompt_request(&json!({}), None)
-        .expect_err("missing params");
+    let parser_error =
+        crate::commands::grok_shim::turn::wire::parse_prompt_request(&json!({}), None)
+            .expect_err("missing params");
     assert!(
         parser_error.to_string().contains("session/prompt"),
         "the source parser message is preserved: {parser_error}"

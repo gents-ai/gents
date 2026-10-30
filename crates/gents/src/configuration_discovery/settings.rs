@@ -181,7 +181,12 @@ impl Scanner {
         }
     }
 
-    pub(super) fn parse_mcp_object(&mut self, source: &mut SourceScan, relative: &Path, value: &Value) {
+    pub(super) fn parse_mcp_object(
+        &mut self,
+        source: &mut SourceScan,
+        relative: &Path,
+        value: &Value,
+    ) {
         let Some(object) = value.as_object() else {
             self.malformed_object(source, relative);
             return;
@@ -293,7 +298,12 @@ impl Scanner {
         }
     }
 
-    pub(super) fn hook_items(&mut self, source: &mut SourceScan, relative: &Path, hooks: &Map<String, Value>) {
+    pub(super) fn hook_items(
+        &mut self,
+        source: &mut SourceScan,
+        relative: &Path,
+        hooks: &Map<String, Value>,
+    ) {
         let mut events: Vec<_> = hooks.keys().collect();
         events.sort();
         for event in events {

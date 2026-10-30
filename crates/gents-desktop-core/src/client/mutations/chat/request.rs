@@ -12,9 +12,9 @@ use uuid::Uuid;
 
 use crate::client::store::ClientStore;
 
+use super::super::graphql::escape_graphql_string;
 #[cfg(test)]
 use super::super::graphql::normalize_required;
-use super::super::graphql::escape_graphql_string;
 use prepare::prepare_request_submission;
 
 /// The durable submission receipt. Replica observation may still be pending;

@@ -8,9 +8,7 @@ use defra_node::EmbeddedNode;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use super::probe::{
-    probe_selected_backends, record_probe_event, ProbeEnv, ProbeSchedule,
-};
+use super::probe::{probe_selected_backends, record_probe_event, ProbeEnv, ProbeSchedule};
 use super::prober::run_scheduled_backend_probe_cycle;
 use super::*;
 use crate::backend_registry::DEFAULT_MAX_QUEUE_DEPTH;
