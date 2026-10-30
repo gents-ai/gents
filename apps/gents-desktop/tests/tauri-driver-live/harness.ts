@@ -87,6 +87,17 @@ export async function withLiveDesktop<T>(
   const context = await startLiveDesktop(options);
   try {
     return await callback(context);
+  } catch (error) {
+    const alerts = [
+      ...document.querySelectorAll(
+        '[role="alert"], [role="status"], [data-sonner-toast]',
+      ),
+    ]
+      .map((alert) => alert.textContent?.trim())
+      .filter(Boolean);
+    if (error instanceof Error && alerts.length)
+      error.message += `\nvisible alerts: ${JSON.stringify(alerts)}`;
+    throw error;
   } finally {
     await context.driver.dispose();
   }
