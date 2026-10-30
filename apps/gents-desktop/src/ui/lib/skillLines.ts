@@ -33,6 +33,20 @@ export function withCommandLines(text: string, skills: readonly string[]): strin
   return `${lines.join("\n")} ${text}`;
 }
 
+const named = (text: string, id: string) =>
+  new RegExp(`(^|\\s)/${id.replace(/[.-]/g, "\\$&")}(?=\\s|$)`).test(text);
+
+/** a sent message's text as it was written, for copying: the skills it
+    doesn't name open it as commands, which the composer draws as chips
+    again when the text is pasted */
+export function writtenText(
+  content: string,
+  skills: readonly string[] | null | undefined,
+): string {
+  const unnamed = [...new Set(skills ?? [])].filter((id) => !named(content, id));
+  return withCommandLines(content, unnamed).trimEnd();
+}
+
 /** `text` with an opening `/skill <id>` line for each of `skills` */
 export function withSkillLines(text: string, skills: readonly string[]): string {
   return skills.length

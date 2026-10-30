@@ -36,6 +36,7 @@ import {
   type QueueSteer,
 } from "@source-inc/gents-desktop-client";
 import { Hint } from "./Hint";
+import { SentText } from "./SkillChips";
 import { useComposerEdit } from "./session/composerEdit";
 import { AutomatedInput } from "./TranscriptInputs";
 
@@ -342,6 +343,19 @@ function useLeavingRows(rows: PendingRow[], edited: ReadonlySet<string>): Pendin
   );
 }
 
+/** A queued message's text, with its skills as chips like a sent one's;
+    the queue's entry follows the message's edits, the turn is what was sent. */
+function QueuedText({ row }: { row: PendingRow }) {
+  const skills =
+    (row.kind === "message" ? row.entry?.selectedSkillIds : null) ??
+    row.turn.selectedSkillIds;
+  return skills?.length ? (
+    <SentText content={row.turn.content} skills={skills} />
+  ) : (
+    row.turn.content
+  );
+}
+
 function TakenRow({ row }: { row: PendingRow }) {
   return (
     <div className="flex min-w-0 items-center gap-2" data-taken>
@@ -350,7 +364,7 @@ function TakenRow({ row }: { row: PendingRow }) {
         className="size-3.5 shrink-0 text-muted-foreground"
       />
       <span className="min-w-0 flex-1 truncate text-muted-foreground">
-        {row.turn.content}
+        <QueuedText row={row} />
         {row.turn.attachments?.length
           ? ` · ${row.turn.attachments.length} attachment(s)`
           : ""}
@@ -430,7 +444,7 @@ function MessageRow({
               : "Steers in at the next step"
         }
       >
-        {row.turn.content}
+        <QueuedText row={row} />
         {row.turn.attachments?.length
           ? ` · ${row.turn.attachments.length} attachment(s)`
           : ""}

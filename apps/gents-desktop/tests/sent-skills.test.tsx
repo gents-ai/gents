@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { PendingTray } from "../src/ui/screens/PendingTray";
 import { SentText } from "../src/ui/screens/SkillChips";
 
 vi.mock("@/hooks/useClient", () => ({
@@ -42,5 +43,38 @@ describe("a sent message's skills", () => {
     render(<SentText content="see /review and /etc" skills={[]} />);
     expect(chips()).toEqual([]);
     expect(screen.getByText("see /review and /etc")).toBeInTheDocument();
+  });
+});
+
+describe("a queued message's skills", () => {
+  it("show as chips in the tray, as they will once it is sent", () => {
+    const entry = {
+      requestDocId: "doc-q",
+      requestId: "q",
+      content: "fix it",
+      selectedSkillIds: ["review"],
+      editable: true,
+      steerable: true,
+      editGroup: "same",
+    };
+    render(
+      <PendingTray
+        queued={[
+          {
+            requestId: "q",
+            content: "fix it",
+            selectedSkillIds: ["review"],
+            lifecycleState: "pending",
+            foldedIntoRequestId: null,
+            origin: null,
+            createdAt: "2026-10-30T00:00:00Z",
+          },
+        ]}
+        queue={[entry]}
+        onEdit={vi.fn()}
+      />,
+    );
+    expect(chips()).toEqual(["/review"]);
+    expect(screen.getByText("fix it")).toBeTruthy();
   });
 });
