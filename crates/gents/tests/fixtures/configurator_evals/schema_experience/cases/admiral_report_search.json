@@ -6,7 +6,6 @@
     {
       "stage_id": "configure",
       "prompt": "I am putting together a small history reference. Set up AdmiralReport records with name, rank and duty, all text. Duty will hold an English paragraph about each officer. I want keyword searches over those paragraphs to return the most relevant reports first. Set up what is needed and give yourself access to save and search these records; I will send the five entries next.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "schema",
@@ -31,7 +30,6 @@
     {
       "stage_id": "populate",
       "prompt": "Save these five reports as given, one record per officer. The names and ranks below are intentional.\n\n[\n  {\n    \"name\": \"William D. Leahy\",\n    \"rank\": \"Fleet Admiral\",\n    \"duty\": \"Leahy served as Chief of Staff to the Commander in Chief for Presidents Roosevelt and Truman from 1942 to 1949. He was the senior member of the Joint Chiefs of Staff and helped coordinate military advice and wartime strategy at the presidential level.\"\n  },\n  {\n    \"name\": \"William F. Halsey Jr.\",\n    \"rank\": \"Fleet Admiral\",\n    \"duty\": \"Halsey commanded Allied forces in the South Pacific during the Solomon Islands campaign. He later commanded the Third Fleet, directing fast carrier operations across the western Pacific and supporting the advance toward Japan.\"\n  },\n  {\n    \"name\": \"Chester W. Nimitz\",\n    \"rank\": \"Fleet Admiral\",\n    \"duty\": \"Nimitz commanded the Pacific Fleet and Pacific Ocean Areas during the war against Japan. He directed the broad Pacific campaign and later became Chief of Naval Operations, overseeing the Navy during its transition from wartime strength to a smaller peacetime force.\"\n  },\n  {\n    \"name\": \"Ernest J. King\",\n    \"rank\": \"Fleet Admiral\",\n    \"duty\": \"King served as Chief of Naval Operations and Commander in Chief of the United States Fleet during World War II. He established the Tenth Fleet as an antisubmarine command in 1943, coordinating the Atlantic campaign against U-boats and allocating forces to protect shipping.\"\n  },\n  {\n    \"name\": \"Raymond A. Spruance\",\n    \"rank\": \"Admiral\",\n    \"duty\": \"Spruance commanded Task Force 16 at the Battle of Midway and later led the Fifth Fleet. His Central Pacific commands supported campaigns in the Gilberts, Marshalls and Marianas, followed by the assaults on Iwo Jima and Okinawa.\"\n  }\n]",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",
@@ -145,7 +143,6 @@
     {
       "stage_id": "search",
       "prompt": "Search the saved duty paragraphs for the keywords \"antisubmarine U-boats\". Return only the strongest match from the ranked search, including its name, rank and duty paragraph, and tell me which officer it is.",
-      "deadline_secs": 600,
       "capture": [],
       "checks": [
         {

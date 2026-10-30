@@ -181,7 +181,12 @@ pub struct EvalStage {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub seed: Option<EvalFixtureDocument>,
-    pub deadline_secs: u64,
+    /// Opt-in wall-clock bound: when it expires the runner interrupts the
+    /// request and the stage is graded `deadline`. Absent, the stage waits for
+    /// the request's own terminal state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub deadline_secs: Option<u64>,
     /// Keep observing after the request ends, until the trial home is quiet;
     /// evidence then covers every later request of the session.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -339,7 +344,7 @@ impl EvalDefinition {
                     "eval definition {id} case {case_id} has duplicate stage_id {stage_id}"
                 );
                 ensure!(
-                    stage.deadline_secs > 0,
+                    stage.deadline_secs != Some(0),
                     "eval definition {id} case {case_id} stage {stage_id} deadline_secs must be positive"
                 );
                 ensure!(
@@ -472,7 +477,6 @@ mod tests {
                 "stages": [{
                     "stage_id": "check",
                     "prompt": "Run the monitor.",
-                    "deadline_secs": 600,
                     "checks": [
                         {"check": "mailbox_findings", "params": {"expect": ["disk"]}, "tier": "acceptance"},
                         {"check": "llm_judge", "params": {"rubric": "clear"}, "tier": "development"}

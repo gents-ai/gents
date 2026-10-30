@@ -12,7 +12,6 @@
     {
       "stage_id": "configure",
       "prompt": "I need you to keep results for my workflow. The records are EvalAutomationInput { correlation: string, message: string } and EvalAutomationOutput { correlation: string, result: string }. The correlation is a caller-supplied business key: preserve it exactly, and find records using that key alone. The record types already exist. Give yourself tools to add and find both input and output records, limited to those records.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -159,7 +158,6 @@
     {
       "stage_id": "exercise",
       "prompt": "Save one output for correlation \"val-charlie-004\" with result \"done\". Also save an input with the same correlation and message \"kickoff\". Use your recordkeeping tools; leave configuration alone.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "captured_rows_count",
@@ -337,7 +335,6 @@
     {
       "stage_id": "confirm_input_row",
       "prompt": "Look up EvalAutomationInput for correlation \"val-charlie-004\" and tell me what is stored. Do not write anything.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "captured_fields_match",

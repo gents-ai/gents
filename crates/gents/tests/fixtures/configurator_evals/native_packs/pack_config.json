@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "engineer-native-packs",
-      "comparability_version": 1,
+      "comparability_version": 2,
       "title": "Native plugin pack lifecycle",
       "subject": {
         "kind": "agent",

@@ -532,14 +532,6 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
       if (Math.abs(s.scrollTop - lastWrite) < 1) return;
       lastScrollAt = performance.now();
       glide = null;
-      /* at the top nothing more can scroll: the carried difference lands
-         with the reader's row kept where it is, never taken anew from the
-         layout it shifts */
-      if (hidden && s.scrollTop <= 0) {
-        landCarried();
-        ahead();
-        return;
-      }
       if (readerScrolling || dragging || performance.now() - lastInputAt < INTENT_MS) {
         const foot = s.scrollHeight - live.current.room - s.clientHeight;
         const atFoot = s.scrollTop >= foot - REPIN_PX;
@@ -561,6 +553,15 @@ export function useTranscriptList<E>(options: TranscriptListOptions<E>) {
             setMode({ kind: "read", key: mode.key, offset: mode.offset - moved });
           else capture();
         }
+      }
+      /* at the top nothing more can scroll: the carried difference lands
+         with the reader's row, as their scroll left it, kept where it is,
+         never taken anew from the layout it shifts. Landed on the row held
+         before their scroll, a jump to the top would be sent back */
+      if (hidden && s.scrollTop <= 0) {
+        landCarried();
+        ahead();
+        return;
       }
       ahead();
       publishBottom();

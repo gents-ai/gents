@@ -6,7 +6,6 @@
     {
       "stage_id": "configure",
       "prompt": "Our product matching prototype already produces three-number vectors; don't generate embeddings. Create CatalogItem with sku and label as text, and coordinates as a list of Float32 values. Add an exact FLAT vector index with three dimensions and Euclidean distance. The catalog is small, so exact answers matter more than scaling right now.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "schema",

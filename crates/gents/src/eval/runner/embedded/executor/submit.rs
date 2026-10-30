@@ -6,6 +6,7 @@ use tokio::sync::watch;
 
 use super::install::{bind_fixture_owner, create_document};
 use super::outcome::trigger_failure;
+use super::settle::remaining_of;
 use super::{Reconciled, POLL};
 use crate::defra_node::EmbeddedNode;
 use crate::eval::runner::embedded::home::{EmbeddedHome, RUNTIME_READY_TIMEOUT};
@@ -17,11 +18,17 @@ use crate::lifecycle::{
 };
 use crate::ConfigAccess;
 
+/// How long a seed stage without its own deadline waits for a trigger to fire
+/// a request. No request exists yet, so no turn is bounded by it; a subject
+/// that never configured the trigger would otherwise hold the trial forever.
+const SEED_FIRE_WINDOW: Duration = Duration::from_secs(600);
+
 #[derive(Debug)]
 pub(super) enum StageSubmission {
     Submitted {
         request_id: String,
-        remaining: Duration,
+        /// Absent, the stage waits for the request's own terminal state.
+        remaining: Option<Duration>,
     },
     Failed(OutcomeKind),
 }
@@ -64,7 +71,7 @@ pub(super) async fn seed_and_await_fire(
     home: &EmbeddedHome,
     ready: &watch::Receiver<Reconciled>,
     seed: &FixtureDocument,
-    deadline: Duration,
+    deadline: Option<Duration>,
     trial_id: &str,
     stage_id: &str,
 ) -> Result<StageSubmission> {
@@ -94,7 +101,7 @@ pub(super) async fn seed_and_await_fire(
         if let Some(request_id) = fired_request(&home.node, &doc_id).await? {
             return Ok(StageSubmission::Submitted {
                 request_id,
-                remaining: deadline.saturating_sub(started.elapsed()),
+                remaining: remaining_of(deadline, started),
             });
         }
         if let Some(kind) = trigger_failure(
@@ -109,9 +116,10 @@ pub(super) async fn seed_and_await_fire(
         {
             return resolve_seed_failure(&home.node, &doc_id, kind, deadline, started).await;
         }
+        let fire_window = deadline.unwrap_or(SEED_FIRE_WINDOW);
         anyhow::ensure!(
-            started.elapsed() < deadline,
-            "no trigger fired a request within {deadline:?} of seeding {}",
+            started.elapsed() < fire_window,
+            "no trigger fired a request within {fire_window:?} of seeding {}",
             seed.collection
         );
         tokio::time::sleep(POLL).await;
@@ -122,13 +130,13 @@ async fn resolve_seed_failure(
     node: &EmbeddedNode,
     doc_id: &str,
     kind: OutcomeKind,
-    deadline: Duration,
+    deadline: Option<Duration>,
     started: Instant,
 ) -> Result<StageSubmission> {
     Ok(match fired_request(node, doc_id).await? {
         Some(request_id) => StageSubmission::Submitted {
             request_id,
-            remaining: deadline.saturating_sub(started.elapsed()),
+            remaining: remaining_of(deadline, started),
         },
         None => StageSubmission::Failed(kind),
     })

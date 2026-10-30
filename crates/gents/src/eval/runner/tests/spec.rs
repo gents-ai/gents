@@ -109,7 +109,7 @@ fn a_stage_captures_what_it_declares_and_otherwise_what_the_run_requested() {
                     {"kind": "file", "name": "notes", "glob": "**/*.txt"}
                 ]
             },
-            {"stage_id": "bare", "prompt": "p", "deadline_secs": 60},
+            {"stage_id": "bare", "prompt": "p"},
             {
                 "stage_id": "seeded",
                 "seed": {"collection": "Event", "document": {"kind": "signup"}},
@@ -129,8 +129,9 @@ fn a_stage_captures_what_it_declares_and_otherwise_what_the_run_requested() {
 
     assert_eq!(
         (stages[0].stage_id.as_str(), stages[0].deadline_secs),
-        ("declared", 60)
+        ("declared", Some(60))
     );
+    assert_eq!(stages[1].deadline_secs, None);
     assert_eq!(
         stages[0].captures,
         vec![

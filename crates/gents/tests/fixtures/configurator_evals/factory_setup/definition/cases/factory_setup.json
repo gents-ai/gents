@@ -11,7 +11,6 @@
     {
       "stage_id": "setup",
       "prompt": "Please read factory/kickoff.md and set up the research desk it describes.",
-      "deadline_secs": 7200,
       "settle": true,
       "capture": [
         {
@@ -1901,7 +1900,6 @@
     {
       "stage_id": "repair",
       "prompt": "Review the setup against the findings below and fix every unmet requirement. Preserve correct configuration. Recheck your changes and send an updated Research desk setup receipt naming anything still missing. Do not launch the workflow or change your own model settings or instructions.",
-      "deadline_secs": 7200,
       "settle": true,
       "capture": [
         {

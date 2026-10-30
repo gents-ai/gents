@@ -299,7 +299,6 @@ pub(crate) mod tests {
             "stages": [{
                 "stage_id": "answer",
                 "prompt": "Record one item.",
-                "deadline_secs": 600,
                 "capture": [{
                     "kind": "documents",
                     "name": "items",

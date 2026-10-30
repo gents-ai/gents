@@ -6,7 +6,6 @@
     {
       "stage_id": "configure",
       "prompt": "I need you to keep results for my workflow. The records are EvalAutomationInput { correlation: string, message: string } and EvalAutomationOutput { correlation: string, result: string }. The correlation is a caller-supplied business key: preserve it exactly, and find records using that key alone. Set up storage for these record types. Give yourself tools to add and find output records, limited to those records.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -147,7 +146,6 @@
     {
       "stage_id": "exercise",
       "prompt": "Save one output for correlation \"val-foxtrot-007\" with result \"once\". Then look it up by correlation and tell me what was saved. Use your recordkeeping tools; leave configuration alone.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "captured_rows_count",
@@ -331,7 +329,6 @@
     {
       "stage_id": "verify_persistence",
       "prompt": "Look up EvalAutomationOutput for correlation \"val-foxtrot-007\" and tell me what is stored. Do not write anything.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "captured_rows_count",

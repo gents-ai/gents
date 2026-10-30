@@ -6,7 +6,6 @@
     {
       "stage_id": "discover",
       "prompt": "I want to put a sensible spending and time limit on our work together. What model are you using, what limits do we have now, and what would you recommend? Explain your recommendation; do not change anything yet.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",
@@ -133,7 +132,6 @@
     {
       "stage_id": "configure",
       "prompt": "Yes, use our current model and connection. For your work, allow up to 20 turns, 150,000 total tokens, and 10 minutes per request. Update the existing settings where possible and tell me what changed.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",

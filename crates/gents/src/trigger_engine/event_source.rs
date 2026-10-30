@@ -28,17 +28,15 @@ const GROUP_DUE_RECONCILE_BUDGET: usize = 16;
 const MAX_ACTIVE_GROUP_TIMERS: usize = 4096;
 const MAX_DORMANT_GROUP_TIMERS: usize = 4096;
 
+/// Runtime-filled tool fields are never required (surface validation refuses
+/// `fill` with `required`), so an absent or null source value leaves the fill
+/// unset and the fire proceeds; the consuming tool decides whether it can run
+/// without that value.
 fn captured_source_field(doc: &serde_json::Value, field: &str) -> anyhow::Result<Option<String>> {
-    let Some(value) = doc.get(field) else {
-        if field == "requester_did" {
-            return Ok(None);
-        }
-        anyhow::bail!("source document is missing runtime-filled field `{field}`");
-    };
-    let canonical = match value {
-        serde_json::Value::Null if field == "requester_did" => return Ok(None),
-        serde_json::Value::String(value) => value.clone(),
-        serde_json::Value::Number(value)
+    let canonical = match doc.get(field) {
+        None | Some(serde_json::Value::Null) => return Ok(None),
+        Some(serde_json::Value::String(value)) => value.clone(),
+        Some(serde_json::Value::Number(value))
             if value.as_i64().is_some() || value.as_u64().is_some() =>
         {
             value.to_string()
@@ -2202,15 +2200,16 @@ mod mailbox_owner_capture_tests {
     use super::captured_source_field;
 
     #[test]
-    fn ownerless_source_is_optional_but_declared_source_fills_are_not() {
-        let doc = serde_json::json!({"run_id": "run-1"});
+    fn absent_or_null_source_values_leave_the_fill_unset() {
+        let doc = serde_json::json!({"run_id": "run-1", "handoff_id": null});
         assert_eq!(captured_source_field(&doc, "requester_did").unwrap(), None);
         let null_owner = serde_json::json!({"requester_did": null});
         assert_eq!(
             captured_source_field(&null_owner, "requester_did").unwrap(),
             None
         );
-        assert!(captured_source_field(&doc, "required_route").is_err());
+        assert_eq!(captured_source_field(&doc, "handoff_id").unwrap(), None);
+        assert_eq!(captured_source_field(&doc, "route").unwrap(), None);
         assert_eq!(
             captured_source_field(&doc, "run_id").unwrap().as_deref(),
             Some("run-1")
@@ -2223,5 +2222,7 @@ mod mailbox_owner_capture_tests {
         assert!(captured_source_field(&doc, "requester_did").is_err());
         let blank = serde_json::json!({"requester_did": "   "});
         assert!(captured_source_field(&blank, "requester_did").is_err());
+        let malformed = serde_json::json!({"handoff_id": 1.5});
+        assert!(captured_source_field(&malformed, "handoff_id").is_err());
     }
 }

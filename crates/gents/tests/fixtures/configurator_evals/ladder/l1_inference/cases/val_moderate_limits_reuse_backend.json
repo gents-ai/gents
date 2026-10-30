@@ -6,7 +6,6 @@
     {
       "stage_id": "discover",
       "prompt": "Our longer work sessions keep stopping early. Look at the limits we actually have and explain what I could raise. Tell me which model we are using. Please do not change anything yet.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",
@@ -133,7 +132,6 @@
     {
       "stage_id": "configure",
       "prompt": "Yes, set your limits to 30 turns, 250,000 total tokens, and 15 minutes per request. Keep using the same model and connection; update the current settings rather than making another copy.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",

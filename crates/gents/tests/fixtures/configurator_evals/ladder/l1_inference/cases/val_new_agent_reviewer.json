@@ -6,7 +6,6 @@
     {
       "stage_id": "discover",
       "prompt": "I want a reviewer with its own limits, without changing your setup. Check our current model and explain what settings you would give the reviewer before creating anything.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",
@@ -133,7 +132,6 @@
     {
       "stage_id": "configure",
       "prompt": "Create Reviewer with instructions for careful code review and its own limit settings: 30 turns, 100,000 total tokens, and 15 minutes per request. Use our current model and connection, and leave your own settings alone.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",

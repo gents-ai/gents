@@ -16,7 +16,7 @@
     {
       "profile_id": "workstation-2",
       "backend_id": "workstation-2",
-      "model_name": "GLM-5.3-Flash-NVFP4"
+      "model_name": "DeepSeek-V4.1-Flash-1017"
     }
   ]
 }

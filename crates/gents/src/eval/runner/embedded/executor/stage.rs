@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use super::capture::{capture_documents, run_captures};
 use super::evidence::usage_of;
 use super::outcome::{provider_reason, stage_failure_kind, trigger_failure};
-use super::settle::{extend_with_later_requests, settle_home};
+use super::settle::{extend_with_later_requests, remaining_of, settle_home};
 use super::submit::{seed_and_await_fire, submit_stage, StageSubmission};
 use super::{Reconciled, POLL};
 use crate::defra_node::EmbeddedNode;
@@ -158,7 +158,7 @@ async fn observe_stage_terminal(
     cancel: &CancellationToken,
     runtime: &RunningRuntime,
     request_id: &str,
-    remaining: Duration,
+    remaining: Option<Duration>,
 ) -> (Result<TerminalObservation>, bool) {
     let watch_started = std::time::Instant::now();
     let stopped;
@@ -203,7 +203,7 @@ async fn submit_and_observe(
     ready: &watch::Receiver<Reconciled>,
 ) -> ObservedStage {
     let stage_started = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let deadline = Duration::from_secs(stage.deadline_secs);
+    let deadline = stage.deadline_secs.map(Duration::from_secs);
     let started = Instant::now();
     let submit = async {
         match &stage.seed {
@@ -268,7 +268,7 @@ async fn submit_and_observe(
 
     let settling = stage.settle && !stopped && !runtime.handle.is_finished() && observed.is_some();
     if settling {
-        let budget = deadline.saturating_sub(started.elapsed());
+        let budget = remaining_of(deadline, started);
         tokio::select! {
             biased;
             () = cancel.cancelled() => {}
@@ -368,7 +368,7 @@ async fn continue_until_done(
     home: &EmbeddedHome,
     locator: &TrialLocator,
     stage: &StageSpec,
-    deadline: Duration,
+    deadline: Option<Duration>,
     started: Instant,
 ) -> (u32, bool) {
     let Some(continuation) = &stage.continuation else {
@@ -412,8 +412,8 @@ async fn continue_until_done(
                 return (prods, true);
             }
         }
-        let remaining = deadline.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
+        let remaining = remaining_of(deadline, started);
+        if remaining.is_some_and(|remaining| remaining.is_zero()) {
             break;
         }
         let request_id = uuid::Uuid::new_v4().to_string();
@@ -434,7 +434,7 @@ async fn continue_until_done(
             () = cancel.cancelled() => break,
             _ = await_terminal(&home.node, &request_id, remaining, GRACE) => {}
         }
-        let remaining = deadline.saturating_sub(started.elapsed());
+        let remaining = remaining_of(deadline, started);
         tokio::select! {
             biased;
             () = cancel.cancelled() => break,
@@ -457,7 +457,7 @@ async fn interrupt_and_settle(
     crate::interrupt::interrupt_request(node, request_id)
         .await
         .context("interrupting a cancelled stage")?;
-    await_terminal(node, request_id, Duration::ZERO, GRACE).await
+    await_terminal(node, request_id, Some(Duration::ZERO), GRACE).await
 }
 
 #[cfg(test)]

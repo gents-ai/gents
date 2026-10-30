@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::{
     cli_tool, default_agent_id_for_node, default_inference_profile_id_for_agent,
-    DocumentRuntimeOptions, Gents, InferenceBackend, KeyIdentity, NodeIdentity, ToolCeiling,
+    DocumentRuntimeOptions, Gents, InferenceBackend, NodeIdentity, ToolCeiling,
 };
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::{decode_node_readiness_snapshot, NodeReadinessRow};
@@ -47,20 +47,17 @@ impl RunningNode {
 
 pub(super) async fn spawn_live_node(
     node_owner: Arc<ClientCore>,
-    key_path: PathBuf,
+    agent_root: PathBuf,
     name: &str,
     backend: &LiveBackendConfig,
     target_backend: Option<&LiveBackendConfig>,
 ) -> Result<(RunningNode, LiveAgentDocs, PathBuf)> {
-    let tool_root = key_path
-        .parent()
-        .map(|parent| parent.join("tool-root"))
-        .unwrap_or_else(|| std::env::temp_dir().join(format!("gents-tools-{name}")));
+    let tool_root = agent_root.join("tool-root");
     std::fs::create_dir_all(&tool_root)
         .with_context(|| format!("creating live tool root {}", tool_root.display()))?;
     seed_repo_workspace(&tool_root)?;
 
-    let identity = Arc::new(KeyIdentity::load_or_create(key_path, None)?);
+    let identity: Arc<dyn NodeIdentity> = Arc::new(node_owner.node_identity().clone());
     let node_did = identity.did().to_string();
     let docs = seed_live_agent_documents(
         node_owner.as_ref(),

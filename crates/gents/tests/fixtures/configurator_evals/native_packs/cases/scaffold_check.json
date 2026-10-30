@@ -6,7 +6,6 @@
     {
       "stage_id": "scaffold",
       "prompt": "Create a minimal documents pack named scratch_native in this workspace using the native config pack scaffold command. Discover the relevant help first. Keep shell off. Do not install the pack, change agents or tools, or run a graph. Use native config commands; do not invoke a CLI or shell.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",
@@ -71,7 +70,6 @@
     {
       "stage_id": "check",
       "prompt": "Use the native config pack check command to validate the scratch_native pack created in the preceding request and report the actual validation result. Keep shell off. Do not install the pack, change agents or tools, or run a graph.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",

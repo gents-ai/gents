@@ -12,7 +12,6 @@
     {
       "stage_id": "configure",
       "prompt": "I need you to keep results for my workflow. The records are EvalAutomationInput { correlation: string, message: string } and EvalAutomationOutput { correlation: string, result: string }. The correlation is a caller-supplied business key: preserve it exactly, and find records using that key alone. The record types already exist. Give yourself a tool to add output records, with no ability to read stored records or access other collections. Also create an assistant named Held Out Writer, using our current model, with the same ability to add output records and no read access.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -174,7 +173,6 @@
     {
       "stage_id": "exercise",
       "prompt": "Save one output for correlation \"held-zeta-008\" with result \"verified\". Use your recordkeeping tools; leave configuration alone.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "captured_rows_count",

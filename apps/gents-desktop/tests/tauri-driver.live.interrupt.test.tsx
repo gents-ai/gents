@@ -127,7 +127,7 @@ describeLive("Tauri app live interrupt flow", () => {
             () => {
               expect(
                 driver.sendButton(),
-                `follow-up send disabled: ${driver.composer().placeholder}`,
+                `follow-up send disabled: ${driver.composerPlaceholder()}`,
               ).toBeEnabled();
             },
             { timeout: 30_000 },

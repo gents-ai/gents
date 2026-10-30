@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "configurator-l2-agent",
-      "comparability_version": 8,
+      "comparability_version": 9,
       "title": "The Engineer: agent + context + tool-grant configuration",
       "subject": {
         "kind": "agent",

@@ -12,7 +12,6 @@
     {
       "stage_id": "configure",
       "prompt": "Create an assistant named Clerk for restock notes. Give it its own instructions and tool permissions, appropriate for its role: acknowledge incoming restock notes by SKU. It must not modify files or run shell commands. Use our existing model settings. Keep your own role and permissions unchanged. Let it read files but do not grant other capabilities. Our RestockNote records carry sku and handoff_id; handoff_id identifies each note through its processing. When a new note arrives, have Clerk acknowledge its sku. Keep the app’s standard run record so I can see whether each run succeeded or failed. Do not submit a restock note yet.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "crew_spec_match",
@@ -234,7 +233,6 @@
           "handoff_id": "clerk-restock-A-100"
         }
       },
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "captured_fields_match",

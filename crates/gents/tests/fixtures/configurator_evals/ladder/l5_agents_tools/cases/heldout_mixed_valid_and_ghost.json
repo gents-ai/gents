@@ -6,7 +6,6 @@
     {
       "stage_id": "configure-mixed",
       "prompt": "Create Available Helper for short questions, using our current model, and make it available for you to delegate to. Also connect the existing assistant Missing Assistant. If that assistant does not exist, do not create a replacement or a broken connection; explain the problem and finish the part that works.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -127,7 +126,6 @@
     {
       "stage_id": "delegate-to-valid",
       "prompt": "Ask Available Helper to reply with exactly HO-999 and report its reply when it arrives.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",

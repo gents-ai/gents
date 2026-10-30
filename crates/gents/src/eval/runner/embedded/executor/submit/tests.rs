@@ -21,7 +21,7 @@ async fn a_seed_wait_resolves_as_soon_as_reconciliation_reports_an_error() {
             &home,
             &ready,
             &seed,
-            Duration::from_secs(2),
+            Some(Duration::from_secs(2)),
             "trial",
             "stage",
         );
@@ -105,7 +105,7 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
         &home.node,
         &doc_id,
         failure,
-        Duration::from_secs(600),
+        Some(Duration::from_secs(600)),
         Instant::now(),
     )
     .await
@@ -119,5 +119,5 @@ async fn a_request_published_between_seed_observations_takes_precedence() {
         panic!("the committed request must take precedence: {resolved:?}");
     };
     assert_eq!(request_id, "fired");
-    assert!(!remaining.is_zero());
+    assert!(remaining.is_some_and(|remaining| !remaining.is_zero()));
 }

@@ -189,7 +189,7 @@ mod tests {
                     stage_id: id.to_string(),
                     prompt: "p".into(),
                     seed: None,
-                    deadline_secs: 60,
+                    deadline_secs: None,
                     settle: false,
                     continuation: None,
                     review_previous: false,

@@ -8,7 +8,13 @@ export type EvalStage = { stage_id: string, prompt: string,
 /**
  * A document written instead of a prompt.
  */
-seed?: EvalFixtureDocument | null, deadline_secs: number,
+seed?: EvalFixtureDocument | null,
+/**
+ * Opt-in wall-clock bound: when it expires the runner interrupts the
+ * request and the stage is graded `deadline`. Absent, the stage waits for
+ * the request's own terminal state.
+ */
+deadline_secs?: number | null,
 /**
  * Keep observing after the request ends, until the trial home is quiet;
  * evidence then covers every later request of the session.

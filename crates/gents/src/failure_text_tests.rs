@@ -148,6 +148,16 @@ fn scheme_credentials_are_redacted_and_scheme_prose_survives() {
         ),
         ("sent Basic dXNlcjpwYXNzd29yZA==", "dXNlcjpw"),
         ("Authorization: Token abcdef0123456789", "abcdef0123"),
+        ("rejected Bearer abcdefghijklmnopqrstuvwx", "abcdefghijkl"),
+        (
+            "Authorization: Bearer abcdefghijklmnopqrstuvwx",
+            "abcdefghijkl",
+        ),
+        // base64 of "jimj:krio", all lowercase
+        ("sent Basic amltajprcmlv", "amltajprcmlv"),
+        // base64 of "jimj:kri", all lowercase, padding dropped
+        ("sent basic amltajprcmk", "amltajprcmk"),
+        ("Authorization: Basic amltajprcmk=", "amltajprcmk"),
     ] {
         let reason = redact(text);
         assert!(!reason.contains(secret), "{secret} leaked: {reason}");
@@ -158,6 +168,13 @@ fn scheme_credentials_are_redacted_and_scheme_prose_survives() {
         "basic configuration is missing",
         "Bearer authentication failed",
         "Bearer token expired",
+        "Bearer auth is not configured",
+        "Bearer authorization header missing",
+        "Basic authentication failed",
+        "Basic credentials rejected",
+        "basic usage",
+        "Authorization: Basic authentication",
+        "Authorization: Bearer token",
         "operator authorization: [blockers]",
         "runtime authorization: denied for this node",
     ] {

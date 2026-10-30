@@ -17,7 +17,13 @@ const SETTLE_QUIET: Duration = Duration::from_secs(60);
 
 const SETTLE_POLL: Duration = Duration::from_secs(2);
 
-pub(super) async fn settle_home(node: &EmbeddedNode, budget: Duration) -> Result<bool> {
+/// What is left of an opt-in stage deadline; absent means unbounded.
+pub(super) fn remaining_of(deadline: Option<Duration>, started: Instant) -> Option<Duration> {
+    deadline.map(|deadline| deadline.saturating_sub(started.elapsed()))
+}
+
+/// Absent `budget` waits until the home is quiet.
+pub(super) async fn settle_home(node: &EmbeddedNode, budget: Option<Duration>) -> Result<bool> {
     let started = Instant::now();
     let mut quiet: Option<(Instant, usize)> = None;
     loop {
@@ -31,10 +37,11 @@ pub(super) async fn settle_home(node: &EmbeddedNode, budget: Duration) -> Result
         if quiet.is_some_and(|(since, _)| now.duration_since(since) >= SETTLE_QUIET) {
             return Ok(true);
         }
-        if started.elapsed() >= budget {
+        let left = remaining_of(budget, started);
+        if left.is_some_and(|left| left.is_zero()) {
             return Ok(false);
         }
-        tokio::time::sleep(SETTLE_POLL.min(budget.saturating_sub(started.elapsed()))).await;
+        tokio::time::sleep(left.map_or(SETTLE_POLL, |left| SETTLE_POLL.min(left))).await;
     }
 }
 async fn request_counts(node: &EmbeddedNode) -> Result<(usize, usize)> {

@@ -30,7 +30,7 @@ async fn a_cancelled_seed_stage_is_runtime_before_any_request_exists() {
             collection: "NoSuchItem".into(),
             document: json!({}),
         }),
-        deadline_secs: 120,
+        deadline_secs: None,
         settle: false,
         continuation: None,
         review_previous: false,
@@ -167,13 +167,7 @@ async fn trial_teardown_settles_scheduled_inference_without_expiring_its_lease()
             cancel.cancel();
             let (terminal, stopped) = tokio::time::timeout(
                 Duration::from_secs(30),
-                observe_stage_terminal(
-                    &home.node,
-                    &cancel,
-                    &runtime,
-                    &request_id,
-                    Duration::from_secs(120),
-                ),
+                observe_stage_terminal(&home.node, &cancel, &runtime, &request_id, None),
             )
             .await
             .expect("stage cancellation must settle active inference");
@@ -232,7 +226,7 @@ async fn a_stage_that_could_not_be_submitted_still_runs_its_captures() {
         stage_id: "only".to_string(),
         prompt: "hello".to_string(),
         seed: None,
-        deadline_secs: 1,
+        deadline_secs: Some(1),
         settle: false,
         continuation: None,
         review_previous: false,
@@ -302,7 +296,7 @@ async fn a_runtime_that_exits_mid_stage_fails_the_stage_as_runtime_at_once() {
         stage_id: "only".to_string(),
         prompt: "hello".to_string(),
         seed: None,
-        deadline_secs: 600,
+        deadline_secs: None,
         settle: false,
         continuation: None,
         review_previous: false,
@@ -410,7 +404,7 @@ async fn a_seed_template_failure_ends_the_stage_before_its_deadline() {
             collection: "EvalSeed".into(),
             document: json!({"payload": {}}),
         }),
-        deadline_secs: 600,
+        deadline_secs: None,
         settle: false,
         continuation: None,
         review_previous: false,
@@ -494,7 +488,7 @@ async fn a_request_that_settled_before_its_runtime_exited_keeps_its_outcome() {
         &CancellationToken::new(),
         &runtime,
         request_id,
-        Duration::from_secs(600),
+        None,
     )
     .await;
     tokio::time::resume();
