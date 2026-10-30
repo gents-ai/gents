@@ -1962,14 +1962,14 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "backend_health::tests::generated_backend_health_cases_match_prober_transitions",
             package: "gents",
-            source_path: "crates/gents/src/backend_health.rs",
+            source_path: "crates/gents/src/backend_health/tests.rs",
             module_path: "backend_health::tests",
             function: "generated_backend_health_cases_match_prober_transitions",
         },
         ConformanceConsumer::RustTest {
             id: "backend_health::tests::generated_backend_probe_schedule_cases_match_runtime_selection",
             package: "gents",
-            source_path: "crates/gents/src/backend_health.rs",
+            source_path: "crates/gents/src/backend_health/tests.rs",
             module_path: "backend_health::tests",
             function: "generated_backend_probe_schedule_cases_match_runtime_selection",
         },
