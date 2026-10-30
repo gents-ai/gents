@@ -44,14 +44,16 @@ pub(super) fn insert_timeline_item_by_sequence(
     item: crate::types::RenderedTimelineItem,
     sequence: i64,
 ) {
+    /* after the last row at or before the message, so a pending turn drawn
+    ahead of that message doesn't pull the item above it */
     let index = items
         .iter()
-        .position(|existing| {
+        .rposition(|existing| {
             rendered_timeline_durable_sequence(existing)
                 .flatten()
-                .is_none_or(|existing| existing > sequence)
+                .is_some_and(|existing| existing <= sequence)
         })
-        .unwrap_or(items.len());
+        .map_or(0, |at| at + 1);
     items.insert(index, item);
 }
 

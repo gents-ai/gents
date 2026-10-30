@@ -126,7 +126,9 @@ function dayItems(): RenderedTimelineItem[] {
       messagesCompacted: 128,
       originalTokens: 182_400,
       compactedTokens: 11_900,
-      timestamp: at(1, 17),
+      /* made this morning, as today's first request started: a compaction
+         is drawn by the message it follows, so it opens no day */
+      timestamp: at(0, 8),
       summary: [
         "# Continuation checkpoint",
         "",

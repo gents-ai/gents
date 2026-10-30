@@ -6,9 +6,11 @@ test("a compaction marks where it happened and opens what the agent kept", async
   await gotoHarness(page, "days");
   await page.getByTestId("session-session-intro").click();
   const marker = page.getByTestId("session-compaction-event");
-  await expect(marker).toContainText("Compacted 128 messages");
+  await expect(marker).toContainText("Compacted");
+  /* the runtime counts what the model was sent, so no count is shown */
+  await expect(marker).not.toContainText("128 messages");
   await expect(marker).toContainText("182k → 11.9k tokens (−93%)");
-  const toggle = marker.getByRole("button", { name: /Compacted 128 messages/ });
+  const toggle = marker.getByRole("button", { name: /Compacted/ });
   await expect(toggle).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByTestId("compaction-summary")).toHaveCount(0);
 

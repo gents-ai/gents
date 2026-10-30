@@ -574,17 +574,16 @@ export function SessionContext({
                 .map((entry) => (
                   <li key={entry.compactionKey} className="flex justify-between gap-3">
                     <span>
-                      {entry.createdAt && shortTime(entry.createdAt) && (
+                      {entry.createdAt && shortTime(entry.createdAt) ? (
                         <time
                           dateTime={entry.createdAt}
                           title={fullTime(entry.createdAt)}
                         >
-                          {shortTime(entry.createdAt)} ·{" "}
+                          {shortTime(entry.createdAt)}
                         </time>
+                      ) : (
+                        "Compacted"
                       )}
-                      {entry.messagesCompacted == null
-                        ? "Message count unavailable"
-                        : `${entry.messagesCompacted.toLocaleString()} ${entry.messagesCompacted === 1 ? "message" : "messages"}`}
                     </span>
                     <span className="text-right tabular-nums">
                       {entry.originalTokens == null || entry.compactedTokens == null

@@ -621,8 +621,12 @@ export const TranscriptPanel = memo(function TranscriptPanel({
       dayOpenings(
         entries,
         (entry) => entry.key,
+        /* a compaction is drawn by the message it follows, not its own
+           time, so it doesn't open a day */
         (entry) =>
-          entry.kind === "item" && "timestamp" in entry.item
+          entry.kind === "item" &&
+          entry.item.kind !== "sessionCompaction" &&
+          "timestamp" in entry.item
             ? entry.item.timestamp
             : null,
       ),
