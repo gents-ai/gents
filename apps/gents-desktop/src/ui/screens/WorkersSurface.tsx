@@ -11,7 +11,14 @@ import { StartedCount } from "./StartedCount";
 import { span, useMinute } from "./time";
 import { sessionViews } from "@/app/sessionViews";
 import { sessionKeyOf } from "../../hooks/fleetStore";
-import { runningUnder, useFleet, workersOf, workersOfId } from "../hooks/useFleet";
+import {
+  failedUnder,
+  runningUnder,
+  stoppedUnder,
+  useFleet,
+  workersOf,
+  workersOfId,
+} from "../hooks/useFleet";
 
 /* newest started first; a row keeps its place as its state changes */
 const ordered = (workers: readonly SessionSummary[]) =>
@@ -45,6 +52,8 @@ function WorkerRow({
   const key = sessionKeyOf(worker);
   const children = useFleet((s) => workersOf(s, worker));
   const running = useFleet((s) => runningUnder(s, worker));
+  const failed = useFleet((s) => failedUnder(s, worker));
+  const stopped = useFleet((s) => stoppedUnder(s, worker));
   const shown = useMemo(
     () => ordered(children.filter((c) => !above.has(sessionKeyOf(c)))),
     [children, above],
@@ -70,6 +79,8 @@ function WorkerRow({
             session={worker}
             started={shown.length}
             running={running}
+            failed={failed}
+            stopped={stopped}
             open={open}
             onToggle={() => opened.toggle(key)}
           />
