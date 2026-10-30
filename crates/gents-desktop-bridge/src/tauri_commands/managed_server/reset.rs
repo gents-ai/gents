@@ -131,7 +131,7 @@ pub(in crate::tauri_commands) async fn retire_orphaned_client_state(
         return Ok(None);
     }
     drain_managed_runtime_pairing(state).await;
-    let _client = crate::tauri_commands::lifecycle::exclude_client(state).await?;
+    let _client = crate::tauri_commands::lifecycle::exclusion::exclude_client(state).await?;
     let user_home = resolve_user_home(dirs::home_dir())?;
     let plan = plan_home_reset(
         None,
@@ -196,7 +196,7 @@ where
     };
     let _client = if plan.retires_client_state() {
         drain_managed_runtime_pairing(state).await;
-        Some(crate::tauri_commands::lifecycle::exclude_client(state).await?)
+        Some(crate::tauri_commands::lifecycle::exclusion::exclude_client(state).await?)
     } else {
         None
     };

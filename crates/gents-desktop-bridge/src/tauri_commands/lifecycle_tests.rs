@@ -1,4 +1,12 @@
+use tokio::sync::watch;
+
+use super::core_start::{
+    acquire_client_lifecycle, bounded_client_start, classify_client_start_error,
+    deliver_client_start, start_client_core_async, ClientStartDelivery, NO_STAGE_COMPLETED,
+};
+use super::exclusion::shutdown_excluded_client;
 use super::*;
+
 
 #[tokio::test]
 async fn a_stalled_client_start_keeps_the_store_locked_until_its_core_closes() {
