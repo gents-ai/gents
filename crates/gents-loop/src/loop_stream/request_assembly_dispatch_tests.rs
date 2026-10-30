@@ -3,7 +3,7 @@ use std::sync::Arc;
 use gents_protocol::message::Message;
 use rig::completion::CompletionRequest;
 
-use super::prepare_dispatch_attempt;
+use super::dispatch::prepare_dispatch_attempt;
 use crate::backend_provider::BackendProviderKind;
 use crate::completion_retry::CompletionRetryPolicy;
 use crate::loop_stream::LoopConfig;

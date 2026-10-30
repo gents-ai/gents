@@ -1,5 +1,7 @@
+use super::tagged_history::tagged_from_sourced;
 use super::*;
 use crate::claude_messages_body::{ReasoningWitness, ReplayIssuer, ReplayOrigin};
+use crate::provider_input::ProviderInputProfile;
 use gents_protocol::message::Text;
 
 fn provider_tag(turn_index: u32) -> ReplayTag {

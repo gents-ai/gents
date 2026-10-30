@@ -68,24 +68,25 @@ pub use one_shot::{
     OneShotNoVisibleOutput, OneShotProviderFailure,
 };
 pub use repeated_tool_failure::REPEATED_TOOL_FAILURE_PREFIX;
-pub use request_assembly::resolve_replay_evidence;
-pub use request_assembly::{assemble_new_messages, is_request_context_message};
-pub use request_assembly::{
-    assemble_provider_request, association_reduction, provider_messages, provider_view_tagged,
-    replay_compaction_prefix_bound, sanitize_tagged_history, select_tagged_assistant_blocks,
-};
-pub use request_assembly::{
+pub use request_assembly::dispatch::{
     clamp_request_output_budget, completion_request_input_components, ensure_context_can_dispatch,
-    repair_provider_input,
 };
+pub use request_assembly::repair::repair_provider_input;
+pub use request_assembly::resolve_replay_evidence;
+pub use request_assembly::tagged_history::{
+    association_reduction, provider_messages, provider_view_tagged, sanitize_tagged_history,
+    select_tagged_assistant_blocks,
+};
+pub use request_assembly::{assemble_new_messages, is_request_context_message};
+pub use request_assembly::{assemble_provider_request, replay_compaction_prefix_bound};
 use tool_dispatch::admit_tool;
 pub use tool_dispatch::dispatch_tool;
 
 use provider_idle::{within_provider_idle, ProviderAttemptFailure};
-use request_assembly::{
-    build_budgeted_request, context_accounting_for_request, message_values,
-    prepare_dispatch_attempt, rebuild_after_provider_overflow, repair_and_rebuild_request,
-};
+use request_assembly::dispatch::{context_accounting_for_request, prepare_dispatch_attempt};
+use request_assembly::message_values;
+use request_assembly::repair::repair_and_rebuild_request;
+use request_assembly::turn_budget::{build_budgeted_request, rebuild_after_provider_overflow};
 pub use tool_dispatch::value_to_json_string;
 use turn_threading::{bounded_tool_result, close_streaming_turn};
 pub use turn_threading::{
@@ -1600,8 +1601,10 @@ fn assemble_rig_chat_history(
         .chain(std::iter::once(prompt))
         .cloned()
         .collect();
-    let ordered =
-        request_assembly::provider_order(config.provider_input_counter.profile(), messages);
+    let ordered = request_assembly::tagged_history::provider_order(
+        config.provider_input_counter.profile(),
+        messages,
+    );
     let mut projected = config
         .preamble
         .as_ref()
