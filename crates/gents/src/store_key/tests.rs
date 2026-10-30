@@ -258,7 +258,7 @@ fn recorded_creation_intent_resumes_without_replacing_a_stores_missing_key() {
 #[test]
 fn only_a_definitely_absent_keychain_item_is_a_missing_key() {
     let data = Path::new("/tmp/gents-home/data");
-    let missing = keychain_failure(crate::identity::ERR_SEC_ITEM_NOT_FOUND, data);
+    let missing = keychain_failure(crate::identity::macos::ERR_SEC_ITEM_NOT_FOUND, data);
     assert_eq!(
         incompatible_store(&missing, data).map(|store| store.kind),
         Some(IncompatibleStoreKind::MissingStoreKey)
