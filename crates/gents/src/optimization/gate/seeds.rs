@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 
 use super::{reject, StructuralRejection};
 use crate::document_config::{EvalCase, EvalDefinition, EventSource};
-use crate::eval::runner::embedded::executor::bind_fixture_owner;
+use crate::eval::runner::embedded::executor::install::bind_fixture_owner;
 use crate::optimization::subject::{task_seed_routes, MaterializedPack};
 use crate::optimization::target::TargetField;
 use crate::template::{render_template, task_node_ctx, TemplateScope};

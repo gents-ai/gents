@@ -6,7 +6,8 @@ use serde_json::Value;
 
 use crate::config_client::ConfigAccess;
 use crate::defra_node::EmbeddedNode;
-use crate::eval::runner::embedded::executor::{documents_capture_query, usage_of};
+use crate::eval::runner::embedded::executor::capture::documents_capture_query;
+use crate::eval::runner::embedded::executor::evidence::usage_of;
 use crate::eval::runner::embedded::observe::request_evidence_from_query_data;
 use crate::eval::runner::executor::{Capture, StageSpec};
 use crate::eval::runner::progress::{LastToolCall, LiveSnapshot, ToolTally};
