@@ -198,12 +198,16 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
             include_str!("../../../gents-cli/src/commands/config/task_run.rs"),
         ),
         (
-            "desktop request preparation",
-            include_str!("../../../gents-desktop-core/src/client/mutations/chat/request/prepare.rs"),
-        ),
-        (
-            "desktop request retry",
-            include_str!("../../../gents-desktop-core/src/client/mutations/chat/request/retry.rs"),
+            "desktop requests",
+            concat!(
+                include_str!("../../../gents-desktop-core/src/client/mutations/chat/request.rs"),
+                include_str!(
+                    "../../../gents-desktop-core/src/client/mutations/chat/request/prepare.rs"
+                ),
+                include_str!(
+                    "../../../gents-desktop-core/src/client/mutations/chat/request/retry.rs"
+                ),
+            ),
         ),
     ] {
         let production = source.split("#[cfg(test)]\nmod tests {").next().unwrap();

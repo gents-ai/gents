@@ -2,7 +2,7 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 
 use super::{
-    P2pDiscoveryArg, P2pRelayModeArg, P2pTransportArg, ToolCeilingArg, parse_env_var_name,
+    parse_env_var_name, P2pDiscoveryArg, P2pRelayModeArg, P2pTransportArg, ToolCeilingArg,
 };
 use crate::cli::output_format::OutputFormat;
 

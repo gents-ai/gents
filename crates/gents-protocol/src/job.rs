@@ -15,14 +15,14 @@ pub use settings::{
     JobPolicy, PluginDataDeclaration, PluginJobDeclaration, PluginJobSettings, StampedField,
 };
 pub use step::{
-    CALLER_NODE_DID_FILTER, DataOp, DataQuery, DataWrite, JobControlKind, JobControlRequest,
-    JobEffects, JobFailure, JobInterrupt, JobMessage, JobScratch, JobSpawn, JobStepInput,
-    JobSuspend, JobSuspendKind, OnConflict,
+    DataOp, DataQuery, DataWrite, JobControlKind, JobControlRequest, JobEffects, JobFailure,
+    JobInterrupt, JobMessage, JobScratch, JobSpawn, JobStepInput, JobSuspend, JobSuspendKind,
+    OnConflict, CALLER_NODE_DID_FILTER,
 };
 pub use step_output::JobStepOutput;
 pub use view::{
-    JOB_CONTROL_PATH, JobChildRow, JobControlOutcome, JobOutcome, JobPinSummary, JobReadError,
-    JobScope, JobView, OperatorJobControlRequest,
+    JobChildRow, JobControlOutcome, JobOutcome, JobPinSummary, JobReadError, JobScope, JobView,
+    OperatorJobControlRequest, JOB_CONTROL_PATH,
 };
 
 // No field below may be named with KEY, SECRET, TOKEN or PASSWORD in any case:

@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use clap::Subcommand;
 
-use crate::CLOUD_AFTER_HELP;
 use crate::cli::output_format::OutputFormat;
+use crate::CLOUD_AFTER_HELP;
 
 #[derive(clap::Args)]
 pub(crate) struct CodexAuthProbeArgs {

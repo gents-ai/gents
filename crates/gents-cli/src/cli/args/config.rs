@@ -8,8 +8,8 @@ use super::{
     ConfigMcpCommand, ConfigScheduleCommand, ConfigTriggerCommand, ConfigValidateArgs,
     InferenceProfileCommand,
 };
-use crate::CONFIG_EXPORT_AFTER_HELP;
 use crate::cli::output_format::OutputFormat;
+use crate::CONFIG_EXPORT_AFTER_HELP;
 
 #[derive(Subcommand)]
 pub(crate) enum ConfigCommand {

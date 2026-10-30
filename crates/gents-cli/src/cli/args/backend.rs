@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Subcommand, ValueEnum};
 use gents::{BackendProviderKind, OpenAiWireApi};
 
-use super::{ACCOUNT_HELP, ACCOUNT_PROVIDERS, ConfigListArgs, ConfigShowArgs};
+use super::{ConfigListArgs, ConfigShowArgs, ACCOUNT_HELP, ACCOUNT_PROVIDERS};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum OpenAiWireApiArg {

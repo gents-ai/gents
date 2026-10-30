@@ -153,12 +153,10 @@ async fn returned_receipt_survives_outer_deadline_and_conflicting_receipt_is_ref
         registry.plugin_receipt("physical-call").await,
         Some(plugin_receipt())
     );
-    assert!(
-        registry
-            .plugin_receipt("another-physical-call")
-            .await
-            .is_none()
-    );
+    assert!(registry
+        .plugin_receipt("another-physical-call")
+        .await
+        .is_none());
 }
 
 #[tokio::test]

@@ -43,10 +43,7 @@ fn snapshot(root: &Path) -> BTreeMap<String, Vec<u8>> {
     result
 }
 
-fn normalize_source_roots(
-    inventory: &mut ConfigurationDiscoveryInventory,
-    roots: &[(&str, &str)],
-) {
+fn normalize_source_roots(inventory: &mut ConfigurationDiscoveryInventory, roots: &[(&str, &str)]) {
     for source in &mut inventory.sources {
         source.selected_root = roots
             .iter()

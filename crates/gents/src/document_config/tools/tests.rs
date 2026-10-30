@@ -355,9 +355,10 @@ mod wire {
         )
         .unwrap();
         assert_eq!(tools.agents.unwrap().enabled, Some(true));
-        assert!(report.warnings.iter().any(
-            |warning| warning.starts_with("agent_new_widened") && warning.contains("wf-a")
-        ));
+        assert!(report
+            .warnings
+            .iter()
+            .any(|warning| warning.starts_with("agent_new_widened") && warning.contains("wf-a")));
     }
 
     #[test]
@@ -499,8 +500,7 @@ mod wire {
         )
         .unwrap();
 
-        let (tools, context, _) =
-            unwire_plugin(&tools, &context, &runner, &skills, &[]).unwrap();
+        let (tools, context, _) = unwire_plugin(&tools, &context, &runner, &skills, &[]).unwrap();
         let plugins = tools
             .integrations
             .as_ref()
@@ -514,8 +514,7 @@ mod wire {
         assert_eq!(set(target_ids), BTreeSet::from(["shared", "other-own"]));
         assert!(context.skill_ids.contains(&"create-workflow".to_owned()));
 
-        let (tools, context, _) =
-            unwire_plugin(&tools, &context, &other, &skills, &[]).unwrap();
+        let (tools, context, _) = unwire_plugin(&tools, &context, &other, &skills, &[]).unwrap();
         assert!(tools.agents.as_ref().unwrap().target_ids.is_empty());
         assert_eq!(context.skill_ids, strs(&["existing"]));
     }

@@ -227,7 +227,9 @@ pub(crate) struct SessionForkArgs {
 pub(crate) enum ResponseCommand {
     #[command(about = "Show the selected canonical terminal output for a request")]
     Show(ResponseShowArgs),
-    #[command(about = "Wait until a request reaches terminal state with canonical terminal output")]
+    #[command(
+        about = "Wait until a request reaches terminal state with canonical terminal output"
+    )]
     Wait(ResponseWaitArgs),
 }
 

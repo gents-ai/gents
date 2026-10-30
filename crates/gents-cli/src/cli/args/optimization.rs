@@ -2,8 +2,8 @@ use clap::Subcommand;
 use gents::optimization::target::JobTarget;
 
 use super::{
-    EvalScopeArgs, PolicyArg, ProposerArg, SubjectArg, parse_policy, parse_proposer, parse_subject,
-    parse_target,
+    parse_policy, parse_proposer, parse_subject, parse_target, EvalScopeArgs, PolicyArg,
+    ProposerArg, SubjectArg,
 };
 
 /// `gents optimization run`'s exit statuses: scripts must not read a job left

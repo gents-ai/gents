@@ -10,10 +10,10 @@ use super::super::canonical_rows::{
     decode_output_segment_row, decode_scoped_request_output_segments, AGENT_OUTPUT_SEGMENT_FIELDS,
 };
 use super::access::{rows_value, ReadAccess, ReadCache, RequestOutputRows};
-#[cfg(test)]
-use super::{record_request_output_scan, SOURCE_OUTPUT_QUERIES};
 use super::headers::{load_header, validate_origin_chain};
 use super::ReconstructedScopedMessage;
+#[cfg(test)]
+use super::{record_request_output_scan, SOURCE_OUTPUT_QUERIES};
 
 async fn request_rows(
     access: ReadAccess<'_, '_>,

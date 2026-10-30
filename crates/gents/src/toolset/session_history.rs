@@ -10,7 +10,8 @@ mod inference;
 mod investigation;
 pub use investigation::load_session_investigation;
 use investigation::{
-    AgentDetailRow, CompactionConfigDetailRow, ContextDetailRow, ProfileDetailRow, ToolCallDetailRow,
+    AgentDetailRow, CompactionConfigDetailRow, ContextDetailRow, ProfileDetailRow,
+    ToolCallDetailRow,
 };
 mod observation;
 pub use observation::{

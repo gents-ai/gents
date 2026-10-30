@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Subcommand, ValueEnum};
 
-use super::{ACCOUNT_PROVIDERS, ScopeArgs};
+use super::{ScopeArgs, ACCOUNT_PROVIDERS};
 use crate::cli::output_format::OutputFormat;
 
 #[derive(Subcommand)]

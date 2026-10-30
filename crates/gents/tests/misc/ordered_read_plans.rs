@@ -352,7 +352,9 @@ fn source_files(root: &Path, files: &mut Vec<PathBuf>) {
             ]
             .iter()
             .any(|name| path.file_name().is_some_and(|found| found == *name))
-                && path.file_name().is_some_and(|name| scanned_stem(&name.to_string_lossy()))
+                && path
+                    .file_name()
+                    .is_some_and(|name| scanned_stem(&name.to_string_lossy()))
             {
                 source_files(&path, files);
             }

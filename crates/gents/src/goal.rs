@@ -88,9 +88,7 @@ pub use backed_request::{
 pub(crate) use controller::fence_goal_continuation_claim_in_txn;
 pub use controller::{claim_continuation, claim_retry_continuation, update_goal_fields_if_status};
 use creation::stage_goal_and_claim;
-pub(crate) use creation::{
-    create_goal_for_request, load_goal_creation_claim_fingerprint_in_txn,
-};
+pub(crate) use creation::{create_goal_for_request, load_goal_creation_claim_fingerprint_in_txn};
 pub use creation::{
     create_goal_for_session, replacement_goal_identity, CreateGoalForSessionError,
     CreateGoalForSessionOutcome, GoalCreationIdentity,
@@ -120,9 +118,9 @@ pub use transition::{
     goal_submission_step, GoalContinuationAction, GoalContinuationPhase, GoalCreateDisposition,
     GoalCreateRequest, GoalCreationFingerprint, GoalSubmissionAction, GoalSubmissionState,
 };
-use usage::session_token_usage_in_txn;
 #[cfg(test)]
 pub(crate) use usage::session_token_usage_breakdown_in_txn;
+use usage::session_token_usage_in_txn;
 pub use usage::{refresh_goal_usage, session_token_usage, SessionTokenUsage};
 pub(crate) use write::pause_goal_for_interrupt_in_txn;
 use write::set_goal_in_txn;

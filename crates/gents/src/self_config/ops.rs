@@ -5,12 +5,8 @@ use defra_node::EmbeddedNode;
 use identity::Did;
 use serde_json::{json, Map, Value};
 
-use crate::config_client::patch::{
-    apply_patch, ensure_admissible, FieldDelta, SelfConfigTarget,
-};
-use crate::config_client::{
-    apply_desired_state_plan, validate_desired_state_plan,
-};
+use crate::config_client::patch::{apply_patch, ensure_admissible, FieldDelta, SelfConfigTarget};
+use crate::config_client::{apply_desired_state_plan, validate_desired_state_plan};
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::tool_surface::SelfConfigProcessCeiling;
 
@@ -19,8 +15,8 @@ mod grants;
 mod guards;
 mod request;
 
-use documents::{candidate_doc, replacement_plan, safe_diff};
 pub use documents::{apply_tool_grant_selection, validate_tool_network_selection};
+use documents::{candidate_doc, replacement_plan, safe_diff};
 pub(crate) use documents::{decode_merged, read_owned_doc, validate_merged_selection};
 pub(crate) use grants::guard_reselection_keeps_grants_in_txn;
 pub use grants::{guard_tools_keep_grants, reselection_keeps_grants, OperatorGrants};
