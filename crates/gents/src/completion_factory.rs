@@ -239,7 +239,7 @@ pub(crate) async fn aggregate_token_budget_for_request(
     };
     let used = match request.purpose {
         RequestPurpose::Normal => {
-            crate::toolset::load_parent_inclusive_budget_usage(node, request).await?
+            crate::tools::native::load_parent_inclusive_budget_usage(node, request).await?
         }
         RequestPurpose::TitleAudit => load_prior_charged_tokens(node, &request.doc_id).await?,
         RequestPurpose::AccessReview => unreachable!("review cannot mint a ledger"),

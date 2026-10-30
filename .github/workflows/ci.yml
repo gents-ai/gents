@@ -342,8 +342,8 @@ jobs:
           RUST_MIN_STACK: 16777216
         run: |
           cargo test -p gents --lib runtime_status::tests::
-          cargo test -p gents --lib toolset::tests::read_only_bash
-          cargo test -p gents --lib managed_exec::
+          cargo test -p gents --lib tools::native::tests::read_only_bash
+          cargo test -p gents --lib tools::exec::
           cargo test -p gents --lib artifact_
           # Live-output byte evidence for background tools must fail the PR
           # that breaks it, not the post-merge main run (#2686).

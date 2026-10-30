@@ -36,7 +36,7 @@ use crate::tools::background::status::caused_request_terminals_in_txn;
 use crate::tools::call::lifecycle::{
     load_tool_call_arguments, CausedRequestTerminal, ToolCallState,
 };
-use crate::workspace::request_workspace_cwd;
+use crate::tools::workspace::request_workspace_cwd;
 
 #[cfg(test)]
 tokio::task_local! {
@@ -2178,7 +2178,7 @@ pub(crate) mod tests {
         assert!(keys.len() > 60);
         let secret: Vec<&String> = keys
             .iter()
-            .filter(|key| crate::toolset::is_secret_env_name(key))
+            .filter(|key| crate::tools::native::is_secret_env_name(key))
             .collect();
         assert!(secret.is_empty(), "{secret:?}");
         let value = serde_json::to_value(&input).unwrap();

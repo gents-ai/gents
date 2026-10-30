@@ -25,8 +25,9 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         "existing durable work\n",
     )
     .unwrap();
-    let workspace = crate::workspace::IsolatedWorkspaceDoc {
-        path_capability: crate::workspace::WorkspacePathCapability::exact_paths(vec![]).unwrap(),
+    let workspace = crate::tools::workspace::IsolatedWorkspaceDoc {
+        path_capability: crate::tools::workspace::WorkspacePathCapability::exact_paths(vec![])
+            .unwrap(),
         workspace_id: "recovery-workspace".into(),
         work_unit_id: "work-unit".into(),
         repository_id: "repository".into(),
@@ -43,7 +44,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         caused_by_invocation_id: "invocation".into(),
         caused_by_correlation: "correlation".into(),
     };
-    let placement = crate::workspace::WorkspacePlacementDoc {
+    let placement = crate::tools::workspace::WorkspacePlacementDoc {
         workspace_id: workspace.workspace_id.clone(),
         owner_node_did: did.into(),
         host_path: workspace_path.to_string_lossy().into_owned(),
@@ -56,8 +57,11 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         observed_tree_hash: String::new(),
     };
     for mutation in [
-        crate::workspace::isolated_workspace_upsert_mutation(&workspace),
-        crate::workspace::workspace_placement_upsert_mutation(&placement, "2026-09-01T00:00:00Z"),
+        crate::tools::workspace::isolated_workspace_upsert_mutation(&workspace),
+        crate::tools::workspace::workspace_placement_upsert_mutation(
+            &placement,
+            "2026-09-01T00:00:00Z",
+        ),
     ] {
         let result = node.execute(&mutation).await;
         assert!(!result.has_errors(), "{:?}", result.errors);
@@ -121,7 +125,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         .await
         .unwrap();
     let parent = owner.request().clone();
-    let parent_overlay = crate::workspace::resolve_request_workspace_overlay(
+    let parent_overlay = crate::tools::workspace::resolve_request_workspace_overlay(
         &node,
         &parent,
         owner.execution_generation().unwrap(),
@@ -235,7 +239,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         child.caused_by_parent_request_doc_id.as_deref(),
         Some(parent.doc_id.as_str())
     );
-    let overlay = crate::workspace::resolve_request_workspace_overlay(
+    let overlay = crate::tools::workspace::resolve_request_workspace_overlay(
         &node,
         child,
         "",

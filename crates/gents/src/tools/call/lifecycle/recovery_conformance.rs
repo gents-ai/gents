@@ -143,7 +143,7 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
         let registry = crate::tools::call::hook::BackgroundExecutionRegistry::default()
             .with_process_records(records.path().to_path_buf());
         let process = if case.await_mode == "background" {
-            crate::managed_exec::ownership::test_support::process_for_generated_outcome(
+            crate::tools::exec::ownership::test_support::process_for_generated_outcome(
                 &registry,
                 admission.tool.tool_call_id(),
                 &tool_doc,
@@ -163,7 +163,7 @@ async fn generated_native_restart_dispositions_use_canonical_admission_owner() {
         if let Some(process) = process {
             assert_ne!(
                 process.identity.observe(),
-                crate::managed_exec::ownership::ProcessObservation::Running,
+                crate::tools::exec::ownership::ProcessObservation::Running,
                 "{name}: restart recovery left the recorded process running"
             );
             process.finish().await;

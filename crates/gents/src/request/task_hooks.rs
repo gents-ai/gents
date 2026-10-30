@@ -9,10 +9,10 @@ use tokio_util::sync::CancellationToken;
 use crate::config_client::config_projection;
 use crate::documents::{Task, TaskHook, TaskHookPhase};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 use crate::request::lifecycle::RequestTerminalOutcome;
 use crate::request::watcher::AgentRequest;
 use crate::store::collection::Collection;
+use crate::tools::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 
 #[path = "task_hooks/records.rs"]
 mod records;
@@ -465,7 +465,7 @@ impl TaskHookExec for ManagedTaskHookExec {
         });
         let outcome = match &self.record {
             Some(record) => {
-                crate::managed_exec::ownership::scope_process_recorder(
+                crate::tools::exec::ownership::scope_process_recorder(
                     record.process_recorder(&hook.hook_id),
                     execution,
                 )

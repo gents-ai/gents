@@ -598,7 +598,7 @@ fn non_empty_string(value: Option<&str>) -> Option<String> {
 }
 
 pub fn supports_foreground_backgrounding(name: &str) -> bool {
-    crate::toolset::is_bash_tool_name(name)
+    crate::tools::native::is_bash_tool_name(name)
 }
 
 /// Requests a handoff of one exact native invocation. The runtime publishes
@@ -637,7 +637,7 @@ pub async fn request_foreground_backgrounding(
     anyhow::ensure!(
         row["tool_name"]
             .as_str()
-            .is_some_and(crate::toolset::is_bash_tool_name)
+            .is_some_and(crate::tools::native::is_bash_tool_name)
             && row["plugin_parent_tool_call_doc_id"].is_null(),
         "only a direct native Bash command can be backgrounded"
     );

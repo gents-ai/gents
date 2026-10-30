@@ -16,8 +16,8 @@ fn running_session_message_filter(local_did: &str) -> String {
     format!(
         r#"node_did: {{ _eq: "{}" }}, lifecycle_state: {{ _eq: "running" }}, await_mode: {{ _eq: "background" }}, spawned_by_tool_call_doc_id: {{ _eq: null }}, tool_name: {{ _in: ["{}", "{}"] }}"#,
         escape_graphql_string(local_did),
-        crate::toolset::AGENT_NEW_TOOL_NAME,
-        crate::toolset::AGENT_MESSAGE_TOOL_NAME,
+        crate::tools::native::AGENT_NEW_TOOL_NAME,
+        crate::tools::native::AGENT_MESSAGE_TOOL_NAME,
     )
 }
 

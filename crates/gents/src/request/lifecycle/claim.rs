@@ -450,7 +450,8 @@ impl RequestLifecycle {
                         .filter(|rows| !rows.is_empty())
                     {
                         for row in rows {
-                            crate::workspace::release_terminal_writer_binding(txn, row).await?;
+                            crate::tools::workspace::release_terminal_writer_binding(txn, row)
+                                .await?;
                         }
                         crate::triggers::engine::durable::publish_request_outcome(
                             txn,
@@ -533,7 +534,8 @@ impl RequestLifecycle {
                         .filter(|rows| !rows.is_empty())
                     {
                         for row in rows {
-                            crate::workspace::release_terminal_writer_binding(txn, row).await?;
+                            crate::tools::workspace::release_terminal_writer_binding(txn, row)
+                                .await?;
                         }
                         crate::triggers::engine::durable::publish_request_outcome(
                             txn,
@@ -629,7 +631,8 @@ impl RequestLifecycle {
                     if updated {
                         if let Some(rows) = response["data"]["update_AgentRequest"].as_array() {
                             for row in rows {
-                                crate::workspace::release_terminal_writer_binding(txn, row).await?;
+                                crate::tools::workspace::release_terminal_writer_binding(txn, row)
+                                    .await?;
                             }
                         }
                         crate::triggers::engine::durable::publish_request_outcome(

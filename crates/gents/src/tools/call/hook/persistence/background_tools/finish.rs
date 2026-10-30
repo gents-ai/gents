@@ -42,9 +42,9 @@ pub(in crate::tools::call::hook::persistence) async fn finish_background_executi
     } else {
         execution
     };
-    if crate::toolset::is_bash_tool_name(lifecycle.tool_name()) {
+    if crate::tools::native::is_bash_tool_name(lifecycle.tool_name()) {
         let outcome = execution.as_ref().ok();
-        if crate::managed_exec::ownership::native_terminal_needs_confirmation(outcome) {
+        if crate::tools::exec::ownership::native_terminal_needs_confirmation(outcome) {
             let receipt = match outcome {
                 Some(outcome) => {
                     crate::tools::call::hook::RetainedStopReceipt::from_outcome(outcome)
@@ -87,8 +87,8 @@ pub(in crate::tools::call::hook::persistence) async fn finish_background_executi
             .await,
     );
 
-    if crate::toolset::is_bash_tool_name(&execution_tool_name)
-        && crate::managed_exec::ownership::native_terminal_needs_confirmation(
+    if crate::tools::native::is_bash_tool_name(&execution_tool_name)
+        && crate::tools::exec::ownership::native_terminal_needs_confirmation(
             execution.as_ref().ok(),
         )
     {
@@ -97,13 +97,13 @@ pub(in crate::tools::call::hook::persistence) async fn finish_background_executi
             Some(record) => matches!(
                 record
                     .identity
-                    .await_signalled_group_exit(crate::managed_exec::ownership::KILL_GRACE)
+                    .await_signalled_group_exit(crate::tools::exec::ownership::KILL_GRACE)
                     .await,
-                crate::managed_exec::ownership::ProcessObservation::Exited
+                crate::tools::exec::ownership::ProcessObservation::Exited
             ),
             None => !matches!(
                 executions.live_process_evidence(&execution_call_id, &execution_tool_doc_id),
-                crate::managed_exec::ownership::LiveProcessEvidence::SpawnedUnverified
+                crate::tools::exec::ownership::LiveProcessEvidence::SpawnedUnverified
             ),
         };
         {

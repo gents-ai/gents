@@ -63,7 +63,7 @@ impl DefraSessionHook {
                 .background_tool_registry
                 .timeouts()
                 .for_execution(target.tool_name(), target.selected_service_id()),
-            Err(_) => crate::tool_surface::BackgroundTimeoutPolicy::default(),
+            Err(_) => crate::tools::surface::BackgroundTimeoutPolicy::default(),
         }
         .wait;
         let wait_deadline_at = chrono::Utc::now()

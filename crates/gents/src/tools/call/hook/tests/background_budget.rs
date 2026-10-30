@@ -256,9 +256,9 @@ async fn configured_background_lifetimes_and_waits_follow_the_target() {
     }))
     .unwrap();
     let remote_name = crate::meta_tools::flat_tool_name("search", "query");
-    let config = crate::tool_surface::BackgroundToolConfig {
+    let config = crate::tools::surface::BackgroundToolConfig {
         allowlist: vec!["bash".into(), remote_name.clone()],
-        timeouts: crate::tool_surface::ToolTimeouts::from_document(&tools).background,
+        timeouts: crate::tools::surface::ToolTimeouts::from_document(&tools).background,
     };
     let executions = BackgroundExecutionRegistry::default();
     let hook =

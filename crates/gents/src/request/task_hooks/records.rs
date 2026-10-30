@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 use super::{run_finally, HookCommandResult, ManagedTaskHookExec, TaskHookCancellation};
 use crate::documents::{TaskHook, TaskHookPhase};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use crate::managed_exec::ownership::{
+use crate::tools::exec::ownership::{
     HostRecord, HostRecordStore, ProcessIdentity, ProcessRecorder,
 };
 
@@ -22,7 +22,7 @@ pub(crate) struct TaskHookRecord {
     pub(crate) node_did: String,
     pub(crate) cwd: PathBuf,
     #[serde(default)]
-    pub(crate) root_guard: Option<crate::tool_surface::RootExecutionGuard>,
+    pub(crate) root_guard: Option<crate::tools::surface::RootExecutionGuard>,
     pub(crate) hooks: Vec<TaskHook>,
     #[serde(default)]
     pub(crate) attempts: Vec<RecordedHookAttempt>,
@@ -298,7 +298,7 @@ async fn recover_record(
             tracing::info!(
                 request_id = %record.request_id,
                 hook_id = %attempt.hook_id,
-                outcome = crate::managed_exec::ProcessStopOutcome::from_observations(before, after).as_str(),
+                outcome = crate::tools::exec::ProcessStopOutcome::from_observations(before, after).as_str(),
                 "stopped task hook command left by an interrupted execution"
             );
         }

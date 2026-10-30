@@ -12,8 +12,8 @@ use crate::completion_factory::build_admitted_model;
 use crate::inference::admission::AdmissionRegistry;
 use crate::prompt::LayeredPromptBuilder;
 use crate::request::watcher::AgentRequest;
-use crate::tool_surface::{self, ToolRuntimeContext, ToolSurface};
 use crate::tools::call::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
+use crate::tools::surface::{self, ToolRuntimeContext, ToolSurface};
 
 #[derive(Clone)]
 pub(super) struct RuntimeContext {
@@ -128,8 +128,7 @@ impl RuntimeContext {
             crate::documents::BackendAuth::NodeOAuth { .. } => "no-key".to_owned(),
             _ => agent_config.completion_client_api_key()?,
         };
-        let allowed_targets =
-            tool_surface::resolve_agent_target_descriptions(tool_surface.as_ref());
+        let allowed_targets = surface::resolve_agent_target_descriptions(tool_surface.as_ref());
         let prompt_builder = LayeredPromptBuilder::new(
             agent_config.as_ref(),
             tool_surface.as_ref(),
@@ -212,7 +211,7 @@ impl RuntimeContext {
         remote_tools: Option<crate::documents::RemoteTools>,
         job_tools: rapidhash::RapidHashMap<String, crate::tools::background::job::JobBinding>,
         output_obligations: Vec<(String, crate::documents::WriteToolOutputObligation)>,
-        root_execution_guard: Option<crate::tool_surface::RootExecutionGuard>,
+        root_execution_guard: Option<crate::tools::surface::RootExecutionGuard>,
         client: C,
     ) -> Result<()>
     where

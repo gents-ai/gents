@@ -304,7 +304,7 @@ impl super::ToolCallLifecycle {
             let deadline_at = parse_datetime(row.deadline_at.as_deref());
 
             if registered && session_stopped {
-                let process = if crate::toolset::is_bash_tool_name(&row.tool_name) {
+                let process = if crate::tools::native::is_bash_tool_name(&row.tool_name) {
                     executions
                         .stop_native_process(&row.tool_call_id, &row.doc_id)
                         .await
@@ -321,7 +321,7 @@ impl super::ToolCallLifecycle {
                     );
                     continue;
                 };
-                if crate::toolset::is_bash_tool_name(&row.tool_name) {
+                if crate::tools::native::is_bash_tool_name(&row.tool_name) {
                     if let Some(mut retained) = ToolCallLifecycle::load_by_doc_id(
                         node.clone(),
                         &row.doc_id,
@@ -361,7 +361,7 @@ impl super::ToolCallLifecycle {
 
             if registered {
                 let cause = RecoveryOutcome::TaskDeleted;
-                let process = if crate::toolset::is_bash_tool_name(&row.tool_name) {
+                let process = if crate::tools::native::is_bash_tool_name(&row.tool_name) {
                     executions
                         .stop_native_process(&row.tool_call_id, &row.doc_id)
                         .await
@@ -372,13 +372,13 @@ impl super::ToolCallLifecycle {
                 };
                 if !matches!(
                     process,
-                    crate::managed_exec::ProcessStopOutcome::Stopped
-                        | crate::managed_exec::ProcessStopOutcome::AlreadyExited
+                    crate::tools::exec::ProcessStopOutcome::Stopped
+                        | crate::tools::exec::ProcessStopOutcome::AlreadyExited
                 ) {
                     tracing::warn!(doc_id = %row.doc_id, tool_call_id = %row.tool_call_id, process = process.as_str(), "background process was not observed to stop");
                     continue;
                 }
-                if crate::toolset::is_bash_tool_name(&row.tool_name) {
+                if crate::tools::native::is_bash_tool_name(&row.tool_name) {
                     if let Some(mut retained) = ToolCallLifecycle::load_by_doc_id(
                         node.clone(),
                         &row.doc_id,
@@ -478,8 +478,8 @@ impl super::ToolCallLifecycle {
                 continue;
             }
             let (before, after) = record.identity.stop().await;
-            if crate::managed_exec::ProcessStopOutcome::from_observations(before, after)
-                == crate::managed_exec::ProcessStopOutcome::StillRunning
+            if crate::tools::exec::ProcessStopOutcome::from_observations(before, after)
+                == crate::tools::exec::ProcessStopOutcome::StillRunning
             {
                 tracing::warn!(
                     tool_call_id = %record.tool_call_id,
@@ -508,8 +508,8 @@ impl super::ToolCallLifecycle {
         executions: &crate::tools::call::hook::BackgroundExecutionRegistry,
         cause: CancelCause,
         completion_reason: &str,
-    ) -> Result<(crate::managed_exec::ProcessStopOutcome, bool, bool)> {
-        use crate::managed_exec::ProcessStopOutcome;
+    ) -> Result<(crate::tools::exec::ProcessStopOutcome, bool, bool)> {
+        use crate::tools::exec::ProcessStopOutcome;
         let doc_id = lifecycle
             .doc_id()
             .context("background cancellation requires physical tool identity")?
@@ -711,7 +711,7 @@ mod tests {
     /// verdict no test host can construct, through the native classifier.
     #[test]
     fn generated_native_process_verdicts_match_orphan_classifier() {
-        use crate::managed_exec::ProcessStopOutcome;
+        use crate::tools::exec::ProcessStopOutcome;
         let verdict = |name: &str| match name {
             "stopped" => ProcessStopOutcome::Stopped,
             "alreadyExited" => ProcessStopOutcome::AlreadyExited,
@@ -843,7 +843,7 @@ mod tests {
             requester_did: None,
             session_id: None,
             tool_call_id: None,
-            tool_name: crate::toolset::AGENT_NEW_TOOL_NAME.into(),
+            tool_name: crate::tools::native::AGENT_NEW_TOOL_NAME.into(),
             status: status.into(),
             lifecycle_state: Some("completed".into()),
             cancel_cause: None,
@@ -887,7 +887,7 @@ mod tests {
             lifecycle_state: Some(state),
             ..Default::default()
         };
-        for tool_name in [crate::toolset::AGENT_NEW_TOOL_NAME, "bash"] {
+        for tool_name in [crate::tools::native::AGENT_NEW_TOOL_NAME, "bash"] {
             let background = row("background", tool_name);
             for state in [
                 RequestLifecycleState::Interrupted,
@@ -1339,12 +1339,12 @@ fn unresolved_parent_warning_due(doc_id: &str) -> bool {
 
 fn classify_orphaned_background_tool(
     row: &RunningToolCallRow,
-    process: crate::managed_exec::ProcessStopOutcome,
+    process: crate::tools::exec::ProcessStopOutcome,
     task_deleted: bool,
     session_stopped: bool,
     now: DateTime<Utc>,
 ) -> Option<RecoveryOutcome> {
-    use crate::managed_exec::ProcessStopOutcome;
+    use crate::tools::exec::ProcessStopOutcome;
     match process {
         ProcessStopOutcome::StillRunning => None,
         ProcessStopOutcome::NotOwned | ProcessStopOutcome::AlreadyExited => {
@@ -1367,9 +1367,9 @@ fn classify_orphaned_background_tool(
 }
 
 fn classify_registered_session_stop(
-    process: crate::managed_exec::ProcessStopOutcome,
+    process: crate::tools::exec::ProcessStopOutcome,
 ) -> Option<RecoveryOutcome> {
-    use crate::managed_exec::ProcessStopOutcome;
+    use crate::tools::exec::ProcessStopOutcome;
     match process {
         ProcessStopOutcome::StillRunning => None,
         ProcessStopOutcome::NotOwned | ProcessStopOutcome::AlreadyExited => {

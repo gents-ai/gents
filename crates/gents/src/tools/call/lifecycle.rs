@@ -140,7 +140,7 @@ pub(crate) use delivery::publish_background_receipt_in_txn;
 pub(crate) mod file_inventory;
 mod file_review_access;
 pub(crate) mod query;
-pub use crate::toolset::file_contents::ContentDocument;
+pub use crate::tools::native::file_contents::ContentDocument;
 pub(crate) use file_review_access::grant_source_file_read;
 pub use file_review_access::VerifiedFileImageReceipt;
 pub(crate) use query::load_tool_file_change_observation_in_txn;
@@ -210,7 +210,7 @@ pub enum ToolRowKind {
 
 impl ToolRowKind {
     pub(crate) fn of(tool_name: &str) -> Self {
-        if crate::toolset::is_session_message_tool(tool_name) {
+        if crate::tools::native::is_session_message_tool(tool_name) {
             Self::SessionMessage
         } else {
             Self::Native
@@ -388,11 +388,11 @@ impl ToolCallLifecycle {
             if let Some(pending) = writes.downcast_ref::<delivery::PluginToolWrites>() {
                 self.plugin_writes = Some(pending.clone());
             }
-            if let Some(changes) = writes.downcast_ref::<crate::toolset::FileChanges>() {
+            if let Some(changes) = writes.downcast_ref::<crate::tools::native::FileChanges>() {
                 self.file_capture = Some(file_inventory::FileCapture::Images(changes.clone()));
             }
             if writes
-                .downcast_ref::<crate::toolset::VerifiedUnchanged>()
+                .downcast_ref::<crate::tools::native::VerifiedUnchanged>()
                 .is_some()
             {
                 self.file_capture = Some(file_inventory::FileCapture::Unchanged {
@@ -637,7 +637,7 @@ impl ToolCallLifecycle {
         };
         match agent_id {
             Some(agent_id) => {
-                crate::tool_surface::configured_output_budget(
+                crate::tools::surface::configured_output_budget(
                     &self.node,
                     &self.node_did,
                     &agent_id,
@@ -645,7 +645,7 @@ impl ToolCallLifecycle {
                 )
                 .await
             }
-            None => crate::toolset::DEFAULT_MAX_COMMAND_CHARS,
+            None => crate::tools::native::DEFAULT_MAX_COMMAND_CHARS,
         }
     }
 
@@ -713,11 +713,11 @@ mod tests {
             .kind()
         };
         assert_eq!(
-            kind_of(crate::toolset::AGENT_NEW_TOOL_NAME),
+            kind_of(crate::tools::native::AGENT_NEW_TOOL_NAME),
             ToolRowKind::SessionMessage
         );
         assert_eq!(
-            kind_of(crate::toolset::AGENT_MESSAGE_TOOL_NAME),
+            kind_of(crate::tools::native::AGENT_MESSAGE_TOOL_NAME),
             ToolRowKind::SessionMessage
         );
         assert_eq!(kind_of("tool"), ToolRowKind::Native);

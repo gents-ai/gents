@@ -8,7 +8,7 @@ use crate::inference::backends::provider::BackendProviderKind;
 use crate::inference::compaction::CompactionStrategy;
 use crate::openai_wire::OpenAiWireApi;
 use crate::store::identity::{NodeIdentity, RuntimeNode};
-use crate::tool_surface::AgentToolSurfaceConfig;
+use crate::tools::surface::AgentToolSurfaceConfig;
 
 pub const DEFAULT_CONTEXT_WINDOW: usize = 131_072;
 pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 32_768;

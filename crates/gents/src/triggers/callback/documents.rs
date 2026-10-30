@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry, rows};
 
-use crate::workspace::{
+use crate::tools::workspace::{
     isolated_workspace_upsert_mutation, workspace_placement_upsert_mutation, IsolatedWorkspaceDoc,
     MemoryWorkspaceDocuments, RepositoryPlacementRef, WorkspaceDocuments, WorkspacePlacementDoc,
 };
@@ -203,7 +203,7 @@ pub fn validate_callback_binding(binding: &CallbackBindingDoc) -> Result<()> {
             "duplicate callback input field {field}"
         );
         anyhow::ensure!(
-            !crate::toolset::is_secret_env_name(field),
+            !crate::tools::native::is_secret_env_name(field),
             "CallbackBinding {} source field `{field}` is secret-bearing",
             binding.binding_id
         );
@@ -224,7 +224,7 @@ pub fn reject_secret_bearing_callback_fields(
     }
     for field in parse_string_list(source_fields) {
         crate::graphql::validate_graphql_name(&field)?;
-        if crate::toolset::is_secret_env_name(&field) {
+        if crate::tools::native::is_secret_env_name(&field) {
             anyhow::bail!("CallbackBinding {binding_id} source field `{field}` is secret-bearing");
         }
     }
@@ -251,7 +251,7 @@ fn secret_ident(ident: &str) -> Option<String> {
     if ident.is_empty() || ident.starts_with('_') {
         return None;
     }
-    crate::toolset::is_secret_env_name(ident).then(|| ident.to_string())
+    crate::tools::native::is_secret_env_name(ident).then(|| ident.to_string())
 }
 
 fn strip_graphql_string_literals(input: &str) -> String {
@@ -279,7 +279,7 @@ pub fn strip_secret_fields(value: Value) -> Value {
     match value {
         Value::Object(map) => Value::Object(
             map.into_iter()
-                .filter(|(key, _)| !crate::toolset::is_secret_env_name(key))
+                .filter(|(key, _)| !crate::tools::native::is_secret_env_name(key))
                 .map(|(key, child)| (key, strip_secret_fields(child)))
                 .collect(),
         ),

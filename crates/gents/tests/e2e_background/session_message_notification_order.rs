@@ -132,7 +132,7 @@ async fn resumed_prompt_sorts_after_an_observer_appended_notification() {
             prompt: PARENT_PROMPT,
             accepted_chunks: vec![StreamChunk::tool_call(
                 "e2e-session-order-tool-call",
-                gents::toolset::AGENT_NEW_TOOL_NAME,
+                gents::tools::native::AGENT_NEW_TOOL_NAME,
                 json!({ "agent": CHILD_AGENT_ID, "prompt": CHILD_PROMPT }).to_string(),
             )],
             child_plans: vec![StreamPlan::new(

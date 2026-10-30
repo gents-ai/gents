@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::store::identity::{KeyIdentity, NodeIdentity};
-use crate::workspace::WorkspaceBindingDoc;
+use crate::tools::workspace::WorkspaceBindingDoc;
 
 #[derive(Clone, Copy, Debug)]
 enum RejectionOwner {
@@ -89,7 +89,7 @@ impl Fixture {
         ConfigAccess::write_local(
             &self.node,
             "test.workspace_rejection_binding",
-            &crate::workspace::workspace_binding_upsert_mutation(binding),
+            &crate::tools::workspace::workspace_binding_upsert_mutation(binding),
         )
         .await
         .unwrap();

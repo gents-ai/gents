@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use gents::documents::Agent;
 use gents::graphql::escape_graphql_string;
 use gents::self_config::{configure_agent, ConfigureAgentParams, StringUpdate};
-use gents::tool_surface::presets;
+use gents::tools::surface::presets;
 use gents::{default_agent_id_for_node, Collection, NodeIdentity};
 use serde_json::{json, Value};
 
@@ -432,7 +432,7 @@ mod tests {
                 .as_ref()
                 .and_then(|host| host.bash.as_ref())
                 .map(|bash| bash.mode),
-            Some(gents::tool_surface::BashMode::Unrestricted),
+            Some(gents::tools::surface::BashMode::Unrestricted),
         );
 
         let clone_doc = ConfigureAgentParams {

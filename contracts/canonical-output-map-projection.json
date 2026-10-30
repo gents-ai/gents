@@ -142,7 +142,7 @@
       "constructors": [],
       "generated_groups": ["canonical_payload_presentation_cases", "terminal_diagnostic_presentation_cases", "terminal_diagnostic_replay_cases"],
       "fixture_status": "concrete_inputs",
-      "native_owner_paths": ["crates/gents-protocol/src/output.rs", "crates/gents/src/session/history.rs", "crates/gents/src/tools/call/lifecycle/delivery.rs", "crates/gents/src/toolset/cli_tool.rs"],
+      "native_owner_paths": ["crates/gents-protocol/src/output.rs", "crates/gents/src/session/history.rs", "crates/gents/src/tools/call/lifecycle/delivery.rs", "crates/gents/src/tools/native/cli_tool.rs"],
       "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_presentation.rs", "crates/gents/src/lean_vocab_test/canonical_presentation/native_adapter.rs", "crates/gents/src/tools/call/lifecycle/delivery.rs"],
       "native_status": "pending",
       "required_cases": [

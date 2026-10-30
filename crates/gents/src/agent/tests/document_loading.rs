@@ -7,8 +7,8 @@ use super::super::*;
 use super::support::*;
 use crate::documents::{default_agent_id_for_node, Agent, AgentTargetDocument, Tools};
 use crate::ensure_runtime_schemas;
-use crate::tool_surface::ToolCeiling;
-use crate::toolset::ToolSet;
+use crate::tools::native::ToolSet;
+use crate::tools::surface::ToolCeiling;
 
 async fn install_default_behavior_chain(node: &Arc<EmbeddedNode>, did: &str, agent_id: &str) {
     crate::test_support::install_test_agent(node, did, agent_id).await;

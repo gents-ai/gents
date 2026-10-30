@@ -5,7 +5,7 @@ use crate::store::identity::NodeIdentity;
 #[tokio::test]
 async fn cancelling_while_approval_waits_never_requires_a_process_record() {
     use crate::plugin::approval::workspace;
-    if !crate::toolset::workspace_write_sandbox_enforced() {
+    if !crate::tools::native::workspace_write_sandbox_enforced() {
         return;
     }
     let expected = crate::lean_vocab_test::lean_process_stop_cases()
@@ -14,7 +14,7 @@ async fn cancelling_while_approval_waits_never_requires_a_process_record() {
         .unwrap();
     let mut harness = admission_harness(|_, root| {
         BackgroundToolRegistry::from_tools(
-            vec![crate::toolset::write_capable_bash_for_test(root)],
+            vec![crate::tools::native::write_capable_bash_for_test(root)],
             &["bash_unrestricted".into()],
         )
     })
@@ -169,7 +169,7 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
         } else {
             &case["expectedRoute"]
         };
-        let supported = crate::toolset::workspace_write_sandbox_enforced();
+        let supported = crate::tools::native::workspace_write_sandbox_enforced();
         let guard_case = crate::lean_vocab_test::lean_contract_snapshot()
             .operator_path_cases
             .iter()
@@ -184,7 +184,7 @@ async fn background_commands_keep_workspace_consent_after_dispatch() {
         let allowed = expected == "allow" && guard_case["expected"] == true;
         let mut harness = admission_harness(|_, root| {
             BackgroundToolRegistry::from_tools(
-                vec![crate::toolset::write_capable_bash_for_test(root)],
+                vec![crate::tools::native::write_capable_bash_for_test(root)],
                 &["bash_unrestricted".into()],
             )
         })
@@ -356,15 +356,15 @@ impl DeniedTarget {
     fn registry(&self, node: &Arc<EmbeddedNode>, root: &std::path::Path) -> BackgroundToolRegistry {
         match self {
             Self::ReadOnlyBash => BackgroundToolRegistry::from_tools(
-                vec![crate::toolset::read_only_bash_for_test(
+                vec![crate::tools::native::read_only_bash_for_test(
                     root,
                     vec!["ls".into()],
                 )],
                 &["bash".into()],
             ),
             Self::CliArgvPrefix => BackgroundToolRegistry::from_tools(
-                vec![crate::toolset::cli_tool_for_test(
-                    crate::toolset::CliToolConfig {
+                vec![crate::tools::native::cli_tool_for_test(
+                    crate::tools::native::CliToolConfig {
                         name: "git".into(),
                         binary_path: "/bin/echo".into(),
                         description: String::new(),
@@ -560,7 +560,7 @@ async fn spawn_process_rejects_unadvertised_arguments_before_spawned_admission()
             request_id,
         } = admission_harness(|_, root| {
             BackgroundToolRegistry::from_tools(
-                vec![crate::toolset::read_only_bash_for_test(
+                vec![crate::tools::native::read_only_bash_for_test(
                     root,
                     vec!["ls".into()],
                 )],
@@ -571,14 +571,14 @@ async fn spawn_process_rejects_unadvertised_arguments_before_spawned_admission()
         accept_hook_tool_call(
             &hook,
             "spawn-malformed",
-            crate::toolset::SPAWN_PROCESS_TOOL_NAME,
+            crate::tools::native::SPAWN_PROCESS_TOOL_NAME,
             args,
             None,
         )
         .await;
         let action = hook
             .on_tool_call(
-                crate::toolset::SPAWN_PROCESS_TOOL_NAME,
+                crate::tools::native::SPAWN_PROCESS_TOOL_NAME,
                 None,
                 "spawn-malformed",
                 args,
@@ -604,7 +604,7 @@ async fn spawn_process_rejects_unadvertised_arguments_before_spawned_admission()
         assert_eq!(rows.len(), 1, "{args}: {rows:?}");
         assert_eq!(
             rows[0]["tool_name"],
-            crate::toolset::SPAWN_PROCESS_TOOL_NAME
+            crate::tools::native::SPAWN_PROCESS_TOOL_NAME
         );
         assert!(rows[0]["spawned_by_tool_call_doc_id"].is_null(), "{rows:?}");
         assert_eq!(rows[0]["lifecycle_state"], "failed", "{args}: {rows:?}");

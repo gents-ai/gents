@@ -122,7 +122,7 @@ pub enum ToolFileChangeRead {
         changes: gents_protocol::file_changes::ToolFileChanges,
         /// File documents holding the retained versions; empty for rows that
         /// still carry their images inline.
-        contents: Vec<crate::toolset::file_contents::ContentDocument>,
+        contents: Vec<crate::tools::native::file_contents::ContentDocument>,
     },
 }
 
@@ -258,10 +258,14 @@ async fn load_tool_file_change_observation_source(
         requester_did: requester_did.map(str::to_owned),
     };
     let reader = match source {
-        ReadSource::Access(access) => crate::toolset::file_contents::ContentReader::Access(access),
-        ReadSource::Txn(txn) => crate::toolset::file_contents::ContentReader::Transaction(txn),
+        ReadSource::Access(access) => {
+            crate::tools::native::file_contents::ContentReader::Access(access)
+        }
+        ReadSource::Txn(txn) => {
+            crate::tools::native::file_contents::ContentReader::Transaction(txn)
+        }
     };
-    let (changes, contents) = crate::toolset::file_contents::decode_observation(
+    let (changes, contents) = crate::tools::native::file_contents::decode_observation(
         reader,
         &scope,
         tool_call_doc_id,
@@ -734,7 +738,7 @@ async fn load_accepted_tool_call(
         anyhow::ensure!(
             call.request_doc_id == parent.request_doc_id
                 && call.message_sequence == parent.message_sequence
-                && parent.tool_name == crate::toolset::SPAWN_PROCESS_TOOL_NAME,
+                && parent.tool_name == crate::tools::native::SPAWN_PROCESS_TOOL_NAME,
             "spawned tool presentation has incoherent accepted-parent provenance"
         );
         Some(parent)
@@ -1401,7 +1405,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(read.request_doc_id, request_doc_id);
-        assert_eq!(read.tool_name, crate::toolset::SPAWN_PROCESS_TOOL_NAME);
+        assert_eq!(
+            read.tool_name,
+            crate::tools::native::SPAWN_PROCESS_TOOL_NAME
+        );
         assert_eq!(read.lifecycle_state, ToolCallState::Completed);
         assert!(!read.arguments.is_empty());
         assert_eq!(

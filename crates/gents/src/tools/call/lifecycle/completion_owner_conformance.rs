@@ -489,7 +489,7 @@ pub(crate) async fn selected_background_wake_with_successor(
         &mut owner,
         did,
         1,
-        crate::toolset::LIST_PROCESSES_TOOL_NAME,
+        crate::tools::native::LIST_PROCESSES_TOOL_NAME,
         "completion-order-list",
         json!({}),
         AwaitMode::Foreground,
@@ -503,7 +503,7 @@ pub(crate) async fn selected_background_wake_with_successor(
             &mut owner,
             did,
             2,
-            crate::toolset::AGENT_NEW_TOOL_NAME,
+            crate::tools::native::AGENT_NEW_TOOL_NAME,
             "completion-order-successor",
             json!({"agent": "general", "prompt": "second work"}),
             AwaitMode::Background,
@@ -550,7 +550,7 @@ pub(crate) async fn selected_background_wake_with_successor(
             .await
             .unwrap();
     assert!(matches!(wait_native, Message::Assistant { ref content, .. }
-        if content.iter().any(|part| matches!(part, AssistantContent::ToolCall(call) if call.function.name == crate::toolset::LIST_PROCESSES_TOOL_NAME))));
+        if content.iter().any(|part| matches!(part, AssistantContent::ToolCall(call) if call.function.name == crate::tools::native::LIST_PROCESSES_TOOL_NAME))));
     assert!(wait_record.sequence < notification_record.sequence);
     assert!(notifications[0].1.contains("<tool-completion"));
     assert!(notifications[0].1.contains("durable native output"));

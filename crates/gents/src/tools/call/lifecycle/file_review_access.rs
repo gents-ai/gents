@@ -100,8 +100,8 @@ impl VerifiedFileImageReceipt {
             session_id: entry.scope.session_id.clone(),
             requester_did: Some(entry.scope.requester_did.clone()),
         };
-        let (changes, _) = crate::toolset::file_contents::decode_observation(
-            crate::toolset::file_contents::ContentReader::Access(&access),
+        let (changes, _) = crate::tools::native::file_contents::decode_observation(
+            crate::tools::native::file_contents::ContentReader::Access(&access),
             &scope,
             &entry.tool_call_doc_id,
             row["file_changes"].clone(),

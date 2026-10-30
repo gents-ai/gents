@@ -18,7 +18,7 @@ use gents::documents::{
 use gents::goal::{set_goal, GoalStatus};
 use gents::graphql::escape_graphql_string;
 use gents::run_timeline_fetch::load_run_timeline_rows;
-use gents::toolset::{
+use gents::tools::native::{
     AGENT_INTERRUPT_TOOL_NAME, AGENT_LIST_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
 };
 use gents::{
@@ -3743,7 +3743,7 @@ fn assert_standard_backgrounding_tool_surfaces(
     assert_eq!(
         parent_surface.included.get("agent"),
         Some(&{
-            let mut names = gents::toolset::AGENT_TOOL_NAMES
+            let mut names = gents::tools::native::AGENT_TOOL_NAMES
                 .iter()
                 .map(|name| name.to_string())
                 .collect::<Vec<_>>();

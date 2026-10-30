@@ -322,7 +322,7 @@ impl ToolCallLifecycle {
                 let plugin_writes = plugin_writes.clone();
                 let file_capture = file_capture.clone();
                 Box::pin(async move {
-                    if tool_name == crate::toolset::SPAWN_PROCESS_TOOL_NAME {
+                    if tool_name == crate::tools::native::SPAWN_PROCESS_TOOL_NAME {
                         txn.contend_with_request_siblings();
                     }
                     let now = fixture_now.unwrap_or_else(Utc::now);

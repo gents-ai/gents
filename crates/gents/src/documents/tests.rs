@@ -22,7 +22,7 @@ fn tools_document_accepts_empty_string_arrays_and_null_groups() {
     assert!(document.built_ins.is_none());
     assert_eq!(
         document.host.as_ref().unwrap().files.as_ref().unwrap().mode,
-        crate::tool_surface::FileToolMode::ReadOnly
+        crate::tools::surface::FileToolMode::ReadOnly
     );
 }
 
@@ -379,7 +379,7 @@ fn validate_rejects_duplicate_field_names_within_decl() {
 
 #[test]
 fn reserved_names_cover_native_and_meta_tools() {
-    use crate::toolset::NativeTool;
+    use crate::tools::native::NativeTool;
 
     let native = [
         NativeTool::ListFiles { max_entries: 1 },
@@ -439,7 +439,7 @@ fn reserved_names_cover_native_and_meta_tools() {
 #[test]
 fn memory_tool_name_is_reserved() {
     assert!(is_reserved_builtin_tool_name(
-        crate::toolset::MEMORY_TOOL_NAME
+        crate::tools::native::MEMORY_TOOL_NAME
     ));
 }
 

@@ -166,7 +166,7 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
                 config,
                 &[],
                 BackgroundToolRegistry::default(),
-                crate::toolset::lsp::LspPool::new(),
+                crate::tools::native::lsp::LspPool::new(),
             ),
             observe_renewal
         );
@@ -310,7 +310,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
     use crate::documents::{
         WriteToolDecl, WriteToolField, WriteToolOutputObligation, WriteToolOutputObligationScope,
     };
-    use crate::tool_surface::{
+    use crate::tools::surface::{
         AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling, ToolRuntimeContext,
     };
 
@@ -534,7 +534,7 @@ async fn oneshot_bash_uses_owned_request_context() {
         .await
         .unwrap();
     let tools = Arc::new(
-        crate::toolset::ToolSet::builder()
+        crate::tools::native::ToolSet::builder()
             .read_root(root.path())
             .bash_read_only()
             .build()

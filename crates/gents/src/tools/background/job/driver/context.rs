@@ -11,9 +11,9 @@ use super::JobRuntime;
 use crate::config_client::ConfigApplyTxn;
 use crate::graphql::escape_graphql_string;
 use crate::plugin::store::{parse_coordinate, read_record, InstalledPlugin};
-use crate::tool_surface::EndpointScope;
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::lifecycle::ToolCallLifecycle;
+use crate::tools::surface::EndpointScope;
 
 /// Every fact admission reads about the caller, the plugin and the host,
 /// read through `txn`. The step-0 facts are inert: a pinned row never
@@ -99,8 +99,11 @@ pub(in crate::tools::background::job) async fn step_context_for(
                     within.push((facts.cwd.clone(), dir.clone()));
                 }
                 if resolved.as_deref().is_some_and(|dir| {
-                    crate::workspace::require_under_ceiling(dir, runtime.tool_root.as_deref())
-                        .is_ok()
+                    crate::tools::workspace::require_under_ceiling(
+                        dir,
+                        runtime.tool_root.as_deref(),
+                    )
+                    .is_ok()
                 }) {
                     cwd_allowed.push(dir.clone());
                 }

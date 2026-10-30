@@ -605,7 +605,7 @@ async fn interrupt_while_restoring_the_provider_checkpoint_terminalizes_through_
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_index() {
-    use crate::managed_exec::ownership::{ProcessIdentity, ProcessObservation};
+    use crate::tools::exec::ownership::{ProcessIdentity, ProcessObservation};
 
     fn git(dir: &std::path::Path, args: &[&str]) {
         let status = std::process::Command::new("git")
@@ -656,7 +656,7 @@ async fn interrupt_while_hashing_a_sealed_workspace_kills_git_and_keeps_its_inde
     let hashing = tokio::spawn(async move {
         super::super::request::prepare_unless_interrupted(
             &mut interrupt_rx,
-            crate::workspace::adapter::working_tree_hash(&dest),
+            crate::tools::workspace::adapter::working_tree_hash(&dest),
         )
         .await
         .map(|hashed| hashed.map_err(|error| format!("{error:#}")))

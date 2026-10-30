@@ -26,7 +26,6 @@ use gents::pack::home_install::{record_after_install_via, recorded_provenance, I
 use gents::pack::PackKind;
 use gents::plugin::data::StampContext;
 use gents::plugin::job_calls;
-use gents::tool_surface::EndpointScope;
 use gents::tools::background::job::admit::{
     self, HostFacts, RootCall, StepCall, StepChild, StepContext, StepRow,
 };
@@ -41,6 +40,7 @@ use gents::tools::background::job::settings::{
 };
 use gents::tools::background::status::ProcessControlScope;
 use gents::tools::call::lifecycle::{AwaitMode, ToolCallState, ToolRowKind};
+use gents::tools::surface::EndpointScope;
 use gents_protocol::job::keys::{
     decode_job_retry_key, job_message_key, job_session_id, job_spawn_key,
 };
@@ -1266,7 +1266,7 @@ fn generated_plugin_job_lineage_cases_decode_strictly() {
 }
 
 /// `strip_secret_fields` drops a field whose upper-cased name contains one of
-/// these (`toolset::shared::command::is_secret_env_name`), so no job field may.
+/// these (`tools::native::shared::command::is_secret_env_name`), so no job field may.
 const SECRET_SUBSTRINGS: [&str; 4] = ["KEY", "SECRET", "TOKEN", "PASSWORD"];
 
 fn collect_field_names(value: &serde_json::Value, names: &mut BTreeSet<String>) {

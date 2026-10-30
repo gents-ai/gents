@@ -1,6 +1,6 @@
 use crate::agent::tool_selection_from_document;
 use crate::documents::Tools;
-use crate::toolset::CommandExecutionMode;
+use crate::tools::native::CommandExecutionMode;
 
 fn tools_doc(bash_mode: &str) -> Tools {
     serde_json::from_value(serde_json::json!({

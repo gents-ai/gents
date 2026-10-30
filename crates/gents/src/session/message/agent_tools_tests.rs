@@ -534,7 +534,7 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
     access
         .write(
             "test.restore_creation_cause",
-            &set_name(crate::toolset::AGENT_NEW_TOOL_NAME),
+            &set_name(crate::tools::native::AGENT_NEW_TOOL_NAME),
         )
         .await
         .unwrap();
@@ -582,7 +582,7 @@ async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() 
         real_identity: true,
         p2p: true,
         await_mode: AwaitMode::Background,
-        tool_name: Some(crate::toolset::AGENT_NEW_TOOL_NAME.into()),
+        tool_name: Some(crate::tools::native::AGENT_NEW_TOOL_NAME.into()),
         start_running: false,
         ..Default::default()
     })
@@ -1367,7 +1367,7 @@ async fn session_listing_discovers_unlinked_work_and_matches_send_authority() {
             &mut caller_owner,
             &caller.node_did,
             1,
-            crate::toolset::AGENT_MESSAGE_TOOL_NAME,
+            crate::tools::native::AGENT_MESSAGE_TOOL_NAME,
             "message-trigger-worker",
             serde_json::json!({"session_id": "correlated-worker", "message": "continue shard R3a"}),
             AwaitMode::Background,

@@ -1,6 +1,6 @@
 use crate::defra_query::DEFRA_QUERY_TOOL_NAME;
 use crate::meta_tools::META_TOOL_NAMES;
-use crate::toolset::{
+use crate::tools::native::{
     AGENT_INTERRUPT_TOOL_NAME, AGENT_LIST_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
     CANCEL_PROCESS_TOOL_NAME, CONTEXT_BUDGET_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
     READ_PROCESS_TOOL_NAME, SESSION_HISTORY_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME,
@@ -442,8 +442,8 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         "memory",
     ];
 
-    crate::toolset::NativeTool::ALL_NAMES.contains(&name)
-        || name == crate::toolset::lsp::LSP_TOOL_NAME
+    crate::tools::native::NativeTool::ALL_NAMES.contains(&name)
+        || name == crate::tools::native::lsp::LSP_TOOL_NAME
         || META_TOOL_NAMES.contains(&name)
         || AGENT_TOOL_NAMES.contains(&name)
         || SINGLETON_TOOL_NAMES.contains(&name)

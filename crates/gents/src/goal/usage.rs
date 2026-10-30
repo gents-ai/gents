@@ -38,7 +38,7 @@ pub(crate) async fn session_token_usage_breakdown_in_txn(
     node_did: &str,
     session_id: &str,
 ) -> Result<SessionTokenUsage> {
-    crate::toolset::load_session_goal_usage(txn, node_did, session_id)
+    crate::tools::native::load_session_goal_usage(txn, node_did, session_id)
         .await
         .context("summing goal inference usage")
 }

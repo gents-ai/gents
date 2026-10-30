@@ -71,7 +71,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
                 &mut parent,
                 &node_did,
                 0,
-                crate::toolset::SPAWN_PROCESS_TOOL_NAME,
+                crate::tools::native::SPAWN_PROCESS_TOOL_NAME,
                 "task-native-tool",
                 serde_json::json!({"tool_name": "bash", "args": {}}),
                 AwaitMode::Background,
@@ -94,11 +94,10 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
             let tool_call_id = tool_call_id.clone();
             let tool_doc_id = tool_doc_id.clone();
             tokio::spawn(async move {
-                let process =
-                    crate::managed_exec::ownership::test_support::OwnedTestProcess::spawn(Some(
-                        recorder,
-                    ))
-                    .await;
+                let process = crate::tools::exec::ownership::test_support::OwnedTestProcess::spawn(
+                    Some(recorder),
+                )
+                .await;
                 let _ = identity_tx.send(process.identity.clone());
                 token.cancelled().await;
                 process.finish().await;
@@ -142,7 +141,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         assert_eq!(report.tool_calls_terminalized, 0, "{}", left.name);
         assert_eq!(
             process.observe(),
-            crate::managed_exec::ownership::ProcessObservation::Running,
+            crate::tools::exec::ownership::ProcessObservation::Running,
             "{}",
             left.name
         );
@@ -198,7 +197,7 @@ async fn generated_registered_background_owner_stop_cases_use_live_worker() {
         worker.await.unwrap();
         assert_ne!(
             process.observe(),
-            crate::managed_exec::ownership::ProcessObservation::Running,
+            crate::tools::exec::ownership::ProcessObservation::Running,
             "{}",
             deleted.name
         );
@@ -297,7 +296,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
         let tool_call_id = tool_call_id.clone();
         let tool_doc_id = tool_doc_id.clone();
         tokio::spawn(async move {
-            let process = crate::managed_exec::ownership::test_support::OwnedTestProcess::spawn(
+            let process = crate::tools::exec::ownership::test_support::OwnedTestProcess::spawn(
                 Some(recorder),
             )
             .await;
@@ -315,7 +314,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     let process = identity_rx.await.unwrap();
     assert_eq!(
         process.observe(),
-        crate::managed_exec::ownership::ProcessObservation::Running
+        crate::tools::exec::ownership::ProcessObservation::Running
     );
     release_reservation_tx.send(()).unwrap();
     reservation_released_rx.await.unwrap();
@@ -341,7 +340,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     );
     assert_eq!(
         process.observe(),
-        crate::managed_exec::ownership::ProcessObservation::Running
+        crate::tools::exec::ownership::ProcessObservation::Running
     );
 
     let job_home = tempfile::tempdir().unwrap();
@@ -399,7 +398,7 @@ async fn session_resume_waits_for_live_process_record_after_tool_terminalizes() 
     worker.await.unwrap();
     assert_ne!(
         process.observe(),
-        crate::managed_exec::ownership::ProcessObservation::Running
+        crate::tools::exec::ownership::ProcessObservation::Running
     );
     crate::session::resume_session(
         &admission.node,

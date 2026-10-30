@@ -7,7 +7,7 @@ use gents::session::origin::{
     group_caused, lineage, single_caused, starting_request, SessionLink, SessionScope,
 };
 use gents::session::{public_request_filter, session_scope_filter};
-use gents::toolset::is_session_message_tool;
+use gents::tools::native::is_session_message_tool;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;

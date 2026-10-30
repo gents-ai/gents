@@ -332,7 +332,7 @@ pub(crate) async fn consume_folded_in_txn(
         .as_str()
         .context("folded request receipt omitted request_id")?
         .to_owned();
-    crate::workspace::release_terminal_writer_binding(txn, &updated[0]).await?;
+    crate::tools::workspace::release_terminal_writer_binding(txn, &updated[0]).await?;
     crate::triggers::engine::durable::publish_request_outcome(
         txn,
         &consumption.node_did,

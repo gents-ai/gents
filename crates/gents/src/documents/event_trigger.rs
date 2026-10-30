@@ -314,7 +314,7 @@ pub struct EventSource {
     pub group: Option<EventGroup>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub workspace_authority: Option<crate::toolset::WorkspaceAuthority>,
+    pub workspace_authority: Option<crate::tools::native::WorkspaceAuthority>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub created_at: Option<String>,

@@ -180,7 +180,7 @@ impl DefraSessionHook {
             .doc_id()
             .context("background result requires physical tool identity")?;
         let result = if lifecycle.is_spawned_background()
-            || crate::toolset::is_bash_tool_name(lifecycle.tool_name())
+            || crate::tools::native::is_bash_tool_name(lifecycle.tool_name())
         {
             crate::tools::background::status::canonical_tool_output(
                 self.node.as_ref(),

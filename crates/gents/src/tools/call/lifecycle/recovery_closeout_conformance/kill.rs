@@ -11,7 +11,7 @@ async fn kill_fixture(observation: &str) -> (PublishedAdmission, Option<String>)
         name: format!("kill-session-message-{observation}"),
         real_identity: true,
         await_mode: AwaitMode::Background,
-        tool_name: Some(crate::toolset::AGENT_NEW_TOOL_NAME.to_owned()),
+        tool_name: Some(crate::tools::native::AGENT_NEW_TOOL_NAME.to_owned()),
         start_running,
         ..Default::default()
     };

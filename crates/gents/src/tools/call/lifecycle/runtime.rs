@@ -14,7 +14,7 @@ pub(crate) struct ToolWorkspaceScope {
     pub workspace_cwd: Option<PathBuf>,
     pub workspace_root: Option<PathBuf>,
     pub workspace_authority: Option<WorkspaceAuthority>,
-    pub workspace_artifact: Option<crate::workspace::ArtifactGrant>,
+    pub workspace_artifact: Option<crate::tools::workspace::ArtifactGrant>,
 }
 
 impl ToolWorkspaceScope {
@@ -41,7 +41,7 @@ pub(crate) struct CurrentToolRuntimeContext {
     pub(crate) workspace_cwd: Option<PathBuf>,
     pub(crate) workspace_root: Option<PathBuf>,
     pub(crate) workspace_authority: Option<WorkspaceAuthority>,
-    pub(crate) workspace_artifact: Option<crate::workspace::ArtifactGrant>,
+    pub(crate) workspace_artifact: Option<crate::tools::workspace::ArtifactGrant>,
     pub(crate) session_id: Option<String>,
     pub(crate) background: bool,
     pub(crate) correlation: Option<String>,

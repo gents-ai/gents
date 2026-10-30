@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::super::*;
 use super::support::*;
 use crate::ensure_runtime_schemas;
-use crate::tool_surface::ToolCeiling;
+use crate::tools::surface::ToolCeiling;
 
 #[tokio::test]
 async fn builder_rejects_node_without_signing_did() {

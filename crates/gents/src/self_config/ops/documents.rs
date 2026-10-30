@@ -7,7 +7,7 @@ use crate::config_client::{
     DesiredStateApplyPlan,
 };
 use crate::documents::Tools;
-use crate::toolset::CommandNetworkMode;
+use crate::tools::native::CommandNetworkMode;
 
 pub fn apply_tool_grant_selection(
     tools: &mut Tools,
@@ -69,7 +69,7 @@ pub(crate) fn validate_merged_selection(merged: &Map<String, Value>) -> Result<(
         .as_ref()
         .and_then(|group| group.lsp.as_ref())
     {
-        crate::toolset::lsp::LspConfigDocument::parse_self_config(lsp.config.as_deref())
+        crate::tools::native::lsp::LspConfigDocument::parse_self_config(lsp.config.as_deref())
             .map_err(anyhow::Error::msg)?;
     }
     tools.validate()

@@ -7,7 +7,7 @@ use crate::request::lifecycle::{SessionMessageCause, SessionMessageTarget};
 #[cfg(test)]
 use crate::session::origin::SessionScope;
 #[cfg(test)]
-use crate::tool_surface::AgentToolConfig;
+use crate::tools::surface::AgentToolConfig;
 use anyhow::Result;
 #[cfg(test)]
 use defra_node::EmbeddedNode;

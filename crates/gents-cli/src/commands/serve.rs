@@ -741,7 +741,7 @@ async fn serve_foreground(
         effective_tool_root
             .as_deref()
             .map(|root| {
-                gents::tool_surface::resolve_configured_tool_root(root)
+                gents::tools::surface::resolve_configured_tool_root(root)
                     .map(|resolved| resolved.to_string_lossy().into_owned())
                     .map_err(|error| {
                         format!("tool root {} does not resolve: {error:#}", root.display())

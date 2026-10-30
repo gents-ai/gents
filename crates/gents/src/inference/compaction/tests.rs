@@ -2431,7 +2431,7 @@ fn calls_without_a_result_are_not_recorded_as_modifications() {
 fn every_registered_file_tool_is_classified() {
     const NOT_FILE_TOOLS: [&str; 2] = ["bash", "bash_unrestricted"];
 
-    for name in crate::toolset::NativeTool::ALL_NAMES {
+    for name in crate::tools::native::NativeTool::ALL_NAMES {
         if NOT_FILE_TOOLS.contains(&name) {
             continue;
         }

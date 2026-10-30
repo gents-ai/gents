@@ -15,7 +15,7 @@ pub(super) async fn operations_snapshot_response(
     core: Arc<ClientCore>,
     request: DesktopOperationsSnapshotRequest,
 ) -> Result<DesktopOperationsSnapshot> {
-    let native_executors = gents::native_executor_status::active_native_executors()
+    let native_executors = gents::tools::exec::status::active_native_executors()
         .into_iter()
         .map(|executor| NativeExecutorStatusView {
             id: executor.id as i64,

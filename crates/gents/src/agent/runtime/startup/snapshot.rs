@@ -8,7 +8,7 @@ use crate::agent::{DocumentResolveContext, Gents};
 use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::backends::registry;
 use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
-use crate::tool_surface::{ToolRuntimeContext, ToolSurface};
+use crate::tools::surface::{ToolRuntimeContext, ToolSurface};
 
 pub(super) fn is_degraded_startup_unavailable_reason(
     reason: gents_protocol::node_readiness::AgentReadinessUnavailableReason,

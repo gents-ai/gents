@@ -13,7 +13,7 @@
       "constructors": [],
       "generated_groups": ["canonical_dispatch_observation_cases", "canonical_spawned_target_rejection_cases"],
       "fixture_status": "concrete_inputs",
-      "native_owner_paths": ["crates/gents/src/tools/call/hook/persistence/prompt_hook.rs", "crates/gents/src/tools/call/hook.rs", "crates/gents/src/tools/call/lifecycle/transition/native.rs", "crates/gents-loop/src/loop_stream.rs", "crates/gents-loop/src/tool.rs", "crates/gents/src/toolset/bash_tools.rs", "crates/gents/src/tools/call/hook/persistence/background_tools.rs", "crates/gents/src/tools/call/lifecycle/recovery.rs"],
+      "native_owner_paths": ["crates/gents/src/tools/call/hook/persistence/prompt_hook.rs", "crates/gents/src/tools/call/hook.rs", "crates/gents/src/tools/call/lifecycle/transition/native.rs", "crates/gents-loop/src/loop_stream.rs", "crates/gents-loop/src/tool.rs", "crates/gents/src/tools/native/bash_tools.rs", "crates/gents/src/tools/call/hook/persistence/background_tools.rs", "crates/gents/src/tools/call/lifecycle/recovery.rs"],
       "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_execution.rs", "crates/gents/src/tools/call/hook/tests.rs", "crates/gents-loop/src/end_to_end_test.rs", "crates/gents/src/agent/loop_stream/tests/tool_execution.rs", "crates/gents/src/tools/call/hook/tests/background_admission.rs"],
       "native_status": "pending",
       "required_cases": [

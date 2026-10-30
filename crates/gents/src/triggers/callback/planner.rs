@@ -5,7 +5,7 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::workspace::{
+use crate::tools::workspace::{
     action_plan_canonical_json, canonical_json_string, parse_action_plan_json, ActionPlan,
     ACTION_PLAN_ABI,
 };

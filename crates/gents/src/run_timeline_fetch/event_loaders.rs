@@ -464,7 +464,7 @@ pub(super) fn resolve_tool_payloads(
                 );
                 if spawned_by_tool_call_doc_id.is_some() {
                     anyhow::ensure!(
-                        name == crate::toolset::SPAWN_PROCESS_TOOL_NAME,
+                        name == crate::tools::native::SPAWN_PROCESS_TOOL_NAME,
                         "spawned tool parent is not an accepted spawn_process invocation"
                     );
                     let input: crate::tools::background::status::BackgroundToolArgs =

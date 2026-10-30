@@ -28,8 +28,8 @@ use crate::documents::{PortCardinality, PortSpec};
 use crate::plugin::data::{DataCaller, PluginData, StampContext};
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::PluginVerdict;
-use crate::workspace::journal::advance;
-use crate::workspace::{ActionJournalEntry, ActionJournalState};
+use crate::tools::workspace::journal::advance;
+use crate::tools::workspace::{ActionJournalEntry, ActionJournalState};
 
 /// A plugin writes only a pack's own collections: never the runtime's
 /// documents and never a protected collection.
@@ -175,7 +175,7 @@ pub(super) async fn execute(
     journal: Vec<ActionJournalEntry>,
     data_node: Option<&Arc<EmbeddedNode>>,
 ) -> Result<()> {
-    if let Some(journal) = crate::workspace::recover_running(&journal) {
+    if let Some(journal) = crate::tools::workspace::recover_running(&journal) {
         return persist_journal(
             node,
             invocation,

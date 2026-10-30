@@ -43,7 +43,6 @@ use crate::plugin::job_calls::JobCaller;
 use crate::plugin::store::InstalledPlugin;
 use crate::plugin::PluginVerdict;
 use crate::request::lifecycle::SessionMessageCause;
-use crate::tool_surface::EndpointScope;
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::hook::persistence::{
     count_live_backgrounded_rows_in, MAX_BACKGROUNDED_TOOLS_PER_PARENT,
@@ -54,6 +53,7 @@ use crate::tools::call::lifecycle::plugin_receipt::decide;
 use crate::tools::call::lifecycle::PluginJobTerminal;
 use crate::tools::call::lifecycle::{AwaitMode, ReceiptDecision, ToolRowKind};
 use crate::tools::call::lifecycle::{FailureClass, ToolCallLifecycle, ToolCallState};
+use crate::tools::surface::EndpointScope;
 
 /// Runs step 0 of the running foreground job tool call `lifecycle` and ends
 /// it unless the output adopts a job. Returns the payload the model reads.

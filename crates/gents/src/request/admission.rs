@@ -253,7 +253,7 @@ pub(crate) async fn terminalize_pending_request_rejection(
                     .and_then(serde_json::Value::as_array)
                 {
                     for row in rows {
-                        crate::workspace::release_terminal_writer_binding(txn, row).await?;
+                        crate::tools::workspace::release_terminal_writer_binding(txn, row).await?;
                         if let Some(request_id) = row["request_id"].as_str() {
                             crate::triggers::engine::durable::publish_request_outcome(
                                 txn, owner, request_id, "failed", reason, now,
@@ -622,8 +622,8 @@ async fn verify_request_input(
         .and_then(|tools| tools.host.as_ref())
         .and_then(|host| host.bash.as_ref())
         .and_then(|bash| bash.execution_mode)
-        == Some(crate::toolset::CommandExecutionMode::ArtifactWrite);
-    crate::workspace::validate_request_workspace_input(node, &request, artifact_requested)
+        == Some(crate::tools::native::CommandExecutionMode::ArtifactWrite);
+    crate::tools::workspace::validate_request_workspace_input(node, &request, artifact_requested)
         .await
         .map_err(AgentRequestAdmissionError::denied)?;
     let runtime_control = admission.kind == AgentRequestAdmissionKind::RuntimeInternal

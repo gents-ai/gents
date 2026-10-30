@@ -63,7 +63,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("Goals", Module("conformance/goals.rs")),
         ("Identity", Module("conformance/identity.rs")),
         ("InferenceCall", Module("conformance/inference_call.rs")),
-        ("ManagedExec", Gap("Real process-group/job kill and bounded-drain tests live in src/managed_exec.rs; generated OS/process-tree cases still need those consumers, not fixture-only flags.")),
+        ("ManagedExec", Gap("Real process-group/job kill and bounded-drain tests live in src/tools/exec/mod.rs; generated OS/process-tree cases still need those consumers, not fixture-only flags.")),
         ("Mailbox", Module("conformance/mailbox.rs")),
         ("MCPHealth", Module("conformance/mcp_health.rs")),
         (

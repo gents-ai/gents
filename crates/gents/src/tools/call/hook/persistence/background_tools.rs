@@ -14,7 +14,7 @@ async fn complete_spawn_process_failure(
     lifecycle: &mut ToolCallLifecycle,
     failure: FailureClass,
     result: String,
-    denial: Option<&crate::toolset::CommandPolicyDenial>,
+    denial: Option<&crate::tools::native::CommandPolicyDenial>,
 ) -> anyhow::Result<ToolCallHookAction> {
     let (bounded, presentation) = bounded_tool_result_with_presentation(
         SPAWN_PROCESS_TOOL_NAME,
@@ -156,9 +156,9 @@ impl DefraSessionHook {
                 "running spawn_process parent lacks physical identity"
             ))?
         );
-        let effective_timeout = if crate::toolset::is_bash_tool_name(target_name) {
+        let effective_timeout = if crate::tools::native::is_bash_tool_name(target_name) {
             let requested = parsed.args.get("timeout_secs").and_then(|v| v.as_u64());
-            crate::toolset::background_command_timeout(requested).min(lifetime)
+            crate::tools::native::background_command_timeout(requested).min(lifetime)
         } else {
             lifetime
         };
@@ -255,11 +255,11 @@ impl DefraSessionHook {
             .map(|runtime| runtime.source_fields)
             .unwrap_or_default();
         let executions = self.background_executions.clone();
-        let process_tool = crate::toolset::is_bash_tool_name(target_name);
+        let process_tool = crate::tools::native::is_bash_tool_name(target_name);
         let process_recorder =
             executions.process_recorder(&execution_call_id, &execution_tool_doc_id);
         tokio::spawn(crate::plugin::approval::carry_interactive(async move {
-            let execution = AssertUnwindSafe(crate::managed_exec::ownership::scope_process_recorder(
+            let execution = AssertUnwindSafe(crate::tools::exec::ownership::scope_process_recorder(
                 process_recorder,
                 crate::tools::call::lifecycle::runtime::scope_tool_request_identity(
                     requester_did,
@@ -280,11 +280,11 @@ impl DefraSessionHook {
                                 if process_tool {
                                     crate::tools::call::lifecycle::runtime::call_tool_managed_with_cleanup(
                                         target_tool.as_ref(), target_args, |outcome| {
-                                            if let Some(outcome) = outcome.filter(|outcome| crate::managed_exec::ownership::native_terminal_needs_confirmation(Some(outcome))) {
+                                            if let Some(outcome) = outcome.filter(|outcome| crate::tools::exec::ownership::native_terminal_needs_confirmation(Some(outcome))) {
                                                 executions.set_stop_receipt(&execution_call_id, &execution_tool_doc_id, crate::tools::call::hook::RetainedStopReceipt::from_outcome(outcome));
                                             }
                                             executions.live_process_evidence(&execution_call_id, &execution_tool_doc_id)
-                                                != crate::managed_exec::ownership::LiveProcessEvidence::NeverSpawned
+                                                != crate::tools::exec::ownership::LiveProcessEvidence::NeverSpawned
                                         },
                                     ).await
                                 } else {

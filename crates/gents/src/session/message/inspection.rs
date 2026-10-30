@@ -12,7 +12,7 @@ use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::escape_graphql_string;
 use crate::session::origin::SessionScope;
 use crate::session::TxnCanonicalReader;
-use crate::tool_surface::AgentToolConfig;
+use crate::tools::surface::AgentToolConfig;
 
 const TEXT_CHARS: usize = 8_000;
 const TOOL_PREVIEW_CHARS: usize = 240;

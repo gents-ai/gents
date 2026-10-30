@@ -15,7 +15,7 @@ use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::resolved::ResolvedAgent;
 use crate::request::watcher::AgentRequest;
 use crate::store::identity::RuntimeNode;
-use crate::tool_surface::ToolSurface;
+use crate::tools::surface::ToolSurface;
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 use gents_protocol::node_readiness::{
     effective_agent_readiness_admission, EffectiveAgentReadinessAdmission,

@@ -24,18 +24,18 @@ impl ConfigCommandTool {
         let mode = effective
             .pointer("/runtime_effective/effective/file_mode")
             .and_then(Value::as_str)
-            .map(crate::tool_surface::FileToolMode::parse)
+            .map(crate::tools::surface::FileToolMode::parse)
             .transpose()?
             .unwrap_or_default();
         anyhow::ensure!(
-            mode != crate::tool_surface::FileToolMode::Off,
+            mode != crate::tools::surface::FileToolMode::Off,
             "configuration discovery requires effective file read permission on the invoking agent"
         );
         let root = effective
             .pointer("/runtime_effective/effective/root")
             .and_then(Value::as_str)
             .context("configuration discovery requires an effective tool root")?;
-        let context = crate::toolset::ToolContext::new(root.into(), false)?;
+        let context = crate::tools::native::ToolContext::new(root.into(), false)?;
         let sources = requested
             .into_iter()
             .map(|source| {

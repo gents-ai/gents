@@ -191,19 +191,19 @@ impl DefraSessionHook {
             crate::tools::call::control::CancelBackgroundToolCallOutcome::Cancelled { .. } => {
                 cancel_process_reply(
                     background_tool_call_id,
-                    crate::managed_exec::ProcessStopOutcome::Stopped,
+                    crate::tools::exec::ProcessStopOutcome::Stopped,
                 )
             }
             crate::tools::call::control::CancelBackgroundToolCallOutcome::Unverified => {
                 cancel_process_reply(
                     background_tool_call_id,
-                    crate::managed_exec::ProcessStopOutcome::StillRunning,
+                    crate::tools::exec::ProcessStopOutcome::StillRunning,
                 )
             }
             crate::tools::call::control::CancelBackgroundToolCallOutcome::Lost => {
                 cancel_process_reply(
                     background_tool_call_id,
-                    crate::managed_exec::ProcessStopOutcome::NotOwned,
+                    crate::tools::exec::ProcessStopOutcome::NotOwned,
                 )
             }
             crate::tools::call::control::CancelBackgroundToolCallOutcome::AlreadyTerminal {
@@ -225,9 +225,9 @@ impl DefraSessionHook {
 
 fn cancel_process_reply(
     tool_call_id: &str,
-    process: crate::managed_exec::ProcessStopOutcome,
+    process: crate::tools::exec::ProcessStopOutcome,
 ) -> String {
-    use crate::managed_exec::CancelProcessReply;
+    use crate::tools::exec::CancelProcessReply;
     let reply = process.cancel_reply();
     let error = match reply {
         CancelProcessReply::Cancelled => serde_json::Value::Null,

@@ -101,7 +101,7 @@ impl ToolCallLifecycle {
                 ToolCallState::Running | ToolCallState::Completed
             ) && !self.is_spawned_background()
                 && self.plugin_effect.is_none()
-                && self.tool_name == crate::toolset::SPAWN_PROCESS_TOOL_NAME,
+                && self.tool_name == crate::tools::native::SPAWN_PROCESS_TOOL_NAME,
             "spawned background admission requires the accepted spawn_process owner"
         );
         let parent_doc_id = self
@@ -217,7 +217,7 @@ impl ToolCallLifecycle {
                                 MessageBlock::ToolCall { tool_call_doc_id, id, name, .. }
                                 if tool_call_doc_id == &parent_doc_id
                                     && id == &parent_tool_call_id
-                                    && name == crate::toolset::SPAWN_PROCESS_TOOL_NAME)),
+                                    && name == crate::tools::native::SPAWN_PROCESS_TOOL_NAME)),
                         "spawned admission parent is not exactly bound by its accepted provider header"
                     );
                     let parent_row = txn.execute(&format!(r#"{{ AgentToolCall(filter: {{

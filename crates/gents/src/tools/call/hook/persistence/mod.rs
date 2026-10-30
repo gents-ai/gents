@@ -14,7 +14,7 @@ use crate::tools::background::status::{
 };
 use crate::tools::call::lifecycle::query::load_tool_call_result;
 use crate::tools::call::lifecycle::{AwaitMode, CancelCause, FailureClass, ToolCallLifecycle};
-use crate::toolset::{
+use crate::tools::native::{
     AGENT_NEW_TOOL_NAME, CANCEL_PROCESS_TOOL_NAME, LIST_PROCESSES_TOOL_NAME,
     READ_PROCESS_TOOL_NAME, SPAWN_PROCESS_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
 };

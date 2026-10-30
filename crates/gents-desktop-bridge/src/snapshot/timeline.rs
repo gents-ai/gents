@@ -378,7 +378,7 @@ mod tests {
             tool_call_key: "start-1".to_string(),
             request_id: Some("parent-1".to_string()),
             message_sequence: Some(2),
-            tool_name: Some(gents::toolset::AGENT_NEW_TOOL_NAME.to_string()),
+            tool_name: Some(gents::tools::native::AGENT_NEW_TOOL_NAME.to_string()),
             tool_call_id: Some("start-1".to_string()),
             args: Some(r#"{"agent":"researcher","prompt":"trace the request flow"}"#.to_string()),
             partial_output_tail: None,

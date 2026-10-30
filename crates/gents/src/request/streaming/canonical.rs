@@ -38,7 +38,7 @@ pub(crate) fn session_message_call_ids(message: &gents_protocol::message::Messag
             .iter()
             .filter_map(|part| match part {
                 gents_protocol::message::AssistantContent::ToolCall(call)
-                    if crate::toolset::is_session_message_tool(&call.function.name) =>
+                    if crate::tools::native::is_session_message_tool(&call.function.name) =>
                 {
                     Some(call.id.clone())
                 }

@@ -140,7 +140,7 @@ pub(super) async fn seed_peer_session_message(
             id: tool_call_id.into(),
             call_id: Some(tool_call_id.into()),
             function: ToolFunction::new(
-                crate::toolset::AGENT_NEW_TOOL_NAME.into(),
+                crate::tools::native::AGENT_NEW_TOOL_NAME.into(),
                 serde_json::json!({ "agent": "remote-target", "prompt": prompt }),
             ),
             signature: None,

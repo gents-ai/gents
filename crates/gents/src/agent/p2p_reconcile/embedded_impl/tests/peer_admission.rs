@@ -250,7 +250,7 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
             &mut parent_lifecycle,
             &coordinator_did,
             2,
-            crate::toolset::AGENT_MESSAGE_TOOL_NAME,
+            crate::tools::native::AGENT_MESSAGE_TOOL_NAME,
             "peer-interrupt-message",
             serde_json::json!({"session_id": active.session_id, "message": "change direction", "delivery": "interrupt"}),
             crate::tools::call::lifecycle::AwaitMode::Background,

@@ -1469,7 +1469,7 @@ const AMBIENT_CONTEXT_ALLOWLIST: &[(&str, usize, &str)] = &[
     ("crates/gents-loop/src/tool_effects.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents/src/inference/admission/client.rs", 1, "request context read inside Rig's CompletionModel and HTTP client; thread through a per-call provider client"),
     ("crates/gents/src/config_client/txn/native.rs", 1, "re-entrant write fence inside a transaction callback; the handle itself is passed explicitly"),
-    ("crates/gents/src/managed_exec/ownership.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
+    ("crates/gents/src/tools/exec/ownership.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents/src/plugin/approval.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents/src/plugin/approval/workspace/context.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
     ("crates/gents/src/tools/call/lifecycle/runtime.rs", 1, "request context for tool calls; thread through a ToolDyn::call context argument"),
@@ -2000,13 +2000,13 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // serde `invalid type: string` message
     ("crates/gents/src/self_config/command/patch.rs", 1),
     // display only: appends a next-call hint when absent
-    ("crates/gents/src/toolset/session_history.rs", 1),
+    ("crates/gents/src/tools/native/session_history.rs", 1),
     // persisted AgentRequest failure_reason
     ("crates/gents/src/trace_export.rs", 6),
     // serde `unknown variant` message
-    ("crates/gents/src/workspace/action_plan.rs", 1),
+    ("crates/gents/src/tools/workspace/action_plan.rs", 1),
     // git show stderr
-    ("crates/gents/src/workspace/adapter.rs", 2),
+    ("crates/gents/src/tools/workspace/adapter.rs", 2),
 ];
 
 const TEXT_TESTS: &[&str] = &["contains", "starts_with", "ends_with", "eq", "ne"];

@@ -646,7 +646,7 @@ fn resolve_agent_environments(
                         .map(str::trim)
                         .filter(|root| !root.is_empty())
                         .map(std::path::Path::new);
-                    gents::tool_surface::resolve_effective_tool_root(
+                    gents::tools::surface::resolve_effective_tool_root(
                         &agent.agent_id,
                         stored_root,
                         operator_root,

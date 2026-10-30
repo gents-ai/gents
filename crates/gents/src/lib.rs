@@ -45,7 +45,6 @@ pub mod provider_budget {
 #[path = "lean_vocab_test/canonical_execution/native_adapter.rs"]
 mod canonical_execution_native_adapter;
 pub(crate) mod provider_usage;
-pub mod starter_recipes;
 pub mod startup_readiness;
 pub mod startup_recovery;
 pub mod store;
@@ -282,10 +281,8 @@ pub(crate) mod test_support {
          \"service_id\": \"observability-mcp\", \"tool_name\": \"list_hosts\"}";
 }
 pub mod log_rate;
-pub(crate) mod managed_exec;
 pub mod mcp_pool;
 pub mod meta_tools;
-pub mod native_executor_status;
 pub mod oneshot;
 pub mod periodic_recovery;
 pub mod prompt;
@@ -308,13 +305,10 @@ pub(crate) mod runtime_trace;
 pub mod schema_tool;
 pub mod self_config;
 pub mod session;
-pub mod tool_surface;
 pub mod tools;
-pub mod toolset;
 pub mod trace_export;
 pub mod triggers;
 pub mod truncation;
-pub mod workspace;
 
 pub use adapter_projection::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
@@ -383,7 +377,6 @@ pub use inference::resolved::{
 };
 pub use mcp_pool::McpPool;
 pub use meta_tools::build_meta_tools;
-pub use native_executor_status::{active_native_executors, NativeExecutorStatus};
 pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
 pub use openai_wire::OpenAiWireApi;
 pub use p2p_observability::{
@@ -442,11 +435,6 @@ pub use store::schema::{
     OAUTH_CREDENTIAL_SCHEMA, SCHEDULE_SCHEMA, TASK_SCHEMA, TOOLS_SCHEMA,
     TOOL_SERVICE_HEALTH_STATE_SCHEMA, TOOL_SERVICE_REGISTRY_SCHEMA,
 };
-pub use tool_surface::{
-    cli_tool, AgentToolSurfaceConfig, BashMode, CustomToolFactory, FileToolMode,
-    ResolvedToolSelection, ToolCeiling, ToolPolicyVersion, ToolRuntimeContext, ToolSurface,
-    TOOL_POLICY_V1,
-};
 pub(crate) use tools::background::diagnostics::load_background_completion_diagnostics_for_session;
 pub use tools::background::diagnostics::{
     load_background_completion_diagnostics, BackgroundCompletionDiagnostics,
@@ -458,10 +446,16 @@ pub use tools::call::control::{cancel_background_tool_call, CancelBackgroundTool
 pub use tools::call::hook::{
     BackgroundExecutionRegistry, BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats,
 };
-pub use toolset::{
+pub use tools::exec::status::{active_native_executors, NativeExecutorStatus};
+pub use tools::native::{
     build_native_tools, enable_self_runner, CliToolConfig, CommandExecutionMode,
     CommandExecutionPolicy, CommandNetworkMode, FileToolLimits, NativeTool, ToolSet,
     ToolSetBuilder,
+};
+pub use tools::surface::{
+    cli_tool, AgentToolSurfaceConfig, BashMode, CustomToolFactory, FileToolMode,
+    ResolvedToolSelection, ToolCeiling, ToolPolicyVersion, ToolRuntimeContext, ToolSurface,
+    TOOL_POLICY_V1,
 };
 pub use triggers::callback::reject_secret_bearing_callback_fields;
 pub use triggers::engine::event_source::EventSource;

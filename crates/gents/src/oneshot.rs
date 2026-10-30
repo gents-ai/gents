@@ -17,8 +17,8 @@ use crate::request::lifecycle::{
     ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TriggerLineage,
 };
 use crate::request::streaming::DefraStreamWriter;
-use crate::tool_surface::{self, ToolRuntimeContext};
 use crate::tools::call::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
+use crate::tools::surface::{self, ToolRuntimeContext};
 use futures::StreamExt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,7 +49,7 @@ pub async fn run_openai_oneshot_with_tools(
         .tools
         .resolve(&node, agent.node_did(), &Default::default())
         .await?;
-    let allowed_targets = tool_surface::resolve_agent_target_descriptions(&tool_surface);
+    let allowed_targets = surface::resolve_agent_target_descriptions(&tool_surface);
     let prompt_builder = LayeredPromptBuilder::new(agent, &tool_surface, &allowed_targets);
     let output_obligations = tool_surface.output_obligations();
 
@@ -101,7 +101,7 @@ struct OneshotInputs<'a> {
     output_obligations: &'a [(String, crate::documents::WriteToolOutputObligation)],
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     background_tool_registry: BackgroundToolRegistry,
-    lsp_pool: crate::toolset::lsp::LspPool,
+    lsp_pool: crate::tools::native::lsp::LspPool,
 }
 
 async fn run_oneshot_with_completion_client<C>(
@@ -149,7 +149,7 @@ where
 
 async fn terminalize_oneshot_setup_failure(
     lifecycle: &mut RequestLifecycle,
-    lsp_pool: &crate::toolset::lsp::LspPool,
+    lsp_pool: &crate::tools::native::lsp::LspPool,
     error: anyhow::Error,
 ) -> anyhow::Error {
     let reason = error.to_string();
@@ -186,7 +186,7 @@ async fn run_oneshot_owned<M>(
     mut config: crate::agent::loop_stream::LoopConfig,
     output_obligations: &[(String, crate::documents::WriteToolOutputObligation)],
     background_tool_registry: BackgroundToolRegistry,
-    lsp_pool: crate::toolset::lsp::LspPool,
+    lsp_pool: crate::tools::native::lsp::LspPool,
 ) -> Result<OneshotRunResult>
 where
     M: ProviderModel,

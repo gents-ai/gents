@@ -10,7 +10,7 @@ use super::target::session_target_allowed;
 use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
 use crate::session::origin::{SessionLineage, SessionScope};
-use crate::tool_surface::AgentToolConfig;
+use crate::tools::surface::AgentToolConfig;
 
 const PAGE_SIZE: usize = 100;
 const SCAN_PAGES: usize = 10;

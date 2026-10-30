@@ -1021,7 +1021,7 @@ pub async fn verified_agent_new_creation(
         || call["session_id"].as_str() != Some(caller.session_id.as_str())
         || call["requester_did"].as_str() != caller.requester_did.as_deref()
         || call["tool_call_id"].as_str() != Some(call_id)
-        || call["tool_name"].as_str() != Some(crate::toolset::AGENT_NEW_TOOL_NAME)
+        || call["tool_name"].as_str() != Some(crate::tools::native::AGENT_NEW_TOOL_NAME)
     {
         return Ok(false);
     }
@@ -1060,7 +1060,7 @@ fn agent_receipt_matches(
     opening: &str,
     call_id: &str,
 ) -> bool {
-    if read.tool_name != crate::toolset::AGENT_NEW_TOOL_NAME
+    if read.tool_name != crate::tools::native::AGENT_NEW_TOOL_NAME
         || read.request_doc_id
             != request
                 .caused_by_parent_request_doc_id

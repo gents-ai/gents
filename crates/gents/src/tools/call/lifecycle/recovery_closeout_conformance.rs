@@ -29,7 +29,7 @@ async fn generated_native_missing_parent_restart_cases_defer() {
             await_mode: AwaitMode::Background,
             tool_name: case
                 .session_message
-                .then(|| crate::toolset::AGENT_NEW_TOOL_NAME.to_owned()),
+                .then(|| crate::tools::native::AGENT_NEW_TOOL_NAME.to_owned()),
             ..Default::default()
         })
         .await
@@ -134,7 +134,7 @@ async fn generated_session_message_recovery_cases_use_accepted_call() {
                 name: format!("recovery-closeout-{name}"),
                 real_identity: true,
                 await_mode: AwaitMode::Background,
-                tool_name: Some(crate::toolset::AGENT_NEW_TOOL_NAME.to_owned()),
+                tool_name: Some(crate::tools::native::AGENT_NEW_TOOL_NAME.to_owned()),
                 start_running: true,
                 ..Default::default()
             })
@@ -454,7 +454,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         let records = tempfile::tempdir().unwrap();
         let registry = crate::BackgroundExecutionRegistry::default()
             .with_process_records(records.path().to_path_buf());
-        let process = crate::managed_exec::ownership::test_support::process_for_generated_outcome(
+        let process = crate::tools::exec::ownership::test_support::process_for_generated_outcome(
             &registry,
             admission.tool.tool_call_id(),
             &tool_doc_id,
@@ -472,7 +472,7 @@ async fn generated_orphan_background_recovery_cases_use_accepted_native_call() {
         if let Some(process) = process {
             assert_ne!(
                 process.identity.observe(),
-                crate::managed_exec::ownership::ProcessObservation::Running,
+                crate::tools::exec::ownership::ProcessObservation::Running,
                 "{name}: settled row left its process running"
             );
             process.finish().await;

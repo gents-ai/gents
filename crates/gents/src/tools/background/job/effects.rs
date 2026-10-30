@@ -656,7 +656,6 @@ mod tests {
     }
 
     use crate::request::lifecycle::SessionMessageCause;
-    use crate::tool_surface::EndpointScope;
     use crate::tools::background::job::admit::{
         HostFacts, StepCall, StepChild, StepContext, StepRow,
     };
@@ -665,6 +664,7 @@ mod tests {
     use crate::tools::call::lifecycle::admission_fixture::{
         published_admission, PublishedAdmissionOptions,
     };
+    use crate::tools::surface::EndpointScope;
     use gents_protocol::job::{
         DynamicMode, JobCeiling, JobChildState, JobEffects, JobMessage, JobOrigin, JobPin,
         JobPolicy, JobSpawn, JobState,

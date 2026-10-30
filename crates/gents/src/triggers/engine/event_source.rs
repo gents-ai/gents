@@ -177,7 +177,7 @@ async fn enrich_native_outcome_provenance(
         "WorkspaceReceipt" => {
             let workspace_id = required_source_string(source, "workspace_id")?;
             let expected_work_unit = required_source_string(source, "work_unit_id")?;
-            let workspace = crate::workspace::overlay::load_isolated_workspace_record(
+            let workspace = crate::tools::workspace::overlay::load_isolated_workspace_record(
                 node,
                 &workspace_id,
                 owner,

@@ -592,7 +592,7 @@ pub async fn session_rows(
 pub async fn session_context_details(
     core: &std::sync::Arc<gents_desktop_core::client::ClientCore>,
     request: crate::types::SessionContextDetailsRequest,
-) -> Result<Option<gents::toolset::SessionContextDetails>, BridgeError> {
+) -> Result<Option<gents::tools::native::SessionContextDetails>, BridgeError> {
     if core
         .session_unreadable_reason(&request.session_id, &request.node_did)
         .is_some()

@@ -14,7 +14,7 @@ use crate::health_checker::{spawn_health_checker, ServiceHealthMap};
 use crate::inference::admission::AdmissionRegistry;
 use crate::inference::backends::registry;
 use crate::runtime_status::{ReconcilePhase, RuntimeStatusHandle};
-use crate::tool_surface::ToolRuntimeContext;
+use crate::tools::surface::ToolRuntimeContext;
 
 mod lifecycle_coordinator;
 mod recovery;
@@ -543,7 +543,7 @@ async fn run_agent_owned(
         .document_runtime_context()
         .and_then(|context| context.tool_ceiling.root())
         .map(std::path::Path::to_path_buf);
-    crate::workspace::install_process_operator_tool_root(callback_ceiling.clone());
+    crate::tools::workspace::install_process_operator_tool_root(callback_ceiling.clone());
     let callback_plugins = agent.plugins().clone();
     let callback_cancel = cancel.child_token();
     let callback_startup_barrier = startup_barrier.clone();

@@ -201,7 +201,7 @@ fn durable_delivery_predicates_match_executable_lean_owners() {
     }
     for case in cases["self_sessions"].as_array().unwrap() {
         assert_eq!(
-            crate::toolset::session_history::is_current_session(
+            crate::tools::native::session_history::is_current_session(
                 case["caller_owner"].as_str().unwrap(),
                 case["caller_session"].as_str().unwrap(),
                 case["listed_owner"].as_str().unwrap(),

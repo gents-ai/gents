@@ -22,21 +22,24 @@ impl HookOwnedTool {
         (crate::goal::UPDATE_GOAL_TOOL_NAME, Self::UpdateGoal),
         (crate::goal::CREATE_GOAL_TOOL_NAME, Self::CreateGoal),
         (
-            crate::toolset::AGENT_INTERRUPT_TOOL_NAME,
-            Self::AgentControl,
-        ),
-        (crate::toolset::AGENT_LIST_TOOL_NAME, Self::AgentControl),
-        (
-            crate::toolset::AGENT_SESSION_READ_TOOL_NAME,
+            crate::tools::native::AGENT_INTERRUPT_TOOL_NAME,
             Self::AgentControl,
         ),
         (
-            crate::toolset::AGENT_SESSION_LIST_TOOL_NAME,
+            crate::tools::native::AGENT_LIST_TOOL_NAME,
+            Self::AgentControl,
+        ),
+        (
+            crate::tools::native::AGENT_SESSION_READ_TOOL_NAME,
+            Self::AgentControl,
+        ),
+        (
+            crate::tools::native::AGENT_SESSION_LIST_TOOL_NAME,
             Self::AgentControl,
         ),
         (AGENT_NEW_TOOL_NAME, Self::SessionMessage),
         (
-            crate::toolset::AGENT_MESSAGE_TOOL_NAME,
+            crate::tools::native::AGENT_MESSAGE_TOOL_NAME,
             Self::SessionMessage,
         ),
         (SPAWN_PROCESS_TOOL_NAME, Self::SpawnProcess),
@@ -449,7 +452,7 @@ impl DefraSessionHook {
                     )
                 })?;
 
-            if crate::managed_exec::ownership::native_terminal_needs_confirmation(Some(outcome))
+            if crate::tools::exec::ownership::native_terminal_needs_confirmation(Some(outcome))
                 && !self.foreground_stop_confirmed(&lc, RetainedStopReceipt::Failure(outcome.clone())).await {
                 self.in_flight_lifecycles.lock().await.insert(internal_call_id.to_owned(), lc);
                 return Ok(HookAction::Terminate { reason: "tool process exit could not be confirmed".to_owned() });
@@ -462,7 +465,7 @@ impl DefraSessionHook {
                 self.background_live_outputs.registry.deferred_writes(&tool_call_doc_id).await
             );
 
-            if crate::managed_exec::ownership::native_terminal_needs_confirmation(Some(outcome))
+            if crate::tools::exec::ownership::native_terminal_needs_confirmation(Some(outcome))
                 && self.background_executions.settle_retained_stop(&mut lc).await? {
                 self.release_live_output(&tool_call_doc_id).await;
                 return Ok(HookAction::Continue);

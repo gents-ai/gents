@@ -367,22 +367,22 @@ def vocabularyCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "vocabulary"
       "ManagedExecState"
-      "managed_exec::tests::rust_managed_exec_state_vocabulary_matches_lean_model")
+      "tools::exec::tests::rust_managed_exec_state_vocabulary_matches_lean_model")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
       "vocabulary"
       "ProcessStopOutcome"
-      "managed_exec::tests::rust_process_stop_outcome_vocabulary_matches_lean_model")
+      "tools::exec::tests::rust_process_stop_outcome_vocabulary_matches_lean_model")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
       "vocabulary"
       "CancelProcessReply"
-      "managed_exec::tests::rust_cancel_process_reply_vocabulary_matches_lean_model")
+      "tools::exec::tests::rust_cancel_process_reply_vocabulary_matches_lean_model")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "process_stop_cases"
       "ProcessStopCases"
-      "managed_exec::tests::generated_process_stop_cases_drive_host_owner"
+      "tools::exec::tests::generated_process_stop_cases_drive_host_owner"
       "Each generated verdict is checked against the native mapping, and the reachable observations (a recorded running group, the same group after the owner's stop, a reused start identity) are produced by real test-owned process groups. A group that survives SIGKILL cannot be constructed on a test host, so stillRunning is checked only through the mapping.")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
@@ -495,7 +495,7 @@ def stateMachineCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "state_machine"
       "ManagedExec"
-      "managed_exec::tests::managed_exec_state_machine_contract_is_complete")
+      "tools::exec::tests::managed_exec_state_machine_contract_is_complete")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
       "state_machine"
@@ -1121,7 +1121,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "title_usage_cases"
       "TitleUsageCases"
-      "toolset::title_audit_usage::tests::generated_budget_recovery_cases_bind_signed_catalog_usage"
+      "tools::native::title_audit_usage::tests::generated_budget_recovery_cases_bind_signed_catalog_usage"
       "The catalog consumer binds parent-inclusive spending, missing and zero usage, late reports, duplicate-call accounting and goal charges that include reviews while excluding titles. Historical receipt authentication and foreign-parent filtering remain separate native admission boundaries.")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -1291,27 +1291,27 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "command_policy_cases"
       "CommandPolicyValidation"
-      "toolset::tests::generated_command_policy_cases_match_rust_validation")
+      "tools::native::tests::generated_command_policy_cases_match_rust_validation")
       "command-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "command_policy_cases"
       "CommandPolicySandbox"
-      "toolset::tests::generated_command_sandbox_cases_match_rust_selection")
+      "tools::native::tests::generated_command_sandbox_cases_match_rust_selection")
       "command-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "command_policy_cases"
       "CommandPolicyEnv"
-      "toolset::tests::generated_command_env_cases_match_rust_filtering")
+      "tools::native::tests::generated_command_env_cases_match_rust_filtering")
       "command-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "command_isolation_cases"
       "CommandIsolation"
-      "toolset::shared::command::network_enforcement_disclosure_tests::generated_command_isolation_matches_native_policy")
+      "tools::native::shared::command::network_enforcement_disclosure_tests::generated_command_isolation_matches_native_policy")
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "command_isolation_cases"
       "CommandIsolationSeatbelt"
-      "toolset::shared::command::command_credentials::tests::generated_bounded_sandboxes_deny_credentials_and_default_network")
+      "tools::native::shared::command::command_credentials::tests::generated_bounded_sandboxes_deny_credentials_and_default_network")
       "command-policy" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "command_policy_cases"
@@ -1412,7 +1412,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "artifact_mode_meet_cases"
       "ArtifactModeMeetCases"
-      "toolset::tests::generated_artifact_mode_meet_cases_drive_command_effect_intersection")
+      "tools::native::tests::generated_artifact_mode_meet_cases_drive_command_effect_intersection")
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "artifact_admission_cases"
@@ -1424,7 +1424,7 @@ def caseCoverage : List CoverageEntry :=
       "artifact_spawn_cases"
       "ArtifactSpawnCases"
       boundaryCommandPolicyHostExecutionAssumptionsId
-      "toolset::tests::generated_artifact_spawn_cases_drive_live_foreground_and_background_launches")
+      "tools::native::tests::generated_artifact_spawn_cases_drive_live_foreground_and_background_launches")
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "operator_base_freeze_cases"
@@ -1769,7 +1769,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "tool_timeout_cases"
       "ToolTimeoutCases"
-      "tool_surface::timeouts::tests::generated_tool_timeout_cases_bind_native_resolution")
+      "tools::surface::timeouts::tests::generated_tool_timeout_cases_bind_native_resolution")
       "tool-policy" [Surface.agentFacing]
   , tagged (consumerCoverage
       "workspace_path_alias_cases"

@@ -4,7 +4,7 @@ use super::*;
 #[tokio::test]
 async fn unowned_live_process_group_keeps_the_retained_owner_record() {
     use crate::lean_vocab_test::lean_process_stop_cases;
-    use crate::managed_exec::ownership::{ProcessIdentity, ProcessObservation, ProcessRecord};
+    use crate::tools::exec::ownership::{ProcessIdentity, ProcessObservation, ProcessRecord};
 
     // The current test process proves the group is live; the impossible pid
     // models a recorded leader that exited or was reused. No signal is sent.

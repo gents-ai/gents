@@ -1269,7 +1269,7 @@ async fn accepted_session_message_lifecycle(
     accepted_hook_tool_lifecycle(
         hook,
         internal_call_id,
-        crate::toolset::AGENT_NEW_TOOL_NAME,
+        crate::tools::native::AGENT_NEW_TOOL_NAME,
         &arguments,
         deadline_at,
         crate::tools::call::lifecycle::AwaitMode::Background,
@@ -2717,7 +2717,7 @@ async fn interruption_leaves_background_workers_running() {
     let name = process_name.clone();
     let token = tokens[0].clone();
     let worker = tokio::spawn(async move {
-        crate::managed_exec::run_managed_exec(crate::managed_exec::ManagedExecRequest {
+        crate::tools::exec::run_managed_exec(crate::tools::exec::ManagedExecRequest {
             argv: vec!["/bin/sh".into(), "-c".into(), "sleep 30".into()],
             cwd: std::env::temp_dir(),
             deadline_at: Some(Utc::now() + chrono::Duration::seconds(10)),
@@ -2761,7 +2761,7 @@ async fn interruption_leaves_background_workers_running() {
             .await
             .unwrap()
             .unwrap(),
-        crate::managed_exec::ManagedExecOutcome::Cancelled { .. }
+        crate::tools::exec::ManagedExecOutcome::Cancelled { .. }
     ));
 }
 
@@ -4342,7 +4342,7 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
     ));
 
     let dispatched = crate::agent::loop_stream::dispatch_tool(
-        &crate::toolset::ToolSet::builder()
+        &crate::tools::native::ToolSet::builder()
             .read_root(std::env::temp_dir())
             .bash_read_only()
             .build()
@@ -4684,7 +4684,7 @@ async fn generated_background_process_identity_cases_cancel_only_the_physical_in
             .await;
         assert_eq!(token.is_cancelled(), expected, "{case}");
         assert_eq!(
-            outcome == crate::managed_exec::ProcessStopOutcome::Stopped,
+            outcome == crate::tools::exec::ProcessStopOutcome::Stopped,
             expected,
             "{case}"
         );

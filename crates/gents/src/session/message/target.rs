@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::config_client::ConfigAccess;
 use crate::request::lifecycle::SessionMessageTarget;
 use crate::session::origin::SessionScope;
-use crate::tool_surface::AgentToolConfig;
+use crate::tools::surface::AgentToolConfig;
 
 pub(crate) async fn load_caller_session_tools(
     node: &Arc<EmbeddedNode>,

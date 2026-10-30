@@ -249,18 +249,20 @@ where
                 let skill_reminders = self
                     .prompt_builder
                     .selected_skill_reminders(selected_skill_ids);
-                let overlay = crate::workspace::resolve_request_workspace_overlay(
+                let overlay = crate::tools::workspace::resolve_request_workspace_overlay(
                     &self.node,
                     &request,
                     lifecycle.execution_generation()?,
                     self.agent_config.tools.static_policy().bash.execution_mode
-                        == crate::toolset::CommandExecutionMode::ArtifactWrite,
+                        == crate::tools::native::CommandExecutionMode::ArtifactWrite,
                     self.operator_tool_root.as_deref(),
                 )
                 .await?;
                 let frozen_instruction_manifest =
-                    crate::workspace::frozen_instruction_manifest_from_overlay(overlay.as_ref())
-                        .map(str::to_owned);
+                    crate::tools::workspace::frozen_instruction_manifest_from_overlay(
+                        overlay.as_ref(),
+                    )
+                    .map(str::to_owned);
                 let request_context_message = super::inference::render_request_context_message(
                     self.node.as_ref(),
                     &self.agent_config,
@@ -303,7 +305,7 @@ where
                         workspace_artifact: overlay.workspace_artifact,
                     },
                     None => crate::tools::call::lifecycle::runtime::ToolWorkspaceScope::cwd_only(
-                        crate::workspace::request_workspace_cwd(&request),
+                        crate::tools::workspace::request_workspace_cwd(&request),
                     ),
                 };
                 let wake_notifications = if resume_from_history {

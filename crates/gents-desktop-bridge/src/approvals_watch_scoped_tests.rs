@@ -81,7 +81,7 @@ impl Workspace {
             "kind": "command", "argv": ["echo", "approved"],
             "cwd": self.settings.workspace.path,
             "root": self.root.path().canonicalize().unwrap(),
-            "policy": gents::toolset::CommandExecutionPolicy::write_capable(),
+            "policy": gents::tools::native::CommandExecutionPolicy::write_capable(),
         });
         serde_json::from_value(value).unwrap()
     }

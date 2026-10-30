@@ -317,7 +317,7 @@ async fn exercise_inventory_delivery_inner(recovery: bool) -> Result<()> {
         .await?;
         let physical = tool.doc_id().context("accepted physical tool")?.to_owned();
         let writer = output.writer_for(physical.clone()).await;
-        let mutator = crate::toolset::write_file_for_test(&workspace);
+        let mutator = crate::tools::native::write_file_for_test(&workspace);
         let result = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
             None, CancellationToken::new(), None, Some(writer), None, None, Default::default(), false,
             mutator.call(arguments.to_string())).await?;
@@ -566,7 +566,7 @@ async fn exercise_recovery(context: RecoveryContext<'_>) -> Result<()> {
     .await?;
     let physical = late.doc_id().context("late physical tool")?.to_owned();
     let writer = output.writer_for(physical.clone()).await;
-    let mutator = crate::toolset::write_file_for_test(workspace);
+    let mutator = crate::tools::native::write_file_for_test(workspace);
     let result = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
         None, CancellationToken::new(), None, Some(writer), None, None, Default::default(), false,
         mutator.call(arguments.to_string())).await?;

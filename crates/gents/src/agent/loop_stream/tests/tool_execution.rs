@@ -134,7 +134,7 @@ impl PolicyDeniedOwner {
             Self::ReadOnlyBash => PolicyDeniedCall {
                 tool_name: "bash",
                 arguments: serde_json::json!({"command": "rm", "args": ["-rf", "."]}),
-                tools: vec![crate::toolset::read_only_bash_for_test(
+                tools: vec![crate::tools::native::read_only_bash_for_test(
                     root,
                     vec!["ls".into()],
                 )],
@@ -142,8 +142,8 @@ impl PolicyDeniedOwner {
             Self::CliArgvPrefix => PolicyDeniedCall {
                 tool_name: "git",
                 arguments: serde_json::json!({"argv": ["push", "--force"]}),
-                tools: vec![crate::toolset::cli_tool_for_test(
-                    crate::toolset::CliToolConfig {
+                tools: vec![crate::tools::native::cli_tool_for_test(
+                    crate::tools::native::CliToolConfig {
                         name: "git".into(),
                         binary_path: "/bin/echo".into(),
                         description: String::new(),
@@ -1757,7 +1757,7 @@ async fn parallel_native_reads_publish_distinct_bound_unchanged_receipts() {
     tokio::fs::write(root.path().join("b.txt"), "beta")
         .await
         .unwrap();
-    let tools = crate::toolset::ToolSet::builder()
+    let tools = crate::tools::native::ToolSet::builder()
         .read_root(root.path())
         .read_file()
         .build()
@@ -1859,7 +1859,7 @@ async fn measure_parallel_native_read_turns() {
     let mut totals = [Duration::ZERO; 2];
     for round in 0..10 {
         for parallel in [round % 2 == 0, round % 2 != 0] {
-            let native = crate::toolset::ToolSet::builder()
+            let native = crate::tools::native::ToolSet::builder()
                 .read_root(root.path())
                 .read_file()
                 .build()

@@ -2,7 +2,7 @@ use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
 use super::*;
-use crate::tool_surface::{
+use crate::tools::surface::{
     AgentToolConfig, AgentToolSurfaceConfig, FileToolMode, ResolvedToolSelection,
     RuntimeToolAvailability, ToolCeiling,
 };

@@ -6,7 +6,7 @@ use crate::agent::completion_retry::CompletionRetryProfileFields;
 use crate::inference::resolved::SamplingConfig;
 use crate::request::watcher::AgentRequest;
 use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
-use crate::tool_surface::AgentToolSurfaceConfig;
+use crate::tools::surface::AgentToolSurfaceConfig;
 
 fn request() -> AgentRequest {
     AgentRequest {

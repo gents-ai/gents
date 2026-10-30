@@ -9,7 +9,7 @@ use crate::goal::{
 };
 use crate::graphql::escape_graphql_string;
 use crate::inference::llm::ToolCallHookAction;
-use crate::toolset::{CreateGoalArgs, GetGoalArgs, UpdateGoalArgs};
+use crate::tools::native::{CreateGoalArgs, GetGoalArgs, UpdateGoalArgs};
 
 use super::DefraSessionHook;
 

@@ -122,7 +122,7 @@ pub(crate) async fn recover_workspace_binding_pending_requests(
             )?),
             workspace_seal_hash: request.workspace_seal_hash.clone(),
         };
-        match crate::workspace::materialize_workspace_binding(
+        match crate::tools::workspace::materialize_workspace_binding(
             node,
             &request.request_id,
             request_doc_id,
@@ -235,7 +235,8 @@ impl MaterializerHandle for ProductionMaterializer {
             crate::request::lifecycle::TriggerExecutionContext::parse(trigger_context.as_deref())?;
             let explicit = WorkspaceLineage::from_trigger_context(trigger_context.as_deref())?;
             let mut workspace = explicit;
-            crate::workspace::stamp_workspace_lineage(&node, &node_did, &mut workspace).await?;
+            crate::tools::workspace::stamp_workspace_lineage(&node, &node_did, &mut workspace)
+                .await?;
             workspace.require_authority_if_workspace_id()?;
             let lineage = TriggerLineage {
                 trigger_id: trigger_id.clone(),
@@ -390,7 +391,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 (enqueued, conversation_title)
             };
             if workspace_ref.is_some() {
-                crate::workspace::materialize_workspace_binding(
+                crate::tools::workspace::materialize_workspace_binding(
                     &node,
                     &enqueued.request_id,
                     &enqueued.doc_id,

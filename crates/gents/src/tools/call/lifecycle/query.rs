@@ -223,7 +223,7 @@ impl ToolCallLifecycle {
                 parent_doc_id != row.doc_id
                     && row.request_doc_id.as_deref() == Some(accepted.request_doc_id.as_str())
                     && row.message_sequence == accepted.message_sequence
-                    && accepted.tool_name == crate::toolset::SPAWN_PROCESS_TOOL_NAME,
+                    && accepted.tool_name == crate::tools::native::SPAWN_PROCESS_TOOL_NAME,
                 "spawned lifecycle has incoherent accepted-parent provenance"
             );
         } else {

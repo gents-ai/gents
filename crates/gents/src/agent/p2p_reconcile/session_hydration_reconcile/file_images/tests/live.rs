@@ -500,7 +500,7 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool, shared: bool) -> 
     std::fs::write(workspace.join("recorded.txt"), "recorded before\n")?;
     let output = LiveToolOutputRegistry::default();
     let writer = output.writer_for(physical.clone()).await;
-    let mutator = crate::toolset::write_file_for_test(&workspace);
+    let mutator = crate::tools::native::write_file_for_test(&workspace);
     let result = gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
         None, CancellationToken::new(), None, Some(writer), None, None, Default::default(), false,
         mutator.call(json!({

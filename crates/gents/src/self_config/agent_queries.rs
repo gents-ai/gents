@@ -29,7 +29,7 @@ async fn agent_snapshot(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
-    process_ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
+    process_ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
     protected: bool,
     default_agent_id: Option<&str>,
 ) -> Result<Value> {
@@ -48,7 +48,7 @@ async fn agent_snapshot(
 pub(super) async fn agent_list(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
-    process_ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
+    process_ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
     limit: usize,
     cursor: Option<&str>,
 ) -> Result<String> {
@@ -141,7 +141,7 @@ pub(super) async fn agent_inspect(
     node: &Arc<EmbeddedNode>,
     node_did: &str,
     agent_id: &str,
-    process_ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
+    process_ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
 ) -> Result<String> {
     let catalog = load_agent_catalog(node, node_did).await?;
     let _ = catalog.agents.get(agent_id).with_context(|| {

@@ -41,10 +41,10 @@ use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::runtime_status::RuntimeStatusHandle;
 use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
-use crate::tool_surface::AgentToolSurfaceConfig;
 use crate::tools::call::hook::{
     BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
 };
+use crate::tools::surface::AgentToolSurfaceConfig;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct ReviewUsage {
@@ -366,7 +366,7 @@ async fn workspace_command_uses_the_configured_review_task_and_the_callers_ledge
     .unwrap()
     .with_reviewer(reviewer.callback.clone());
     let tool_root = key.path.parent().unwrap().to_owned();
-    let tool_context = crate::toolset::ToolContext::new(tool_root.clone(), false).unwrap();
+    let tool_context = crate::tools::native::ToolContext::new(tool_root.clone(), false).unwrap();
     let (program, arguments) = if cfg!(windows) {
         (
             "cmd.exe",
@@ -377,15 +377,15 @@ async fn workspace_command_uses_the_configured_review_task_and_the_callers_ledge
     };
     let output = workspace::scope(
         Some(context),
-        crate::toolset::run_command_for_test(
+        crate::tools::native::run_command_for_test(
             &tool_context,
             "bash_unrestricted",
             program,
             &arguments,
             key.path.to_str(),
             Duration::from_secs(5),
-            &crate::toolset::CommandExecutionPolicy::write_capable()
-                .with_mode(crate::toolset::CommandExecutionMode::Unrestricted),
+            &crate::tools::native::CommandExecutionPolicy::write_capable()
+                .with_mode(crate::tools::native::CommandExecutionMode::Unrestricted),
             true,
             2048,
         ),
@@ -498,7 +498,7 @@ async fn changing_the_review_task_while_it_runs_discards_its_allowance() {
             &project_path,
             &project_path,
             None,
-            &crate::toolset::CommandExecutionPolicy::write_capable(),
+            &crate::tools::native::CommandExecutionPolicy::write_capable(),
         )
         .await
     }));
@@ -581,7 +581,7 @@ async fn configuration_edits_cannot_replace_the_selected_review_policy() {
         fixture.node.clone(),
         fixture.parent.node_did.clone(),
         Some(fixture.identity.clone()),
-        &crate::tool_surface::SelfConfigToolConfig {
+        &crate::tools::surface::SelfConfigToolConfig {
             enabled: true,
             agent_id: fixture.parent.agent_id.clone(),
             categories: std::collections::BTreeSet::from(["automation".into()]),
@@ -595,7 +595,7 @@ async fn configuration_edits_cannot_replace_the_selected_review_policy() {
         .iter()
         .find(|tool| tool.name() == crate::self_config::CONFIG_TOOL_NAME)
         .unwrap();
-    let tool_context = crate::toolset::ToolContext::new(key.path.clone(), false).unwrap();
+    let tool_context = crate::tools::native::ToolContext::new(key.path.clone(), false).unwrap();
     let marker = key.path.join("marker");
     let source = key.path.join("fixture.rs");
     std::fs::write(&source, "pub fn fixture() {}\n").unwrap();
@@ -607,8 +607,8 @@ async fn configuration_edits_cannot_replace_the_selected_review_policy() {
         marker.to_str().unwrap().to_owned(),
         source.to_str().unwrap().to_owned(),
     ];
-    let policy = crate::toolset::CommandExecutionPolicy::write_capable()
-        .with_mode(crate::toolset::CommandExecutionMode::Unrestricted);
+    let policy = crate::tools::native::CommandExecutionPolicy::write_capable()
+        .with_mode(crate::tools::native::CommandExecutionMode::Unrestricted);
     workspace::scope(Some(context), async {
         let changed = config
             .call(
@@ -624,7 +624,7 @@ async fn configuration_edits_cannot_replace_the_selected_review_policy() {
             serde_json::from_str::<serde_json::Value>(&changed).unwrap()["committed"],
             true
         );
-        let error = crate::toolset::run_command_for_test(
+        let error = crate::tools::native::run_command_for_test(
             &tool_context,
             "bash_unrestricted",
             &program,
@@ -661,7 +661,7 @@ async fn configuration_edits_cannot_replace_the_selected_review_policy() {
             Some(&updated),
         )
         .unwrap();
-        crate::toolset::run_command_for_test(
+        crate::tools::native::run_command_for_test(
             &tool_context,
             "bash_unrestricted",
             &program,
@@ -742,7 +742,7 @@ async fn a_lost_review_worker_cancels_the_caller_and_retains_the_fatal_error() {
                 &key.path,
                 &key.path,
                 None,
-                &crate::toolset::CommandExecutionPolicy::write_capable(),
+                &crate::tools::native::CommandExecutionPolicy::write_capable(),
             ),
         ),
     )

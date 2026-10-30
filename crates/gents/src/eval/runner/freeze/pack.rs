@@ -10,7 +10,7 @@ use crate::documents::PackConfig;
 use crate::eval::runner::executor::Isolation;
 use crate::eval::{CellSpec, SubjectRef};
 use crate::pack::{declared_paths, digest_declared_assets, PackInstallOptions, PackManifest};
-use crate::tool_surface::BashMode;
+use crate::tools::surface::BashMode;
 
 pub(crate) struct LoadedPack {
     pub(crate) digest: String,

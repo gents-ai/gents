@@ -279,7 +279,7 @@ pub struct ConfigCommandTool {
     pub(super) categories: BTreeSet<String>,
     pub(super) no_lockout: bool,
     pub(super) preview: bool,
-    pub(super) process_ceiling: crate::tool_surface::SelfConfigProcessCeiling,
+    pub(super) process_ceiling: crate::tools::surface::SelfConfigProcessCeiling,
     pub(super) execution: Arc<super::execution::ExecutionObservation>,
     pub(super) plugins: Arc<crate::plugin::executor::PluginExecutor>,
 }

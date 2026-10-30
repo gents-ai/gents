@@ -102,7 +102,7 @@ where
     }
 
     pub(in crate::agent) fn with_operator_tool_root(mut self, root: Option<PathBuf>) -> Self {
-        crate::workspace::install_process_operator_tool_root(root.clone());
+        crate::tools::workspace::install_process_operator_tool_root(root.clone());
         self.operator_tool_root = root;
         self
     }
@@ -114,7 +114,7 @@ where
 
     pub(in crate::agent) fn with_root_execution_guard(
         mut self,
-        guard: Option<crate::tool_surface::RootExecutionGuard>,
+        guard: Option<crate::tools::surface::RootExecutionGuard>,
     ) -> Self {
         self.root_execution_guard = guard;
         self
@@ -122,7 +122,7 @@ where
 
     pub(in crate::agent) fn with_tool_surface_runtime_policy(
         self,
-        guard: Option<crate::tool_surface::RootExecutionGuard>,
+        guard: Option<crate::tools::surface::RootExecutionGuard>,
         operator_root: Option<PathBuf>,
     ) -> Self {
         self.with_root_execution_guard(guard)

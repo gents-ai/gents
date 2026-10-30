@@ -41,7 +41,7 @@ pub(crate) async fn append_background_tool_completion(
         .and_then(|stored| published_notification_budget(stored, &render));
     let output_budget = match published_budget {
         Some(budget) => budget,
-        None => crate::tool_surface::configured_output_budget(
+        None => crate::tools::surface::configured_output_budget(
             node,
             &parent_request.node_did,
             &parent_request.agent_id,

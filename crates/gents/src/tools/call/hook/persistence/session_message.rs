@@ -372,7 +372,7 @@ impl DefraSessionHook {
                 tools.target_names(),
             ));
         }
-        if tool_name == crate::toolset::AGENT_LIST_TOOL_NAME {
+        if tool_name == crate::tools::native::AGENT_LIST_TOOL_NAME {
             if let Err(error) = serde_json::from_str::<crate::session::message::AgentListArgs>(args)
             {
                 return Ok(invalid_tool_arguments_payload(
@@ -385,7 +385,7 @@ impl DefraSessionHook {
                 crate::session::message::agent_list(&self.node, &caller, &tools).await?,
             ));
         }
-        if tool_name == crate::toolset::AGENT_SESSION_LIST_TOOL_NAME {
+        if tool_name == crate::tools::native::AGENT_SESSION_LIST_TOOL_NAME {
             let parsed =
                 match serde_json::from_str::<crate::session::message::AgentSessionListArgs>(args) {
                     Ok(parsed) => parsed,
@@ -409,7 +409,7 @@ impl DefraSessionHook {
                     .await?,
             ));
         }
-        if tool_name == crate::toolset::AGENT_SESSION_READ_TOOL_NAME {
+        if tool_name == crate::tools::native::AGENT_SESSION_READ_TOOL_NAME {
             let parsed =
                 match serde_json::from_str::<crate::session::message::AgentSessionReadArgs>(args) {
                     Ok(parsed) => parsed,
@@ -458,9 +458,9 @@ impl DefraSessionHook {
         }
         let control_tool = matches!(
             tool_name,
-            crate::toolset::AGENT_INTERRUPT_TOOL_NAME
-                | crate::toolset::AGENT_STOP_TOOL_NAME
-                | crate::toolset::AGENT_RESUME_TOOL_NAME
+            crate::tools::native::AGENT_INTERRUPT_TOOL_NAME
+                | crate::tools::native::AGENT_STOP_TOOL_NAME
+                | crate::tools::native::AGENT_RESUME_TOOL_NAME
         );
         if !control_tool {
             return Ok(invalid_tool_arguments_payload(
@@ -507,7 +507,8 @@ impl DefraSessionHook {
         }
         if matches!(
             tool_name,
-            crate::toolset::AGENT_STOP_TOOL_NAME | crate::toolset::AGENT_RESUME_TOOL_NAME
+            crate::tools::native::AGENT_STOP_TOOL_NAME
+                | crate::tools::native::AGENT_RESUME_TOOL_NAME
         ) && target.node_did != caller.node_did
         {
             return Ok(interrupt_refused_payload(
@@ -517,7 +518,7 @@ impl DefraSessionHook {
             ));
         }
         match tool_name {
-            crate::toolset::AGENT_INTERRUPT_TOOL_NAME => {
+            crate::tools::native::AGENT_INTERRUPT_TOOL_NAME => {
                 let interrupted =
                     crate::session::message::interrupt_session(&self.node, &target).await?;
                 Ok(json_string(json!({
@@ -527,7 +528,7 @@ impl DefraSessionHook {
                     "request_id": interrupted
                 })))
             }
-            crate::toolset::AGENT_STOP_TOOL_NAME => {
+            crate::tools::native::AGENT_STOP_TOOL_NAME => {
                 let receipt = crate::session::stop_session(
                     &self.node,
                     &target.node_did,
@@ -541,7 +542,7 @@ impl DefraSessionHook {
                     "drained_request_ids": receipt.drained_request_ids,
                     "next": "call agent_session_read with view=status to observe request and tool settlement"})))
             }
-            crate::toolset::AGENT_RESUME_TOOL_NAME => {
+            crate::tools::native::AGENT_RESUME_TOOL_NAME => {
                 let Some(job_driver) = self.job_driver.clone() else {
                     anyhow::bail!("agent_resume cannot verify plugin execution settlement because the runtime job owner is unavailable; retry after runtime recovery")
                 };

@@ -9,7 +9,7 @@ pub async fn load_session_context_details(
     session_id: &str,
     request_id: &str,
     call_id: &str,
-) -> anyhow::Result<Option<gents::toolset::SessionContextDetails>> {
+) -> anyhow::Result<Option<gents::tools::native::SessionContextDetails>> {
     let response = access.execute(&format!(
         r#"{{ InferenceCall(filter: {{
             call_id: {{_eq: "{}"}}, node_did: {{_eq: "{}"}},
@@ -64,7 +64,7 @@ pub async fn load_session_context_details(
         requester_did,
         session_id,
         physical_id,
-        &gents::toolset::LastRequestContextSnapshot {
+        &gents::tools::native::LastRequestContextSnapshot {
             request_id: context.request_id.clone(),
             call_id: context.call_id.clone(),
             call_sequence: context.call_sequence,
@@ -81,7 +81,7 @@ pub(super) async fn load_latest_session_request_context(
     requester_did: Option<&str>,
     session_id: &str,
 ) -> anyhow::Result<Option<LoadedRequestContext>> {
-    let rows = gents::toolset::load_latest_session_context_calls(
+    let rows = gents::tools::native::load_latest_session_context_calls(
         access,
         node_did,
         requester_did,

@@ -1327,7 +1327,7 @@ async fn receipt_hashes_host_prepared_input_and_actual_http_grant() {
         } else {
             serde_json::json!({"http_calls":true,"value":1})
         };
-        let canonical = crate::workspace::canonical_json_string(&effective).unwrap();
+        let canonical = crate::tools::workspace::canonical_json_string(&effective).unwrap();
         assert_eq!(
             call.receipt.input_digest,
             format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))

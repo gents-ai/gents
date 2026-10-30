@@ -131,7 +131,7 @@ pub(super) fn render_request_context_message(
 ) -> Result<Option<Message>> {
     Ok(assemble_request_context_message(
         frozen_instruction_manifest,
-        crate::workspace::request_workspace_cwd(request).as_deref(),
+        crate::tools::workspace::request_workspace_cwd(request).as_deref(),
         agent_config.tools.host_tools().read_root(),
     ))
 }
@@ -141,7 +141,7 @@ fn assemble_request_context_message(
     live_cwd: Option<&std::path::Path>,
     live_tool_root: Option<&std::path::Path>,
 ) -> Option<Message> {
-    crate::workspace::instruction_body_for_request(
+    crate::tools::workspace::instruction_body_for_request(
         frozen_instruction_manifest,
         live_cwd,
         live_tool_root,
@@ -1012,10 +1012,10 @@ pub(super) mod tests {
     use crate::prompt::LayeredPromptBuilder;
     use crate::request::watcher::AgentRequest;
     use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
-    use crate::tool_surface::AgentToolSurfaceConfig;
     use crate::tools::call::hook::{
         BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,
     };
+    use crate::tools::surface::AgentToolSurfaceConfig;
     use anyhow::Context;
     use futures::stream;
     use rig::completion::{
@@ -2107,7 +2107,7 @@ pub(super) mod tests {
             ),
         })
         .unwrap()
-        .with_root_execution_guard(Some(crate::tool_surface::RootExecutionGuard {
+        .with_root_execution_guard(Some(crate::tools::surface::RootExecutionGuard {
             agent_id: agent_config.agent_id.clone(),
             selected_root: Some(selected.clone()),
             ceiling_root: Some(selected.clone()),

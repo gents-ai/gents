@@ -114,7 +114,7 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
         let host = tools.host.as_ref().unwrap();
         assert_eq!(
             host.bash.as_ref().map(|bash| bash.mode),
-            Some(gents::tool_surface::BashMode::Off),
+            Some(gents::tools::surface::BashMode::Off),
             "{name}"
         );
         let [surface] = config.datastore_tool_surfaces.as_slice() else {

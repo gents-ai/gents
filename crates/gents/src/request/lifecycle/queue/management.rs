@@ -818,7 +818,7 @@ pub(crate) async fn apply_pending_user_edit_in_txn(
         );
         let mut released = serde_json::to_value(old)?;
         released["_docID"] = serde_json::Value::String(old_id.to_owned());
-        crate::workspace::release_terminal_writer_binding(txn, &released).await?;
+        crate::tools::workspace::release_terminal_writer_binding(txn, &released).await?;
         crate::triggers::engine::durable::publish_request_outcome(
             txn,
             node_did,

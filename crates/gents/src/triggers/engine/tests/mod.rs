@@ -26,7 +26,7 @@ use crate::runtime_snapshot::{
     ResolvedSchedule, ResolvedTask, ScheduleCadence,
 };
 use crate::store::identity::{KeyIdentity, RuntimeNode};
-use crate::tool_surface::AgentToolSurfaceConfig;
+use crate::tools::surface::AgentToolSurfaceConfig;
 use crate::triggers::engine::event_source::EventSource;
 use crate::triggers::engine::manual_source::ManualSource;
 use crate::triggers::engine::production_materializer::{

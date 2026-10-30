@@ -142,14 +142,14 @@ pub(super) fn tools_request(
     request.normalize = Box::new(move |txn, _, stored, merged| {
         let ceiling_root = ceiling_root.clone();
         Box::pin(async move {
-            let policy = crate::tool_surface::load_workspace_root_policy_in_txn(
+            let policy = crate::tools::surface::load_workspace_root_policy_in_txn(
                 txn,
                 ceiling_root.as_deref(),
             )
             .await?;
             let stored_root = stored_host_root(stored);
             let mut tools = decode_merged::<crate::documents::Tools>("Tools", merged)?;
-            crate::tool_surface::canonicalize_tools_root(
+            crate::tools::surface::canonicalize_tools_root(
                 &mut tools,
                 &policy,
                 stored_root.as_deref(),

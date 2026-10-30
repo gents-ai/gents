@@ -1,7 +1,7 @@
 use crate::config_client::ConfigApplyTxn;
 use crate::graphql::escape_graphql_string;
 use crate::session::origin::SessionScope;
-use crate::toolset::FileChanges;
+use crate::tools::native::FileChanges;
 use anyhow::{ensure, Context, Result};
 
 #[derive(Clone)]

@@ -9,8 +9,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::tool_surface::{BashMode, FileToolMode};
-use crate::toolset::{CommandExecutionMode, CommandNetworkMode};
+use crate::tools::native::{CommandExecutionMode, CommandNetworkMode};
+use crate::tools::surface::{BashMode, FileToolMode};
 pub use gents_protocol::row::RetiredKey;
 
 /// Tool capabilities, execution policies, and dependencies referenced by a context.
@@ -590,7 +590,7 @@ impl Tools {
                 errors,
                 field,
                 value,
-                crate::toolset::MAX_CONFIGURED_COMMAND_CHARS,
+                crate::tools::native::MAX_CONFIGURED_COMMAND_CHARS,
             );
         }
         fn bounded(
@@ -646,7 +646,7 @@ impl Tools {
                     &mut errors,
                     "host.files.max_read_chars",
                     files.max_read_chars,
-                    crate::toolset::MAX_CONFIGURED_FILE_CHARS,
+                    crate::tools::native::MAX_CONFIGURED_FILE_CHARS,
                 );
                 for (field, value) in [
                     ("host.files.max_list_entries", files.max_list_entries),
@@ -656,7 +656,7 @@ impl Tools {
                         &mut errors,
                         field,
                         value,
-                        crate::toolset::MAX_CONFIGURED_FILE_RESULTS,
+                        crate::tools::native::MAX_CONFIGURED_FILE_RESULTS,
                     );
                 }
             }
@@ -666,7 +666,7 @@ impl Tools {
                     "host.bash.timeout_secs",
                     bash.timeout_secs,
                     bash.max_timeout_secs,
-                    crate::toolset::DEFAULT_COMMAND_TIMEOUT_SECS as i64,
+                    crate::tools::native::DEFAULT_COMMAND_TIMEOUT_SECS as i64,
                     None,
                 );
                 bounded(
@@ -876,12 +876,12 @@ impl Tools {
                     "integrations.lsp.timeout_secs",
                     lsp.timeout_secs,
                     lsp.max_timeout_secs,
-                    crate::toolset::lsp::DEFAULT_ACTION_TIMEOUT_SECS as i64,
-                    Some(crate::toolset::lsp::MAX_ACTION_TIMEOUT_SECS as i64),
+                    crate::tools::native::lsp::DEFAULT_ACTION_TIMEOUT_SECS as i64,
+                    Some(crate::tools::native::lsp::MAX_ACTION_TIMEOUT_SECS as i64),
                 );
-                if let Err(error) =
-                    crate::toolset::lsp::LspConfigDocument::parse_operator(lsp.config.as_deref())
-                {
+                if let Err(error) = crate::tools::native::lsp::LspConfigDocument::parse_operator(
+                    lsp.config.as_deref(),
+                ) {
                     errors.push(format!("invalid integrations.lsp.config: {error}"));
                 }
             }

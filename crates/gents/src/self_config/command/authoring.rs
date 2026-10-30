@@ -110,11 +110,11 @@ fn parse_authoring_args(verb: &str, argv: &[String]) -> Result<AuthoringCall> {
 }
 
 fn ensure_mode(
-    mode: crate::tool_surface::FileToolMode,
+    mode: crate::tools::surface::FileToolMode,
     write: bool,
     operation: &str,
 ) -> Result<()> {
-    use crate::tool_surface::FileToolMode;
+    use crate::tools::surface::FileToolMode;
     match (write, mode) {
         (_, FileToolMode::Off) => bail!(
             "pack {operation} requires effective file permission on the invoking agent; the effective file tools are Off. Grant file tools, or run pack authoring from the operator CLI"
@@ -126,7 +126,7 @@ fn ensure_mode(
     }
 }
 
-fn admit_scaffold_dir(context: &crate::toolset::ToolContext, name: &str) -> Result<PathBuf> {
+fn admit_scaffold_dir(context: &crate::tools::native::ToolContext, name: &str) -> Result<PathBuf> {
     context.resolve_path_allow_create(name)
 }
 
@@ -155,7 +155,7 @@ impl ConfigCommandTool {
         &self,
         operation: &str,
         write: bool,
-    ) -> Result<crate::toolset::ToolContext> {
+    ) -> Result<crate::tools::native::ToolContext> {
         let effective = self
             .core
             .read_effective_config(&BTreeSet::new(), false, false)
@@ -163,7 +163,7 @@ impl ConfigCommandTool {
         let mode = effective
             .pointer("/runtime_effective/effective/file_mode")
             .and_then(Value::as_str)
-            .map(crate::tool_surface::FileToolMode::parse)
+            .map(crate::tools::surface::FileToolMode::parse)
             .transpose()?
             .unwrap_or_default();
         ensure_mode(mode, write, operation)?;
@@ -171,7 +171,7 @@ impl ConfigCommandTool {
             .pointer("/runtime_effective/effective/root")
             .and_then(Value::as_str)
             .with_context(|| format!("pack {operation} requires an effective tool root"))?;
-        crate::toolset::ToolContext::new(root.into(), false)
+        crate::tools::native::ToolContext::new(root.into(), false)
     }
 
     async fn scaffold(&self, name: &str, input: &ScaffoldInput) -> Result<String> {
@@ -266,7 +266,8 @@ mod tests {
     #[test]
     fn the_caller_path_never_expands_authority() {
         let root = tempfile::tempdir().unwrap();
-        let context = crate::toolset::ToolContext::new(root.path().to_path_buf(), false).unwrap();
+        let context =
+            crate::tools::native::ToolContext::new(root.path().to_path_buf(), false).unwrap();
         let inside = admit_scaffold_dir(&context, "review_toolkit").unwrap();
         // ToolContext::new canonicalizes the root, so containment is judged
         // against the canonical root, not the caller alias (e.g. /var is a
@@ -285,7 +286,7 @@ mod tests {
 
     #[test]
     fn write_authoring_requires_readwrite_and_verify_only_read() {
-        use crate::tool_surface::FileToolMode;
+        use crate::tools::surface::FileToolMode;
         assert!(ensure_mode(FileToolMode::ReadWrite, true, "scaffold").is_ok());
         for (mode, expected) in [
             (FileToolMode::Off, "file permission"),

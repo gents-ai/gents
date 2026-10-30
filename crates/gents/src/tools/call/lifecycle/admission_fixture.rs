@@ -512,8 +512,8 @@ pub async fn published_admission_with_owner(
     let tool_name = options
         .tool_name
         .clone()
-        .unwrap_or_else(|| crate::toolset::SPAWN_PROCESS_TOOL_NAME.into());
-    let (native_id, arguments) = if crate::toolset::is_session_message_tool(&tool_name) {
+        .unwrap_or_else(|| crate::tools::native::SPAWN_PROCESS_TOOL_NAME.into());
+    let (native_id, arguments) = if crate::tools::native::is_session_message_tool(&tool_name) {
         (
             "bridge-native-tool",
             serde_json::json!({"agent": "general", "prompt": "work"}),
@@ -617,7 +617,7 @@ pub async fn published_background_bridge(
         name: name.to_owned(),
         real_identity: true,
         await_mode: AwaitMode::Background,
-        tool_name: Some(crate::toolset::AGENT_NEW_TOOL_NAME.to_owned()),
+        tool_name: Some(crate::tools::native::AGENT_NEW_TOOL_NAME.to_owned()),
         ..Default::default()
     })
     .await
@@ -692,7 +692,7 @@ pub async fn published_session_message_with_owner(
         "a session message is signed by a real node and runs in background"
     );
     let (mut admission, request) = published_admission_with_owner(PublishedAdmissionOptions {
-        tool_name: Some(crate::toolset::AGENT_NEW_TOOL_NAME.to_owned()),
+        tool_name: Some(crate::tools::native::AGENT_NEW_TOOL_NAME.to_owned()),
         start_running: false,
         ..options
     })

@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::ValueEnum;
-use gents::tool_surface::{measured_mcp_services_for_access, RuntimeToolAvailability};
+use gents::tools::surface::{measured_mcp_services_for_access, RuntimeToolAvailability};
 use gents::{AgentToolSurfaceConfig, ToolCeiling};
 use serde::Serialize;
 use serde_json::{json, Value};

@@ -11,7 +11,7 @@ pub(super) use crate::ensure_runtime_schemas;
 pub(super) use crate::graphql::escape_graphql_string;
 pub(super) use crate::request::watcher::AgentRequest;
 pub(super) use crate::runtime_status::RuntimeStatusHandle;
-pub(super) use crate::tool_surface::ToolCeiling;
+pub(super) use crate::tools::surface::ToolCeiling;
 pub(super) use gents_protocol::node_readiness::{
     AgentReadinessState, AgentReadinessUnavailableReason, NodeReadinessProcessState,
     NodeReadinessSnapshot,

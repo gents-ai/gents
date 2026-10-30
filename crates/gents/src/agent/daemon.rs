@@ -58,8 +58,10 @@ fn permits_natural_finish(request: &AgentRequest, task_owned: bool) -> bool {
             || request
                 .workspace_authority
                 .as_deref()
-                .and_then(|authority| crate::toolset::WorkspaceAuthority::parse(authority).ok())
-                == Some(crate::toolset::WorkspaceAuthority::ReadOnly))
+                .and_then(|authority| {
+                    crate::tools::native::WorkspaceAuthority::parse(authority).ok()
+                })
+                == Some(crate::tools::native::WorkspaceAuthority::ReadOnly))
 }
 
 /// Authenticate the exact durable request immediately before claim so a stale
@@ -139,7 +141,7 @@ where
     approval_home: Option<PathBuf>,
     request_admission: crate::request::admission::AgentRequestAdmissionVerifier,
     auxiliary_tasks: auxiliary_tasks::AuxiliaryTasks,
-    root_execution_guard: Option<crate::tool_surface::RootExecutionGuard>,
+    root_execution_guard: Option<crate::tools::surface::RootExecutionGuard>,
 }
 
 enum HandleRequestOutcome {

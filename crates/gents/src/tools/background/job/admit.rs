@@ -3,11 +3,11 @@ use std::collections::BTreeSet;
 use crate::request::lifecycle::materialize::{
     next_request_hop, request_hop_within_bound, RequestHopCause,
 };
-use crate::tool_surface::EndpointScope;
 use crate::tools::background::job::keys::job_spawn_key;
 use crate::tools::background::job::origin::call_origin;
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::hook::persistence::MAX_BACKGROUNDED_TOOLS_PER_PARENT;
+use crate::tools::surface::EndpointScope;
 use gents_protocol::job::{
     DynamicMode, JobCeiling, JobChildState, JobControlRequest, JobEffects, JobGuestPin,
     JobInterrupt, JobMessage, JobOrigin, JobPin, JobPolicy, JobResume, JobResumeEngine, JobSpawn,

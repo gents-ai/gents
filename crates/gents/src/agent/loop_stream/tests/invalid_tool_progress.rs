@@ -284,7 +284,7 @@ async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeed
         RawStreamingChoice::FinalResponse(()),
     ]);
     let model = ScriptedModel::new_turns(turns);
-    let tools = crate::toolset::ToolSet::builder()
+    let tools = crate::tools::native::ToolSet::builder()
         .read_root(root.path())
         .bash_read_only()
         .build()
@@ -401,7 +401,7 @@ async fn empty_bash_arguments_exhaust_owned_loop_without_side_effects() {
             RawStreamingChoice::FinalResponse(()),
         ]);
         let model = ScriptedModel::new_turns(turns);
-        let tools = crate::toolset::ToolSet::builder()
+        let tools = crate::tools::native::ToolSet::builder()
             .read_root(root.path())
             .bash_read_only()
             .build()

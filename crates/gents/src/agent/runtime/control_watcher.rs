@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, watch};
 
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::runtime_status::{ReconcilePhase, RuntimeStatusHandle};
-use crate::tool_surface::ToolRuntimeContext;
+use crate::tools::surface::ToolRuntimeContext;
 
 use super::super::document_view;
 use super::super::DocumentResolveContext;
@@ -100,7 +100,7 @@ pub(super) async fn run_control_watcher_with_timing(
         names_by_id,
     } = subscription;
     let mut measured_mcp_availability =
-        crate::tool_surface::measured_available_mcp_service_ids(&node, &node_did)
+        crate::tools::surface::measured_available_mcp_service_ids(&node, &node_did)
             .await?
             .into_iter()
             .collect::<BTreeSet<_>>();
@@ -271,7 +271,7 @@ pub(super) async fn run_control_watcher_with_timing(
                         .copied()
                         .unwrap_or(update.collection_id.as_str());
                     if collection_name == "ToolServiceHealthState" {
-                        let current = match crate::tool_surface::measured_available_mcp_service_ids(
+                        let current = match crate::tools::surface::measured_available_mcp_service_ids(
                             &node,
                             &node_did,
                         )

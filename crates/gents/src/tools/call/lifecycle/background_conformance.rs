@@ -45,7 +45,8 @@ async fn generated_background_lifecycle_cases_use_canonical_admission_owner() {
             } else {
                 AwaitMode::Background
             },
-            tool_name: session_message.then(|| crate::toolset::AGENT_NEW_TOOL_NAME.to_owned()),
+            tool_name: session_message
+                .then(|| crate::tools::native::AGENT_NEW_TOOL_NAME.to_owned()),
             job_pin: plugin_job,
             start_running: true,
             ..Default::default()

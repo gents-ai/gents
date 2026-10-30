@@ -886,7 +886,7 @@ async fn initialize_runtime_home(
     let tools_id = default_tools_id_for_agent(&default_agent_id);
     let tool_ceiling = tool_ceiling_for_package(tool_package);
     let tool_root = resolve_tool_root_for_package(tool_package, args.tool_root.as_deref())?;
-    let explicit_workspace_policy = gents::tool_surface::load_workspace_root_policy(node, None)
+    let explicit_workspace_policy = gents::tools::surface::load_workspace_root_policy(node, None)
         .await?
         .configured;
     let pinned_tool_root = explicit_workspace_policy
@@ -1764,7 +1764,7 @@ mod tests {
             node.clone(),
             owner.clone(),
             Some(identity.clone()),
-            &gents::tool_surface::SelfConfigToolConfig {
+            &gents::tools::surface::SelfConfigToolConfig {
                 enabled: true,
                 agent_id: summary.default_agent_id.clone(),
                 categories: categories.into_iter().collect(),
@@ -1805,7 +1805,7 @@ mod tests {
 
     async fn explain_initialized_default_agent(
         engineer: bool,
-    ) -> gents::tool_surface::ToolSurfaceExplanation {
+    ) -> gents::tools::surface::ToolSurfaceExplanation {
         let temp = tempfile::tempdir().unwrap();
         let identity: Arc<dyn gents::NodeIdentity> =
             Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
