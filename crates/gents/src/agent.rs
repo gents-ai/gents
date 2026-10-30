@@ -356,6 +356,19 @@ impl Gents {
         &self.runtime_node.node_did
     }
 
+    /// Local runtime notices reuse mailbox ownership and canonical session
+    /// scope. The admission guard prevents publication racing retirement.
+    pub async fn publish_runtime_notice(
+        &self,
+        notice: crate::mailbox::RuntimeNotice,
+    ) -> Result<crate::mailbox::MailboxItem, crate::mailbox::RuntimeNoticeError> {
+        let _work = self
+            .service_admission()
+            .admit()
+            .map_err(anyhow::Error::new)?;
+        crate::mailbox::publish_runtime_notice(&self.node, self.node_did(), notice).await
+    }
+
     pub fn usage_cache(&self) -> &Arc<crate::usage_observation::UsageCache> {
         &self.usage_cache
     }

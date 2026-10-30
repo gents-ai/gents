@@ -1049,6 +1049,15 @@ fn shell_environment_filters_secrets_and_forces_noninteractive_values() {
     let env = build_shell_env_from_vars([
         ("PATH".to_string(), "/custom/bin".to_string()),
         ("HOME".to_string(), "/tmp/home".to_string()),
+        ("XDG_RUNTIME_DIR".to_string(), "/run/user/1001".to_string()),
+        (
+            "DBUS_SESSION_BUS_ADDRESS".to_string(),
+            "unix:path=/run/user/1001/bus".to_string(),
+        ),
+        (
+            "XDG_CONFIG_HOME".to_string(),
+            "/tmp/user-config".to_string(),
+        ),
         ("OPENAI_API_KEY".to_string(), "secret".to_string()),
         ("SESSION_TOKEN".to_string(), "secret".to_string()),
         ("DATABASE_SECRET".to_string(), "secret".to_string()),
@@ -1059,6 +1068,18 @@ fn shell_environment_filters_secrets_and_forces_noninteractive_values() {
 
     assert_eq!(env.get("PATH").map(String::as_str), Some("/custom/bin"));
     assert_eq!(env.get("HOME").map(String::as_str), Some("/tmp/home"));
+    assert_eq!(
+        env.get("XDG_RUNTIME_DIR").map(String::as_str),
+        Some("/run/user/1001")
+    );
+    assert_eq!(
+        env.get("DBUS_SESSION_BUS_ADDRESS").map(String::as_str),
+        Some("unix:path=/run/user/1001/bus")
+    );
+    assert_eq!(
+        env.get("XDG_CONFIG_HOME").map(String::as_str),
+        Some("/tmp/user-config")
+    );
     assert!(!env.contains_key("OPENAI_API_KEY"));
     assert!(!env.contains_key("SESSION_TOKEN"));
     assert!(!env.contains_key("DATABASE_SECRET"));

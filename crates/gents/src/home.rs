@@ -493,8 +493,8 @@ pub struct RuntimeStartupReservation {
 }
 
 /// A dedicated OS thread keeps an abandoned OS lock wait out of Tokio's
-/// blocking pool. Only standalone preparation processes may call this, once
-/// per process. Cancellation abandons the receiver; a later acquisition is
+/// blocking pool. Standalone preparation, native server startup and the
+/// independent updater call this once per process. Cancellation abandons the receiver; a later acquisition is
 /// immediately dropped, and process exit terminates the pending OS wait.
 pub async fn reserve_runtime_startup(home_dir: &Path) -> Result<RuntimeStartupReservation> {
     let (receive, worker) = start_runtime_startup_waiter(home_dir)?;

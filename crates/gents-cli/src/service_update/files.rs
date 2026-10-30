@@ -16,6 +16,16 @@ pub(super) fn lock(path: &Path) -> Result<File> {
         .context("another updater owns this operation")?;
     Ok(file)
 }
+pub(super) fn submission_lock(path: &Path) -> Result<File> {
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)?;
+    file.lock()?;
+    Ok(file)
+}
 pub(super) fn read_json<T>(path: &Path) -> Result<T>
 where
     T: serde::de::DeserializeOwned,
@@ -160,4 +170,109 @@ pub(super) fn backup_inventory(home: &Path) -> Result<Vec<PathBuf>> {
     let data = gents::home::default_data_dir(home);
     anyhow::ensure!(data.is_dir() && owned.contains(&data), "managed cold backup requires an exclusively owned default data directory; use external maintenance for shared or missing stores");
     Ok(owned)
+}
+
+/// Native file notifications avoid polling shared receipts while the runtime
+/// and independently supervised helper exchange acknowledgements.
+pub(super) struct Changes {
+    _watcher: notify::RecommendedWatcher,
+    receive: tokio::sync::mpsc::Receiver<notify::Result<notify::Event>>,
+}
+impl Changes {
+    pub(super) async fn watch(path: &Path) -> Result<Self> {
+        Self::watch_mode(path, false).await
+    }
+    pub(super) async fn operations(path: &Path) -> Result<Self> {
+        Self::watch_mode(path, true).await
+    }
+    async fn watch_mode(path: &Path, operations: bool) -> Result<Self> {
+        use notify::Watcher as _;
+        let path = path.to_owned();
+        tokio::task::spawn_blocking(move || -> Result<Self> {
+            let (send, receive) = tokio::sync::mpsc::channel(1);
+            let mut watcher =
+                notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                    if event
+                        .as_ref()
+                        .is_ok_and(|event| matches!(event.kind, notify::EventKind::Access(_)))
+                    {
+                        return;
+                    }
+                    let _ = send.try_send(event);
+                })?;
+            watcher.watch(&path, notify::RecursiveMode::NonRecursive)?;
+            if operations {
+                for entry in fs::read_dir(&path)? {
+                    let entry = entry?;
+                    if entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|s| uuid::Uuid::parse_str(s).is_ok())
+                        && entry.path().is_dir()
+                    {
+                        watcher.watch(&entry.path(), notify::RecursiveMode::NonRecursive)?;
+                    }
+                }
+            }
+            Ok(Self {
+                _watcher: watcher,
+                receive,
+            })
+        })
+        .await?
+    }
+    pub(super) async fn changed(&mut self) -> Result<()> {
+        self.receive
+            .recv()
+            .await
+            .context("operation file watcher stopped")??;
+        Ok(())
+    }
+}
+
+pub(super) fn check_backup_capacity(home: &Path, destination: &Path) -> Result<()> {
+    fn size(path: &Path) -> Result<u64> {
+        let meta = fs::symlink_metadata(path)?;
+        if meta.is_dir() {
+            fs::read_dir(path)?.try_fold(0u64, |sum, entry| {
+                sum.checked_add(size(&entry?.path())?)
+                    .context("backup size overflow")
+            })
+        } else if meta.is_file() || meta.file_type().is_symlink() {
+            Ok(meta.len())
+        } else {
+            anyhow::bail!("cannot back up special file {}", path.display())
+        }
+    }
+    let mut bytes = 0u64;
+    for path in backup_inventory(home)? {
+        let source = if path == gents::home::default_data_dir(home) {
+            fs::canonicalize(path)?
+        } else {
+            path
+        };
+        bytes = bytes
+            .checked_add(size(&source)?)
+            .context("backup size overflow")?;
+    }
+    #[cfg(not(unix))]
+    let _ = (bytes, destination);
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        let path = std::ffi::CString::new(destination.as_os_str().as_bytes())?;
+        let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+        // SAFETY: the path is NUL terminated and statvfs initializes stats on success.
+        anyhow::ensure!(
+            unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) } == 0,
+            "backup capacity check failed: {}",
+            std::io::Error::last_os_error()
+        );
+        // SAFETY: statvfs succeeded and initialized stats.
+        let stats = unsafe { stats.assume_init() };
+        let available = u128::from(stats.f_bavail) * u128::from(stats.f_frsize);
+        let required = u128::from(bytes) * 2 + 64 * 1024 * 1024;
+        anyhow::ensure!(available >= required, "insufficient space for cold backup: need {required} bytes, available {available}; runtime unchanged");
+    }
+    Ok(())
 }

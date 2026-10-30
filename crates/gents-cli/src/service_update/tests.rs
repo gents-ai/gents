@@ -249,6 +249,30 @@ fn fixture_plan(home: &Path) -> Plan {
         user_home: home.into(),
     }
 }
+fn initialize_fixture_identity(plan: &mut Plan) {
+    use gents::identity::NodeIdentity as _;
+    let key = plan.home.join("fixture.key");
+    let identity = gents::identity::KeyIdentity::load_or_create(&key, None).unwrap();
+    plan.node_did = identity.did().to_owned();
+    crate::home_state::write_init_config(
+        &plan.home,
+        &crate::shared::StoredInitConfig {
+            home: plan.home.to_string_lossy().into_owned(),
+            node_name: "fixture".into(),
+            node_did: plan.node_did.clone(),
+            key_path: Some(key.to_string_lossy().into_owned()),
+            identity_backend: Some("file".into()),
+            keychain_label: None,
+            secure_enclave_label: None,
+            tool_package: None,
+            tool_ceiling: crate::cli::args::ToolCeilingArg::Readwrite,
+            tool_root: Some(plan.home.to_string_lossy().into_owned()),
+            store_encryption: None,
+        },
+    )
+    .unwrap();
+}
+
 fn fixture_receipt(plan: &Plan, phase: Phase) -> Receipt {
     Receipt {
         operation_id: plan.id,
@@ -262,12 +286,27 @@ fn fixture_receipt(plan: &Plan, phase: Phase) -> Receipt {
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[tokio::test]
 async fn startup_failure_retains_cold_backup_and_session_outcome_without_resetting_data() {
     let home = tempfile::tempdir().unwrap();
     let home = std::fs::canonicalize(home.path()).unwrap();
-    let plan = fixture_plan(&home);
+    let mut plan = fixture_plan(&home);
+    initialize_fixture_identity(&mut plan);
     let directory = operation_dir(&home, plan.id);
+    let executable = directory.join("gents");
+    plan.prior_definition = if cfg!(target_os = "macos") {
+        format!(r#"<?xml version="1.0"?><plist version="1.0"><dict><key>Label</key><string>{}</string><key>ProgramArguments</key><array><string>{}</string><string>server</string><string>--home</string><string>{}</string></array></dict></plist>"#, crate::native_service::SERVICE_LABEL, executable.display(), home.display()).into_bytes()
+    } else {
+        format!(
+            "[Service]\nExecStart=\"{}\" \"server\" \"--home\" \"{}\"\n",
+            executable.display(),
+            home.display()
+        )
+        .into_bytes()
+    };
+    plan.next_definition = plan.prior_definition.clone();
+
     std::fs::create_dir_all(directory.join("backup/data")).unwrap();
     std::fs::write(directory.join("backup/data/retained"), b"cold store").unwrap();
     std::fs::create_dir(home.join("data")).unwrap();
@@ -283,6 +322,15 @@ async fn startup_failure_retains_cold_backup_and_session_outcome_without_resetti
     assert_eq!(outcome.phase, Phase::Failed);
     assert_eq!(outcome.session_id.as_deref(), Some("original-session"));
     assert!(outcome.message.contains("No data reset"));
+    assert!(!outcome.message.contains("initialized home missing"));
+    assert!(
+        outcome
+            .message
+            .contains("reading installed service definition before startup"),
+        "{}",
+        outcome.message
+    );
+    assert!(directory.join("startup-attempted.json").is_file());
     assert_eq!(
         std::fs::read(home.join("data/retained")).unwrap(),
         b"live store"
@@ -344,7 +392,8 @@ async fn helper_recovery_cannot_extend_a_busy_or_unhealthy_operation_forever() {
 async fn replacement_cannot_back_up_or_install_over_a_claimed_store() {
     let home = tempfile::tempdir().unwrap();
     let home = std::fs::canonicalize(home.path()).unwrap();
-    let plan = fixture_plan(&home);
+    let mut plan = fixture_plan(&home);
+    initialize_fixture_identity(&mut plan);
     let directory = operation_dir(&home, plan.id);
     std::fs::create_dir(home.join("data")).unwrap();
     let _store = gents::home::lock_home_store(&home).unwrap();
@@ -357,6 +406,19 @@ async fn replacement_cannot_back_up_or_install_over_a_claimed_store() {
     run(home, plan.id).await.unwrap();
     let outcome: Receipt = files::read_json(&directory.join("receipt.json")).unwrap();
     assert_eq!(outcome.phase, Phase::Failed);
+    assert!(
+        outcome.message.contains("already using"),
+        "{}",
+        outcome.message
+    );
+    assert!(
+        outcome
+            .message
+            .contains(&format!("process {}", std::process::id())),
+        "{}",
+        outcome.message
+    );
+    assert!(!outcome.message.contains("initialized home missing"));
     assert!(!directory.join("backup").exists());
     assert!(!plan.service_config_dir.exists());
 }
@@ -441,4 +503,146 @@ async fn acceptance_requires_the_registered_helper_to_acknowledge_startup() {
         .await
         .unwrap();
     assert!(!home.path().join("data").exists());
+}
+
+#[test]
+fn abandoned_unpublished_staging_does_not_block_updates() {
+    let root = tempfile::tempdir().unwrap();
+    let orphan = root.path().join("stage-unpublished");
+    std::fs::create_dir(&orphan).unwrap();
+    std::fs::write(orphan.join("receipt.json"), "invalid partial JSON").unwrap();
+    stage::reject_pending(root.path()).unwrap();
+}
+
+#[test]
+fn abandoned_pre_acceptance_expires_but_accepted_operations_remain_owned() {
+    let home = tempfile::tempdir().unwrap();
+    let plan = fixture_plan(home.path());
+    let directory = operation_dir(home.path(), plan.id);
+    files::write_json(&directory.join("plan.json"), &plan).unwrap();
+    files::write_json(
+        &directory.join("receipt.json"),
+        &fixture_receipt(&plan, Phase::Registered),
+    )
+    .unwrap();
+    let root = directory.parent().unwrap();
+    stage::reject_pending(root).unwrap();
+    assert_eq!(
+        files::read_json::<Receipt>(&directory.join("receipt.json"))
+            .unwrap()
+            .phase,
+        Phase::Failed
+    );
+    files::write_json(
+        &directory.join("receipt.json"),
+        &fixture_receipt(&plan, Phase::Accepted),
+    )
+    .unwrap();
+    assert!(stage::reject_pending(root).is_err());
+    assert_eq!(
+        files::read_json::<Receipt>(&directory.join("receipt.json"))
+            .unwrap()
+            .phase,
+        Phase::Accepted
+    );
+}
+
+#[tokio::test]
+async fn recovery_refuses_any_candidate_start_attempt_even_without_readiness() {
+    let home = tempfile::tempdir().unwrap();
+    let plan = fixture_plan(home.path());
+    let directory = operation_dir(home.path(), plan.id);
+    files::write_json(&directory.join("startup-attempted.json"), &true).unwrap();
+    let mut reservation = Some(
+        gents::home::reserve_runtime_startup(home.path())
+            .await
+            .unwrap(),
+    );
+    assert!(
+        !recovery::restore_unstarted(&plan, Phase::Installed, &mut reservation)
+            .await
+            .unwrap()
+    );
+    assert!(reservation.is_some());
+    assert!(!plan.service_config_dir.exists());
+}
+
+#[tokio::test]
+async fn file_notifications_observe_atomic_receipt_replacement() {
+    let root = tempfile::tempdir().unwrap();
+    let mut changes = files::Changes::watch(root.path()).await.unwrap();
+    files::write_json(&root.path().join("receipt.json"), &true).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), changes.changed())
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn exposed_candidate_is_a_rollback_fence_even_without_a_startup_marker() {
+    let home = tempfile::tempdir().unwrap();
+    let mut plan = fixture_plan(home.path());
+    plan.intent.executable_update = true;
+    let directory = operation_dir(home.path(), plan.id);
+    files::write_json(&directory.join("candidate-exposed.json"), &true).unwrap();
+    let mut reservation = Some(
+        gents::home::reserve_runtime_startup(home.path())
+            .await
+            .unwrap(),
+    );
+    assert!(
+        !recovery::restore_unstarted(&plan, Phase::BackedUp, &mut reservation)
+            .await
+            .unwrap()
+    );
+    assert!(reservation.is_some());
+    assert!(!plan.service_config_dir.exists());
+}
+
+#[tokio::test]
+async fn health_resume_gets_one_durable_bounded_grace_not_an_unbounded_extension() {
+    let directory = tempfile::tempdir().unwrap();
+    let expired = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+    files::write_json(&directory.path().join("health-deadline.json"), &expired).unwrap();
+    assert!(
+        execute::health_deadline(directory.path(), false)
+            .await
+            .unwrap()
+            < chrono::Utc::now()
+    );
+    let first = execute::health_deadline(directory.path(), true)
+        .await
+        .unwrap();
+    assert!(first > chrono::Utc::now());
+    assert_eq!(
+        first,
+        execute::health_deadline(directory.path(), true)
+            .await
+            .unwrap()
+    );
+    files::write_json(
+        &directory.path().join("health-resume-deadline.json"),
+        &expired,
+    )
+    .unwrap();
+    assert!(
+        execute::health_deadline(directory.path(), true)
+            .await
+            .unwrap()
+            < chrono::Utc::now()
+    );
+}
+
+#[test]
+fn legacy_runtime_cannot_begin_an_unfenced_managed_handoff() {
+    let mut capabilities = gents_protocol::serve_lifecycle::control::current_capabilities();
+    execute::require_startup_fence(&capabilities).unwrap();
+    capabilities.remove(gents_protocol::serve_lifecycle::control::NATIVE_STARTUP_FENCE_CAPABILITY);
+    let error = execute::require_startup_fence(&capabilities).unwrap_err();
+    assert!(error.to_string().contains("external administration"));
+    capabilities.insert(
+        gents_protocol::serve_lifecycle::control::NATIVE_STARTUP_FENCE_CAPABILITY.into(),
+        2,
+    );
+    assert!(execute::require_startup_fence(&capabilities).is_err());
 }
