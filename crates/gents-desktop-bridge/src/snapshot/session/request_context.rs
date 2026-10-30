@@ -166,6 +166,226 @@ pub(super) async fn load_session_request_context_history(
         .collect()
 }
 
+pub(super) async fn load_session_reductions(
+    access: &gents::config_client::ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> anyhow::Result<Vec<LoadedReduction>> {
+    let requester = requester_did
+        .map(gents::graphql::escape_graphql_string)
+        .map(|did| format!("\"{did}\""))
+        .unwrap_or_else(|| "null".to_string());
+    let query = format!(
+        r#"query {{
+            ProviderContextReduction(
+                filter: {{
+                    node_did: {{ _eq: "{node_did}" }},
+                    session_id: {{ _eq: "{session_id}" }},
+                    requester_did: {{ _eq: {requester} }}
+                }},
+                order: [{{ created_at: ASC }}, {{ reduction_key: ASC }}]
+            ) {{
+                reduction_key source_boundary_json messages_compacted
+                original_tokens compacted_tokens created_at
+            }}
+        }}"#,
+        node_did = gents::graphql::escape_graphql_string(node_did),
+        session_id = gents::graphql::escape_graphql_string(session_id),
+    );
+    let data = access.execute(&query).await?;
+    data.pointer("/data/ProviderContextReduction")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            anyhow::anyhow!("ProviderContextReduction response omitted its result array")
+        })?
+        .iter()
+        .map(decode_reduction_row)
+        .collect()
+}
+
+/// Where each start-of-request compaction happened: the first message of the
+/// request it ran for, by compaction key. A compaction whose request is
+/// unknown (a fork's copy has none) or has no messages here is left out.
+pub(super) async fn load_compaction_request_starts(
+    access: &gents::config_client::ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> anyhow::Result<RapidHashMap<String, i64>> {
+    let scope = format!(
+        r#"node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, requester_did: {{ _eq: {requester} }}"#,
+        node = gents::graphql::escape_graphql_string(node_did),
+        session = gents::graphql::escape_graphql_string(session_id),
+        requester = requester_did
+            .map(|did| format!("\"{}\"", gents::graphql::escape_graphql_string(did)))
+            .unwrap_or_else(|| "null".to_string()),
+    );
+    let data = access
+        .execute(&format!(
+            "query {{ CompactionEntry(filter: {{ {scope} }}) {{ compaction_key request_doc_id }} }}"
+        ))
+        .await?;
+    let requests = data
+        .pointer("/data/CompactionEntry")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("CompactionEntry response omitted its result array"))?
+        .iter()
+        .filter_map(|row| {
+            Some((
+                row.get("compaction_key")?.as_str()?.to_string(),
+                row.get("request_doc_id")?.as_str()?.to_string(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    if requests.is_empty() {
+        return Ok(RapidHashMap::new());
+    }
+    let ids = requests
+        .iter()
+        .map(|(_, doc_id)| format!(r#""{}""#, gents::graphql::escape_graphql_string(doc_id)))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let data = access
+        .execute(&format!(
+            "query {{ AgentMessage(filter: {{ {scope}, request_doc_id: {{ _in: [{ids}] }} }}) {{ request_doc_id sequence }} }}"
+        ))
+        .await?;
+    let mut starts = RapidHashMap::<String, i64>::new();
+    for row in data
+        .pointer("/data/AgentMessage")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("AgentMessage response omitted its result array"))?
+    {
+        let (Some(doc_id), Some(sequence)) = (
+            row.get("request_doc_id")
+                .and_then(serde_json::Value::as_str),
+            row.get("sequence").and_then(serde_json::Value::as_i64),
+        ) else {
+            continue;
+        };
+        starts
+            .entry(doc_id.to_string())
+            .and_modify(|first| *first = (*first).min(sequence))
+            .or_insert(sequence);
+    }
+    Ok(requests
+        .into_iter()
+        .filter_map(|(key, doc_id)| Some((key, *starts.get(&doc_id)?)))
+        .collect())
+}
+
+pub(super) struct EntrySummary {
+    pub(super) summary: Option<String>,
+    pub(super) files_read: Option<String>,
+    pub(super) files_modified: Option<String>,
+}
+
+/// What the agent kept of the compactions a read draws, by key: only those
+/// markers carry their summaries, so a read doesn't carry every one.
+#[derive(Default)]
+pub(super) struct MarkerSummaries {
+    pub(super) entries: RapidHashMap<String, EntrySummary>,
+    pub(super) reductions: RapidHashMap<String, Option<String>>,
+}
+
+pub(super) async fn load_marker_summaries(
+    access: &gents::config_client::ConfigAccess,
+    node_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    entry_keys: &[String],
+    reduction_keys: &[String],
+) -> anyhow::Result<MarkerSummaries> {
+    let mut summaries = MarkerSummaries::default();
+    if entry_keys.is_empty() && reduction_keys.is_empty() {
+        return Ok(summaries);
+    }
+    let keys = |keys: &[String]| {
+        keys.iter()
+            .map(|key| format!(r#""{}""#, gents::graphql::escape_graphql_string(key)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let scope = format!(
+        r#"node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, requester_did: {{ _eq: {requester} }}"#,
+        node = gents::graphql::escape_graphql_string(node_did),
+        session = gents::graphql::escape_graphql_string(session_id),
+        requester = requester_did
+            .map(|did| format!("\"{}\"", gents::graphql::escape_graphql_string(did)))
+            .unwrap_or_else(|| "null".to_string()),
+    );
+    let data = access
+        .execute(&format!(
+            "query {{ CompactionEntry(filter: {{ {scope}, compaction_key: {{ _in: [{entries}] }} }}) {{ compaction_key summary files_read files_modified }} ProviderContextReduction(filter: {{ {scope}, reduction_key: {{ _in: [{reductions}] }} }}) {{ reduction_key summary }} }}",
+            entries = keys(entry_keys),
+            reductions = keys(reduction_keys),
+        ))
+        .await?;
+    let text = |row: &serde_json::Value, field: &str| {
+        row.get(field)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    for row in data
+        .pointer("/data/CompactionEntry")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(key) = text(row, "compaction_key") {
+            summaries.entries.insert(
+                key,
+                EntrySummary {
+                    summary: text(row, "summary"),
+                    files_read: text(row, "files_read"),
+                    files_modified: text(row, "files_modified"),
+                },
+            );
+        }
+    }
+    for row in data
+        .pointer("/data/ProviderContextReduction")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(key) = text(row, "reduction_key") {
+            summaries.reductions.insert(key, text(row, "summary"));
+        }
+    }
+    Ok(summaries)
+}
+
+fn decode_reduction_row(row: &serde_json::Value) -> anyhow::Result<LoadedReduction> {
+    let string = |field: &str| {
+        row.get(field)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+    };
+    let int = |field: &str| row.get(field).and_then(serde_json::Value::as_i64);
+    let reduction_key = string("reduction_key")
+        .filter(|key| !key.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("ProviderContextReduction row has no reduction_key"))?;
+    let anchor_sequence = string("source_boundary_json")
+        .and_then(|json| {
+            serde_json::from_str::<gents::provider_context_reduction::SourceBoundary>(&json).ok()
+        })
+        .and_then(|boundary| boundary.canonical_through)
+        .map(|fact| fact.sequence);
+    Ok(LoadedReduction {
+        reduction_key,
+        anchor_sequence,
+        summary: string("summary"),
+        messages_compacted: int("messages_compacted"),
+        original_tokens: int("original_tokens"),
+        compacted_tokens: int("compacted_tokens"),
+        created_at: string("created_at"),
+    })
+}
+
 fn has_context_accounting(row: &serde_json::Value) -> bool {
     row.get("context_accounting_json")
         .and_then(serde_json::Value::as_str)
@@ -308,6 +528,311 @@ mod tests {
         assert!(details.is_none());
         assert_eq!(server.received_requests().await.unwrap().len(), 2);
         core.shutdown().await.unwrap();
+        server.verify().await;
+    }
+
+    fn reduction(key: &str, through: Option<i64>, created_at: &str) -> LoadedReduction {
+        let boundary = serde_json::json!({
+            "boundary_version": 2,
+            "request_doc_id": "physical-req-1",
+            "request_commit_cid": "cid",
+            "canonical_through": through.map(|sequence| serde_json::json!({
+                "doc_id": "message", "sequence": sequence, "commit_cid": "cid"
+            })),
+        });
+        decode_reduction_row(&serde_json::json!({
+            "reduction_key": key,
+            "source_boundary_json": boundary.to_string(),
+            "summary": "# Continuation checkpoint\n\nWrite snake stories.",
+            "messages_compacted": 12,
+            "original_tokens": 16523,
+            "compacted_tokens": 516,
+            "created_at": created_at,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_mid_request_compaction_is_marked_after_the_last_message_it_covered() {
+        let page = [12_i64, 13, 14].into_iter().collect::<RapidHashSet<_>>();
+        let mut items = Vec::new();
+        attach_reduction_compaction_timeline_events(
+            &mut items,
+            &[
+                reduction("covered", Some(13), "2026-10-29T21:14:59.563619Z"),
+                reduction("older-page", Some(4), "2026-10-29T21:00:00Z"),
+                reduction("no-boundary", None, "2026-10-29T21:01:00Z"),
+            ],
+            &page,
+        );
+        let [RenderedTimelineItem::SessionCompaction {
+            item_key,
+            sequence,
+            messages_compacted,
+            summary,
+            files_read,
+            ..
+        }] = items.as_slice()
+        else {
+            panic!("expected one compaction marker, got {items:?}");
+        };
+        assert_eq!(item_key, "request-compaction:covered");
+        assert_eq!(*sequence, 13);
+        assert_eq!(*messages_compacted, Some(12));
+        assert_eq!(
+            summary.as_deref(),
+            Some("# Continuation checkpoint\n\nWrite snake stories.")
+        );
+        /* a mid-request compaction records no file lists */
+        assert_eq!(files_read, &None);
+    }
+
+    #[test]
+    fn the_session_counts_both_kinds_of_compaction_oldest_first() {
+        let entry: gents_protocol::row::CompactionEntryRow =
+            serde_json::from_value(serde_json::json!({
+                "compaction_key": "session-entry",
+                "sequence": 1,
+                "messages_compacted": 4,
+                "created_at": "2026-10-29T21:20:00Z"
+            }))
+            .unwrap();
+        let reductions = [reduction(
+            "mid-request",
+            Some(13),
+            "2026-10-29T21:14:59.563619Z",
+        )];
+        let keys = |views: Vec<SessionCompactionView>| {
+            views
+                .into_iter()
+                .map(|view| view.compaction_key)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            keys(session_compaction_views(
+                std::slice::from_ref(&entry),
+                Some(&reductions)
+            )),
+            ["mid-request", "session-entry"]
+        );
+        /* reductions that failed to load leave the session entries alone */
+        assert_eq!(
+            keys(session_compaction_views(std::slice::from_ref(&entry), None)),
+            ["session-entry"]
+        );
+    }
+
+    #[test]
+    fn a_compacted_call_leaves_the_reduction_summary_once_its_marker_is_shown() {
+        let call = |call_seq: i64, reason: &str| {
+            let mut context = decode_request_context_row(&serde_json::json!({
+                "request_doc_id": "physical-req-1",
+                "request_id": "req-1",
+                "call_id": format!("call-{call_seq}"),
+                "call_seq": call_seq,
+                "queued_at": format!("2026-10-29T21:14:5{call_seq}Z"),
+                "context_accounting_json": serde_json::json!({
+                    "accounting_version": 2, "attempt": 0, "compaction_reason": reason,
+                    "compaction_threshold_basis_points": 250,
+                    "compaction_threshold_tokens": 25000,
+                    "components": {"additional_parameters": 35, "documents": 0,
+                        "messages": 2611, "output_schema": 0, "tool_schemas": 8212},
+                    "configured_max_output_tokens": 64000, "context_window": 1000000,
+                    "effective_max_output_tokens": 64000, "estimated_input_tokens": 10858,
+                    "estimator": "claude_messages_wire_json_bytes_div_4_v1",
+                    "pre_compaction_input_tokens": 26865, "turn_index": 1
+                }).to_string(),
+            }))
+            .unwrap();
+            context.anchor_sequence = Some(12);
+            context
+        };
+        let page = [12_i64].into_iter().collect::<RapidHashSet<_>>();
+        let counts = |history, compactions_shown| {
+            let mut items = Vec::new();
+            attach_context_reduction_timeline_events(&mut items, history, &page, compactions_shown);
+            items
+                .iter()
+                .filter_map(|item| match item {
+                    RenderedTimelineItem::RequestContextReductionSummary {
+                        compacted_count,
+                        repaired_count,
+                        ..
+                    } => Some((*compacted_count, *repaired_count)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(counts(vec![call(3, "compacted")], true).is_empty());
+        assert_eq!(
+            counts(
+                vec![call(2, "provider_view_repaired"), call(3, "compacted")],
+                true
+            ),
+            [(0, 1)]
+        );
+        /* without the reductions there is no marker, so the summary keeps it */
+        assert_eq!(counts(vec![call(3, "compacted")], false), [(1, 0)]);
+    }
+
+    fn marker(key: &str, sequence: i64, timestamp: &str) -> (i64, RenderedTimelineItem) {
+        (
+            sequence,
+            RenderedTimelineItem::SessionCompaction {
+                item_key: key.into(),
+                sequence,
+                messages_compacted: None,
+                original_tokens: None,
+                compacted_tokens: None,
+                timestamp: Some(timestamp.into()),
+                summary: None,
+                files_read: None,
+                files_modified: None,
+            },
+        )
+    }
+
+    fn message(key: &str, sequence: i64) -> RenderedTimelineItem {
+        RenderedTimelineItem::AssistantMessage {
+            request_turn: None,
+            item_key: key.into(),
+            request_id: None,
+            sequence: Some(sequence),
+            content: Some(key.into()),
+            reasoning: None,
+            timestamp: None,
+            reconstruction: MessageReconstructionView {
+                state: ReconstructionState::Ready,
+                error: None,
+                denied_dependency_doc_id: None,
+            },
+        }
+    }
+
+    fn keys(items: &[RenderedTimelineItem]) -> Vec<&str> {
+        items
+            .iter()
+            .map(|item| match item {
+                RenderedTimelineItem::SessionCompaction { item_key, .. }
+                | RenderedTimelineItem::AssistantMessage { item_key, .. }
+                | RenderedTimelineItem::PendingUserTurn { item_key, .. } => item_key.as_str(),
+                _ => "other",
+            })
+            .collect()
+    }
+
+    #[test]
+    fn compactions_after_one_message_read_in_the_order_they_happened() {
+        let mut items = vec![message("m13", 13), message("m14", 14)];
+        attach_compaction_markers(
+            &mut items,
+            vec![
+                marker("today", 13, "2026-10-30T17:06:48Z"),
+                marker("yesterday", 13, "2026-10-29T21:14:59.563619Z"),
+            ],
+        );
+        assert_eq!(keys(&items), ["m13", "yesterday", "today", "m14"]);
+    }
+
+    #[test]
+    fn a_compaction_follows_its_message_past_a_pending_turn_drawn_ahead_of_it() {
+        let pending = RenderedTimelineItem::PendingUserTurn {
+            item_key: "pending".into(),
+            request_id: "request".into(),
+            started_goal_id: None,
+            content: "queued".into(),
+            captured_context: None,
+            attachments: None,
+            selected_skill_ids: vec![],
+            lifecycle_state: None,
+            folded_into_request_id: None,
+            origin: None,
+            created_at: None,
+        };
+        let mut items = vec![pending, message("m5", 5), message("m6", 6)];
+        attach_compaction_markers(
+            &mut items,
+            vec![marker("compaction", 5, "2026-10-30T17:00:00Z")],
+        );
+        assert_eq!(keys(&items), ["pending", "m5", "compaction", "m6"]);
+    }
+
+    #[test]
+    fn a_start_of_request_compaction_is_placed_where_its_request_began() {
+        let entry: gents_protocol::row::CompactionEntryRow =
+            serde_json::from_value(serde_json::json!({
+                "compaction_key": "entry",
+                "compacted_through_sequence": 13
+            }))
+            .unwrap();
+        let starts = [("entry".to_string(), 86_i64)].into_iter().collect();
+        assert_eq!(session_compaction_anchor(&entry, &starts), Some(86));
+        /* a fork's copy names no request: the last message it compacted */
+        assert_eq!(
+            session_compaction_anchor(&entry, &RapidHashMap::new()),
+            Some(13)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_read_carries_the_summaries_of_the_markers_it_draws_only() {
+        use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(|request: &wiremock::Request| {
+                request
+                    .body_json::<serde_json::Value>()
+                    .ok()
+                    .and_then(|body| body["query"].as_str().map(str::to_owned))
+                    .is_some_and(|query| {
+                        query.contains(r#"compaction_key: { _in: ["drawn"] }"#)
+                            && query.contains(r#"reduction_key: { _in: ["mid"] }"#)
+                    })
+            })
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"data": {
+                    "CompactionEntry": [{"compaction_key": "drawn", "summary": "## Goal\nKept.",
+                        "files_read": "[\"src/lib.rs\"]", "files_modified": null}],
+                    "ProviderContextReduction": [{"reduction_key": "mid", "summary": "  "}]
+                }})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut markers = vec![
+            marker("session-compaction:drawn", 4, "2026-10-30T17:00:00Z"),
+            marker("request-compaction:mid", 9, "2026-10-30T17:01:00Z"),
+        ];
+        fill_marker_summaries(
+            &ConfigAccess::graphql(server.uri()),
+            "session",
+            "node",
+            Some("requester"),
+            &mut markers,
+        )
+        .await;
+        let summaries = markers
+            .iter()
+            .map(|(_, item)| match item {
+                RenderedTimelineItem::SessionCompaction {
+                    summary,
+                    files_read,
+                    ..
+                } => (summary.clone(), files_read.clone()),
+                _ => unreachable!(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            summaries,
+            [
+                (
+                    Some("## Goal\nKept.".into()),
+                    Some(vec!["src/lib.rs".into()])
+                ),
+                /* a blank summary is no summary: nothing to open */
+                (None, None),
+            ]
+        );
         server.verify().await;
     }
 }

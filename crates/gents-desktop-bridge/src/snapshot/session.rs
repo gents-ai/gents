@@ -162,6 +162,20 @@ struct LoadedRequestContext {
     accounting: gents_protocol::rendered_request::ContextAccounting,
 }
 
+/// A compaction made between two model calls of one request. The runtime
+/// records it as a `ProviderContextReduction`, apart from the session's
+/// `CompactionEntry` rows.
+struct LoadedReduction {
+    reduction_key: String,
+    /// The last stored message the compaction covered.
+    anchor_sequence: Option<i64>,
+    summary: Option<String>,
+    messages_compacted: Option<i64>,
+    original_tokens: Option<i64>,
+    compacted_tokens: Option<i64>,
+    created_at: Option<String>,
+}
+
 #[cfg(test)]
 pub fn build_session_snapshot_from_store(
     store: &gents_desktop_core::client::ClientStore,
@@ -420,20 +434,10 @@ pub async fn build_session_snapshot_for_node_with_transcript(
                 &mut snapshot.timeline_items,
             )
             .await;
-            if let Some(entries) = history.compactions {
+            if let Some(compactions) = history.compactions {
                 snapshot.context.session_compaction_count =
-                    Some(i64::try_from(entries.len()).unwrap_or(i64::MAX));
-                snapshot.context.compactions = entries
-                    .iter()
-                    .map(|entry| SessionCompactionView {
-                        compaction_key: entry.compaction_key.clone(),
-                        sequence: entry.sequence,
-                        messages_compacted: entry.messages_compacted.map(|value| value.max(0)),
-                        original_tokens: entry.original_tokens,
-                        compacted_tokens: entry.compacted_tokens,
-                        created_at: entry.created_at.clone(),
-                    })
-                    .collect();
+                    Some(i64::try_from(compactions.len()).unwrap_or(i64::MAX));
+                snapshot.context.compactions = compactions;
             }
             snapshot.context.request_reduction_history_loaded = history.reductions_loaded;
         }
@@ -450,10 +454,11 @@ pub async fn build_session_snapshot_for_node_with_transcript(
     snapshot
 }
 
-/// What a read's context history found: the session's compactions when they
-/// loaded, and whether the reductions of the read's requests did.
+/// What a read's context history found: the session's compactions, oldest
+/// first, when they loaded, and whether the reductions of the read's requests
+/// did.
 pub(crate) struct ContextHistory {
-    pub(crate) compactions: Option<Vec<gents_protocol::row::CompactionEntryRow>>,
+    pub(crate) compactions: Option<Vec<SessionCompactionView>>,
     pub(crate) reductions_loaded: bool,
 }
 
@@ -480,10 +485,7 @@ pub(crate) async fn attach_context_history_rows(
     )
     .await
     {
-        Ok(entries) => {
-            attach_session_compaction_timeline_events(items, &entries, &page_sequences);
-            Some(entries)
-        }
+        Ok(entries) => Some(entries),
         Err(error) => {
             tracing::warn!(
                 target: "gents_desktop::chat",
@@ -495,6 +497,55 @@ pub(crate) async fn attach_context_history_rows(
             None
         }
     };
+    let reductions =
+        match request_context::load_session_reductions(access, node_did, session_id, requester_did)
+            .await
+        {
+            Ok(reductions) => Some(reductions),
+            Err(error) => {
+                tracing::warn!(
+                    target: "gents_desktop::chat",
+                    session_id,
+                    node_did,
+                    error = %error,
+                    "loading session reductions failed"
+                );
+                None
+            }
+        };
+    let starts = match &compactions {
+        Some(entries) if !entries.is_empty() => request_context::load_compaction_request_starts(
+            access,
+            node_did,
+            session_id,
+            requester_did,
+        )
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!(
+                target: "gents_desktop::chat",
+                session_id,
+                node_did,
+                error = %error,
+                "loading where session compactions ran failed"
+            );
+            RapidHashMap::new()
+        }),
+        _ => RapidHashMap::new(),
+    };
+    let mut markers = compactions
+        .iter()
+        .flat_map(|entries| session_compaction_markers(entries, &starts, &page_sequences))
+        .chain(
+            reductions
+                .iter()
+                .flat_map(|reductions| reduction_compaction_markers(reductions, &page_sequences)),
+        )
+        .collect::<Vec<_>>();
+    fill_marker_summaries(access, session_id, node_did, requester_did, &mut markers).await;
+    attach_compaction_markers(items, markers);
+    let compactions =
+        compactions.map(|entries| session_compaction_views(&entries, reductions.as_deref()));
     let request_doc_ids = messages
         .iter()
         .filter_map(|row| row.message.request_doc_id.clone())
@@ -511,7 +562,12 @@ pub(crate) async fn attach_context_history_rows(
     .await
     {
         Ok(history) => {
-            attach_context_reduction_timeline_events(items, history, &page_sequences);
+            attach_context_reduction_timeline_events(
+                items,
+                history,
+                &page_sequences,
+                reductions.is_some(),
+            );
             true
         }
         Err(error) => {
@@ -531,10 +587,103 @@ pub(crate) async fn attach_context_history_rows(
     }
 }
 
+/// The session's compactions of both kinds, oldest first. Without the
+/// reductions, only the session entries are known.
+fn session_compaction_views(
+    entries: &[gents_protocol::row::CompactionEntryRow],
+    reductions: Option<&[LoadedReduction]>,
+) -> Vec<SessionCompactionView> {
+    let mut views = entries
+        .iter()
+        .map(|entry| SessionCompactionView {
+            compaction_key: entry.compaction_key.clone(),
+            sequence: entry.sequence,
+            messages_compacted: entry.messages_compacted.map(|value| value.max(0)),
+            original_tokens: entry.original_tokens,
+            compacted_tokens: entry.compacted_tokens,
+            created_at: entry.created_at.clone(),
+        })
+        .chain(
+            reductions
+                .unwrap_or_default()
+                .iter()
+                .map(|reduction| SessionCompactionView {
+                    compaction_key: reduction.reduction_key.clone(),
+                    sequence: None,
+                    messages_compacted: reduction.messages_compacted.map(|value| value.max(0)),
+                    original_tokens: reduction.original_tokens,
+                    compacted_tokens: reduction.compacted_tokens,
+                    created_at: reduction.created_at.clone(),
+                }),
+        )
+        .collect::<Vec<_>>();
+    views.sort_by(|left, right| {
+        compaction_time(left)
+            .cmp(&compaction_time(right))
+            .then_with(|| left.compaction_key.cmp(&right.compaction_key))
+    });
+    views
+}
+
+/// Session entries and reductions write `created_at` with different
+/// precision, so they are compared as instants rather than as text.
+fn compaction_time(view: &SessionCompactionView) -> Option<DateTime<Utc>> {
+    view.created_at
+        .as_deref()
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
+}
+
+#[cfg(test)]
+fn attach_reduction_compaction_timeline_events(
+    items: &mut Vec<RenderedTimelineItem>,
+    reductions: &[LoadedReduction],
+    page_sequences: &RapidHashSet<i64>,
+) {
+    attach_compaction_markers(
+        items,
+        reduction_compaction_markers(reductions, page_sequences),
+    );
+}
+
+fn reduction_compaction_markers(
+    reductions: &[LoadedReduction],
+    page_sequences: &RapidHashSet<i64>,
+) -> Vec<(i64, RenderedTimelineItem)> {
+    let mut markers = Vec::new();
+    for reduction in reductions {
+        let Some(sequence) = reduction
+            .anchor_sequence
+            .filter(|sequence| page_sequences.contains(sequence))
+        else {
+            continue;
+        };
+        let item = RenderedTimelineItem::SessionCompaction {
+            item_key: format!("request-compaction:{}", reduction.reduction_key),
+            sequence,
+            messages_compacted: reduction.messages_compacted.map(|value| value.max(0)),
+            original_tokens: reduction.original_tokens,
+            compacted_tokens: reduction.compacted_tokens,
+            timestamp: reduction.created_at.clone(),
+            summary: reduction
+                .summary
+                .clone()
+                .filter(|summary| !summary.trim().is_empty()),
+            files_read: None,
+            files_modified: None,
+        };
+        markers.push((sequence, item));
+    }
+    markers
+}
+
+/// `compactions_shown` means the reductions loaded and each compaction already
+/// has its own marker, so the summary counts only the repaired inputs.
 fn attach_context_reduction_timeline_events(
     items: &mut Vec<RenderedTimelineItem>,
     history: Vec<LoadedRequestContext>,
     page_sequences: &RapidHashSet<i64>,
+    compactions_shown: bool,
 ) {
     struct RequestSummary {
         sequence: i64,
@@ -549,6 +698,11 @@ fn attach_context_reduction_timeline_events(
     let mut summaries = std::collections::BTreeMap::<String, RequestSummary>::new();
     for entry in history {
         let compacted = match entry.accounting.compaction_reason {
+            gents_protocol::rendered_request::ContextCompactionReason::Compacted
+                if compactions_shown =>
+            {
+                continue
+            }
             gents_protocol::rendered_request::ContextCompactionReason::Compacted => true,
             gents_protocol::rendered_request::ContextCompactionReason::ProviderViewRepaired => {
                 false
@@ -679,15 +833,41 @@ async fn fill_job_outcomes(core: &ClientCore, snapshot: &mut DesktopSessionSnaps
     }
 }
 
-fn attach_session_compaction_timeline_events(
+#[cfg(test)]
+pub(super) fn attach_session_compaction_timeline_events(
     items: &mut Vec<RenderedTimelineItem>,
     entries: &[gents_protocol::row::CompactionEntryRow],
     page_sequences: &RapidHashSet<i64>,
 ) {
+    attach_compaction_markers(
+        items,
+        session_compaction_markers(entries, &RapidHashMap::new(), page_sequences),
+    );
+}
+
+/// A start-of-request compaction is drawn where it happened: after the first
+/// message of the request it ran for. Without that request (a fork's copy),
+/// it falls back to the last message it compacted.
+fn session_compaction_anchor(
+    entry: &gents_protocol::row::CompactionEntryRow,
+    starts: &RapidHashMap<String, i64>,
+) -> Option<i64> {
+    starts
+        .get(&entry.compaction_key)
+        .copied()
+        .or(entry.compacted_through_sequence)
+        .filter(|sequence| *sequence >= 0)
+}
+
+fn session_compaction_markers(
+    entries: &[gents_protocol::row::CompactionEntryRow],
+    starts: &RapidHashMap<String, i64>,
+    page_sequences: &RapidHashSet<i64>,
+) -> Vec<(i64, RenderedTimelineItem)> {
+    let mut markers = Vec::new();
     for entry in entries {
-        let Some(sequence) = entry
-            .compacted_through_sequence
-            .filter(|sequence| *sequence >= 0 && page_sequences.contains(sequence))
+        let Some(sequence) = session_compaction_anchor(entry, starts)
+            .filter(|sequence| page_sequences.contains(sequence))
         else {
             continue;
         };
@@ -698,9 +878,117 @@ fn attach_session_compaction_timeline_events(
             original_tokens: entry.original_tokens,
             compacted_tokens: entry.compacted_tokens,
             timestamp: entry.created_at.clone(),
+            summary: entry
+                .summary
+                .clone()
+                .filter(|summary| !summary.trim().is_empty()),
+            files_read: compaction_files(entry.files_read.as_deref()),
+            files_modified: compaction_files(entry.files_modified.as_deref()),
         };
+        markers.push((sequence, item));
+    }
+    markers
+}
+
+/// Only the markers a read draws carry their summaries and file lists.
+async fn fill_marker_summaries(
+    access: &ConfigAccess,
+    session_id: &str,
+    node_did: &str,
+    requester_did: Option<&str>,
+    markers: &mut [(i64, RenderedTimelineItem)],
+) {
+    let keys = |prefix: &str| {
+        markers
+            .iter()
+            .filter_map(|(_, item)| match item {
+                RenderedTimelineItem::SessionCompaction { item_key, .. } => {
+                    item_key.strip_prefix(prefix).map(str::to_owned)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let (entry_keys, reduction_keys) = (keys("session-compaction:"), keys("request-compaction:"));
+    let summaries = match request_context::load_marker_summaries(
+        access,
+        node_did,
+        session_id,
+        requester_did,
+        &entry_keys,
+        &reduction_keys,
+    )
+    .await
+    {
+        Ok(summaries) => summaries,
+        Err(error) => {
+            tracing::warn!(
+                target: "gents_desktop::chat",
+                session_id,
+                node_did,
+                error = %error,
+                "loading compaction summaries failed"
+            );
+            return;
+        }
+    };
+    let kept =
+        |summary: &Option<String>| summary.clone().filter(|summary| !summary.trim().is_empty());
+    for (_, item) in markers.iter_mut() {
+        let RenderedTimelineItem::SessionCompaction {
+            item_key,
+            summary,
+            files_read,
+            files_modified,
+            ..
+        } = item
+        else {
+            continue;
+        };
+        if let Some(entry) = item_key
+            .strip_prefix("session-compaction:")
+            .and_then(|key| summaries.entries.get(key))
+        {
+            *summary = kept(&entry.summary);
+            *files_read = compaction_files(entry.files_read.as_deref());
+            *files_modified = compaction_files(entry.files_modified.as_deref());
+        } else if let Some(text) = item_key
+            .strip_prefix("request-compaction:")
+            .and_then(|key| summaries.reductions.get(key))
+        {
+            *summary = kept(text);
+        }
+    }
+}
+
+/// Compactions are drawn after the message they cover through; two after the
+/// same message (one at a request's start and one between model calls of
+/// another) read in the order they happened.
+fn attach_compaction_markers(
+    items: &mut Vec<RenderedTimelineItem>,
+    mut markers: Vec<(i64, RenderedTimelineItem)>,
+) {
+    let time = |item: &RenderedTimelineItem| match item {
+        RenderedTimelineItem::SessionCompaction { timestamp, .. } => timestamp
+            .as_deref()
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&Utc)),
+        _ => None,
+    };
+    markers.sort_by(|(left_at, left), (right_at, right)| {
+        left_at
+            .cmp(right_at)
+            .then_with(|| time(left).cmp(&time(right)))
+    });
+    for (sequence, item) in markers {
         insert_timeline_item_by_sequence(items, item, sequence);
     }
+}
+
+/// The compaction entry keeps its file lists as JSON arrays in a string field.
+fn compaction_files(json: Option<&str>) -> Option<Vec<String>> {
+    json.and_then(|json| serde_json::from_str::<Vec<String>>(json).ok())
+        .filter(|files| !files.is_empty())
 }
 
 fn job_row_fill(
@@ -885,6 +1173,7 @@ mod paging_coverage_tests {
             &mut snapshot.timeline_items,
             history,
             &rapidhash::RapidHashSet::from_iter([1]),
+            false,
         );
         assert!(matches!(
             snapshot.timeline_items.as_slice(),
