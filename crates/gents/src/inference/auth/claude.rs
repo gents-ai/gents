@@ -2,7 +2,7 @@ use std::fmt;
 
 use chrono::{DateTime, Duration, Utc};
 
-use crate::oauth_credential::{
+use crate::inference::auth::credential::{
     classify_oauth_auth_error, oauth_credential_id, OAuthAuthProblem, OAuthCredential, OAuthProduct,
 };
 
@@ -111,7 +111,7 @@ pub fn credential_from_login_tokens(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::oauth_credential::OAuthAuthProblem;
+    use crate::inference::auth::credential::OAuthAuthProblem;
 
     #[test]
     fn scopes_are_the_subscription_set() {

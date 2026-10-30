@@ -1373,9 +1373,9 @@ async fn bind_default_agent_chatgpt_backend(
 }
 
 async fn insert_enabled_oauth_credential(node: &defra_node::EmbeddedNode, node_did: &str) {
-    let credential = crate::oauth_credential::OAuthCredential {
+    let credential = crate::inference::auth::credential::OAuthCredential {
         doc_id: None,
-        credential_id: crate::oauth_credential::oauth_credential_id(
+        credential_id: crate::inference::auth::credential::oauth_credential_id(
             node_did,
             crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
         ),
@@ -1395,7 +1395,8 @@ async fn insert_enabled_oauth_credential(node: &defra_node::EmbeddedNode, node_d
         provider_account_key: None,
         label: None,
     };
-    let mutation = crate::oauth_credential::oauth_credential_upsert_mutation(&credential);
+    let mutation =
+        crate::inference::auth::credential::oauth_credential_upsert_mutation(&credential);
     let response = node.execute(&mutation).await;
     assert!(
         !response.has_errors(),
@@ -1602,7 +1603,7 @@ async fn readiness_follows_the_backend_account_reference() {
 #[tokio::test]
 async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
     use crate::config_client::ConfigAccess;
-    use crate::oauth_credential::{set_account_enabled, store_sign_in};
+    use crate::inference::auth::credential::{set_account_enabled, store_sign_in};
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("document-view-account-lifecycle"));
@@ -1611,10 +1612,10 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
     bind_default_agent_claude_backend(&node, &did, &default_agent_id).await;
     let access = ConfigAccess::local(node.clone());
     let sign_in = |who: &str| {
-        crate::claude_oauth::credential_from_login_tokens(
+        crate::inference::auth::claude::credential_from_login_tokens(
             did.clone(),
-            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
-            &crate::claude_oauth::ClaudeLoginTokens {
+            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            &crate::inference::auth::claude::ClaudeLoginTokens {
                 access_token: format!("access-{who}"),
                 refresh_token: format!("refresh-{who}"),
                 expires_in: Some(3600),
@@ -1671,7 +1672,8 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
             let did = did.clone();
             let credential_id = b.credential.credential_id.clone();
             Box::pin(async move {
-                crate::oauth_credential::remove_account_in_txn(txn, &did, &credential_id).await
+                crate::inference::auth::credential::remove_account_in_txn(txn, &did, &credential_id)
+                    .await
             })
         })
         .await
@@ -1683,7 +1685,7 @@ async fn disabling_or_removing_an_account_stops_only_its_behaviors() {
 #[tokio::test]
 async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
     use crate::config_client::ConfigAccess;
-    use crate::oauth_credential::{set_account_enabled, store_sign_in};
+    use crate::inference::auth::credential::{set_account_enabled, store_sign_in};
     use gents_protocol::node_readiness::is_behavior_unavailable_rejection;
     use gents_protocol::node_readiness::AgentReadinessUnavailableReason as Reason;
     let node = test_node().await;
@@ -1694,10 +1696,10 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
     bind_default_agent_claude_backend(&node, &did, &x).await;
     let access = ConfigAccess::local(node.clone());
     let sign_in = |who: &str| {
-        crate::claude_oauth::credential_from_login_tokens(
+        crate::inference::auth::claude::credential_from_login_tokens(
             did.clone(),
-            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
-            &crate::claude_oauth::ClaudeLoginTokens {
+            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            &crate::inference::auth::claude::ClaudeLoginTokens {
                 access_token: format!("access-{who}"),
                 refresh_token: format!("refresh-{who}"),
                 expires_in: Some(3600),
@@ -1713,7 +1715,7 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
     let b = store_sign_in(&access, sign_in("b"), None).await.unwrap();
     let b_backend = format!(
         "{}-{}",
-        crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+        crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
         b.credential
             .account_ref
             .as_deref()
@@ -1809,7 +1811,8 @@ async fn an_unavailable_account_is_a_behavior_unavailable_rejection() {
             let did = did.clone();
             let credential_id = b.credential.credential_id.clone();
             Box::pin(async move {
-                crate::oauth_credential::remove_account_in_txn(txn, &did, &credential_id).await
+                crate::inference::auth::credential::remove_account_in_txn(txn, &did, &credential_id)
+                    .await
             })
         })
         .await
@@ -1878,10 +1881,10 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
         reason.diagnostic
     );
 
-    let credential = crate::claude_oauth::credential_from_login_tokens(
+    let credential = crate::inference::auth::claude::credential_from_login_tokens(
         identity.did(),
-        crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
-        &crate::claude_oauth::ClaudeLoginTokens {
+        crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+        &crate::inference::auth::claude::ClaudeLoginTokens {
             access_token: "access-token".to_string(),
             refresh_token: "refresh-token".to_string(),
             expires_in: Some(3600),
@@ -1892,7 +1895,7 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
         },
         chrono::Utc::now(),
     );
-    crate::oauth_credential::upsert_oauth_credential(&node, &credential)
+    crate::inference::auth::credential::upsert_oauth_credential(&node, &credential)
         .await
         .expect("upsert credential");
 
@@ -1967,9 +1970,9 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
         "agent_config must start unavailable without a credential"
     );
 
-    let credential = crate::oauth_credential::OAuthCredential {
+    let credential = crate::inference::auth::credential::OAuthCredential {
         doc_id: None,
-        credential_id: crate::oauth_credential::oauth_credential_id(
+        credential_id: crate::inference::auth::credential::oauth_credential_id(
             identity.did(),
             crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
         ),
@@ -1989,7 +1992,7 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
         provider_account_key: None,
         label: None,
     };
-    let doc_id = crate::oauth_credential::upsert_oauth_credential(&node, &credential)
+    let doc_id = crate::inference::auth::credential::upsert_oauth_credential(&node, &credential)
         .await
         .expect("upsert credential");
 

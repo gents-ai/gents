@@ -710,11 +710,11 @@ async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result
     for backend in [&claude, &elsewhere] {
         crate::config_client::write_inference_backend_document(&access, backend).await?;
     }
-    let credential = crate::oauth_credential::OAuthCredential {
+    let credential = crate::inference::auth::credential::OAuthCredential {
         doc_id: None,
         credential_id: format!("claude-subscription:{owner}"),
         node_did: owner.clone(),
-        provider: crate::claude_oauth::CLAUDE_OAUTH_PROVIDER.into(),
+        provider: crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER.into(),
         access_token: SECRET.into(),
         refresh_token: format!("{SECRET}-refresh"),
         id_token: None,

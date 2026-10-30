@@ -124,7 +124,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         }),
     };
     let tool_ceiling_check = diagnose_tool_ceiling(init_config.as_ref());
-    let accounts = gents::oauth_credential::list_accounts(&access, &node_did).await;
+    let accounts = gents::inference::auth::credential::list_accounts(&access, &node_did).await;
     let backend_reports = match bundle.as_ref() {
         Some(bundle) => {
             diagnose_backends(&access, bundle, accounts.as_deref().unwrap_or_default()).await
@@ -188,16 +188,18 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     let principal_present = bundle.is_some();
 
     let chatgpt_provider = gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
-    let mut chatgpt_auth_check = match gents::oauth_credential::resolve_oauth_credential(
+    let mut chatgpt_auth_check = match gents::inference::auth::credential::resolve_oauth_credential(
         &access,
         &node_did,
         chatgpt_provider,
-        gents::oauth_credential::AccountPick::ProviderDefault,
+        gents::inference::auth::credential::AccountPick::ProviderDefault,
     )
     .await
     {
         Ok(Some(credential))
-            if gents::oauth_credential::token_is_fresh(credential.access_token_expires_at) =>
+            if gents::inference::auth::credential::token_is_fresh(
+                credential.access_token_expires_at,
+            ) =>
         {
             json!({
                 "ok": true,
@@ -213,19 +215,19 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "credential_id": credential.credential_id,
             "provider": credential.provider,
             "expires_at": credential.access_token_expires_at,
-            "guidance": gents::oauth_credential::classify_chatgpt_auth_error(
+            "guidance": gents::inference::auth::credential::classify_chatgpt_auth_error(
                 &node_did,
                 chatgpt_provider,
-                &gents::oauth_credential::OAuthAuthProblem::Expired,
+                &gents::inference::auth::credential::OAuthAuthProblem::Expired,
             ),
         }),
         Ok(None) => json!({
             "ok": false,
             "provider": chatgpt_provider,
-            "guidance": gents::oauth_credential::classify_chatgpt_auth_error(
+            "guidance": gents::inference::auth::credential::classify_chatgpt_auth_error(
                 &node_did,
                 chatgpt_provider,
-                &gents::oauth_credential::OAuthAuthProblem::Missing,
+                &gents::inference::auth::credential::OAuthAuthProblem::Missing,
             ),
         }),
         Err(error) => json!({
@@ -236,16 +238,18 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     };
 
     let xai_provider = gents::xai_grok_oauth::XAI_OAUTH_PROVIDER;
-    let mut xai_auth_check = match gents::oauth_credential::resolve_oauth_credential(
+    let mut xai_auth_check = match gents::inference::auth::credential::resolve_oauth_credential(
         &access,
         &node_did,
         xai_provider,
-        gents::oauth_credential::AccountPick::ProviderDefault,
+        gents::inference::auth::credential::AccountPick::ProviderDefault,
     )
     .await
     {
         Ok(Some(credential))
-            if gents::oauth_credential::token_is_fresh(credential.access_token_expires_at) =>
+            if gents::inference::auth::credential::token_is_fresh(
+                credential.access_token_expires_at,
+            ) =>
         {
             json!({
                 "ok": true,
@@ -262,7 +266,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "guidance": gents::xai_grok_oauth::classify_xai_auth_error(
                 &node_did,
                 xai_provider,
-                &gents::oauth_credential::OAuthAuthProblem::Expired,
+                &gents::inference::auth::credential::OAuthAuthProblem::Expired,
             ),
         }),
         Ok(None) => json!({
@@ -271,7 +275,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "guidance": gents::xai_grok_oauth::classify_xai_auth_error(
                 &node_did,
                 xai_provider,
-                &gents::oauth_credential::OAuthAuthProblem::Missing,
+                &gents::inference::auth::credential::OAuthAuthProblem::Missing,
             ),
         }),
         Err(error) => json!({
@@ -281,17 +285,19 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         }),
     };
 
-    let claude_provider = gents::claude_oauth::CLAUDE_OAUTH_PROVIDER;
-    let mut claude_auth_check = match gents::oauth_credential::resolve_oauth_credential(
+    let claude_provider = gents::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
+    let mut claude_auth_check = match gents::inference::auth::credential::resolve_oauth_credential(
         &access,
         &node_did,
         claude_provider,
-        gents::oauth_credential::AccountPick::ProviderDefault,
+        gents::inference::auth::credential::AccountPick::ProviderDefault,
     )
     .await
     {
         Ok(Some(credential))
-            if gents::oauth_credential::token_is_fresh(credential.access_token_expires_at) =>
+            if gents::inference::auth::credential::token_is_fresh(
+                credential.access_token_expires_at,
+            ) =>
         {
             json!({
                 "ok": true,
@@ -305,19 +311,19 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "credential_id": credential.credential_id,
             "provider": credential.provider,
             "expires_at": credential.access_token_expires_at,
-            "guidance": gents::claude_oauth::classify_claude_auth_error(
+            "guidance": gents::inference::auth::claude::classify_claude_auth_error(
                 &node_did,
                 claude_provider,
-                &gents::oauth_credential::OAuthAuthProblem::Expired,
+                &gents::inference::auth::credential::OAuthAuthProblem::Expired,
             ),
         }),
         Ok(None) => json!({
             "ok": false,
             "provider": claude_provider,
-            "guidance": gents::claude_oauth::classify_claude_auth_error(
+            "guidance": gents::inference::auth::claude::classify_claude_auth_error(
                 &node_did,
                 claude_provider,
-                &gents::oauth_credential::OAuthAuthProblem::Missing,
+                &gents::inference::auth::credential::OAuthAuthProblem::Missing,
             ),
         }),
         Err(error) => json!({
@@ -331,8 +337,8 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         (
             &mut chatgpt_auth_check,
             chatgpt_provider,
-            gents::oauth_credential::classify_chatgpt_auth_error
-                as fn(&str, &str, &gents::oauth_credential::OAuthAuthProblem) -> String,
+            gents::inference::auth::credential::classify_chatgpt_auth_error
+                as fn(&str, &str, &gents::inference::auth::credential::OAuthAuthProblem) -> String,
         ),
         (
             &mut xai_auth_check,
@@ -342,7 +348,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
         (
             &mut claude_auth_check,
             claude_provider,
-            gents::claude_oauth::classify_claude_auth_error,
+            gents::inference::auth::claude::classify_claude_auth_error,
         ),
     ] {
         check["accounts"] = match &accounts {
@@ -449,12 +455,12 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
 }
 
 fn accounts_json(
-    accounts: &[&gents::oauth_credential::AccountSummary],
+    accounts: &[&gents::inference::auth::credential::AccountSummary],
     node_did: &str,
     provider: &str,
-    classify: fn(&str, &str, &gents::oauth_credential::OAuthAuthProblem) -> String,
+    classify: fn(&str, &str, &gents::inference::auth::credential::OAuthAuthProblem) -> String,
 ) -> Value {
-    use gents::oauth_credential::OAuthAuthProblem;
+    use gents::inference::auth::credential::OAuthAuthProblem;
     accounts
         .iter()
         .map(|account| {
@@ -462,7 +468,9 @@ fn accounts_json(
                 Some(OAuthAuthProblem::WrongMode {
                     found_mode: "disabled".into(),
                 })
-            } else if !gents::oauth_credential::token_is_fresh(account.access_token_expires_at) {
+            } else if !gents::inference::auth::credential::token_is_fresh(
+                account.access_token_expires_at,
+            ) {
                 Some(OAuthAuthProblem::Expired)
             } else {
                 None
@@ -486,7 +494,7 @@ mod tests {
     use serde_json::json;
 
     use super::{accounts_json, claude_auth_gate};
-    use gents::oauth_credential::AccountSummary;
+    use gents::inference::auth::credential::AccountSummary;
 
     fn account(label: &str, enabled: bool, expires_in_minutes: i64) -> AccountSummary {
         AccountSummary {
@@ -509,7 +517,7 @@ mod tests {
             &accounts.iter().collect::<Vec<_>>(),
             "did:key:z6MkT",
             "claude-subscription",
-            gents::claude_oauth::classify_claude_auth_error,
+            gents::inference::auth::claude::classify_claude_auth_error,
         )
     }
 

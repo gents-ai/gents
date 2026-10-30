@@ -925,15 +925,17 @@ fn text_fingerprint(value: &str) -> (usize, u64) {
 
 fn account_problem_lines(
     failure_reason: &str,
-    accounts: &[(String, gents::oauth_credential::ServingAccount)],
-    all: &[gents::oauth_credential::AccountSummary],
+    accounts: &[(String, gents::inference::auth::credential::ServingAccount)],
+    all: &[gents::inference::auth::credential::AccountSummary],
 ) -> Vec<String> {
     if !gents_protocol::node_readiness::is_behavior_unavailable_rejection(failure_reason.trim()) {
         return Vec::new();
     }
     accounts
         .iter()
-        .filter(|(_, account)| account.state != gents::oauth_credential::AccountState::Enabled)
+        .filter(|(_, account)| {
+            account.state != gents::inference::auth::credential::AccountState::Enabled
+        })
         .filter_map(|(profile, account)| {
             let provider = account.provider?;
             Some(format!(
@@ -941,7 +943,7 @@ fn account_problem_lines(
                  set-account {profile} <account> ({})",
                 account.label,
                 account.state.as_str(),
-                gents::oauth_credential::enabled_accounts_note(provider, all),
+                gents::inference::auth::credential::enabled_accounts_note(provider, all),
             ))
         })
         .collect()
@@ -964,7 +966,7 @@ async fn account_problems(
         let did = submitted.node_did.as_str();
         anyhow::Ok((
             gents::config_client::agent_accounts(&access, did, agent_id).await?,
-            gents::oauth_credential::list_accounts(&access, did).await?,
+            gents::inference::auth::credential::list_accounts(&access, did).await?,
         ))
     };
     match read.await {
@@ -1272,7 +1274,7 @@ mod tests {
 
     mod account_problem {
         use super::*;
-        use gents::oauth_credential::{AccountState, AccountSummary, ServingAccount};
+        use gents::inference::auth::credential::{AccountState, AccountSummary, ServingAccount};
         use gents_protocol::row::AgentReadinessUnavailableReason as Reason;
 
         const CLAUDE: &str = "claude-subscription";

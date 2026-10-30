@@ -4339,8 +4339,8 @@ async fn grok_accounts_core(agent: &str, original: bool, g2: bool) -> SelfConfig
         .unwrap();
     let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
     for (account_ref, enabled) in [(None, original), (Some("g2"), g2)] {
-        let original_id = crate::oauth_credential::oauth_credential_id(&owner, provider);
-        let credential = crate::oauth_credential::OAuthCredential {
+        let original_id = crate::inference::auth::credential::oauth_credential_id(&owner, provider);
+        let credential = crate::inference::auth::credential::OAuthCredential {
             doc_id: None,
             credential_id: match account_ref {
                 Some(account_ref) => format!("{original_id}:{account_ref}"),
@@ -4362,7 +4362,7 @@ async fn grok_accounts_core(agent: &str, original: bool, g2: bool) -> SelfConfig
             provider_account_key: None,
             label: None,
         };
-        crate::oauth_credential::upsert_oauth_credential(&node, &credential)
+        crate::inference::auth::credential::upsert_oauth_credential(&node, &credential)
             .await
             .unwrap();
     }
@@ -5651,8 +5651,10 @@ async fn seed_account_view(
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     owner: &str,
 ) {
-    use crate::oauth_credential::{oauth_credential_id, upsert_oauth_credential, OAuthCredential};
-    let provider = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
+    use crate::inference::auth::credential::{
+        oauth_credential_id, upsert_oauth_credential, OAuthCredential,
+    };
+    let provider = crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
     let account = |account_ref: Option<&str>, label: &str, enabled: bool| OAuthCredential {
         doc_id: None,
         credential_id: match account_ref {
@@ -7169,9 +7171,9 @@ async fn install_chat_account_fences(node: &Arc<EmbeddedNode>, owner: &str) {
             .unwrap();
     }
     let provider = crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
-    let base_id = crate::oauth_credential::oauth_credential_id(owner, provider);
+    let base_id = crate::inference::auth::credential::oauth_credential_id(owner, provider);
     for (account_ref, connected) in [(None, false), (Some("acct-b"), true)] {
-        let credential = crate::oauth_credential::OAuthCredential {
+        let credential = crate::inference::auth::credential::OAuthCredential {
             doc_id: None,
             credential_id: match account_ref {
                 Some(account_ref) => format!("{base_id}:{account_ref}"),
@@ -7193,7 +7195,7 @@ async fn install_chat_account_fences(node: &Arc<EmbeddedNode>, owner: &str) {
             provider_account_key: None,
             label: None,
         };
-        crate::oauth_credential::upsert_oauth_credential(node, &credential)
+        crate::inference::auth::credential::upsert_oauth_credential(node, &credential)
             .await
             .unwrap();
     }

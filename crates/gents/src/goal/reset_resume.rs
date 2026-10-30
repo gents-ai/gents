@@ -2,7 +2,7 @@ use super::*;
 use crate::blocked_turn::{goal_stopped_in_txn, served_profile};
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::document_config::BackendAuth;
-use crate::oauth_credential::{resolve_oauth_credential_in_txn, AccountPick};
+use crate::inference::auth::credential::{resolve_oauth_credential_in_txn, AccountPick};
 use crate::store::identity::NodeIdentity;
 use gents_loop::provider_limit::{classify_provider_limit, ProviderLimit};
 

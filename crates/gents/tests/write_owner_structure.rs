@@ -792,7 +792,7 @@ fn dependency_reachability_resolves_renamed_packages() {
     );
 }
 
-const OAUTH_CREDENTIAL_OWNER: &str = "crates/gents/src/oauth_credential.rs";
+const OAUTH_CREDENTIAL_OWNER: &str = "crates/gents/src/inference/auth/credential.rs";
 
 const REMOVED_OAUTH_PICKERS: &[&str] = &[
     "lookup_oauth_credential",
@@ -949,7 +949,7 @@ fn oauth_credential_picks_go_through_the_resolver() {
         let limit = allowed.get(path).copied().unwrap_or_default();
         if found != limit {
             violations.push(format!(
-                "{path}: {found} OAuthCredential row read(s), allowlisted {limit}; pick through oauth_credential::resolve_oauth_credential"
+                "{path}: {found} OAuthCredential row read(s), allowlisted {limit}; pick through inference::auth::credential::resolve_oauth_credential"
             ));
         }
     }
@@ -964,7 +964,7 @@ fn oauth_credential_picks_go_through_the_resolver() {
 fn oauth_pick_fence_flags_pickers_raw_queries_and_reads() {
     for (source, violations, reads) in [
         ("fn f(n: &N) { lookup_oauth_credential(n, \"did\", \"p\"); }", 1, 0),
-        ("fn f(a: &A) { gents::oauth_credential::oauth_credential_query(\"d\", \"p\"); }", 1, 0),
+        ("fn f(a: &A) { gents::inference::auth::credential::oauth_credential_query(\"d\", \"p\"); }", 1, 0),
         ("async fn load_oauth_credential() {}", 1, 0),
         ("fn f(v: &V) { v.has_enabled_oauth_credential(\"p\"); }", 1, 0),
         (r#"fn f(d: &str) -> String { format!("query {{ OAuthCredential(filter: {{ node_did: {{ _eq: \"{d}\" }} }}) {{ _docID }} }}") }"#, 1, 0),
@@ -1007,7 +1007,7 @@ const RIG_PATH_ALLOWLIST: &[&str] = &[
     "crates/gents/src/claude_subscription.rs",
     "crates/gents/src/inference_http.rs",
     "crates/gents/src/llm/backend_client.rs",
-    "crates/gents/src/oauth_http.rs",
+    "crates/gents/src/inference/auth/http.rs",
     "crates/gents/src/provider_http.rs",
     "crates/gents/src/usage_observation.rs",
     "crates/gents/src/xai_grok_oauth.rs",

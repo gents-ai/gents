@@ -1,8 +1,8 @@
 use rig::completion::ToolDefinition;
 
 use super::*;
+use crate::inference::auth::credential::test_support::{seed_credential, test_node};
 use crate::llm::message::Message;
-use crate::oauth_credential::test_support::{seed_credential, test_node};
 
 fn request_from_native(
     preamble: Option<&str>,
@@ -180,7 +180,7 @@ async fn build_with_a_seeded_credential_yields_a_shared_bearer() {
     seed_credential(
         &node,
         "did:key:z6MkSeeded",
-        crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+        crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
         chrono::Utc::now() + chrono::Duration::hours(8),
     )
     .await;
@@ -216,20 +216,20 @@ async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
     seed_credential(
         &node,
         "did:key:z6MkStaleRefresh",
-        crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+        crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
         chrono::Utc::now() - chrono::Duration::minutes(1),
     )
     .await;
-    let (url, handle) = crate::oauth_credential::test_support::one_shot_token_server(
+    let (url, handle) = crate::inference::auth::credential::test_support::one_shot_token_server(
         200,
         r#"{"access_token":"access-NEW","refresh_token":"refresh-NEW","expires_in":28800}"#,
     )
     .await;
-    let _env = crate::oauth_credential::test_support::TOKEN_URL_ENV
+    let _env = crate::inference::auth::credential::test_support::TOKEN_URL_ENV
         .lock()
         .await;
     std::env::set_var(
-        crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
+        crate::inference::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
         &url,
     );
     let client = ClaudeSubscriptionClient::build(
@@ -241,7 +241,7 @@ async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
     .await
     .expect("client");
     let bearer = client.bearer.current_bearer().await;
-    std::env::remove_var(crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
+    std::env::remove_var(crate::inference::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
     assert_eq!(bearer.expect("token"), "access-NEW");
 
     let request = handle.await.expect("server");
@@ -251,7 +251,7 @@ async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
     assert_eq!(body["refresh_token"], "refresh-TEST");
     assert_eq!(
         body["client_id"],
-        crate::claude_oauth::CLAUDE_OAUTH_CLIENT_ID
+        crate::inference::auth::claude::CLAUDE_OAUTH_CLIENT_ID
     );
 
     assert_eq!(
@@ -303,12 +303,12 @@ fn anthropic_api_key_is_a_shared_key_kind_on_the_messages_wire() {
 #[tokio::test]
 async fn usage_wiring_claude_built_client_holds_its_account_reporter() {
     let did = "did:key:z6MkUsageWireClaude";
-    let node = crate::oauth_credential::test_support::test_node().await;
-    let credential = crate::oauth_credential::OAuthCredential {
+    let node = crate::inference::auth::credential::test_support::test_node().await;
+    let credential = crate::inference::auth::credential::OAuthCredential {
         doc_id: None,
         credential_id: format!(
             "{}:acct-ref-2",
-            crate::oauth_credential::oauth_credential_id(did, CLAUDE_OAUTH_PROVIDER)
+            crate::inference::auth::credential::oauth_credential_id(did, CLAUDE_OAUTH_PROVIDER)
         ),
         node_did: did.to_string(),
         provider: CLAUDE_OAUTH_PROVIDER.to_string(),
@@ -326,7 +326,7 @@ async fn usage_wiring_claude_built_client_holds_its_account_reporter() {
         provider_account_key: None,
         label: None,
     };
-    let doc_id = crate::oauth_credential::upsert_oauth_credential(&node, &credential)
+    let doc_id = crate::inference::auth::credential::upsert_oauth_credential(&node, &credential)
         .await
         .unwrap();
 

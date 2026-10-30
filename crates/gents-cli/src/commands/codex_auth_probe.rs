@@ -39,10 +39,10 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
     if blocks.is_empty() {
         bail!(
             "{}",
-            gents::oauth_credential::classify_chatgpt_auth_error(
+            gents::inference::auth::credential::classify_chatgpt_auth_error(
                 &node_did,
                 &provider,
-                &gents::oauth_credential::OAuthAuthProblem::Missing,
+                &gents::inference::auth::credential::OAuthAuthProblem::Missing,
             )
         );
     }
@@ -54,7 +54,7 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
 }
 
 async fn probe_account(
-    credential: gents::oauth_credential::OAuthCredential,
+    credential: gents::inference::auth::credential::OAuthCredential,
     node_did: &str,
     provider: &str,
     max_models: usize,
@@ -96,10 +96,10 @@ async fn probe_account(
     if !status.is_success() {
         let body = String::from_utf8_lossy(&body);
         if status.as_u16() == 401 || status.as_u16() == 403 {
-            let guidance = gents::oauth_credential::classify_chatgpt_auth_error(
+            let guidance = gents::inference::auth::credential::classify_chatgpt_auth_error(
                 node_did,
                 provider,
-                &gents::oauth_credential::OAuthAuthProblem::Expired,
+                &gents::inference::auth::credential::OAuthAuthProblem::Expired,
             );
             bail!("models request failed with HTTP {status}: {body}\n{guidance}");
         }

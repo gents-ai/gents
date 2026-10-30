@@ -16,7 +16,9 @@ impl BackendProviderOauthExt for BackendProviderKind {
         match self {
             Self::ChatGptCodex => Some(crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER),
             Self::XaiGrokOAuth => Some(crate::xai_grok_oauth::XAI_OAUTH_PROVIDER),
-            Self::ClaudeCliSubscription => Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
+            Self::ClaudeCliSubscription => {
+                Some(crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER)
+            }
             _ => None,
         }
     }
@@ -245,7 +247,7 @@ pub async fn discover_models(
     kind: BackendProviderKind,
     endpoint: &str,
     api_key: Option<&str>,
-    oauth_credential: Option<&crate::oauth_credential::OAuthCredential>,
+    oauth_credential: Option<&crate::inference::auth::credential::OAuthCredential>,
 ) -> Result<Vec<AdvertisedModel>> {
     let xai_api = kind == BackendProviderKind::OpenAiCompatible
         && crate::inference_setup::is_xai_api_endpoint(endpoint);

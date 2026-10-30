@@ -1,5 +1,5 @@
 use super::{ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan};
-use crate::oauth_credential::ServingAccount;
+use crate::inference::auth::credential::ServingAccount;
 use crate::{Collection, InferenceBackend};
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
@@ -76,7 +76,7 @@ pub async fn serving_accounts(
     access: &ConfigAccess,
     node_did: &str,
 ) -> Result<BTreeMap<String, ServingAccount>> {
-    let accounts = crate::oauth_credential::list_accounts(access, node_did).await?;
+    let accounts = crate::inference::auth::credential::list_accounts(access, node_did).await?;
     let backends = access
         .transact_readonly("config.serving_accounts", |txn| {
             Box::pin(async move { list_inference_backends_in_txn(txn, node_did).await })
@@ -87,7 +87,7 @@ pub async fn serving_accounts(
         .map(|backend| {
             (
                 backend.backend_id.clone(),
-                crate::oauth_credential::serving_account(backend, &accounts),
+                crate::inference::auth::credential::serving_account(backend, &accounts),
             )
         })
         .collect())
@@ -97,15 +97,15 @@ pub async fn serving_accounts(
 mod tests {
     use super::*;
     use crate::document_config::BackendAuth;
-    use crate::oauth_credential::{set_account_enabled, store_sign_in, AccountState};
+    use crate::inference::auth::credential::{set_account_enabled, store_sign_in, AccountState};
     use serde_json::json;
     use std::sync::Arc;
 
-    fn claude_sign_in(did: &str, who: &str) -> crate::oauth_credential::OAuthCredential {
-        crate::claude_oauth::credential_from_login_tokens(
+    fn claude_sign_in(did: &str, who: &str) -> crate::inference::auth::credential::OAuthCredential {
+        crate::inference::auth::claude::credential_from_login_tokens(
             did,
-            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
-            &crate::claude_oauth::ClaudeLoginTokens {
+            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            &crate::inference::auth::claude::ClaudeLoginTokens {
                 access_token: "access-SECRET".into(),
                 refresh_token: format!("refresh-{who}"),
                 expires_in: Some(3600),
@@ -169,7 +169,7 @@ mod tests {
         set_account_enabled(&access, did, &b.credential.credential_id, false).await?;
         let b_backend = format!(
             "{}-{}",
-            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
             b.credential.account_ref.as_deref().unwrap()
         );
 
@@ -178,7 +178,7 @@ mod tests {
             label: label.into(),
             state,
             provider: (label != "name-openai")
-                .then_some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
+                .then_some(crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER),
         };
         assert_eq!(
             serving,

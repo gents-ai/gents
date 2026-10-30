@@ -6,7 +6,7 @@ use crate::commands::accounts::{snapshot, Snapshot};
 use crate::config_writes::ConfigAccess;
 use anyhow::{Context, Result};
 use gents::document_config::InferenceProfile;
-use gents::oauth_credential::{
+use gents::inference::auth::credential::{
     backend_account, serving_account, AccountState, AccountSummary, ServingAccount,
 };
 use serde_json::{json, Value};
@@ -145,7 +145,10 @@ async fn set_profile(
             .iter()
             .find(|account| account.provider == provider && account.default)
             .with_context(|| {
-                gents::oauth_credential::enabled_accounts_note(provider, &snapshot.accounts)
+                gents::inference::auth::credential::enabled_accounts_note(
+                    provider,
+                    &snapshot.accounts,
+                )
             })?,
         (None, None) => unreachable!("handled above"),
     };
@@ -260,7 +263,7 @@ async fn write_checked(
             !moved || *state == AccountState::Enabled,
             "account {label:?} is {}; {}",
             state.as_str(),
-            gents::oauth_credential::enabled_accounts_note(provider, &snapshot.accounts)
+            gents::inference::auth::credential::enabled_accounts_note(provider, &snapshot.accounts)
         );
     }
     let doc_id = gents::config_client::write_inference_profile_document(access, profile).await?;
@@ -439,11 +442,11 @@ mod tests {
     const DID: &str = "did:key:z6MkTestProfileAccounts";
     const CLAUDE: &str = "claude-subscription";
 
-    fn claude_sign_in(who: &str) -> gents::oauth_credential::OAuthCredential {
-        gents::claude_oauth::credential_from_login_tokens(
+    fn claude_sign_in(who: &str) -> gents::inference::auth::credential::OAuthCredential {
+        gents::inference::auth::claude::credential_from_login_tokens(
             DID,
             CLAUDE,
-            &gents::claude_oauth::ClaudeLoginTokens {
+            &gents::inference::auth::claude::ClaudeLoginTokens {
                 access_token: "access-SECRET".into(),
                 refresh_token: format!("refresh-SECRET-{who}"),
                 expires_in: Some(3600),
@@ -478,7 +481,7 @@ mod tests {
     }
 
     async fn seeded() -> (ConfigAccess, String, String) {
-        use gents::oauth_credential::{set_account_enabled, store_sign_in};
+        use gents::inference::auth::credential::{set_account_enabled, store_sign_in};
         let node = std::sync::Arc::new(
             crate::shared::test_support::node_builder()
                 .build()
@@ -514,9 +517,12 @@ mod tests {
             .await
             .unwrap();
         }
-        gents::oauth_credential::upsert_oauth_credential_on(&access, &claude_sign_in("a"))
-            .await
-            .unwrap();
+        gents::inference::auth::credential::upsert_oauth_credential_on(
+            &access,
+            &claude_sign_in("a"),
+        )
+        .await
+        .unwrap();
         let b = store_sign_in(&access, claude_sign_in("b"), Some("label-b"))
             .await
             .unwrap();
@@ -526,7 +532,7 @@ mod tests {
         set_account_enabled(&access, DID, &c.credential.credential_id, false)
             .await
             .unwrap();
-        let backend_of = |sign_in: &gents::oauth_credential::SignIn| {
+        let backend_of = |sign_in: &gents::inference::auth::credential::SignIn| {
             format!(
                 "{CLAUDE}-{}",
                 sign_in.credential.account_ref.as_deref().unwrap()
@@ -634,13 +640,13 @@ mod tests {
     }
 
     async fn disable(access: &ConfigAccess, credential_id: &str) {
-        gents::oauth_credential::set_account_enabled(access, DID, credential_id, false)
+        gents::inference::auth::credential::set_account_enabled(access, DID, credential_id, false)
             .await
             .unwrap();
     }
 
     fn original_id() -> String {
-        gents::oauth_credential::oauth_credential_id(DID, CLAUDE)
+        gents::inference::auth::credential::oauth_credential_id(DID, CLAUDE)
     }
 
     #[tokio::test]
@@ -651,7 +657,7 @@ mod tests {
         grok.credential_id = format!("xai-oauth:{DID}:acct-g");
         grok.account_ref = Some("acct-g".into());
         grok.label = Some("label-b".into());
-        gents::oauth_credential::upsert_oauth_credential_on(&access, &grok)
+        gents::inference::auth::credential::upsert_oauth_credential_on(&access, &grok)
             .await
             .unwrap();
 
@@ -967,7 +973,7 @@ mod tests {
         grok.credential_id = format!("xai-oauth:{DID}:acct-g");
         grok.account_ref = Some("acct-g".into());
         grok.label = Some("label-g".into());
-        gents::oauth_credential::upsert_oauth_credential_on(&access, &grok)
+        gents::inference::auth::credential::upsert_oauth_credential_on(&access, &grok)
             .await
             .unwrap();
         gents::config_client::write_inference_backend_document(

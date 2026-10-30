@@ -4,11 +4,11 @@ impl ConfigCommandTool {
     /// Usage endpoint reads select no account and expose no credential identity.
     pub(super) async fn account_inventory(&self) -> Result<String> {
         use crate::backend_provider::BackendProviderOauthExt;
-        use crate::oauth_credential::backend_account;
+        use crate::inference::auth::credential::backend_account;
         use crate::usage_observation::{read_node_usage, UsageTrigger};
         let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let node_did = self.node_did.as_str();
-        let accounts = crate::oauth_credential::list_accounts(&access, node_did).await?;
+        let accounts = crate::inference::auth::credential::list_accounts(&access, node_did).await?;
         let (backends, profiles) = crate::config_client::ConfigAccess::transact_local_readonly(
             &self.node,
             Some(self.core.identity()?),

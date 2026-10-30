@@ -294,7 +294,7 @@ async fn usage_client(
     cache: &std::sync::Arc<crate::usage_observation::UsageCache>,
     backend_id: &str,
 ) -> (std::sync::Arc<defra_node::EmbeddedNode>, ProviderHttpClient) {
-    let node = crate::oauth_credential::test_support::test_node().await;
+    let node = crate::inference::auth::credential::test_support::test_node().await;
     let reporter = crate::usage_observation::UsageReporter::new(
         cache.clone(),
         node.clone(),

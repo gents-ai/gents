@@ -18,10 +18,7 @@ pub mod background_tools;
 pub mod blocked_turn;
 pub(crate) mod callback;
 pub mod chatgpt_codex;
-pub mod chatgpt_oauth_refresh;
 pub mod claude_messages;
-pub mod claude_oauth;
-pub mod claude_oauth_refresh;
 pub mod claude_subscription;
 pub mod codex_shim_binding;
 pub mod compaction;
@@ -44,6 +41,7 @@ pub mod goal;
 pub mod graphql;
 pub mod health_checker;
 pub mod hook;
+pub mod inference;
 pub mod inference_http;
 pub mod inference_observation;
 pub mod inference_setup;
@@ -52,8 +50,6 @@ pub mod interrupt;
 pub(crate) mod lean_vocab_test;
 pub mod native_logging;
 mod node_readiness_publisher;
-pub mod oauth_credential;
-pub(crate) mod oauth_http;
 pub mod openai_wire;
 pub mod p2p_observability;
 pub mod p2p_tool;
@@ -82,8 +78,6 @@ pub mod startup_recovery;
 pub mod store;
 pub mod usage_observation;
 pub mod xai_grok_oauth;
-pub mod xai_oauth_login;
-pub mod xai_oauth_refresh;
 
 #[cfg(test)]
 pub(crate) mod test_support {

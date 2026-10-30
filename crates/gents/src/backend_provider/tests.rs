@@ -323,7 +323,7 @@ async fn discover_models_sends_chatgpt_codex_version_header_and_query_param() {
         spawn_model_discovery_server(
             r#"{"models":[{"slug":"gpt-6.1-sol","display_name":"GPT-6.1 Sol","context_window":272000,"max_context_window":872000,"supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"xhigh"},{"effort":"max"},{"effort":"ultra"}]}]}"#,
         ).await;
-    let credential = crate::oauth_credential::OAuthCredential {
+    let credential = crate::inference::auth::credential::OAuthCredential {
         doc_id: None,
         credential_id: "chatgpt-codex:did:key:zAgent".to_string(),
         node_did: "did:key:zAgent".to_string(),
@@ -396,12 +396,12 @@ async fn discover_models_sends_chatgpt_codex_version_header_and_query_param() {
     );
 }
 
-fn claude_credential() -> crate::oauth_credential::OAuthCredential {
-    crate::oauth_credential::OAuthCredential {
+fn claude_credential() -> crate::inference::auth::credential::OAuthCredential {
+    crate::inference::auth::credential::OAuthCredential {
         doc_id: None,
         credential_id: "claude-subscription:did:key:zAgent".to_string(),
         node_did: "did:key:zAgent".to_string(),
-        provider: crate::claude_oauth::CLAUDE_OAUTH_PROVIDER.to_string(),
+        provider: crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER.to_string(),
         access_token: "access-token".to_string(),
         refresh_token: "refresh-token".to_string(),
         id_token: None,
@@ -418,8 +418,8 @@ fn claude_credential() -> crate::oauth_credential::OAuthCredential {
     }
 }
 
-fn grok_credential() -> crate::oauth_credential::OAuthCredential {
-    crate::oauth_credential::OAuthCredential {
+fn grok_credential() -> crate::inference::auth::credential::OAuthCredential {
+    crate::inference::auth::credential::OAuthCredential {
         doc_id: None,
         credential_id: "xai-oauth:did:key:zAgent".to_string(),
         node_did: "did:key:zAgent".to_string(),

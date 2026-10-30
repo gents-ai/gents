@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 
 use crate::document_config::InferenceProfile;
-use crate::oauth_credential::ServingAccount;
+use crate::inference::auth::credential::ServingAccount;
 use crate::store::collection::Collection;
 
 use super::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
@@ -197,11 +197,11 @@ mod tests {
         Ok(())
     }
 
-    fn claude_sign_in(did: &str, who: &str) -> crate::oauth_credential::OAuthCredential {
-        crate::claude_oauth::credential_from_login_tokens(
+    fn claude_sign_in(did: &str, who: &str) -> crate::inference::auth::credential::OAuthCredential {
+        crate::inference::auth::claude::credential_from_login_tokens(
             did,
-            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
-            &crate::claude_oauth::ClaudeLoginTokens {
+            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            &crate::inference::auth::claude::ClaudeLoginTokens {
                 access_token: "access-TEST".into(),
                 refresh_token: format!("refresh-{who}"),
                 expires_in: Some(3600),
@@ -216,7 +216,7 @@ mod tests {
 
     #[tokio::test]
     async fn account_events_never_repoint_a_profile() -> Result<()> {
-        use crate::oauth_credential::{
+        use crate::inference::auth::credential::{
             remove_account_in_txn, resolve_oauth_credential, set_account_enabled, store_sign_in,
             AccountPick,
         };
@@ -250,7 +250,7 @@ mod tests {
         let b = store_sign_in(&access, claude_sign_in(did, "b"), None).await?;
         let b_backend = format!(
             "{}-{}",
-            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
             b.credential.account_ref.as_deref().unwrap()
         );
         for (profile_id, backend_id) in [
@@ -320,7 +320,7 @@ mod tests {
         );
         assert_eq!(profiles().await, before, "sign in D");
 
-        for account in crate::oauth_credential::list_accounts(&access, did).await? {
+        for account in crate::inference::auth::credential::list_accounts(&access, did).await? {
             remove(account.credential_id).await;
         }
         let reused = store_sign_in(&access, claude_sign_in(did, "e"), None).await?;
@@ -330,7 +330,7 @@ mod tests {
         let resolved = resolve_oauth_credential(
             &access,
             did,
-            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
             AccountPick::Reference(None),
         )
         .await?
@@ -360,7 +360,9 @@ mod tests {
 
     #[tokio::test]
     async fn agent_accounts_follow_profile_and_compaction() -> Result<()> {
-        use crate::oauth_credential::{set_account_enabled, store_sign_in, AccountState};
+        use crate::inference::auth::credential::{
+            set_account_enabled, store_sign_in, AccountState,
+        };
         let did = "did:key:z6MkTestAgentAccounts";
         let node = Arc::new(crate::test_support::node_builder().build().await?);
         crate::ensure_runtime_schemas(&node).await?;
@@ -382,7 +384,7 @@ mod tests {
         let b = store_sign_in(&access, claude_sign_in(did, "b"), Some("label-b")).await?;
         let b_backend = format!(
             "{}-{}",
-            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
             b.credential.account_ref.as_deref().unwrap()
         );
         let documents = [
@@ -417,7 +419,7 @@ mod tests {
                 ServingAccount {
                     label: label.into(),
                     state,
-                    provider: Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
+                    provider: Some(crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER),
                 },
             )
         };

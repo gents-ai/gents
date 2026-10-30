@@ -28,7 +28,7 @@ async fn oauth_kinds_probe_the_credential_document_fresh_is_healthy_and_promotes
     seed_credential(
         &node,
         did,
-        crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+        crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
         Utc::now() + chrono::Duration::hours(8),
     )
     .await;
@@ -66,7 +66,7 @@ async fn oauth_account_reference_is_probed_with_its_own_account() {
     let node = test_node().await;
     let did = "did:key:z6MkProbeAccount";
     let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
-    let account = crate::oauth_credential::OAuthCredential {
+    let account = crate::inference::auth::credential::OAuthCredential {
         doc_id: None,
         credential_id: format!("{provider}:{did}:acct-b"),
         node_did: did.to_string(),
@@ -85,7 +85,7 @@ async fn oauth_account_reference_is_probed_with_its_own_account() {
         provider_account_key: None,
         label: None,
     };
-    crate::oauth_credential::upsert_oauth_credential(&node, &account)
+    crate::inference::auth::credential::upsert_oauth_credential(&node, &account)
         .await
         .expect("seed acct-b");
     let (options, client, health_map) = (
@@ -175,11 +175,11 @@ async fn oauth_account_reference_without_its_row_is_not_probed() {
         .await
         .and_then(|snap| snap.last_error)
         .unwrap_or_default();
-    let missing = crate::oauth_credential::classify_oauth_auth_error(
-        &crate::oauth_credential::XAI_OAUTH_PRODUCT,
+    let missing = crate::inference::auth::credential::classify_oauth_auth_error(
+        &crate::inference::auth::credential::XAI_OAUTH_PRODUCT,
         did,
         crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
-        &crate::oauth_credential::OAuthAuthProblem::Missing,
+        &crate::inference::auth::credential::OAuthAuthProblem::Missing,
     );
     assert!(error.contains(&missing), "{error}");
 }
@@ -292,7 +292,7 @@ impl Drop for TokenUrlOverrideGuard {
 async fn oauth_kinds_refresh_an_expired_credential_on_probe_and_recover() {
     let node = test_node().await;
     let did = "did:key:z6MkProbeExpired";
-    let provider = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
+    let provider = crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
     seed_credential_with_refresh_token(
         &node,
         did,
@@ -314,14 +314,15 @@ async fn oauth_kinds_refresh_an_expired_credential_on_probe_and_recover() {
 
     // TOKEN_URL_ENV is process-global; serialize changes to its override.
     let _env = TOKEN_URL_ENV.lock().await;
-    let _guard = TokenUrlOverrideGuard(crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
+    let _guard =
+        TokenUrlOverrideGuard(crate::inference::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
     let (url, server) = one_shot_token_server(
         200,
         r#"{"access_token":"access-REFRESHED","refresh_token":"refresh-ROTATED","expires_in":28800}"#,
     )
     .await;
     std::env::set_var(
-        crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
+        crate::inference::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
         &url,
     );
     let outcome = probe_backends_cycle(
@@ -359,9 +360,9 @@ async fn oauth_kinds_refresh_an_expired_credential_on_probe_and_recover() {
         refresh_request.contains("refresh-TEST"),
         "the refresh must present the stored refresh token: {refresh_request}"
     );
-    let stored = crate::oauth_credential::lookup_oauth_credential_by_id(
+    let stored = crate::inference::auth::credential::lookup_oauth_credential_by_id(
         &node,
-        &crate::oauth_credential::oauth_credential_id(did, provider),
+        &crate::inference::auth::credential::oauth_credential_id(did, provider),
     )
     .await
     .expect("lookup stored credential")
@@ -381,7 +382,7 @@ async fn oauth_kinds_refresh_an_expired_credential_on_probe_and_recover() {
 async fn a_hung_token_endpoint_does_not_stall_the_next_backend_probe() {
     let node = test_node().await;
     let did = "did:key:z6MkProbeHungRefresh";
-    let provider = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
+    let provider = crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
     seed_credential_with_refresh_token(
         &node,
         did,
@@ -405,17 +406,18 @@ async fn a_hung_token_endpoint_does_not_stall_the_next_backend_probe() {
     seed_backend_observation(&node, &next, "unknown").await;
 
     let _env = TOKEN_URL_ENV.lock().await;
-    let _guard = TokenUrlOverrideGuard(crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
+    let _guard =
+        TokenUrlOverrideGuard(crate::inference::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
     let (received_tx, _received) = oneshot::channel();
     let (_never_release, release_rx) = oneshot::channel();
-    let (url, _server) = crate::oauth_credential::test_support::gated_token_server(
+    let (url, _server) = crate::inference::auth::credential::test_support::gated_token_server(
         200,
         r#"{"access_token":"access-REFRESHED","expires_in":28800}"#,
         Some((received_tx, release_rx)),
     )
     .await;
     std::env::set_var(
-        crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
+        crate::inference::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
         &url,
     );
     let outcome = tokio::time::timeout(
@@ -495,8 +497,8 @@ async fn subscription_probe_preserves_typed_refresh_rejections() {
     let _env = TOKEN_URL_ENV.lock().await;
     for (provider, override_env, kind, forbidden_event) in [
         (
-            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
-            crate::claude_oauth::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
+            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            crate::inference::auth::claude::CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
             crate::backend_provider::BackendProviderKind::ClaudeCliSubscription,
             "subscriptionNotEntitled",
         ),

@@ -9,7 +9,7 @@ use rig::streaming::RawStreamingChoice;
 use thiserror::Error;
 
 use crate::claude_subscription::ClaudeStreamResponse;
-use crate::oauth_credential::BearerSource;
+use crate::inference::auth::credential::BearerSource;
 use crate::rendered_request::RenderedRequestCapturingHttpClient;
 
 #[cfg(test)]

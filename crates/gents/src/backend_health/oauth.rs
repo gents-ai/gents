@@ -4,7 +4,7 @@ use defra_node::EmbeddedNode;
 
 use crate::backend_provider::BackendProviderOauthExt;
 use crate::backend_registry::InferenceBackend;
-use crate::oauth_credential::OAuthRefreshKind;
+use crate::inference::auth::credential::OAuthRefreshKind;
 
 pub struct OAuthProbeContext<'a> {
     pub node: Arc<EmbeddedNode>,
@@ -16,13 +16,13 @@ pub struct OAuthProbeContext<'a> {
 pub(super) struct OAuthProbeError {
     context: String,
     #[source]
-    pub(super) source: crate::oauth_credential::OAuthCredentialError,
+    pub(super) source: crate::inference::auth::credential::OAuthCredentialError,
 }
 
 pub(super) async fn oauth_credential_for_probe(
     context: &OAuthProbeContext<'_>,
     backend: &InferenceBackend,
-) -> std::result::Result<crate::oauth_credential::OAuthCredential, OAuthProbeError> {
+) -> std::result::Result<crate::inference::auth::credential::OAuthCredential, OAuthProbeError> {
     let provider = backend
         .provider_kind
         .oauth_provider()
@@ -33,13 +33,15 @@ pub(super) async fn oauth_credential_for_probe(
             ),
             source: anyhow::anyhow!("backend kind has no OAuth provider").into(),
         })?;
-    let (bearer, mut credential) = crate::oauth_http::bootstrap_oauth_client_typed(
+    let (bearer, mut credential) = crate::inference::auth::http::bootstrap_oauth_client_typed(
         context.node.clone(),
         context.node_did,
         provider,
         oauth_refresh_kind(backend.provider_kind),
         oauth_product(backend.provider_kind),
-        crate::oauth_credential::AccountPick::Reference(backend.auth.oauth_account_ref()),
+        crate::inference::auth::credential::AccountPick::Reference(
+            backend.auth.oauth_account_ref(),
+        ),
     )
     .await
     .map_err(|source| OAuthProbeError {
@@ -83,16 +85,16 @@ pub(crate) fn oauth_refresh_kind(
 
 pub(crate) fn oauth_product(
     kind: crate::backend_provider::BackendProviderKind,
-) -> crate::oauth_credential::OAuthProduct {
+) -> crate::inference::auth::credential::OAuthProduct {
     match kind {
         crate::backend_provider::BackendProviderKind::ChatGptCodex => {
-            crate::oauth_credential::CHATGPT_OAUTH_PRODUCT
+            crate::inference::auth::credential::CHATGPT_OAUTH_PRODUCT
         }
         crate::backend_provider::BackendProviderKind::XaiGrokOAuth => {
-            crate::oauth_credential::XAI_OAUTH_PRODUCT
+            crate::inference::auth::credential::XAI_OAUTH_PRODUCT
         }
         crate::backend_provider::BackendProviderKind::ClaudeCliSubscription => {
-            crate::claude_oauth::CLAUDE_OAUTH_PRODUCT
+            crate::inference::auth::claude::CLAUDE_OAUTH_PRODUCT
         }
         _ => unreachable!("only agent-scoped OAuth kinds reach OAuth probing"),
     }

@@ -1,9 +1,9 @@
 use std::time::Duration;
 
+use gents::inference::auth::credential::OAuthCredential;
 use gents::inference_setup::{
     InferenceAuthMethod, InferenceModelOption, InferenceModelRecommendation, InferenceProviderId,
 };
-use gents::oauth_credential::OAuthCredential;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{BridgeError, BridgeErrorCode};
@@ -298,11 +298,11 @@ pub(crate) async fn discovery_account(
     provider: &str,
     account_ref: Option<&str>,
 ) -> anyhow::Result<(Option<OAuthCredential>, gents::document_config::BackendAuth)> {
-    let credential = gents::oauth_credential::resolve_oauth_credential(
+    let credential = gents::inference::auth::credential::resolve_oauth_credential(
         access,
         node_did,
         provider,
-        gents::oauth_credential::AccountPick::Reference(account_ref),
+        gents::inference::auth::credential::AccountPick::Reference(account_ref),
     )
     .await?;
     Ok((

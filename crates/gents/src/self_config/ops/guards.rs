@@ -145,7 +145,8 @@ pub(crate) async fn guard_backend_choice_in_txn(
         .with_context(|| format!("InferenceBackend {next_backend_id:?} not found"))?;
     let default_account = match (&next.auth, next.provider_kind.oauth_provider()) {
         (BackendAuth::NodeOAuth { .. }, Some(provider)) => {
-            crate::oauth_credential::provider_default_account_ref(txn, owner, provider).await?
+            crate::inference::auth::credential::provider_default_account_ref(txn, owner, provider)
+                .await?
         }
         _ => None,
     };

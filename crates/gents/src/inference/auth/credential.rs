@@ -20,8 +20,8 @@ pub fn account_display_label(credential: &OAuthCredential) -> Option<String> {
     let claims = credential
         .id_token
         .as_deref()
-        .and_then(crate::chatgpt_oauth_refresh::jwt_payload)
-        .or_else(|| crate::chatgpt_oauth_refresh::jwt_payload(&credential.access_token));
+        .and_then(crate::inference::auth::chatgpt_refresh::jwt_payload)
+        .or_else(|| crate::inference::auth::chatgpt_refresh::jwt_payload(&credential.access_token));
     let field = |key: &str| {
         claims
             .as_ref()
@@ -148,7 +148,7 @@ pub fn resolve_access_token_expiry(
     expires_in: Option<i64>,
     now: DateTime<Utc>,
 ) -> DateTime<Utc> {
-    crate::chatgpt_oauth_refresh::jwt_expiration(access_token)
+    crate::inference::auth::chatgpt_refresh::jwt_expiration(access_token)
         .or_else(|| {
             expires_in
                 .filter(|seconds| *seconds > 0)
@@ -567,8 +567,8 @@ impl SignIn {
 fn sign_in_product(provider: &str) -> Option<OAuthProduct> {
     match provider {
         crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER => Some(CHATGPT_OAUTH_PRODUCT),
-        crate::claude_oauth::CLAUDE_OAUTH_PROVIDER => {
-            Some(crate::claude_oauth::CLAUDE_OAUTH_PRODUCT)
+        crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER => {
+            Some(crate::inference::auth::claude::CLAUDE_OAUTH_PRODUCT)
         }
         crate::xai_grok_oauth::XAI_OAUTH_PROVIDER => Some(XAI_OAUTH_PRODUCT),
         _ => None,
@@ -630,7 +630,7 @@ pub(crate) fn preset_account_backend(
     use crate::inference_setup::{InferenceAuthMethod as Auth, InferenceProviderId as Id};
     let (provider_id, auth) = match provider {
         crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER => (Id::OpenAi, Auth::ChatGptOauth),
-        crate::claude_oauth::CLAUDE_OAUTH_PROVIDER => (Id::Anthropic, Auth::ClaudeOauth),
+        crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER => (Id::Anthropic, Auth::ClaudeOauth),
         crate::xai_grok_oauth::XAI_OAUTH_PROVIDER => (Id::Grok, Auth::GrokOauth),
         other => anyhow::bail!("no backend reads sign-ins of provider {other:?}"),
     };
@@ -762,14 +762,14 @@ pub async fn store_sign_in(
 fn identity_keys(credential: &OAuthCredential) -> Vec<String> {
     let keys = match credential.provider.as_str() {
         crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER => {
-            crate::chatgpt_oauth_refresh::chatgpt_account_keys(
+            crate::inference::auth::chatgpt_refresh::chatgpt_account_keys(
                 &credential.access_token,
                 credential.id_token.as_deref(),
                 credential.account_id.as_deref(),
             )
         }
         crate::xai_grok_oauth::XAI_OAUTH_PROVIDER => {
-            crate::xai_oauth_login::xai_account_key(&credential.access_token)
+            crate::inference::auth::xai_login::xai_account_key(&credential.access_token)
                 .into_iter()
                 .collect()
         }
@@ -1067,7 +1067,7 @@ pub fn no_switch_candidate_note(provider: &str, model: &str) -> String {
 
 const ACCOUNT_PROVIDERS: [&str; 3] = [
     crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
-    crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+    crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
     crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
 ];
 
@@ -1429,12 +1429,14 @@ pub fn apply_refreshed_tokens(credential: &mut OAuthCredential, refreshed: Refre
 
 fn provider_account_key(kind: OAuthRefreshKind, credential: &OAuthCredential) -> Option<String> {
     match kind {
-        OAuthRefreshKind::ChatGpt => crate::chatgpt_oauth_refresh::chatgpt_account_key(
+        OAuthRefreshKind::ChatGpt => crate::inference::auth::chatgpt_refresh::chatgpt_account_key(
             &credential.access_token,
             credential.id_token.as_deref(),
             credential.account_id.as_deref(),
         ),
-        OAuthRefreshKind::Xai => crate::xai_oauth_login::xai_account_key(&credential.access_token),
+        OAuthRefreshKind::Xai => {
+            crate::inference::auth::xai_login::xai_account_key(&credential.access_token)
+        }
         OAuthRefreshKind::Claude => None,
     }
 }
@@ -1562,7 +1564,7 @@ pub fn account_failure_state(text: &str) -> Option<&'static str> {
     [
         CHATGPT_OAUTH_PRODUCT,
         XAI_OAUTH_PRODUCT,
-        crate::claude_oauth::CLAUDE_OAUTH_PRODUCT,
+        crate::inference::auth::claude::CLAUDE_OAUTH_PRODUCT,
     ]
     .iter()
     .any(|product| text.contains(&format!("{} account \"", product.name)))
@@ -1781,13 +1783,22 @@ impl DbCredentialBearer {
     ) -> Result<RefreshedTokens, OAuthAuthProblem> {
         match self.refresh_kind {
             OAuthRefreshKind::ChatGpt => {
-                crate::chatgpt_oauth_refresh::refresh_chatgpt_token(refresh_token, &self.http).await
+                crate::inference::auth::chatgpt_refresh::refresh_chatgpt_token(
+                    refresh_token,
+                    &self.http,
+                )
+                .await
             }
             OAuthRefreshKind::Claude => {
-                crate::claude_oauth_refresh::refresh_claude_token(refresh_token, &self.http).await
+                crate::inference::auth::claude_refresh::refresh_claude_token(
+                    refresh_token,
+                    &self.http,
+                )
+                .await
             }
             OAuthRefreshKind::Xai => {
-                crate::xai_oauth_refresh::refresh_xai_token(refresh_token, &self.http).await
+                crate::inference::auth::xai_refresh::refresh_xai_token(refresh_token, &self.http)
+                    .await
             }
         }
     }
@@ -2243,7 +2254,7 @@ mod serving_account_tests {
                 "claude-subscription:did:key:z6MkTest{}",
                 account_ref.unwrap_or("")
             ),
-            provider: crate::claude_oauth::CLAUDE_OAUTH_PROVIDER.into(),
+            provider: crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER.into(),
             account_ref: account_ref.map(str::to_owned),
             label: label.into(),
             identity: Some("IDENTITY".into()),
@@ -2290,7 +2301,7 @@ mod serving_account_tests {
             ServingAccount {
                 label: "Claude".into(),
                 state: AccountState::Enabled,
-                provider: Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
+                provider: Some(crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER),
             }
         );
         let b = backend(
@@ -2304,7 +2315,7 @@ mod serving_account_tests {
             ServingAccount {
                 label: "label-b".into(),
                 state: AccountState::Disabled,
-                provider: Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
+                provider: Some(crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER),
             }
         );
     }
@@ -2322,7 +2333,7 @@ mod serving_account_tests {
             ServingAccount {
                 label: "label-gone".into(),
                 state: AccountState::Missing,
-                provider: Some(crate::claude_oauth::CLAUDE_OAUTH_PROVIDER),
+                provider: Some(crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER),
             }
         );
     }
@@ -2524,7 +2535,7 @@ mod resolver_tests {
             &OAuthAuthProblem::Missing,
         );
         let bootstrap = |pick| {
-            crate::oauth_http::bootstrap_oauth_client(
+            crate::inference::auth::http::bootstrap_oauth_client(
                 node.clone(),
                 DID,
                 PROVIDER,
@@ -2590,10 +2601,10 @@ mod sign_in_tests {
     }
 
     fn claude(label: &str, account_uuid: &str, refresh_token: &str) -> OAuthCredential {
-        crate::claude_oauth::credential_from_login_tokens(
+        crate::inference::auth::claude::credential_from_login_tokens(
             DID,
-            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
-            &crate::claude_oauth::ClaudeLoginTokens {
+            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            &crate::inference::auth::claude::ClaudeLoginTokens {
                 access_token: "access-TEST".into(),
                 refresh_token: refresh_token.into(),
                 expires_in: Some(3600),
@@ -2607,10 +2618,10 @@ mod sign_in_tests {
     }
 
     fn grok(access_claims: Value, refresh_token: &str) -> OAuthCredential {
-        crate::xai_oauth_login::credential_from_login_tokens(
+        crate::inference::auth::xai_login::credential_from_login_tokens(
             DID,
             crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
-            &crate::xai_oauth_login::XaiLoginTokens {
+            &crate::inference::auth::xai_login::XaiLoginTokens {
                 access_token: unsigned_jwt(access_claims),
                 refresh_token: refresh_token.into(),
                 id_token: None,
@@ -2680,8 +2691,8 @@ mod lifecycle_tests {
     use super::test_support::{test_node, unsigned_jwt};
     use super::*;
     use crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
-    use crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
     use crate::config_client::ConfigAccess;
+    use crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
     use crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
 
     #[derive(Debug, Clone, Copy)]
@@ -2719,10 +2730,10 @@ mod lifecycle_tests {
                         Utc::now(),
                     )
                 }
-                Self::Claude => crate::claude_oauth::credential_from_login_tokens(
+                Self::Claude => crate::inference::auth::claude::credential_from_login_tokens(
                     did,
                     CLAUDE_OAUTH_PROVIDER,
-                    &crate::claude_oauth::ClaudeLoginTokens {
+                    &crate::inference::auth::claude::ClaudeLoginTokens {
                         access_token: "access-TEST".into(),
                         refresh_token: refresh_token.into(),
                         expires_in: Some(3600),
@@ -2733,10 +2744,10 @@ mod lifecycle_tests {
                     },
                     Utc::now(),
                 ),
-                Self::Grok => crate::xai_oauth_login::credential_from_login_tokens(
+                Self::Grok => crate::inference::auth::xai_login::credential_from_login_tokens(
                     did,
                     XAI_OAUTH_PROVIDER,
-                    &crate::xai_oauth_login::XaiLoginTokens {
+                    &crate::inference::auth::xai_login::XaiLoginTokens {
                         access_token: unsigned_jwt(json!({
                             "principal_type": "user",
                             "principal_id": format!("principal-{who}"),
@@ -2912,10 +2923,10 @@ mod lifecycle_tests {
         account: Option<&str>,
         refresh_token: &str,
     ) -> OAuthCredential {
-        crate::claude_oauth::credential_from_login_tokens(
+        crate::inference::auth::claude::credential_from_login_tokens(
             did,
             CLAUDE_OAUTH_PROVIDER,
-            &crate::claude_oauth::ClaudeLoginTokens {
+            &crate::inference::auth::claude::ClaudeLoginTokens {
                 access_token: "access-TEST".into(),
                 refresh_token: refresh_token.into(),
                 expires_in: Some(3600),
@@ -2929,10 +2940,10 @@ mod lifecycle_tests {
     }
 
     fn grok(did: &str, principal_id: &str, refresh_token: &str) -> OAuthCredential {
-        crate::xai_oauth_login::credential_from_login_tokens(
+        crate::inference::auth::xai_login::credential_from_login_tokens(
             did,
             XAI_OAUTH_PROVIDER,
-            &crate::xai_oauth_login::XaiLoginTokens {
+            &crate::inference::auth::xai_login::XaiLoginTokens {
                 access_token: unsigned_jwt(
                     json!({ "principal_type": "user", "principal_id": principal_id }),
                 ),
@@ -3863,7 +3874,7 @@ mod backfill_tests {
     use crate::config_client::ConfigAccess;
     use crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
 
-    const XAI_ENV: &str = crate::xai_oauth_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV;
+    const XAI_ENV: &str = crate::inference::auth::xai_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV;
     const CHATGPT_ENV: &str = gents_protocol::chatgpt_oauth::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
 
     fn token_response(access_claims: Value) -> &'static str {
@@ -4071,10 +4082,10 @@ mod backfill_tests {
         let did = "did:key:z6MkTestRaceSignIn";
         seed_expired_grok(&node, did, None).await;
         let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
-        let sign_in = crate::xai_oauth_login::credential_from_login_tokens(
+        let sign_in = crate::inference::auth::xai_login::credential_from_login_tokens(
             did,
             XAI_OAUTH_PROVIDER,
-            &crate::xai_oauth_login::XaiLoginTokens {
+            &crate::inference::auth::xai_login::XaiLoginTokens {
                 access_token: unsigned_jwt(
                     json!({ "principal_type": "user", "principal_id": "principal-1" }),
                 ),
@@ -4120,10 +4131,10 @@ mod backfill_tests {
         let did = "did:key:z6MkTestRaceReplaced";
         seed_expired_grok(&node, did, None).await;
         let credential_id = oauth_credential_id(did, XAI_OAUTH_PROVIDER);
-        let sign_in = crate::xai_oauth_login::credential_from_login_tokens(
+        let sign_in = crate::inference::auth::xai_login::credential_from_login_tokens(
             did,
             XAI_OAUTH_PROVIDER,
-            &crate::xai_oauth_login::XaiLoginTokens {
+            &crate::inference::auth::xai_login::XaiLoginTokens {
                 access_token: unsigned_jwt(
                     json!({ "principal_type": "user", "principal_id": "principal-2" }),
                 ),
@@ -4263,7 +4274,7 @@ mod backfill_tests {
             assert_eq!(before.provider_account_key, None);
             let default = resolve(AccountPick::ProviderDefault).await.unwrap();
             assert_eq!(default.as_ref(), Some(&before));
-            let (_, bootstrapped) = crate::oauth_http::bootstrap_oauth_client(
+            let (_, bootstrapped) = crate::inference::auth::http::bootstrap_oauth_client(
                 node.clone(),
                 did,
                 provider,
@@ -4321,7 +4332,7 @@ mod cooldown_tests {
         // Process-global; hold TOKEN_URL_ENV while it is set.
         let _env = TOKEN_URL_ENV.lock().await;
         std::env::set_var(
-            crate::xai_oauth_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV,
+            crate::inference::auth::xai_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV,
             &url,
         );
         let bearer = DbCredentialBearer::new(
@@ -4336,7 +4347,7 @@ mod cooldown_tests {
         let first = bearer.current_bearer().await.expect_err("revoked");
         let request = handle.await.expect("server");
         let second = bearer.current_bearer().await.expect_err("cooldown");
-        std::env::remove_var(crate::xai_oauth_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV);
+        std::env::remove_var(crate::inference::auth::xai_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV);
 
         assert!(request.contains("grant_type=refresh_token"), "{request}");
         assert!(
@@ -4411,13 +4422,13 @@ mod cooldown_tests {
         let (url, handle) = one_shot_token_server(401, r#"{"error":"invalid_grant"}"#).await;
         let _env = TOKEN_URL_ENV.lock().await;
         std::env::set_var(
-            crate::xai_oauth_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV,
+            crate::inference::auth::xai_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV,
             &url,
         );
         let first = bearer.current_bearer().await.expect_err("revoked");
         let request = handle.await.expect("server");
         let second = bearer.current_bearer().await.expect_err("cooldown");
-        std::env::remove_var(crate::xai_oauth_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV);
+        std::env::remove_var(crate::inference::auth::xai_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV);
         (first.to_string(), second.to_string(), request)
     }
 
@@ -4649,9 +4660,11 @@ pub(crate) mod test_support {
         expires_at: DateTime<Utc>,
         refresh_token: &str,
     ) {
-        let credential = crate::oauth_credential::OAuthCredential {
+        let credential = crate::inference::auth::credential::OAuthCredential {
             doc_id: None,
-            credential_id: crate::oauth_credential::oauth_credential_id(node_did, provider),
+            credential_id: crate::inference::auth::credential::oauth_credential_id(
+                node_did, provider,
+            ),
             node_did: node_did.to_string(),
             provider: provider.to_string(),
             access_token: "access-TEST".into(),
@@ -4668,7 +4681,7 @@ pub(crate) mod test_support {
             provider_account_key: None,
             label: None,
         };
-        crate::oauth_credential::upsert_oauth_credential(node, &credential)
+        crate::inference::auth::credential::upsert_oauth_credential(node, &credential)
             .await
             .expect("seed credential");
     }

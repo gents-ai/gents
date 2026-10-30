@@ -11,7 +11,7 @@ use crate::shared::ConfigExportBundle;
 pub(super) async fn diagnose_backends(
     access: &ConfigAccess,
     bundle: &ConfigExportBundle,
-    accounts: &[gents::oauth_credential::AccountSummary],
+    accounts: &[gents::inference::auth::credential::AccountSummary],
 ) -> Vec<Value> {
     let mut models = BTreeMap::<&str, BTreeSet<&str>>::new();
     for profile in &bundle.config.inference_profiles {
@@ -131,9 +131,9 @@ async fn backend_check(
 
 fn account_field(
     backend: &InferenceBackend,
-    accounts: &[gents::oauth_credential::AccountSummary],
+    accounts: &[gents::inference::auth::credential::AccountSummary],
 ) -> Option<Value> {
-    gents::oauth_credential::backend_account(backend, accounts)
+    gents::inference::auth::credential::backend_account(backend, accounts)
         .map(|account| account.map_or(Value::Null, |account| json!(account.label)))
 }
 

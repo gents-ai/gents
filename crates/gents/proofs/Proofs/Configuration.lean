@@ -447,7 +447,7 @@ structure OAuthAccountRow where
 /-- The executing node's enabled row of `kind` with exactly the requested
 account reference: a reference never falls back to another account, and another
 node's row never resolves. Order among equal matches is the Rust resolver's
-(earliest-connected enabled first, `oauth_credential.rs`); it is not modeled,
+(earliest-connected enabled first, `inference/auth/credential.rs`); it is not modeled,
 because it only matters once a node holds several accounts. -/
 def oauthResolve (scope kind : String) (account : Option String)
     (rows : List OAuthAccountRow) : Option OAuthAccountRow :=

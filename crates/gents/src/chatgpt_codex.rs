@@ -15,8 +15,8 @@ use rig::wasm_compat::WasmCompatSend;
 use serde_json::{json, Value};
 
 #[cfg(test)]
-use crate::oauth_credential::BearerSource;
-use crate::oauth_credential::{
+use crate::inference::auth::credential::BearerSource;
+use crate::inference::auth::credential::{
     oauth_credential_id, DbCredentialBearer, OAuthCredential, OAuthRefreshKind,
     CHATGPT_OAUTH_PRODUCT,
 };
@@ -39,11 +39,12 @@ impl OAuthCredential {
     ) -> Self {
         let node_did = node_did.into();
         let provider = provider.into();
-        let id_claims = crate::chatgpt_oauth_refresh::decode_id_token_claims(id_token);
-        let access_token_expires_at = crate::chatgpt_oauth_refresh::jwt_expiration(&access_token)
-            .or(id_claims.expires_at)
-            .unwrap_or_else(|| now + Duration::hours(1));
-        let provider_account_key = crate::chatgpt_oauth_refresh::chatgpt_account_key(
+        let id_claims = crate::inference::auth::chatgpt_refresh::decode_id_token_claims(id_token);
+        let access_token_expires_at =
+            crate::inference::auth::chatgpt_refresh::jwt_expiration(&access_token)
+                .or(id_claims.expires_at)
+                .unwrap_or_else(|| now + Duration::hours(1));
+        let provider_account_key = crate::inference::auth::chatgpt_refresh::chatgpt_account_key(
             &access_token,
             Some(id_token),
             id_claims.account_id.as_deref(),
@@ -134,7 +135,7 @@ pub struct ChatGptCodexPolicy {
     pub service_tier: Option<crate::config::ServiceTier>,
 }
 
-impl crate::oauth_http::OAuthHttpPolicy for ChatGptCodexPolicy {
+impl crate::inference::auth::http::OAuthHttpPolicy for ChatGptCodexPolicy {
     const REJECTION_STATUSES: &'static [u16] = &[401, 403];
 
     fn patch_request_body(&self, req: Request<Bytes>) -> Request<Bytes> {
@@ -256,7 +257,7 @@ fn retain_turn_state(headers: &HeaderMap) {
 }
 
 pub type ChatGptCodexHttpClient<S, H = ReqwestClient> =
-    crate::oauth_http::BearerAuthHttpClient<S, ChatGptCodexPolicy, H>;
+    crate::inference::auth::http::BearerAuthHttpClient<S, ChatGptCodexPolicy, H>;
 
 fn synthesize_completion_response(request_body: &[u8], sse_body: &str) -> Bytes {
     if let Some(response) = completed_response(sse_body) {
@@ -379,13 +380,13 @@ pub async fn build_responses_client(
     >,
 > {
     let provider = CHATGPT_CODEX_PROVIDER;
-    let (bearer, credential) = crate::oauth_http::bootstrap_oauth_client(
+    let (bearer, credential) = crate::inference::auth::http::bootstrap_oauth_client(
         node.clone(),
         node_did,
         provider,
         OAuthRefreshKind::ChatGpt,
         CHATGPT_OAUTH_PRODUCT,
-        crate::oauth_credential::AccountPick::Reference(account_ref),
+        crate::inference::auth::credential::AccountPick::Reference(account_ref),
     )
     .await?;
     let headers =

@@ -3,7 +3,7 @@ use std::io::{IsTerminal, Write};
 use anyhow::{Context, Result};
 use gents::backend_provider::BackendProviderOauthExt;
 use gents::document_config::InferenceProfile;
-use gents::oauth_credential::{backend_account, AccountSummary};
+use gents::inference::auth::credential::{backend_account, AccountSummary};
 use gents::usage_observation::{usage_view, AccountUsageRead, UsageRead, UsageTrigger, UsageView};
 use gents::{BackendProviderKind, InferenceBackend};
 use serde::{Deserialize, Serialize};
@@ -208,7 +208,7 @@ pub(crate) struct Snapshot {
 }
 
 pub(crate) async fn snapshot(access: &ConfigAccess, node_did: &str) -> Result<Snapshot> {
-    let accounts = gents::oauth_credential::list_accounts(access, node_did).await?;
+    let accounts = gents::inference::auth::credential::list_accounts(access, node_did).await?;
     let (backends, profiles) = access
         .transact_write("accounts.config", |txn| {
             Box::pin(async move {
@@ -337,7 +337,7 @@ pub(crate) async fn account_rows(
     for backend in &snapshot.backends {
         let status = match backend_account(backend, &snapshot.accounts) {
             Some(Some(_)) => continue,
-            Some(None) => gents::oauth_credential::AccountState::Missing.as_str(),
+            Some(None) => gents::inference::auth::credential::AccountState::Missing.as_str(),
             None if backend.enabled => "enabled",
             None => "disabled",
         };
@@ -614,12 +614,17 @@ pub(crate) async fn label_account(
     label: &str,
 ) -> Result<Value> {
     let account = resolve_account(access, node_did, account, provider).await?;
-    gents::oauth_credential::set_account_label(access, node_did, &account.credential_id, label)
-        .await?;
+    gents::inference::auth::credential::set_account_label(
+        access,
+        node_did,
+        &account.credential_id,
+        label,
+    )
+    .await?;
     Ok(json!({
         "credential_id": account.credential_id,
         "provider": account.provider,
-        "label": gents::oauth_credential::validate_account_label(label)?,
+        "label": gents::inference::auth::credential::validate_account_label(label)?,
     }))
 }
 
@@ -653,8 +658,13 @@ pub(crate) async fn disable_account(
     warn_profiles(access, node_did, account, provider, warnings).await?;
     let snapshot = snapshot(access, node_did).await?;
     let account = snapshot.pick(account, provider)?;
-    gents::oauth_credential::set_account_enabled(access, node_did, &account.credential_id, false)
-        .await?;
+    gents::inference::auth::credential::set_account_enabled(
+        access,
+        node_did,
+        &account.credential_id,
+        false,
+    )
+    .await?;
     Ok(json!({
         "credential_id": account.credential_id,
         "provider": account.provider,
@@ -681,7 +691,7 @@ pub async fn remove_account(
         .transact_write("accounts.remove", |txn| {
             let account = account.clone();
             Box::pin(async move {
-                gents::oauth_credential::remove_account_in_txn(
+                gents::inference::auth::credential::remove_account_in_txn(
                     txn,
                     node_did,
                     &account.credential_id,
@@ -733,12 +743,12 @@ pub(crate) async fn probe_each_account<F, Fut>(
     probe: F,
 ) -> Result<Vec<String>>
 where
-    F: Fn(gents::oauth_credential::OAuthCredential) -> Fut,
+    F: Fn(gents::inference::auth::credential::OAuthCredential) -> Fut,
     Fut: std::future::Future<Output = Result<String>>,
 {
     let mut blocks = Vec::new();
     let mut failed = Vec::new();
-    for account in gents::oauth_credential::list_accounts(access, node_did)
+    for account in gents::inference::auth::credential::list_accounts(access, node_did)
         .await?
         .into_iter()
         .filter(|account| account.provider == provider)
@@ -747,11 +757,13 @@ where
             blocks.push(format!("{}: disabled, not probed", account.label));
             continue;
         }
-        let probed = match gents::oauth_credential::resolve_oauth_credential(
+        let probed = match gents::inference::auth::credential::resolve_oauth_credential(
             access,
             node_did,
             provider,
-            gents::oauth_credential::AccountPick::Reference(account.account_ref.as_deref()),
+            gents::inference::auth::credential::AccountPick::Reference(
+                account.account_ref.as_deref(),
+            ),
         )
         .await?
         {

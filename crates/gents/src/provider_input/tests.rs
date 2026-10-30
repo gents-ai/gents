@@ -68,7 +68,7 @@ fn core_request(reasoning: &str) -> CompletionRequest {
 #[derive(Debug)]
 struct StaticBearer;
 
-impl crate::oauth_credential::BearerSource for StaticBearer {
+impl crate::inference::auth::credential::BearerSource for StaticBearer {
     async fn current_bearer(&self) -> anyhow::Result<String> {
         Ok("test-oauth-token".to_string())
     }

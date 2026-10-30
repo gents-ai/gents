@@ -2,7 +2,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::oauth_credential::{OAuthAuthProblem, RefreshedTokens};
+use crate::inference::auth::credential::{OAuthAuthProblem, RefreshedTokens};
 
 const TOKEN_URL: &str = "https://auth.x.ai/oauth2/token";
 
@@ -74,7 +74,7 @@ pub async fn refresh_xai_token(
         )
     })?;
 
-    let access_token_expires_at = crate::oauth_credential::resolve_access_token_expiry(
+    let access_token_expires_at = crate::inference::auth::credential::resolve_access_token_expiry(
         &access_token,
         refreshed.expires_in,
         Utc::now(),

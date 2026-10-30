@@ -1,5 +1,5 @@
+use gents::inference::auth::credential::SignIn;
 use gents::inference_setup::InferenceAuthMethod;
-use gents::oauth_credential::SignIn;
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tokio_util::sync::CancellationToken;
 

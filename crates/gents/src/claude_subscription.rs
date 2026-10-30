@@ -14,8 +14,8 @@ use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 use rig::OneOrMany;
 use serde::{Deserialize, Serialize};
 
-use crate::claude_oauth::{CLAUDE_OAUTH_PRODUCT, CLAUDE_OAUTH_PROVIDER};
-use crate::oauth_credential::{BearerSource, DbCredentialBearer, OAuthRefreshKind};
+use crate::inference::auth::claude::{CLAUDE_OAUTH_PRODUCT, CLAUDE_OAUTH_PROVIDER};
+use crate::inference::auth::credential::{BearerSource, DbCredentialBearer, OAuthRefreshKind};
 use crate::usage_observation::{UsageAccount, UsageReporter};
 
 pub const DEFAULT_BACKEND_ENDPOINT: &str = "claude-cli://subscription";
@@ -69,13 +69,13 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
         node_did: &str,
         account_ref: Option<&str>,
     ) -> Result<Self> {
-        let (bearer, credential) = crate::oauth_http::bootstrap_oauth_client(
+        let (bearer, credential) = crate::inference::auth::http::bootstrap_oauth_client(
             node.clone(),
             node_did,
             CLAUDE_OAUTH_PROVIDER,
             OAuthRefreshKind::Claude,
             CLAUDE_OAUTH_PRODUCT,
-            crate::oauth_credential::AccountPick::Reference(account_ref),
+            crate::inference::auth::credential::AccountPick::Reference(account_ref),
         )
         .await?;
         Ok(Self {

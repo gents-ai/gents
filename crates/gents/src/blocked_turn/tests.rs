@@ -9,7 +9,9 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
-use crate::oauth_credential::{account_failure, account_failure_state, XAI_OAUTH_PRODUCT};
+use crate::inference::auth::credential::{
+    account_failure, account_failure_state, XAI_OAUTH_PRODUCT,
+};
 use crate::Collection;
 
 const DID: &str = "did:key:z6MkTestBlockedTurn";
@@ -87,7 +89,7 @@ fn references(documents: Vec<(Collection, Value)>) -> ConfigReferences {
 fn account(account_ref: Option<&str>, label: &str) -> AccountSummary {
     AccountSummary {
         credential_id: format!("credential-KEY-SENTINEL-{label}"),
-        provider: crate::claude_oauth::CLAUDE_OAUTH_PROVIDER.into(),
+        provider: crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER.into(),
         account_ref: account_ref.map(str::to_owned),
         label: label.into(),
         identity: Some("IDENTITY".into()),
@@ -167,7 +169,7 @@ fn limit_on(main_backend: &str, failure_reason: String) -> Option<BlockedTurn> {
 fn label_b() -> Option<BlockedAccount> {
     Some(BlockedAccount {
         label: "label-b".into(),
-        provider: crate::claude_oauth::CLAUDE_OAUTH_PROVIDER.into(),
+        provider: crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER.into(),
     })
 }
 
@@ -456,10 +458,10 @@ async fn embedded() -> (Arc<EmbeddedNode>, ConfigAccess) {
     crate::ensure_node(&node, DID).await.unwrap();
     let access = ConfigAccess::local(node.clone());
     let sign_in = |who: &str| {
-        crate::claude_oauth::credential_from_login_tokens(
+        crate::inference::auth::claude::credential_from_login_tokens(
             DID,
-            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
-            &crate::claude_oauth::ClaudeLoginTokens {
+            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+            &crate::inference::auth::claude::ClaudeLoginTokens {
                 access_token: "access-SECRET".into(),
                 refresh_token: format!("refresh-SECRET-{who}"),
                 expires_in: Some(3600),
@@ -478,15 +480,16 @@ async fn embedded() -> (Arc<EmbeddedNode>, ConfigAccess) {
     )
     .await
     .unwrap();
-    crate::oauth_credential::store_sign_in(&access, sign_in("a"), None)
+    crate::inference::auth::credential::store_sign_in(&access, sign_in("a"), None)
         .await
         .unwrap();
-    let b = crate::oauth_credential::store_sign_in(&access, sign_in("b"), Some("label-b"))
-        .await
-        .unwrap();
+    let b =
+        crate::inference::auth::credential::store_sign_in(&access, sign_in("b"), Some("label-b"))
+            .await
+            .unwrap();
     let b_backend = format!(
         "{}-{}",
-        crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+        crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
         b.credential.account_ref.as_deref().unwrap()
     );
     let documents = documents(&b_backend, A)

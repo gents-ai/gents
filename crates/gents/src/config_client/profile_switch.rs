@@ -10,7 +10,7 @@ use super::{
 };
 use crate::config::advertised_model_for_profile;
 use crate::document_config::{ConfigReferences, InferenceBackendObservation, InferenceProfile};
-use crate::oauth_credential::{
+use crate::inference::auth::credential::{
     backend_account, enabled_accounts_note, list_accounts, no_switch_candidate_note, provider_name,
     serving_account, AccountState, AccountSummary, ServingAccount,
 };

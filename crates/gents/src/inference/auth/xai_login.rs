@@ -7,8 +7,8 @@ use chrono::Utc;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::oauth_credential::{oauth_credential_id, OAuthCredential};
-use crate::xai_oauth_refresh::XAI_OAUTH_CLIENT_ID;
+use crate::inference::auth::credential::{oauth_credential_id, OAuthCredential};
+use crate::inference::auth::xai_refresh::XAI_OAUTH_CLIENT_ID;
 
 const DEVICE_CODE_URL: &str = "https://auth.x.ai/oauth2/device/code";
 const TOKEN_URL: &str = "https://auth.x.ai/oauth2/token";
@@ -273,7 +273,7 @@ where
 /// deduplicates an account, it is never an authorization, routing or
 /// request-header input. Bad claims yield `None`, never an error.
 pub fn xai_account_key(access_token: &str) -> Option<String> {
-    let claims = crate::chatgpt_oauth_refresh::jwt_payload(access_token)?;
+    let claims = crate::inference::auth::chatgpt_refresh::jwt_payload(access_token)?;
     let claim = |name: &str| {
         claims
             .get(name)
@@ -295,7 +295,7 @@ pub fn credential_from_login_tokens(
 ) -> OAuthCredential {
     let node_did = node_did.into();
     let provider = provider.into();
-    let access_token_expires_at = crate::oauth_credential::resolve_access_token_expiry(
+    let access_token_expires_at = crate::inference::auth::credential::resolve_access_token_expiry(
         &tokens.access_token,
         tokens.expires_in,
         now,
@@ -367,11 +367,12 @@ mod tests {
 
     #[test]
     fn credential_from_tokens_keys_the_access_token_principal() {
-        let access = crate::oauth_credential::test_support::unsigned_jwt(serde_json::json!({
-            "principal_type": "user",
-            "principal_id": "principal-1",
-            "sub": "user-a"
-        }));
+        let access =
+            crate::inference::auth::credential::test_support::unsigned_jwt(serde_json::json!({
+                "principal_type": "user",
+                "principal_id": "principal-1",
+                "sub": "user-a"
+            }));
         assert_eq!(
             grok_login(access).provider_account_key.as_deref(),
             Some("user:principal-1")
@@ -380,7 +381,7 @@ mod tests {
 
     #[test]
     fn credential_from_tokens_without_principal_has_no_key() {
-        let no_principal = crate::oauth_credential::test_support::unsigned_jwt(
+        let no_principal = crate::inference::auth::credential::test_support::unsigned_jwt(
             serde_json::json!({ "sub": "user-a" }),
         );
         for access in [no_principal, "not-a-jwt".to_string()] {

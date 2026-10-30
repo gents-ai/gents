@@ -17,7 +17,7 @@ use crate::backend_provider::BackendProviderOauthExt;
 use crate::config::ResolvedAgent;
 use crate::config_client::ConfigAccess;
 use crate::document_config::{BackendAuth, InferenceBackend};
-use crate::oauth_credential::{
+use crate::inference::auth::credential::{
     resolve_oauth_credential, AccountPick, BearerSource, OAuthCredential,
 };
 
@@ -456,7 +456,7 @@ pub async fn read_account_usage(
         ),
         None => {
             let provider = kind.oauth_provider().context("backend has no usage read")?;
-            let bootstrap = crate::oauth_http::bootstrap_oauth_client(
+            let bootstrap = crate::inference::auth::http::bootstrap_oauth_client(
                 node.clone(),
                 node_did,
                 provider,
@@ -569,7 +569,7 @@ pub async fn read_node_usage(
     now: DateTime<Utc>,
 ) -> Result<Vec<AccountUsageRead>> {
     let access = ConfigAccess::local(node.clone());
-    let accounts = crate::oauth_credential::list_accounts(&access, node_did).await?;
+    let accounts = crate::inference::auth::credential::list_accounts(&access, node_did).await?;
     let backends = access
         .transact_readonly("usage_observation.read_node", |txn| {
             Box::pin(async move {
@@ -581,7 +581,7 @@ pub async fn read_node_usage(
     let mut jobs = Vec::new();
     for backend in &backends {
         let (entry, account_enabled) =
-            match crate::oauth_credential::backend_account(backend, &accounts) {
+            match crate::inference::auth::credential::backend_account(backend, &accounts) {
                 Some(None) => continue,
                 Some(Some(account)) => {
                     if !backend.enabled
@@ -618,7 +618,7 @@ pub async fn read_node_usage(
         {
             continue;
         }
-        let backend = crate::oauth_credential::preset_account_backend(
+        let backend = crate::inference::auth::credential::preset_account_backend(
             node_did,
             &account.provider,
             account.account_ref.as_deref(),
@@ -657,7 +657,7 @@ pub async fn read_node_usage(
     Ok(futures::future::join_all(reads).await)
 }
 
-fn account_entry(account: &crate::oauth_credential::AccountSummary) -> AccountUsageRead {
+fn account_entry(account: &crate::inference::auth::credential::AccountSummary) -> AccountUsageRead {
     AccountUsageRead {
         label: account.label.clone(),
         provider: account.provider.clone(),

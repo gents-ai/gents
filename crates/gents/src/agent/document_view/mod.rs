@@ -8,7 +8,7 @@ pub(crate) use load::load_document_runtime_view;
 pub(crate) use snapshot::resolve_document_runtime_snapshot_from_view;
 
 use crate::document_config::*;
-use crate::oauth_credential::OAuthCredential;
+use crate::inference::auth::credential::OAuthCredential;
 use rapidhash::RapidHashMap;
 
 /// Ids in these namespaces were minted only by the retired graph publisher and
@@ -59,9 +59,9 @@ impl DocumentRuntimeView {
     pub(super) fn resolves_oauth_credential(
         &self,
         provider: &str,
-        pick: crate::oauth_credential::AccountPick<'_>,
+        pick: crate::inference::auth::credential::AccountPick<'_>,
     ) -> bool {
-        crate::oauth_credential::pick_oauth_credential(
+        crate::inference::auth::credential::pick_oauth_credential(
             self.oauth_credentials.values().map(|record| &record.value),
             &self.node.value.node_did,
             provider,

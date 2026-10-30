@@ -1147,7 +1147,7 @@ mod tests {
             counts
         }
 
-        let node = crate::oauth_credential::test_support::test_node().await;
+        let node = crate::inference::auth::credential::test_support::test_node().await;
         let map = ServiceHealthMap::new();
         let context = HealthPersistenceContext {
             node: &node,
@@ -1504,7 +1504,7 @@ mod tests {
 
     #[tokio::test]
     async fn persisted_health_rows_are_node_scoped_and_stale_rows_sweep_within_the_agent() {
-        let node = crate::oauth_credential::test_support::test_node().await;
+        let node = crate::inference::auth::credential::test_support::test_node().await;
         let did_a = "did:key:zHealthA";
         let did_b = "did:key:zHealthB";
         for did in [did_a, did_b] {
@@ -1638,7 +1638,7 @@ mod tests {
 
     #[tokio::test]
     async fn persistence_collapses_twins_to_the_row_readers_select() {
-        let node = crate::oauth_credential::test_support::test_node().await;
+        let node = crate::inference::auth::credential::test_support::test_node().await;
         let node_did = "did:key:health-owner";
         let mut created = std::collections::BTreeMap::<&str, Vec<String>>::new();
         for (service, updated_at, endpoint) in [
@@ -1782,7 +1782,7 @@ mod tests {
         });
         let cancel = tokio_util::sync::CancellationToken::new();
         cancel.cancel();
-        let node = crate::oauth_credential::test_support::test_node().await;
+        let node = crate::inference::auth::credential::test_support::test_node().await;
         let health = ServiceHealthMap::new();
         health
             .set_entry(

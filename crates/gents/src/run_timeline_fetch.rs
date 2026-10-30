@@ -156,7 +156,7 @@ async fn name_serving_accounts(
     node_did: &str,
     events: &mut [crate::run_timeline::RunTimelineEvent],
 ) -> Result<()> {
-    let accounts = crate::oauth_credential::list_accounts(access, node_did).await?;
+    let accounts = crate::inference::auth::credential::list_accounts(access, node_did).await?;
     let backends = access
         .transact_readonly("timeline.serving_accounts", |txn| {
             Box::pin(async move {
@@ -182,11 +182,12 @@ async fn name_serving_accounts(
         else {
             continue;
         };
-        let since = crate::oauth_credential::backend_account(backend, &accounts)
+        let since = crate::inference::auth::credential::backend_account(backend, &accounts)
             .flatten()
             .and_then(|account| account.connected_at);
         if since.is_none_or(|since| at >= since) {
-            call.account = Some(crate::oauth_credential::serving_account(backend, &accounts).label);
+            call.account =
+                Some(crate::inference::auth::credential::serving_account(backend, &accounts).label);
         }
     }
     Ok(())
@@ -873,7 +874,9 @@ mod tests {
 
     #[tokio::test]
     async fn call_rows_carry_the_serving_account() {
-        use crate::oauth_credential::{list_accounts, remove_account_in_txn, store_sign_in};
+        use crate::inference::auth::credential::{
+            list_accounts, remove_account_in_txn, store_sign_in,
+        };
         let did = "did:key:z6MkTestTimelineAccounts";
         let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -894,10 +897,10 @@ mod tests {
             .await
             .unwrap();
         let sign_in = |who: &str| {
-            crate::claude_oauth::credential_from_login_tokens(
+            crate::inference::auth::claude::credential_from_login_tokens(
                 did,
-                crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
-                &crate::claude_oauth::ClaudeLoginTokens {
+                crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+                &crate::inference::auth::claude::ClaudeLoginTokens {
                     access_token: "access-SECRET".into(),
                     refresh_token: format!("refresh-SECRET-{who}"),
                     expires_in: Some(3600),
@@ -915,7 +918,7 @@ mod tests {
             .unwrap();
         let b_backend = format!(
             "{}-{}",
-            crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
             b.credential.account_ref.as_deref().unwrap()
         );
         let at =

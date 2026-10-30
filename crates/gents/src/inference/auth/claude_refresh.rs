@@ -2,11 +2,11 @@ use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::claude_oauth::{
+use crate::inference::auth::claude::{
     CLAUDE_OAUTH_CLIENT_ID, CLAUDE_OAUTH_SCOPES, CLAUDE_OAUTH_TOKEN_URL,
     CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
 };
-use crate::oauth_credential::{OAuthAuthProblem, RefreshedTokens};
+use crate::inference::auth::credential::{OAuthAuthProblem, RefreshedTokens};
 
 #[derive(Serialize)]
 struct RefreshRequest<'a> {
@@ -147,7 +147,7 @@ fn parse_error_message(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::oauth_credential::test_support::one_shot_token_server;
+    use crate::inference::auth::credential::test_support::one_shot_token_server;
 
     async fn refresh_against(
         status: u16,
@@ -178,9 +178,12 @@ mod tests {
         assert_eq!(body["refresh_token"], "refresh-OLD");
         assert_eq!(
             body["client_id"],
-            crate::claude_oauth::CLAUDE_OAUTH_CLIENT_ID
+            crate::inference::auth::claude::CLAUDE_OAUTH_CLIENT_ID
         );
-        assert_eq!(body["scope"], crate::claude_oauth::CLAUDE_OAUTH_SCOPES);
+        assert_eq!(
+            body["scope"],
+            crate::inference::auth::claude::CLAUDE_OAUTH_SCOPES
+        );
         assert_eq!(refreshed.access_token, "access-NEW");
         assert_eq!(refreshed.refresh_token, "refresh-NEW");
         assert!(

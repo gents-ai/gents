@@ -15,8 +15,8 @@ use rig::wasm_compat::WasmCompatSend;
 use serde_json::Value;
 
 #[cfg(test)]
-use crate::oauth_credential::BearerSource;
-use crate::oauth_credential::{
+use crate::inference::auth::credential::BearerSource;
+use crate::inference::auth::credential::{
     classify_oauth_auth_error, DbCredentialBearer, OAuthAuthProblem, OAuthRefreshKind,
     XAI_OAUTH_PRODUCT,
 };
@@ -115,7 +115,7 @@ pub fn build_xai_grok_oauth_headers() -> Result<HeaderMap> {
 #[derive(Clone, Default)]
 pub struct XaiGrokOAuthPolicy;
 
-impl crate::oauth_http::OAuthHttpPolicy for XaiGrokOAuthPolicy {
+impl crate::inference::auth::http::OAuthHttpPolicy for XaiGrokOAuthPolicy {
     const REJECTION_STATUSES: &'static [u16] = &[401];
 
     fn merge_identity_headers(&self, headers: &mut HeaderMap) -> http_client::Result<()> {
@@ -146,7 +146,7 @@ impl crate::oauth_http::OAuthHttpPolicy for XaiGrokOAuthPolicy {
 }
 
 pub type XaiGrokOAuthHttpClient<S, H = ReqwestClient> =
-    crate::oauth_http::BearerAuthHttpClient<S, XaiGrokOAuthPolicy, H>;
+    crate::inference::auth::http::BearerAuthHttpClient<S, XaiGrokOAuthPolicy, H>;
 
 fn normalize_xai_usage_stream(response: StreamingResponse) -> StreamingResponse {
     let (parts, mut body) = response.into_parts();
@@ -287,13 +287,13 @@ async fn build_authenticated_http(
     account_ref: Option<&str>,
 ) -> Result<CapturingXaiGrokOAuthHttpClient> {
     let provider = XAI_OAUTH_PROVIDER;
-    let (bearer, _credential) = crate::oauth_http::bootstrap_oauth_client(
+    let (bearer, _credential) = crate::inference::auth::http::bootstrap_oauth_client(
         node,
         node_did,
         provider,
         OAuthRefreshKind::Xai,
         XAI_OAUTH_PRODUCT,
-        crate::oauth_credential::AccountPick::Reference(account_ref),
+        crate::inference::auth::credential::AccountPick::Reference(account_ref),
     )
     .await?;
     Ok(XaiGrokOAuthHttpClient::with_inner(
@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn only_401_invalidates_bearer_403_is_a_tier_gate() {
-        use crate::oauth_http::{is_bearer_rejection, OAuthHttpPolicy as _};
+        use crate::inference::auth::http::{is_bearer_rejection, OAuthHttpPolicy as _};
         let statuses = XaiGrokOAuthPolicy::REJECTION_STATUSES;
         let unauthorized =
             http_client::Error::InvalidStatusCode("401".parse().expect("valid status"));

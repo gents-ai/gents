@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::document_config::{ConfigReferences, InferenceBackend};
 use crate::graphql::escape_graphql_string;
-use crate::oauth_credential::{
+use crate::inference::auth::credential::{
     account_failure_state, backend_account, list_accounts, serving_account, AccountState,
     AccountSummary, ServingAccount,
 };

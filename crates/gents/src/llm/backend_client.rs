@@ -38,7 +38,7 @@ pub(crate) enum BackendClient {
     ChatGptCodex(
         rig::providers::openai::Client<
             crate::chatgpt_codex::ChatGptCodexHttpClient<
-                crate::oauth_credential::DbCredentialBearer,
+                crate::inference::auth::credential::DbCredentialBearer,
                 crate::rendered_request::RenderedRequestCapturingHttpClient<
                     crate::provider_http::ProviderHttpClient,
                 >,
@@ -55,7 +55,7 @@ pub(crate) enum BackendClient {
     ),
     ClaudeSubscription(
         crate::claude_subscription::ClaudeSubscriptionClient<
-            crate::oauth_credential::DbCredentialBearer,
+            crate::inference::auth::credential::DbCredentialBearer,
         >,
     ),
     AnthropicApiKey(
@@ -331,7 +331,7 @@ mod usage_tests;
 mod tests {
     use super::*;
     use crate::agent::PendingAgent;
-    use crate::oauth_credential::BearerSource;
+    use crate::inference::auth::credential::BearerSource;
     use crate::store::identity::KeyIdentity;
 
     async fn test_node() -> Arc<EmbeddedNode> {
@@ -469,8 +469,8 @@ mod tests {
         account_ref: Option<&str>,
     ) {
         let node_did = agent.node_did();
-        let original = crate::oauth_credential::oauth_credential_id(node_did, provider);
-        let credential = crate::oauth_credential::OAuthCredential {
+        let original = crate::inference::auth::credential::oauth_credential_id(node_did, provider);
+        let credential = crate::inference::auth::credential::OAuthCredential {
             doc_id: None,
             credential_id: match account_ref {
                 Some(account_ref) => format!("{original}:{account_ref}"),
@@ -492,7 +492,7 @@ mod tests {
             provider_account_key: None,
             label: None,
         };
-        crate::oauth_credential::upsert_oauth_credential(node, &credential)
+        crate::inference::auth::credential::upsert_oauth_credential(node, &credential)
             .await
             .expect("test OAuthCredential must persist");
     }
@@ -522,7 +522,7 @@ mod tests {
             (
                 BackendProviderKind::ClaudeCliSubscription,
                 crate::OpenAiWireApi::Responses,
-                crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+                crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
             ),
         ] {
             let mut agent = test_agent(kind, wire);
@@ -557,9 +557,9 @@ mod tests {
             assert_eq!(built, kind);
             let acct_b = format!(
                 "{}:acct-b",
-                crate::oauth_credential::oauth_credential_id(agent.node_did(), provider)
+                crate::inference::auth::credential::oauth_credential_id(agent.node_did(), provider)
             );
-            let bearer = crate::oauth_credential::test_support::bound_bearer(&acct_b)
+            let bearer = crate::inference::auth::credential::test_support::bound_bearer(&acct_b)
                 .unwrap_or_else(|| panic!("{kind:?} {wire:?} did not bind acct-b"));
             assert_eq!(bearer.current_bearer().await.unwrap(), "access-acct-b");
         }
@@ -585,7 +585,7 @@ mod tests {
             (
                 BackendProviderKind::ClaudeCliSubscription,
                 crate::OpenAiWireApi::Responses,
-                crate::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+                crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
             ),
         ] {
             let on_a = test_agent(kind, wire);
@@ -595,7 +595,8 @@ mod tests {
             on_b.backend_auth = crate::document_config::BackendAuth::NodeOAuth {
                 account_ref: Some("acct-b".into()),
             };
-            let original = crate::oauth_credential::oauth_credential_id(on_a.node_did(), provider);
+            let original =
+                crate::inference::auth::credential::oauth_credential_id(on_a.node_did(), provider);
             for (agent, credential_id, token) in [
                 (&on_a, original.clone(), "access-original"),
                 (&on_b, format!("{original}:acct-b"), "access-acct-b"),
@@ -609,8 +610,9 @@ mod tests {
                 )
                 .await
                 .unwrap_or_else(|error| panic!("{kind:?} {credential_id}: {error:#}"));
-                let bearer = crate::oauth_credential::test_support::bound_bearer(&credential_id)
-                    .unwrap_or_else(|| panic!("{kind:?} did not bind {credential_id}"));
+                let bearer =
+                    crate::inference::auth::credential::test_support::bound_bearer(&credential_id)
+                        .unwrap_or_else(|| panic!("{kind:?} did not bind {credential_id}"));
                 assert_eq!(bearer.current_bearer().await.unwrap(), token, "{kind:?}");
             }
         }
@@ -640,10 +642,10 @@ mod tests {
         .await
         .err()
         .expect("an account reference must not build with the original credential");
-        let missing = crate::oauth_credential::classify_chatgpt_auth_error(
+        let missing = crate::inference::auth::credential::classify_chatgpt_auth_error(
             codex.node_did(),
             crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
-            &crate::oauth_credential::OAuthAuthProblem::Missing,
+            &crate::inference::auth::credential::OAuthAuthProblem::Missing,
         );
         assert!(format!("{error:#}").contains(&missing), "{error:#}");
     }
@@ -724,7 +726,12 @@ mod tests {
             BackendProviderKind::ClaudeCliSubscription,
             crate::OpenAiWireApi::ChatCompletions,
         );
-        seed_oauth_credential(&node, &claude, crate::claude_oauth::CLAUDE_OAUTH_PROVIDER).await;
+        seed_oauth_credential(
+            &node,
+            &claude,
+            crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER,
+        )
+        .await;
         let client = build_backend_client(
             std::sync::Arc::default(),
             node.clone(),

@@ -6,7 +6,7 @@ use gents_loop::account_usage::{UsageReport, UsageSource, UsageWindow};
 use serde_json::{json, Value};
 
 use super::*;
-use crate::oauth_credential::{
+use crate::inference::auth::credential::{
     oauth_credential_id, resolve_oauth_credential, test_support, upsert_oauth_credential,
     AccountPick,
 };
@@ -331,7 +331,7 @@ async fn read_claude_on_open_then_skips_a_recent_read() {
     let cache = UsageCache::default();
     let did = "did:key:z6MkUsageReadClaudeOpen";
     let node = node().await;
-    let provider = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
+    let provider = crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
     let now = Utc::now();
     sign_in(&node, did, provider, now + Duration::hours(1), None).await;
     let (url, handle) = test_support::one_shot_token_server(
@@ -387,7 +387,7 @@ async fn read_claude_on_refresh_sends_the_oauth_beta() {
     let cache = UsageCache::default();
     let did = "did:key:z6MkUsageReadClaude";
     let node = node().await;
-    let provider = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
+    let provider = crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
     sign_in(&node, did, provider, Utc::now() + Duration::hours(1), None).await;
     let (url, handle) = test_support::one_shot_token_server(
         200,
@@ -832,7 +832,7 @@ async fn read_guard_unresolvable_key_is_unavailable_with_no_request() {
 }
 
 const GROK: &str = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
-const CLAUDE: &str = crate::claude_oauth::CLAUDE_OAUTH_PROVIDER;
+const CLAUDE: &str = crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
 const GROK_BILLING_BODY: &str = r#"{"config":{"creditUsagePercent":30,"currentPeriod":{"start":"2100-01-01T00:00:00Z","end":"2100-01-08T00:00:00Z"}}}"#;
 
 async fn sign_in_ref(
@@ -1292,12 +1292,13 @@ async fn cache_is_runtime_local_and_replacement_sign_ins_reject_late_responses()
         .transact_write("test.remove", |txn| {
             let credential_id = row.credential_id.clone();
             Box::pin(async move {
-                crate::oauth_credential::remove_account_in_txn(txn, A, &credential_id).await
+                crate::inference::auth::credential::remove_account_in_txn(txn, A, &credential_id)
+                    .await
             })
         })
         .await
         .unwrap();
-    let replacement = crate::oauth_credential::store_sign_in(
+    let replacement = crate::inference::auth::credential::store_sign_in(
         &access,
         credential(A, None, Some("same-provider-account")),
         Some("replacement"),

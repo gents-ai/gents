@@ -7,7 +7,7 @@ use gents_protocol::chatgpt_oauth::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::oauth_credential::{OAuthAuthProblem, RefreshedTokens};
+use crate::inference::auth::credential::{OAuthAuthProblem, RefreshedTokens};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct IdTokenClaims {
@@ -256,7 +256,7 @@ fn parse_error_message(body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::oauth_credential::test_support::{one_shot_token_server, unsigned_jwt};
+    use crate::inference::auth::credential::test_support::{one_shot_token_server, unsigned_jwt};
 
     #[tokio::test]
     async fn refresh_classifies_invalid_grant_without_using_display_text() {
