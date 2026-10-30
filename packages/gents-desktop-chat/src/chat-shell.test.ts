@@ -518,6 +518,54 @@ describe("a session this app doesn't own", () => {
   });
 });
 
+describe("a sent message held in the pending queue", () => {
+  const sent: ChatWorkflowState = {
+    kind: "awaitingObservation",
+    nodeDid: "did:key:node",
+    sessionId: "session-1",
+    requestId: "req-sent",
+  };
+  const queuedAs = (requestId: string) => ({
+    requestDocId: `doc-${requestId}`,
+    requestId,
+    content: "queued prompt",
+    editable: true,
+    steerable: false,
+    editGroup: null,
+  });
+  const project = (overrides: Partial<DesktopSessionSnapshot>) =>
+    projectChatShell({
+      clientAvailable: true,
+      selectedNodeDid: "did:key:node",
+      selectedSessionId: "session-1",
+      sending: false,
+      selectedSessionSummary: null,
+      session: session({ nodeDid: "did:key:node", ...overrides }),
+      localWorkflow: sent,
+    });
+
+  test("is no longer awaited, so editing or removing it leaves the composer free", () => {
+    const projection = project({
+      turnState: "completed",
+      pendingQueue: [queuedAs("req-sent")],
+    });
+    expect(projection.workflow).toEqual({ kind: "ready" });
+    expect(projection.nonEmptyContentSendStatus.kind).toBe("ready");
+  });
+
+  test("waits behind the running turn rather than offering to stop itself", () => {
+    const projection = project({
+      turnState: "running",
+      pendingQueue: [queuedAs("req-sent")],
+    });
+    expect(projection.workflow).toMatchObject({
+      kind: "turnInProgress",
+      requestId: "req-1",
+    });
+    expect(projection.activeRequestId).toBe("req-1");
+  });
+});
+
 describe("requestProgressPresentation", () => {
   test(
     "matches every generated Lean request lifecycle projection",
@@ -538,7 +586,9 @@ describe("requestProgressPresentation", () => {
 });
 
 test("inference activity has distinct shared presentation", () => {
-  expect(inferenceActivityStatus("awaiting_provider")?.label).toBe("Waiting for provider…");
+  expect(inferenceActivityStatus("awaiting_provider")?.label).toBe(
+    "Waiting for provider…",
+  );
   expect(inferenceActivityStatus("working")?.label).toBe("Agent is working…");
   expect(inferenceActivityStatus("waiting")?.label).toBe("Waiting…");
   expect(inferenceActivityStatus("retrying")?.label).toBe("Retrying provider…");
