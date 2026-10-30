@@ -18,7 +18,7 @@ pub async fn write_agent_document(access: &ConfigAccess, behavior: &Agent) -> Re
                     update: value,
                 }])?;
                 super::apply_desired_state_plan(txn, &plan).await?;
-                super::desired_state::read_record(
+                super::desired_state::read::read_record(
                     txn,
                     Collection::Agent,
                     &behavior.node_did,

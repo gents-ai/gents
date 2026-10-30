@@ -18,7 +18,7 @@ pub async fn write_tools_document(access: &ConfigAccess, tools: &Tools) -> Resul
                     update: value,
                 }])?;
                 super::apply_desired_state_plan(txn, &plan).await?;
-                super::desired_state::read_record(
+                super::desired_state::read::read_record(
                     txn,
                     Collection::Tools,
                     &tools.node_did,
@@ -64,7 +64,7 @@ mod tests {
                 Box::pin(async move {
                     for (owner, expected) in [("did:key:owner", tools), ("did:key:other", foreign)]
                     {
-                        let (_, value) = super::super::desired_state::read_record(
+                        let (_, value) = super::super::desired_state::read::read_record(
                             txn,
                             Collection::Tools,
                             owner,

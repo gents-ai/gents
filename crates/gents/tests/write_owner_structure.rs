@@ -1790,7 +1790,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/agent/reconcile.rs", 1),
     ("crates/gents/src/application_write/mod.rs", 1),
     ("crates/gents/src/background_tools/final_output.rs", 1),
-    ("crates/gents/src/config_client/desired_state.rs", 1),
+    ("crates/gents/src/config_client/desired_state/plan.rs", 1),
     ("crates/gents/src/config_client/retry.rs", 2),
     ("crates/gents/src/config_client/schema_install.rs", 2),
     ("crates/gents/src/defra_query/mod.rs", 1),
