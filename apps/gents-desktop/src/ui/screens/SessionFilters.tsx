@@ -19,9 +19,12 @@ import {
   passes,
   toggleShown,
   type SessionFilter,
+  type SessionFilterAxis,
   type SessionSource,
   type SessionState,
 } from "@/lib/session-filter";
+import { useIsNewTest } from "@/lib/seen";
+import { Hint } from "./Hint";
 import { nodeKeyOf } from "../../hooks/fleetStore";
 import { useFleet } from "@/hooks/useFleet";
 import { agentName } from "./behavior";
@@ -49,8 +52,9 @@ export const matchesView = (
   c: SessionSummary,
   f: SessionFilter,
   query: string | null,
+  isFresh?: (c: SessionSummary) => boolean,
 ) =>
-  passes(c, f) &&
+  passes(c, f, isFresh) &&
   (!query || (c.title ?? "").toLowerCase().includes(query.toLowerCase()));
 
 export type Option<V extends string> = {
@@ -261,8 +265,13 @@ export function SessionFilters({
   value: SessionFilter;
   onChange: (next: SessionFilter) => void;
 }): ReactNode {
-  const countFor = (axis: keyof SessionFilter, test: (c: SessionSummary) => boolean) =>
-    sessions.filter((c) => passes(c, { ...value, [axis]: [] }) && test(c)).length;
+  const isFresh = useIsNewTest();
+  const countFor = (axis: SessionFilterAxis, test: (c: SessionSummary) => boolean) =>
+    sessions.filter((c) => passes(c, { ...value, [axis]: [] }, isFresh) && test(c))
+      .length;
+  const freshCount = sessions.filter(
+    (c) => passes(c, { ...value, fresh: false }, isFresh) && isFresh(c),
+  ).length;
 
   const stateCounts = Object.fromEntries(
     STATES.map((s) => [s.value, countFor("states", (c) => matchesState(c, s.value))]),
@@ -302,6 +311,11 @@ export function SessionFilters({
           onChange={(next) => onChange({ ...value, agents: next })}
         />
       )}
+      <FreshToggle
+        on={Boolean(value.fresh)}
+        count={freshCount}
+        onChange={(fresh) => onChange({ ...value, fresh })}
+      />
       <Axis
         label="State"
         icon={Activity}
@@ -321,5 +335,39 @@ export function SessionFilters({
         onChange={(sources) => onChange({ ...value, sources })}
       />
     </div>
+  );
+}
+
+/** Narrows the list to the sessions with something new since they were last
+    on screen, marked as each such session's row is. */
+function FreshToggle({
+  on,
+  count,
+  onChange,
+}: {
+  on: boolean;
+  count: number;
+  onChange: (on: boolean) => void;
+}) {
+  const label = `New since you looked${count ? ` (${count})` : ""}`;
+  return (
+    <Hint label={label}>
+      <Button
+        variant="quiet"
+        size="sm"
+        aria-label="New since you looked"
+        aria-pressed={on}
+        data-testid="fresh-filter"
+        className={cn("px-2", on && "bg-accent text-foreground")}
+        onClick={() => onChange(!on)}
+      >
+        <span
+          className={cn(
+            "size-2 rounded-full",
+            count > 0 || on ? "bg-brand" : "border border-muted-foreground/60",
+          )}
+        />
+      </Button>
+    </Hint>
   );
 }

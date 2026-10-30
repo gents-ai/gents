@@ -138,6 +138,9 @@ const seenOf = (state: SessionViews, session: SessionKey) =>
 export const useSeenMark = (session: SessionKey): SeenMark | null =>
   useStore(store, (state) => seenOf(state, session));
 
+/** Every session's mark of what it had done when last on screen here. */
+export const useSeenMarks = () => useStore(store, (state) => state.seen);
+
 /** When this device started keeping what was seen, kept current. */
 export const useSeenSince = (): string | null =>
   useStore(store, (state) => state.since);

@@ -11,7 +11,12 @@ export type SessionFilter = {
   states: SessionState[];
   sources: SessionSource[];
   agents: string[];
+  /** only the sessions with something new since they were last on screen */
+  fresh?: boolean;
 };
+
+/** The filter's lists of choices, one per axis. */
+export type SessionFilterAxis = "states" | "sources" | "agents";
 
 export const emptyFilter: SessionFilter = {
   states: [],
@@ -20,7 +25,10 @@ export const emptyFilter: SessionFilter = {
 };
 
 export const hasFilter = (f: SessionFilter) =>
-  f.states.length > 0 || f.sources.length > 0 || f.agents.length > 0;
+  f.states.length > 0 ||
+  f.sources.length > 0 ||
+  f.agents.length > 0 ||
+  Boolean(f.fresh);
 
 const STATES: readonly string[] = [
   "working",
@@ -41,6 +49,7 @@ export function restoreSessionFilter(stored: unknown): SessionFilter {
     states: [...new Set(states)].filter((s): s is SessionState => STATES.includes(s)),
     sources: field("sources").filter((s): s is SessionSource => SOURCES.includes(s)),
     agents: field("agents"),
+    ...((saved as Record<string, unknown>).fresh === true && { fresh: true }),
   };
 }
 
@@ -54,10 +63,18 @@ export const matchesSource = (c: SessionSummary, source: SessionSource) =>
       ? Boolean(c.startedBy)
       : !(c.taskId || c.triggerId || c.startedBy);
 
-export const passes = (c: SessionSummary, f: SessionFilter) =>
+/** Whether `c` passes `f`; `isFresh` says whether a session has something
+    new since it was last on screen, which only the view that keeps those
+    marks can tell. */
+export const passes = (
+  c: SessionSummary,
+  f: SessionFilter,
+  isFresh?: (c: SessionSummary) => boolean,
+) =>
   (f.states.length === 0 || f.states.some((s) => matchesState(c, s))) &&
   (f.sources.length === 0 || f.sources.some((s) => matchesSource(c, s))) &&
-  (f.agents.length === 0 || f.agents.includes(c.agentId ?? ""));
+  (f.agents.length === 0 || f.agents.includes(c.agentId ?? "")) &&
+  (!f.fresh || !isFresh || isFresh(c));
 
 /** A choice shows checked while nothing narrows its axis. */
 export const isShown = <V extends string>(picked: readonly V[], v: V) =>

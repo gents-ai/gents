@@ -1,5 +1,11 @@
 import type { SessionSummary } from "@source-inc/gents-desktop-client";
-import { useSeenMark, useSeenSince, type SeenMark } from "@/app/sessionViews";
+import { useCallback } from "react";
+import {
+  useSeenMark,
+  useSeenMarks,
+  useSeenSince,
+  type SeenMark,
+} from "@/app/sessionViews";
 import { sessionKeyOf } from "../../hooks/fleetStore";
 import { stateOf } from "./live";
 
@@ -42,4 +48,21 @@ export function useIsNew(s: Seeable & IdentifiedSession): boolean {
   const seen = useSeenMark(sessionKeyOf(s));
   const since = useSeenSince();
   return isNew(s, seen, since);
+}
+
+/** `isNew` for any session, as a test a list can filter by. */
+export function useIsNewTest(): (s: Seeable & IdentifiedSession) => boolean {
+  const marks = useSeenMarks();
+  const since = useSeenSince();
+  return useCallback(
+    (s) => {
+      const key = sessionKeyOf(s);
+      return isNew(
+        s,
+        marks.find((entry) => entry.session === key)?.mark ?? null,
+        since,
+      );
+    },
+    [marks, since],
+  );
 }

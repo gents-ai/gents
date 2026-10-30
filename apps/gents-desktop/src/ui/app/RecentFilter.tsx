@@ -24,6 +24,7 @@ import {
   matchesState,
   toggleShown,
   type SessionFilter,
+  type SessionFilterAxis,
 } from "@/lib/session-filter";
 import { agentName } from "@/screens/behavior";
 import { SOURCES, STATES, type Option } from "@/screens/SessionFilters";
@@ -43,7 +44,7 @@ export function RecentFilter({ sessions }: { sessions: SessionSummary[] }) {
     })
     .sort((a, b) => a.name.localeCompare(b.name));
   const agentIds = agents.map((a) => a.id);
-  const toggle = <K extends keyof SessionFilter>(
+  const toggle = <K extends SessionFilterAxis>(
     axis: K,
     all: readonly string[],
     v: SessionFilter[K][number],

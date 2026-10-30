@@ -56,6 +56,7 @@ import { NodeAgentStack } from "./NodeBehaviorStack";
 import { ListedSessionStatus } from "./SessionStatus";
 import { StartedCount } from "./StartedCount";
 import { SessionFilters, matchesView } from "./SessionFilters";
+import { useIsNewTest } from "@/lib/seen";
 import { emptyFilter, hasFilter } from "@/lib/session-filter";
 import { sessionRows, type SessionRow as Row } from "@/lib/session-rows";
 import {
@@ -143,6 +144,7 @@ export function SessionsScreen({
     }
     return nearest;
   }, [inScope, parentOf]);
+  const isFresh = useIsNewTest();
   const filtering = hasFilter(filter) || Boolean(query);
   const { rows, trail, shown, total } = useMemo(
     () =>
@@ -150,11 +152,21 @@ export function SessionsScreen({
         sessions: inScope,
         parentOf: (c) => listedParents.get(sessionKeyOf(c)) ?? null,
         under: under ?? null,
-        matches: filtering ? (c) => matchesView(c, filter, query) : null,
+        matches: filtering ? (c) => matchesView(c, filter, query, isFresh) : null,
         isOpen: (key) => opened.keys.has(key),
         pinned,
       }),
-    [inScope, listedParents, under, filter, query, filtering, opened.keys, pinned],
+    [
+      inScope,
+      listedParents,
+      under,
+      filter,
+      query,
+      filtering,
+      opened.keys,
+      pinned,
+      isFresh,
+    ],
   );
   const level = trail[trail.length - 1] ?? null;
   const listed = useMemo(
