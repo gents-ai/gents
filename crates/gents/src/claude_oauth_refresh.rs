@@ -1,12 +1,22 @@
 use chrono::{Duration, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::claude_oauth::{
     CLAUDE_OAUTH_CLIENT_ID, CLAUDE_OAUTH_SCOPES, CLAUDE_OAUTH_TOKEN_URL,
     CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
 };
+use crate::oauth_credential::token_endpoint::{
+    endpoint_url, BadRequest, TokenEndpoint, TransportDetail,
+};
 use crate::oauth_credential::{OAuthAuthProblem, RefreshedTokens};
+
+const TOKEN_ENDPOINT: TokenEndpoint = TokenEndpoint {
+    provider: "Claude",
+    bad_request: BadRequest::InvalidGrant { nested_code: false },
+    forbidden_is_not_entitled: true,
+    reads_error_description: true,
+    transport_detail: TransportDetail::Kind,
+};
 
 #[derive(Serialize)]
 struct RefreshRequest<'a> {
@@ -30,10 +40,9 @@ pub async fn refresh_claude_token(
     refresh_token: &str,
     http: &reqwest::Client,
 ) -> Result<RefreshedTokens, OAuthAuthProblem> {
-    let endpoint = std::env::var(CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| CLAUDE_OAUTH_TOKEN_URL.to_string());
+    let endpoint = endpoint_url(CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV, || {
+        CLAUDE_OAUTH_TOKEN_URL.to_string()
+    });
     refresh_claude_token_at(&endpoint, refresh_token, http).await
 }
 
@@ -48,47 +57,16 @@ pub(crate) async fn refresh_claude_token_at(
         client_id: CLAUDE_OAUTH_CLIENT_ID,
         scope: CLAUDE_OAUTH_SCOPES,
     };
-    let response = http
-        .post(endpoint)
-        .header("Accept", "application/json")
-        .header("Content-Type", "application/json")
-        .json(&request)
-        .send()
-        .await
-        .map_err(|error| {
-            OAuthAuthProblem::Other(format!(
-                "Claude token refresh request failed: {}",
-                transport_kind(&error)
-            ))
-        })?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        if status == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(OAuthAuthProblem::Expired);
-        }
-        if status == reqwest::StatusCode::BAD_REQUEST
-            && error_code(&body).as_deref() == Some("invalid_grant")
-        {
-            return Err(OAuthAuthProblem::Expired);
-        }
-        if status == reqwest::StatusCode::FORBIDDEN {
-            return Err(OAuthAuthProblem::NotEntitled);
-        }
-        return Err(OAuthAuthProblem::Other(format!(
-            "Claude token refresh failed with HTTP {status}: {}",
-            parse_error_message(&body)
-        )));
-    }
-
-    let refreshed = response.json::<RefreshResponse>().await.map_err(|error| {
-        OAuthAuthProblem::Other(format!("decoding Claude token refresh response: {error}"))
-    })?;
-    let access_token = refreshed.access_token.ok_or_else(|| {
-        OAuthAuthProblem::Other("Claude token refresh response omitted access_token".to_string())
-    })?;
-    let access_token_expires_at = refreshed
+    let grant: RefreshResponse = TOKEN_ENDPOINT
+        .exchange(
+            http.post(endpoint)
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .json(&request),
+        )
+        .await?;
+    let access_token = TOKEN_ENDPOINT.access_token(grant.access_token)?;
+    let access_token_expires_at = grant
         .expires_in
         .filter(|seconds| *seconds > 0)
         .map(|seconds| Utc::now() + Duration::seconds(seconds))
@@ -96,7 +74,7 @@ pub(crate) async fn refresh_claude_token_at(
 
     Ok(RefreshedTokens {
         access_token,
-        refresh_token: refreshed
+        refresh_token: grant
             .refresh_token
             .unwrap_or_else(|| refresh_token.to_string()),
         id_token: None,
@@ -105,43 +83,6 @@ pub(crate) async fn refresh_claude_token_at(
         plan_type: None,
         access_token_expires_at,
     })
-}
-
-fn transport_kind(error: &reqwest::Error) -> &'static str {
-    if error.is_timeout() {
-        "timed out"
-    } else if error.is_connect() {
-        "could not connect"
-    } else {
-        "failed"
-    }
-}
-
-fn error_code(body: &str) -> Option<String> {
-    serde_json::from_str::<Value>(body)
-        .ok()?
-        .get("error")?
-        .as_str()
-        .map(str::to_string)
-}
-
-fn parse_error_message(body: &str) -> String {
-    let Ok(value) = serde_json::from_str::<Value>(body) else {
-        return body.to_string();
-    };
-    value
-        .get("error_description")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            value.get("error").and_then(|error| {
-                error
-                    .as_str()
-                    .or_else(|| error.get("message").and_then(Value::as_str))
-            })
-        })
-        .or_else(|| value.get("message").and_then(Value::as_str))
-        .unwrap_or(body)
-        .to_string()
 }
 
 #[cfg(test)]
