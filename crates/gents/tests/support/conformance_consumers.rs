@@ -1668,7 +1668,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "eth::submit::tests::transition_table_matches_lean_contract",
             package: "gents",
-            source_path: "crates/gents/src/eth/submit.rs",
+            source_path: "crates/gents/src/eth/submit/tests.rs",
             module_path: "eth::submit::tests",
             function: "transition_table_matches_lean_contract",
         },
