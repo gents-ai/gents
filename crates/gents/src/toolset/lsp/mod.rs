@@ -306,7 +306,7 @@ impl Tool for LspTool {
         }
         if matches!(action, LspAction::RequestRead | LspAction::RequestWrite) {
             let method = args.query.as_deref().unwrap_or("");
-            actions::validate_raw_request(&self.context, method, args.payload.as_deref())?;
+            actions::request::validate_raw_request(&self.context, method, args.payload.as_deref())?;
         }
         let workspace = self.effective_workspace();
         let detected = catalog::detect_admitted_servers(&workspace, &self.config.servers);
