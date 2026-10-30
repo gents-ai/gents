@@ -1183,7 +1183,7 @@ fn integrate_writer(
         docs.write_binding(super::binding::release_binding(binding))
             .unwrap();
     }
-    super::executor::clear_integrate_journal(&fx.repo, workspace_id);
+    super::executor::integrate::clear_integrate_journal(&fx.repo, workspace_id);
     outcome
 }
 
