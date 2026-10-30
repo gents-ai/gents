@@ -271,22 +271,11 @@ pub async fn build_session_snapshot_for_node_with_transcript(
         },
         None => None,
     };
-    let observed_queue_ids = store
-        .requests
-        .iter()
-        .filter(|row| {
-            row.node_did.as_deref() == node_did
-                && row.session_id.as_deref() == Some(session_id)
-                && matches!(
-                    row.lifecycle_state,
-                    Some(
-                        RequestLifecycleState::Pending
-                            | RequestLifecycleState::WorkspaceBindingPending
-                    )
-                )
-        })
-        .filter_map(|row| row.doc_id.clone())
-        .collect::<Vec<_>>();
+    let observed_queue_ids = pending_queue_doc_ids(
+        request_projection.unwrap_or(&store.requests),
+        node_did,
+        session_id,
+    );
     let mut arrival_order = None;
     let pending_queue = match node_did {
         Some(node_did)
@@ -713,6 +702,32 @@ fn job_row_fill(
     let outcome = outcomes.get(tool_call_id).cloned();
     let next_calls = gents_server::jobs::next_calls(state, &format!("{session_id}:{tool_call_id}"));
     Some((outcome, next_calls))
+}
+
+/// The session's pending requests in `rows`, as the ids whose arrival
+/// order the runtime reports. `rows` must be the rows the queued turns are
+/// projected from: ordering keeps only the turns it has ids for, so ids
+/// from a local store that has not yet seen a queued request, such as an
+/// edit's replacement, drop that turn while the pending queue lists it.
+pub(super) fn pending_queue_doc_ids(
+    rows: &[AgentRequestRow],
+    node_did: Option<&str>,
+    session_id: &str,
+) -> Vec<String> {
+    rows.iter()
+        .filter(|row| {
+            row.node_did.as_deref() == node_did
+                && row.session_id.as_deref() == Some(session_id)
+                && matches!(
+                    row.lifecycle_state,
+                    Some(
+                        RequestLifecycleState::Pending
+                            | RequestLifecycleState::WorkspaceBindingPending
+                    )
+                )
+        })
+        .filter_map(|row| row.doc_id.clone())
+        .collect()
 }
 
 pub(super) fn order_queued_turns(snapshot: &mut DesktopSessionSnapshot, arrivals: &[String]) {
