@@ -81,3 +81,16 @@ if (typeof globalThis.ClipboardEvent !== "function") {
     }
   } as unknown as typeof ClipboardEvent;
 }
+/* Node 25+ defines its own localStorage and sessionStorage globals, left
+   undefined without --localstorage-file, and they shadow jsdom's */
+for (const name of ["localStorage", "sessionStorage"] as const) {
+  if (globalThis[name] === undefined) {
+    const storage = (globalThis as { jsdom?: { window: Window } }).jsdom?.window[name];
+    if (storage)
+      Object.defineProperty(globalThis, name, {
+        value: storage,
+        configurable: true,
+        writable: true,
+      });
+  }
+}
