@@ -1,30 +1,9 @@
-use chrono::{Duration, Utc};
-use serde::{Deserialize, Serialize};
+use chrono::{DateTime, Utc};
+use gents_claude::oauth::{self, RefreshFailure};
 use serde_json::Value;
 
-use crate::claude_oauth::{
-    CLAUDE_OAUTH_CLIENT_ID, CLAUDE_OAUTH_SCOPES, CLAUDE_OAUTH_TOKEN_URL,
-    CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV,
-};
+use crate::claude_oauth::{CLAUDE_OAUTH_PRODUCT, CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV};
 use crate::oauth_credential::{OAuthAuthProblem, RefreshedTokens};
-
-#[derive(Serialize)]
-struct RefreshRequest<'a> {
-    grant_type: &'static str,
-    refresh_token: &'a str,
-    client_id: &'static str,
-    scope: &'static str,
-}
-
-#[derive(Deserialize)]
-struct RefreshResponse {
-    #[serde(default)]
-    access_token: Option<String>,
-    #[serde(default)]
-    refresh_token: Option<String>,
-    #[serde(default)]
-    expires_in: Option<i64>,
-}
 
 pub async fn refresh_claude_token(
     refresh_token: &str,
@@ -33,7 +12,7 @@ pub async fn refresh_claude_token(
     let endpoint = std::env::var(CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| CLAUDE_OAUTH_TOKEN_URL.to_string());
+        .unwrap_or_else(|| oauth::TOKEN_URL.to_string());
     refresh_claude_token_at(&endpoint, refresh_token, http).await
 }
 
@@ -42,17 +21,20 @@ pub(crate) async fn refresh_claude_token_at(
     refresh_token: &str,
     http: &reqwest::Client,
 ) -> Result<RefreshedTokens, OAuthAuthProblem> {
-    let request = RefreshRequest {
-        grant_type: "refresh_token",
+    // Gents stores no granted-scope list, so the owner's default refresh scopes apply.
+    let post = oauth::refresh_request(&oauth::RefreshRequest {
         refresh_token,
-        client_id: CLAUDE_OAUTH_CLIENT_ID,
-        scope: CLAUDE_OAUTH_SCOPES,
-    };
+        scopes: &[],
+        expires_in: None,
+        client_id: None,
+    })
+    .map_err(|error| OAuthAuthProblem::Other(format!("Claude token refresh failed: {error}")))?;
     let response = http
         .post(endpoint)
+        .timeout(std::time::Duration::from_millis(post.timeout_ms))
         .header("Accept", "application/json")
         .header("Content-Type", "application/json")
-        .json(&request)
+        .body(post.body)
         .send()
         .await
         .map_err(|error| {
@@ -63,40 +45,35 @@ pub(crate) async fn refresh_claude_token_at(
         })?;
 
     let status = response.status();
+    let body = response.bytes().await.map_err(|error| {
+        OAuthAuthProblem::Other(format!(
+            "Claude token refresh request failed: {}",
+            transport_kind(&error)
+        ))
+    })?;
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        if status == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(OAuthAuthProblem::Expired);
-        }
-        if status == reqwest::StatusCode::BAD_REQUEST
-            && error_code(&body).as_deref() == Some("invalid_grant")
-        {
-            return Err(OAuthAuthProblem::Expired);
-        }
-        if status == reqwest::StatusCode::FORBIDDEN {
-            return Err(OAuthAuthProblem::NotEntitled);
-        }
-        return Err(OAuthAuthProblem::Other(format!(
-            "Claude token refresh failed with HTTP {status}: {}",
-            parse_error_message(&body)
-        )));
+        return Err(refresh_problem(status, &body));
     }
 
-    let refreshed = response.json::<RefreshResponse>().await.map_err(|error| {
+    let now = Utc::now();
+    let tokens = oauth::parse_token_response(
+        &body,
+        u64::try_from(now.timestamp_millis()).unwrap_or_default(),
+        Some(refresh_token),
+    )
+    .map_err(|error| {
         OAuthAuthProblem::Other(format!("decoding Claude token refresh response: {error}"))
     })?;
-    let access_token = refreshed.access_token.ok_or_else(|| {
-        OAuthAuthProblem::Other("Claude token refresh response omitted access_token".to_string())
-    })?;
-    let access_token_expires_at = refreshed
-        .expires_in
-        .filter(|seconds| *seconds > 0)
-        .map(|seconds| Utc::now() + Duration::seconds(seconds))
-        .unwrap_or_else(|| Utc::now() + Duration::hours(1));
+    let access_token_expires_at = i64::try_from(tokens.expires_at_ms)
+        .ok()
+        .and_then(DateTime::from_timestamp_millis)
+        .ok_or_else(|| {
+            OAuthAuthProblem::Other("Claude token refresh response lifetime is out of range".into())
+        })?;
 
     Ok(RefreshedTokens {
-        access_token,
-        refresh_token: refreshed
+        access_token: tokens.access_token,
+        refresh_token: tokens
             .refresh_token
             .unwrap_or_else(|| refresh_token.to_string()),
         id_token: None,
@@ -107,6 +84,31 @@ pub(crate) async fn refresh_claude_token_at(
     })
 }
 
+/// Maps a failed token call onto the credential problem, using the owner's
+/// classification of the status and body.
+fn refresh_problem(status: reqwest::StatusCode, body: &[u8]) -> OAuthAuthProblem {
+    match oauth::classify_failure(Some(status.as_u16()), body) {
+        RefreshFailure::SignedOut => OAuthAuthProblem::Expired,
+        RefreshFailure::AccountOnHold => OAuthAuthProblem::Other(format!(
+            "the Claude account is on hold; resolve the hold with Anthropic, then sign in again with `gents {}`",
+            CLAUDE_OAUTH_PRODUCT.login_command
+        )),
+        // An unreadable 401 is an invalid token and a 403 is the plan gate.
+        RefreshFailure::Rejected if status == reqwest::StatusCode::UNAUTHORIZED => {
+            OAuthAuthProblem::Expired
+        }
+        RefreshFailure::Rejected if status == reqwest::StatusCode::FORBIDDEN => {
+            OAuthAuthProblem::NotEntitled
+        }
+        RefreshFailure::InvalidScope | RefreshFailure::Rejected | RefreshFailure::Transient => {
+            OAuthAuthProblem::Other(format!(
+                "Claude token refresh failed with HTTP {status}: {}",
+                parse_error_message(&String::from_utf8_lossy(body))
+            ))
+        }
+    }
+}
+
 fn transport_kind(error: &reqwest::Error) -> &'static str {
     if error.is_timeout() {
         "timed out"
@@ -115,14 +117,6 @@ fn transport_kind(error: &reqwest::Error) -> &'static str {
     } else {
         "failed"
     }
-}
-
-fn error_code(body: &str) -> Option<String> {
-    serde_json::from_str::<Value>(body)
-        .ok()?
-        .get("error")?
-        .as_str()
-        .map(str::to_string)
 }
 
 fn parse_error_message(body: &str) -> String {
@@ -176,11 +170,8 @@ mod tests {
             serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
         assert_eq!(body["grant_type"], "refresh_token");
         assert_eq!(body["refresh_token"], "refresh-OLD");
-        assert_eq!(
-            body["client_id"],
-            crate::claude_oauth::CLAUDE_OAUTH_CLIENT_ID
-        );
-        assert_eq!(body["scope"], crate::claude_oauth::CLAUDE_OAUTH_SCOPES);
+        assert_eq!(body["client_id"], oauth::CLIENT_ID);
+        assert_eq!(body["scope"], oauth::REFRESH_SCOPES.join(" "));
         assert_eq!(refreshed.access_token, "access-NEW");
         assert_eq!(refreshed.refresh_token, "refresh-NEW");
         assert!(
@@ -220,5 +211,62 @@ mod tests {
     async fn refresh_403_is_not_entitled() {
         let (result, _) = refresh_against(403, r#"{"error":"forbidden"}"#).await;
         assert_eq!(result.unwrap_err(), OAuthAuthProblem::NotEntitled);
+    }
+
+    #[tokio::test]
+    async fn refresh_account_on_hold_is_an_actionable_problem() {
+        let (result, _) = refresh_against(
+            400,
+            r#"{"error":"invalid_grant","error_description":"account_on_hold"}"#,
+        )
+        .await;
+        match result.unwrap_err() {
+            OAuthAuthProblem::Other(text) => {
+                assert!(text.contains("on hold"), "{text}");
+                assert!(text.contains("gents claude-login"), "{text}");
+            }
+            other => panic!("expected Other, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_server_error_and_invalid_scope_are_other() {
+        for (status, body) in [
+            (500, r#"{"error":"server_error"}"#),
+            (
+                400,
+                r#"{"error":"invalid_scope","error_description":"scope"}"#,
+            ),
+        ] {
+            let (result, _) = refresh_against(status, body).await;
+            assert!(
+                matches!(result.unwrap_err(), OAuthAuthProblem::Other(text) if text.contains(&status.to_string())),
+                "{status}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_response_without_lifetime_is_rejected() {
+        let (result, _) = refresh_against(200, r#"{"access_token":"access-NEW"}"#).await;
+        assert!(matches!(
+            result.unwrap_err(),
+            OAuthAuthProblem::Other(text) if text.contains("malformed")
+        ));
+    }
+
+    #[tokio::test]
+    async fn refresh_honors_the_token_url_override_env() {
+        let (url, handle) =
+            one_shot_token_server(200, r#"{"access_token":"access-NEW","expires_in":3600}"#).await;
+        let _env = crate::oauth_credential::test_support::TOKEN_URL_ENV
+            .lock()
+            .await;
+        std::env::set_var(CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV, &url);
+        let result = refresh_claude_token("refresh-OLD", &reqwest::Client::new()).await;
+        std::env::remove_var(CLAUDE_OAUTH_TOKEN_URL_OVERRIDE_ENV);
+        assert_eq!(result.expect("refreshed").access_token, "access-NEW");
+        let request = handle.await.expect("server");
+        assert!(request.starts_with("POST /v1/oauth/token"), "{request}");
     }
 }

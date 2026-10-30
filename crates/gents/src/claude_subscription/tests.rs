@@ -249,10 +249,7 @@ async fn stale_credential_refreshes_once_through_the_claude_token_endpoint() {
         serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
     assert_eq!(body["grant_type"], "refresh_token");
     assert_eq!(body["refresh_token"], "refresh-TEST");
-    assert_eq!(
-        body["client_id"],
-        crate::claude_oauth::CLAUDE_OAUTH_CLIENT_ID
-    );
+    assert_eq!(body["client_id"], gents_claude::oauth::CLIENT_ID);
 
     assert_eq!(
         client.accounts[0]
