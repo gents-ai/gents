@@ -102,8 +102,10 @@ function RailSyncDot() {
     <div className="relative h-8 w-7">
       <div
         className={cn(
-          "absolute top-0 left-0 z-40",
-          flyoutOpen ? "left-[6px] w-[16.5rem]" : "w-7",
+          "absolute z-40",
+          /* the dot keeps its place as it becomes the row, which spans the
+             flyout's rows */
+          flyoutOpen ? "-top-0.5 -left-px w-[261px]" : "top-0 left-0 w-7",
         )}
       >
         <SyncHealth syncHealth={syncHealth} compact={!flyoutOpen} row={flyoutOpen} />
