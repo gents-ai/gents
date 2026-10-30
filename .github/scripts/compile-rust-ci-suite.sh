@@ -43,6 +43,7 @@ case "${suite}" in
       gents-protocol
       gents-schemas
       gents-chatgpt-login
+      gents-claude
       gents-claude-login
       gents-login-ui
       gents-codex-protocol
