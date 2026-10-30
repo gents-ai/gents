@@ -499,7 +499,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "client::observe::projection_store::reload_tests::generated_notice_delivery_never_regresses_watchers",
             package: "gents-desktop-core",
-            source_path: "crates/gents-desktop-core/src/client/observe/projection_store.rs",
+            source_path: "crates/gents-desktop-core/src/client/observe/projection_store/reload_tests.rs",
             module_path: "client::observe::projection_store::reload_tests",
             function: "generated_notice_delivery_never_regresses_watchers",
         },
