@@ -335,12 +335,12 @@ export function RailFlyout({
             "left-1.5 pt-3.5",
             "rounded-2xl border border-border/60",
             hover
-              ? "z-30 shadow-lg transition-[opacity,transform] duration-200 ease-out"
+              ? "z-30 shadow-lg transition-opacity duration-200 ease-out"
               : "shadow-xs",
             hover &&
-              (open
-                ? "translate-x-0 opacity-100"
-                : "pointer-events-none -translate-x-2 opacity-0"),
+              /* a fade, not a slide: its icons sit over the rail's and must
+                 not move while it opens or closes */
+              (open ? "opacity-100" : "pointer-events-none opacity-0"),
           )}
         >
           {/* the panel keeps its margin from the window's edge, and its
