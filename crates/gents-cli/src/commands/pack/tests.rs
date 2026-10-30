@@ -1,4 +1,8 @@
+use super::install::{check_expected_digest, check_wire_target, install_documents_command};
+use super::scope::resolve_plugin_slot_owner;
+use super::source::names_a_directory;
 use super::*;
+use gents::pack::{PackKind, PackManifest};
 
 #[tokio::test]
 async fn a_bare_subject_spec_is_a_pack_name_even_when_the_cwd_has_that_directory() {
