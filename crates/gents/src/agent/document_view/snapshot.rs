@@ -10,7 +10,7 @@ use crate::documents::Agent as AgentDocument;
 use crate::inference::admission::BackendAvailability;
 use crate::inference::resolved::ResolvedAgent;
 use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
-use crate::tool_surface::ResolvedToolSelection;
+use crate::tools::surface::ResolvedToolSelection;
 
 use super::DocumentRuntimeView;
 
@@ -19,7 +19,7 @@ use crate::agent::{
     AgentBuildError, AgentDocumentInputs, AgentFactory, DocumentResolveContext,
 };
 use crate::store::identity::RuntimeNode;
-use crate::tool_surface::AgentToolConfig;
+use crate::tools::surface::AgentToolConfig;
 
 macro_rules! owned_doc {
     ($map:expr, $id:expr, $owner:expr) => {{
@@ -220,7 +220,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                         selected.write_tools = merged.write_tools;
                         selected.surface_of_tool = merged.surface_of_tool;
                         let agents =
-                            crate::tool_surface::AgentToolConfig::from_document_with_targets(
+                            crate::tools::surface::AgentToolConfig::from_document_with_targets(
                                 tools,
                                 view.agent_targets.values().map(|record| &record.value),
                             )?;

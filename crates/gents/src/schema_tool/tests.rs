@@ -1,5 +1,5 @@
 use super::*;
-use crate::tool_surface::{AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling};
+use crate::tools::surface::{AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling};
 
 fn args(value: Value) -> SchemaParams {
     serde_json::from_value(value).unwrap()

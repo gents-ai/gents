@@ -192,7 +192,7 @@ fn ensure_tool_less(
         Vec::new(),
     )?
     .explain_with_runtime_availability(
-        gents::tool_surface::RuntimeToolAvailability::all(),
+        gents::tools::surface::RuntimeToolAvailability::all(),
         owner,
         &active,
     )

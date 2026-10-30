@@ -240,7 +240,7 @@ where
 
         let sealed = request::prepare_unless_interrupted(
             &mut interrupt_rx,
-            crate::workspace::writer_request_already_sealed(&self.node, &request),
+            crate::tools::workspace::writer_request_already_sealed(&self.node, &request),
         )
         .await;
         let Some(sealed) = sealed else {
@@ -267,7 +267,7 @@ where
                     tracing::warn!(request_id = %request.request_id, %error, "stopping workspace completion after execution ownership loss");
                     return Ok(());
                 }
-                if let Err(error) = crate::workspace::seal_on_writer_success(
+                if let Err(error) = crate::tools::workspace::seal_on_writer_success(
                     &self.node,
                     &request,
                     self.operator_tool_root.as_deref(),
@@ -473,7 +473,8 @@ where
                     Ok(true) if skipped_before_work => {
                         record_current_request_outcome("completed");
                         if let Err(error) =
-                            crate::workspace::release_writer_binding(&self.node, &request).await
+                            crate::tools::workspace::release_writer_binding(&self.node, &request)
+                                .await
                         {
                             tracing::warn!(request_id = %request.request_id, error = %crate::failure_text::BoundedErrorChain(error.as_ref()),
                                 "failed to release writer workspace binding after skipped task gate");
@@ -520,7 +521,7 @@ where
                 }
                 self.record_request_interruption(&request, interruption_source);
                 if let Err(error) =
-                    crate::workspace::release_writer_binding(&self.node, &request).await
+                    crate::tools::workspace::release_writer_binding(&self.node, &request).await
                 {
                     tracing::warn!(
                         request_id = %request.request_id,

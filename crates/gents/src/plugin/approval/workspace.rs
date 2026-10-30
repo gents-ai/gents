@@ -44,7 +44,7 @@ pub struct Support {
 pub fn support() -> Support {
     Support {
         contract_version: CONTRACT_VERSION,
-        workspace_sandbox: crate::toolset::workspace_write_sandbox_enforced(),
+        workspace_sandbox: crate::tools::native::workspace_write_sandbox_enforced(),
         remembered_commands: true,
     }
 }
@@ -137,7 +137,7 @@ pub(crate) enum BindingAction {
         cwd: PathBuf,
         root: PathBuf,
         writable_root: Option<PathBuf>,
-        policy: crate::toolset::CommandExecutionPolicy,
+        policy: crate::tools::native::CommandExecutionPolicy,
     },
     FileMutation {
         tool: String,
@@ -212,7 +212,7 @@ impl BindingAction {
                 ..
             } => {
                 crate::plugin::allowed::canonical_target(root, Some(true))?;
-                let context = crate::toolset::ToolContext::new(root.clone(), false)?;
+                let context = crate::tools::native::ToolContext::new(root.clone(), false)?;
                 let resolved = context.resolve_path_allow_create(
                     path.to_str()
                         .context("the file approval path is not valid UTF-8")?,

@@ -46,7 +46,7 @@ pub async fn desktop_operations_snapshot(
         .ok_or_else(|| BridgeError::untyped("no node selected; pass nodeDid explicitly"))?;
 
     let native_executors: Vec<NativeExecutorStatusView> =
-        gents::native_executor_status::active_native_executors()
+        gents::tools::exec::status::active_native_executors()
             .into_iter()
             .map(|ne| NativeExecutorStatusView {
                 id: ne.id as i64,

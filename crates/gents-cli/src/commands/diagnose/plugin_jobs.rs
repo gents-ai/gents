@@ -4,7 +4,7 @@ use gents::documents::{Agent, PluginToolRef, Tools};
 use gents::pack::home_install::recorded_provenance;
 use gents::pack::{read_home_install, InstalledVia, PackKind};
 use gents::plugin::store::{parse_coordinate, read_record};
-use gents::tool_surface::{BashMode, FileToolMode};
+use gents::tools::surface::{BashMode, FileToolMode};
 use gents_protocol::job::PluginJobSettings;
 use serde::Serialize;
 use serde_json::{json, Value};

@@ -415,8 +415,8 @@ fn generated(hook_id: &str, phase: &str) -> LeanTaskHook {
 #[cfg(unix)]
 #[tokio::test]
 async fn recovery_stops_a_surviving_hook_command_before_cleanup() {
-    use crate::managed_exec::ownership::test_support::OwnedTestProcess;
-    use crate::managed_exec::ownership::ProcessObservation;
+    use crate::tools::exec::ownership::test_support::OwnedTestProcess;
+    use crate::tools::exec::ownership::ProcessObservation;
 
     let fixture = Fixture::new().await;
     let dir = tempfile::tempdir().expect("case directory");
@@ -546,7 +546,7 @@ async fn recovered_cleanup_outside_an_admitted_root_is_refused() {
         (
             "root-outside-ceiling",
             dir.path().to_path_buf(),
-            Some(crate::tool_surface::RootExecutionGuard {
+            Some(crate::tools::surface::RootExecutionGuard {
                 agent_id: AGENT_ID.into(),
                 selected_root: Some(dir.path().to_path_buf()),
                 ceiling_root: Some(ceiling.path().to_path_buf()),

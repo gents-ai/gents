@@ -26,11 +26,11 @@ use crate::inference::resolved::{
 use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
 use crate::store::identity::{NodeIdentity, RuntimeNode};
-use crate::tool_surface::{
+use crate::tools::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
+use crate::tools::surface::{
     AgentToolSurfaceConfig, BashMode, CustomToolFactory, FileToolMode, ResolvedToolSelection,
     ToolCeiling,
 };
-use crate::tools::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
 
 #[cfg(test)]
 const TEST_DEFAULT_BACKEND_ENDPOINT: &str = "http://localhost:8000/v1";

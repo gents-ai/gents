@@ -8,9 +8,7 @@ use defra_node::EmbeddedNode;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::store::graphql::{
-    escape_graphql_string, first_row, graphql_with_transaction_retry, rows,
-};
+use crate::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry, rows};
 
 use crate::tools::workspace::{
     isolated_workspace_upsert_mutation, workspace_placement_upsert_mutation, IsolatedWorkspaceDoc,
@@ -199,7 +197,7 @@ pub fn validate_callback_binding(binding: &CallbackBindingDoc) -> Result<()> {
     }
     let mut unique = RapidHashSet::new();
     for field in &binding.input_fields {
-        crate::store::graphql::validate_graphql_name(field)?;
+        crate::graphql::validate_graphql_name(field)?;
         anyhow::ensure!(
             unique.insert(field),
             "duplicate callback input field {field}"
@@ -219,13 +217,13 @@ pub fn reject_secret_bearing_callback_fields(
     source_fields: Option<&str>,
 ) -> Result<()> {
     if let Some(filter) = filter.map(str::trim).filter(|filter| !filter.is_empty()) {
-        crate::store::graphql::validate_graphql_filter_fragment(filter)?;
+        crate::graphql::validate_graphql_filter_fragment(filter)?;
         if let Some(field) = secret_field_in_filter(filter) {
             anyhow::bail!("CallbackBinding {binding_id} filter field `{field}` is secret-bearing");
         }
     }
     for field in parse_string_list(source_fields) {
-        crate::store::graphql::validate_graphql_name(&field)?;
+        crate::graphql::validate_graphql_name(&field)?;
         if crate::tools::native::is_secret_env_name(&field) {
             anyhow::bail!("CallbackBinding {binding_id} source field `{field}` is secret-bearing");
         }
@@ -299,18 +297,16 @@ async fn load_config<T>(
 where
     T: serde::de::DeserializeOwned + Send,
 {
-    crate::store::config_client::ConfigAccess::transact_local_readonly(
+    crate::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "callback.read_config",
         |txn| {
             Box::pin(async move {
-                crate::store::config_client::read_desired_state_record_in_txn(
-                    txn, collection, owner, id,
-                )
-                .await?
-                .map(|(_, value)| serde_json::from_value(value).map_err(Into::into))
-                .transpose()
+                crate::config_client::read_desired_state_record_in_txn(txn, collection, owner, id)
+                    .await?
+                    .map(|(_, value)| serde_json::from_value(value).map_err(Into::into))
+                    .transpose()
             })
         },
     )
@@ -322,7 +318,7 @@ pub async fn list_enabled_bindings(
     owner: &str,
 ) -> Result<Vec<CallbackBindingDoc>> {
     let (fields, _) =
-        crate::store::config_client::config_projection(crate::Collection::CallbackBinding, None)?;
+        crate::config_client::config_projection(crate::Collection::CallbackBinding, None)?;
     let query = format!(
         "{{ CallbackBinding(filter: {{ node_did: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
         escape_graphql_string(owner),
@@ -516,7 +512,7 @@ pub async fn list_recent_failed(
         limit = SUCCEEDED_REPAIR_LIMIT,
     );
     let response =
-        crate::store::graphql::graphql_with_transaction_retry(node, &query, "callback.list_failed")
+        crate::graphql::graphql_with_transaction_retry(node, &query, "callback.list_failed")
             .await
             .context("query recent failed CallbackInvocation")?;
     Ok(rows(&response, "CallbackInvocation")?)
@@ -650,7 +646,7 @@ pub async fn create_pending_invocation(
     });
     let variables = serde_json::json!({"input": input});
     let mutation = "mutation($input: CallbackInvocationMutationInputArg!) { create_CallbackInvocation(input: $input) { _docID } }";
-    let written = crate::store::config_client::ConfigAccess::transact_local_write(
+    let written = crate::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "callback.create_invocation",
@@ -737,16 +733,13 @@ pub async fn update_invocation(
     expected_state: Option<&str>,
 ) -> Result<bool> {
     let mutation = update_invocation_mutation(invocation, expected_state);
-    let response = crate::store::config_client::ConfigAccess::write_local_response(
+    let response = crate::config_client::ConfigAccess::write_local_response(
         node,
         "callback.update_invocation",
         &mutation,
     )
     .await?;
-    Ok(
-        crate::store::graphql::single_mutation_document(&response, "update_CallbackInvocation")?
-            .is_some(),
-    )
+    Ok(crate::graphql::single_mutation_document(&response, "update_CallbackInvocation")?.is_some())
 }
 
 pub(super) fn create_callback_result_mutation(result: &CallbackResultDoc) -> String {
@@ -792,7 +785,7 @@ pub async fn create_callback_result(
         return Ok(existing);
     }
     let mutation = create_callback_result_mutation(result);
-    match crate::store::config_client::ConfigAccess::write_local_response(
+    match crate::config_client::ConfigAccess::write_local_response(
         node,
         "callback.create_result",
         &mutation,
@@ -855,7 +848,7 @@ pub async fn flush_workspace_docs(
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     for workspace in docs.workspaces.values() {
         let mutation = isolated_workspace_upsert_mutation(workspace);
-        crate::store::config_client::ConfigAccess::write_local_response(
+        crate::config_client::ConfigAccess::write_local_response(
             node,
             "callback.upsert_isolated_workspace",
             &mutation,
@@ -865,7 +858,7 @@ pub async fn flush_workspace_docs(
     }
     for placement in docs.placements.values() {
         let mutation = workspace_placement_upsert_mutation(placement, &now);
-        crate::store::config_client::ConfigAccess::write_local_response(
+        crate::config_client::ConfigAccess::write_local_response(
             node,
             "callback.upsert_workspace_placement",
             &mutation,

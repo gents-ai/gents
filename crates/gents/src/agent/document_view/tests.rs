@@ -5,7 +5,7 @@ use crate::agent::DocumentResolveContext;
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
-use crate::tool_surface::ToolCeiling;
+use crate::tools::surface::ToolCeiling;
 
 async fn test_node() -> Arc<defra_node::EmbeddedNode> {
     Arc::new(crate::test_support::node_builder().build().await.unwrap())
@@ -143,7 +143,7 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
     let tools_doc_id = view.tools[&tools_id].doc_id.clone();
     let mut tools_doc = view.tools[&tools_id].value.clone();
     tools_doc.host.get_or_insert_with(Default::default).files = Some(crate::documents::FileTools {
-        mode: crate::tool_surface::FileToolMode::ReadOnly,
+        mode: crate::tools::surface::FileToolMode::ReadOnly,
         ..Default::default()
     });
     crate::config_client::write_tools_document(
@@ -180,7 +180,7 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
             .as_ref()
             .and_then(|host| host.files.as_ref())
             .map(|files| files.mode),
-        Some(crate::tool_surface::FileToolMode::ReadOnly),
+        Some(crate::tools::surface::FileToolMode::ReadOnly),
         "reloaded view must observe the read-only file-tools patch"
     );
     view = reloaded;

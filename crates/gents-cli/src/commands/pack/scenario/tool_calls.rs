@@ -240,7 +240,7 @@ fn tool_call_matches(row: &Value, expected: &ToolCallExpectation) -> bool {
             return false;
         };
         let matches = if field == "file" {
-            gents::toolset::result_path_matches(expected_value, actual)
+            gents::tools::native::result_path_matches(expected_value, actual)
         } else {
             actual == expected_value
         };
@@ -259,5 +259,5 @@ fn tool_call_matches(row: &Value, expected: &ToolCallExpectation) -> bool {
 }
 
 fn result_looks_failed(result: &str) -> bool {
-    gents::toolset::result_looks_failed(result)
+    gents::tools::native::result_looks_failed(result)
 }

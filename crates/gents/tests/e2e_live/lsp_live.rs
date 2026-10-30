@@ -17,7 +17,7 @@ use crate::support::snapshots::fetch_tool_call_payloads_for_request;
 use crate::support::test_db;
 
 const MEET_FILE: &str = "crates/gents-loop/src/tool_policy.rs";
-const ADVERTISED_FILE: &str = "crates/gents/src/toolset/lsp/auth.rs";
+const ADVERTISED_FILE: &str = "crates/gents/src/tools/native/lsp/auth.rs";
 
 fn live_lsp_enabled() -> bool {
     std::env::var("GENTS_LIVE_LSP").as_deref() == Ok("1")
@@ -387,7 +387,8 @@ fn matching_hover<'a>(
     calls.iter().copied().find(|call| {
         call_completed(call)
             && action_of(call).as_deref() == Some("hover")
-            && file_of(call).is_some_and(|path| gents::toolset::result_path_matches(file, &path))
+            && file_of(call)
+                .is_some_and(|path| gents::tools::native::result_path_matches(file, &path))
             && symbol_of(call).as_deref() == Some(symbol)
             && !result_is_error(call)
             && call
@@ -433,7 +434,7 @@ fn symbol_of(call: &ToolCallRow) -> Option<String> {
 }
 
 fn result_is_error(call: &ToolCallRow) -> bool {
-    gents::toolset::result_looks_failed(call.result.as_deref().unwrap_or(""))
+    gents::tools::native::result_looks_failed(call.result.as_deref().unwrap_or(""))
 }
 
 type CallSummary = (

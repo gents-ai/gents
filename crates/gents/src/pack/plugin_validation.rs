@@ -233,7 +233,7 @@ impl PackPlugin {
                     )
                 })?;
                 anyhow::ensure!(
-                    !crate::toolset::is_secret_env_name(field),
+                    !crate::tools::native::is_secret_env_name(field),
                     "plugin {name:?} data.stamped field {field:?} looks like a secret name; \
                      rename the field"
                 );

@@ -310,7 +310,7 @@ mod tests {
             assert_eq!(observed, expected);
             let receipt = call.plugin_receipt.unwrap();
             assert_eq!(receipt.authority.unwrap().host_tools, granted && live);
-            let canonical = crate::workspace::canonical_json_string(&observed).unwrap();
+            let canonical = crate::tools::workspace::canonical_json_string(&observed).unwrap();
             assert_eq!(
                 receipt.input_digest,
                 format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))

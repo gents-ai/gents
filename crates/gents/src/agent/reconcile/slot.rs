@@ -14,7 +14,7 @@ use crate::request::watcher::AgentRequest;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::startup_readiness::{BuildOutcome, BuildStanding};
-use crate::tool_surface::ToolSurface;
+use crate::tools::surface::ToolSurface;
 
 use rapidhash::{HashMapExt, RapidHashMap};
 

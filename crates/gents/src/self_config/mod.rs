@@ -50,8 +50,8 @@ use serde_json::{json, Value};
 use crate::config_client::patch::{SelfConfigPatch, SelfConfigTarget};
 use crate::graphql::escape_graphql_string;
 use crate::inference::llm::tool::{Tool, ToolDefinition, ToolDyn};
-use crate::tool_surface::presets::{builtin_preset_names, preset_fields};
-use crate::tool_surface::SelfConfigToolConfig;
+use crate::tools::surface::presets::{builtin_preset_names, preset_fields};
+use crate::tools::surface::SelfConfigToolConfig;
 use crate::NodeIdentity;
 use agent::derive_agent_id;
 use defra_node::EmbeddedNode;
@@ -172,7 +172,7 @@ pub struct ConfigureAgentParams {
     #[serde(default)]
     pub enable_lsp: Option<bool>,
     #[serde(default)]
-    pub network_mode: Option<crate::toolset::CommandNetworkMode>,
+    pub network_mode: Option<crate::tools::native::CommandNetworkMode>,
 }
 
 pub fn build_self_config_tools(

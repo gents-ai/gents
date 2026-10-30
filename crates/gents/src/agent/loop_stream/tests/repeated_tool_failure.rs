@@ -251,7 +251,7 @@ async fn repeated_identical_bash_failure_stops_the_loop() {
         RawStreamingChoice::FinalResponse(()),
     ]);
     let model = ScriptedModel::new_turns(turns);
-    let tools = crate::toolset::ToolSet::builder()
+    let tools = crate::tools::native::ToolSet::builder()
         .read_root(root.path())
         .bash_read_only()
         .build()

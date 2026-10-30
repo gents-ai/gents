@@ -603,10 +603,8 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                     call.await
                 } else {
                     let (action, fired) =
-                        crate::store::config_client::ConfigApplyTxn::with_post_commit_receipt_loss(
-                            call,
-                        )
-                        .await;
+                        crate::config_client::ConfigApplyTxn::with_post_commit_receipt_loss(call)
+                            .await;
                     assert!(fired, "{}: receipt fault must fire", case.name);
                     action
                 };
@@ -654,7 +652,7 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                 case.name
             );
             let document =
-                crate::store::graphql::escape_graphql_string(&fixture.lifecycle.request().doc_id);
+                crate::graphql::escape_graphql_string(&fixture.lifecycle.request().doc_id);
             let request_query = format!(
                 "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{document}\" }} }}) {{ _docID lifecycle_state execution_generation terminal_output }} }}"
             );
@@ -695,7 +693,7 @@ async fn dispatch_receipt_scripts_bind_call_hook_under_both_persistence_policies
                 crate::request::lifecycle::TerminalizeResult::Won
             );
             let document =
-                crate::store::graphql::escape_graphql_string(&fixture.lifecycle.request().doc_id);
+                crate::graphql::escape_graphql_string(&fixture.lifecycle.request().doc_id);
             let observed = crate::ConfigAccess::local(node.clone()).execute(&format!(
                 "{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: \"{document}\" }} }}) {{ _docID lifecycle_state stuck_since }} AgentMessage(filter: {{ request_doc_id: {{ _eq: \"{document}\" }} }}) {{ _docID }} }}"
             )).await.unwrap();
@@ -796,7 +794,7 @@ async fn control_tool_completion_failure_never_reauthorizes_dispatch() {
             .await;
             accept_hook_tool_call(&hook, "control-call", "create_goal", &args, None).await;
             let (action, mutations) =
-                crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+                crate::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
                     completion_mutation,
                     hook.on_tool_call("create_goal", None, "control-call", &args),
                 )
@@ -966,9 +964,9 @@ async fn create_interruptible_request_with_fields(
     node_did: &str,
     extra_fields: &str,
 ) -> String {
-    let request_id = crate::store::graphql::escape_graphql_string(request_id);
-    let session_id = crate::store::graphql::escape_graphql_string(session_id);
-    let node_did = crate::store::graphql::escape_graphql_string(node_did);
+    let request_id = crate::graphql::escape_graphql_string(request_id);
+    let session_id = crate::graphql::escape_graphql_string(session_id);
+    let node_did = crate::graphql::escape_graphql_string(node_did);
     let created_at = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
@@ -1030,10 +1028,10 @@ async fn create_corroborated_child_request(
             caused_by_parent_request_doc_id: "{}",
             caused_by_parent_tool_call_id: "{}",
             caused_by_parent_tool_call_doc_id: "{}","#,
-        crate::store::graphql::escape_graphql_string(parent_request_id),
-        crate::store::graphql::escape_graphql_string(parent_request_doc_id),
-        crate::store::graphql::escape_graphql_string(tool_call_id),
-        crate::store::graphql::escape_graphql_string(tool_call_doc_id),
+        crate::graphql::escape_graphql_string(parent_request_id),
+        crate::graphql::escape_graphql_string(parent_request_doc_id),
+        crate::graphql::escape_graphql_string(tool_call_id),
+        crate::graphql::escape_graphql_string(tool_call_doc_id),
     );
     create_interruptible_request_with_fields(
         node,
@@ -1075,7 +1073,7 @@ async fn bind_interruptible_request_with_requester(
         .map(|did| {
             format!(
                 "requester_did: \"{}\",",
-                crate::store::graphql::escape_graphql_string(did)
+                crate::graphql::escape_graphql_string(did)
             )
         })
         .unwrap_or_default();
@@ -1090,7 +1088,7 @@ async fn bind_interruptible_request_with_requester(
     let reset = node
         .execute(&format!(
             r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "pending" }}) {{ _docID }} }}"#,
-            crate::store::graphql::escape_graphql_string(&doc_id)
+            crate::graphql::escape_graphql_string(&doc_id)
         ))
         .await;
     assert!(
@@ -1101,12 +1099,12 @@ async fn bind_interruptible_request_with_requester(
     let loaded = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
-            crate::store::graphql::escape_graphql_string(&doc_id),
+            crate::graphql::escape_graphql_string(&doc_id),
             crate::request::watcher::AGENT_REQUEST_FIELDS
         ))
         .await;
     let row: gents_protocol::row::AgentRequestRow =
-        crate::store::graphql::first_row(&loaded, "AgentRequest")
+        crate::graphql::first_row(&loaded, "AgentRequest")
             .unwrap()
             .unwrap();
     let mut lifecycle = crate::request::lifecycle::RequestLifecycle::new_with_node_did(
@@ -1176,7 +1174,7 @@ async fn publish_claimed_authored_input(
     context: Option<Message>,
     prompt: Message,
 ) {
-    use crate::runtime::agent::loop_stream::LoopStreamItem;
+    use crate::agent::loop_stream::LoopStreamItem;
     use crate::runtime::agent::stream_processor::StreamProcessor;
 
     let mut fixtures = hook_execution_fixtures().lock().await;
@@ -1373,8 +1371,8 @@ async fn fetch_tool_call_row(
     session_id: &str,
     tool_call_id: &str,
 ) -> serde_json::Value {
-    let session_id = crate::store::graphql::escape_graphql_string(session_id);
-    let tool_call_id = crate::store::graphql::escape_graphql_string(tool_call_id);
+    let session_id = crate::graphql::escape_graphql_string(session_id);
+    let tool_call_id = crate::graphql::escape_graphql_string(tool_call_id);
     let resp = node
         .execute(&format!(
             r#"{{
@@ -1468,7 +1466,7 @@ async fn list_processes_skip_publishes_canonical_tool_result() {
     ));
 
     let timeline = crate::observe::run_timeline_fetch::load_run_timeline_rows(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         "request-control-result",
     )
     .await
@@ -1552,7 +1550,7 @@ async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
     }
 
     let timeline = crate::observe::run_timeline_fetch::load_run_timeline_rows(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         "request-control-results",
     )
     .await
@@ -1708,7 +1706,7 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
         "a different same-state closure is a modeled conflict, not a lost CAS"
     );
     let durable = crate::tools::call::lifecycle::query::load_tool_call_result(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &conflict_doc_id,
         "did:test:control-race",
         &session_id,
@@ -1721,7 +1719,7 @@ async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
         "durable winner"
     );
     let presentation = crate::tools::call::lifecycle::load_tool_call_presentation(
-        &crate::store::config_client::ConfigAccess::local(node.clone()),
+        &crate::config_client::ConfigAccess::local(node.clone()),
         &conflict_doc_id,
         "did:test:control-race",
         &session_id,
@@ -2282,7 +2280,7 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     let response = node
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ request_doc_id }} }}"#,
-            crate::store::graphql::escape_graphql_string(&session_id)
+            crate::graphql::escape_graphql_string(&session_id)
         ))
         .await;
     assert!(
@@ -2344,7 +2342,7 @@ async fn steering_input_is_published_once_when_claimed_owner_runs() {
                     session_id: {{ _eq: "{}" }}
                 }}) {{ message_key request_doc_id }}
             }}"#,
-            crate::store::graphql::escape_graphql_string(&session_id)
+            crate::graphql::escape_graphql_string(&session_id)
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -2471,14 +2469,9 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
         ToolCallHookAction::Continue
     ));
 
-    let dispatched = crate::runtime::agent::loop_stream::dispatch_tool(
-        &[],
-        "ghost_tool",
-        "{}".to_string(),
-        None,
-        None,
-    )
-    .await;
+    let dispatched =
+        crate::agent::loop_stream::dispatch_tool(&[], "ghost_tool", "{}".to_string(), None, None)
+            .await;
 
     let _ = hook
         .on_tool_result("ghost_tool", None, "internal-unknown", "{}", &dispatched)
@@ -4354,7 +4347,7 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
         ToolCallHookAction::Continue
     ));
 
-    let dispatched = crate::runtime::agent::loop_stream::dispatch_tool(
+    let dispatched = crate::agent::loop_stream::dispatch_tool(
         &crate::tools::native::ToolSet::builder()
             .read_root(std::env::temp_dir())
             .bash_read_only()

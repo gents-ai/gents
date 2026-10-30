@@ -66,7 +66,7 @@ pub(super) async fn agent_preview(
     node: &Arc<EmbeddedNode>,
     owner: &str,
     args: &ConfigureAgentParams,
-    ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
+    ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
 ) -> Result<String> {
     match agent_apply(node, owner, args, ceiling, true).await {
         Ok(result) => Ok(result),
@@ -82,7 +82,7 @@ pub(super) async fn agent_mutate(
     owner: &str,
     identity: &dyn NodeIdentity,
     args: &ConfigureAgentParams,
-    ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
+    ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
 ) -> Result<String> {
     anyhow::ensure!(
         identity.did() == owner,
@@ -96,7 +96,7 @@ pub async fn configure_agent(
     owner: &str,
     identity: &dyn NodeIdentity,
     args: &ConfigureAgentParams,
-    ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
+    ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
 ) -> Result<String> {
     anyhow::ensure!(
         identity.did() == owner,
@@ -110,7 +110,7 @@ async fn agent_apply(
     node: &Arc<EmbeddedNode>,
     owner: &str,
     args: &ConfigureAgentParams,
-    ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
+    ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
     preview: bool,
 ) -> Result<String> {
     agent_apply_access(
@@ -169,7 +169,7 @@ async fn agent_apply_access(
     access: &ConfigAccess,
     owner: &str,
     args: &ConfigureAgentParams,
-    ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
+    ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
     preview: bool,
     held: Option<&ops::OperatorGrants>,
 ) -> Result<String> {
@@ -211,7 +211,7 @@ async fn agent_apply_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     args: &ConfigureAgentParams,
-    ceiling: &crate::tool_surface::SelfConfigProcessCeiling,
+    ceiling: &crate::tools::surface::SelfConfigProcessCeiling,
     preview: bool,
     held: Option<&ops::OperatorGrants>,
 ) -> Result<String> {
@@ -327,21 +327,21 @@ async fn agent_apply_in_txn(
                     "clone inherits its source tools; edit the cloned Tools to change grants"
                 );
                 let fields = preset_fields(preset).context("unknown permission preset")?;
-                let write = preset == crate::tool_surface::presets::PRESET_WRITE;
+                let write = preset == crate::tools::surface::presets::PRESET_WRITE;
                 tools = Some(Tools {
                     host: Some(HostTools {
                         files: Some(FileTools {
-                            mode: crate::tool_surface::FileToolMode::parse(
+                            mode: crate::tools::surface::FileToolMode::parse(
                                 &fields.file_tools_mode,
                             )?,
                             ..Default::default()
                         }),
                         bash: Some(BashTools {
-                            mode: crate::tool_surface::BashMode::parse(&fields.bash_mode)?,
+                            mode: crate::tools::surface::BashMode::parse(&fields.bash_mode)?,
                             execution_mode: write.then_some(if cfg!(target_os = "macos") {
-                                crate::toolset::CommandExecutionMode::WorkspaceWrite
+                                crate::tools::native::CommandExecutionMode::WorkspaceWrite
                             } else {
-                                crate::toolset::CommandExecutionMode::Unrestricted
+                                crate::tools::native::CommandExecutionMode::Unrestricted
                             }),
                             background_enabled: write,
                             ..Default::default()
@@ -375,7 +375,7 @@ async fn agent_apply_in_txn(
                     "generated tools ID already exists"
                 );
                 tools.node_did = owner.to_owned();
-                let policy = crate::tool_surface::load_workspace_root_policy_in_txn(
+                let policy = crate::tools::surface::load_workspace_root_policy_in_txn(
                     txn,
                     ceiling.root.as_deref(),
                 )
@@ -385,7 +385,7 @@ async fn agent_apply_in_txn(
                 } else {
                     tools.host.as_ref().and_then(|host| host.root.clone())
                 };
-                crate::tool_surface::canonicalize_tools_root(
+                crate::tools::surface::canonicalize_tools_root(
                     &mut tools,
                     &policy,
                     stored_root.as_deref(),

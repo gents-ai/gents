@@ -1340,7 +1340,7 @@ async fn startup_demotion_cascades_to_targets_schedules_and_tasks() {
     )
     .await;
     let (agent, _plugin_home) = documents_agent(&node, &identity).await;
-    let tool_runtime = crate::tool_surface::ToolRuntimeContext::new_with_node_did(
+    let tool_runtime = crate::tools::surface::ToolRuntimeContext::new_with_node_did(
         agent.node.clone(),
         agent.mcp_pool.clone(),
         crate::health_checker::ServiceHealthMap::new(),

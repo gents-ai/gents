@@ -18,10 +18,10 @@ use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
 use crate::store::identity::{NodeIdentity, RuntimeNode};
 use crate::store::schema::migration;
-use crate::tool_surface::{
+use crate::tools::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
+use crate::tools::surface::{
     AgentToolConfig, AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling,
 };
-use crate::tools::call::hook::{BackgroundExecutionRegistry, FailurePolicy};
 use crate::triggers::engine::manual_source::ManualTriggerHandle;
 
 mod builder;
@@ -54,8 +54,8 @@ pub use builder::{AgentBuilder, GentsBuilder};
 pub(crate) async fn process_owned_request_with_model_for_test<M>(
     node: Arc<EmbeddedNode>,
     agent_config: Arc<ResolvedAgent>,
-    tool_surface: Arc<crate::tool_surface::ToolSurface>,
-    tool_runtime: &crate::tool_surface::ToolRuntimeContext,
+    tool_surface: Arc<crate::tools::surface::ToolSurface>,
+    tool_runtime: &crate::tools::surface::ToolRuntimeContext,
     model: M,
     request: crate::request::watcher::AgentRequest,
 ) -> anyhow::Result<()>
@@ -63,7 +63,7 @@ where
     M: crate::inference::llm::rig_compat::ProviderModel,
 {
     let allowed_targets =
-        crate::tool_surface::resolve_agent_target_descriptions(tool_surface.as_ref());
+        crate::tools::surface::resolve_agent_target_descriptions(tool_surface.as_ref());
     let prompt_builder = crate::prompt::LayeredPromptBuilder::new(
         agent_config.as_ref(),
         &tool_surface,

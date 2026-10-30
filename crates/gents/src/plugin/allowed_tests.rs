@@ -205,7 +205,7 @@ fn staged_permission_objects_are_rejected_by_native_paths_and_plugin_mounts() {
     let directory = world
         .gents
         .join(crate::store::local::home::PERMISSION_STAGING_DIR_NAME);
-    let context = crate::toolset::ToolContext::new(world.root.clone(), false).unwrap();
+    let context = crate::tools::native::ToolContext::new(world.root.clone(), false).unwrap();
     write_permission_file(&world.gents, &file(&world.gents), |output| {
         output.write_all(b"new permissions")?;
         let staged = std::fs::read_dir(&directory)?.next().unwrap()?.path();

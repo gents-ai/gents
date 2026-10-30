@@ -60,7 +60,7 @@ impl Fixture {
                     cwd: self.key.path.clone(),
                     root: self.key.path.clone(),
                     writable_root: None,
-                    policy: crate::toolset::CommandExecutionPolicy::write_capable(),
+                    policy: crate::tools::native::CommandExecutionPolicy::write_capable(),
                 })
             },
             covered,

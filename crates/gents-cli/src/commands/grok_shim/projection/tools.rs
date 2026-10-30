@@ -55,7 +55,7 @@ impl ToolCallKind {
 
     pub(super) fn from_tool_name(tool_name: &str) -> Self {
         match tool_name {
-            "read_file" | gents::toolset::AGENT_SESSION_READ_TOOL_NAME => ToolCallKind::Read,
+            "read_file" | gents::tools::native::AGENT_SESSION_READ_TOOL_NAME => ToolCallKind::Read,
             "edit_file" | "write_file" | "apply_patch" | "create_file" => ToolCallKind::Edit,
             "delete_file" | "remove_file" => ToolCallKind::Delete,
             "move_file" | "rename_file" => ToolCallKind::Move,
@@ -63,7 +63,7 @@ impl ToolCallKind {
             | "glob"
             | "list_files"
             | "search"
-            | gents::toolset::AGENT_SESSION_LIST_TOOL_NAME => ToolCallKind::Search,
+            | gents::tools::native::AGENT_SESSION_LIST_TOOL_NAME => ToolCallKind::Search,
             "bash"
             | "bash_unrestricted"
             | "shell"
@@ -273,7 +273,7 @@ pub(super) fn suppressed_tool_family(tool_name: &str) -> Option<&'static str> {
 pub(super) fn is_task_family(tool_name: &str) -> bool {
     matches!(
         tool_name,
-        "task" | "Task" | gents::toolset::AGENT_NEW_TOOL_NAME
+        "task" | "Task" | gents::tools::native::AGENT_NEW_TOOL_NAME
     )
 }
 
@@ -411,7 +411,7 @@ pub(super) fn project_tool_rows(
         let kind = ToolCallKind::from_tool_name(tool_name);
         let title = tool_title(row, &kind, presentations);
         let content = tool_content(result_text);
-        let mut raw_input = if tool_name == gents::toolset::AGENT_MESSAGE_TOOL_NAME {
+        let mut raw_input = if tool_name == gents::tools::native::AGENT_MESSAGE_TOOL_NAME {
             agent_message_raw_input(args)
         } else {
             raw_input_value(args, meta.as_ref())
@@ -576,7 +576,7 @@ fn tool_title(
         )
         .as_ref(),
     ) || tool_name == SEND_ACTIVE_AGENT_MESSAGE_TITLE
-        || tool_name == gents::toolset::AGENT_MESSAGE_TOOL_NAME
+        || tool_name == gents::tools::native::AGENT_MESSAGE_TOOL_NAME
     {
         return SEND_ACTIVE_AGENT_MESSAGE_TITLE.to_string();
     }

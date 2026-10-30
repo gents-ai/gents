@@ -14,7 +14,7 @@ use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::runtime_status::{ReconcilePhase, RuntimeStatusHandle};
-use crate::tool_surface::ToolSurface;
+use crate::tools::surface::ToolSurface;
 
 mod diff;
 mod slot;

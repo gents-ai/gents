@@ -232,7 +232,7 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
                 .map(|value| value.as_str()),
         )
         .chain(
-            crate::toolset::CommandNetworkMode::ALL
+            crate::tools::native::CommandNetworkMode::ALL
                 .into_iter()
                 .map(|value| value.as_str()),
         );
@@ -242,16 +242,16 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
             "canonical enum value {value:?} missing from help"
         );
     }
-    for value in crate::tool_surface::FileToolMode::ALL
+    for value in crate::tools::surface::FileToolMode::ALL
         .into_iter()
         .map(|value| serde_json::to_value(value).unwrap())
         .chain(
-            crate::tool_surface::BashMode::ALL
+            crate::tools::surface::BashMode::ALL
                 .into_iter()
                 .map(|value| serde_json::to_value(value).unwrap()),
         )
         .chain(
-            crate::toolset::CommandExecutionMode::ALL
+            crate::tools::native::CommandExecutionMode::ALL
                 .into_iter()
                 .map(|value| serde_json::to_value(value).unwrap()),
         )
@@ -1273,9 +1273,9 @@ async fn skill_import_previews_without_writes_and_requires_file_authority() {
     .await
     .unwrap_err();
     assert!(denied.contains("file read permission"), "{denied}");
-    grants.process_ceiling = crate::tool_surface::SelfConfigProcessCeiling {
-        file_mode: crate::tool_surface::FileToolMode::ReadOnly,
-        bash_mode: crate::tool_surface::BashMode::Off,
+    grants.process_ceiling = crate::tools::surface::SelfConfigProcessCeiling {
+        file_mode: crate::tools::surface::FileToolMode::ReadOnly,
+        bash_mode: crate::tools::surface::BashMode::Off,
         root: Some(root.path().into()),
     };
     let core = SelfConfigCore::new(node.clone(), owner.clone(), "beh-test".into()).unwrap();
@@ -1443,9 +1443,9 @@ async fn configuration_discovery_is_read_only_root_bounded_and_sanitized() {
     .unwrap_err();
     assert!(denied.contains("file read permission"), "{denied}");
 
-    grants.process_ceiling = crate::tool_surface::SelfConfigProcessCeiling {
-        file_mode: crate::tool_surface::FileToolMode::ReadOnly,
-        bash_mode: crate::tool_surface::BashMode::Off,
+    grants.process_ceiling = crate::tools::surface::SelfConfigProcessCeiling {
+        file_mode: crate::tools::surface::FileToolMode::ReadOnly,
+        bash_mode: crate::tools::surface::BashMode::Off,
         root: Some(root.path().into()),
     };
     let core = SelfConfigCore::new(node.clone(), owner.clone(), "beh-test".into()).unwrap();
@@ -1565,9 +1565,9 @@ async fn setup_discovery_clarification_apply_and_verification_preserve_disabled_
 
     let mut grants = config(&["tools", "agent", "backend"]);
     grants.preview = true;
-    grants.process_ceiling = crate::tool_surface::SelfConfigProcessCeiling {
-        file_mode: crate::tool_surface::FileToolMode::ReadOnly,
-        bash_mode: crate::tool_surface::BashMode::Off,
+    grants.process_ceiling = crate::tools::surface::SelfConfigProcessCeiling {
+        file_mode: crate::tools::surface::FileToolMode::ReadOnly,
+        bash_mode: crate::tools::surface::BashMode::Off,
         root: Some(root.path().into()),
     };
     let core = SelfConfigCore::new(node.clone(), owner.clone(), "beh-test".into()).unwrap();
@@ -3352,7 +3352,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
         &node,
         &crate::agent::DocumentResolveContext::for_tests(
             identity,
-            crate::tool_surface::ToolCeiling::readonly(),
+            crate::tools::surface::ToolCeiling::readonly(),
             Default::default(),
         ),
     )
@@ -3642,9 +3642,9 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
     .unwrap();
     let core = SelfConfigCore::new(node.clone(), owner.clone(), agent_id.into())
         .unwrap()
-        .with_process_ceiling(crate::tool_surface::SelfConfigProcessCeiling {
-            file_mode: crate::tool_surface::FileToolMode::ReadOnly,
-            bash_mode: crate::tool_surface::BashMode::Off,
+        .with_process_ceiling(crate::tools::surface::SelfConfigProcessCeiling {
+            file_mode: crate::tools::surface::FileToolMode::ReadOnly,
+            bash_mode: crate::tools::surface::BashMode::Off,
             root: Some(ceiling.path().to_path_buf()),
         });
     let patch = |root: &std::path::Path| {
@@ -3771,9 +3771,9 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
 
     let mut tool_config = config(&["node"]);
     tool_config.agent_id = seed_agent.into();
-    tool_config.process_ceiling = crate::tool_surface::SelfConfigProcessCeiling {
-        file_mode: crate::tool_surface::FileToolMode::ReadOnly,
-        bash_mode: crate::tool_surface::BashMode::Off,
+    tool_config.process_ceiling = crate::tools::surface::SelfConfigProcessCeiling {
+        file_mode: crate::tools::surface::FileToolMode::ReadOnly,
+        bash_mode: crate::tools::surface::BashMode::Off,
         root: Some(operator_root.path().to_path_buf()),
     };
     let agent_tools = build_self_config_tools(
@@ -3852,7 +3852,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         &node,
         &crate::agent::DocumentResolveContext::for_tests(
             identity.clone(),
-            crate::tool_surface::ToolCeiling::readonly_at(operator_root.path()),
+            crate::tools::surface::ToolCeiling::readonly_at(operator_root.path()),
             Default::default(),
         ),
     )
@@ -3870,8 +3870,10 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
             .await
             .expect("resolve fresh-request tool surface"),
     );
-    let runtime =
-        crate::tool_surface::ToolRuntimeContext::oneshot_with_node_did(node.clone(), owner.clone());
+    let runtime = crate::tools::surface::ToolRuntimeContext::oneshot_with_node_did(
+        node.clone(),
+        owner.clone(),
+    );
 
     let cases = [
         (
@@ -4681,7 +4683,7 @@ async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply
     for field in ["settings", "init_options", "initOptions"] {
         let server = json!({field:{"check":{"overrideCommand":["custom-check"]}}});
         let raw = json!({"servers":{"rust-analyzer":server}}).to_string();
-        crate::toolset::lsp::LspConfigDocument::parse_operator(Some(&raw)).unwrap();
+        crate::tools::native::lsp::LspConfigDocument::parse_operator(Some(&raw)).unwrap();
         let patch = json!({"integrations":{"lsp":{"config":raw}}});
         let preview = config
             .call(json!({"argv":["tools", "preview", "--set", format!("integrations={}", patch["integrations"])]}).to_string())
@@ -6575,7 +6577,7 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     let mut cfg = config(&["tools", "agent"]);
     cfg.agent_id = "setup".into();
     cfg.enable_pack_install = true;
-    cfg.process_ceiling.file_mode = crate::tool_surface::FileToolMode::ReadOnly;
+    cfg.process_ceiling.file_mode = crate::tools::surface::FileToolMode::ReadOnly;
     cfg.process_ceiling.root = Some(workspace.path().to_owned());
     let tools = build_self_config_tools(
         std::sync::Arc::default(),
@@ -6687,10 +6689,10 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     );
     let record = crate::plugin::store::read_record(home.path(), "fixture", "native_echo").unwrap();
     assert!(record.granted.is_none());
-    let surface = crate::tool_surface::AgentToolSurfaceConfig::from_tools_document(
+    let surface = crate::tools::surface::AgentToolSurfaceConfig::from_tools_document(
         "setup",
         &persisted,
-        &crate::tool_surface::ToolCeiling::readonly_at(workspace.path()),
+        &crate::tools::surface::ToolCeiling::readonly_at(workspace.path()),
         Vec::new(),
     )
     .unwrap()
@@ -6698,7 +6700,7 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     .await
     .unwrap();
     let runtime =
-        crate::tool_surface::ToolRuntimeContext::oneshot_with_node_did(node.clone(), &did)
+        crate::tools::surface::ToolRuntimeContext::oneshot_with_node_did(node.clone(), &did)
             .with_plugins(plugins.clone());
     let fresh_tools = surface.build_tools(&runtime).await.unwrap();
     let fresh_tool = fresh_tools
@@ -6770,7 +6772,7 @@ async fn native_pack_local_paths_and_approval_fail_closed() {
         .unwrap_err()
         .to_string()
         .contains("effective file read permission"));
-    cfg.process_ceiling.file_mode = crate::tool_surface::FileToolMode::ReadOnly;
+    cfg.process_ceiling.file_mode = crate::tools::surface::FileToolMode::ReadOnly;
     let tools = build_self_config_tools(
         std::sync::Arc::default(),
         node,
@@ -7116,7 +7118,7 @@ async fn pack_tool_with_local_read(
     let mut tool_config = config(&["tools"]);
     tool_config.agent_id = "setup".to_string();
     tool_config.enable_pack_install = true;
-    tool_config.process_ceiling.file_mode = crate::tool_surface::FileToolMode::ReadOnly;
+    tool_config.process_ceiling.file_mode = crate::tools::surface::FileToolMode::ReadOnly;
     tool_config.process_ceiling.root = Some(root.to_owned());
     let tools = build_self_config_tools(
         std::sync::Arc::default(),

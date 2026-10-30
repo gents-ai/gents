@@ -124,15 +124,15 @@ impl PackInstaller {
                     let mode = effective
                         .pointer("/runtime_effective/effective/file_mode")
                         .and_then(Value::as_str)
-                        .map(crate::tool_surface::FileToolMode::parse)
+                        .map(crate::tools::surface::FileToolMode::parse)
                         .transpose()?
                         .unwrap_or_default();
-                    anyhow::ensure!(mode != crate::tool_surface::FileToolMode::Off, "local pack inspection requires effective file read permission on the invoking agent");
+                    anyhow::ensure!(mode != crate::tools::surface::FileToolMode::Off, "local pack inspection requires effective file read permission on the invoking agent");
                     let root = effective
                         .pointer("/runtime_effective/effective/root")
                         .and_then(Value::as_str)
                         .context("local pack inspection requires an effective tool root")?;
-                    let context = crate::toolset::ToolContext::new(root.into(), false)?;
+                    let context = crate::tools::native::ToolContext::new(root.into(), false)?;
                     let path = context
                         .resolve_existing_file(path.to_str().context("pack path is not UTF-8")?)?;
                     anyhow::ensure!(path.extension().is_some_and(|extension| extension == crate::pack::archive::EXTENSION), "native local inspection accepts a built .pack artifact; directories require a scoped build owner");

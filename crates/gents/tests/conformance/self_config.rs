@@ -15,7 +15,7 @@ use gents::self_config::{
     guard_agent_keeps_reach, guard_backend_auth, guard_backend_choice, guard_tools_keep_control,
     guard_tools_keep_grants, reselection_keeps_grants, OperatorGrants,
 };
-use gents::toolset::CommandNetworkMode;
+use gents::tools::native::CommandNetworkMode;
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 

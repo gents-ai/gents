@@ -6,7 +6,9 @@ use gents::config_client::{
 };
 use gents::documents::PackConfig;
 use gents::self_config::build_self_config_tools;
-use gents::tool_surface::{BashMode, FileToolMode, SelfConfigProcessCeiling, SelfConfigToolConfig};
+use gents::tools::surface::{
+    BashMode, FileToolMode, SelfConfigProcessCeiling, SelfConfigToolConfig,
+};
 use gents::Collection;
 use serde_json::{json, Value};
 

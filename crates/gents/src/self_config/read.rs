@@ -93,7 +93,7 @@ impl SelfConfigCore {
             .transpose()?;
         let selection = canonical_tools
             .as_ref()
-            .map(crate::tool_surface::ResolvedToolSelection::from_document)
+            .map(crate::tools::surface::ResolvedToolSelection::from_document)
             .transpose()?;
         let lsp_selected = selection.as_ref().is_some_and(|s| s.enable_lsp);
         let configured_network_mode = canonical_tools
@@ -101,7 +101,7 @@ impl SelfConfigCore {
             .and_then(|tools| tools.host.as_ref())
             .and_then(|host| host.bash.as_ref())
             .and_then(|bash| bash.network_mode)
-            .unwrap_or(crate::toolset::CommandNetworkMode::Inherit);
+            .unwrap_or(crate::tools::native::CommandNetworkMode::Inherit);
         let effective_network_mode = selection
             .as_ref()
             .and_then(|selection| selection.command_policy.as_ref())
@@ -110,34 +110,34 @@ impl SelfConfigCore {
         let network_enforcement = selection
             .as_ref()
             .and_then(|selection| selection.command_policy.as_ref())
-            .map(crate::toolset::CommandExecutionPolicy::network_enforcement_disclosure)
+            .map(crate::tools::native::CommandExecutionPolicy::network_enforcement_disclosure)
             .unwrap_or("no host command policy is active");
         let requested_file_mode = tools
             .and_then(|tools| tools.pointer("/host/files/mode"))
             .and_then(Value::as_str)
-            .map(crate::tool_surface::FileToolMode::parse)
+            .map(crate::tools::surface::FileToolMode::parse)
             .transpose()?
             .unwrap_or_default();
         let requested_bash_mode = tools
             .and_then(|tools| tools.pointer("/host/bash/mode"))
             .and_then(Value::as_str)
-            .map(crate::tool_surface::BashMode::parse)
+            .map(crate::tools::surface::BashMode::parse)
             .transpose()?
             .unwrap_or_default();
         let process_ceiling = self.process_ceiling();
         let effective_file_mode = requested_file_mode.meet(process_ceiling.file_mode);
         let effective_bash_mode = requested_bash_mode.meet(process_ceiling.bash_mode);
-        let effective_root = if effective_file_mode != crate::tool_surface::FileToolMode::Off
-            || effective_bash_mode != crate::tool_surface::BashMode::Off
+        let effective_root = if effective_file_mode != crate::tools::surface::FileToolMode::Off
+            || effective_bash_mode != crate::tools::surface::BashMode::Off
         {
-            let policy = crate::tool_surface::load_workspace_root_policy_in_txn(
+            let policy = crate::tools::surface::load_workspace_root_policy_in_txn(
                 txn,
                 process_ceiling.root.as_deref(),
             )
             .await?;
             if let Some(tools) = canonical_tools.as_mut() {
                 let stored_root = tools.host.as_ref().and_then(|host| host.root.clone());
-                crate::tool_surface::canonicalize_tools_root(
+                crate::tools::surface::canonicalize_tools_root(
                     tools,
                     &policy,
                     stored_root.as_deref(),
@@ -148,7 +148,7 @@ impl SelfConfigCore {
                 .and_then(|tools| tools.host.as_ref())
                 .and_then(|host| host.root.as_deref())
                 .filter(|root| !root.trim().is_empty());
-            crate::tool_surface::resolve_effective_tool_root(
+            crate::tools::surface::resolve_effective_tool_root(
                 self.agent_id(),
                 configured_root.map(Path::new),
                 process_ceiling.root.as_deref(),

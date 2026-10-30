@@ -75,20 +75,20 @@ fn generated_root_admission_cases_drive_production_root_policy() {
         }
         let mut documents = enabled
             .iter()
-            .map(|root| gents::tool_surface::WorkspaceRootDocument {
+            .map(|root| gents::tools::surface::WorkspaceRootDocument {
                 root_path: Some(root.to_string_lossy().into_owned()),
                 enabled: Some(true),
             })
             .collect::<Vec<_>>();
         if case.configured && documents.is_empty() && case.observation != "invalid_ceiling" {
-            documents.push(gents::tool_surface::WorkspaceRootDocument {
+            documents.push(gents::tools::surface::WorkspaceRootDocument {
                 root_path: ceiling
                     .as_ref()
                     .map(|root| root.to_string_lossy().into_owned()),
                 enabled: Some(false),
             });
         }
-        let policy = gents::tool_surface::project_workspace_root_policy(
+        let policy = gents::tools::surface::project_workspace_root_policy(
             documents,
             invalid_ceiling.as_deref().or(ceiling.as_deref()),
         );
@@ -181,9 +181,12 @@ fn generated_root_admission_cases_drive_production_root_policy() {
         };
         match case.operation.as_str() {
             "create" => {
-                let admitted =
-                    gents::tool_surface::admit_authored_root(&policy, &authored_root, case.stored)
-                        .is_ok();
+                let admitted = gents::tools::surface::admit_authored_root(
+                    &policy,
+                    &authored_root,
+                    case.stored,
+                )
+                .is_ok();
                 assert_eq!(
                     admitted, case.expected,
                     "production root admission disagrees with generated case {} ({})",
@@ -195,7 +198,7 @@ fn generated_root_admission_cases_drive_production_root_policy() {
                     .as_deref()
                     .expect("meet case models a process ceiling");
                 let meet = match candidate.as_deref() {
-                    Some(selection) => gents::tool_surface::resolve_effective_tool_root(
+                    Some(selection) => gents::tools::surface::resolve_effective_tool_root(
                         "conformance",
                         Some(selection),
                         Some(ceiling),
@@ -205,20 +208,20 @@ fn generated_root_admission_cases_drive_production_root_policy() {
                             host: Some(gents::documents::HostTools {
                                 root: Some(case.authored.clone()),
                                 files: Some(gents::documents::FileTools {
-                                    mode: gents::tool_surface::FileToolMode::ReadOnly,
+                                    mode: gents::tools::surface::FileToolMode::ReadOnly,
                                     ..Default::default()
                                 }),
                                 ..Default::default()
                             }),
                             ..Default::default()
                         };
-                        gents::tool_surface::canonicalize_tools_root(&mut tools, &policy, None)
+                        gents::tools::surface::canonicalize_tools_root(&mut tools, &policy, None)
                             .and_then(|()| {
                                 let configured = tools
                                     .host
                                     .and_then(|host| host.root)
                                     .filter(|root| !root.trim().is_empty());
-                                gents::tool_surface::resolve_effective_tool_root(
+                                gents::tools::surface::resolve_effective_tool_root(
                                     "conformance",
                                     configured.as_deref().map(std::path::Path::new),
                                     Some(ceiling),

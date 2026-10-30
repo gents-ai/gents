@@ -103,8 +103,8 @@ fn test_tool_runtime(
     node: &Arc<defra_node::EmbeddedNode>,
     node_did: &str,
     resolve_context: &crate::agent::DocumentResolveContext,
-) -> crate::tool_surface::ToolRuntimeContext {
-    crate::tool_surface::ToolRuntimeContext::new_with_node_did(
+) -> crate::tools::surface::ToolRuntimeContext {
+    crate::tools::surface::ToolRuntimeContext::new_with_node_did(
         node.clone(),
         crate::mcp_pool::McpPool::default(),
         crate::health_checker::ServiceHealthMap::default(),

@@ -14,7 +14,7 @@ pub(super) async fn load(
     request: &AgentRequestRow,
 ) -> Result<Option<ContextSample>> {
     let Some(observation) =
-        gents::toolset::load_pinned_request_context_observation(node, request).await?
+        gents::tools::native::load_pinned_request_context_observation(node, request).await?
     else {
         return Ok(None);
     };
@@ -78,7 +78,7 @@ mod tests {
         ensure_no_errors(&response, "seed physical inference context").unwrap();
         assert_eq!(load(&node, &requests[0]).await.unwrap().unwrap().used, 975);
         assert!(load(&node, &requests[1]).await.unwrap().is_none());
-        assert!(gents::toolset::load_request_context_observation(
+        assert!(gents::tools::native::load_request_context_observation(
             &node,
             "owner",
             Some("requester"),

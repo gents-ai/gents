@@ -104,7 +104,7 @@ struct PluginAttemptError {
 }
 
 fn json_digest(value: &serde_json::Value) -> String {
-    let canonical = crate::workspace::canonical_json_string(value)
+    let canonical = crate::tools::workspace::canonical_json_string(value)
         .expect("JSON value has a canonical encoding");
     format!("sha256:{:x}", Sha256::digest(canonical.as_bytes()))
 }
