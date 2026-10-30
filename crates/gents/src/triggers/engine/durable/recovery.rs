@@ -91,7 +91,7 @@ pub(crate) async fn recover_outcomes_in_txn(
 mod tests {
     use super::*;
     use crate::config_client::ConfigAccess;
-    use crate::trigger_engine::durable::{fire_key, stage_fire_request};
+    use crate::triggers::engine::durable::{fire_key, stage_fire_request};
 
     #[tokio::test]
     async fn restart_outcome_recovery_matches_modeled_crash_boundaries() {

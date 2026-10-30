@@ -1,4 +1,4 @@
-use crate::trigger_engine::event_source::EventSource;
+use crate::triggers::engine::event_source::EventSource;
 use crate::watcher::DefraWatcher;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

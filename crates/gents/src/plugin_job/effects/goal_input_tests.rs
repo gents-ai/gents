@@ -161,7 +161,7 @@ async fn deliver(
         crate::lifecycle::RequestSigner::RegisteredTarget,
     )
     .await?;
-    let prepared = crate::trigger_engine::durable::PreparedFire {
+    let prepared = crate::triggers::engine::durable::PreparedFire {
         receipt: fire,
         target_existing: case["existing"] == true,
         replace_prior: false,
@@ -252,7 +252,7 @@ async fn generated_deliveries_capture_destination_goal_in_the_admission_transact
             identity.session_id()
         };
         if case["expected"].is_null() {
-            assert!(crate::trigger_engine::durable::resolve_session_id(
+            assert!(crate::triggers::engine::durable::resolve_session_id(
                 &identity,
                 Some(&session),
                 false

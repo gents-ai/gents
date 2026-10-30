@@ -36,7 +36,7 @@ pub(crate) const LIFECYCLE_SUCCEEDED: &str = "succeeded";
 pub(crate) const LIFECYCLE_FAILED: &str = "failed";
 pub(crate) const LIFECYCLE_DENIED: &str = "denied";
 
-pub(super) struct CallbackEngine {
+pub(crate) struct CallbackEngine {
     node: Arc<EmbeddedNode>,
     node_did: String,
     ceiling: Option<PathBuf>,

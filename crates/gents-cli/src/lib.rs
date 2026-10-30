@@ -89,7 +89,7 @@ const DEFAULT_LOG_FILTER: &str = concat!(
     "gents::hook=info,",
     "gents::session::sessions=info,",
     "gents::streaming=info,",
-    "gents::trigger_engine=info"
+    "gents::triggers::engine=info"
 );
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = gents::store::local::home::RUNTIME_STATE_FILE_NAME;

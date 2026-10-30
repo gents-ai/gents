@@ -199,7 +199,7 @@ pub(crate) trait MaterializerHandle: Send + Sync {
         rendered_prompt: &str,
         rendered_goal_objective: Option<&str>,
         durable_fire_key: &str,
-        delivery: Option<&crate::trigger_engine::durable::PreparedFire>,
+        delivery: Option<&crate::triggers::engine::durable::PreparedFire>,
         prepared_ids: Option<(&str, &str)>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<String>> + Send + '_>>;
 

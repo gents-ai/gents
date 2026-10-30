@@ -5,7 +5,7 @@ async fn startup_seeding_covers_every_document_beyond_the_former_cap() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let ids =
-        crate::trigger_engine::event_delivery::source_scan::tests::create_source_documents(&node)
+        crate::triggers::engine::event_delivery::source_scan::tests::create_source_documents(&node)
             .await;
     let mut trigger =
         resolved_event_trigger("complete-seed", "RescanSource", resolved_task("observe"));
@@ -614,7 +614,7 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
     );
     assert_eq!(
         intent.durable_fire_key,
-        crate::trigger_engine::durable_fire_key(
+        crate::triggers::engine::durable_fire_key(
             "event-document",
             &["trigger-webhook", ev["source_doc_id"].as_str().unwrap()]
         )
@@ -653,9 +653,9 @@ async fn a_callback_result_fires_its_bindings_event_source_once() {
             ("inv-other", "another-binding"),
             ("inv-wanted", "maintenance-execute-workspace"),
         ] {
-            crate::callback::create_callback_result(
+            crate::triggers::callback::create_callback_result(
                 &node_for_write,
-                &crate::callback::CallbackResultDoc {
+                &crate::triggers::callback::CallbackResultDoc {
                     result_id: format!("res-{invocation_id}"),
                     invocation_id: invocation_id.to_string(),
                     binding_id: Some(binding_id.to_string()),
@@ -881,7 +881,8 @@ async fn correlation_populated_after_create_remains_eligible_for_delivery() {
     );
     let (_tx, rx) = watch::channel(snapshot.clone());
     let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
-    source.deferrals = crate::trigger_engine::deferred_delivery::DeferralWatch::new(Duration::ZERO);
+    source.deferrals =
+        crate::triggers::engine::deferred_delivery::DeferralWatch::new(Duration::ZERO);
 
     source.reconcile_subscriptions(snapshot.as_ref()).await;
     assert!(
@@ -2136,11 +2137,11 @@ fn source_fields_query_refuses_a_hostile_collection_name() {
         "__Type",
         "Job Other",
     ] {
-        crate::trigger_engine::event_source::source_fields_query(hostile)
+        crate::triggers::engine::event_source::source_fields_query(hostile)
             .expect_err(&format!("{hostile:?} must be refused"));
     }
     let query =
-        crate::trigger_engine::event_source::source_fields_query("Job").expect("a plain name");
+        crate::triggers::engine::event_source::source_fields_query("Job").expect("a plain name");
     assert!(query.contains(r#"__type(name: "Job")"#), "{query}");
 }
 

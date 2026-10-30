@@ -13,7 +13,7 @@ use crate::documents::{
     TRIGGER_CURSOR_BATCH_SIZE,
 };
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
-use crate::trigger_engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
+use crate::triggers::engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
 
 pub(crate) struct ScheduleSource {
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
@@ -192,7 +192,7 @@ impl TriggerSource for ScheduleSource {
                             group_vars: None,
                             trigger_context: None,
                             args_vars: None,
-                            durable_fire_key: crate::trigger_engine::durable_fire_key(
+                            durable_fire_key: crate::triggers::engine::durable_fire_key(
                                 "schedule",
                                 &[trigger_id, &next_run_at],
                             ),

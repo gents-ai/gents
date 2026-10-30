@@ -102,7 +102,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("RuntimeReconcile", Module("conformance/client_runtime.rs")),
         (
             "Scheduling",
-            WorkspaceTest("crates/gents/src/trigger_engine/tests/schedule_source.rs"),
+            WorkspaceTest("crates/gents/src/triggers/engine/tests/schedule_source.rs"),
         ),
         ("ScopeTemplates", Module("conformance/scope_templates.rs")),
         ("SelfConfig", Module("conformance/self_config.rs")),
@@ -153,7 +153,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("Transcript", Gap("Native owner coverage exists for ordering, model-scripted parallel completion, pair closure, and ownership abandonment. Full generated coverage still needs transaction fault injection for lost-ack duplicate delivery replay and a native permissive orphan-result publication owner.")),
         (
             "Triggers",
-            WorkspaceTest("crates/gents/src/trigger_engine/tests/dispatch_contract.rs"),
+            WorkspaceTest("crates/gents/src/triggers/engine/tests/dispatch_contract.rs"),
         ),
         ("Workspace", Gap("Canonical binding/admission fixtures await the workspace runtime owner; the removed test-local predicate mirror was not implementation coverage.")),
         (

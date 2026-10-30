@@ -433,8 +433,8 @@ impl ConfigReferences {
                         require(Collection::Schedule, schedule_id, "source.schedule_id")?;
                         // The fire-time owner, so publication refuses exactly
                         // what every schedule fire would error on (#2080).
-                        crate::trigger_engine::validate_task_delivery_options(
-                            crate::trigger_engine::TriggerKind::Schedule,
+                        crate::triggers::engine::validate_task_delivery_options(
+                            crate::triggers::engine::TriggerKind::Schedule,
                             task.emit_outcome,
                             doc.concurrency.unwrap_or_default(),
                             doc.session_id_template.is_some(),
@@ -459,7 +459,7 @@ impl ConfigReferences {
                                 .context("trigger event source missing")?,
                         )?;
                         ensure!(
-                            crate::trigger_engine::durable::outcome_source_allowed(
+                            crate::triggers::engine::durable::outcome_source_allowed(
                                 &source.source_collection,
                                 task.emit_outcome,
                             ),
@@ -512,7 +512,7 @@ impl ConfigReferences {
                     correlation_field,
                     outputs,
                     ..
-                } => crate::callback::plugin::validate_handler(
+                } => crate::triggers::callback::plugin::validate_handler(
                     &plugin,
                     &digest,
                     correlation_field.as_deref(),
@@ -533,7 +533,7 @@ impl ConfigReferences {
                         .get(&(Collection::EventSource, doc.event_source_id.clone()))
                         .context("callback event source missing")?,
                 )?;
-                crate::callback::reject_secret_bearing_callback_fields(
+                crate::triggers::callback::reject_secret_bearing_callback_fields(
                     &doc.binding_id,
                     source.filter.as_deref(),
                     None,

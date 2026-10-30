@@ -393,7 +393,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/callback/documents.rs",
+      "path": "crates/gents/src/triggers/callback/documents.rs",
       "collection": "CallbackInvocation",
       "arguments": "filter: { owner_node_did: { _eq: \"$GENTS_owner$\" }, lifecycle_state: { _eq: \"failed\" }, created_at: { _ge: \"$GENTS_cutoff$\" } }, order: { created_at: DESC }, limit: $GENTS_limit$"
     },
@@ -407,7 +407,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/callback/documents.rs",
+      "path": "crates/gents/src/triggers/callback/documents.rs",
       "collection": "CallbackInvocation",
       "arguments": "filter: { owner_node_did: { _eq: \"$GENTS_owner$\" }, lifecycle_state: { _eq: \"succeeded\" }, created_at: { _ge: \"$GENTS_cutoff$\" } }, order: { created_at: DESC }, limit: $GENTS_limit$"
     },
@@ -817,7 +817,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/trigger_engine/event_delivery.rs",
+      "path": "crates/gents/src/triggers/engine/event_delivery.rs",
       "collection": "$GENTS_0$",
       "arguments": "filter:$GENTS_filter$,order:{_docID:ASC},limit:$GENTS_1$"
     },
@@ -831,7 +831,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/trigger_engine/event_delivery.rs",
+      "path": "crates/gents/src/triggers/engine/event_delivery.rs",
       "collection": "$GENTS_0$",
       "arguments": "filter:$GENTS_filter$,order:{_docID:ASC},limit:$GENTS_GROUP_RECOVERY_PAGE_SIZE$"
     },
@@ -845,7 +845,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/trigger_engine/event_delivery/source_scan.rs",
+      "path": "crates/gents/src/triggers/engine/event_delivery/source_scan.rs",
       "collection": "$GENTS_collection$",
       "arguments": "filter: $GENTS_filter$, order: { _docID: ASC }, limit: $GENTS_SOURCE_SCAN_PAGE_SIZE$"
     },

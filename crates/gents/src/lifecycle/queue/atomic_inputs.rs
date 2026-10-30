@@ -577,7 +577,7 @@ async fn background_completion_transaction_attempt(
                     .and_then(|data| data.get("update_AgentRequest"))
                     .is_some_and(crate::graphql::response_has_documents)
                 {
-                    crate::trigger_engine::durable::publish_request_outcome(
+                    crate::triggers::engine::durable::publish_request_outcome(
                         txn,
                         &parent.node_did,
                         &lower.request_id,

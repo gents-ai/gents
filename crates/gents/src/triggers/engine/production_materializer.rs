@@ -15,7 +15,7 @@ use crate::lifecycle::{
     TriggerLineage, WorkspaceLineage,
 };
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ResolvedTask};
-use crate::trigger_engine::{MaterializerHandle, TriggerKind};
+use crate::triggers::engine::{MaterializerHandle, TriggerKind};
 
 pub(crate) struct ProductionMaterializer {
     node: Arc<EmbeddedNode>,
@@ -194,7 +194,7 @@ impl MaterializerHandle for ProductionMaterializer {
         rendered_prompt: &str,
         rendered_goal_objective: Option<&str>,
         durable_fire_key: &str,
-        delivery: Option<&crate::trigger_engine::durable::PreparedFire>,
+        delivery: Option<&crate::triggers::engine::durable::PreparedFire>,
         prepared_ids: Option<(&str, &str)>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + '_>> {
         if matches!(trigger_kind, TriggerKind::Manual)
@@ -504,7 +504,7 @@ impl MaterializerHandle for ProductionMaterializer {
     ) -> Pin<Box<dyn std::future::Future<Output = Result<Option<String>>> + Send + '_>> {
         let identity = identity.clone();
         Box::pin(async move {
-            let key = crate::trigger_engine::durable::fire_key(&identity);
+            let key = crate::triggers::engine::durable::fire_key(&identity);
             crate::config_client::ConfigAccess::transact_local_readonly(
                 &self.node, Some(self.runtime_actor()?), "trigger.recover_admitted_fire",
                 |txn| { let key = key.clone(); let identity = identity.clone(); Box::pin(async move {

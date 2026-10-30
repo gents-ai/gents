@@ -11,13 +11,13 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use super::{CallbackWorkers, PLUGIN_CALLBACK_CONCURRENCY};
-use crate::callback::documents::{load_callback, load_invocation, CallbackInvocationDoc};
 use crate::config_client::{
     apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::store;
 use crate::plugin::tests::executor::{asking_plugin_wat, installed_plugin};
+use crate::triggers::callback::documents::{load_callback, load_invocation, CallbackInvocationDoc};
 use crate::UpdateSubscriptionSource;
 
 const OWNER: &str = crate::lifecycle::test_support::PIN_FIXED_DID;
@@ -264,7 +264,7 @@ async fn live_engine_recovers_saturated_plugin_without_new_arrivals() {
 
     let cancel = CancellationToken::new();
     let _cancel_guard = cancel.clone().drop_guard();
-    let mut engine = tokio::spawn(crate::callback::run_callback_engine(
+    let mut engine = tokio::spawn(crate::triggers::callback::run_callback_engine(
         node.clone(),
         OWNER.into(),
         None,

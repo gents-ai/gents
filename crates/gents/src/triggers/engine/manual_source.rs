@@ -62,7 +62,7 @@ impl ManualTriggerHandle {
             group_vars: None,
             trigger_context: None,
             args_vars: Some(args),
-            durable_fire_key: crate::trigger_engine::durable_fire_key(
+            durable_fire_key: crate::triggers::engine::durable_fire_key(
                 "manual",
                 &[&uuid::Uuid::new_v4().to_string()],
             ),

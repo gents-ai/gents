@@ -174,7 +174,7 @@ async fn a_seed_ignores_unrelated_and_stale_trigger_failures() {
         .unwrap();
     let since = "2026-06-01T00:00:00Z";
     let source = "seed-\"current";
-    let unacknowledged = crate::trigger_engine::UNACKNOWLEDGED_STATUS;
+    let unacknowledged = crate::triggers::engine::UNACKNOWLEDGED_STATUS;
     for (trigger_id, status, doc_id, attempted) in [
         ("unrelated", "error", "another-seed", since),
         ("stale", "error", source, "2026-01-01T00:00:00Z"),
@@ -265,7 +265,7 @@ async fn a_seed_unacknowledged_trigger_is_infrastructure() {
     seed_trigger(
         &home,
         "unacknowledged",
-        crate::trigger_engine::UNACKNOWLEDGED_STATUS,
+        crate::triggers::engine::UNACKNOWLEDGED_STATUS,
         Some("acknowledgment channel closed"),
         since,
     )
@@ -297,7 +297,7 @@ async fn an_unacknowledged_seed_fire_does_not_downgrade_a_recorded_error() {
     let since = "2026-06-01T00:00:00Z";
     let source = "seed-current";
     for (trigger_id, status) in [
-        ("lost", crate::trigger_engine::UNACKNOWLEDGED_STATUS),
+        ("lost", crate::triggers::engine::UNACKNOWLEDGED_STATUS),
         ("caused", "error"),
     ] {
         seed_trigger(

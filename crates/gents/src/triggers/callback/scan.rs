@@ -20,12 +20,12 @@ use super::documents::{
 };
 use super::{CallbackEngine, LIFECYCLE_PENDING};
 
-use crate::trigger_engine::event_delivery::source_scan::load_doc_ids;
+use crate::triggers::engine::event_delivery::source_scan::load_doc_ids;
 
 const CALLBACK_RESCAN_INTERVAL: Duration = Duration::from_secs(5);
 
-use crate::trigger_engine::event_delivery::{self, Delivery, GroupOutcome};
-pub(super) use crate::trigger_engine::event_source::SourceSchemaCache;
+use crate::triggers::engine::event_delivery::{self, Delivery, GroupOutcome};
+pub(super) use crate::triggers::engine::event_source::SourceSchemaCache;
 
 pub(super) fn rescan_tick() -> tokio::time::Interval {
     let mut tick = tokio::time::interval(CALLBACK_RESCAN_INTERVAL);
@@ -835,8 +835,9 @@ mod grouped_tests {
         let response = node.execute(query).await;
         let rows = crate::graphql::rows::<Value>(&response, "CallbackInvocation").unwrap();
         assert_eq!(rows.len(), 1);
-        let frozen =
-            crate::callback::documents::callback_input_from_storage(rows[0]["input"].clone());
+        let frozen = crate::triggers::callback::documents::callback_input_from_storage(
+            rows[0]["input"].clone(),
+        );
         let members = node
             .execute("{CallbackMember(order:{_docID:ASC}){value}}")
             .await;
@@ -869,7 +870,9 @@ mod grouped_tests {
             "same group must not materialize a second invocation"
         );
         assert_eq!(
-            crate::callback::documents::callback_input_from_storage(rows[0]["input"].clone()),
+            crate::triggers::callback::documents::callback_input_from_storage(
+                rows[0]["input"].clone()
+            ),
             frozen,
             "replay must preserve original projected input"
         );

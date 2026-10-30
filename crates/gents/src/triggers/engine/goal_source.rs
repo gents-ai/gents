@@ -663,7 +663,7 @@ impl GoalSource {
             group_vars: None,
             trigger_context: parent.caused_by_trigger_context.clone(),
             args_vars: None,
-            durable_fire_key: crate::trigger_engine::durable_fire_key(
+            durable_fire_key: crate::triggers::engine::durable_fire_key(
                 "goal-continuation",
                 &[&child.request_id],
             ),

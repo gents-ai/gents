@@ -27,12 +27,12 @@ use crate::runtime_snapshot::{
 };
 use crate::store::identity::{KeyIdentity, RuntimeNode};
 use crate::tool_surface::AgentToolSurfaceConfig;
-use crate::trigger_engine::event_source::EventSource;
-use crate::trigger_engine::manual_source::ManualSource;
-use crate::trigger_engine::production_materializer::{
+use crate::triggers::engine::event_source::EventSource;
+use crate::triggers::engine::manual_source::ManualSource;
+use crate::triggers::engine::production_materializer::{
     execution_origin_for_trigger_kind, ProductionMaterializer,
 };
-use crate::trigger_engine::schedule_source::ScheduleSource;
+use crate::triggers::engine::schedule_source::ScheduleSource;
 use crate::BackendProviderKind;
 
 type MaterializeCall = (Option<String>, TriggerKind, String);
@@ -78,17 +78,18 @@ fn stub_principal() -> Arc<crate::store::identity::RuntimeNode> {
     })
 }
 
-const LEAN_TRIGGER_TYPES_MODEL: &str = include_str!("../../../proofs/Proofs/Triggers/Types.lean");
+const LEAN_TRIGGER_TYPES_MODEL: &str =
+    include_str!("../../../../proofs/Proofs/Triggers/Types.lean");
 const LEAN_TRIGGER_TYPES_FILE: &str = "crates/gents/proofs/Proofs/Triggers/Types.lean";
 
 #[test]
 fn durable_fire_keys_are_unambiguous_across_component_delimiters() {
-    let left = crate::trigger_engine::durable_fire_key("event-document", &["trigger:a", "doc"]);
-    let right = crate::trigger_engine::durable_fire_key("event-document", &["trigger", "a:doc"]);
+    let left = crate::triggers::engine::durable_fire_key("event-document", &["trigger:a", "doc"]);
+    let right = crate::triggers::engine::durable_fire_key("event-document", &["trigger", "a:doc"]);
     assert_ne!(left, right);
     assert_ne!(
         left,
-        crate::trigger_engine::durable_fire_key("event-group", &["trigger:a", "doc"])
+        crate::triggers::engine::durable_fire_key("event-group", &["trigger:a", "doc"])
     );
 }
 
@@ -246,7 +247,7 @@ impl MaterializerHandle for SpyMaterializer {
         rendered_prompt: &str,
         rendered_goal_objective: Option<&str>,
         durable_fire_key: &str,
-        delivery: Option<&crate::trigger_engine::durable::PreparedFire>,
+        delivery: Option<&crate::triggers::engine::durable::PreparedFire>,
         _prepared_ids: Option<(&str, &str)>,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + '_>> {
         let entry = (

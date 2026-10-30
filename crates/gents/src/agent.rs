@@ -22,7 +22,7 @@ use crate::store::schema::migration;
 use crate::tool_surface::{
     AgentToolConfig, AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling,
 };
-use crate::trigger_engine::manual_source::ManualTriggerHandle;
+use crate::triggers::engine::manual_source::ManualTriggerHandle;
 
 mod builder;
 pub mod completion_retry;

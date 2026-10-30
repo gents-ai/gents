@@ -12,7 +12,6 @@ pub mod background_completion;
 mod background_completion_diagnostics;
 pub mod background_tools;
 pub mod blocked_turn;
-pub(crate) mod callback;
 pub mod codex_shim_binding;
 pub(crate) mod completion_factory;
 pub mod config_client;
@@ -23,7 +22,6 @@ pub mod documents;
 pub mod drop_cleanup;
 pub mod error;
 pub mod eval;
-pub mod event_delivery_contract;
 pub mod external_adapter_capture;
 pub mod failure_text;
 pub mod file_inventory;
@@ -336,7 +334,7 @@ pub mod tool_control;
 pub mod tool_surface;
 pub mod toolset;
 pub mod trace_export;
-pub(crate) mod trigger_engine;
+pub mod triggers;
 pub mod truncation;
 pub mod watcher;
 pub mod workspace;
@@ -363,7 +361,6 @@ pub use background_completion_diagnostics::{
 };
 pub use background_tools::load_caused_request_terminal;
 pub use background_tools::status_projection::OutputEvidence;
-pub use callback::reject_secret_bearing_callback_fields;
 pub use config_client::ConfigAccess;
 pub use defra_node;
 pub use documents::template::{
@@ -488,12 +485,13 @@ pub use toolset::{
     CommandExecutionPolicy, CommandNetworkMode, FileToolLimits, NativeTool, ToolSet,
     ToolSetBuilder,
 };
-pub use trigger_engine::event_source::EventSource;
-pub use trigger_engine::goal_source::GoalSource;
-pub use trigger_engine::subscription_source::{
+pub use triggers::callback::reject_secret_bearing_callback_fields;
+pub use triggers::engine::event_source::EventSource;
+pub use triggers::engine::goal_source::GoalSource;
+pub use triggers::engine::subscription_source::{
     collection_ids, subscribe_collections, UpdateSubscriptionSource,
 };
-pub use trigger_engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
+pub use triggers::engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
 pub use truncation::{TruncationLimits, TruncationMode};
 pub use watcher::{AgentRequest, DefraWatcher, Watcher};
 

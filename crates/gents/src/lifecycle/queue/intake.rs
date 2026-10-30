@@ -67,7 +67,7 @@ async fn order_pending_in_txn(
                 .context("pending message has no physical identity")
         })
         .collect::<Result<Vec<_>>>()?;
-    let order = crate::trigger_engine::durable::request_arrival_order(txn, &ids).await?;
+    let order = crate::triggers::engine::durable::request_arrival_order(txn, &ids).await?;
     anyhow::ensure!(
         order.len() == ids.len(),
         "pending queue arrival is incomplete"

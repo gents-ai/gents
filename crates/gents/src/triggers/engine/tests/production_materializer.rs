@@ -31,7 +31,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         source_collection: "Schedule".into(),
         source_doc_id: "authority-occurrence".into(),
     };
-    let prepared = crate::trigger_engine::durable::PreparedFire {
+    let prepared = crate::triggers::engine::durable::PreparedFire {
         receipt: gents_protocol::trigger_delivery::TriggerFire {
             fire_key: identity.fire_key(),
             request_id: identity.request_id(),
@@ -645,7 +645,7 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
         source_collection: "Schedule".into(),
         source_doc_id: "original-due-occurrence".into(),
     };
-    let prepared = crate::trigger_engine::durable::PreparedFire {
+    let prepared = crate::triggers::engine::durable::PreparedFire {
         receipt: gents_protocol::trigger_delivery::TriggerFire {
             fire_key: identity.fire_key(),
             request_id: identity.request_id(),
@@ -953,8 +953,8 @@ async fn durable_group_marker_preserves_generation_owner_and_goal_mode() {
     let owner = "did:key:z-marker-owner";
     let trigger = "review-\"verify";
     let correlation = "run-\"42";
-    let old = crate::trigger_engine::durable_fire_key("event-group", &["old-membership"]);
-    let next = crate::trigger_engine::durable_fire_key("event-group", &["new-membership"]);
+    let old = crate::triggers::engine::durable_fire_key("event-group", &["old-membership"]);
+    let next = crate::triggers::engine::durable_fire_key("event-group", &["new-membership"]);
     create_request(
         &node,
         &old,
@@ -1002,7 +1002,7 @@ async fn durable_group_marker_preserves_generation_owner_and_goal_mode() {
             .unwrap(),
         "goal task still marks the same delivery after task rename or goal-mode switch"
     );
-    let later = crate::trigger_engine::durable_fire_key("event-group", &["third-membership"]);
+    let later = crate::triggers::engine::durable_fire_key("event-group", &["third-membership"]);
     assert!(!materializer
         .has_materialized_group_request(owner, trigger, &later)
         .await
@@ -1698,7 +1698,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
         source_collection: "ReplayWork".into(),
         source_doc_id: "physical-source".into(),
     };
-    let key = crate::trigger_engine::durable::fire_key(&identity);
+    let key = crate::triggers::engine::durable::fire_key(&identity);
     let fire = gents_protocol::trigger_delivery::TriggerFire {
         fire_key: key.clone(),
         request_id: identity.request_id(),
@@ -1720,7 +1720,7 @@ async fn admitted_event_replay_precedes_render_and_latest_only_supersession() {
     crate::config_client::ConfigAccess::transact_local_write(&node, None, "test.seed_committed_replay", |txn| {
         let fire = fire.clone();
         Box::pin(async move {
-            assert!(crate::trigger_engine::durable::stage_fire_receipt(txn, &fire).await?);
+            assert!(crate::triggers::engine::durable::stage_fire_receipt(txn, &fire).await?);
             txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) {create_AgentRequest(input: $input) {_docID}}", &serde_json::json!({"input": {
                 "request_id": fire.request_id, "node_did": fire.identity.owner_did,
                 "session_id": fire.session_id, "agent_id": "general", "purpose": "normal",
@@ -1776,7 +1776,7 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
         source_collection: "Schedule".into(),
         source_doc_id: "persisted-due-occurrence".into(),
     };
-    let key = crate::trigger_engine::durable::fire_key(&identity);
+    let key = crate::triggers::engine::durable::fire_key(&identity);
     let fire = gents_protocol::trigger_delivery::TriggerFire {
         fire_key: key.clone(),
         request_id: identity.request_id(),
@@ -1798,7 +1798,7 @@ async fn admitted_schedule_replay_precedes_render_and_latest_only_supersession()
     crate::config_client::ConfigAccess::transact_local_write(&node, None, "test.seed_committed_replay", |txn| {
         let fire = fire.clone();
         Box::pin(async move {
-            assert!(crate::trigger_engine::durable::stage_fire_receipt(txn, &fire).await?);
+            assert!(crate::triggers::engine::durable::stage_fire_receipt(txn, &fire).await?);
             txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) {create_AgentRequest(input: $input) {_docID}}", &serde_json::json!({"input": {
                 "request_id": fire.request_id, "node_did": fire.identity.owner_did,
                 "session_id": fire.session_id, "agent_id": "general", "purpose": "normal",

@@ -567,7 +567,7 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
             .and_then(|data| data.get("update_AgentRequest"))
             .is_some_and(crate::graphql::response_has_documents)
         {
-            crate::trigger_engine::durable::publish_request_outcome(
+            crate::triggers::engine::durable::publish_request_outcome(
                 txn,
                 &goal.node_did,
                 &row.request_id,

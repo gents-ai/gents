@@ -6,7 +6,7 @@ pub(super) async fn event_group_eligibility_matches_lean_generated_contract_case
     assert!(!cases.is_empty());
     for case in cases {
         assert_eq!(
-            crate::trigger_engine::event_source::group_candidate_eligible(
+            crate::triggers::engine::event_source::group_candidate_eligible(
                 case.actual_count,
                 case.expected_count,
                 case.minimum_count,

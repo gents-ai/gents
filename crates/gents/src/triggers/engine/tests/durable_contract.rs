@@ -1,5 +1,5 @@
 use super::*;
-use crate::trigger_engine::durable;
+use crate::triggers::engine::durable;
 use gents_protocol::trigger_delivery::{FireIdentity, TriggerFire};
 use serde::Deserialize;
 
@@ -923,9 +923,9 @@ async fn admit_callback_arrival(
     doc_id: &str,
     version: &str,
 ) {
-    crate::callback::create_pending_invocation(
+    crate::triggers::callback::create_pending_invocation(
         node,
-        &crate::callback::CallbackInvocationDoc {
+        &crate::triggers::callback::CallbackInvocationDoc {
             input: serde_json::json!({}),
             invocation_id: uuid::Uuid::new_v4().to_string(),
             owner_node_did: "owner-a".into(),
@@ -936,9 +936,9 @@ async fn admit_callback_arrival(
                 source_doc_id: doc_id.into(),
                 source_version: Some(version.into()),
             },
-            idempotency_key: crate::callback::idempotency_key("handoff", "Work", doc_id),
+            idempotency_key: crate::triggers::callback::idempotency_key("handoff", "Work", doc_id),
             caused_by_correlation: None,
-            lifecycle_state: crate::callback::LIFECYCLE_PENDING.into(),
+            lifecycle_state: crate::triggers::callback::LIFECYCLE_PENDING.into(),
             attempts: Some(0),
             action_plan: None,
             action_journal: None,

@@ -452,7 +452,7 @@ impl RequestLifecycle {
                         for row in rows {
                             crate::workspace::release_terminal_writer_binding(txn, row).await?;
                         }
-                        crate::trigger_engine::durable::publish_request_outcome(
+                        crate::triggers::engine::durable::publish_request_outcome(
                             txn,
                             &request.node_did,
                             &request.request_id,
@@ -535,7 +535,7 @@ impl RequestLifecycle {
                         for row in rows {
                             crate::workspace::release_terminal_writer_binding(txn, row).await?;
                         }
-                        crate::trigger_engine::durable::publish_request_outcome(
+                        crate::triggers::engine::durable::publish_request_outcome(
                             txn,
                             &request.node_did,
                             &request.request_id,
@@ -632,7 +632,7 @@ impl RequestLifecycle {
                                 crate::workspace::release_terminal_writer_binding(txn, row).await?;
                             }
                         }
-                        crate::trigger_engine::durable::publish_request_outcome(
+                        crate::triggers::engine::durable::publish_request_outcome(
                             txn,
                             &request.node_did,
                             &request.request_id,

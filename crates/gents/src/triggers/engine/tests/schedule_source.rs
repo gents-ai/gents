@@ -370,7 +370,7 @@ async fn schedule_source_next_fire_emits_intent_when_schedule_is_due() {
     assert!(intent.args_vars.is_none());
     assert_eq!(
         intent.durable_fire_key,
-        crate::trigger_engine::durable_fire_key("schedule", &["sched-1", &persisted_next_run_at])
+        crate::triggers::engine::durable_fire_key("schedule", &["sched-1", &persisted_next_run_at])
     );
 
     let ev = &intent.event_vars;

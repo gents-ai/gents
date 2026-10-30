@@ -292,7 +292,7 @@ async fn an_unacknowledged_fire_records_its_reason_on_the_trigger() {
     let before = delivery.cursor().await;
     drop(intent);
     let trigger = delivery
-        .trigger_status(crate::trigger_engine::UNACKNOWLEDGED_STATUS)
+        .trigger_status(crate::triggers::engine::UNACKNOWLEDGED_STATUS)
         .await;
     assert!(
         trigger["last_error"]
@@ -341,7 +341,7 @@ async fn a_driver_that_dies_mid_dispatch_records_the_fire_as_unacknowledged() {
     std::panic::set_hook(previous_hook);
     joined.expect_err("the materializer must have killed the driver");
     let trigger = delivery
-        .trigger_status(crate::trigger_engine::UNACKNOWLEDGED_STATUS)
+        .trigger_status(crate::triggers::engine::UNACKNOWLEDGED_STATUS)
         .await;
     assert_eq!(
         trigger["last_fired_source_doc_id"].as_str(),
@@ -361,7 +361,7 @@ async fn an_acknowledged_fire_records_no_unacknowledged_status() {
     let settled = observed_trigger(delivery.node.as_ref(), "ping-trigger").await;
     assert_ne!(
         settled["last_status"].as_str(),
-        Some(crate::trigger_engine::UNACKNOWLEDGED_STATUS),
+        Some(crate::triggers::engine::UNACKNOWLEDGED_STATUS),
         "{settled}"
     );
     assert!(
@@ -387,7 +387,7 @@ impl MaterializerHandle for PanicMaterializer {
         _rendered_prompt: &str,
         _rendered_goal_objective: Option<&str>,
         _durable_fire_key: &str,
-        _delivery: Option<&crate::trigger_engine::durable::PreparedFire>,
+        _delivery: Option<&crate::triggers::engine::durable::PreparedFire>,
         _prepared_ids: Option<(&str, &str)>,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<String>> + Send + '_>> {
         Box::pin(async { panic!("injected materializer panic") })

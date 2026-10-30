@@ -1287,7 +1287,7 @@ mod session_message_tests {
 }
 
 pub fn task_fire_key(identity: &gents_protocol::trigger_delivery::FireIdentity) -> String {
-    crate::trigger_engine::durable::fire_key(identity)
+    crate::triggers::engine::durable::fire_key(identity)
 }
 
 pub struct TaskDeliveryAdmission {
@@ -1329,7 +1329,7 @@ pub async fn write_task_delivery_local(
 pub(crate) async fn write_trigger_delivery(
     node: &std::sync::Arc<EmbeddedNode>,
     actor: ::identity::Did,
-    prepared: &crate::trigger_engine::durable::PreparedFire,
+    prepared: &crate::triggers::engine::durable::PreparedFire,
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<TaskDeliveryAdmission> {
     crate::config_client::ConfigAccess::transact_local_write(
@@ -1339,7 +1339,7 @@ pub(crate) async fn write_trigger_delivery(
         |txn| {
             Box::pin(async move {
                 let fresh =
-                    crate::trigger_engine::durable::stage_fire_receipt(txn, &prepared.receipt)
+                    crate::triggers::engine::durable::stage_fire_receipt(txn, &prepared.receipt)
                         .await?;
                 let mut create = create.clone();
                 if fresh {
@@ -1410,7 +1410,7 @@ pub async fn supersede_trigger_requests_in_txn(
         .as_array()
         .context("supersession omitted pending requests")?;
     for row in pending {
-        crate::trigger_engine::durable::publish_request_outcome(
+        crate::triggers::engine::durable::publish_request_outcome(
             txn,
             owner,
             row["request_id"]
@@ -1455,7 +1455,7 @@ async fn stage_task_delivery(
     continue_existing: bool,
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<TaskDeliveryAdmission> {
-    let fresh = crate::trigger_engine::durable::stage_fire_receipt(txn, fire).await?;
+    let fresh = crate::triggers::engine::durable::stage_fire_receipt(txn, fire).await?;
     stage_task_delivery_with_receipt(txn, fire, continue_existing, create, fresh).await
 }
 
@@ -1534,7 +1534,7 @@ async fn stage_task_delivery_with_receipt(
         .await?;
         if continue_existing {
             anyhow::ensure!(
-                crate::trigger_engine::durable::resolve_session_id(
+                crate::triggers::engine::durable::resolve_session_id(
                     &fire.identity,
                     Some(&create.session_id),
                     session.is_some()
@@ -1545,7 +1545,7 @@ async fn stage_task_delivery_with_receipt(
         } else {
             anyhow::ensure!(
                 manual_label
-                    || crate::trigger_engine::durable::resolve_session_id(
+                    || crate::triggers::engine::durable::resolve_session_id(
                         &fire.identity,
                         None,
                         false

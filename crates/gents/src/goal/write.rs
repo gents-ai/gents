@@ -189,7 +189,7 @@ pub(super) async fn set_goal_in_txn(
         let updated = load_canonical_goal_in_txn(txn, node_did, session_id)
             .await?
             .context("updated Goal row disappeared")?;
-        crate::trigger_engine::durable::publish_goal_outcomes(
+        crate::triggers::engine::durable::publish_goal_outcomes(
             txn,
             node_did,
             &updated.goal_id,

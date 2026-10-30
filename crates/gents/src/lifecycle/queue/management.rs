@@ -142,7 +142,7 @@ pub async fn pending_user_queue_projection(
                     })
                     .collect::<Result<Vec<_>>>()?;
                 let arrival_order =
-                    crate::trigger_engine::durable::request_arrival_order(txn, observed_doc_ids)
+                    crate::triggers::engine::durable::request_arrival_order(txn, observed_doc_ids)
                         .await?;
                 Ok(PendingQueueProjection {
                     pending: PendingQueueSnapshot { entries },
@@ -812,7 +812,7 @@ pub(crate) async fn apply_pending_user_edit_in_txn(
         let mut released = serde_json::to_value(old)?;
         released["_docID"] = serde_json::Value::String(old_id.to_owned());
         crate::workspace::release_terminal_writer_binding(txn, &released).await?;
-        crate::trigger_engine::durable::publish_request_outcome(
+        crate::triggers::engine::durable::publish_request_outcome(
             txn,
             node_did,
             &old.request_id,

@@ -102,7 +102,7 @@ pub(super) async fn trigger_failure(
 ) -> Option<OutcomeKind> {
     let node_did = escape_graphql_string(node_did);
     let since = escape_graphql_string(since);
-    let unacknowledged = crate::trigger_engine::UNACKNOWLEDGED_STATUS;
+    let unacknowledged = crate::triggers::engine::UNACKNOWLEDGED_STATUS;
     let source_filter = source_doc_id.map_or_else(String::new, |doc_id| {
         format!(
             r#", last_fired_source_doc_id: {{ _eq: "{}" }}"#,

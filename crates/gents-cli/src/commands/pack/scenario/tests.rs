@@ -299,7 +299,7 @@ async fn documents_fixture_staging_installs_its_declared_schemas() {
     node.shutdown().await;
 }
 
-const COLOURED: &str = "\u{1b}[32m INFO\u{1b}[0m \u{1b}[2mgents::trigger_engine::event_source\u{1b}[0m\u{1b}[2m:\u{1b}[0m event source now observing source collection \u{1b}[3msource_collection\u{1b}[0m\u{1b}[2m=\u{1b}[0mExperimentJob \u{1b}[3mgeneration\u{1b}[0m\u{1b}[2m=\u{1b}[0m3";
+const COLOURED: &str = "\u{1b}[32m INFO\u{1b}[0m \u{1b}[2mgents::triggers::engine::event_source\u{1b}[0m\u{1b}[2m:\u{1b}[0m event source now observing source collection \u{1b}[3msource_collection\u{1b}[0m\u{1b}[2m=\u{1b}[0mExperimentJob \u{1b}[3mgeneration\u{1b}[0m\u{1b}[2m=\u{1b}[0m3";
 
 #[test]
 fn matches_the_observe_line_through_ansi_colouring() {

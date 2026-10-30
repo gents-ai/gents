@@ -374,7 +374,7 @@ async fn stage_resume_inner(
     let now = Utc::now();
     let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let wrapup = post.wrapup_requested && !post.wrapup_completed;
-    let content = crate::trigger_engine::goal_source::continuation_prompt(&goal, None, wrapup);
+    let content = crate::triggers::engine::goal_source::continuation_prompt(&goal, None, wrapup);
     let session_hop =
         crate::session::load_session_current_hop_in_txn(txn, node_did, session_id).await?;
     let mut create = prepare_goal_continuation(

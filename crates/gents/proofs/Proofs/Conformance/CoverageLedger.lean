@@ -562,42 +562,42 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "trigger_delivery"
       "Triggers.Durable"
-      "trigger_engine::tests::durable_contract::generated_fire_transactions_are_atomic_and_owner_scoped")
+      "triggers::engine::tests::durable_contract::generated_fire_transactions_are_atomic_and_owner_scoped")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "trigger_delivery"
       "Triggers.Queue"
-      "trigger_engine::tests::durable_contract::durable_delivery_predicates_match_executable_lean_owners")
+      "triggers::engine::tests::durable_contract::durable_delivery_predicates_match_executable_lean_owners")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "trigger_delivery"
       "Triggers.Types"
-      "trigger_engine::tests::durable_contract::durable_delivery_predicates_match_executable_lean_owners")
+      "triggers::engine::tests::durable_contract::durable_delivery_predicates_match_executable_lean_owners")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "trigger_delivery"
       "Triggers.Durable"
-      "trigger_engine::tests::durable_contract::generated_latest_delivery_admission_preserves_rejected_and_replayed_work")
+      "triggers::engine::tests::durable_contract::generated_latest_delivery_admission_preserves_rejected_and_replayed_work")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "trigger_delivery"
       "EventDelivery.Durable"
-      "trigger_engine::tests::durable_contract::generated_arrival_checkpoints_preserve_committed_delivery_across_crashes")
+      "triggers::engine::tests::durable_contract::generated_arrival_checkpoints_preserve_committed_delivery_across_crashes")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "trigger_delivery"
       "EventDelivery.Durable"
-      "trigger_engine::tests::durable_contract::generated_callback_arrival_checkpoints_use_invocation_receipts")
+      "triggers::engine::tests::durable_contract::generated_callback_arrival_checkpoints_use_invocation_receipts")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "trigger_delivery"
       "Triggers.Durable.Outcomes"
-      "trigger_engine::tests::durable_contract::generated_terminal_outcome_action_traces_use_native_owners")
+      "triggers::engine::tests::durable_contract::generated_terminal_outcome_action_traces_use_native_owners")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "trigger_cases"
       "TriggerDispatch"
-      "trigger_engine::tests::trigger_engine_dispatch_matches_lean_generated_contract_cases"
+      "triggers::engine::tests::trigger_engine_dispatch_matches_lean_generated_contract_cases"
       "Dispatch decisions exercise the production engine. Existing materializer tests cover correlation scope, retry exclusion and live-execution supersession. Cross-node isolation and expired-claim deadline/grace cases still need direct materializer observations. A booted schedule-kind error-writeback observation is also outstanding.")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -623,7 +623,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "goal_claimed_readiness_cases"
       "GoalClaimedReadinessCases"
-      "trigger_engine::goal_source::claimed_readiness_tests::generated_claimed_readiness_cases_drive_goal_source")
+      "triggers::engine::goal_source::claimed_readiness_tests::generated_claimed_readiness_cases_drive_goal_source")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_transition_cases"
@@ -716,7 +716,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "event_group_cases"
       "EventGroupCases"
-      "trigger_engine::tests::event_group_eligibility_matches_lean_generated_contract_cases"
+      "triggers::engine::tests::event_group_eligibility_matches_lean_generated_contract_cases"
       "Exercises the production count/timeout eligibility owner for trigger and callback cases. Typed consumer/config/owner identity, durable marker suppression and atomic materialization require the migrated event-group owner; the old trigger-only spy cannot establish these guarantees.")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -892,7 +892,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "catalog_refresh_cases"
       "CatalogRefreshCases"
-      "backend_registry::tests::generated_catalog_refreshes_preserve_payload_commits_and_latest_freshness")
+      "inference::backends::registry::tests::generated_catalog_refreshes_preserve_payload_commits_and_latest_freshness")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "request_terminal_selection_cases"
@@ -1096,22 +1096,22 @@ def caseCoverage : List CoverageEntry :=
       "backend_health_cases"
       "BackendHealthAdmissionCases"
       boundaryBackendHealthAdmissionFreshnessId
-      "backend_registry::tests::generated_backend_health_admission_cases_match_registry_and_admission_policy")
+      "inference::backends::registry::tests::generated_backend_health_admission_cases_match_registry_and_admission_policy")
       "backend-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "backend_health_cases"
       "BackendHealthAdmissionCases"
-      "backend_registry::tests::display_state_matches_every_lean_backend_health_admission_case")
+      "inference::backends::registry::tests::display_state_matches_every_lean_backend_health_admission_case")
       "backend-health" [Surface.operatorUi]
   , tagged (consumerCoverage
       "backend_health_cases"
       "BackendHealthTransitionCases"
-      "backend_health::tests::generated_backend_health_cases_match_prober_transitions")
+      "inference::backends::health::tests::generated_backend_health_cases_match_prober_transitions")
       "backend-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "backend_probe_schedule_cases"
       "BackendProbeScheduleCases"
-      "backend_health::tests::generated_backend_probe_schedule_cases_match_runtime_selection")
+      "inference::backends::health::tests::generated_backend_probe_schedule_cases_match_runtime_selection")
       "backend-health" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "inference_registry_cases"
@@ -2273,7 +2273,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "prompt_assembly_claude_wire_start_cases"
       "PromptAssemblyClaudeWireStartCases"
-      "claude_messages::tests::generated_claude_wire_start_cases_drive_native_parser"
+      "inference::clients::claude_messages::tests::generated_claude_wire_start_cases_drive_native_parser"
       "The four generated wire-start cases bind initial signature plus later delta, absent initial signature, ordered rejection of later thinking, and malformed signature type at the native SSE parser. The native test compares final content/error, not intermediate modeled steps or durable output capture.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -2369,7 +2369,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "routing_affinity_cases"
       "RoutingAffinityCases"
-      "chatgpt_codex::tests::routing_affinity_matches_lean_owner")
+      "inference::clients::chatgpt_codex::tests::routing_affinity_matches_lean_owner")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "current_input_cases"
@@ -2573,7 +2573,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "event_delivery_cases"
       "EventDeliveryTransitionCases"
-      "trigger_engine::tests::event_source::generated_sibling_delivery_case_preserves_pending_correlation"
+      "triggers::engine::tests::event_source::generated_sibling_delivery_case_preserves_pending_correlation"
       "Observes the sibling trigger readiness/correlation case. Other transition rows use separate consumers or retain the explicit substrate follow-up.")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
@@ -2636,7 +2636,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "callback_recovery_cases"
       "CallbackRecoveryCases"
-      "callback::tests::generated_recovery_and_denial_match_runtime_owners")
+      "triggers::callback::tests::generated_recovery_and_denial_match_runtime_owners")
       "isolated-workspaces" [Surface.runtimeInternal]
 
   , tagged (consumerWithFollowUp "runtime_cases" "RuntimeReconcileCases"

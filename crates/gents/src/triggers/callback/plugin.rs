@@ -189,7 +189,7 @@ pub(super) async fn execute(
         Ok(record) => record,
         Err(error) => return deny(node, invocation, &format!("{error:#}")).await,
     };
-    let input = crate::callback::documents::strip_secret_fields(source.clone());
+    let input = crate::triggers::callback::documents::strip_secret_fields(source.clone());
     let bound = match plugins
         .bind_input(
             &record,

@@ -12,8 +12,8 @@ use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
-use crate::event_delivery_contract::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
+use crate::triggers::event_delivery::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
 use crate::UpdateSubscriptionSource;
 
 use super::{FireIntent, TriggerKind, TriggerSource};
@@ -208,7 +208,7 @@ async fn enrich_native_outcome_provenance(
         _ => anyhow::bail!("unsupported native provenance source {collection}"),
     };
 
-    let invocation = crate::callback::load_invocation(node, &invocation_id, owner)
+    let invocation = crate::triggers::callback::load_invocation(node, &invocation_id, owner)
         .await?
         .ok_or_else(|| anyhow::anyhow!("native source has no node-scoped CallbackInvocation"))?;
     anyhow::ensure!(
@@ -1218,7 +1218,7 @@ impl EventSource {
             group_vars: Some(group_vars),
             trigger_context,
             args_vars: None,
-            durable_fire_key: crate::trigger_engine::durable_fire_key(
+            durable_fire_key: crate::triggers::engine::durable_fire_key(
                 "event-group",
                 &[&delivery.group_key(correlation)],
             ),
@@ -1555,12 +1555,12 @@ impl EventSource {
         node_did: String,
         trigger_id: String,
         source_doc_id: String,
-        result: crate::trigger_engine::FireResult,
+        result: crate::triggers::engine::FireResult,
     ) {
         tokio::spawn(async move {
             let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
             let (status, error_value, fire_delta) = match &result {
-                crate::trigger_engine::FireResult::Fired { request_id } => {
+                crate::triggers::engine::FireResult::Fired { request_id } => {
                     tracing::debug!(
                         trigger_id = %trigger_id,
                         request_id = %request_id,
@@ -1568,15 +1568,15 @@ impl EventSource {
                     );
                     ("fired", None, Some(1))
                 }
-                crate::trigger_engine::FireResult::Duplicate { request_id } => {
+                crate::triggers::engine::FireResult::Duplicate { request_id } => {
                     tracing::debug!(%trigger_id, %request_id, "duplicate event fire refused");
                     ("duplicate", None, None)
                 }
-                crate::trigger_engine::FireResult::Skipped { reason } => {
+                crate::triggers::engine::FireResult::Skipped { reason } => {
                     ("skipped", Some(reason.clone()), None)
                 }
-                crate::trigger_engine::FireResult::Errored { error }
-                | crate::trigger_engine::FireResult::Rejected { error } => {
+                crate::triggers::engine::FireResult::Errored { error }
+                | crate::triggers::engine::FireResult::Rejected { error } => {
                     ("error", Some(error.clone()), None)
                 }
             };
@@ -1620,7 +1620,7 @@ impl EventSource {
             let update = crate::documents::TriggerRuntimeUpdate {
                 last_attempt_at: Some(now),
                 last_fired_source_doc_id: Some(source_doc_id),
-                last_status: Some(crate::trigger_engine::UNACKNOWLEDGED_STATUS.to_string()),
+                last_status: Some(crate::triggers::engine::UNACKNOWLEDGED_STATUS.to_string()),
                 last_error: Some(
                     "the fire produced no result before its acknowledgment channel closed"
                         .to_string(),
@@ -1891,7 +1891,7 @@ impl EventSource {
                 group_vars: None,
                 trigger_context,
                 args_vars: None,
-                durable_fire_key: crate::trigger_engine::durable_fire_key(
+                durable_fire_key: crate::triggers::engine::durable_fire_key(
                     "event-document",
                     &[&trigger.trigger_id, source_doc_id],
                 ),
