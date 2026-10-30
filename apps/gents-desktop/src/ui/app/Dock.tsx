@@ -1,6 +1,12 @@
-import { useLayoutEffect, useRef, useState } from "react";
-import { Columns2, MessageSquare, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Columns2, MessageSquare, Plus, X } from "lucide-react";
 import { Button } from "@gents/ui/components/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@gents/ui/components/dropdown-menu";
 import { Hint } from "@/screens/Hint";
 import { PanelMenu } from "./PanelMenu";
 import { cn } from "@gents/ui/lib/utils";
@@ -82,7 +88,7 @@ export function DockTabs({
   routeName: string;
   paneTab?: { onShow: () => void; progress: number } | null;
 }) {
-  const { dock, activate, moveTab, closeTab, closeDock } = useDockFor(
+  const { dock, activate, moveTab, closeTab, closeDock, openSurface } = useDockFor(
     dockScopeOf(routeName, sessionId),
   );
   const paneTitle =
@@ -98,6 +104,22 @@ export function DockTabs({
       if (tab) moveTab(tab.id, to);
     },
   });
+  /* tabs past the strip's right edge fade out under the + */
+  const [cut, setCut] = useState(false);
+  const strip = reorder.container;
+  useEffect(() => {
+    const el = strip.current;
+    if (!el) return;
+    const measure = () => setCut(el.scrollLeft + el.clientWidth < el.scrollWidth - 1);
+    measure();
+    const sizes = new ResizeObserver(measure);
+    sizes.observe(el);
+    el.addEventListener("scroll", measure, { passive: true });
+    return () => {
+      sizes.disconnect();
+      el.removeEventListener("scroll", measure);
+    };
+  }, [strip, view.tabs.length]);
   const onPress = (e: React.PointerEvent<HTMLElement>, id: string, index: number) => {
     reorder.handle(index).onPointerDown(e);
     if (e.button !== 0) return;
@@ -167,72 +189,80 @@ export function DockTabs({
           </button>
         </div>
       )}
-      <div
-        role="tablist"
-        aria-label="Panels"
-        ref={reorder.container}
-        className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-      >
-        {view.tabs.map((s, index) => {
-          const active = s.id === view.active!.id;
-          return (
-            <div
-              key={s.id}
-              role="presentation"
-              data-reorder-key={s.id}
-              {...reorder.handle(index)}
-              onPointerDown={(e) => onPress(e, s.id, index)}
-              style={reorder.style(index)}
-              className={cn(
-                "group/tab flex h-8 min-w-18 max-w-56 flex-1 basis-0 items-center rounded-lg pr-1 pl-2.5 text-xs transition-colors select-none",
-                active
-                  ? "bg-accent text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-                reorder.moving === index && "relative z-10 bg-accent",
-                reorder.lifted === index && "shadow-md ring-1 ring-border",
-                reorder.active && reorder.moving !== index && "pointer-events-none",
-              )}
-            >
-              <button
-                ref={(el) => {
-                  if (el) tabEls.current.set(s.id, el);
-                  else tabEls.current.delete(s.id);
-                }}
-                type="button"
-                role="tab"
-                id={dockTabId(s.id)}
-                aria-selected={active}
-                aria-controls={active ? DOCK_PANEL_ID : undefined}
-                aria-keyshortcuts="Delete"
-                tabIndex={active ? 0 : -1}
-                onKeyDown={(e) => onTabKey(e, index)}
-                onClick={() => activate(s.id)}
-                className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5"
-              >
-                <s.icon className="size-4 shrink-0" />
-                <span className={cn("truncate", active && "font-medium")}>
-                  {s.title}
-                </span>
-                <TabBadge surface={s} sessionId={sessionId} />
-              </button>
-              <button
-                type="button"
-                aria-hidden
-                tabIndex={-1}
-                title={`Close ${s.title}`}
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => closeTab(s.id)}
+      <div className="flex min-w-0 flex-1 items-center gap-1">
+        <div
+          role="tablist"
+          aria-label="Panels"
+          ref={reorder.container}
+          data-cut={cut || undefined}
+          className={cn(
+            "flex min-w-0 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+            cut &&
+              "[mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)]",
+          )}
+        >
+          {view.tabs.map((s, index) => {
+            const active = s.id === view.active!.id;
+            return (
+              <div
+                key={s.id}
+                role="presentation"
+                data-reorder-key={s.id}
+                {...reorder.handle(index)}
+                onPointerDown={(e) => onPress(e, s.id, index)}
+                style={reorder.style(index)}
                 className={cn(
-                  "ml-1 grid size-5 shrink-0 cursor-pointer place-items-center rounded-md hover:bg-background",
-                  !active &&
-                    "opacity-0 group-focus-within/tab:opacity-100 group-hover/tab:opacity-100",
+                  "group/tab flex h-8 w-56 min-w-18 shrink items-center rounded-lg pr-1 pl-2.5 text-xs transition-colors select-none",
+                  active
+                    ? "bg-accent text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                  reorder.moving === index && "relative z-10 bg-accent",
+                  reorder.lifted === index && "shadow-md ring-1 ring-border",
+                  reorder.active && reorder.moving !== index && "pointer-events-none",
                 )}
               >
-                <X className="size-3.5" />
-              </button>
-            </div>
-          );
-        })}
+                <button
+                  ref={(el) => {
+                    if (el) tabEls.current.set(s.id, el);
+                    else tabEls.current.delete(s.id);
+                  }}
+                  type="button"
+                  role="tab"
+                  id={dockTabId(s.id)}
+                  aria-selected={active}
+                  aria-controls={active ? DOCK_PANEL_ID : undefined}
+                  aria-keyshortcuts="Delete"
+                  tabIndex={active ? 0 : -1}
+                  onKeyDown={(e) => onTabKey(e, index)}
+                  onClick={() => activate(s.id)}
+                  className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5"
+                >
+                  <s.icon className="size-4 shrink-0" />
+                  <span className={cn("truncate", active && "font-medium")}>
+                    {s.title}
+                  </span>
+                  <TabBadge surface={s} sessionId={sessionId} />
+                </button>
+                <button
+                  type="button"
+                  aria-hidden
+                  tabIndex={-1}
+                  title={`Close ${s.title}`}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => closeTab(s.id)}
+                  className={cn(
+                    "ml-1 grid size-5 shrink-0 cursor-pointer place-items-center rounded-md hover:bg-background",
+                    !active &&
+                      "opacity-0 group-focus-within/tab:opacity-100 group-hover/tab:opacity-100",
+                  )}
+                >
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        <AddTab available={view.available} onOpen={openSurface} />
       </div>
       <Hint label="Hide panel">
         <Button
@@ -246,6 +276,46 @@ export function DockTabs({
         </Button>
       </Hint>
     </div>
+  );
+}
+
+/* the panels this page can show that aren't open yet; none, no button */
+function AddTab({
+  available,
+  onOpen,
+}: {
+  available: readonly Surface[];
+  onOpen: (id: string) => void;
+}) {
+  if (available.length === 0) return null;
+  return (
+    <DropdownMenu>
+      <Hint label="Open a panel">
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Open a panel"
+              className="shrink-0"
+            />
+          }
+        >
+          <Plus />
+        </DropdownMenuTrigger>
+      </Hint>
+      <DropdownMenuContent
+        align="start"
+        className="w-48 text-xs [&_[role=menuitem]]:text-xs"
+      >
+        {available.map((s) => (
+          <DropdownMenuItem key={s.id} onClick={() => onOpen(s.id)}>
+            <s.icon className="size-4" />
+            <span className="flex-1">{s.title}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
