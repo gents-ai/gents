@@ -10,7 +10,7 @@ const OWNER_FILES: &[&str] = &[
     "crates/gents/src/config_client/txn/auto_commit.rs",
     "crates/gents/src/config_client/txn/execute.rs",
     "crates/gents/src/config_client/txn/transact_entry.rs",
-    "crates/gents-protocol/src/graphql.rs",
+    "crates/gents-protocol/src/graphql/transport.rs",
 ];
 
 const READ_OWNER_FILES: &[&str] = &[
@@ -1780,7 +1780,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents-loop/src/loop_stream/aggregate_budget.rs", 4),
     ("crates/gents-protocol/src/database_error.rs", 1),
     ("crates/gents-protocol/src/error_chain.rs", 1),
-    ("crates/gents-protocol/src/graphql.rs", 3),
+    ("crates/gents-protocol/src/graphql/transport.rs", 3),
     ("crates/gents/src/agent/daemon.rs", 1),
     ("crates/gents/src/agent/daemon/owned_work.rs", 1),
     ("crates/gents/src/agent/stream_processor.rs", 1),
@@ -1985,7 +1985,7 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // DefraDB schema validator messages
     ("crates/gents-migration/src/engine.rs", 1),
     // DefraDB missing-collection messages
-    ("crates/gents-protocol/src/graphql.rs", 4),
+    ("crates/gents-protocol/src/graphql/response.rs", 4),
     // replicated AgentRequest failure_reason
     ("crates/gents-protocol/src/node_readiness.rs", 1),
     // DefraDB HTTP 409 commit body
