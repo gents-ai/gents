@@ -92,7 +92,7 @@ async fn load_request_show_snapshot(
 
     let request_terminal = canonical_request.is_terminal();
     let request_node_did = canonical_request.node_did.unwrap_or_default();
-    let blocked = gents::blocked_turn::blocked_turn(&access, &request_node_did, request_id)
+    let blocked = gents::goal::blocked_turn::blocked_turn(&access, &request_node_did, request_id)
         .await
         .unwrap_or_else(|error| {
             tracing::warn!(request_id, error = %format!("{error:#}"), "blocked turn unreadable");

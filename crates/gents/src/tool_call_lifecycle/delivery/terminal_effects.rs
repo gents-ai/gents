@@ -29,7 +29,7 @@ pub(super) async fn retain_file_changes(
         ),
         "file changes lost their physical tool binding"
     );
-    let session_scope = crate::session_origin::SessionScope {
+    let session_scope = crate::session::origin::SessionScope {
         node_did: node_did.to_owned(),
         session_id: session_id.to_owned(),
         requester_did: requester_did.map(str::to_owned),

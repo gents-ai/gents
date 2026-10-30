@@ -30,7 +30,7 @@ use crate::plugin::job_calls::JobCaller;
 use crate::plugin::store::{parse_coordinate, read_record, InstalledPlugin};
 use crate::plugin::GuestTrap;
 use crate::request::lifecycle::SessionMessageCause;
-use crate::session_origin::SessionScope;
+use crate::session::origin::SessionScope;
 use crate::tool_call_lifecycle::{PluginJobTerminal, ToolCallLifecycle, ToolCallState};
 
 /// What one `run_step` did.
@@ -378,8 +378,13 @@ async fn step_transaction(
             job_row_doc_id: row_doc_id.to_owned(),
             chain_root_doc_id: pin.chain_root_doc_id.clone(),
         };
-        crate::application_write::apply_plugin_writes_in_txn(txn, &grant, &stamps, writes.to_vec())
-            .await?;
+        crate::plugin::application_write::apply_plugin_writes_in_txn(
+            txn,
+            &grant,
+            &stamps,
+            writes.to_vec(),
+        )
+        .await?;
     }
     // (e)
     let guest = progress_of(output)

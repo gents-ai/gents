@@ -7,7 +7,7 @@ use crate::background_tools::{
     BackgroundToolArgs, CancelToolArgs, WaitToolArgs, DEFAULT_WAIT_PROCESS_TIMEOUT_SECS,
     MAX_WAIT_PROCESS_TIMEOUT_SECS,
 };
-use crate::session_message::{
+use crate::session::message::{
     AgentInterruptArgs, AgentListArgs, AgentMessageArgs, AgentNewArgs, AgentSessionListArgs,
     AgentSessionReadArgs,
 };

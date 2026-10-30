@@ -31,7 +31,7 @@ pub fn awaiting_goal_question_ids(
     }) else {
         return Vec::new();
     };
-    let ids = crate::mailbox::awaiting_question_ids(items, parent, now);
+    let ids = crate::session::mailbox::awaiting_question_ids(items, parent, now);
     if ids.is_empty() {
         return ids;
     }

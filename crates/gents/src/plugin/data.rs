@@ -11,7 +11,7 @@ use std::sync::Arc;
 pub use gents_protocol::job::OnConflict;
 pub use gents_protocol::job::StampedField as Stamp;
 
-use crate::application_write::Observation;
+use crate::plugin::application_write::Observation;
 
 const MAX_WRITES: usize = 100;
 
@@ -651,7 +651,7 @@ mod tests {
             stamped_supplied_by_guest: false,
             invocation,
             applicable: Vec::new(),
-            write: crate::application_write::Observation {
+            write: crate::plugin::application_write::Observation {
                 operation: "create".into(),
                 granted: true,
                 application: true,

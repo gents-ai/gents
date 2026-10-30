@@ -17,7 +17,7 @@ pub(super) async fn load(
     selection: &crate::plugin::approval::workspace::ReviewTaskSelection,
 ) -> Result<Policy> {
     let task_id = selection.task_id.as_str();
-    let definition = crate::session_message::load_configured_task(node, &parent.node_did, task_id)
+    let definition = crate::session::message::load_configured_task(node, &parent.node_did, task_id)
         .await?
         .context("access review Task is not configured")?;
     anyhow::ensure!(
@@ -45,7 +45,7 @@ impl Policy {
         node: &Arc<EmbeddedNode>,
         parent: &AgentRequest,
     ) -> Result<bool> {
-        Ok(crate::session_message::load_configured_task(
+        Ok(crate::session::message::load_configured_task(
             node,
             &parent.node_did,
             &self.definition.task_id,

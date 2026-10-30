@@ -1,8 +1,8 @@
 use super::{local, registry};
 use anyhow::{Context, Result};
+use gents::pack::archive::PackArchive;
+use gents::pack::resolve::{resolve_named, ResolveOptions, ResolvedFrom};
 use gents::pack::PackManifest;
-use gents::pack_archive::PackArchive;
-use gents::pack_resolve::{resolve_named, ResolveOptions, ResolvedFrom};
 
 pub(crate) struct PackSource {
     pub(super) archive: std::sync::Arc<PackArchive>,
@@ -108,7 +108,7 @@ pub(crate) async fn resolve_pack_source(
             artifact_digest,
             version,
         } => {
-            let parsed = gents::pack_resolve::parse_pack_spec(spec)?;
+            let parsed = gents::pack::resolve::parse_pack_spec(spec)?;
             Source::Registry {
                 namespace: parsed.namespace.to_owned(),
                 name: parsed.name.to_owned(),

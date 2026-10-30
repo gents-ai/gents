@@ -83,9 +83,9 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
     let row: gents_protocol::row::AgentRequestRow =
         serde_json::from_value(rows["data"]["AgentRequest"][0].clone()).unwrap();
     let request = crate::AgentRequest::try_from(row).unwrap();
-    let scope = crate::session_origin::SessionScope::of_request(&request);
+    let scope = crate::session::origin::SessionScope::of_request(&request);
     assert!(
-        !crate::session_origin::task_triggered_opening(&access, &scope)
+        !crate::session::origin::task_triggered_opening(&access, &scope)
             .await
             .unwrap()
     );
@@ -114,16 +114,16 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
     .await
     .unwrap();
     assert!(
-        crate::session_origin::task_triggered_opening(&access, &scope)
+        crate::session::origin::task_triggered_opening(&access, &scope)
             .await
             .unwrap()
     );
-    let caller = crate::session_origin::SessionScope {
+    let caller = crate::session::origin::SessionScope {
         session_id: "caller".into(),
         ..scope.clone()
     };
     assert!(
-        crate::session_message::interrupt_refusal(&node, &caller, &scope)
+        crate::session::message::interrupt_refusal(&node, &caller, &scope)
             .await
             .unwrap()
             .is_none()
@@ -142,11 +142,11 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
             tags: Vec::new(),
         }],
     };
-    let listed = crate::session_message::agent_session_list(
+    let listed = crate::session::message::agent_session_list(
         &node,
         &caller_request,
         &tools,
-        &crate::session_message::AgentSessionListArgs::default(),
+        &crate::session::message::AgentSessionListArgs::default(),
     )
     .await
     .unwrap();
@@ -157,21 +157,21 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         .find(|entry| entry["session_id"] == scope.session_id)
         .unwrap();
     assert_eq!(entry["can_interrupt"], true);
-    let wrong_requester = crate::session_origin::SessionScope {
+    let wrong_requester = crate::session::origin::SessionScope {
         requester_did: Some("did:wrong:requester".into()),
         ..scope.clone()
     };
     assert!(
-        !crate::session_origin::task_triggered_opening(&access, &wrong_requester)
+        !crate::session::origin::task_triggered_opening(&access, &wrong_requester)
             .await
             .unwrap()
     );
-    let foreign = crate::session_origin::SessionScope {
+    let foreign = crate::session::origin::SessionScope {
         node_did: "did:other".into(),
         ..caller
     };
     assert!(
-        crate::session_message::interrupt_refusal(&node, &foreign, &scope)
+        crate::session::message::interrupt_refusal(&node, &foreign, &scope)
             .await
             .unwrap()
             .is_some()
@@ -181,15 +181,15 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         escape_graphql_string(&owner), escape_graphql_string(&request.request_id), escape_graphql_string(&scope.session_id)
     )).await.unwrap();
     assert!(
-        !crate::session_origin::task_triggered_opening(&access, &scope)
+        !crate::session::origin::task_triggered_opening(&access, &scope)
             .await
             .unwrap()
     );
-    let listed = crate::session_message::agent_session_list(
+    let listed = crate::session::message::agent_session_list(
         &node,
         &caller_request,
         &tools,
-        &crate::session_message::AgentSessionListArgs::default(),
+        &crate::session::message::AgentSessionListArgs::default(),
     )
     .await
     .unwrap();
@@ -210,7 +210,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         escape_graphql_string(&owner), escape_graphql_string(&request.request_id), escape_graphql_string(&scope.session_id)
     )).await.unwrap();
     assert!(
-        !crate::session_origin::task_triggered_opening(&access, &scope)
+        !crate::session::origin::task_triggered_opening(&access, &scope)
             .await
             .unwrap()
     );
@@ -222,7 +222,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         escape_graphql_string(&prepared.receipt.fire_key), escape_graphql_string(&owner), escape_graphql_string(&request.request_id), escape_graphql_string(&scope.session_id)
     )).await.unwrap();
     assert!(
-        !crate::session_origin::task_triggered_opening(&access, &scope)
+        !crate::session::origin::task_triggered_opening(&access, &scope)
             .await
             .unwrap()
     );
@@ -254,12 +254,12 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
     )
     .await
     .unwrap();
-    let wrong_requester_scope = crate::session_origin::SessionScope {
+    let wrong_requester_scope = crate::session::origin::SessionScope {
         requester_did: Some("did:wrong:requester".into()),
         ..scope.clone()
     };
     assert!(
-        !crate::session_origin::task_triggered_opening(&access, &wrong_requester_scope)
+        !crate::session::origin::task_triggered_opening(&access, &wrong_requester_scope)
             .await
             .unwrap()
     );
@@ -304,7 +304,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         serde_json::from_value(forged_rows["data"]["AgentRequest"][0].clone()).unwrap();
     assert!(crate::request::admission::verify_request_receipt_signature(&forged_row).is_err());
     let forged_request = crate::AgentRequest::try_from(forged_row).unwrap();
-    let forged_scope = crate::session_origin::SessionScope::of_request(&forged_request);
+    let forged_scope = crate::session::origin::SessionScope::of_request(&forged_request);
     access.write("test.forged_fire", &format!(
         r#"mutation {{create_TriggerFire(input: {{fire_key: "forged-fire", owner_did: "{}", request_id: "forged-authority-request", session_id: "forged-authority-session", trigger_id: "authority-trigger", task_id: "authority-task"}}) {{_docID}}}}"#,
         escape_graphql_string(&owner)
@@ -358,7 +358,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
         )
         .await
         .unwrap();
-        let bad_scope = crate::session_origin::SessionScope {
+        let bad_scope = crate::session::origin::SessionScope {
             node_did: owner.clone(),
             session_id: test_session.into(),
             requester_did: if test_session == "wrong-requester-session" {
@@ -368,7 +368,7 @@ async fn task_opening_grants_same_node_interrupt_only_with_verified_fire() {
             },
         };
         assert!(
-            !crate::session_origin::task_triggered_opening(&access, &bad_scope)
+            !crate::session::origin::task_triggered_opening(&access, &bad_scope)
                 .await
                 .unwrap(),
             "{test_session}"
@@ -692,13 +692,13 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
         crate::request::admission::SIGNED_REQUEST_FIELDS
     );
     let admitted = access.execute(&query).await.unwrap();
-    let existing_scope = crate::session_origin::SessionScope {
+    let existing_scope = crate::session::origin::SessionScope {
         node_did: owner.clone(),
         session_id: session.to_owned(),
         requester_did: Some(owner.clone()),
     };
     assert!(
-        !crate::session_origin::task_triggered_opening(&access, &existing_scope)
+        !crate::session::origin::task_triggered_opening(&access, &existing_scope)
             .await
             .unwrap()
     );
@@ -710,7 +710,7 @@ async fn durable_goal_task_replay_retains_its_admitted_assignment() {
         escape_graphql_string(&owner), escape_graphql_string(session), escape_graphql_string(later_doc),
     )).await.unwrap();
     assert!(
-        !crate::session_origin::task_triggered_opening(&access, &existing_scope)
+        !crate::session::origin::task_triggered_opening(&access, &existing_scope)
             .await
             .unwrap()
     );

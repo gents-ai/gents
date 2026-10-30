@@ -19,7 +19,7 @@ pub(super) struct PackInstallParams {
     pub expected_digest: Option<String>,
 }
 
-pub(super) struct ConfigPackDistribution(pub(super) crate::pack_resolve::ResolvedNamedPack);
+pub(super) struct ConfigPackDistribution(pub(super) crate::pack::resolve::ResolvedNamedPack);
 
 impl ConfigPackDistribution {
     pub(super) fn manifest(&self) -> &crate::pack::PackManifest {
@@ -32,9 +32,9 @@ impl ConfigPackDistribution {
 
     pub(super) fn source(&self) -> &'static str {
         match self.0.from {
-            crate::pack_resolve::ResolvedFrom::Installed => "installed",
-            crate::pack_resolve::ResolvedFrom::Store => "store",
-            crate::pack_resolve::ResolvedFrom::Registry { .. } => "registry",
+            crate::pack::resolve::ResolvedFrom::Installed => "installed",
+            crate::pack::resolve::ResolvedFrom::Store => "store",
+            crate::pack::resolve::ResolvedFrom::Registry { .. } => "registry",
         }
     }
 
@@ -45,7 +45,7 @@ impl ConfigPackDistribution {
             return self.digest().to_owned();
         }
         let manifest = self.manifest();
-        if crate::pack_store::is_valid_index_version(&manifest.version) {
+        if crate::pack::store::is_valid_index_version(&manifest.version) {
             format!(
                 "{}/{}@{}",
                 manifest.metadata.namespace, manifest.name, manifest.version
@@ -57,7 +57,7 @@ impl ConfigPackDistribution {
 
     pub(super) fn registry_artifact_digest(&self) -> Option<&str> {
         match &self.0.from {
-            crate::pack_resolve::ResolvedFrom::Registry {
+            crate::pack::resolve::ResolvedFrom::Registry {
                 artifact_digest, ..
             } => Some(artifact_digest),
             _ => None,
@@ -70,7 +70,7 @@ impl PackInstaller {
         let coordinate = args.package.trim();
         anyhow::ensure!(!coordinate.is_empty(), "pack name must not be blank");
         if crate::pack::local::classify(coordinate).is_none() {
-            crate::pack_resolve::parse_pack_spec(coordinate)?;
+            crate::pack::resolve::parse_pack_spec(coordinate)?;
         }
         anyhow::ensure!(
             args.variables.len() <= 32,
@@ -135,7 +135,7 @@ impl PackInstaller {
                     let context = crate::toolset::ToolContext::new(root.into(), false)?;
                     let path = context
                         .resolve_existing_file(path.to_str().context("pack path is not UTF-8")?)?;
-                    anyhow::ensure!(path.extension().is_some_and(|extension| extension == crate::pack_archive::EXTENSION), "native local inspection accepts a built .pack artifact; directories require a scoped build owner");
+                    anyhow::ensure!(path.extension().is_some_and(|extension| extension == crate::pack::archive::EXTENSION), "native local inspection accepts a built .pack artifact; directories require a scoped build owner");
                     // The no-follow import carries the same handle the
                     // admission validated, so a swap after admission cannot
                     // change which bytes are verified and stored.
@@ -160,17 +160,17 @@ impl PackInstaller {
                 archive.manifest().metadata.kind
             );
             return Ok(ConfigPackDistribution(
-                crate::pack_resolve::ResolvedNamedPack {
+                crate::pack::resolve::ResolvedNamedPack {
                     archive,
-                    from: crate::pack_resolve::ResolvedFrom::Store,
+                    from: crate::pack::resolve::ResolvedFrom::Store,
                 },
             ));
         }
-        let registry_url = crate::pack_registry::resolve_registry_url(None);
-        let spec = match crate::pack_resolve::parse_pack_spec(coordinate)? {
+        let registry_url = crate::pack::registry::resolve_registry_url(None);
+        let spec = match crate::pack::resolve::parse_pack_spec(coordinate)? {
             parsed if operation == "update" && parsed.version.is_none() => {
-                let client = crate::pack_registry::RegistryClient::new(registry_url.clone());
-                let latest = crate::pack_registry::resolve_pack_coordinate(
+                let client = crate::pack::registry::RegistryClient::new(registry_url.clone());
+                let latest = crate::pack::registry::resolve_pack_coordinate(
                     &client,
                     parsed.namespace,
                     parsed.name,
@@ -192,9 +192,9 @@ impl PackInstaller {
             Some((&access, self.core.node_did())),
         )
         .await?;
-        let resolved = crate::pack_resolve::resolve_named(
+        let resolved = crate::pack::resolve::resolve_named(
             &spec,
-            &crate::pack_resolve::ResolveOptions {
+            &crate::pack::resolve::ResolveOptions {
                 home: self.home.as_deref(),
                 registry_url,
                 installed: &installed,

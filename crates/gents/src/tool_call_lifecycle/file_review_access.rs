@@ -95,7 +95,7 @@ impl VerifiedFileImageReceipt {
                 && row["requester_did"] == entry.scope.requester_did,
             "delivered inventory image crossed its canonical source"
         );
-        let scope = crate::session_origin::SessionScope {
+        let scope = crate::session::origin::SessionScope {
             node_did: entry.scope.node_did.clone(),
             session_id: entry.scope.session_id.clone(),
             requester_did: Some(entry.scope.requester_did.clone()),

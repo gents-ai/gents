@@ -1,5 +1,5 @@
 use clap::Subcommand;
-use gents::optimization::target::JobTarget;
+use gents::eval::optimization::target::JobTarget;
 
 use super::{
     parse_policy, parse_proposer, parse_subject, parse_target, EvalScopeArgs, PolicyArg,

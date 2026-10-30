@@ -276,16 +276,16 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
         agent_id: active.agent_id.clone(),
         session_id: active.session_id.clone(),
     };
-    let plan = crate::session_message::plan_with_delivery(
+    let plan = crate::session::message::plan_with_delivery(
         &coordinator,
         &cause,
         &target,
-        crate::session_message::RenderedBody {
+        crate::session::message::RenderedBody {
             content: "change direction".into(),
             goal: None,
         },
         None,
-        crate::session_message::AgentMessageDelivery::Interrupt,
+        crate::session::message::AgentMessageDelivery::Interrupt,
     )
     .await
     .unwrap()
@@ -298,7 +298,7 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
         |txn| {
             let (cause, plan) = (&cause, &plan);
             Box::pin(async move {
-                crate::session_message::stage_planned_write_in_txn(txn, cause, plan)
+                crate::session::message::stage_planned_write_in_txn(txn, cause, plan)
                     .await
                     .map_err(anyhow::Error::from)?;
                 anyhow::bail!("abort staged message and interrupt")
@@ -322,7 +322,7 @@ async fn peer_request_final_admission_uses_the_requester_signature_and_fresh_aut
         .is_none(),
         "an aborted interrupting message interrupts nothing"
     );
-    let receipt = crate::session_message::commit(&coordinator, &cause, &mut followup, plan, true)
+    let receipt = crate::session::message::commit(&coordinator, &cause, &mut followup, plan, true)
         .await
         .unwrap();
     assert!(

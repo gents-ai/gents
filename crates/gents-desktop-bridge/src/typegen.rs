@@ -764,7 +764,7 @@ fn eval_capture_types_preserve_native_wire_tags() {
 #[test]
 fn canonical_config_requests_preserve_compact_authoring_and_auth_wire_tags() {
     let dir = tempfile::tempdir().expect("generated directory");
-    gents::mailbox::MailboxNotificationPolicy::export_all_to(dir.path())
+    gents::session::mailbox::MailboxNotificationPolicy::export_all_to(dir.path())
         .expect("notification export");
     let notification = std::fs::read_to_string(dir.path().join("NotificationIdentity.ts")).unwrap();
     assert!(

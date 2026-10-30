@@ -147,7 +147,7 @@ impl ToolSurface {
         if self
             .write_tools
             .iter()
-            .any(|decl| decl.collection == crate::mailbox::MAILBOX_COLLECTION)
+            .any(|decl| decl.collection == crate::session::mailbox::MAILBOX_COLLECTION)
         {
             // Mailbox-capable event-trigger stages require explicit human-owner
             // lineage from the source document.
@@ -278,7 +278,7 @@ impl ToolSurface {
             names.push(DEFRA_QUERY_TOOL_NAME.to_string());
         }
         if !self.application_write_collections.is_empty() {
-            names.push(crate::application_write::WRITE_TOOL_NAME.into());
+            names.push(crate::plugin::application_write::WRITE_TOOL_NAME.into());
         }
         if self.lsp.is_some() {
             names.push(crate::toolset::lsp::LSP_TOOL_NAME.to_string());
@@ -411,7 +411,7 @@ impl ToolSurface {
             ));
         }
         if !self.application_write_collections.is_empty() {
-            tools.push(Box::new(crate::application_write::WriteTool::new(
+            tools.push(Box::new(crate::plugin::application_write::WriteTool::new(
                 crate::config_client::ConfigAccess::local(runtime.node.clone()),
                 self.application_write_collections.iter().cloned().collect(),
                 datastore_actor.clone(),
@@ -437,7 +437,7 @@ impl ToolSurface {
         let mut registered_names: RapidHashSet<String> =
             tools.iter().map(|tool| tool.name()).collect();
         for decl in &self.write_tools {
-            crate::mailbox::validate_mailbox_write_decl(decl)?;
+            crate::session::mailbox::validate_mailbox_write_decl(decl)?;
             if !decl.is_well_formed() || !decl.output_obligation_is_well_formed() {
                 anyhow::bail!(
                     "write tool `{}` reached registration with an invalid declaration",
@@ -450,8 +450,8 @@ impl ToolSurface {
                     decl.tool_name
                 );
             }
-            if decl.collection == crate::mailbox::MAILBOX_COLLECTION {
-                tools.push(Box::new(crate::mailbox::MailboxCreateTool::new(
+            if decl.collection == crate::session::mailbox::MAILBOX_COLLECTION {
+                tools.push(Box::new(crate::session::mailbox::MailboxCreateTool::new(
                     runtime.node.clone(),
                     decl.notification
                         .clone()

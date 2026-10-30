@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 
 use crate::config_client::{ConfigAccess, SchemaInstallPlan};
 use crate::documents::PackConfig;
-use crate::pack_archive::PackArchive;
+use crate::pack::archive::PackArchive;
 
 use super::super::home_install::materialize_asset_pack;
 use super::super::{

@@ -98,7 +98,7 @@ mod tests {
     #[tokio::test]
     async fn a_published_plugin_installs_from_its_pack_and_runs_by_name() {
         let (bytes, digest) = echo_pack();
-        let archive = gents::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+        let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
         let (namespace, version) = (
             archive.manifest().metadata.namespace.clone(),
             archive.manifest().version.clone(),
@@ -123,7 +123,7 @@ mod tests {
     async fn install_and_remove_record_the_plugin_store_change_in_the_node() {
         use clap::Parser;
         let (bytes, digest) = echo_pack();
-        let archive = gents::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+        let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
         let (namespace, version) = (
             archive.manifest().metadata.namespace.clone(),
             archive.manifest().version.clone(),
@@ -173,7 +173,7 @@ mod tests {
     #[tokio::test]
     async fn plugin_install_writes_an_operator_home_record() {
         let (bytes, digest) = echo_pack();
-        let archive = gents::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+        let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
         let (namespace, version) = (
             archive.manifest().metadata.namespace.clone(),
             archive.manifest().version.clone(),
@@ -200,7 +200,7 @@ mod tests {
     #[tokio::test]
     async fn a_digest_mismatch_is_refused_and_nothing_is_installed() {
         let (bytes, _) = echo_pack();
-        let archive = gents::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+        let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
         let namespace = archive.manifest().metadata.namespace.clone();
         let version = archive.manifest().version.clone();
         let (base_url, _) = serve_fake_pack("echo", &version, bytes, "0".repeat(64)).await;
@@ -216,7 +216,7 @@ mod tests {
     #[tokio::test]
     async fn a_pack_from_another_namespace_is_refused() {
         let (bytes, digest) = echo_pack();
-        let version = gents::pack_archive::PackArchive::from_bytes(&bytes)
+        let version = gents::pack::archive::PackArchive::from_bytes(&bytes)
             .unwrap()
             .manifest()
             .version
@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn a_plugin_is_published_as_a_single_plugin_pack() {
         let (bytes, _) = echo_pack();
-        let archive = gents::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+        let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
         let manifest = archive.manifest();
         assert_eq!(manifest.name, "echo");
         assert_eq!(manifest.metadata.kind, gents::pack::PackKind::Plugins);
@@ -284,8 +284,8 @@ mod instruction_tests {
             .unwrap(),
         )
         .unwrap();
-        let (bytes, _) = gents::pack_archive::pack_dir(&root).unwrap();
-        let archive = gents::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+        let (bytes, _) = gents::pack::archive::pack_dir(&root).unwrap();
+        let archive = gents::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
         let home = tempfile::tempdir().unwrap();
 
         gents::plugin::install::install_pack_plugins(

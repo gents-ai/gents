@@ -641,7 +641,7 @@ async fn configuration_edits_cannot_replace_the_selected_review_policy() {
         assert!(crate::plugin::approval::pending_requests(home.path())
             .unwrap()
             .is_empty());
-        let current = crate::session_message::load_configured_task(
+        let current = crate::session::message::load_configured_task(
             &fixture.node,
             &fixture.parent.node_did,
             "review",

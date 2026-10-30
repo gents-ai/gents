@@ -3,11 +3,11 @@ use std::time::Duration;
 
 use gents::documents::{AgentTools, IntegrationTools, PluginToolRef, Tools};
 use gents::eval::runner::embedded::EmbeddedHome;
+use gents::pack::archive::{pack_dir, PackArchive};
 use gents::pack::{
     install_prepared_document_pack, load_pack_config, prepare_document_pack_install, DriftPolicy,
     InstalledVia, PackInferenceBindings, PackInstallOptions,
 };
-use gents::pack_archive::{pack_dir, PackArchive};
 use gents::plugin_job::job::{
     JobChildState, JobControlRequest, JobEffects, JobGuestPin, JobPolicy, JobReadError, JobSpawn,
     JobState, JobStepOutput, JobView, PluginJobSettings,

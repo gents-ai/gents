@@ -370,8 +370,8 @@ pub(super) fn page(resource: &str) -> Option<Page> {
 
 fn mailbox_values() -> Value {
     json!({
-        "kind": crate::mailbox::MailboxKind::ALL.map(crate::mailbox::MailboxKind::as_str),
-        "action": crate::mailbox::MailboxAction::ALL.map(crate::mailbox::MailboxAction::as_str),
+        "kind": crate::session::mailbox::MailboxKind::ALL.map(crate::session::mailbox::MailboxKind::as_str),
+        "action": crate::session::mailbox::MailboxAction::ALL.map(crate::session::mailbox::MailboxAction::as_str),
         "identity": [{"mode":"event"}, {"mode":"condition","key":"monitor-summary"}],
         "document_response": {"action":"write_document","expected_collection":"COLLECTION","required_schema_field":"mailbox_item_key: String @immutable @index(unique: true)"},
     })

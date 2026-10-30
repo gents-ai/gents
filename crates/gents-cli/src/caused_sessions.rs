@@ -6,8 +6,8 @@ use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::session::load_latest_request_in_txn;
-pub(crate) use gents::session_origin::SessionScope;
-use gents::session_origin::{
+pub(crate) use gents::session::origin::SessionScope;
+use gents::session::origin::{
     lineage, load_session, started_by, starting_request, SessionLink, REQUEST_FIELDS,
 };
 use gents_protocol::row::AgentRequestRow;

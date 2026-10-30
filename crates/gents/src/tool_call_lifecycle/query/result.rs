@@ -252,7 +252,7 @@ async fn load_tool_file_change_observation_source(
         .filter(|id| !id.is_empty())
         .context("file image observation has no physical identity")?
         .to_owned();
-    let scope = crate::session_origin::SessionScope {
+    let scope = crate::session::origin::SessionScope {
         node_did: node_did.to_owned(),
         session_id: session_id.to_owned(),
         requester_did: requester_did.map(str::to_owned),

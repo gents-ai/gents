@@ -3,6 +3,7 @@
 
 pub mod checks;
 pub mod documents;
+pub mod optimization;
 pub mod outcome;
 pub mod report;
 pub mod runner;

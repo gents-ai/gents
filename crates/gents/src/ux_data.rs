@@ -25,7 +25,7 @@ use crate::documents::{
     list_datastore_tool_surfaces, DatastoreToolSurfaceDocument, SurfaceToolDecl,
 };
 use crate::inference::llm::tool::Tool;
-use crate::ux_plugin::UxListing;
+use crate::plugin::ux::UxListing;
 
 /// One call from a page, as `desktop_ux_data_call` receives it.
 #[derive(Debug, Clone, Deserialize)]
@@ -50,7 +50,7 @@ fn kind_of(entry: &SurfaceToolDecl) -> &'static str {
 }
 
 fn listing_with_data(home: &Path, ux: &str) -> Result<UxListing> {
-    let listing = crate::ux_plugin::find(home, ux)?;
+    let listing = crate::plugin::ux::find(home, ux)?;
     anyhow::ensure!(
         !listing.data.is_empty(),
         "ux plugin {ux:?} declares no data surfaces"

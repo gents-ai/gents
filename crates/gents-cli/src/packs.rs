@@ -158,7 +158,7 @@ pub async fn dynamic_workflows(home: PathBuf) -> Result<Value> {
             .iter()
             .max_by_key(|view| view.created_at)
             .expect("a group has a run");
-        let agent_id = gents::session_origin::load_session(
+        let agent_id = gents::session::origin::load_session(
             &access,
             &latest.session_id,
             latest.scope.requester_did.as_deref(),
@@ -350,21 +350,21 @@ pub async fn whoami(home: PathBuf, registry: Option<String>) -> Result<Value> {
 /* ---- UX plugins: what the desktop's doors read ---- */
 
 /// Every UX plugin on disk under `home` (dev folder and installed packs).
-pub fn ux_list(home: &std::path::Path) -> Result<Vec<gents::ux_plugin::UxListing>> {
-    gents::ux_plugin::list(home)
+pub fn ux_list(home: &std::path::Path) -> Result<Vec<gents::plugin::ux::UxListing>> {
+    gents::plugin::ux::list(home)
 }
 
 /// The module for the UX plugin `id`, produced from its file or by running
 /// the pack's own `.afb` producer under the installed plugin's bounds.
-pub async fn ux_module(home: PathBuf, id: String) -> Result<gents::ux_plugin::UxModule> {
-    let listing = gents::ux_plugin::find(&home, &id)?;
+pub async fn ux_module(home: PathBuf, id: String) -> Result<gents::plugin::ux::UxModule> {
+    let listing = gents::plugin::ux::find(&home, &id)?;
     let home_for_run = home.clone();
-    gents::ux_plugin::resolve_module(&home, &listing, |namespace, plugin| async move {
+    gents::plugin::ux::resolve_module(&home, &listing, |namespace, plugin| async move {
         crate::commands::plugin::call_installed(
             &home_for_run,
             &namespace,
             &plugin,
-            gents::ux_plugin::producer_input(),
+            gents::plugin::ux::producer_input(),
         )
         .await
     })
@@ -378,7 +378,7 @@ pub async fn ux_module(home: PathBuf, id: String) -> Result<gents::ux_plugin::Ux
 /// asked, so this binds a call to a pack, not to a caller; the webview
 /// keeps a plugin to its own listing by offering it no other verb.
 pub fn plugin_call_target(home: &std::path::Path, ux: &str, name: &str) -> Result<String> {
-    let listing = gents::ux_plugin::find(home, ux)?;
+    let listing = gents::plugin::ux::find(home, ux)?;
     let coordinate = listing.pack.ok_or_else(|| {
         anyhow::anyhow!(
             "ux plugin {ux:?} ships in no pack; ctx.plugin reaches a pack's own .afb plugins only"
@@ -395,7 +395,7 @@ pub fn plugin_call_target(home: &std::path::Path, ux: &str, name: &str) -> Resul
 
 pub fn plugin_call_uses_data(home: &std::path::Path, ux: &str, name: &str) -> Result<bool> {
     let coordinate = plugin_call_target(home, ux, name)?;
-    let (namespace, _) = gents::pack_registry::split_pack_coordinate(&coordinate);
+    let (namespace, _) = gents::pack::registry::split_pack_coordinate(&coordinate);
     Ok(gents::plugin::store::read_record(home, namespace, name)?
         .data_grant()
         .is_some())
@@ -427,7 +427,7 @@ pub async fn plugin_call(
     operator: Option<(gents::ConfigAccess, String)>,
 ) -> Result<Value> {
     let coordinate = plugin_call_target(&home, &ux, &name)?;
-    let (namespace, _) = gents::pack_registry::split_pack_coordinate(&coordinate);
+    let (namespace, _) = gents::pack::registry::split_pack_coordinate(&coordinate);
     tracing::info!(ux = %ux, pack = %coordinate, plugin = %name, "ux plugin call");
     gents::plugin::approval::scope_interactive(
         true,
@@ -505,7 +505,7 @@ mod tests {
             .join(gents::store::local::home::UX_PLUGINS_DIR_NAME)
             .join("loose");
         std::fs::create_dir_all(&dev).unwrap();
-        std::fs::write(dev.join(gents::ux_plugin::DEV_ENTRY), "export default {}").unwrap();
+        std::fs::write(dev.join(gents::plugin::ux::DEV_ENTRY), "export default {}").unwrap();
         let assets = "packs/.materialized/examples/board_pack/deadbeef";
         std::fs::create_dir_all(home.path().join(assets).join("ux/board")).unwrap();
         std::fs::write(

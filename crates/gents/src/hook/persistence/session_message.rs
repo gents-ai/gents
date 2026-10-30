@@ -1,7 +1,7 @@
 use super::*;
 use anyhow::Context;
 
-use crate::session_message::{AgentMessageArgs, AgentNewArgs};
+use crate::session::message::{AgentMessageArgs, AgentNewArgs};
 
 impl DefraSessionHook {
     pub(super) async fn persist_session_message_tool_call(
@@ -41,7 +41,7 @@ impl DefraSessionHook {
             crate::request::binding::load_agent_request_by_doc_id(&self.node, &caller_doc_id)
                 .await?
                 .context("session-message calling request disappeared")?;
-        let tools = crate::session_message::load_caller_session_tools(
+        let tools = crate::session::message::load_caller_session_tools(
             &self.node,
             &caller.node_did,
             &caller.agent_id,
@@ -110,7 +110,7 @@ impl DefraSessionHook {
                 },
                 (parsed.prompt, parsed.task),
                 parsed.title,
-                crate::session_message::AgentMessageDelivery::Queue,
+                crate::session::message::AgentMessageDelivery::Queue,
             )
         } else {
             let parsed = match serde_json::from_str::<AgentMessageArgs>(args) {
@@ -135,7 +135,7 @@ impl DefraSessionHook {
                     )
                 );
             }
-            let Some(target) = crate::session_message::resolve_send_target(
+            let Some(target) = crate::session::message::resolve_send_target(
                 &self.node,
                 &caller.node_did,
                 &tools,
@@ -161,11 +161,11 @@ impl DefraSessionHook {
                     invalid_tool_arguments_payload(tool_name, "/delivery", message)
                 ),
             };
-            if delivery == crate::session_message::AgentMessageDelivery::Interrupt {
-                if let Some(reason) = crate::session_message::interrupt_refusal(
+            if delivery == crate::session::message::AgentMessageDelivery::Interrupt {
+                if let Some(reason) = crate::session::message::interrupt_refusal(
                     &self.node,
-                    &crate::session_origin::SessionScope::of_request(&caller),
-                    &crate::session_message::target_scope(&caller.node_did, &target),
+                    &crate::session::origin::SessionScope::of_request(&caller),
+                    &crate::session::message::target_scope(&caller.node_did, &target),
                 )
                 .await?
                 {
@@ -179,7 +179,7 @@ impl DefraSessionHook {
         };
         let field = if create { "prompt" } else { "message" };
         let body =
-            match crate::session_message::message_body(field, body.0.as_ref(), body.1.as_ref()) {
+            match crate::session::message::message_body(field, body.0.as_ref(), body.1.as_ref()) {
                 Ok(body) => body,
                 Err(message) => refuse!(
                     FailureClass::ArgumentInvalid,
@@ -188,7 +188,7 @@ impl DefraSessionHook {
             };
 
         let caller_hop = caller.request_hop;
-        let rendered = match crate::session_message::render_body(
+        let rendered = match crate::session::message::render_body(
             &self.node,
             &caller.node_did,
             &target.agent_id,
@@ -220,7 +220,7 @@ impl DefraSessionHook {
             tool_call_doc_id,
             correlation: caller.caused_by_correlation.clone(),
         };
-        let mut plan = match crate::session_message::plan_with_delivery(
+        let mut plan = match crate::session::message::plan_with_delivery(
             &self.node,
             &cause,
             &target,
@@ -235,7 +235,7 @@ impl DefraSessionHook {
                 FailureClass::ArgumentInvalid,
                 invalid_tool_arguments_payload(
                     tool_name,
-                    if delivery == crate::session_message::AgentMessageDelivery::Steer
+                    if delivery == crate::session::message::AgentMessageDelivery::Steer
                         && target.node_did != caller.node_did
                     {
                         "/delivery"
@@ -270,40 +270,45 @@ impl DefraSessionHook {
                 );
             }
         }
-        let receipt =
-            match crate::session_message::commit(&self.node, &cause, &mut lifecycle, plan, !create)
-                .await
-            {
-                Ok(receipt) => crate::tool_output::render(
-                    &receipt,
-                    &["status", "session_id", "request_id", "tool_call_id"],
-                )?,
-                Err(crate::session_message::CommitError::Steer(refusal)) => {
-                    refuse!(
-                        FailureClass::ArgumentInvalid,
-                        invalid_tool_arguments_payload(tool_name, "/delivery", refusal.to_string())
-                    );
-                }
-                Err(error) => {
-                    if let crate::session_message::CommitError::Other(ref error) = error {
-                        if let Some(capacity) = error.downcast_ref::<BackgroundCapacityExceeded>() {
-                            refuse!(
-                                FailureClass::ServiceUnavailable,
-                                background_budget_exceeded_payload(tool_name, capacity.0)
-                            );
-                        }
+        let receipt = match crate::session::message::commit(
+            &self.node,
+            &cause,
+            &mut lifecycle,
+            plan,
+            !create,
+        )
+        .await
+        {
+            Ok(receipt) => crate::tool_output::render(
+                &receipt,
+                &["status", "session_id", "request_id", "tool_call_id"],
+            )?,
+            Err(crate::session::message::CommitError::Steer(refusal)) => {
+                refuse!(
+                    FailureClass::ArgumentInvalid,
+                    invalid_tool_arguments_payload(tool_name, "/delivery", refusal.to_string())
+                );
+            }
+            Err(error) => {
+                if let crate::session::message::CommitError::Other(ref error) = error {
+                    if let Some(capacity) = error.downcast_ref::<BackgroundCapacityExceeded>() {
+                        refuse!(
+                            FailureClass::ServiceUnavailable,
+                            background_budget_exceeded_payload(tool_name, capacity.0)
+                        );
                     }
-                    refuse!(
-                        FailureClass::ServiceUnavailable,
-                        service_unavailable_payload(
-                            tool_name,
-                            "/",
-                            format!("the message could not be delivered: {error:#}"),
-                            true,
-                        )
-                    );
                 }
-            };
+                refuse!(
+                    FailureClass::ServiceUnavailable,
+                    service_unavailable_payload(
+                        tool_name,
+                        "/",
+                        format!("the message could not be delivered: {error:#}"),
+                        true,
+                    )
+                );
+            }
+        };
         Ok(self.skip_tool_result(tool_name, receipt))
     }
 }
@@ -352,7 +357,7 @@ impl DefraSessionHook {
             crate::request::binding::load_agent_request_by_doc_id(&self.node, &caller_doc_id)
                 .await?
                 .context("agents tool calling request disappeared")?;
-        let tools = crate::session_message::load_caller_session_tools(
+        let tools = crate::session::message::load_caller_session_tools(
             &self.node,
             &caller.node_did,
             &caller.agent_id,
@@ -368,7 +373,7 @@ impl DefraSessionHook {
             ));
         }
         if tool_name == crate::toolset::AGENT_LIST_TOOL_NAME {
-            if let Err(error) = serde_json::from_str::<crate::session_message::AgentListArgs>(args)
+            if let Err(error) = serde_json::from_str::<crate::session::message::AgentListArgs>(args)
             {
                 return Ok(invalid_tool_arguments_payload(
                     tool_name,
@@ -377,12 +382,12 @@ impl DefraSessionHook {
                 ));
             }
             return Ok(json_string(
-                crate::session_message::agent_list(&self.node, &caller, &tools).await?,
+                crate::session::message::agent_list(&self.node, &caller, &tools).await?,
             ));
         }
         if tool_name == crate::toolset::AGENT_SESSION_LIST_TOOL_NAME {
             let parsed =
-                match serde_json::from_str::<crate::session_message::AgentSessionListArgs>(args) {
+                match serde_json::from_str::<crate::session::message::AgentSessionListArgs>(args) {
                     Ok(parsed) => parsed,
                     Err(error) => {
                         return Ok(invalid_tool_arguments_payload(
@@ -400,13 +405,13 @@ impl DefraSessionHook {
                 ));
             }
             return Ok(json_string(
-                crate::session_message::agent_session_list(&self.node, &caller, &tools, &parsed)
+                crate::session::message::agent_session_list(&self.node, &caller, &tools, &parsed)
                     .await?,
             ));
         }
         if tool_name == crate::toolset::AGENT_SESSION_READ_TOOL_NAME {
             let parsed =
-                match serde_json::from_str::<crate::session_message::AgentSessionReadArgs>(args) {
+                match serde_json::from_str::<crate::session::message::AgentSessionReadArgs>(args) {
                     Ok(parsed) => parsed,
                     Err(error) => {
                         return Ok(invalid_tool_arguments_payload(
@@ -426,7 +431,7 @@ impl DefraSessionHook {
             if parsed.session_id.trim() == caller.session_id {
                 return Ok(invalid_tool_arguments_payload(tool_name, "/session_id", "agent_session_read cannot address the calling session; use sessions to inspect this conversation"));
             }
-            let Some(target) = crate::session_message::resolve_send_target(
+            let Some(target) = crate::session::message::resolve_send_target(
                 &self.node,
                 &caller.node_did,
                 &tools,
@@ -436,7 +441,7 @@ impl DefraSessionHook {
             else {
                 return Ok(tool_not_allowed_payload(tool_name, "/session_id", &parsed.session_id, "session is not messageable; discover available sessions with agent_session_list", tools.target_names()));
             };
-            if let Err(error) = parsed.validate_target(&crate::session_message::target_scope(
+            if let Err(error) = parsed.validate_target(&crate::session::message::target_scope(
                 &caller.node_did,
                 &target,
             )) {
@@ -447,7 +452,7 @@ impl DefraSessionHook {
                 ));
             }
             return Ok(json_string(
-                crate::session_message::agent_session_read(&self.node, &caller, &tools, &parsed)
+                crate::session::message::agent_session_read(&self.node, &caller, &tools, &parsed)
                     .await?,
             ));
         }
@@ -464,7 +469,7 @@ impl DefraSessionHook {
                 "unknown session tool",
             ));
         }
-        let parsed = match serde_json::from_str::<crate::session_message::AgentInterruptArgs>(args)
+        let parsed = match serde_json::from_str::<crate::session::message::AgentInterruptArgs>(args)
         {
             Ok(parsed) => parsed,
             Err(error) => {
@@ -476,7 +481,7 @@ impl DefraSessionHook {
             }
         };
         let session = parsed.session_id.trim();
-        let Some(target) = crate::session_message::resolve_send_target(
+        let Some(target) = crate::session::message::resolve_send_target(
             &self.node,
             &caller.node_did,
             &tools,
@@ -490,10 +495,10 @@ impl DefraSessionHook {
                 "only the session that started this session may control it",
             ));
         };
-        let target = crate::session_message::target_scope(&caller.node_did, &target);
-        if let Some(reason) = crate::session_message::interrupt_refusal(
+        let target = crate::session::message::target_scope(&caller.node_did, &target);
+        if let Some(reason) = crate::session::message::interrupt_refusal(
             &self.node,
-            &crate::session_origin::SessionScope::of_request(&caller),
+            &crate::session::origin::SessionScope::of_request(&caller),
             &target,
         )
         .await?
@@ -514,7 +519,7 @@ impl DefraSessionHook {
         match tool_name {
             crate::toolset::AGENT_INTERRUPT_TOOL_NAME => {
                 let interrupted =
-                    crate::session_message::interrupt_session(&self.node, &target).await?;
+                    crate::session::message::interrupt_session(&self.node, &target).await?;
                 Ok(json_string(json!({
                     "ok": true,
                     "session_id": session,

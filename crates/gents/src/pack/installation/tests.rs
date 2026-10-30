@@ -756,8 +756,8 @@ async fn dependency_fixture() -> (Arc<defra_node::EmbeddedNode>, ConfigAccess) {
 /// Installs `dependee_fixture` the way a front-end installs a documents pack.
 async fn install_dependee(access: &ConfigAccess, explicit: bool) {
     let (_guard, dir) = crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
-    let (bytes, _) = crate::pack_archive::pack_dir(&dir).unwrap();
-    let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+    let (bytes, _) = crate::pack::archive::pack_dir(&dir).unwrap();
+    let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
     let authored = crate::pack::load_pack_config(
         archive.manifest(),
         &crate::pack::PackInstallOptions {
@@ -1197,8 +1197,8 @@ fn install_fixture_plugins_into(
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     edit(&mut manifest["plugins"][0]);
     std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let (bytes, _) = crate::pack_archive::pack_dir(&root).unwrap();
-    let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+    let (bytes, _) = crate::pack::archive::pack_dir(&root).unwrap();
+    let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
     crate::plugin::install::install_pack_plugins(
         home,
         archive.manifest(),
@@ -1327,15 +1327,15 @@ fn installed_plugin_record_without_data_unique_keys_decodes() {
     assert!(record.data_unique_keys.is_empty());
 }
 
-fn documents_archive() -> crate::pack_archive::PackArchive {
+fn documents_archive() -> crate::pack::archive::PackArchive {
     let (_guard, root) = crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
     let path = root.join("manifest.json");
     let mut manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     manifest.as_object_mut().unwrap().remove("schemas");
     std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let (bytes, _) = crate::pack_archive::pack_dir(&root).unwrap();
-    crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+    let (bytes, _) = crate::pack::archive::pack_dir(&root).unwrap();
+    crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap()
 }
 
 fn prepared() -> PreparedDocumentPackInstall {
@@ -1352,7 +1352,7 @@ fn prepared() -> PreparedDocumentPackInstall {
     }
 }
 
-fn operator_record(archive: &crate::pack_archive::PackArchive) -> crate::pack::HomePackInstall {
+fn operator_record(archive: &crate::pack::archive::PackArchive) -> crate::pack::HomePackInstall {
     crate::pack::HomePackInstall {
         coordinate: format!(
             "{}/{}",
@@ -1371,7 +1371,7 @@ fn operator_record(archive: &crate::pack_archive::PackArchive) -> crate::pack::H
     }
 }
 
-async fn self_config_install(archive: &crate::pack_archive::PackArchive, home: Option<&Path>) {
+async fn self_config_install(archive: &crate::pack::archive::PackArchive, home: Option<&Path>) {
     install_prepared_document_pack(
         &access().await,
         OWNER,
@@ -1430,7 +1430,7 @@ async fn explicit_self_config_reinstall_lowers_the_pack_record() {
     assert_eq!(stored.digest, archive.digest());
 }
 
-fn documents_archive_shipping(files: &[(&str, &str)]) -> crate::pack_archive::PackArchive {
+fn documents_archive_shipping(files: &[(&str, &str)]) -> crate::pack::archive::PackArchive {
     let (_guard, root) = crate::test_support::fixture_pack_copy("documents_fixture", &json!({}));
     let path = root.join("manifest.json");
     let mut manifest: serde_json::Value =
@@ -1446,8 +1446,8 @@ fn documents_archive_shipping(files: &[(&str, &str)]) -> crate::pack_archive::Pa
     }
     object.insert("assets".into(), json!(assets));
     std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let (bytes, _) = crate::pack_archive::pack_dir(&root).unwrap();
-    crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+    let (bytes, _) = crate::pack::archive::pack_dir(&root).unwrap();
+    crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap()
 }
 
 #[tokio::test]
@@ -1466,8 +1466,8 @@ async fn operator_installs_document_pack_ux_with_its_data_plugin() {
         "contributes": { "areas": ["nav"], "directives": [] }
     }]);
     std::fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let (bytes, _) = crate::pack_archive::pack_dir(&root).unwrap();
-    let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+    let (bytes, _) = crate::pack::archive::pack_dir(&root).unwrap();
+    let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
     let home = tempfile::tempdir().unwrap();
     install_prepared_document_pack(
         &access().await,
@@ -1489,7 +1489,7 @@ async fn operator_installs_document_pack_ux_with_its_data_plugin() {
         .plugins
         .iter()
         .any(|plugin| plugin.name == "job_fixture"));
-    let listing = crate::ux_plugin::find(home.path(), "fixture/job_plugin_fixture/board").unwrap();
+    let listing = crate::plugin::ux::find(home.path(), "fixture/job_plugin_fixture/board").unwrap();
     assert_eq!(listing.pack.as_deref(), Some("fixture/job_plugin_fixture"));
     assert!(std::path::Path::new(&listing.file).is_file());
     let plugin = crate::plugin::store::read_record(home.path(), "fixture", "job_fixture").unwrap();
@@ -1514,7 +1514,7 @@ async fn operator_installs_document_pack_ux_with_its_data_plugin() {
 
 fn recorded(
     home: &Path,
-    archive: &crate::pack_archive::PackArchive,
+    archive: &crate::pack::archive::PackArchive,
 ) -> crate::pack::HomePackInstall {
     crate::pack::read_home_install(home, &operator_record(archive).coordinate)
         .unwrap()
@@ -1691,12 +1691,12 @@ fn documents_dependency_pair(
     broken_dependent_plugin: bool,
 ) -> (
     [tempfile::TempDir; 2],
-    crate::pack_archive::PackArchive,
-    crate::pack_archive::PackArchive,
+    crate::pack::archive::PackArchive,
+    crate::pack::archive::PackArchive,
 ) {
     let archive = |dir: &std::path::Path| {
-        let (bytes, _) = crate::pack_archive::pack_dir(dir).unwrap();
-        crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+        let (bytes, _) = crate::pack::archive::pack_dir(dir).unwrap();
+        crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap()
     };
     let edit = |dir: &std::path::Path, change: &dyn Fn(&mut Value)| {
         let path = dir.join("manifest.json");
@@ -1759,8 +1759,8 @@ fn documents_dependency_pair(
 
 async fn install_dependent_with_dependee(
     access: &ConfigAccess,
-    dependee: &crate::pack_archive::PackArchive,
-    dependent: &crate::pack_archive::PackArchive,
+    dependee: &crate::pack::archive::PackArchive,
+    dependent: &crate::pack::archive::PackArchive,
     plugin_home: Option<&std::path::Path>,
 ) {
     try_install_dependent_with_dependee(access, dependee, dependent, plugin_home)
@@ -1770,8 +1770,8 @@ async fn install_dependent_with_dependee(
 
 async fn try_install_dependent_with_dependee(
     access: &ConfigAccess,
-    dependee: &crate::pack_archive::PackArchive,
-    dependent: &crate::pack_archive::PackArchive,
+    dependee: &crate::pack::archive::PackArchive,
+    dependent: &crate::pack::archive::PackArchive,
     plugin_home: Option<&std::path::Path>,
 ) -> Result<InstallReport> {
     let authored = crate::pack::load_pack_config(
@@ -1898,8 +1898,8 @@ async fn a_failing_dependent_does_not_publish_dependency_plugin() {
 /// `dependee_plugin` the dependee also ships the plugin `echo`.
 async fn refused_dependency(dependee_plugin: bool, change: &dyn Fn(&mut Value)) -> String {
     let archive = |dir: &std::path::Path| {
-        let (bytes, _) = crate::pack_archive::pack_dir(dir).unwrap();
-        crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+        let (bytes, _) = crate::pack::archive::pack_dir(dir).unwrap();
+        crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap()
     };
     let edit = |dir: &std::path::Path, change: &dyn Fn(&mut Value)| {
         let path = dir.join("manifest.json");
@@ -2108,8 +2108,8 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
     manifest.as_object_mut().unwrap().remove("schemas");
     manifest.as_object_mut().unwrap().remove("inference_slots");
     std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-    let (bytes, _) = crate::pack_archive::pack_dir(&directory).unwrap();
-    let archive = crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap();
+    let (bytes, _) = crate::pack::archive::pack_dir(&directory).unwrap();
+    let archive = crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap();
     let config = |plugin: Option<&str>| -> PackConfig {
         serde_json::from_value(json!({
             "node": {"node_did": identity.did()},
@@ -2121,7 +2121,7 @@ async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_p
     async fn prepare_remote(
         access: &ConfigAccess,
         owner: &str,
-        archive: &crate::pack_archive::PackArchive,
+        archive: &crate::pack::archive::PackArchive,
         config: &PackConfig,
     ) -> Result<PreparedDocumentPackInstall> {
         prepare_document_pack_install(
@@ -2479,8 +2479,8 @@ async fn pinned_plugin_references_match_executable_model_before_install_or_updat
             })).unwrap();
             crate::plugin::store::write_record(home.path(), &record).unwrap();
         }
-        let (packed, _) = crate::pack_archive::pack_dir(dir.path()).unwrap();
-        let archive = crate::pack_archive::PackArchive::from_bytes(&packed).unwrap();
+        let (packed, _) = crate::pack::archive::pack_dir(dir.path()).unwrap();
+        let archive = crate::pack::archive::PackArchive::from_bytes(&packed).unwrap();
         let mut config = config_naming_plugin("acme/web_search");
         let plugin = &mut config.tools[0]
             .integrations
@@ -2940,8 +2940,8 @@ async fn installed_plugin_pin_is_rechecked_at_graph_commit() {
         )),
     )
     .unwrap();
-    let (packed, _) = crate::pack_archive::pack_dir(&updated_dir.path().join("source")).unwrap();
-    let updated = crate::pack_archive::PackArchive::from_bytes(&packed).unwrap();
+    let (packed, _) = crate::pack::archive::pack_dir(&updated_dir.path().join("source")).unwrap();
+    let updated = crate::pack::archive::PackArchive::from_bytes(&packed).unwrap();
     crate::pack::plugin_lifecycle::install(
         home.path(),
         &updated,
@@ -3063,8 +3063,8 @@ async fn installed_plugin_pin_stays_locked_through_document_commit() {
         )),
     )
     .unwrap();
-    let (packed, _) = crate::pack_archive::pack_dir(&updated_dir.path().join("source")).unwrap();
-    let updated = crate::pack_archive::PackArchive::from_bytes(&packed).unwrap();
+    let (packed, _) = crate::pack::archive::pack_dir(&updated_dir.path().join("source")).unwrap();
+    let updated = crate::pack::archive::PackArchive::from_bytes(&packed).unwrap();
     let notify_access = access.clone();
     let notify_home = home.path().to_owned();
     let update = crate::pack::plugin_lifecycle::install(
@@ -3160,8 +3160,8 @@ async fn standalone_plugin_update_restores_store_and_home_on_pin_conflict() {
         changed,
     )
     .unwrap();
-    let (packed, _) = crate::pack_archive::pack_dir(&updated_dir.path().join("source")).unwrap();
-    let updated = crate::pack_archive::PackArchive::from_bytes(&packed).unwrap();
+    let (packed, _) = crate::pack::archive::pack_dir(&updated_dir.path().join("source")).unwrap();
+    let updated = crate::pack::archive::PackArchive::from_bytes(&packed).unwrap();
     let notify_access = access.clone();
     let notify_home = home.path().to_owned();
     let error = crate::pack::plugin_lifecycle::install(
@@ -3229,8 +3229,8 @@ async fn dependency_schema_is_published_before_root_schema_rejection() {
         std::fs::write(path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     }
     let archive = |dir: &std::path::Path| {
-        let (bytes, _) = crate::pack_archive::pack_dir(dir).unwrap();
-        crate::pack_archive::PackArchive::from_bytes(&bytes).unwrap()
+        let (bytes, _) = crate::pack::archive::pack_dir(dir).unwrap();
+        crate::pack::archive::PackArchive::from_bytes(&bytes).unwrap()
     };
     let dependency = archive(&dependency_root);
     let dependent = archive(&root);

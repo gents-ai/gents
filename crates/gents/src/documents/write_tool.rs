@@ -153,7 +153,7 @@ impl<'de> serde::Deserialize<'de> for WriteToolField {
 pub struct WriteToolDecl {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
-    pub notification: Option<crate::mailbox::MailboxNotificationPolicy>,
+    pub notification: Option<crate::session::mailbox::MailboxNotificationPolicy>,
     pub tool_name: String,
     pub collection: String,
     #[cfg_attr(feature = "typescript", ts(as = "Option<String>", optional))]
@@ -268,7 +268,7 @@ impl<'de> serde::Deserialize<'de> for WriteToolDecl {
         struct Raw {
             tool_name: String,
             #[serde(default)]
-            notification: Option<crate::mailbox::MailboxNotificationPolicy>,
+            notification: Option<crate::session::mailbox::MailboxNotificationPolicy>,
             collection: String,
             #[serde(default)]
             description: String,
@@ -353,7 +353,7 @@ pub(crate) fn validate_write_tool_declarations(
                 decl.tool_name
             )
         })?;
-        crate::mailbox::validate_mailbox_write_decl(decl).map_err(|error| {
+        crate::session::mailbox::validate_mailbox_write_decl(decl).map_err(|error| {
             anyhow::anyhow!(
                 "write_tools[{i}] (tool {:?}) violates mailbox registration policy: {error}",
                 decl.tool_name
@@ -432,7 +432,7 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
     ];
     const SINGLETON_TOOL_NAMES: &[&str] = &[
         DEFRA_QUERY_TOOL_NAME,
-        crate::application_write::WRITE_TOOL_NAME,
+        crate::plugin::application_write::WRITE_TOOL_NAME,
         CONTEXT_BUDGET_TOOL_NAME,
         SESSION_HISTORY_TOOL_NAME,
         crate::schema_tool::SCHEMA_TOOL_NAME,

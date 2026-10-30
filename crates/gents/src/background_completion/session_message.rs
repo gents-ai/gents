@@ -245,10 +245,10 @@ pub(crate) async fn settle_session_message_row(
         .context("session-message row lacks physical identity")?
         .to_owned();
     let calling_request_id = lifecycle.calling_request_id().await?;
-    let caused = match crate::session_message::observe_caused_request(node, lifecycle).await? {
-        crate::session_message::CausedObservation::Bound(caused) => caused,
-        crate::session_message::CausedObservation::NotVisible => return Ok(false),
-        crate::session_message::CausedObservation::Unbound(reason) => {
+    let caused = match crate::session::message::observe_caused_request(node, lifecycle).await? {
+        crate::session::message::CausedObservation::Bound(caused) => caused,
+        crate::session::message::CausedObservation::NotVisible => return Ok(false),
+        crate::session::message::CausedObservation::Unbound(reason) => {
             const REASON: &str = "caused_request_unbound";
             if !lifecycle
                 .fail_owned_with_completion_reason(reason, FailureClass::External, REASON)
@@ -945,15 +945,15 @@ mod turn_assignment_tests {
         .await
         .unwrap()
         .expect("rehydrated session-message row");
-        let caused = match crate::session_message::observe_caused_request(node, &lifecycle)
+        let caused = match crate::session::message::observe_caused_request(node, &lifecycle)
             .await
             .unwrap()
         {
-            crate::session_message::CausedObservation::Bound(caused) => caused,
-            crate::session_message::CausedObservation::Unbound(reason) => {
+            crate::session::message::CausedObservation::Bound(caused) => caused,
+            crate::session::message::CausedObservation::Unbound(reason) => {
                 panic!("expected a bound caused request, got Unbound({reason})")
             }
-            crate::session_message::CausedObservation::NotVisible => {
+            crate::session::message::CausedObservation::NotVisible => {
                 panic!("expected a bound caused request, got NotVisible")
             }
         };

@@ -157,7 +157,7 @@ pub(crate) async fn ensure_session_in_txn(
     }
 
     if let Some(origin) = provenance.as_mut() {
-        origin.started_by = crate::session_origin::verified_starter_in_txn(
+        origin.started_by = crate::session::origin::verified_starter_in_txn(
             txn,
             origin,
             node_did,
@@ -216,7 +216,7 @@ pub(crate) async fn ensure_session_in_txn(
             .and_then(|doc| doc.get("_docID"))
             .and_then(serde_json::Value::as_str)
             .context("created session lacks physical identity")?;
-        origin.creation_receipt = crate::session_origin::issue_creation_receipt_in_txn(
+        origin.creation_receipt = crate::session::origin::issue_creation_receipt_in_txn(
             txn,
             node_did,
             session_id,

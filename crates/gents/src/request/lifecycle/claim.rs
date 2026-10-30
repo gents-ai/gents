@@ -207,7 +207,7 @@ where
                         .is_some_and(response_has_documents)
                 {
                     crate::goal::apply_claimed_task_goal_in_txn(txn, request, claimed_at).await?;
-                    crate::mailbox::claim_reply_in_txn(txn, request, claimed_at).await?;
+                    crate::session::mailbox::claim_reply_in_txn(txn, request, claimed_at).await?;
                     super::materialize::apply_request_session_projection(txn, request, claimed_at)
                         .await?;
                     folded_selection = super::queue::select_fold_in_claim_txn(

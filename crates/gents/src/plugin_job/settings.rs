@@ -178,7 +178,7 @@ pub fn validate(settings: &PluginJobSettings) -> Vec<String> {
     }
     for pack in &policy.trusted_packs {
         if !matches!(
-            crate::pack_resolve::parse_pack_spec(pack),
+            crate::pack::resolve::parse_pack_spec(pack),
             Ok(spec) if spec.version.is_none()
         ) {
             errors.push(format!(

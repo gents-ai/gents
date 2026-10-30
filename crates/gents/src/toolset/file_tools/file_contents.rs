@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::{document_composite_version, escape_graphql_string, mutation_documents};
-use crate::session_origin::SessionScope;
+use crate::session::origin::SessionScope;
 
 use super::content_hash;
 

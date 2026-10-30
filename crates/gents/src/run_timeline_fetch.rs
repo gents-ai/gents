@@ -538,7 +538,7 @@ pub async fn load_run_timeline_rows(
     // `child_request_id` is the single-request projection of a session-message
     // call. A job row's many caused requests come from
     // `session_origin::requests_caused_by_calls`.
-    let caused = crate::session_origin::caused_requests(
+    let caused = crate::session::origin::caused_requests(
         access,
         tool_calls.iter().filter_map(|row| row.doc_id.as_deref()),
     )

@@ -120,7 +120,8 @@ pub async fn plan(
 ) -> Result<Option<ProviderRecoveryPlan>> {
     validate_scope(access, request).await?;
     let Some(blocked) =
-        gents::blocked_turn::blocked_turn(access, &request.node_did, &request.request_id).await?
+        gents::goal::blocked_turn::blocked_turn(access, &request.node_did, &request.request_id)
+            .await?
     else {
         return Ok(None);
     };
@@ -174,10 +175,10 @@ pub async fn plan(
     }
     Ok(Some(ProviderRecoveryPlan {
         reason: match blocked.reason {
-            gents::blocked_turn::BlockedReason::UsageLimit => "usage_limit",
-            gents::blocked_turn::BlockedReason::AccountDisabled => "account_disabled",
-            gents::blocked_turn::BlockedReason::AccountRemoved => "account_removed",
-            gents::blocked_turn::BlockedReason::AccountSignedOut => "account_signed_out",
+            gents::goal::blocked_turn::BlockedReason::UsageLimit => "usage_limit",
+            gents::goal::blocked_turn::BlockedReason::AccountDisabled => "account_disabled",
+            gents::goal::blocked_turn::BlockedReason::AccountRemoved => "account_removed",
+            gents::goal::blocked_turn::BlockedReason::AccountSignedOut => "account_signed_out",
         }
         .into(),
         account_label: blocked.account.map(|account| account.label),

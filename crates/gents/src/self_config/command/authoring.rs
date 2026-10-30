@@ -215,7 +215,7 @@ impl ConfigCommandTool {
         let path = context.resolve_existing_file(pack)?;
         anyhow::ensure!(
             path.extension()
-                .is_some_and(|extension| extension == crate::pack_archive::EXTENSION),
+                .is_some_and(|extension| extension == crate::pack::archive::EXTENSION),
             "pack verify accepts a built .pack artifact; {} is not one",
             context.display_path(&path)
         );

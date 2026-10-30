@@ -246,7 +246,7 @@ impl FileInventorySnapshot {
             session.doc_id == admission.session_doc_id,
             InventoryRejection("file inventory session identity changed")
         );
-        let scope = crate::session_origin::SessionScope::from(&session.session);
+        let scope = crate::session::origin::SessionScope::from(&session.session);
         let reader: Option<identity::Did> =
             if scope.requester_did.as_deref() == Some(request.requester_did.as_str()) {
                 None

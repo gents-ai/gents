@@ -1224,7 +1224,7 @@ fn engineer_tools(
         display_name: Some("Engineer escalations".to_string()),
         enabled: true,
         entries: Some(vec![SurfaceToolDecl::Create(
-            gents::mailbox::canonical_mailbox_write_decl(),
+            gents::session::mailbox::canonical_mailbox_write_decl(),
         )]),
         created_at: None,
         tags: Vec::new(),

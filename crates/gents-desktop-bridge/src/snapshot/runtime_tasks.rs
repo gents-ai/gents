@@ -350,10 +350,10 @@ mod trigger_recent_runs_tests {
 /// What a session's starter verdict depends on apart from its physical row:
 /// its scope, agent and complete provenance, including the node-signed
 /// creation receipt that binds the physical document and starter index.
-type StarterEvidence = (gents::session_origin::SessionScope, String, String);
+type StarterEvidence = (gents::session::origin::SessionScope, String, String);
 
 fn starter_evidence(
-    scope: gents::session_origin::SessionScope,
+    scope: gents::session::origin::SessionScope,
     agent_id: &str,
     provenance: Option<&gents_protocol::session::SessionProvenance>,
 ) -> Option<StarterEvidence> {
@@ -374,7 +374,7 @@ fn starter_evidence(
 #[derive(Default)]
 pub(crate) struct StarterCache(
     std::sync::Mutex<
-        std::collections::BTreeMap<StarterEvidence, Option<gents::session_origin::SessionLink>>,
+        std::collections::BTreeMap<StarterEvidence, Option<gents::session::origin::SessionLink>>,
     >,
 );
 
@@ -387,7 +387,7 @@ pub(super) async fn resolve_summary_starters<'a, R>(
 {
     let mut started = Vec::new();
     for summary in summaries {
-        let scope = gents::session_origin::SessionScope {
+        let scope = gents::session::origin::SessionScope {
             node_did: summary.node_did.clone(),
             session_id: summary.session_id.clone(),
             requester_did: summary.requester_did.clone(),
@@ -417,7 +417,7 @@ pub(super) async fn resolve_summary_starters<'a, R>(
         missing
     };
     if !missing.is_empty() {
-        match gents::session_origin::verified_recorded_starters(access, &missing).await {
+        match gents::session::origin::verified_recorded_starters(access, &missing).await {
             Ok(observed) => {
                 let mut known = cache
                     .0
@@ -425,7 +425,7 @@ pub(super) async fn resolve_summary_starters<'a, R>(
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 for row in observed {
                     if let Some(evidence) = starter_evidence(
-                        gents::session_origin::SessionScope::from(&row.session),
+                        gents::session::origin::SessionScope::from(&row.session),
                         &row.session.agent_id,
                         row.session.provenance.as_ref(),
                     ) {

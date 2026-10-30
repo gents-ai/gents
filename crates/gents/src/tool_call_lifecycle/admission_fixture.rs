@@ -631,7 +631,7 @@ pub(crate) async fn materialize_session_message(
     tool: &mut ToolCallLifecycle,
     target_node_did: &str,
     prompt: &str,
-) -> anyhow::Result<crate::session_message::SessionMessageReceipt> {
+) -> anyhow::Result<crate::session::message::SessionMessageReceipt> {
     let caller = request.request();
     let cause = crate::request::lifecycle::SessionMessageCause {
         caller_node_did: caller.node_did.clone(),
@@ -653,11 +653,11 @@ pub(crate) async fn materialize_session_message(
         agent_id: "general".to_owned(),
         session_id: uuid::Uuid::new_v4().to_string(),
     };
-    let mut plan = crate::session_message::plan(
+    let mut plan = crate::session::message::plan(
         node,
         &cause,
         &target,
-        crate::session_message::RenderedBody {
+        crate::session::message::RenderedBody {
             content: prompt.to_owned(),
             goal: None,
         },
@@ -667,7 +667,7 @@ pub(crate) async fn materialize_session_message(
     .await?
     .map_err(anyhow::Error::msg)?;
     plan.sign_agent_creation(&cause.caller_node_did).await?;
-    crate::session_message::commit(node, &cause, tool, plan, false)
+    crate::session::message::commit(node, &cause, tool, plan, false)
         .await
         .map_err(Into::into)
 }

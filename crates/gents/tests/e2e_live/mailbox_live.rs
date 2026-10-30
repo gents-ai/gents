@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use gents::documents::{DatastoreTools, SurfaceToolDecl, Tools};
 use gents::graphql::escape_graphql_string;
-use gents::mailbox::{canonical_mailbox_write_decl, list_mailbox_items, MailboxStatus};
+use gents::session::mailbox::{canonical_mailbox_write_decl, list_mailbox_items, MailboxStatus};
 use gents::{Collection, DatastoreToolSurfaceDocument, NodeIdentity};
 
 use crate::support::fixtures::{configure_agent_tools, test_identity};
@@ -108,7 +108,7 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
     assert_eq!(items[0].source_kind, "agent");
     assert_eq!(
         items[0].source_id,
-        gents::mailbox::NotificationIdentity::Event
+        gents::session::mailbox::NotificationIdentity::Event
             .source_id(&node_did, identity.did(), &agent_id, request_id)
             .unwrap()
     );

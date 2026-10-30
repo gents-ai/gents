@@ -272,7 +272,7 @@ async fn stage_claimed_continuation(
     {
         return Ok(None);
     }
-    if crate::mailbox::required_question_in_txn(txn, parent_row).await? {
+    if crate::session::mailbox::required_question_in_txn(txn, parent_row).await? {
         return Ok(None);
     }
     match wait_observation::observe_intentional_wait(

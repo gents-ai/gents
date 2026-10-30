@@ -67,15 +67,16 @@ impl ConfigCommandTool {
                 use crate::documents::SurfaceToolDecl;
                 let (tool_name, collection, result) = match entry {
                     SurfaceToolDecl::Create(decl) => {
-                        let result = if decl.collection == crate::mailbox::MAILBOX_COLLECTION {
-                            crate::mailbox::validate_mailbox_write_decl(&decl)
-                        } else {
-                            crate::defra_write::BoundedWriteTool::new(
-                                crate::config_client::ConfigAccess::local(self.node.clone()),
-                                decl.clone(),
-                            )
-                            .ensure_well_formed()
-                        };
+                        let result =
+                            if decl.collection == crate::session::mailbox::MAILBOX_COLLECTION {
+                                crate::session::mailbox::validate_mailbox_write_decl(&decl)
+                            } else {
+                                crate::defra_write::BoundedWriteTool::new(
+                                    crate::config_client::ConfigAccess::local(self.node.clone()),
+                                    decl.clone(),
+                                )
+                                .ensure_well_formed()
+                            };
                         (decl.tool_name, decl.collection, result)
                     }
                     SurfaceToolDecl::Query(decl) => {

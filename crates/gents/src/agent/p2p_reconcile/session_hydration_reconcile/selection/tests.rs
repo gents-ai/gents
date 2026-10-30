@@ -181,7 +181,7 @@ async fn hydration_segment_selection_uses_the_session_index() {
         requester_did: "did:key:requester-1".into(),
     };
     let collection = SessionHydrationCollection::AgentOutputSegment;
-    let scope = crate::session_origin::SessionScope {
+    let scope = crate::session::origin::SessionScope {
         node_did: request.node_did,
         session_id: request.session_id,
         requester_did: Some(request.requester_did),

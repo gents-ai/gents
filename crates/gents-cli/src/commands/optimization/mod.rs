@@ -5,14 +5,14 @@ use anyhow::{Context, Result};
 use gents::documents::template::catalog::{default_catalog, Site};
 use gents::eval::checks::CheckRegistry;
 use gents::eval::documents::default_breaker_threshold;
-use gents::eval::runner::embedded::EmbeddedExecutor;
-use gents::eval::runner::RunOptions;
-use gents::optimization::target::JobTarget;
-use gents::optimization::{
+use gents::eval::optimization::target::JobTarget;
+use gents::eval::optimization::{
     derive_state, job_dir, job_refused, load_job, promote_refused, removable, run_job,
     show as show_job, validate_job_id, Budgets, JobOutcome, JobRequest, JobState, PolicyV2,
     Proposal, Proposer, ScriptedProposer,
 };
+use gents::eval::runner::embedded::EmbeddedExecutor;
+use gents::eval::runner::RunOptions;
 use gents::{default_agent_id_for_node, default_inference_profile_id_for_agent};
 use tokio_util::sync::CancellationToken;
 
@@ -318,7 +318,7 @@ async fn run(
         captures: Vec::new(),
         run_options: deps.options.clone(),
     };
-    gents::optimization::check_request(&request, &policy)?;
+    gents::eval::optimization::check_request(&request, &policy)?;
     let proposer: Box<dyn Proposer> = match proposer_arg {
         ProposerArg::Scripted(script) => Box::new(scripted_proposer(script, args.rounds)?),
         ProposerArg::Agent { pack, agent } => {
@@ -438,7 +438,7 @@ async fn promote(
     let policy = load_job(&ctx.access, &ctx.owner, &args.job_id)
         .await?
         .map(|job| job.origin.policy);
-    let promotion = gents::optimization::promote(
+    let promotion = gents::eval::optimization::promote(
         &ctx.access,
         &ctx.owner,
         &args.job_id,
@@ -466,7 +466,7 @@ async fn revert(
     args: &OptimizationDigestArgs,
     out: &mut dyn Write,
 ) -> Result<()> {
-    gents::optimization::revert(
+    gents::eval::optimization::revert(
         &ctx.access,
         &ctx.owner,
         &args.job_id,

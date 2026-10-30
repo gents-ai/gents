@@ -629,7 +629,7 @@ async fn pack_list_reports_a_damaged_archive_as_an_error_row() {
     let page: Value =
         serde_json::from_str(&config_call(&tools, &["pack", "list"]).await.unwrap()).unwrap();
     let digest = page["items"][0]["artifact_digest"].as_str().unwrap();
-    let path = crate::pack_store::PackStore::new(home.path())
+    let path = crate::pack::store::PackStore::new(home.path())
         .path(digest)
         .unwrap();
     std::fs::write(path, b"not a pack archive").unwrap();
@@ -5381,8 +5381,8 @@ async fn pack_documents_install_and_release_documents_dependencies() {
     let (home, plugins) = crate::test_support::home_with_fixture_pack("dependent_fixture");
     let (_fixture, directory) =
         crate::test_support::fixture_pack_copy("dependee_fixture", &json!({}));
-    let (bytes, _) = crate::pack_archive::pack_dir(&directory).unwrap();
-    crate::pack_store::PackStore::new(home.path())
+    let (bytes, _) = crate::pack::archive::pack_dir(&directory).unwrap();
+    crate::pack::store::PackStore::new(home.path())
         .import(&bytes[..], None)
         .unwrap();
     let (node, did, tools) = pack_tool("documents-dependencies", plugins).await;
@@ -5467,8 +5467,8 @@ async fn pack_install_blocks_a_dependency_plugin_without_operator_authority() {
     let (_dependent, dependent_dir) =
         crate::test_support::fixture_pack_copy("dependent_fixture", &json!({}));
     let (home, plugins) = crate::test_support::home_with_pack_dir(&dependent_dir);
-    let (bytes, _) = crate::pack_archive::pack_dir(&dependee_dir).unwrap();
-    crate::pack_store::PackStore::new(home.path())
+    let (bytes, _) = crate::pack::archive::pack_dir(&dependee_dir).unwrap();
+    crate::pack::store::PackStore::new(home.path())
         .import(&bytes[..], None)
         .unwrap();
     let (_node, _did, tools) = pack_tool("dependency-plugin-authority", plugins).await;
@@ -6899,7 +6899,7 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
     .unwrap();
 
     // The artifact on disk is a built .pack, reached by explicit path.
-    let (bytes, _) = crate::pack_archive::pack_dir(&directory).unwrap();
+    let (bytes, _) = crate::pack::archive::pack_dir(&directory).unwrap();
     let artifact = fixture.path().join("local_mixed.pack");
     std::fs::write(&artifact, &bytes).unwrap();
 

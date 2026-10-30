@@ -431,7 +431,7 @@ pub(in crate::commands::codex_shim) async fn interrupt_caused_thread_turn(
 ) -> Result<()> {
     cancel_stream_control(connection, &thread.session_id, turn_id).await;
     let interrupted =
-        gents::session_message::interrupt_session(&state.node, &thread.scope()).await?;
+        gents::session::message::interrupt_session(&state.node, &thread.scope()).await?;
     trace::shim_event_fields(
         &state.trace_path,
         "turn_interrupt_caused_thread",

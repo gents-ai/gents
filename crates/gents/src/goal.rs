@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 
 mod backed_request;
+pub mod blocked_turn;
 mod claimed_publication;
 mod client_control;
 mod client_submission;

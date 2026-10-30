@@ -1622,7 +1622,7 @@ mod tests {
                     let mut effects = Vec::new();
                     selection::load_effect_children(
                         txn,
-                        &crate::session_origin::SessionScope {
+                        &crate::session::origin::SessionScope {
                             node_did: request.node_did.clone(),
                             session_id: request.session_id.clone(),
                             requester_did: Some(request.requester_did.clone()),

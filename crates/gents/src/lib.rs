@@ -7,11 +7,9 @@ pub(crate) mod support;
 
 pub mod adapter_projection;
 pub mod agent;
-pub mod application_write;
 pub mod background_completion;
 mod background_completion_diagnostics;
 pub mod background_tools;
-pub mod blocked_turn;
 pub mod codex_shim_binding;
 pub(crate) mod completion_factory;
 pub mod config_client;
@@ -40,15 +38,10 @@ pub mod openai_wire;
 pub mod p2p_observability;
 pub mod p2p_tool;
 pub mod pack;
-pub mod pack_archive;
-pub mod pack_registry;
-pub mod pack_resolve;
-pub mod pack_store;
 pub mod plugin;
 pub mod plugin_job;
 pub(crate) mod provider_input;
 pub mod ux_data;
-pub mod ux_plugin;
 pub use gents_loop::provider_input::ProviderInputProfile;
 pub mod provider_budget {
     pub use crate::provider_input::budget::{effective_input_budget, threshold_budget};
@@ -272,10 +265,10 @@ pub(crate) mod test_support {
         tempfile::TempDir,
         std::sync::Arc<crate::plugin::executor::PluginExecutor>,
     ) {
-        let (bytes, _) = crate::pack_archive::pack_dir(dir)
+        let (bytes, _) = crate::pack::archive::pack_dir(dir)
             .unwrap_or_else(|error| panic!("packing {}: {error:#}", dir.display()));
         let home = tempfile::tempdir().expect("home");
-        crate::pack_store::PackStore::new(home.path())
+        crate::pack::store::PackStore::new(home.path())
             .import(&bytes[..], None)
             .unwrap_or_else(|error| panic!("storing {}: {error:#}", dir.display()));
         let plugins = std::sync::Arc::new(crate::plugin::executor::PluginExecutor::new(Some(
@@ -294,13 +287,11 @@ pub(crate) mod test_support {
          \"service_id\": \"observability-mcp\", \"tool_name\": \"list_hosts\"}";
 }
 pub mod log_rate;
-pub mod mailbox;
 pub(crate) mod managed_exec;
 pub mod mcp_pool;
 pub mod meta_tools;
 pub mod native_executor_status;
 pub mod oneshot;
-pub mod optimization;
 pub mod periodic_recovery;
 pub mod prompt;
 pub mod provider_context_reduction;
@@ -322,8 +313,6 @@ pub(crate) mod runtime_trace;
 pub mod schema_tool;
 pub mod self_config;
 pub mod session;
-pub mod session_message;
-pub mod session_origin;
 pub mod tool_call_lifecycle;
 pub mod tool_control;
 pub mod tool_surface;

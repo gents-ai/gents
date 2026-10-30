@@ -72,7 +72,7 @@ pub fn review_task_policy(
         review_task_is_eligible(task, node, task_id, agent),
         "access review requires an enabled policy Task for this agent without execution side effects"
     );
-    let rendered = crate::session_message::render_task_body(task, node, agent, session, None)
+    let rendered = crate::session::message::render_task_body(task, node, agent, session, None)
         .map_err(anyhow::Error::msg)?;
     anyhow::ensure!(
         rendered.goal.is_none() && !rendered.content.trim().is_empty(),

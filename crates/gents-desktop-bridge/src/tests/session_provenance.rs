@@ -1,4 +1,4 @@
-use gents::session_origin::SessionScope;
+use gents::session::origin::SessionScope;
 
 use crate::provenance::session_provenance;
 use crate::tests::support::{create_request, create_tool_call, seed_provenance_fixture, OPERATOR};

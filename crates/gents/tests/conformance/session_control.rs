@@ -37,9 +37,9 @@ async fn generated_session_control_cases_drive_native_interrupt_stop_and_resume(
     .await
     .unwrap();
     assert_eq!(
-        gents::session_message::interrupt_session(
+        gents::session::message::interrupt_session(
             &db.node,
-            &gents::session_origin::SessionScope {
+            &gents::session::origin::SessionScope {
                 node_did: node_did.to_owned(),
                 session_id: interrupted_session.clone(),
                 requester_did: None,

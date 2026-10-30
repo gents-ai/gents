@@ -29,7 +29,7 @@ pub(super) fn render_request_show_text(
         request.failure_reason.as_deref(),
     );
     if let Some(blocked) = &snapshot.blocked {
-        use gents::blocked_turn::BlockedReason;
+        use gents::goal::blocked_turn::BlockedReason;
         let mut line = format!(
             "blocked: {}",
             match blocked.reason {

@@ -329,7 +329,7 @@ async fn commit_success(
                     txn.execute(create).await?;
                 }
                 if let Some((grant, writes)) = writes {
-                    crate::application_write::apply_plugin_writes_in_txn(
+                    crate::plugin::application_write::apply_plugin_writes_in_txn(
                         txn,
                         grant,
                         stamps,

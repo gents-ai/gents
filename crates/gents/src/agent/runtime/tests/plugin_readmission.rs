@@ -33,8 +33,8 @@ async fn wait_for_agent_state(
 fn install_fixture_plugin(plugin_home: &std::path::Path) -> crate::pack::PackIdentity {
     let (_pack_guard, pack_root) =
         crate::test_support::fixture_pack_copy("bind_plugin_fixture", &serde_json::json!({}));
-    let (pack_bytes, _) = crate::pack_archive::pack_dir(&pack_root).unwrap();
-    let archive = crate::pack_archive::PackArchive::from_bytes(&pack_bytes).unwrap();
+    let (pack_bytes, _) = crate::pack::archive::pack_dir(&pack_root).unwrap();
+    let archive = crate::pack::archive::PackArchive::from_bytes(&pack_bytes).unwrap();
     let installed = crate::plugin::install::install_pack_plugins(
         plugin_home,
         archive.manifest(),

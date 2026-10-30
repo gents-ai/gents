@@ -58,7 +58,7 @@ impl Fixture {
             .join(crate::store::local::home::UX_PLUGINS_DIR_NAME)
             .join("loose");
         std::fs::create_dir_all(&dev).unwrap();
-        std::fs::write(dev.join(crate::ux_plugin::DEV_ENTRY), "export default {}").unwrap();
+        std::fs::write(dev.join(crate::plugin::ux::DEV_ENTRY), "export default {}").unwrap();
         let fixture = Self { home, node, access };
         fixture
             .write_surface(board_surface(NODE, "board", true))

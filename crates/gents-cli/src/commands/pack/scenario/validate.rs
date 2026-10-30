@@ -145,7 +145,7 @@ pub(super) fn validate_prompt_tool_contracts(
             .and_then(|settings| settings.write_collections.as_ref())
             .is_some_and(|collections| !collections.is_empty())
         {
-            advertised.insert(gents::application_write::WRITE_TOOL_NAME.to_string());
+            advertised.insert(gents::plugin::application_write::WRITE_TOOL_NAME.to_string());
         }
         for surface_id in datastore
             .and_then(|datastore| datastore.datastore_tool_surface_ids.as_deref())

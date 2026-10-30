@@ -101,7 +101,7 @@ impl Services {
             input.insert("service".into(), service.data.clone());
             return Ok(());
         }
-        let archive = crate::pack_store::PackStore::new(home).open(digest)?;
+        let archive = crate::pack::store::PackStore::new(home).open(digest)?;
         anyhow::ensure!(
             archive
                 .manifest()
@@ -621,8 +621,8 @@ wait"#
                 serde_json::to_vec(&manifest).unwrap(),
             )
             .unwrap();
-            let (bytes, _) = crate::pack_archive::pack_dir(source.path()).unwrap();
-            let stored = crate::pack_store::PackStore::new(home.path())
+            let (bytes, _) = crate::pack::archive::pack_dir(source.path()).unwrap();
+            let stored = crate::pack::store::PackStore::new(home.path())
                 .import(bytes.as_slice(), None)
                 .unwrap();
             let mut record: InstalledPlugin = serde_json::from_value(serde_json::json!({

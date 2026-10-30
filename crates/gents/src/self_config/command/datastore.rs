@@ -1,8 +1,10 @@
 use super::*;
 
-pub(super) fn mailbox_entries(policy: crate::mailbox::MailboxNotificationPolicy) -> Result<Value> {
+pub(super) fn mailbox_entries(
+    policy: crate::session::mailbox::MailboxNotificationPolicy,
+) -> Result<Value> {
     policy.validate()?;
-    let mut declaration = crate::mailbox::canonical_mailbox_write_decl();
+    let mut declaration = crate::session::mailbox::canonical_mailbox_write_decl();
     declaration.notification = Some(policy);
     Ok(json!([crate::documents::SurfaceToolDecl::Create(
         declaration
@@ -12,8 +14,9 @@ pub(super) fn mailbox_entries(policy: crate::mailbox::MailboxNotificationPolicy)
 pub(super) fn surface_patch(argv: &[String]) -> Result<SelfConfigPatch> {
     let mut parsed = ParsedArgs::parse(argv)?;
     if let Some(policy) = parsed.one("mailbox")? {
-        let policy: crate::mailbox::MailboxNotificationPolicy = serde_json::from_str(policy)
-            .context("--mailbox requires a notification policy JSON object")?;
+        let policy: crate::session::mailbox::MailboxNotificationPolicy =
+            serde_json::from_str(policy)
+                .context("--mailbox requires a notification policy JSON object")?;
         let entries = mailbox_entries(policy)?;
         parsed.options.remove("mailbox");
         parsed
@@ -36,7 +39,7 @@ fn mailbox_option_uses_canonical_declaration_and_rejects_ambiguous_patches() {
         "enabled=true".into(),
     ];
     let patch = surface_patch(&args).unwrap();
-    let mut canonical = crate::mailbox::canonical_mailbox_write_decl();
+    let mut canonical = crate::session::mailbox::canonical_mailbox_write_decl();
     canonical.notification = Some(serde_json::from_value(policy).unwrap());
     assert!(patch.contains(&(
         "entries".into(),

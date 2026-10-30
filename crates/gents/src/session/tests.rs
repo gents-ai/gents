@@ -1758,7 +1758,7 @@ async fn unsigned_starter_cannot_populate_the_index() {
         .started_by
         .as_ref()
         .unwrap();
-    let scope = crate::session_origin::SessionScope::from(source);
+    let scope = crate::session::origin::SessionScope::from(source);
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     for provenance in [session.provenance.clone(), None] {
@@ -1788,15 +1788,15 @@ async fn unsigned_starter_cannot_populate_the_index() {
         .unwrap();
     }
     let access = crate::config_client::ConfigAccess::local(node.clone());
-    let child_scope = crate::session_origin::SessionScope::from(&session);
+    let child_scope = crate::session::origin::SessionScope::from(&session);
     assert!(
-        crate::session_origin::started_by(&access, &child_scope)
+        crate::session::origin::started_by(&access, &child_scope)
             .await
             .unwrap()
             .is_none(),
         "unsigned descriptive source cannot populate the index"
     );
-    assert!(crate::session_origin::lineage(&access, &scope)
+    assert!(crate::session::origin::lineage(&access, &scope)
         .await
         .unwrap()
         .started

@@ -87,12 +87,12 @@ impl DefraQueryMcp {
             authorization,
         )
         .map_err(|e| ErrorData::invalid_request(e.to_string(), None))?;
-        let tool = gents::application_write::WriteTool::new(
+        let tool = gents::plugin::application_write::WriteTool::new(
             gents::config_client::ConfigAccess::Graphql(endpoint),
             self.options.write_collections.clone(),
             None,
         );
-        let call = gents::application_write::WriteParams {
+        let call = gents::plugin::application_write::WriteParams {
             argv: args.argv,
             collection: args.collection,
             options: args.options,

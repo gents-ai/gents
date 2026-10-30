@@ -121,7 +121,7 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
             panic!("{name}: one surface, engineer-mailbox");
         };
         let expected = vec![SurfaceToolDecl::Create(
-            gents::mailbox::canonical_mailbox_write_decl(),
+            gents::session::mailbox::canonical_mailbox_write_decl(),
         )];
         assert_eq!(
             surface.entries.as_ref(),

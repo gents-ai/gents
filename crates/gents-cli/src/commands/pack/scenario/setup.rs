@@ -62,10 +62,10 @@ pub(super) async fn install_dependencies(
 }
 
 pub(super) fn pre_store_with_packs(home: &Path, with_pack: &[PathBuf]) -> Result<()> {
-    let store = gents::pack_store::PackStore::new(home);
+    let store = gents::pack::store::PackStore::new(home);
     for path in with_pack {
         if path.is_dir() {
-            let (bytes, header) = gents::pack_archive::pack_dir(path)
+            let (bytes, header) = gents::pack::archive::pack_dir(path)
                 .with_context(|| format!("packing {}", path.display()))?;
             store.import(bytes.as_slice(), Some(&header.digest))?;
         } else {

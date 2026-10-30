@@ -35,7 +35,7 @@ fn document_pack(
         config["tools"][0]["integrations"] = json!({"plugins": [reference]});
     }
     std::fs::write(root.join("pack_config.json"), serde_json::to_vec(&config)?)?;
-    Ok(gents::pack_archive::pack_dir(root)?.0)
+    Ok(gents::pack::archive::pack_dir(root)?.0)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

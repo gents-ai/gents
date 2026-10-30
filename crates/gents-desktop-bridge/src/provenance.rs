@@ -3,10 +3,10 @@ use std::sync::Arc;
 
 use gents::config_client::ConfigAccess;
 use gents::graphql::graphql_string_list_literal;
-use gents::session::{public_request_filter, session_scope_filter};
-use gents::session_origin::{
+use gents::session::origin::{
     group_caused, lineage, single_caused, starting_request, SessionLink, SessionScope,
 };
+use gents::session::{public_request_filter, session_scope_filter};
 use gents::toolset::is_session_message_tool;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::AgentRequestRow;
@@ -109,7 +109,7 @@ fn text(row: &Value, field: &str) -> Option<String> {
 }
 
 /// The request that opened `link.scope`'s session from `link`'s cause, as
-/// `gents::session_origin::starting_request` selects it (C7, Lean
+/// `gents::session::origin::starting_request` selects it (C7, Lean
 /// `DurableLineage.openingRequest`); `session_provenance` and the lineage
 /// cases both read it here.
 async fn opening_request(
@@ -212,7 +212,7 @@ async fn caused_calls(
         .collect())
 }
 
-fn turn_senders(lineage: &gents::session_origin::SessionLineage) -> Vec<(String, &SessionLink)> {
+fn turn_senders(lineage: &gents::session::origin::SessionLineage) -> Vec<(String, &SessionLink)> {
     let links = lineage
         .started_by
         .iter()

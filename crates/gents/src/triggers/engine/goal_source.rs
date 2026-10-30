@@ -9,8 +9,8 @@ use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
-use crate::blocked_turn::last_failed_call_in_txn;
 use crate::config_client::ConfigAccess;
+use crate::goal::blocked_turn::last_failed_call_in_txn;
 use crate::goal::{
     claim_continuation, claim_retry_continuation, gate_claimed_goal_continuation,
     gate_goal_continuation, goal_continuation_materialization_step, goal_failure_cause,

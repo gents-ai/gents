@@ -178,11 +178,11 @@ pub(super) async fn seed_peer_session_message(
         agent_id: "behavior-1".to_owned(),
         session_id: uuid::Uuid::new_v4().to_string(),
     };
-    let plan = crate::session_message::plan(
+    let plan = crate::session::message::plan(
         node,
         &cause,
         &target,
-        crate::session_message::RenderedBody {
+        crate::session::message::RenderedBody {
             content: prompt.to_owned(),
             goal: None,
         },
@@ -192,7 +192,7 @@ pub(super) async fn seed_peer_session_message(
     .await
     .expect("plan peer session message")
     .expect("peer session message admitted by the caller");
-    crate::session_message::commit(node, &cause, &mut row, plan, false)
+    crate::session::message::commit(node, &cause, &mut row, plan, false)
         .await
         .expect("materialize the caller-signed Peer request")
         .request_id

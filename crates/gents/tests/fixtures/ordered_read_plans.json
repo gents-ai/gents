@@ -380,7 +380,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/blocked_turn.rs",
+      "path": "crates/gents/src/goal/blocked_turn.rs",
       "collection": "InferenceCall",
       "arguments": "filter: { node_did: { _eq: \"$GENTS_node_did$\" }, request_id: { _eq: \"$GENTS_request_id$\" }, call_state: { _eq: \"failed\" } }, order: [{ ended_at: DESC }, { attempt: DESC }], limit: 1"
     },
@@ -585,7 +585,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/session_message/discovery.rs",
+      "path": "crates/gents/src/session/message/discovery.rs",
       "collection": "AgentSession",
       "arguments": "filter: {_and: [$GENTS_0$]}, order: [{created_at: DESC}, {session_id: DESC}, {node_did: DESC}], limit: $GENTS_PAGE_SIZE$"
     },
@@ -598,7 +598,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/session_message/inspection.rs",
+      "path": "crates/gents/src/session/message/inspection.rs",
       "collection": "AgentMessage",
       "arguments": "filter: {$GENTS_scope$$GENTS_bounds$$GENTS_role$}, order: {sequence: DESC}, limit: $GENTS_0$"
     },
@@ -619,7 +619,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/session_message/inspection.rs",
+      "path": "crates/gents/src/session/message/inspection.rs",
       "collection": "AgentRequest",
       "arguments": "filter: {$GENTS_scope$, purpose: {_eq: \"normal\"}, lifecycle_state: {_eq: \"pending\"}}, order: [{created_at: ASC}, {request_id: ASC}], limit: $GENTS_0$"
     },
@@ -636,7 +636,7 @@
   },
   {
     "read": {
-      "path": "crates/gents/src/session_message/inspection.rs",
+      "path": "crates/gents/src/session/message/inspection.rs",
       "collection": "AgentToolCall",
       "arguments": "filter: {$GENTS_scope$, lifecycle_state: {_in: [\"pending\", \"running\"]}}, order: {started_at: ASC}, limit: $GENTS_0$"
     },
