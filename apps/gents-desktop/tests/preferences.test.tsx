@@ -31,7 +31,9 @@ describe("the viewer's preferences", () => {
     await user.click(await screen.findByRole("combobox", { name: "Usage telemetry" }));
     await user.click(await screen.findByRole("option", { name: "Off" }));
     await waitFor(() => expect(save).toHaveBeenCalledWith(false));
-    expect(await screen.findByText("Usage telemetry is not configured.")).toBeVisible();
+    expect(
+      await screen.findByText("Not set up in this build, so nothing is sent."),
+    ).toBeVisible();
   });
 
   it("does not offer opt-in without a configured endpoint", async () => {
@@ -40,8 +42,40 @@ describe("the viewer's preferences", () => {
       enabled: false,
     });
     renderIn(testApp(), <GeneralPanel />);
-    expect(await screen.findByText("Usage telemetry is not configured.")).toBeVisible();
+    expect(
+      await screen.findByText("Not set up in this build, so nothing is sent."),
+    ).toBeVisible();
     expect(screen.queryByRole("combobox", { name: "Usage telemetry" })).toBeNull();
+  });
+
+  it("shows a status that can't be read as the setting's row, not loose text", async () => {
+    vi.spyOn(nativeShell, "productTelemetryStatus").mockRejectedValue(
+      new Error("denied"),
+    );
+    renderIn(testApp(), <GeneralPanel />);
+    const status = await screen.findByText("Couldn't read this setting.");
+    expect(status.closest("[data-slot=field-row]")).toHaveTextContent(
+      "Usage telemetry",
+    );
+    expect(screen.queryByText(/Couldn't save/)).toBeNull();
+  });
+
+  it("says a change didn't save on the setting itself", async () => {
+    vi.spyOn(nativeShell, "productTelemetryStatus").mockResolvedValue({
+      configured: true,
+      enabled: false,
+    });
+    vi.spyOn(nativeShell, "setProductTelemetry").mockRejectedValue(new Error("denied"));
+    const user = userEvent.setup();
+    renderIn(testApp(), <GeneralPanel />);
+    await user.click(await screen.findByRole("combobox", { name: "Usage telemetry" }));
+    await user.click(await screen.findByRole("option", { name: "On" }));
+    const error = await screen.findByText(
+      "Couldn't save the change. It may not last after a restart.",
+    );
+    expect(error.closest("[data-slot=field-row]")).toContainElement(
+      screen.getByRole("combobox", { name: "Usage telemetry" }),
+    );
   });
 
   it("prevents overlapping consent changes while a save is pending", async () => {
