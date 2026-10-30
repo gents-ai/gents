@@ -1984,7 +1984,7 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // JSON-RPC node pruned-history wording
     ("crates/gents/src/eth/rpc.rs", 8),
     // persisted AgentRequest failure_reason
-    ("crates/gents/src/eval/runner/embedded/executor.rs", 2),
+    ("crates/gents/src/eval/runner/embedded/executor/outcome.rs", 2),
     // MCP probe transport/OS error text (metric label)
     ("crates/gents/src/health_checker.rs", 10),
     // display only: appends a next-call hint when absent
