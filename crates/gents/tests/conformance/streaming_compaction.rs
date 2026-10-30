@@ -72,23 +72,26 @@ fn generated_compaction_cursor_cases_pin_contract() {
     ];
     for case in cases {
         let expected_sequence = case.expected_cursor.map(|split| rows[split - 1].0);
-        let actual =
-            gents::compaction::compacted_through_sequence(GROUPED_PROFILE, &rows, case.compacted);
+        let actual = gents::inference::compaction::compacted_through_sequence(
+            GROUPED_PROFILE,
+            &rows,
+            case.compacted,
+        );
         assert_eq!(actual, expected_sequence, "{}: canonical cursor", case.name);
 
         if let Some(cursor) = actual {
-            let (full, _) = gents::compaction::provider_view(
+            let (full, _) = gents::inference::compaction::provider_view(
                 GROUPED_PROFILE,
                 rows.iter().map(|(_, message)| message.clone()).collect(),
             );
-            let (filtered, _) = gents::compaction::provider_view(
+            let (filtered, _) = gents::inference::compaction::provider_view(
                 GROUPED_PROFILE,
                 rows.iter()
                     .filter(|(sequence, _)| *sequence > cursor)
                     .map(|(_, message)| message.clone())
                     .collect(),
             );
-            let (prefix, _) = gents::compaction::provider_view(
+            let (prefix, _) = gents::inference::compaction::provider_view(
                 GROUPED_PROFILE,
                 rows.iter()
                     .filter(|(sequence, _)| *sequence <= cursor)
@@ -111,7 +114,7 @@ fn drive_compaction_reducer_case(case: &lean_vocab_test::LeanCompactionReducerCa
 
     let input = compaction_messages_for_case(case);
     assert_eq!(
-        gents::compaction::session_prefix_is_stable(&input) && case.publication_ready,
+        gents::inference::compaction::session_prefix_is_stable(&input) && case.publication_ready,
         case.projected_prefix_ready,
         "{}: session compaction uses the modeled published provider-prefix boundary",
         case.name,
@@ -193,8 +196,8 @@ fn apply_compaction_reducer(
 ) -> Vec<Message> {
     match case.reducer.as_str() {
         "identity" => input,
-        "strip" => gents::compaction::strip_tool_results(input).0,
-        "provider_view" => gents::compaction::provider_view(GROUPED_PROFILE, input).0,
+        "strip" => gents::inference::compaction::strip_tool_results(input).0,
+        "provider_view" => gents::inference::compaction::provider_view(GROUPED_PROFILE, input).0,
         other => panic!("unsupported compaction reducer {other:?} for {}", case.name),
     }
 }
@@ -203,7 +206,7 @@ fn check_summarize_gate_and_split(
     case: &lean_vocab_test::LeanCompactionReducerCase,
     input: Vec<Message>,
 ) {
-    let production_gate_open = gents::compaction::safe_to_reduce(&input);
+    let production_gate_open = gents::inference::compaction::safe_to_reduce(&input);
     assert_eq!(
         production_gate_open,
         case.turn_boundary && case.provider_fixpoint,
@@ -213,7 +216,7 @@ fn check_summarize_gate_and_split(
     );
     let native_order = with_leading_reasoning(&input);
     assert_eq!(
-        gents::compaction::history::normalize_assistant_content_order(
+        gents::inference::compaction::history::normalize_assistant_content_order(
             GROUPED_PROFILE,
             native_order.clone()
         ) == native_order,
@@ -226,7 +229,7 @@ fn check_summarize_gate_and_split(
         case.name
     );
     assert_eq!(
-        gents::compaction::safe_to_reduce(&native_order),
+        gents::inference::compaction::safe_to_reduce(&native_order),
         case.turn_boundary && case.provider_fixpoint,
         "{}: gate on native-order rows",
         case.name
@@ -238,7 +241,7 @@ fn check_summarize_gate_and_split(
         case.name
     );
 
-    let boundary = gents::compaction::pair_safe_boundary(&input, case.split_index);
+    let boundary = gents::inference::compaction::pair_safe_boundary(&input, case.split_index);
     assert_eq!(
         boundary, case.safe_boundary,
         "{}: production pair_safe_boundary must match Compaction.pairSafeBoundary",
@@ -246,7 +249,7 @@ fn check_summarize_gate_and_split(
     );
     if pair_closed(&input) {
         for budget in 0usize.. {
-            let (old, recent) = gents::compaction::split_for_summary(
+            let (old, recent) = gents::inference::compaction::split_for_summary(
                 input.clone(),
                 budget,
                 gents::BackendProviderKind::OpenAiCompatible,
@@ -347,7 +350,9 @@ fn with_leading_reasoning(messages: &[Message]) -> Vec<Message> {
             {
                 content.insert(
                     0,
-                    AssistantContent::Reasoning(gents::llm::message::Reasoning::new("thinking")),
+                    AssistantContent::Reasoning(gents::inference::llm::message::Reasoning::new(
+                        "thinking",
+                    )),
                 );
                 Message::Assistant { id, content }
             }

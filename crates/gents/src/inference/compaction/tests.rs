@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use crate::llm::message::{
+use crate::inference::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolResult, ToolResultContent, UserContent,
 };
 use rig::client::CompletionClient;
@@ -59,7 +59,7 @@ fn tool_call_msg(name: &str, args: &str) -> Message {
         content: vec![AssistantContent::ToolCall(ToolCall {
             id: "call-1".to_string(),
             call_id: Some("call-1".to_string()),
-            function: crate::llm::message::ToolFunction {
+            function: crate::inference::llm::message::ToolFunction {
                 name: name.to_string(),
                 arguments: serde_json::from_str(args).unwrap_or_default(),
             },
@@ -170,8 +170,8 @@ fn gate_test_loop_config() -> crate::agent::loop_stream::LoopConfig {
         reduction_chain_keys: Vec::new(),
         initial_turn_index: 0,
         resume_from_history: false,
-        context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
-        compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
+        context_window: crate::inference::resolved::DEFAULT_CONTEXT_WINDOW,
+        compaction_threshold: crate::inference::resolved::DEFAULT_COMPACTION_THRESHOLD,
         context_calibration: Default::default(),
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::no_retry(),
         provider_idle_timeout: None,
@@ -187,7 +187,7 @@ fn tool_call_content(id: &str) -> AssistantContent {
     AssistantContent::ToolCall(ToolCall {
         id: id.to_string(),
         call_id: Some(id.to_string()),
-        function: crate::llm::message::ToolFunction {
+        function: crate::inference::llm::message::ToolFunction {
             name: "echo".to_string(),
             arguments: serde_json::json!({}),
         },
@@ -269,7 +269,7 @@ fn normalize_assistant_content_order_moves_text_before_tool_calls() {
         Message::Assistant {
             id: Some("msg-1".to_string()),
             content: vec![
-                AssistantContent::Reasoning(crate::llm::message::Reasoning::new("why")),
+                AssistantContent::Reasoning(crate::inference::llm::message::Reasoning::new("why")),
                 tool_call_content("call-A"),
                 tool_call_content("call-B"),
                 AssistantContent::Text(Text {
@@ -1308,7 +1308,7 @@ async fn summary_completion_uses_independent_output_cap() {
     assert_eq!(
         request.max_tokens,
         Some(summary_output_ceiling(
-            crate::config::DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
+            crate::inference::resolved::DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
             100_000,
         ) as u64),
         "summary completion must use its own output budget, not the turn's"
@@ -1326,7 +1326,7 @@ async fn summary_safety_ceilings_cannot_be_bypassed_by_options() {
     let observed_model = model.clone();
     let compactor = ProviderReductionEngine::new(Arc::new(model), gate_test_loop_config());
     let mut messages = Vec::new();
-    for i in 0..=crate::config::MAX_COMPACTION_SUMMARY_FILE_LIST_MAX {
+    for i in 0..=crate::inference::resolved::MAX_COMPACTION_SUMMARY_FILE_LIST_MAX {
         messages.push(tool_call_msg(
             "read_file",
             &format!(r#"{{"file_path": "/f/{i}"}}"#),
@@ -1362,7 +1362,7 @@ async fn summary_safety_ceilings_cannot_be_bypassed_by_options() {
         .expect("summary request must retain an output allowance");
     assert!(
         effective_max > 0
-            && effective_max <= crate::config::MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS as u64,
+            && effective_max <= crate::inference::resolved::MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS as u64,
         "the hard summary ceiling may be lowered to fit the assembled input, never bypassed: {effective_max}"
     );
 
@@ -1372,7 +1372,7 @@ async fn summary_safety_ceilings_cannot_be_bypassed_by_options() {
             .lines()
             .filter(|line| line.starts_with("- /f/"))
             .count(),
-        crate::config::MAX_COMPACTION_SUMMARY_FILE_LIST_MAX
+        crate::inference::resolved::MAX_COMPACTION_SUMMARY_FILE_LIST_MAX
     );
     assert!(summary.contains("1 more (omitted from this summary)"));
 }
@@ -1592,8 +1592,8 @@ fn scheduled_origin_config() -> crate::agent::loop_stream::LoopConfig {
         reduction_chain_keys: Vec::new(),
         initial_turn_index: 0,
         resume_from_history: false,
-        context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
-        compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
+        context_window: crate::inference::resolved::DEFAULT_CONTEXT_WINDOW,
+        compaction_threshold: crate::inference::resolved::DEFAULT_COMPACTION_THRESHOLD,
         context_calibration: Default::default(),
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
         provider_idle_timeout: None,
@@ -1689,7 +1689,7 @@ impl CompletionModel for ScriptedSummaryModel {
         // Stand in for the capturing transport: a real send claims the armed
         // capture, without which the owned loop's fence fires. No-op outside a
         // capture scope.
-        let _ = crate::rendered_request::scope::claim_pending();
+        let _ = crate::inference::rendered_request::scope::claim_pending();
         let turn = self
             .script
             .lock()
@@ -1849,10 +1849,10 @@ async fn schema_invalid_structured_summary_is_retracted_and_resampled() {
 
 #[tokio::test]
 async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
-    use crate::rendered_request::scope::{
+    use crate::inference::rendered_request::scope::{
         armed_labels, scope_request, test_scope, CaptureScopeKind,
     };
-    use crate::rendered_request::RenderedRequestCaptureSink;
+    use crate::inference::rendered_request::RenderedRequestCaptureSink;
     use crate::store::identity::{KeyIdentity, NodeIdentity};
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
@@ -1866,9 +1866,11 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
         ScriptedSummaryModel::summary_turn(),
     ]);
     let mut config = scheduled_origin_config();
-    config.on_rendered_request = Some(crate::rendered_request::scope::ambient_arming_sink(
-        CaptureScopeKind::Compaction,
-    ));
+    config.on_rendered_request = Some(
+        crate::inference::rendered_request::scope::ambient_arming_sink(
+            CaptureScopeKind::Compaction,
+        ),
+    );
     let compactor = ProviderReductionEngine::new(std::sync::Arc::new(model), config);
 
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
@@ -1938,7 +1940,7 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
 
     let sink: RenderedRequestCaptureSink = std::sync::Arc::new(|_| Box::pin(async { Ok(()) }));
     let mut scope = test_scope(
-        crate::rendered_request::context_for_claimed_request(
+        crate::inference::rendered_request::context_for_claimed_request(
             lifecycle.request(),
             lifecycle.request_commit_cid().unwrap(),
             "model".to_string(),
@@ -2706,7 +2708,7 @@ fn safe_to_reduce_accepts_a_native_order_reasoning_text_turn() {
     let native_turn = Message::Assistant {
         id: None,
         content: vec![
-            AssistantContent::Reasoning(crate::llm::message::Reasoning::new("thinking")),
+            AssistantContent::Reasoning(crate::inference::llm::message::Reasoning::new("thinking")),
             AssistantContent::Text(Text {
                 text: "done".to_string(),
             }),
@@ -2775,8 +2777,8 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         reduction_chain_keys: Vec::new(),
         initial_turn_index: 0,
         resume_from_history: false,
-        context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
-        compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
+        context_window: crate::inference::resolved::DEFAULT_CONTEXT_WINDOW,
+        compaction_threshold: crate::inference::resolved::DEFAULT_COMPACTION_THRESHOLD,
         context_calibration: Default::default(),
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
         provider_idle_timeout: None,
@@ -2842,7 +2844,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
             content: vec![AssistantContent::ToolCall(ToolCall {
                 id: "call-1".into(),
                 call_id: Some("call-1".into()),
-                function: crate::llm::message::ToolFunction {
+                function: crate::inference::llm::message::ToolFunction {
                     name: "read".to_string(),
                     arguments: serde_json::from_str(r#"{"file_path": "/workspace/main.rs"}"#)
                         .unwrap(),
@@ -3053,7 +3055,7 @@ fn scoped_call(id: &str) -> AssistantContent {
     AssistantContent::ToolCall(ToolCall {
         id: id.to_string(),
         call_id: Some(id.to_string()),
-        function: crate::llm::message::ToolFunction {
+        function: crate::inference::llm::message::ToolFunction {
             name: "echo".to_string(),
             arguments: serde_json::json!({}),
         },

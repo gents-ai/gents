@@ -61,7 +61,7 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
         &format!("http://{address}/v1"),
         crate::inference::clients::inference_http::SessionTaggingHttpClient::new(
             crate::inference::clients::inference_http::ResponsesNormalizingHttpClient::new(
-                crate::rendered_request::RenderedRequestCapturingHttpClient::<
+                crate::inference::rendered_request::RenderedRequestCapturingHttpClient::<
                     crate::inference::clients::provider_http::ProviderHttpClient,
                 >::default(),
             ),
@@ -69,10 +69,10 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
         Default::default(),
     )
     .unwrap();
-    let backend = crate::llm::backend_client::BackendClient::OpenAiResponses(client);
+    let backend = crate::inference::llm::backend_client::BackendClient::OpenAiResponses(client);
     let issuer = backend.replay_issuer().unwrap().expect("Responses route");
     let family = backend.provider_family().to_owned();
-    let crate::llm::backend_client::BackendClient::OpenAiResponses(client) = backend else {
+    let crate::inference::llm::backend_client::BackendClient::OpenAiResponses(client) = backend else {
         unreachable!("constructed above")
     };
     let model = client.completion_model("gpt-test");
@@ -80,7 +80,7 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
     let scope_kind = gents_protocol::rendered_request::CaptureScopeKind::Inference;
     let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![echo_tool()]);
     let mut config = owned_config(4);
-    config.on_rendered_request = Some(crate::rendered_request::scope::ambient_arming_sink(
+    config.on_rendered_request = Some(crate::inference::rendered_request::scope::ambient_arming_sink(
         scope_kind,
     ));
     config.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
@@ -102,9 +102,9 @@ async fn responses_encrypted_reasoning_round_trip_through_owned_loop() {
         profile,
     );
     let capture_factory =
-        crate::rendered_request::defra_rendered_request_capture_factory(node.clone());
-    let capture_scope = crate::rendered_request::scope_from_factory(
-        crate::rendered_request::context_for_claimed_request(
+        crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone());
+    let capture_scope = crate::inference::rendered_request::scope_from_factory(
+        crate::inference::rendered_request::context_for_claimed_request(
             lifecycle.request(),
             &request_commit_cid,
             "gpt-test".to_owned(),

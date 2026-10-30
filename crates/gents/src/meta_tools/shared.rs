@@ -113,15 +113,19 @@ impl MetaToolError {
         Self(MetaToolErrorKind::Structured(error))
     }
 
-    pub(super) fn into_dispatch_error(self) -> crate::llm::tool::ToolError {
+    pub(super) fn into_dispatch_error(self) -> crate::inference::llm::tool::ToolError {
         match self.0 {
-            MetaToolErrorKind::Structured(error) => crate::llm::tool::ToolError::ReportedFailure {
-                class: error.lifecycle_failure_class(),
-                text: error.to_result_text(),
-            },
-            MetaToolErrorKind::Other(error) => crate::llm::tool::ToolError::ToolCallError(
-                Box::new(MetaToolError(MetaToolErrorKind::Other(error))),
-            ),
+            MetaToolErrorKind::Structured(error) => {
+                crate::inference::llm::tool::ToolError::ReportedFailure {
+                    class: error.lifecycle_failure_class(),
+                    text: error.to_result_text(),
+                }
+            }
+            MetaToolErrorKind::Other(error) => {
+                crate::inference::llm::tool::ToolError::ToolCallError(Box::new(MetaToolError(
+                    MetaToolErrorKind::Other(error),
+                )))
+            }
         }
     }
 }

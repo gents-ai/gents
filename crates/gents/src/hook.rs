@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use crate::llm::message::Message;
-use crate::llm::tool::ToolDyn;
-use crate::llm::{HookAction, ToolCallHookAction};
+use crate::inference::llm::message::Message;
+use crate::inference::llm::tool::ToolDyn;
+use crate::inference::llm::{HookAction, ToolCallHookAction};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::{watch, Mutex};

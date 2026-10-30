@@ -1,5 +1,5 @@
 use super::*;
-use crate::llm::tool::Tool;
+use crate::inference::llm::tool::Tool;
 use crate::plugin::approval::{self, workspace, Answer, Request};
 
 struct Fixture {

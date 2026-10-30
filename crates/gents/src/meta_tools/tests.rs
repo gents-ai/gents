@@ -55,7 +55,7 @@ pub(super) fn remote_selection(
 
 use super::{CallToolArgs, CallToolTool, MetaToolContext};
 use crate::document_config::RemoteToolStyle;
-use crate::llm::tool::Tool;
+use crate::inference::llm::tool::Tool;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -144,7 +144,7 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
         .unwrap_err();
         assert!(admission.to_string().contains("tool_not_allowed"));
         let flat = super::flat::FlatRemoteTool {
-            definition: crate::llm::tool::ToolDefinition {
+            definition: crate::inference::llm::tool::ToolDefinition {
                 name: "test".into(),
                 description: String::new(),
                 parameters: serde_json::json!({}),
@@ -153,20 +153,20 @@ async fn scoped_discovery_and_flat_dispatch_have_identical_permissions() {
             tool_name: "hidden".into(),
             context: context.clone(),
         };
-        let denial = crate::llm::tool::ToolDyn::call(&flat, "{}".into())
+        let denial = crate::inference::llm::tool::ToolDyn::call(&flat, "{}".into())
             .await
             .unwrap_err();
         assert!(matches!(
             denial,
-            crate::llm::tool::ToolError::ReportedFailure {
+            crate::inference::llm::tool::ToolError::ReportedFailure {
                 class: crate::tool_call_lifecycle::FailureClass::PolicyDenied,
                 ..
             }
         ));
-        let admission = crate::llm::tool::ToolDyn::admit(&flat, "{}").unwrap_err();
+        let admission = crate::inference::llm::tool::ToolDyn::admit(&flat, "{}").unwrap_err();
         assert!(matches!(
             admission,
-            crate::llm::tool::ToolError::ReportedFailure {
+            crate::inference::llm::tool::ToolError::ReportedFailure {
                 class: crate::tool_call_lifecycle::FailureClass::PolicyDenied,
                 ..
             }

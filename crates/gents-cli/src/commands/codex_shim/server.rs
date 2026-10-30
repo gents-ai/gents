@@ -2,7 +2,7 @@ use super::*;
 
 #[derive(Clone)]
 pub(crate) struct CodexShimBindArgs {
-    pub(crate) usage_cache: Arc<gents::usage_observation::UsageCache>,
+    pub(crate) usage_cache: Arc<gents::inference::usage_observation::UsageCache>,
     pub(crate) home: PathBuf,
     pub(crate) fs_root: Option<PathBuf>,
     pub(crate) node: Arc<EmbeddedNode>,

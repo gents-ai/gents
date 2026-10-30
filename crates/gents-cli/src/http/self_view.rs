@@ -315,7 +315,7 @@ fn build_agents(
                 context_window: profile.and_then(|profile| profile.context_window),
                 compaction_threshold: compaction
                     .and_then(|config| config.threshold)
-                    .unwrap_or(gents::config::DEFAULT_COMPACTION_THRESHOLD),
+                    .unwrap_or(gents::inference::resolved::DEFAULT_COMPACTION_THRESHOLD),
             })
         })
         .collect()

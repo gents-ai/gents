@@ -33,7 +33,7 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
     let context = ToolContext::new(root.clone(), false).unwrap();
 
     let list_tool = ListFilesTool::new(context.clone(), DEFAULT_MAX_LIST_ENTRIES);
-    let list_def = crate::llm::tool::Tool::definition(&list_tool, String::new()).await;
+    let list_def = crate::inference::llm::tool::Tool::definition(&list_tool, String::new()).await;
     assert!(list_def.parameters.get("required").is_none());
     assert_eq!(list_def.parameters["properties"]["path"]["default"], ".");
     assert_eq!(
@@ -52,7 +52,7 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
     );
 
     let read_tool = ReadFileTool::new(context.clone(), DEFAULT_MAX_FILE_CHARS);
-    let read_def = crate::llm::tool::Tool::definition(&read_tool, String::new()).await;
+    let read_def = crate::inference::llm::tool::Tool::definition(&read_tool, String::new()).await;
     assert_eq!(read_def.parameters["required"], serde_json::json!(["path"]));
     assert_eq!(
         read_def.parameters["properties"]["start_line"]["default"],
@@ -69,7 +69,8 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
         vec!["cmp".into(), "sha256sum".into()],
     );
-    let read_only_def = crate::llm::tool::Tool::definition(&read_only, String::new()).await;
+    let read_only_def =
+        crate::inference::llm::tool::Tool::definition(&read_only, String::new()).await;
     let commands = read_only_def.parameters["properties"]["command"]["description"]
         .as_str()
         .unwrap();
@@ -78,7 +79,7 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
         !commands.contains("curl"),
         "advertise the configured policy, not a parallel catalog"
     );
-    let write_def = crate::llm::tool::Tool::definition(&write_tool, String::new()).await;
+    let write_def = crate::inference::llm::tool::Tool::definition(&write_tool, String::new()).await;
     assert_eq!(
         write_def.parameters["required"],
         serde_json::json!(["path", "content"])
@@ -98,7 +99,7 @@ async fn native_tool_definitions_include_model_facing_defaults_and_constraints()
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
     )
     .with_background_lifetime(Duration::from_secs(7_200));
-    let bash_def = crate::llm::tool::Tool::definition(&bash_tool, String::new()).await;
+    let bash_def = crate::inference::llm::tool::Tool::definition(&bash_tool, String::new()).await;
     assert_eq!(
         bash_def.parameters["required"],
         serde_json::json!(["command"])
@@ -134,7 +135,7 @@ async fn bash_schema_advertises_decoupled_default_and_max() {
         DEFAULT_MAX_COMMAND_CHARS,
         CommandExecutionPolicy::write_capable(),
     );
-    let def = crate::llm::tool::Tool::definition(&tool, String::new()).await;
+    let def = crate::inference::llm::tool::Tool::definition(&tool, String::new()).await;
     assert_eq!(def.parameters["properties"]["timeout_secs"]["default"], 600);
     assert_eq!(
         def.parameters["properties"]["timeout_secs"]["maximum"],
@@ -157,7 +158,7 @@ async fn workspace_write_bash_names_its_process_limits() {
         DEFAULT_MAX_COMMAND_CHARS,
         CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::WorkspaceWrite),
     );
-    let description = crate::llm::tool::Tool::definition(&tool, String::new())
+    let description = crate::inference::llm::tool::Tool::definition(&tool, String::new())
         .await
         .description;
     assert!(
@@ -167,7 +168,7 @@ async fn workspace_write_bash_names_its_process_limits() {
     );
     #[cfg(target_os = "macos")]
     {
-        let output = crate::llm::tool::Tool::call(
+        let output = crate::inference::llm::tool::Tool::call(
             &tool,
             serde_json::from_value(serde_json::json!({"command":"ps -p 1 -o pid="})).unwrap(),
         )
@@ -271,7 +272,7 @@ fn background_tool_names_are_gated_by_allowlist() {
 #[tokio::test]
 async fn spawn_process_decodes_only_its_advertised_schema() {
     use crate::background_tools::BackgroundToolArgs;
-    use crate::llm::tool::parse_tool_args;
+    use crate::inference::llm::tool::parse_tool_args;
 
     let tools = build_background_tools(BackgroundToolConfig {
         allowlist: vec!["bash_unrestricted".to_string()],
@@ -481,9 +482,9 @@ async fn native_filesystem_deadline_preempts_single_poll_blocker_and_advances_qu
     let context = ToolContext::new(root.clone(), false).unwrap();
 
     let _block_dir = EnvVarGuard::set("GENTS_FS_RUNNER_BLOCK_DIR", context.root().as_os_str());
-    let blocking_tool: Box<dyn crate::llm::tool::ToolDyn> =
+    let blocking_tool: Box<dyn crate::inference::llm::tool::ToolDyn> =
         Box::new(GlobTool::new(context.clone(), DEFAULT_MAX_MATCHES));
-    let second_tool: Box<dyn crate::llm::tool::ToolDyn> =
+    let second_tool: Box<dyn crate::inference::llm::tool::ToolDyn> =
         Box::new(ReadFileTool::new(context, DEFAULT_MAX_FILE_CHARS));
 
     let control_entered = root.join("control-entered");
@@ -606,7 +607,7 @@ async fn read_file_returns_compact_numbered_contents() {
         DEFAULT_MAX_FILE_CHARS,
     );
 
-    let output = crate::llm::tool::Tool::call(
+    let output = crate::inference::llm::tool::Tool::call(
         &tool,
         ReadFileArgs {
             path: "notes.txt".to_string(),
@@ -637,7 +638,7 @@ async fn read_file_reports_truncation_in_compact_metadata() {
     std::fs::write(root.join("notes.txt"), "alpha\nbeta\ngamma\n").unwrap();
     let tool = ReadFileTool::new(ToolContext::new(root, false).unwrap(), 12);
 
-    let output = crate::llm::tool::Tool::call(
+    let output = crate::inference::llm::tool::Tool::call(
         &tool,
         ReadFileArgs {
             path: "notes.txt".to_string(),
@@ -671,7 +672,7 @@ async fn read_file_rejects_paths_outside_root() {
         DEFAULT_MAX_FILE_CHARS,
     );
 
-    let error = crate::llm::tool::Tool::call(
+    let error = crate::inference::llm::tool::Tool::call(
         &tool,
         ReadFileArgs {
             path: "../outside.txt".to_string(),
@@ -699,7 +700,7 @@ async fn write_and_edit_file_work_under_base_within_root() {
     let writer = WriteFileTool::new(context.clone());
     let editor = EditFileTool::new(context);
 
-    let write_output = crate::llm::tool::Tool::call(
+    let write_output = crate::inference::llm::tool::Tool::call(
         &writer,
         WriteFileArgs {
             path: "nested/file.txt".to_string(),
@@ -723,7 +724,7 @@ async fn write_and_edit_file_work_under_base_within_root() {
     assert_eq!(write_meta["created"], true);
     assert!(write_output.contains("write_file: wrote 11 bytes"));
 
-    let edit_output = crate::llm::tool::Tool::call(
+    let edit_output = crate::inference::llm::tool::Tool::call(
         &editor,
         EditFileArgs {
             path: "nested/file.txt".to_string(),
@@ -776,7 +777,7 @@ async fn read_only_workspace_authority_denies_file_writes() {
             Default::default(),
             false,
             async {
-                crate::llm::tool::Tool::call(
+                crate::inference::llm::tool::Tool::call(
                     &writer,
                     WriteFileArgs {
                         path: "file.txt".to_string(),
@@ -832,7 +833,7 @@ async fn read_write_overlay_meets_unrestricted_bash_to_workspace_write() {
             async {
                 let met = crate::toolset::effective_command_policy(&policy);
                 assert_eq!(met.mode, CommandExecutionMode::WorkspaceWrite);
-                crate::llm::tool::Tool::call(
+                crate::inference::llm::tool::Tool::call(
                     &tool,
                     BashArgs {
                         command: "true".to_string(),
@@ -885,7 +886,7 @@ async fn raw_json_escape_hatch_returns_structured_output() {
     std::fs::write(root.join("src/lib.rs"), "pub fn hi() {}\n").unwrap();
     let tool = ListFilesTool::new(ToolContext::new(root.clone(), false).unwrap(), 100);
 
-    let output = crate::llm::tool::Tool::call(
+    let output = crate::inference::llm::tool::Tool::call(
         &tool,
         ListFilesArgs {
             path: Some(".".to_string()),
@@ -924,7 +925,7 @@ async fn list_files_skips_permission_denied_subtrees() {
     std::fs::set_permissions(&restricted, std::fs::Permissions::from_mode(0o000)).unwrap();
 
     let tool = ListFilesTool::new(ToolContext::new(root.clone(), false).unwrap(), 100);
-    let output = crate::llm::tool::Tool::call(
+    let output = crate::inference::llm::tool::Tool::call(
         &tool,
         ListFilesArgs {
             path: Some(".".to_string()),
@@ -956,7 +957,7 @@ async fn list_files_ignores_common_generated_directories_by_default() {
     std::fs::write(root.join("target/debug/app"), "compiled").unwrap();
     let tool = ListFilesTool::new(ToolContext::new(root.clone(), false).unwrap(), 100);
 
-    let output = crate::llm::tool::Tool::call(
+    let output = crate::inference::llm::tool::Tool::call(
         &tool,
         ListFilesArgs {
             path: Some(".".to_string()),
@@ -988,7 +989,7 @@ async fn glob_returns_compact_matches() {
     std::fs::write(root.join("target/debug/main.rs"), "generated\n").unwrap();
     let tool = GlobTool::new(ToolContext::new(root.clone(), false).unwrap(), 100);
 
-    let output = crate::llm::tool::Tool::call(
+    let output = crate::inference::llm::tool::Tool::call(
         &tool,
         GlobArgs {
             pattern: "**/*.rs".to_string(),
@@ -1021,7 +1022,7 @@ async fn grep_returns_compact_line_numbered_matches() {
     .unwrap();
     let tool = GrepTool::new(ToolContext::new(root.clone(), false).unwrap(), 100);
 
-    let output = crate::llm::tool::Tool::call(
+    let output = crate::inference::llm::tool::Tool::call(
         &tool,
         GrepArgs {
             pattern: "println".to_string(),
@@ -1599,7 +1600,7 @@ async fn unrestricted_bash_runs_shell_command_strings() {
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
     );
 
-    let output = crate::llm::tool::Tool::call(
+    let output = crate::inference::llm::tool::Tool::call(
         &tool,
         BashArgs {
             command: "printf OK && printf ERR >&2".to_string(),
@@ -1655,7 +1656,7 @@ async fn unrestricted_bash_reports_descendant_bounded_capture() {
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
     );
 
-    let output = crate::llm::tool::Tool::call(
+    let output = crate::inference::llm::tool::Tool::call(
         &tool,
         BashArgs {
             command: "exec 3< release-gate; printf ERR >&2; (read release <&3) >/dev/null & exit 0"
@@ -1690,7 +1691,7 @@ async fn command_policy_explicit_unrestricted_reports_unsandboxed_metadata() {
         policy,
     );
 
-    let output = crate::llm::tool::Tool::call(
+    let output = crate::inference::llm::tool::Tool::call(
         &tool,
         BashArgs {
             command: "printf".to_string(),
@@ -1719,7 +1720,7 @@ async fn bash_output_supports_raw_json_escape_hatch() {
         vec!["printf".to_string()],
     );
 
-    let output = crate::llm::tool::Tool::call(
+    let output = crate::inference::llm::tool::Tool::call(
         &tool,
         BashArgs {
             command: "printf".to_string(),
@@ -1748,7 +1749,7 @@ async fn bash_nonzero_exit_is_a_typed_tool_failure_with_metadata() {
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
         vec!["false".to_string()],
     );
-    let boxed: Box<dyn crate::llm::tool::ToolDyn> = Box::new(tool);
+    let boxed: Box<dyn crate::inference::llm::tool::ToolDyn> = Box::new(tool);
 
     let outcome = crate::tool_call_lifecycle::runtime::call_tool_managed(
         boxed.as_ref(),
@@ -1780,7 +1781,7 @@ async fn bash_per_call_timeout_is_a_recoverable_typed_failure_with_metadata() {
         vec!["sleep".to_string()],
     );
 
-    let boxed: Box<dyn crate::llm::tool::ToolDyn> = Box::new(tool);
+    let boxed: Box<dyn crate::inference::llm::tool::ToolDyn> = Box::new(tool);
     let outcome = crate::tool_call_lifecycle::runtime::call_tool_managed(
         boxed.as_ref(),
         serde_json::json!({
@@ -1816,7 +1817,7 @@ async fn bash_request_deadline_resolves_to_typed_timeout() {
     );
     let deadline = chrono::Utc::now() + chrono::Duration::milliseconds(100);
 
-    let boxed: Box<dyn crate::llm::tool::ToolDyn> = Box::new(tool);
+    let boxed: Box<dyn crate::inference::llm::tool::ToolDyn> = Box::new(tool);
     let args = serde_json::to_string(&serde_json::json!({
         "command": "sleep",
         "args": ["2"],
@@ -1853,7 +1854,7 @@ async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
     );
     let command = "sleep 2; trap '' TERM; while :; do sleep 1; done & child=$!; printf '%s' \"$child\" > descendant.pid; wait";
 
-    let boxed: Box<dyn crate::llm::tool::ToolDyn> = Box::new(tool);
+    let boxed: Box<dyn crate::inference::llm::tool::ToolDyn> = Box::new(tool);
     let call = crate::tool_call_lifecycle::runtime::call_tool_managed(
         boxed.as_ref(),
         serde_json::json!({
@@ -1923,7 +1924,7 @@ async fn unrestricted_bash_timeout_keeps_output_printed_before_the_timeout() {
     );
     let command = "printf '%s' \"$$\" > shell.pid; echo compiled-pkg-one; echo compiled-pkg-two; echo warn-from-stderr >&2; sleep 30";
 
-    let boxed: Box<dyn crate::llm::tool::ToolDyn> = Box::new(tool);
+    let boxed: Box<dyn crate::inference::llm::tool::ToolDyn> = Box::new(tool);
     let call = crate::tool_call_lifecycle::runtime::call_tool_managed(
         boxed.as_ref(),
         serde_json::json!({
@@ -2006,7 +2007,7 @@ async fn workspace_write_bash_contains_writes_to_tool_root() {
         outside.display()
     );
 
-    let boxed: Box<dyn crate::llm::tool::ToolDyn> = Box::new(tool);
+    let boxed: Box<dyn crate::inference::llm::tool::ToolDyn> = Box::new(tool);
     let outcome = crate::tool_call_lifecycle::runtime::call_tool_managed(
         boxed.as_ref(),
         serde_json::json!({
@@ -2134,16 +2135,18 @@ async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
     let writer = WriteFileTool::new(context.clone());
     let reader = ReadFileTool::new(context, DEFAULT_MAX_FILE_CHARS);
 
-    let created = crate::llm::tool::Tool::call(&writer, write_args("notes.txt", "one\n"))
-        .await
-        .expect("creating a new file is unguarded");
+    let created =
+        crate::inference::llm::tool::Tool::call(&writer, write_args("notes.txt", "one\n"))
+            .await
+            .expect("creating a new file is unguarded");
     let created: serde_json::Value = serde_json::from_str(&created).unwrap();
     assert_eq!(created["created"], true);
     let written_hash = created["content_hash"].as_str().unwrap().to_string();
 
-    let refused = crate::llm::tool::Tool::call(&writer, write_args("notes.txt", "blind\n"))
-        .await
-        .expect_err("blind overwrite must be refused");
+    let refused =
+        crate::inference::llm::tool::Tool::call(&writer, write_args("notes.txt", "blind\n"))
+            .await
+            .expect_err("blind overwrite must be refused");
     let refused = refused.to_string();
     assert!(refused.contains("already exists"), "{refused}");
     assert!(
@@ -2152,7 +2155,7 @@ async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
     );
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "one\n");
 
-    let read = crate::llm::tool::Tool::call(
+    let read = crate::inference::llm::tool::Tool::call(
         &reader,
         ReadFileArgs {
             path: "notes.txt".to_string(),
@@ -2171,7 +2174,7 @@ async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
     std::fs::write(&file, "changed by operator\n").unwrap();
     let mut stale = write_args("notes.txt", "two\n");
     stale.expected_content_hash = Some(read_hash.clone());
-    let stale = crate::llm::tool::Tool::call(&writer, stale)
+    let stale = crate::inference::llm::tool::Tool::call(&writer, stale)
         .await
         .expect_err("a stale hash must be refused");
     let stale = stale.to_string();
@@ -2187,7 +2190,7 @@ async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
 
     let mut current = write_args("notes.txt", "two\n");
     current.expected_content_hash = Some(super::file_tools::content_hash(b"changed by operator\n"));
-    let current = crate::llm::tool::Tool::call(&writer, current)
+    let current = crate::inference::llm::tool::Tool::call(&writer, current)
         .await
         .expect("the current hash authorizes the replacement");
     let current: serde_json::Value = serde_json::from_str(&current).unwrap();
@@ -2196,7 +2199,7 @@ async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
 
     let mut forced = write_args("notes.txt", "three\n");
     forced.overwrite = true;
-    crate::llm::tool::Tool::call(&writer, forced)
+    crate::inference::llm::tool::Tool::call(&writer, forced)
         .await
         .expect("explicit overwrite replaces regardless of current content");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), "three\n");
@@ -2204,7 +2207,7 @@ async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
     let mut both = write_args("notes.txt", "four\n");
     both.expected_content_hash = Some(super::file_tools::content_hash(b"three\n"));
     both.overwrite = true;
-    let both = crate::llm::tool::Tool::call(&writer, both)
+    let both = crate::inference::llm::tool::Tool::call(&writer, both)
         .await
         .expect_err("a hash with overwrite=true is ambiguous");
     assert!(both.to_string().contains("conflict"), "{both}");
@@ -2212,7 +2215,7 @@ async fn write_file_guards_existing_content_by_hash_or_explicit_overwrite() {
 
     let mut vanished = write_args("gone.txt", "x");
     vanished.expected_content_hash = Some(read_hash);
-    let vanished = crate::llm::tool::Tool::call(&writer, vanished)
+    let vanished = crate::inference::llm::tool::Tool::call(&writer, vanished)
         .await
         .expect_err("a hash for a missing file must be refused");
     assert!(
@@ -2230,7 +2233,7 @@ async fn read_file_reports_raw_content_hash() {
         ToolContext::new(root, false).unwrap(),
         DEFAULT_MAX_FILE_CHARS,
     );
-    let output = crate::llm::tool::Tool::call(
+    let output = crate::inference::llm::tool::Tool::call(
         &tool,
         ReadFileArgs {
             path: "config.json".to_string(),
@@ -2256,7 +2259,9 @@ async fn edit_file_dry_run_previews_diff_without_writing() {
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
     let mut args = edit_args("config.json", "\"max_turns\": 20", "\"max_turns\": 250");
     args.dry_run = true;
-    let output = crate::llm::tool::Tool::call(&tool, args).await.unwrap();
+    let output = crate::inference::llm::tool::Tool::call(&tool, args)
+        .await
+        .unwrap();
     let value: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(value["dry_run"], true, "{value}");
     assert!(
@@ -2278,7 +2283,7 @@ async fn edit_file_stale_hash_rejects_before_matching_without_disclosing_current
     let mut args = edit_args("a.txt", "dup", "x");
     args.expected_content_hash =
         Some("sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string());
-    let err = crate::llm::tool::Tool::call(&tool, args)
+    let err = crate::inference::llm::tool::Tool::call(&tool, args)
         .await
         .expect_err("stale hash must reject");
     let text = err.to_string();
@@ -2310,7 +2315,9 @@ async fn edit_file_success_reports_strategy_hashes_and_diff() {
         "  \"max_turns\": 250",
     );
     args.expected_content_hash = Some(pre_hash.clone());
-    let output = crate::llm::tool::Tool::call(&tool, args).await.unwrap();
+    let output = crate::inference::llm::tool::Tool::call(&tool, args)
+        .await
+        .unwrap();
     let value: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(value["match_strategy"], "trailing_whitespace", "{value}");
     assert_eq!(value["pre_edit_hash"].as_str().unwrap(), pre_hash);
@@ -2330,7 +2337,7 @@ async fn edit_file_not_found_error_carries_closest_match() {
     let root = temp_root("gents-edit-closest");
     std::fs::write(root.join("a.yaml"), "max_turns: 20\nmodel: fixture-model\n").unwrap();
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
-    let err = crate::llm::tool::Tool::call(
+    let err = crate::inference::llm::tool::Tool::call(
         &tool,
         edit_args("a.yaml", "max_turns: 21", "max_turns: 250"),
     )
@@ -2347,7 +2354,7 @@ async fn edit_file_ambiguous_error_lists_occurrences() {
     let root = temp_root("gents-edit-ambiguous");
     std::fs::write(root.join("a.txt"), "x = 1\ny\nx = 1\n").unwrap();
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
-    let err = crate::llm::tool::Tool::call(&tool, edit_args("a.txt", "x = 1", "x = 2"))
+    let err = crate::inference::llm::tool::Tool::call(&tool, edit_args("a.txt", "x = 1", "x = 2"))
         .await
         .expect_err("ambiguous");
     let text = err.to_string();
@@ -2363,10 +2370,12 @@ async fn edit_file_crlf_file_round_trips() {
     let file = root.join("w.ini");
     std::fs::write(&file, "a=1\r\nmax_turns=20\r\n").unwrap();
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
-    let output =
-        crate::llm::tool::Tool::call(&tool, edit_args("w.ini", "max_turns=20", "max_turns=250"))
-            .await
-            .unwrap();
+    let output = crate::inference::llm::tool::Tool::call(
+        &tool,
+        edit_args("w.ini", "max_turns=20", "max_turns=250"),
+    )
+    .await
+    .unwrap();
     let _: serde_json::Value = serde_json::from_str(&output).unwrap();
     assert_eq!(std::fs::read(&file).unwrap(), b"a=1\r\nmax_turns=250\r\n");
 }
@@ -2379,7 +2388,9 @@ async fn edit_file_regex_mode_and_insert_after_operation() {
     let tool = EditFileTool::new(ToolContext::new(root.clone(), false).unwrap());
     let mut args = edit_args("c.toml", r"timeout = (\d+)", "timeout = 3600 # was $1");
     args.match_mode = Some("regex".to_string());
-    crate::llm::tool::Tool::call(&tool, args).await.unwrap();
+    crate::inference::llm::tool::Tool::call(&tool, args)
+        .await
+        .unwrap();
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
         "timeout = 3600 # was 1800\n"
@@ -2387,7 +2398,9 @@ async fn edit_file_regex_mode_and_insert_after_operation() {
 
     let mut args = edit_args("c.toml", "timeout = 3600 # was 1800", "\nretries = 3");
     args.operation = Some("insert_after".to_string());
-    crate::llm::tool::Tool::call(&tool, args).await.unwrap();
+    crate::inference::llm::tool::Tool::call(&tool, args)
+        .await
+        .unwrap();
     assert_eq!(
         std::fs::read_to_string(&file).unwrap(),
         "timeout = 3600 # was 1800\nretries = 3\n"
@@ -2400,9 +2413,10 @@ async fn edit_file_rejects_non_utf8_instead_of_corrupting() {
     let file = root.join("latin1.txt");
     std::fs::write(&file, b"caf\xe9 target\n").unwrap();
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
-    let err = crate::llm::tool::Tool::call(&tool, edit_args("latin1.txt", "target", "x"))
-        .await
-        .expect_err("non-UTF-8 must be rejected");
+    let err =
+        crate::inference::llm::tool::Tool::call(&tool, edit_args("latin1.txt", "target", "x"))
+            .await
+            .expect_err("non-UTF-8 must be rejected");
     assert!(err.to_string().contains("UTF-8"), "{err}");
     assert_eq!(std::fs::read(&file).unwrap(), b"caf\xe9 target\n");
 }
@@ -2414,8 +2428,14 @@ async fn edit_file_concurrent_edits_do_not_lose_updates() {
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
     for round in 0..20 {
         std::fs::write(&file, "alpha: 0\nbeta: 0\n").unwrap();
-        let a = crate::llm::tool::Tool::call(&tool, edit_args("both.txt", "alpha: 0", "alpha: 1"));
-        let b = crate::llm::tool::Tool::call(&tool, edit_args("both.txt", "beta: 0", "beta: 1"));
+        let a = crate::inference::llm::tool::Tool::call(
+            &tool,
+            edit_args("both.txt", "alpha: 0", "alpha: 1"),
+        );
+        let b = crate::inference::llm::tool::Tool::call(
+            &tool,
+            edit_args("both.txt", "beta: 0", "beta: 1"),
+        );
         let (ra, rb) = tokio::join!(a, b);
         ra.unwrap();
         rb.unwrap();
@@ -2436,9 +2456,11 @@ async fn write_file_and_edit_file_serialize_on_the_same_lock() {
     let writer = WriteFileTool::new(context);
     for round in 0..20 {
         std::fs::write(&file, "alpha: 0\nbeta: 0\n").unwrap();
-        let edit =
-            crate::llm::tool::Tool::call(&editor, edit_args("both.txt", "alpha: 0", "alpha: 1"));
-        let write = crate::llm::tool::Tool::call(
+        let edit = crate::inference::llm::tool::Tool::call(
+            &editor,
+            edit_args("both.txt", "alpha: 0", "alpha: 1"),
+        );
+        let write = crate::inference::llm::tool::Tool::call(
             &writer,
             WriteFileArgs {
                 path: "both.txt".to_string(),
@@ -2550,7 +2572,7 @@ async fn backgrounded_bash_is_exempt_from_foreground_ceiling() {
         tokio_util::sync::CancellationToken::new(),
         None,
         None,
-        crate::llm::tool::Tool::call(
+        crate::inference::llm::tool::Tool::call(
             &tool,
             BashArgs {
                 command: "sleep".to_string(),
@@ -2855,7 +2877,7 @@ async fn run_artifact_compiler_fixture(build_script: Option<&str>) {
                 workspace_cwd: Some(root.clone()), workspace_root: Some(root.clone()),
                 workspace_authority: Some(WorkspaceAuthority::ReadOnly), workspace_artifact: Some(fx.grant.clone()),
             }, None, None, None, Default::default(), false,
-            crate::llm::tool::Tool::call(&tool, BashArgs { command: "cargo".into(), args: vec![subcommand.into(), "--locked".into(), "--offline".into()],
+            crate::inference::llm::tool::Tool::call(&tool, BashArgs { command: "cargo".into(), args: vec![subcommand.into(), "--locked".into(), "--offline".into()],
                 cwd: None, timeout_secs: Some(120), raw_json: true }),
         ).await;
         outputs.push(

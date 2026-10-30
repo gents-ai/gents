@@ -1404,13 +1404,13 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
             capture["request_doc_id"], active_doc_id,
             "steering must not start a second physical request"
         );
-        let body = gents::rendered_request::decode_capture_json(
+        let body = gents::inference::rendered_request::decode_capture_json(
             &access,
             capture["capture_version"]
                 .as_u64()
                 .context("capture_version")? as u32,
             capture["request_json"].as_str().context("request_json")?,
-            gents::rendered_request::CapturePayloadKind::RequestBody,
+            gents::inference::rendered_request::CapturePayloadKind::RequestBody,
         )
         .await?
         .to_string();

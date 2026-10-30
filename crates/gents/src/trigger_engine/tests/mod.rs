@@ -13,9 +13,9 @@ use tokio::sync::{mpsc, watch, Notify};
 use tokio_util::sync::CancellationToken;
 
 use super::*;
-use crate::config::{ResolvedAgent, SamplingConfig};
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
+use crate::inference::resolved::{ResolvedAgent, SamplingConfig};
 use crate::lean_vocab_test::{
     assert_lean_to_defradb_vocabulary_matches, lean_event_group_case_count, lean_event_group_cases,
     lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases, LeanTriggerDispatchCase,
@@ -579,25 +579,27 @@ fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
         openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://localhost:0/v1".to_string(),
         backend_auth: crate::document_config::BackendAuth::Unauthenticated,
-        model_name: crate::config::DEFAULT_MODEL_NAME.to_string(),
+        model_name: crate::inference::resolved::DEFAULT_MODEL_NAME.to_string(),
         service_tier: None,
         resolved_reasoning_efforts: None,
-        context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
-        max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
-        max_turns: crate::config::DEFAULT_MAX_TURNS,
-        max_turns_provenance: crate::config::MaxTurnsProvenance::Default,
+        context_window: crate::inference::resolved::DEFAULT_CONTEXT_WINDOW,
+        max_output_tokens: crate::inference::resolved::DEFAULT_MAX_OUTPUT_TOKENS,
+        max_turns: crate::inference::resolved::DEFAULT_MAX_TURNS,
+        max_turns_provenance: crate::inference::resolved::MaxTurnsProvenance::Default,
         system_prompt: String::new(),
         tools: AgentToolSurfaceConfig::default(),
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
-        stream_batch_ms: crate::config::DEFAULT_STREAM_BATCH_MS,
+        stream_batch_ms: crate::inference::resolved::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
-            crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+            crate::inference::resolved::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
-        deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
+        deadline_duration: Duration::from_secs(
+            crate::inference::resolved::DEFAULT_DEADLINE_DURATION_SECS,
+        ),
         provider_idle_timeout: Duration::from_secs(
-            crate::config::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+            crate::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
         ),
         completion_retry: crate::agent::completion_retry::CompletionRetryProfileFields::default(),
         sampling: SamplingConfig::default(),

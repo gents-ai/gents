@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use gents::config_client::load_inference_backend_in_txn;
-use gents::usage_observation::{usage_for_backend, UsageObservation};
+use gents::inference::usage_observation::{usage_for_backend, UsageObservation};
 use gents_codex_protocol as codex;
 use serde_json::json;
 
@@ -292,8 +292,10 @@ mod tests {
     use gents::inference::auth::credential::{
         oauth_credential_id, upsert_oauth_credential, OAuthCredential,
     };
-    use gents::usage_observation::account_usage::{UsageReport, UsageSource, UsageWindow};
-    use gents::usage_observation::{load_usage, record_usage, UsageAccount};
+    use gents::inference::usage_observation::account_usage::{
+        UsageReport, UsageSource, UsageWindow,
+    };
+    use gents::inference::usage_observation::{load_usage, record_usage, UsageAccount};
     use gents::{
         record_model_catalog_in_txn, BackendProviderKind, InferenceBackend, InferenceProfile,
     };
@@ -573,10 +575,12 @@ mod tests {
                     source: UsageSource::Header,
                     observed_at: Utc::now(),
                 }],
-                plan: Some(gents::usage_observation::account_usage::UsagePlan {
-                    name: "tier-a".into(),
-                    observed_at: Utc::now(),
-                }),
+                plan: Some(
+                    gents::inference::usage_observation::account_usage::UsagePlan {
+                        name: "tier-a".into(),
+                        observed_at: Utc::now(),
+                    },
+                ),
                 ..UsageReport::default()
             },
         )

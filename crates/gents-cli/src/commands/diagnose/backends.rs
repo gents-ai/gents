@@ -56,7 +56,11 @@ pub(super) async fn diagnose_backends(
             .iter()
             .filter(|profile| profile.backend_id == backend.backend_id)
             .filter_map(|profile| {
-                gents::config::unsent_reasoning_effort(backend, profile, observation.as_ref())
+                gents::inference::resolved::unsent_reasoning_effort(
+                    backend,
+                    profile,
+                    observation.as_ref(),
+                )
             })
             .collect::<Vec<_>>();
         if !warnings.is_empty() {

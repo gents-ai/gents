@@ -19,8 +19,8 @@ pub async fn select_agent_model_on(
     agent_id: &str,
     backend_id: &str,
     model_name: &str,
-    reasoning_effort: Option<gents::config::ReasoningEffort>,
-    service_tier: Option<gents::config::ServiceTier>,
+    reasoning_effort: Option<gents::inference::resolved::ReasoningEffort>,
+    service_tier: Option<gents::inference::resolved::ServiceTier>,
 ) -> Result<InferenceProfile> {
     anyhow::ensure!(!model_name.trim().is_empty(), "Choose a model.");
     access
@@ -262,7 +262,7 @@ mod tests {
                 "first",
                 "backend",
                 "original",
-                Some(gents::config::ReasoningEffort::High),
+                Some(gents::inference::resolved::ReasoningEffort::High),
                 None,
             )
             .await?,
@@ -274,11 +274,14 @@ mod tests {
             "first",
             "backend",
             "original",
-            Some(gents::config::ReasoningEffort::High),
-            Some(gents::config::ServiceTier::Fast),
+            Some(gents::inference::resolved::ReasoningEffort::High),
+            Some(gents::inference::resolved::ServiceTier::Fast),
         )
         .await?;
-        assert_eq!(fast.service_tier, Some(gents::config::ServiceTier::Fast));
+        assert_eq!(
+            fast.service_tier,
+            Some(gents::inference::resolved::ServiceTier::Fast)
+        );
         assert_ne!(fast.profile_id, original.profile_id);
         assert_eq!(
             select_agent_model_on(
@@ -287,8 +290,8 @@ mod tests {
                 "first",
                 "backend",
                 "original",
-                Some(gents::config::ReasoningEffort::High),
-                Some(gents::config::ServiceTier::Fast),
+                Some(gents::inference::resolved::ReasoningEffort::High),
+                Some(gents::inference::resolved::ServiceTier::Fast),
             )
             .await?,
             fast
@@ -299,13 +302,13 @@ mod tests {
             "first",
             "backend",
             "original",
-            Some(gents::config::ReasoningEffort::High),
-            Some(gents::config::ServiceTier::Default),
+            Some(gents::inference::resolved::ReasoningEffort::High),
+            Some(gents::inference::resolved::ServiceTier::Default),
         )
         .await?;
         assert_eq!(
             standard.service_tier,
-            Some(gents::config::ServiceTier::Default)
+            Some(gents::inference::resolved::ServiceTier::Default)
         );
         let unsupported = serde_json::from_value(json!({
             "node_did":owner,"backend_id":"unsupported","name":"Unsupported",
@@ -320,7 +323,7 @@ mod tests {
             "unsupported",
             "original",
             None,
-            Some(gents::config::ServiceTier::Fast),
+            Some(gents::inference::resolved::ServiceTier::Fast),
         )
         .await
         .is_err());
@@ -331,8 +334,8 @@ mod tests {
                 "first",
                 "backend",
                 "original",
-                Some(gents::config::ReasoningEffort::High),
-                Some(gents::config::ServiceTier::Default),
+                Some(gents::inference::resolved::ReasoningEffort::High),
+                Some(gents::inference::resolved::ServiceTier::Default),
             )
             .await?,
             standard
@@ -344,7 +347,7 @@ mod tests {
                 "second",
                 "backend",
                 "original",
-                Some(gents::config::ReasoningEffort::High),
+                Some(gents::inference::resolved::ReasoningEffort::High),
                 None,
             )
             .await?,
@@ -392,7 +395,7 @@ mod tests {
                 assert_eq!(retained.max_output_tokens, Some(100));
                 assert_eq!(
                     retained.reasoning_effort,
-                    Some(gents::config::ReasoningEffort::High)
+                    Some(gents::inference::resolved::ReasoningEffort::High)
                 );
                 Ok::<_, anyhow::Error>(())
             })

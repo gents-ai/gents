@@ -1,5 +1,5 @@
-use gents::compaction::sanitize_history_for_provider;
-use gents::llm::message::{
+use gents::inference::compaction::sanitize_history_for_provider;
+use gents::inference::llm::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
     ToolResultContent, UserContent,
 };
@@ -182,7 +182,7 @@ fn user_item_of(content: &UserContent) -> LeanPromptAssemblyItem {
 }
 
 fn reasoning_text(reasoning: &Reasoning) -> String {
-    use gents::llm::message::ReasoningContent;
+    use gents::inference::llm::message::ReasoningContent;
     reasoning
         .content
         .iter()
@@ -545,7 +545,7 @@ fn claude_thinking_events_as_sse(events: &[LeanClaudeStreamEvent]) -> String {
 
 #[test]
 fn generated_claude_thinking_stream_cases_drive_native_sse_parser() {
-    use gents::llm::message::ReasoningContent;
+    use gents::inference::llm::message::ReasoningContent;
 
     let cases = lean_prompt_assembly_claude_thinking_stream_cases();
     assert!(
@@ -624,7 +624,7 @@ fn generated_claude_thinking_stream_cases_drive_native_sse_parser() {
                     arguments: None,
                 }),
                 RawStreamingChoice::Reasoning { content, .. } => {
-                    let part = gents::llm::rig_compat::from_rig_reasoning_part(content);
+                    let part = gents::inference::llm::rig_compat::from_rig_reasoning_part(content);
                     let part = match part {
                         ReasoningContent::Text { text, signature } => LeanClaudeReasoningPart {
                             kind: "text".into(),
@@ -740,7 +740,7 @@ fn generated_claude_decoded_abort_prefixes_emit_native_audit_events() {
 
 #[test]
 fn generated_claude_initial_thinking_text_seals_in_native_accumulator() {
-    use gents::llm::message::ReasoningContent;
+    use gents::inference::llm::message::ReasoningContent;
     use gents_loop::provider_input::ProviderInputProfile;
     use gents_loop::stream_processor::AssistantTurnAccumulator;
 
@@ -773,7 +773,7 @@ fn generated_claude_initial_thinking_text_seals_in_native_accumulator() {
                     accumulator.push_reasoning_delta(id, &reasoning)
                 }
                 RawStreamingChoice::Reasoning { id, content } => {
-                    let part = gents::llm::rig_compat::from_rig_reasoning_part(&content);
+                    let part = gents::inference::llm::rig_compat::from_rig_reasoning_part(&content);
                     match &part {
                         ReasoningContent::Text { .. } | ReasoningContent::Redacted { .. } => {}
                         other => panic!("unexpected Claude reasoning: {other:?}"),
@@ -835,7 +835,7 @@ fn profile_of_order(mode: crate::lean_vocab_test::LeanAssistantOrderMode) -> Pro
 
 #[test]
 fn generated_assistant_order_cases_bind_selected_provider_order() {
-    use gents::compaction::history::normalize_assistant_content_order;
+    use gents::inference::compaction::history::normalize_assistant_content_order;
     let cases = crate::lean_vocab_test::lean_prompt_assembly_assistant_order_cases();
     assert!(!cases.is_empty());
     for case in cases {
@@ -1709,7 +1709,7 @@ fn files_containing(needles: &[&str]) -> BTreeSet<String> {
 fn provider_invocations_are_confined_to_the_owned_loop_seam() {
     let expected = BTreeSet::from([
         "crates/gents-loop/src/loop_stream.rs".to_string(),
-        "crates/gents/src/llm/rig_compat.rs".to_string(),
+        "crates/gents/src/inference/llm/rig_compat.rs".to_string(),
     ]);
     let found = files_containing(&[".completion_request(", ".completion(", ".stream("]);
     assert_eq!(

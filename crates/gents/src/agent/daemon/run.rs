@@ -6,7 +6,7 @@ use tracing::Instrument;
 
 use super::{auxiliary_task_join_result, AgentDaemon};
 use crate::agent::worker_capacity::{RequestGuard, WorkerCapacity};
-use crate::llm::rig_compat::ProviderModel;
+use crate::inference::llm::rig_compat::ProviderModel;
 use crate::runtime_trace::RequestTraceAttrs;
 use crate::watcher::AgentRequest;
 

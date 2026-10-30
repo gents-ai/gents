@@ -2,7 +2,7 @@ use rapidhash::{HashSetExt, RapidHashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::llm::tool::ToolDyn;
+use crate::inference::llm::tool::ToolDyn;
 use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 
@@ -10,20 +10,20 @@ pub(crate) type AgentFactory =
     Box<dyn FnOnce(Arc<RuntimeNode>) -> std::result::Result<ResolvedAgent, AgentBuildError> + Send>;
 
 use super::{assemble_node_and_agents, runtime, AgentBuildError, Gents, ProcessLifecycleObserver};
-use crate::admission::BackendAdmissionConfig;
 use crate::agent::completion_retry::CompletionRetryProfileFields;
-use crate::compaction::CompactionStrategy;
-use crate::config::{
+use crate::health_checker::HealthCheckerOptions;
+use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
+use crate::inference::admission::BackendAdmissionConfig;
+#[cfg(test)]
+use crate::inference::backends::provider::BackendProviderKind;
+use crate::inference::backends::registry::lookup_backend;
+use crate::inference::compaction::CompactionStrategy;
+use crate::inference::resolved::{
     ResolvedAgent, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
     DEFAULT_MODEL_NAME, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
     DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
-use crate::health_checker::HealthCheckerOptions;
-use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
-#[cfg(test)]
-use crate::inference::backends::provider::BackendProviderKind;
-use crate::inference::backends::registry::lookup_backend;
 use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
 use crate::store::identity::{NodeIdentity, RuntimeNode};
@@ -49,7 +49,7 @@ pub struct GentsBuilder {
     health_checker_options: HealthCheckerOptions,
     process_state_observer: Option<Arc<dyn ProcessLifecycleObserver>>,
     rendered_request_capture_factory:
-        Option<crate::rendered_request::RenderedRequestCaptureFactory>,
+        Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
     agents: Vec<PendingAgent>,
     backend_health: crate::inference::backends::health::BackendHealthMap,
     plugin_home: Option<std::path::PathBuf>,
@@ -260,7 +260,9 @@ impl GentsBuilder {
             router_dispatch_probe: None,
             rendered_request_capture_factory: Some(
                 self.rendered_request_capture_factory.unwrap_or_else(|| {
-                    crate::rendered_request::defra_rendered_request_capture_factory(capture_node)
+                    crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                        capture_node,
+                    )
                 }),
             ),
             manual_trigger_handle: Arc::new(tokio::sync::OnceCell::new()),
@@ -635,9 +637,9 @@ impl PendingAgent {
             max_output_tokens: self.max_output_tokens,
             max_turns: self.max_turns,
             max_turns_provenance: if self.max_turns_explicit {
-                crate::config::MaxTurnsProvenance::BuilderOverride
+                crate::inference::resolved::MaxTurnsProvenance::BuilderOverride
             } else {
-                crate::config::MaxTurnsProvenance::Default
+                crate::inference::resolved::MaxTurnsProvenance::Default
             },
             system_prompt: self.system_prompt,
             tools: AgentToolSurfaceConfig::from_selection(
@@ -698,7 +700,7 @@ impl PendingAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{MaxTurnsProvenance, DEFAULT_MAX_TURNS};
+    use crate::inference::resolved::{MaxTurnsProvenance, DEFAULT_MAX_TURNS};
     use crate::store::identity::KeyIdentity;
 
     fn test_identity(name: &str) -> KeyIdentity {

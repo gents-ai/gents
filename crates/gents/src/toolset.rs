@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::llm::tool::ToolDyn;
+use crate::inference::llm::tool::ToolDyn;
 use anyhow::Result;
 use rapidhash::RapidHashMap;
 
@@ -47,7 +47,7 @@ use crate::tool_surface::{AgentToolConfig, BackgroundToolConfig};
 pub(crate) fn read_only_bash_for_test(
     root: &std::path::Path,
     allowlist: Vec<String>,
-) -> Box<dyn crate::llm::tool::ToolDyn> {
+) -> Box<dyn crate::inference::llm::tool::ToolDyn> {
     Box::new(ReadOnlyBashTool::new(
         ToolContext::new(root.to_path_buf(), false).unwrap(),
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
@@ -58,7 +58,7 @@ pub(crate) fn read_only_bash_for_test(
 #[cfg(all(test, unix))]
 pub(crate) fn write_capable_bash_for_test(
     root: &std::path::Path,
-) -> Box<dyn crate::llm::tool::ToolDyn> {
+) -> Box<dyn crate::inference::llm::tool::ToolDyn> {
     Box::new(UnrestrictedBashTool::new(
         ToolContext::new(root.to_path_buf(), false).unwrap(),
         Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECS),
@@ -73,7 +73,9 @@ pub(crate) fn write_file_for_test(root: &std::path::Path) -> Box<dyn ToolDyn> {
 }
 
 #[cfg(test)]
-pub(crate) fn cli_tool_for_test(config: CliToolConfig) -> Box<dyn crate::llm::tool::ToolDyn> {
+pub(crate) fn cli_tool_for_test(
+    config: CliToolConfig,
+) -> Box<dyn crate::inference::llm::tool::ToolDyn> {
     Box::new(CliTool::new(config))
 }
 
@@ -446,15 +448,17 @@ pub(crate) fn is_bash_tool_name(name: &str) -> bool {
 }
 
 impl NativeTool {
-    const LIST_FILES_NAME: &'static str = <ListFilesTool as crate::llm::tool::Tool>::NAME;
-    const READ_FILE_NAME: &'static str = <ReadFileTool as crate::llm::tool::Tool>::NAME;
-    const GLOB_NAME: &'static str = <GlobTool as crate::llm::tool::Tool>::NAME;
-    const GREP_NAME: &'static str = <GrepTool as crate::llm::tool::Tool>::NAME;
-    const WRITE_FILE_NAME: &'static str = <WriteFileTool as crate::llm::tool::Tool>::NAME;
-    const EDIT_FILE_NAME: &'static str = <EditFileTool as crate::llm::tool::Tool>::NAME;
-    const BASH_NAME: &'static str = <ReadOnlyBashTool as crate::llm::tool::Tool>::NAME;
+    const LIST_FILES_NAME: &'static str =
+        <ListFilesTool as crate::inference::llm::tool::Tool>::NAME;
+    const READ_FILE_NAME: &'static str = <ReadFileTool as crate::inference::llm::tool::Tool>::NAME;
+    const GLOB_NAME: &'static str = <GlobTool as crate::inference::llm::tool::Tool>::NAME;
+    const GREP_NAME: &'static str = <GrepTool as crate::inference::llm::tool::Tool>::NAME;
+    const WRITE_FILE_NAME: &'static str =
+        <WriteFileTool as crate::inference::llm::tool::Tool>::NAME;
+    const EDIT_FILE_NAME: &'static str = <EditFileTool as crate::inference::llm::tool::Tool>::NAME;
+    const BASH_NAME: &'static str = <ReadOnlyBashTool as crate::inference::llm::tool::Tool>::NAME;
     const BASH_UNRESTRICTED_NAME: &'static str =
-        <UnrestrictedBashTool as crate::llm::tool::Tool>::NAME;
+        <UnrestrictedBashTool as crate::inference::llm::tool::Tool>::NAME;
 
     pub(crate) const ALL_NAMES: [&'static str; 8] = [
         Self::LIST_FILES_NAME,

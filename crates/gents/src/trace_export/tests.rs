@@ -1,5 +1,5 @@
 use super::*;
-use crate::llm::message::{Text, ToolCall, ToolFunction};
+use crate::inference::llm::message::{Text, ToolCall, ToolFunction};
 use serde_json::json;
 #[test]
 fn failure_class_parser_accepts_only_canonical_persisted_values() {

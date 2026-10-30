@@ -314,7 +314,8 @@ mod instruction_tests {
             None,
         )
         .unwrap();
-        let definition = gents::llm::tool::ToolDyn::definition(&tool, String::new()).await;
+        let definition =
+            gents::inference::llm::tool::ToolDyn::definition(&tool, String::new()).await;
         assert_eq!(definition.description, markdown);
     }
 }

@@ -120,7 +120,9 @@ impl OpenAiModelRecord {
                 ["low", "medium", "high", "xhigh", "max"]
                     .into_iter()
                     .filter(|effort| caps["effort"][*effort]["supported"].as_bool() == Some(true))
-                    .filter_map(|effort| crate::config::ReasoningEffort::parse(effort).ok())
+                    .filter_map(|effort| {
+                        crate::inference::resolved::ReasoningEffort::parse(effort).ok()
+                    })
                     .collect()
             })
         } else if xai_api {
@@ -131,7 +133,9 @@ impl OpenAiModelRecord {
                     .into_iter()
                     .flatten()
                     .filter_map(serde_json::Value::as_str)
-                    .filter_map(|effort| crate::config::ReasoningEffort::parse(effort).ok())
+                    .filter_map(|effort| {
+                        crate::inference::resolved::ReasoningEffort::parse(effort).ok()
+                    })
                     .collect(),
             )
         } else {
@@ -230,7 +234,9 @@ impl ChatGptCodexModelRecord {
         let reasoning_efforts = self.supported_reasoning_levels.as_ref().map(|levels| {
             levels
                 .iter()
-                .filter_map(|level| crate::config::ReasoningEffort::parse(&level.effort).ok())
+                .filter_map(|level| {
+                    crate::inference::resolved::ReasoningEffort::parse(&level.effort).ok()
+                })
                 .collect()
         });
         let model_name = self.identifier()?;

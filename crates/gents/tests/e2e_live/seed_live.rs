@@ -114,11 +114,11 @@ async fn live_seeds_reach_the_provider() {
         );
         for row in inference_rows.into_iter().chain(compaction_rows) {
             assert_eq!(row.source, "openai_chat_completions");
-            let body = gents::rendered_request::decode_capture_json_embedded(
+            let body = gents::inference::rendered_request::decode_capture_json_embedded(
                 &db.node,
                 row.capture_version,
                 &row.request_json,
-                gents::rendered_request::CapturePayloadKind::RequestBody,
+                gents::inference::rendered_request::CapturePayloadKind::RequestBody,
             )
             .await
             .expect("decode captured provider request");

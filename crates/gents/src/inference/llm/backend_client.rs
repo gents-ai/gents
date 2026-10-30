@@ -4,14 +4,14 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 
-use crate::config::ResolvedAgent;
 use crate::inference::backends::provider::BackendProviderKind;
+use crate::inference::resolved::ResolvedAgent;
 
 pub(crate) enum BackendClient {
     OpenAiChatCompletions(
         rig::providers::openai::CompletionsClient<
             crate::inference::clients::inference_http::SessionTaggingHttpClient<
-                crate::rendered_request::RenderedRequestCapturingHttpClient<
+                crate::inference::rendered_request::RenderedRequestCapturingHttpClient<
                     crate::inference::clients::provider_http::ProviderHttpClient,
                 >,
             >,
@@ -21,7 +21,7 @@ pub(crate) enum BackendClient {
         rig::providers::openai::Client<
             crate::inference::clients::inference_http::SessionTaggingHttpClient<
                 crate::inference::clients::inference_http::ResponsesNormalizingHttpClient<
-                    crate::rendered_request::RenderedRequestCapturingHttpClient<
+                    crate::inference::rendered_request::RenderedRequestCapturingHttpClient<
                         crate::inference::clients::provider_http::ProviderHttpClient,
                     >,
                 >,
@@ -30,7 +30,7 @@ pub(crate) enum BackendClient {
     ),
     OpenRouter(
         rig::providers::openrouter::Client<
-            crate::rendered_request::RenderedRequestCapturingHttpClient<
+            crate::inference::rendered_request::RenderedRequestCapturingHttpClient<
                 crate::inference::clients::provider_http::ProviderHttpClient,
             >,
         >,
@@ -39,7 +39,7 @@ pub(crate) enum BackendClient {
         rig::providers::openai::Client<
             crate::inference::clients::chatgpt_codex::ChatGptCodexHttpClient<
                 crate::inference::auth::credential::DbCredentialBearer,
-                crate::rendered_request::RenderedRequestCapturingHttpClient<
+                crate::inference::rendered_request::RenderedRequestCapturingHttpClient<
                     crate::inference::clients::provider_http::ProviderHttpClient,
                 >,
             >,
@@ -128,14 +128,18 @@ fn messages_replay_issuer(
 }
 
 fn api_key_http(
-    cache: &Arc<crate::usage_observation::UsageCache>,
+    cache: &Arc<crate::inference::usage_observation::UsageCache>,
     node: &Arc<EmbeddedNode>,
     agent: &ResolvedAgent,
 ) -> crate::inference::clients::provider_http::ProviderHttpClient {
-    match crate::usage_observation::UsageAccount::for_agent(agent) {
+    match crate::inference::usage_observation::UsageAccount::for_agent(agent) {
         Some(account) => crate::inference::clients::provider_http::ProviderHttpClient::with_usage(
             Default::default(),
-            crate::usage_observation::UsageReporter::new(cache.clone(), node.clone(), account),
+            crate::inference::usage_observation::UsageReporter::new(
+                cache.clone(),
+                node.clone(),
+                account,
+            ),
         ),
         None => crate::inference::clients::provider_http::ProviderHttpClient::default(),
     }
@@ -144,7 +148,7 @@ fn api_key_http(
 /// OAuth-branch construction hits DefraDB for the agent's `OAuthCredential`
 /// and is bounded by `build_timeout` so a wedged lookup cannot hang startup.
 pub(crate) async fn build_backend_client(
-    cache: Arc<crate::usage_observation::UsageCache>,
+    cache: Arc<crate::inference::usage_observation::UsageCache>,
     node: Arc<EmbeddedNode>,
     agent: &ResolvedAgent,
     api_key: &str,
@@ -161,7 +165,7 @@ pub(crate) async fn build_backend_client(
                     api_key,
                     &agent.backend_endpoint,
                     crate::inference::clients::inference_http::SessionTaggingHttpClient::new(
-                        crate::rendered_request::RenderedRequestCapturingHttpClient::new(
+                        crate::inference::rendered_request::RenderedRequestCapturingHttpClient::new(
                             api_key_http(&cache, &node, agent),
                         ),
                     ),
@@ -174,7 +178,7 @@ pub(crate) async fn build_backend_client(
                     &agent.backend_endpoint,
                     crate::inference::clients::inference_http::SessionTaggingHttpClient::new(
                         crate::inference::clients::inference_http::ResponsesNormalizingHttpClient::new(
-                            crate::rendered_request::RenderedRequestCapturingHttpClient::new(
+                            crate::inference::rendered_request::RenderedRequestCapturingHttpClient::new(
                                 api_key_http(&cache, &node, agent),
                             ),
                         )
@@ -192,14 +196,14 @@ pub(crate) async fn build_backend_client(
                 agent.agent_id, agent.backend_endpoint
             );
             let client: rig::providers::openrouter::Client<
-                crate::rendered_request::RenderedRequestCapturingHttpClient<
+                crate::inference::rendered_request::RenderedRequestCapturingHttpClient<
                     crate::inference::clients::provider_http::ProviderHttpClient,
                 >,
             > = rig::providers::openrouter::Client::builder()
                 .api_key(api_key)
                 .base_url(&agent.backend_endpoint)
                 .http_client(
-                    crate::rendered_request::RenderedRequestCapturingHttpClient::<
+                    crate::inference::rendered_request::RenderedRequestCapturingHttpClient::<
                         crate::inference::clients::provider_http::ProviderHttpClient,
                     >::new(api_key_http(&cache, &node, agent)),
                 )
@@ -305,8 +309,11 @@ pub(crate) async fn build_backend_client(
             let mut client = crate::inference::clients::claude_subscription::ClaudeSubscriptionClient::with_api_key(
                 api_key.to_owned(),
             );
-            client.usage = crate::usage_observation::UsageAccount::for_agent(agent)
-                .map(|account| crate::usage_observation::UsageReporter::new(cache, node, account));
+            client.usage = crate::inference::usage_observation::UsageAccount::for_agent(agent).map(
+                |account| {
+                    crate::inference::usage_observation::UsageReporter::new(cache, node, account)
+                },
+            );
             Ok(BackendClient::AnthropicApiKey(client))
         }
     }
@@ -315,14 +322,18 @@ pub(crate) async fn build_backend_client(
 macro_rules! with_backend_client {
     ($client:expr, |$c:ident| $body:expr) => {
         match $client {
-            $crate::llm::backend_client::BackendClient::OpenAiChatCompletions($c) => $body,
-            $crate::llm::backend_client::BackendClient::OpenAiResponses($c) => $body,
-            $crate::llm::backend_client::BackendClient::OpenRouter($c) => $body,
-            $crate::llm::backend_client::BackendClient::ChatGptCodex($c) => $body,
-            $crate::llm::backend_client::BackendClient::XaiGrokChatCompletions($c) => $body,
-            $crate::llm::backend_client::BackendClient::XaiGrokResponses($c) => $body,
-            $crate::llm::backend_client::BackendClient::ClaudeSubscription($c) => $body,
-            $crate::llm::backend_client::BackendClient::AnthropicApiKey($c) => $body,
+            $crate::inference::llm::backend_client::BackendClient::OpenAiChatCompletions($c) => {
+                $body
+            }
+            $crate::inference::llm::backend_client::BackendClient::OpenAiResponses($c) => $body,
+            $crate::inference::llm::backend_client::BackendClient::OpenRouter($c) => $body,
+            $crate::inference::llm::backend_client::BackendClient::ChatGptCodex($c) => $body,
+            $crate::inference::llm::backend_client::BackendClient::XaiGrokChatCompletions($c) => {
+                $body
+            }
+            $crate::inference::llm::backend_client::BackendClient::XaiGrokResponses($c) => $body,
+            $crate::inference::llm::backend_client::BackendClient::ClaudeSubscription($c) => $body,
+            $crate::inference::llm::backend_client::BackendClient::AnthropicApiKey($c) => $body,
         }
     };
 }

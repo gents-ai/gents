@@ -39,7 +39,7 @@ pub use timeouts::{BackgroundTimeoutPolicy, BackgroundTimeouts, BoundedTimeout, 
 use rapidhash::{HashMapExt, RapidHashMap, RapidHashSet};
 use std::path::PathBuf;
 
-use crate::llm::tool::ToolDyn;
+use crate::inference::llm::tool::ToolDyn;
 use anyhow::{Context, Result};
 
 use crate::defra_query::{
@@ -327,11 +327,13 @@ impl ToolSurface {
             .host_tools
             .build_native_tools_with_writethrough(writethrough)?;
         if self.self_config.enabled {
-            tools.push(Box::new(crate::usage_observation::ProviderLimitsTool {
-                node: runtime.node.clone(),
-                node_did: runtime.node_did.clone(),
-                cache: runtime.usage_cache.clone(),
-            }));
+            tools.push(Box::new(
+                crate::inference::usage_observation::ProviderLimitsTool {
+                    node: runtime.node.clone(),
+                    node_did: runtime.node_did.clone(),
+                    cache: runtime.usage_cache.clone(),
+                },
+            ));
         }
         if self.include_meta_tools {
             tools.extend(

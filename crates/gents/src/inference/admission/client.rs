@@ -74,7 +74,7 @@ impl<M> AdmittedCompletionModel<M> {
             .map_err(AdmittedCallError::Admission)?;
         if observe_provider_activity {
             permit.observe_provider_activity(
-                crate::rendered_request::scope::current_attempt_activity(),
+                crate::inference::rendered_request::scope::current_attempt_activity(),
             );
         }
         let result = match current_context().ok().and_then(|c| c.inference_token) {

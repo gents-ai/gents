@@ -1,6 +1,8 @@
 use gents::defra_node::{EmbeddedNode, EventName};
 use gents::graphql::escape_graphql_string;
-use gents::llm::message::{AssistantContent, Message, Text, ToolResultContent, UserContent};
+use gents::inference::llm::message::{
+    AssistantContent, Message, Text, ToolResultContent, UserContent,
+};
 use gents::tool_call_lifecycle::{CancelCause, ToolCallLifecycle, ToolCallState};
 use gents::{interrupt_request, BackgroundExecutionRegistry, NodeIdentity};
 use serde::Deserialize;

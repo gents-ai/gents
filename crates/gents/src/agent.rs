@@ -7,13 +7,13 @@ use anyhow::Context as _;
 use defra_node::EmbeddedNode;
 use tokio::sync::{watch, OnceCell};
 
-use crate::config::{
-    ResolvedAgent, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
-    DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
-};
 use crate::health_checker::HealthCheckerOptions;
 use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
 use crate::inference::backends::health::{BackendHealthMap, BackendProberOptions};
+use crate::inference::resolved::{
+    ResolvedAgent, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+    DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+};
 use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
@@ -60,7 +60,7 @@ pub(crate) async fn process_owned_request_with_model_for_test<M>(
     request: crate::watcher::AgentRequest,
 ) -> anyhow::Result<()>
 where
-    M: crate::llm::rig_compat::ProviderModel,
+    M: crate::inference::llm::rig_compat::ProviderModel,
 {
     let allowed_targets =
         crate::tool_surface::resolve_agent_target_descriptions(tool_surface.as_ref());
@@ -90,7 +90,9 @@ where
         prompt_builder,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                node.clone(),
+            ),
         ),
         background_tool_registry: crate::hook::BackgroundToolRegistry::default(),
         background_execution_registry: crate::hook::BackgroundExecutionRegistry::default(),
@@ -201,7 +203,7 @@ impl DocumentResolveContext {
 
 #[derive(Clone)]
 pub struct Gents {
-    usage_cache: Arc<crate::usage_observation::UsageCache>,
+    usage_cache: Arc<crate::inference::usage_observation::UsageCache>,
     node: Arc<EmbeddedNode>,
     runtime_node: Arc<RuntimeNode>,
     agents: Vec<Arc<ResolvedAgent>>,
@@ -225,7 +227,7 @@ pub struct Gents {
     #[cfg(test)]
     router_dispatch_probe: Option<tokio::sync::mpsc::UnboundedSender<()>>,
     rendered_request_capture_factory:
-        Option<crate::rendered_request::RenderedRequestCaptureFactory>,
+        Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
     pub(crate) manual_trigger_handle: Arc<OnceCell<ManualTriggerHandle>>,
     enrollment_authority: Arc<std::sync::RwLock<Option<p2p_reconcile::EnrollmentAuthorityHandle>>>,
     operator_tool_root: Option<PathBuf>,
@@ -287,7 +289,9 @@ impl Gents {
         });
 
         let rendered_request_capture_factory =
-            crate::rendered_request::defra_rendered_request_capture_factory(node.clone());
+            crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                node.clone(),
+            );
 
         Ok(Self {
             usage_cache: Arc::default(),
@@ -356,16 +360,16 @@ impl Gents {
         &self.runtime_node.node_did
     }
 
-    pub fn usage_cache(&self) -> &Arc<crate::usage_observation::UsageCache> {
+    pub fn usage_cache(&self) -> &Arc<crate::inference::usage_observation::UsageCache> {
         &self.usage_cache
     }
 
     pub async fn read_usage(
         &self,
-        trigger: crate::usage_observation::UsageTrigger,
+        trigger: crate::inference::usage_observation::UsageTrigger,
         provider: Option<&str>,
-    ) -> anyhow::Result<Vec<crate::usage_observation::AccountUsageRead>> {
-        crate::usage_observation::read_node_usage(
+    ) -> anyhow::Result<Vec<crate::inference::usage_observation::AccountUsageRead>> {
+        crate::inference::usage_observation::read_node_usage(
             &self.usage_cache,
             self.node.clone(),
             self.node_did(),
@@ -516,8 +520,8 @@ pub(crate) struct AgentDocumentInputs<'a> {
     pub(crate) agent_config: &'a crate::document_config::Agent,
     pub(crate) context: Option<&'a crate::document_config::AgentContext>,
     pub(crate) compaction: Option<crate::document_config::CompactionConfig>,
-    pub(crate) compaction_inference: Option<crate::config::ResolvedInference>,
-    pub(crate) inference: &'a crate::config::ResolvedInference,
+    pub(crate) compaction_inference: Option<crate::inference::resolved::ResolvedInference>,
+    pub(crate) inference: &'a crate::inference::resolved::ResolvedInference,
     pub(crate) tool_selection: ResolvedToolSelection,
     pub(crate) agent_tools: AgentToolConfig,
     pub(crate) tool_ceiling: &'a ToolCeiling,

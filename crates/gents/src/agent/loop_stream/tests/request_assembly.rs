@@ -190,10 +190,10 @@ async fn loop_entry_sanitizes_a_recovered_checkpoint_as_one_projection() {
     ]);
     let call = Message::Assistant {
         id: None,
-        content: vec![AssistantContent::ToolCall(crate::llm::message::ToolCall {
+        content: vec![AssistantContent::ToolCall(crate::inference::llm::message::ToolCall {
             id: "restored-call".to_string(),
             call_id: Some("restored-call".to_string()),
-            function: crate::llm::message::ToolFunction {
+            function: crate::inference::llm::message::ToolFunction {
                 name: "read".to_string(),
                 arguments: serde_json::json!({}),
             },
@@ -202,7 +202,7 @@ async fn loop_entry_sanitizes_a_recovered_checkpoint_as_one_projection() {
         })],
     };
     let result = Message::User {
-        content: vec![UserContent::ToolResult(crate::llm::message::ToolResult {
+        content: vec![UserContent::ToolResult(crate::inference::llm::message::ToolResult {
             id: "restored-call".to_string(),
             call_id: Some("restored-call".to_string()),
             content: vec![ToolResultContent::text("restored result")],
@@ -343,20 +343,20 @@ async fn every_request_in_a_tool_loop_satisfies_provider_invariants() {
 
 #[tokio::test]
 async fn dirty_caller_history_is_sanitized_at_loop_entry() {
-    let unpaired_call = crate::llm::message::ToolCall {
+    let unpaired_call = crate::inference::llm::message::ToolCall {
         id: "call-unpaired".to_string(),
         call_id: Some("call-unpaired".to_string()),
-        function: crate::llm::message::ToolFunction {
+        function: crate::inference::llm::message::ToolFunction {
             name: "echo".to_string(),
             arguments: serde_json::json!({}),
         },
         signature: None,
         additional_params: None,
     };
-    let paired_call = crate::llm::message::ToolCall {
+    let paired_call = crate::inference::llm::message::ToolCall {
         id: "call-paired".to_string(),
         call_id: Some("call-paired".to_string()),
-        function: crate::llm::message::ToolFunction {
+        function: crate::inference::llm::message::ToolFunction {
             name: "echo".to_string(),
             arguments: serde_json::json!({}),
         },
@@ -367,7 +367,7 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
         Message::User {
             content: vec![UserContent::tool_result(
                 "call-gone".to_string(),
-                vec![crate::llm::message::ToolResultContent::text("orphaned")],
+                vec![crate::inference::llm::message::ToolResultContent::text("orphaned")],
             )],
         },
         Message::Assistant {
@@ -375,7 +375,7 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
             content: vec![
                 AssistantContent::ToolCall(paired_call),
                 AssistantContent::ToolCall(unpaired_call),
-                AssistantContent::Text(crate::llm::message::Text {
+                AssistantContent::Text(crate::inference::llm::message::Text {
                     text: "stale ordering".to_string(),
                 }),
             ],
@@ -383,7 +383,7 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
         Message::User {
             content: vec![UserContent::tool_result(
                 "call-paired".to_string(),
-                vec![crate::llm::message::ToolResultContent::text("ok")],
+                vec![crate::inference::llm::message::ToolResultContent::text("ok")],
             )],
         },
     ];
@@ -508,7 +508,7 @@ fn is_request_context_message_only_matches_context_user_text() {
 
 #[tokio::test]
 async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
-    use crate::llm::tool::{Tool, ToolDefinition};
+    use crate::inference::llm::tool::{Tool, ToolDefinition};
 
     struct DescribeTool;
     #[derive(Debug, thiserror::Error)]
@@ -586,7 +586,7 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
 
 #[tokio::test]
 async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
-    use crate::llm::tool::{Tool, ToolDefinition};
+    use crate::inference::llm::tool::{Tool, ToolDefinition};
 
     struct StrictTool;
     #[derive(Debug, thiserror::Error)]
@@ -699,10 +699,10 @@ fn assert_all_history_tool_args_object_shaped(history: &[Message]) {
 async fn repair_sanitizes_poisoned_tool_args_in_loaded_history() {
     let poison = format!("bad{}value", '\u{0007}');
 
-    let poisoned_call = crate::llm::message::ToolCall {
+    let poisoned_call = crate::inference::llm::message::ToolCall {
         id: "call-historic".to_string(),
         call_id: Some("call-historic".to_string()),
-        function: crate::llm::message::ToolFunction {
+        function: crate::inference::llm::message::ToolFunction {
             name: "echo".to_string(),
             arguments: serde_json::json!({ "note": poison }),
         },
@@ -913,10 +913,10 @@ fn repaired_arguments(arguments: serde_json::Value) -> serde_json::Value {
     let history = vec![
         Message::Assistant {
             id: None,
-            content: vec![AssistantContent::ToolCall(crate::llm::message::ToolCall {
+            content: vec![AssistantContent::ToolCall(crate::inference::llm::message::ToolCall {
                 id: "call-1".to_string(),
                 call_id: Some("call-1".to_string()),
-                function: crate::llm::message::ToolFunction {
+                function: crate::inference::llm::message::ToolFunction {
                     name: "echo".to_string(),
                     arguments,
                 },
@@ -925,10 +925,10 @@ fn repaired_arguments(arguments: serde_json::Value) -> serde_json::Value {
             })],
         },
         Message::User {
-            content: vec![UserContent::ToolResult(crate::llm::message::ToolResult {
+            content: vec![UserContent::ToolResult(crate::inference::llm::message::ToolResult {
                 id: "call-1".to_string(),
                 call_id: Some("call-1".to_string()),
-                content: vec![ToolResultContent::Text(crate::llm::message::Text {
+                content: vec![ToolResultContent::Text(crate::inference::llm::message::Text {
                     text: "call-1-result".to_string(),
                 })],
             })],
@@ -958,10 +958,10 @@ fn repaired_arguments(arguments: serde_json::Value) -> serde_json::Value {
 fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
     let history = vec![Message::Assistant {
         id: None,
-        content: vec![AssistantContent::ToolCall(crate::llm::message::ToolCall {
+        content: vec![AssistantContent::ToolCall(crate::inference::llm::message::ToolCall {
             id: "call-1".to_string(),
             call_id: Some("call-1".to_string()),
-            function: crate::llm::message::ToolFunction {
+            function: crate::inference::llm::message::ToolFunction {
                 name: "echo".to_string(),
                 arguments: serde_json::json!({ "text": "bad\nvalue" }),
             },
@@ -970,10 +970,10 @@ fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
         })],
     }];
     let new_messages = vec![Message::User {
-        content: vec![UserContent::ToolResult(crate::llm::message::ToolResult {
+        content: vec![UserContent::ToolResult(crate::inference::llm::message::ToolResult {
             id: "call-1".to_string(),
             call_id: Some("call-1".to_string()),
-            content: vec![ToolResultContent::Text(crate::llm::message::Text {
+            content: vec![ToolResultContent::Text(crate::inference::llm::message::Text {
                 text: "done".to_string(),
             })],
         })],
@@ -1009,7 +1009,7 @@ fn repair_preserves_a_tool_pair_split_across_history_and_prompt() {
         .map(|row| row.message.clone())
         .collect::<Vec<_>>();
     assert_eq!(
-        crate::compaction::sanitize_history_for_provider(
+        crate::inference::compaction::sanitize_history_for_provider(
             crate::provider_input::ProviderInputProfile::OpenAiChatCompletions,
             joined.clone(),
         ),

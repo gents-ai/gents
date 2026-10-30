@@ -57,7 +57,7 @@ where
 #[derive(Clone, Debug, Default)]
 pub struct ResponsesNormalizingHttpClient<H = ReqwestClient> {
     inner: H,
-    service_tier: Option<crate::config::ServiceTier>,
+    service_tier: Option<crate::inference::resolved::ServiceTier>,
 }
 
 impl<H> ResponsesNormalizingHttpClient<H> {
@@ -68,7 +68,10 @@ impl<H> ResponsesNormalizingHttpClient<H> {
         }
     }
 
-    pub fn with_service_tier(mut self, tier: Option<crate::config::ServiceTier>) -> Self {
+    pub fn with_service_tier(
+        mut self,
+        tier: Option<crate::inference::resolved::ServiceTier>,
+    ) -> Self {
         self.service_tier = tier;
         self
     }
@@ -90,10 +93,10 @@ impl<H> ResponsesNormalizingHttpClient<H> {
 
 fn normalize_responses_body(
     body: &[u8],
-    tier: Option<crate::config::ServiceTier>,
+    tier: Option<crate::inference::resolved::ServiceTier>,
 ) -> Option<Bytes> {
     let mut value = serde_json::from_slice::<serde_json::Value>(body).ok()?;
-    crate::llm::responses_normalize::normalize_responses_assistant_items(&mut value);
+    crate::inference::llm::responses_normalize::normalize_responses_assistant_items(&mut value);
     if let Some(tier) = tier {
         tier.apply(&mut value).ok()?;
     }
@@ -188,7 +191,7 @@ impl<H> SessionTaggingHttpClient<H> {
         headers: &mut HeaderMap,
         trace_context_headers: RapidHashMap<String, String>,
     ) {
-        if let Some(session_id) = crate::admission::current_session_id() {
+        if let Some(session_id) = crate::inference::admission::current_session_id() {
             if let Ok(value) = HeaderValue::from_str(&session_id) {
                 headers.insert(SESSION_ID_HEADER, value);
             }

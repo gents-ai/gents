@@ -1,9 +1,9 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::config::ReasoningEffort;
 use crate::document_config::AdvertisedModel;
 use crate::inference::backends::provider::BackendProviderKind;
+use crate::inference::resolved::ReasoningEffort;
 use crate::openai_wire::OpenAiWireApi;
 
 pub const INFERENCE_SETUP_CONTRACT_VERSION: u32 = 1;
@@ -142,23 +142,26 @@ pub fn inference_setup_catalog() -> InferenceSetupCatalog {
         contract_version: INFERENCE_SETUP_CONTRACT_VERSION,
         defaults_version: INFERENCE_DEFAULTS_VERSION.to_string(),
         execution_defaults: [
-            ("maxTurns", Some(crate::config::DEFAULT_MAX_TURNS as i64)),
+            (
+                "maxTurns",
+                Some(crate::inference::resolved::DEFAULT_MAX_TURNS as i64),
+            ),
             ("maxTotalTokens", None),
             (
                 "streamBatchMs",
-                Some(crate::config::DEFAULT_STREAM_BATCH_MS as i64),
+                Some(crate::inference::resolved::DEFAULT_STREAM_BATCH_MS as i64),
             ),
             (
                 "streamLivenessSecs",
-                Some(crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64),
+                Some(crate::inference::resolved::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64),
             ),
             (
                 "providerIdleSecs",
-                Some(crate::config::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS as i64),
+                Some(crate::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS as i64),
             ),
             (
                 "deadlineSecs",
-                Some(crate::config::DEFAULT_DEADLINE_DURATION_SECS as i64),
+                Some(crate::inference::resolved::DEFAULT_DEADLINE_DURATION_SECS as i64),
             ),
         ]
         .into_iter()

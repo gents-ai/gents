@@ -27,10 +27,10 @@ use crate::agent::daemon::AgentDaemonInit;
 use crate::agent::runtime::{
     run_router_with_watcher, RouterInputs, RuntimeAdmissionGate, StartupBarrier,
 };
-use crate::config::{ResolvedAgent, SamplingConfig};
 use crate::config_client::ConfigAccess;
 use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
 use crate::inference::backends::provider::BackendProviderKind;
+use crate::inference::resolved::{ResolvedAgent, SamplingConfig};
 use crate::lean_vocab_test::{
     LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation, LeanCanonicalSource,
     LeanPayloadKind, LeanTerminalSelection,
@@ -240,7 +240,7 @@ async fn access_review_uses_the_caller_ledger_without_tools_or_chat_publication(
     assert!(!output.is_empty());
     for row in output {
         assert!(
-            matches!(row.segment.source, OutputSource::ProviderTurn { scope, .. } if scope.kind == crate::rendered_request::CaptureScopeKind::AccessReview)
+            matches!(row.segment.source, OutputSource::ProviderTurn { scope, .. } if scope.kind == crate::inference::rendered_request::CaptureScopeKind::AccessReview)
         );
     }
     let session = crate::graphql::escape_graphql_string(&fixture.parent.session_id);
@@ -1148,14 +1148,14 @@ struct TitleFixture {
 }
 
 impl TitleFixture {
-    fn admitted<M>(&self, model: M) -> crate::admission::AdmittedCompletionModel<M> {
-        let registry = crate::admission::AdmissionRegistry::new(self.node.clone());
+    fn admitted<M>(&self, model: M) -> crate::inference::admission::AdmittedCompletionModel<M> {
+        let registry = crate::inference::admission::AdmissionRegistry::new(self.node.clone());
         let backend = self.agent_config.backend_id.as_ref().unwrap();
         registry.reconcile(
             1,
             &rapidhash::RapidHashMap::from_iter([(
                 backend.clone(),
-                crate::admission::BackendAdmissionConfig {
+                crate::inference::admission::BackendAdmissionConfig {
                     backend_id: backend.clone(),
                     max_concurrent: 1,
                     max_queue_depth: 0,
@@ -1166,7 +1166,7 @@ impl TitleFixture {
                 },
             )]),
         );
-        crate::admission::AdmittedCompletionModel::new(model, registry, "scripted")
+        crate::inference::admission::AdmittedCompletionModel::new(model, registry, "scripted")
     }
 
     async fn new() -> Self {
@@ -1213,7 +1213,7 @@ impl TitleFixture {
             context_window: 8192,
             max_output_tokens: 1024,
             max_turns: 2,
-            max_turns_provenance: crate::config::MaxTurnsProvenance::Default,
+            max_turns_provenance: crate::inference::resolved::MaxTurnsProvenance::Default,
             system_prompt: "system".into(),
             tools: AgentToolSurfaceConfig::meta_only(),
             compaction: None,
@@ -1223,7 +1223,7 @@ impl TitleFixture {
             stream_liveness_timeout: Duration::from_secs(60),
             deadline_duration: Duration::from_secs(120),
             provider_idle_timeout: Duration::from_secs(
-                crate::config::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+                crate::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
             ),
             completion_retry: CompletionRetryProfileFields::default(),
             sampling: SamplingConfig::default(),
@@ -1330,7 +1330,7 @@ impl TitleFixture {
 
     fn task<M>(&self, model: M, capture: bool) -> AuxiliaryTask<M>
     where
-        M: crate::llm::rig_compat::ProviderModel,
+        M: crate::inference::llm::rig_compat::ProviderModel,
     {
         AuxiliaryTask {
             node: self.node.clone(),
@@ -1344,7 +1344,9 @@ impl TitleFixture {
                 crate::agent::p2p_reconcile::enrollment_authority_channel().1,
             ),
             capture_factory: capture.then(|| {
-                crate::rendered_request::defra_rendered_request_capture_factory(self.node.clone())
+                crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                    self.node.clone(),
+                )
             }),
         }
     }
@@ -1575,7 +1577,7 @@ fn provider_events(
         };
         events.push(RawStreamingChoice::Reasoning {
             id: None,
-            content: crate::llm::rig_compat::to_rig_reasoning_part(&content),
+            content: crate::inference::llm::rig_compat::to_rig_reasoning_part(&content),
         });
     }
     if complete {
@@ -1615,7 +1617,10 @@ async fn assert_title_audit(
         else {
             panic!("title wrote a non-provider source")
         };
-        assert_eq!(scope.kind, crate::rendered_request::CaptureScopeKind::Title);
+        assert_eq!(
+            scope.kind,
+            crate::inference::rendered_request::CaptureScopeKind::Title
+        );
         assert_eq!(*turn_index, 0);
         assert_eq!(row.segment.request_doc_id, fixture.title.doc_id);
         sources.insert((*scope, *turn_index, *attempt));
@@ -1726,7 +1731,8 @@ async fn wait_for_title_streams(fixture: &TitleFixture, minimum: usize, fields: 
             .iter()
             .filter_map(|row| match &row.segment.source {
                 OutputSource::ProviderTurn { scope, attempt, .. }
-                    if scope.kind == crate::rendered_request::CaptureScopeKind::Title =>
+                    if scope.kind
+                        == crate::inference::rendered_request::CaptureScopeKind::Title =>
                 {
                     Some((scope.seq, *attempt))
                 }
@@ -1736,8 +1742,8 @@ async fn wait_for_title_streams(fixture: &TitleFixture, minimum: usize, fields: 
         let all_received = sources.len() >= minimum
             && sources.iter().all(|(sequence, attempt)| {
                 let source = OutputSource::ProviderTurn {
-                    scope: crate::rendered_request::CaptureScope {
-                        kind: crate::rendered_request::CaptureScopeKind::Title,
+                    scope: crate::inference::rendered_request::CaptureScope {
+                        kind: crate::inference::rendered_request::CaptureScopeKind::Title,
                         seq: *sequence,
                     },
                     turn_index: 0,
@@ -2070,7 +2076,7 @@ async fn title_audit_is_dispatched_once_by_watcher_router_and_daemon() {
             prompt_builder,
             hook_failure_policy: FailurePolicy::default(),
             rendered_request_capture_factory: Some(
-                crate::rendered_request::defra_rendered_request_capture_factory(
+                crate::inference::rendered_request::defra_rendered_request_capture_factory(
                     fixture.node.clone(),
                 ),
             ),
@@ -2264,7 +2270,9 @@ async fn start_owned_title_daemon(
         prompt_builder,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::rendered_request::defra_rendered_request_capture_factory(fixture.node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                fixture.node.clone(),
+            ),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -2299,10 +2307,12 @@ fn buffered_reasoning_title_provider() -> (
         .into_iter()
         .map(|text| RawStreamingChoice::Reasoning {
             id: None,
-            content: crate::llm::rig_compat::to_rig_reasoning_part(&ReasoningContent::Text {
-                text: text.into(),
-                signature: None,
-            }),
+            content: crate::inference::llm::rig_compat::to_rig_reasoning_part(
+                &ReasoningContent::Text {
+                    text: text.into(),
+                    signature: None,
+                },
+            ),
         })
         .collect();
     let before_second = Arc::new(tokio::sync::Notify::new());
@@ -2605,12 +2615,12 @@ async fn reasoning_only_title_retains_each_attempt_and_uses_bounded_fallback() {
 async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
     let fixture = TitleFixture::new().await;
     let backend = fixture.agent_config.backend_id.clone().unwrap();
-    let registry = crate::admission::AdmissionRegistry::new(fixture.node.clone());
+    let registry = crate::inference::admission::AdmissionRegistry::new(fixture.node.clone());
     registry.reconcile(
         1,
         &rapidhash::RapidHashMap::from_iter([(
             backend.clone(),
-            crate::admission::BackendAdmissionConfig {
+            crate::inference::admission::BackendAdmissionConfig {
                 backend_id: backend.clone(),
                 max_concurrent: 1,
                 max_queue_depth: 1,
@@ -2628,7 +2638,7 @@ async fn a_usage_limited_title_falls_back_without_failing_the_turn() {
         resets_at.timestamp()
     ));
     let calls = provider.calls.clone();
-    let model = crate::admission::AdmittedCompletionModel::new(
+    let model = crate::inference::admission::AdmittedCompletionModel::new(
         provider,
         registry,
         format!("{backend}:connection"),
@@ -2738,7 +2748,7 @@ async fn fenced_title_output_fails_closed_without_retry() {
 
 #[tokio::test]
 async fn title_output_cap_applies_only_when_reasoning_is_disabled_on_the_wire() {
-    use crate::config::ReasoningEffort;
+    use crate::inference::resolved::ReasoningEffort;
     use crate::OpenAiWireApi;
     let fixture = TitleFixture::new().await;
     let configured = Some(1024);
@@ -2821,7 +2831,7 @@ async fn title_output_cap_applies_only_when_reasoning_is_disabled_on_the_wire() 
             &agent_config,
             super::title_generation_preamble(),
             0,
-            crate::rendered_request::CaptureScopeKind::Title,
+            crate::inference::rendered_request::CaptureScopeKind::Title,
         );
         assert_eq!(
             super::title_max_tokens(config.additional_params.as_ref(), configured),
@@ -2837,7 +2847,7 @@ async fn title_output_cap_applies_only_when_reasoning_is_disabled_on_the_wire() 
         &agent_config,
         super::title_generation_preamble(),
         0,
-        crate::rendered_request::CaptureScopeKind::Title,
+        crate::inference::rendered_request::CaptureScopeKind::Title,
     );
     let overridden = crate::completion_factory::merge_optional_params(
         config.additional_params,

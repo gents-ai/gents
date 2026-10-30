@@ -6,7 +6,7 @@ use gents::agent::completion_retry::{
     FailureClass, MidStreamDirective, PreStreamDirective, RetryKind,
 };
 use gents::error::InferenceError;
-use gents::llm::rig_compat::classify_completion_error;
+use gents::inference::llm::rig_compat::classify_completion_error;
 
 /// A synthetic attempt failure as the loop classifies one: the provider
 /// report reads the attempt text and the error's rendering.

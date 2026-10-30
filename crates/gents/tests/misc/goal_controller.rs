@@ -521,7 +521,7 @@ async fn real_waited_process_defers_goal_until_completion_wake_becomes_parent() 
     use crate::support::streaming_backend::{
         StreamChunk, StreamPlan, StreamResponse, StreamScript,
     };
-    use gents::llm::message::{Message, Text, ToolResultContent, UserContent};
+    use gents::inference::llm::message::{Message, Text, ToolResultContent, UserContent};
 
     let db = test_db("goal-real-process-wait-wake").await;
     let parent_request_id = "goal-real-process-parent";

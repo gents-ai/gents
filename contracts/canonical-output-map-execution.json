@@ -43,7 +43,7 @@
   },
   {
     "id":"execution.gate-compaction","constructors":["Gate.Operation.compact"],"model_symbols":[{"file":"crates/gents/proofs/Proofs/CanonicalOutput/Execution/Compaction.lean","symbol":"CanonicalOutput.Execution.Compaction.advanceCursor?"}],
-    "generated_groups":["compaction_reducer_cases","compaction_cursor_cases","canonical_execution_gate_cases"],"fixture_status":"concrete_inputs","native_owner_paths":["crates/gents/src/compaction.rs"],"consumer_paths":["crates/gents/tests/conformance/streaming_compaction.rs"],"native_status":"pending",
+    "generated_groups":["compaction_reducer_cases","compaction_cursor_cases","canonical_execution_gate_cases"],"fixture_status":"concrete_inputs","native_owner_paths":["crates/gents/src/inference/compaction.rs"],"consumer_paths":["crates/gents/tests/conformance/streaming_compaction.rs"],"native_status":"pending",
     "required_cases":["Cursor advances only across stable published prefix below allocator.","Inspection alone cannot advance.","Provider call keys, not physical tool IDs, define identity.","Exported native script compaction_cursor_requires_stable_published_prefix: an unpaired prefix is rejected while the tool runs, a cursor at the allocator is rejected, advance succeeds across the paired prefix and boundary, replay is inert, and rewind is rejected. compaction_cursor is part of every observation.","Still unexported through the gate: reused provider call keys and forked headers, which remain summary-only in compaction_reducer_cases and compaction_cursor_cases."],"retired_bindings":["streaming_response_cases"]
   },
   {

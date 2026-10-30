@@ -54,9 +54,9 @@ async fn restart_obligations(
             crate::session::load_canonical_message_from_node(node, doc_id, node_did, requester_did)
                 .await
                 .expect("reconstruct canonical restart notification");
-        if let crate::llm::message::Message::User { content } = message {
+        if let crate::inference::llm::message::Message::User { content } = message {
             for item in content {
-                if let crate::llm::message::UserContent::Text(text) = item {
+                if let crate::inference::llm::message::UserContent::Text(text) = item {
                     if text.text.contains("<tool-completion") {
                         messages.push(text.text);
                     }

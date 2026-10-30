@@ -1,6 +1,6 @@
 use super::{CallToolArgs, CallToolTool, MetaToolContext};
 use crate::document_config::{RemoteToolStyle, RemoteTools};
-use crate::llm::tool::{BoxFuture, Tool, ToolDefinition, ToolDyn, ToolError};
+use crate::inference::llm::tool::{BoxFuture, Tool, ToolDefinition, ToolDyn, ToolError};
 
 pub(crate) fn flat_tool_name(service: &str, tool: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -71,7 +71,7 @@ impl ToolDyn for FlatRemoteTool {
     }
     fn call<'a>(&'a self, args: String) -> BoxFuture<'a, Result<String, ToolError>> {
         Box::pin(async move {
-            let arguments = crate::llm::tool::parse_tool_args(&args)?;
+            let arguments = crate::inference::llm::tool::parse_tool_args(&args)?;
             Tool::call(
                 &CallToolTool::new(self.context.clone()),
                 CallToolArgs {
@@ -86,7 +86,8 @@ impl ToolDyn for FlatRemoteTool {
     }
 
     fn admit(&self, args: &str) -> Result<(), ToolError> {
-        let Ok(arguments) = crate::llm::tool::parse_tool_args::<serde_json::Value>(args) else {
+        let Ok(arguments) = crate::inference::llm::tool::parse_tool_args::<serde_json::Value>(args)
+        else {
             return Ok(());
         };
         Tool::admit(

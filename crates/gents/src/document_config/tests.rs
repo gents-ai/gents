@@ -886,7 +886,7 @@ async fn inference_retry_policy_fields_round_trip() {
         display_name: Some("Retry Profile".to_string()),
         backend_id: "backend".to_string(),
         model_name: "test-model".to_string(),
-        reasoning_effort: Some(crate::config::ReasoningEffort::Max),
+        reasoning_effort: Some(crate::inference::resolved::ReasoningEffort::Max),
         execution_id: Some("retry-execution".to_string()),
         ..Default::default()
     };
@@ -939,7 +939,7 @@ async fn inference_retry_policy_fields_round_trip() {
     .expect("profile should exist");
     assert_eq!(
         loaded.reasoning_effort,
-        Some(crate::config::ReasoningEffort::Max)
+        Some(crate::inference::resolved::ReasoningEffort::Max)
     );
     assert_eq!(loaded.execution_id.as_deref(), Some("retry-execution"));
 }

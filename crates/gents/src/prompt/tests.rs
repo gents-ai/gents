@@ -1,5 +1,5 @@
 use super::*;
-use crate::llm::message::AssistantContent;
+use crate::inference::llm::message::AssistantContent;
 use crate::test_support::first_content;
 use gents_loop::claude_messages_body::ReplayTag;
 use gents_protocol::output::OutputSource;

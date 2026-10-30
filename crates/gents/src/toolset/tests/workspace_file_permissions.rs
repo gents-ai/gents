@@ -2,7 +2,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use super::*;
-use crate::llm::tool::Tool;
+use crate::inference::llm::tool::Tool;
 use crate::plugin::approval::{self, workspace, Answer, Request};
 use crate::toolset::file_tools::{content_hash, file_mutation_lock_for};
 

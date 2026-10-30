@@ -60,7 +60,7 @@ pub(crate) async fn load_canonical_assistant_candidates_with(
         ),
         (scope.request_id.to_owned(), request_commits),
     )]);
-    let mut capture_cache = crate::rendered_request::CaptureReadCache::default();
+    let mut capture_cache = crate::inference::rendered_request::CaptureReadCache::default();
 
     let session_filter =
         session_scope_filter(scope.node_did, scope.session_id, scope.requester_did);

@@ -17,9 +17,11 @@ async fn capture_scripted_request(
         .map_err(|error| CompletionError::ProviderError(error.to_string()))?;
     body["stream"] = serde_json::Value::Bool(true);
     body["stream_options"] = serde_json::json!({ "include_usage": true });
-    let inner = crate::rendered_request::transport::CountingInner::default();
+    let inner = crate::inference::rendered_request::transport::CountingInner::default();
     let transport =
-        crate::rendered_request::transport::RenderedRequestCapturingHttpClient::new(inner.clone());
+        crate::inference::rendered_request::transport::RenderedRequestCapturingHttpClient::new(
+            inner.clone(),
+        );
     let outbound = rig::http_client::Request::builder()
         .method("POST")
         .uri("https://scripted-provider.invalid/v1/chat/completions")
@@ -120,7 +122,7 @@ async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
         &behavior,
         prompt.preamble().to_owned(),
         0,
-        crate::rendered_request::CaptureScopeKind::OneShot,
+        crate::inference::rendered_request::CaptureScopeKind::OneShot,
     );
     let observations = Arc::new(AtomicUsize::new(0));
     let observe_renewal = async {
@@ -386,7 +388,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
             &behavior,
             prompt.preamble().to_owned(),
             tools.len(),
-            crate::rendered_request::CaptureScopeKind::OneShot,
+            crate::inference::rendered_request::CaptureScopeKind::OneShot,
         );
         config.max_turns = 4;
         let calls = Arc::new(AtomicUsize::new(0));
@@ -550,7 +552,7 @@ async fn oneshot_bash_uses_owned_request_context() {
         &agent,
         prompt.preamble().to_owned(),
         tools.len(),
-        crate::rendered_request::CaptureScopeKind::OneShot,
+        crate::inference::rendered_request::CaptureScopeKind::OneShot,
     );
     config.max_turns = 4;
     let runtime = ToolRuntimeContext::oneshot_with_node_did(node.clone(), agent.node_did());

@@ -218,18 +218,16 @@ async fn provider_stream_guard_prevents_rig_synthesizing_success_at_raw_http_eof
     assert!(first_rig_terminal(FakeProviderHttp { terminal: false })
         .await
         .is_ok());
-    let guarded =
-        crate::rendered_request::RenderedRequestCapturingHttpClient::new(FakeProviderHttp {
-            terminal: false,
-        });
+    let guarded = crate::inference::rendered_request::RenderedRequestCapturingHttpClient::new(
+        FakeProviderHttp { terminal: false },
+    );
     let error = first_rig_terminal(guarded).await.unwrap_err();
     assert!(
         error.contains("without an explicit protocol terminal event"),
         "{error}"
     );
-    let guarded =
-        crate::rendered_request::RenderedRequestCapturingHttpClient::new(FakeProviderHttp {
-            terminal: true,
-        });
+    let guarded = crate::inference::rendered_request::RenderedRequestCapturingHttpClient::new(
+        FakeProviderHttp { terminal: true },
+    );
     assert!(first_rig_terminal(guarded).await.is_ok());
 }

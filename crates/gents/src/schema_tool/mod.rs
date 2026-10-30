@@ -1,6 +1,6 @@
 use crate::config_client::ConfigAccess;
 use crate::defra_node::EmbeddedNode;
-use crate::llm::tool::{Tool, ToolDefinition};
+use crate::inference::llm::tool::{Tool, ToolDefinition};
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};

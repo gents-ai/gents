@@ -1,8 +1,8 @@
 use anyhow::Result;
 
 use super::{AgentDaemon, RequestInterruptionSource};
+use crate::inference::llm::rig_compat::ProviderModel;
 use crate::lifecycle::{RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
-use crate::llm::rig_compat::ProviderModel;
 use crate::runtime_trace::{record_current_failure_class, record_current_request_outcome};
 use crate::streaming::DefraStreamWriter;
 use crate::watcher::AgentRequest;

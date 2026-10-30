@@ -97,7 +97,7 @@ async fn list_candidates(
         crate::commands::accounts::request_usage_reads(
             identity.as_ref(),
             graphql,
-            gents::usage_observation::UsageTrigger::Cached,
+            gents::inference::usage_observation::UsageTrigger::Cached,
             None,
         )
         .await
@@ -419,7 +419,7 @@ pub(super) async fn profile_effort_warning(
         crate::shared::load_backend_observation(access, node_did, &profile.backend_id)
             .await
             .ok();
-    gents::config::unsent_reasoning_effort(&backend, &profile, observation.as_ref())
+    gents::inference::resolved::unsent_reasoning_effort(&backend, &profile, observation.as_ref())
 }
 
 #[cfg(test)]

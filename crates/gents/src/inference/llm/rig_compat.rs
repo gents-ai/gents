@@ -10,8 +10,8 @@ use rig::streaming::{
     RawStreamingChoice, RawStreamingToolCall, StreamedAssistantContent, StreamingCompletionResponse,
 };
 
-use crate::admission::stream_guard::{finish_guard, StreamGuardLifecycle};
-use crate::admission::{
+use crate::inference::admission::stream_guard::{finish_guard, StreamGuardLifecycle};
+use crate::inference::admission::{
     AdmissionError, AdmissionRegistry, AdmittedCallError, AdmittedCompletionModel,
     ProviderCallUsage,
 };

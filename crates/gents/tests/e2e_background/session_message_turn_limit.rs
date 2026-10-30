@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::config::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::inference::resolved::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
 use gents::{DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use serde::Deserialize;
 use serde_json::json;

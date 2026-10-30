@@ -7,7 +7,7 @@ use tokio::sync::{oneshot, Mutex};
 
 use super::StreamGuardLifecycle;
 use crate::config_client::ConfigAccess;
-use crate::llm::rig_compat::hold_stream_guard;
+use crate::inference::llm::rig_compat::hold_stream_guard;
 
 #[derive(Deserialize)]
 struct Case {
@@ -26,7 +26,9 @@ struct Finalizer {
 }
 
 impl StreamGuardLifecycle for Finalizer {
-    fn finish_stream(self) -> BoxFuture<'static, Result<(), crate::admission::AdmissionError>> {
+    fn finish_stream(
+        self,
+    ) -> BoxFuture<'static, Result<(), crate::inference::admission::AdmissionError>> {
         Box::pin(async move {
             let _guard = self.gate.lock().await;
             let _ = self.entered.send(());
@@ -39,7 +41,7 @@ impl StreamGuardLifecycle for Finalizer {
 #[tokio::test]
 async fn lean_storage_gate_scenarios_drive_stream_finalization() {
     let cases: Vec<Case> = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/storage_write_gate.json"
+        "../../../../tests/fixtures/storage_write_gate.json"
     ))
     .expect("Lean storage write-gate fixtures");
     assert_eq!(cases.len(), 4);
@@ -98,7 +100,9 @@ struct NativeFinalizer {
 }
 
 impl StreamGuardLifecycle for NativeFinalizer {
-    fn finish_stream(self) -> BoxFuture<'static, Result<(), crate::admission::AdmissionError>> {
+    fn finish_stream(
+        self,
+    ) -> BoxFuture<'static, Result<(), crate::inference::admission::AdmissionError>> {
         Box::pin(async move {
             ConfigAccess::transact_local_write(
                 &self.node,
@@ -119,7 +123,7 @@ impl StreamGuardLifecycle for NativeFinalizer {
                 },
             )
             .await
-            .map_err(|error| crate::admission::AdmissionError(error.to_string()))
+            .map_err(|error| crate::inference::admission::AdmissionError(error.to_string()))
         })
     }
 }
@@ -127,7 +131,7 @@ impl StreamGuardLifecycle for NativeFinalizer {
 #[tokio::test]
 async fn lean_independent_completion_releases_native_canonical_gate() {
     let cases: Vec<Case> = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/storage_write_gate.json"
+        "../../../../tests/fixtures/storage_write_gate.json"
     ))
     .unwrap();
     let scenario = cases

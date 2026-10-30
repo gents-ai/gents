@@ -650,8 +650,8 @@ pub struct AgentModelSelectionRequest {
     pub agent_id: String,
     pub backend_id: String,
     pub model_name: String,
-    pub reasoning_effort: Option<gents::config::ReasoningEffort>,
-    pub service_tier: Option<gents::config::ServiceTier>,
+    pub reasoning_effort: Option<gents::inference::resolved::ReasoningEffort>,
+    pub service_tier: Option<gents::inference::resolved::ServiceTier>,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]

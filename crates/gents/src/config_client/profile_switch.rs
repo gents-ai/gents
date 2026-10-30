@@ -8,13 +8,13 @@ use super::{
     apply_desired_state_plan, ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument,
     DesiredStateApplyPlan,
 };
-use crate::config::advertised_model_for_profile;
 use crate::document_config::{ConfigReferences, InferenceBackendObservation, InferenceProfile};
 use crate::inference::auth::credential::{
     backend_account, enabled_accounts_note, list_accounts, no_switch_candidate_note, provider_name,
     serving_account, AccountState, AccountSummary, ServingAccount,
 };
-use crate::usage_observation::{usage_view, UsageView};
+use crate::inference::resolved::advertised_model_for_profile;
+use crate::inference::usage_observation::{usage_view, UsageView};
 use crate::{Collection, InferenceBackend};
 
 /// What a move costs, shown with every plan and receipt.
@@ -59,7 +59,7 @@ pub async fn switch_candidates(
     profile_id: &str,
     plugin_slots: &[String],
     now: DateTime<Utc>,
-    observations: &[crate::usage_observation::AccountUsageRead],
+    observations: &[crate::inference::usage_observation::AccountUsageRead],
 ) -> Result<SwitchPlan> {
     let accounts = list_accounts(access, node_did).await?;
     let snapshot = access

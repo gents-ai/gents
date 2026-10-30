@@ -201,19 +201,19 @@ async fn load_messages(
         .await
         .expect("reconstruct recovery notification");
         let content = match message {
-            gents::llm::message::Message::System { content } => content,
-            gents::llm::message::Message::User { content } => content
+            gents::inference::llm::message::Message::System { content } => content,
+            gents::inference::llm::message::Message::User { content } => content
                 .into_iter()
                 .filter_map(|item| match item {
-                    gents::llm::message::UserContent::Text(text) => Some(text.text),
+                    gents::inference::llm::message::UserContent::Text(text) => Some(text.text),
                     _ => None,
                 })
                 .collect::<Vec<_>>()
                 .join("\n"),
-            gents::llm::message::Message::Assistant { content, .. } => content
+            gents::inference::llm::message::Message::Assistant { content, .. } => content
                 .into_iter()
                 .filter_map(|item| match item {
-                    gents::llm::message::AssistantContent::Text(text) => Some(text.text),
+                    gents::inference::llm::message::AssistantContent::Text(text) => Some(text.text),
                     _ => None,
                 })
                 .collect::<Vec<_>>()

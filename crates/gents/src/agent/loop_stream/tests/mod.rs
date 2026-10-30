@@ -3,12 +3,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::llm::message::{AssistantContent, ToolResultContent, UserContent};
-use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
+use crate::inference::llm::message::{AssistantContent, ToolResultContent, UserContent};
+use crate::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use futures::{stream, Stream, StreamExt};
 use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 
-use crate::llm::message::Message;
+use crate::inference::llm::message::Message;
 use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse};
 use tokio::sync::Mutex;
 

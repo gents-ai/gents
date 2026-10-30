@@ -7,11 +7,11 @@ use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::Serialize;
 use tokio::sync::mpsc;
 
-use crate::admission::BackendAdmissionConfig;
-use crate::config::ResolvedAgent;
 pub use crate::document_config::ConcurrencyMode;
 pub use crate::document_config::ScheduleCadence;
 use crate::document_config::TaskHook;
+use crate::inference::admission::BackendAdmissionConfig;
+use crate::inference::resolved::ResolvedAgent;
 use crate::schedule_cron::{next_cron_run_after, CronMissedRunPolicy};
 use crate::store::identity::RuntimeNode;
 use crate::tool_surface::ToolSurface;

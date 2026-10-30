@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::agent::completion_retry::CompletionRetryProfileFields;
-use crate::config::SamplingConfig;
+use crate::inference::resolved::SamplingConfig;
 use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
 use crate::tool_surface::AgentToolSurfaceConfig;
 use crate::watcher::AgentRequest;
@@ -141,19 +141,19 @@ fn responses_and_openrouter_use_profile_reasoning_effort() {
     let codex = reasoning_profile_params(
         BackendProviderKind::ChatGptCodex,
         crate::OpenAiWireApi::Responses,
-        Some(crate::config::ReasoningEffort::Ultra),
+        Some(crate::inference::resolved::ReasoningEffort::Ultra),
     )
     .expect("profile reasoning effort must be present");
     let responses = reasoning_profile_params(
         BackendProviderKind::OpenAiCompatible,
         crate::OpenAiWireApi::Responses,
-        Some(crate::config::ReasoningEffort::XHigh),
+        Some(crate::inference::resolved::ReasoningEffort::XHigh),
     )
     .expect("profile reasoning effort must be present");
     let openrouter = reasoning_profile_params(
         BackendProviderKind::OpenRouter,
         crate::OpenAiWireApi::ChatCompletions,
-        Some(crate::config::ReasoningEffort::Medium),
+        Some(crate::inference::resolved::ReasoningEffort::Medium),
     )
     .expect("profile reasoning effort must be present");
 
@@ -168,7 +168,7 @@ fn profile_none_disables_local_thinking() {
     let value = reasoning_profile_params(
         BackendProviderKind::OpenAiCompatible,
         crate::OpenAiWireApi::ChatCompletions,
-        Some(crate::config::ReasoningEffort::None),
+        Some(crate::inference::resolved::ReasoningEffort::None),
     )
     .expect("explicit none must be present");
 
@@ -188,7 +188,7 @@ fn profile_reasoning_serializes_top_level_into_openai_body() {
             reasoning_profile_params(
                 BackendProviderKind::OpenAiCompatible,
                 crate::OpenAiWireApi::ChatCompletions,
-                Some(crate::config::ReasoningEffort::Max),
+                Some(crate::inference::resolved::ReasoningEffort::Max),
             ),
             provider_additional_params(
                 BackendProviderKind::OpenAiCompatible,
@@ -305,7 +305,7 @@ fn generated_responses_storage_cases_drive_loop_config() {
 
 #[test]
 fn generated_responses_effort_cases_drive_loop_config() {
-    use crate::config::ReasoningEffort;
+    use crate::inference::resolved::ReasoningEffort;
     use crate::lean_vocab_test::lean_prompt_assembly_responses_effort_cases;
 
     let parse = |value: &String| ReasoningEffort::parse(value).expect("Lean effort");
@@ -536,25 +536,27 @@ fn agent_with_retry(completion_retry: CompletionRetryProfileFields) -> ResolvedA
         openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
         backend_auth: crate::document_config::BackendAuth::Unauthenticated,
-        model_name: crate::config::DEFAULT_MODEL_NAME.to_string(),
+        model_name: crate::inference::resolved::DEFAULT_MODEL_NAME.to_string(),
         service_tier: None,
         resolved_reasoning_efforts: None,
-        context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
-        max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
-        max_turns: crate::config::DEFAULT_MAX_TURNS,
-        max_turns_provenance: crate::config::MaxTurnsProvenance::Default,
+        context_window: crate::inference::resolved::DEFAULT_CONTEXT_WINDOW,
+        max_output_tokens: crate::inference::resolved::DEFAULT_MAX_OUTPUT_TOKENS,
+        max_turns: crate::inference::resolved::DEFAULT_MAX_TURNS,
+        max_turns_provenance: crate::inference::resolved::MaxTurnsProvenance::Default,
         system_prompt: "system".to_string(),
         tools: AgentToolSurfaceConfig::meta_only(),
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
-        stream_batch_ms: crate::config::DEFAULT_STREAM_BATCH_MS,
+        stream_batch_ms: crate::inference::resolved::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
-            crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+            crate::inference::resolved::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
-        deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
+        deadline_duration: Duration::from_secs(
+            crate::inference::resolved::DEFAULT_DEADLINE_DURATION_SECS,
+        ),
         provider_idle_timeout: Duration::from_secs(
-            crate::config::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+            crate::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
         ),
         completion_retry,
         sampling: SamplingConfig::default(),
@@ -846,10 +848,10 @@ fn unpinned_sampling_knobs_emit_no_provider_params() {
 
 #[tokio::test]
 async fn every_loop_config_arms_the_capture_scope_it_was_built_for() {
-    use crate::rendered_request::scope::{
+    use crate::inference::rendered_request::scope::{
         claim_pending, scope_request, test_scope, CaptureClaim, CaptureScopeKind,
     };
-    use crate::rendered_request::{
+    use crate::inference::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
     };
 
@@ -925,11 +927,11 @@ fn generated_service_tier_cases_drive_loop_config() {
     assert!(!cases.is_empty());
     for case in cases {
         let family = BackendProviderKind::parse_optional(Some(&case.family)).expect("Lean family");
-        let tier: Option<crate::config::ServiceTier> =
+        let tier: Option<crate::inference::resolved::ServiceTier> =
             serde_json::from_value(serde_json::to_value(&case.requested).unwrap())
                 .expect("Lean tier");
         assert_eq!(
-            crate::config::validate_service_tier(family, tier).is_ok(),
+            crate::inference::resolved::validate_service_tier(family, tier).is_ok(),
             case.allowed,
             "{case:?}"
         );

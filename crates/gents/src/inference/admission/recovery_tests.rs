@@ -415,7 +415,7 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
     let inner = StreamingCompletionResponse::stream(Box::pin(futures::stream::iter(vec![Ok(
         RawStreamingChoice::FinalResponse(()),
     )])));
-    let mut stream = crate::llm::rig_compat::hold_stream_guard(
+    let mut stream = crate::inference::llm::rig_compat::hold_stream_guard(
         inner,
         SignalledPermitFinalizer {
             permit,

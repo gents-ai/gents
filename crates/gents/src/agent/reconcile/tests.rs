@@ -7,12 +7,12 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch, Mutex, Notify, Semaphore};
 
 use super::*;
-use crate::admission::BackendAdmissionConfig;
 use crate::agent::PendingAgent;
-use crate::config::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
+use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::backends::provider::BackendProviderKind;
+use crate::inference::resolved::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
 use crate::lean_vocab_test::lean_runtime_reconcile_case;
 use crate::runtime_status::RuntimeStatusHandle;
 use crate::store::identity::{KeyIdentity, NodeIdentity as _, RuntimeNode};
@@ -672,7 +672,7 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::admission::AdmissionRegistry::new(node.clone()),
+        crate::inference::admission::AdmissionRegistry::new(node.clone()),
         crate::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
@@ -806,7 +806,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
         }
     };
 
-    let registry = crate::admission::AdmissionRegistry::new(node.clone());
+    let registry = crate::inference::admission::AdmissionRegistry::new(node.clone());
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
@@ -864,7 +864,7 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
             "backend-general",
             "general",
             node_did,
-            crate::admission::CallKind::Inference,
+            crate::inference::admission::CallKind::Inference,
             &new_connection,
         )
         .await
@@ -955,7 +955,7 @@ async fn backend_change_restages_the_slot_and_drains_the_call_in_flight() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::admission::AdmissionRegistry::new(node.clone()),
+        crate::inference::admission::AdmissionRegistry::new(node.clone()),
         crate::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
@@ -1143,7 +1143,7 @@ async fn generation_supervisor_rotates_dispatcher_on_agent_change() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::admission::AdmissionRegistry::new(node.clone()),
+        crate::inference::admission::AdmissionRegistry::new(node.clone()),
         crate::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
@@ -1300,7 +1300,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::admission::AdmissionRegistry::new(node.clone()),
+        crate::inference::admission::AdmissionRegistry::new(node.clone()),
         crate::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
@@ -1501,7 +1501,7 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::admission::AdmissionRegistry::new(node),
+        crate::inference::admission::AdmissionRegistry::new(node),
         crate::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
@@ -1589,7 +1589,7 @@ async fn retired_slot_drain_failure_reaches_supervisor_shutdown() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::admission::AdmissionRegistry::new(node.clone()),
+        crate::inference::admission::AdmissionRegistry::new(node.clone()),
         crate::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
@@ -1709,7 +1709,7 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::admission::AdmissionRegistry::new(node),
+        crate::inference::admission::AdmissionRegistry::new(node),
         crate::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
@@ -1864,7 +1864,7 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::admission::AdmissionRegistry::new(node),
+        crate::inference::admission::AdmissionRegistry::new(node),
         crate::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,
@@ -1954,25 +1954,27 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         model_name: "default".to_string(),
         service_tier: None,
         resolved_reasoning_efforts: None,
-        context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
-        max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
-        max_turns: crate::config::DEFAULT_MAX_TURNS,
-        max_turns_provenance: crate::config::MaxTurnsProvenance::Default,
+        context_window: crate::inference::resolved::DEFAULT_CONTEXT_WINDOW,
+        max_output_tokens: crate::inference::resolved::DEFAULT_MAX_OUTPUT_TOKENS,
+        max_turns: crate::inference::resolved::DEFAULT_MAX_TURNS,
+        max_turns_provenance: crate::inference::resolved::MaxTurnsProvenance::Default,
         system_prompt: "initial".to_string(),
         tools: AgentToolSurfaceConfig::meta_only(),
         compaction: None,
         compaction_inference: None,
         max_total_tokens: None,
-        stream_batch_ms: crate::config::DEFAULT_STREAM_BATCH_MS,
+        stream_batch_ms: crate::inference::resolved::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
-            crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+            crate::inference::resolved::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
-        deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
+        deadline_duration: Duration::from_secs(
+            crate::inference::resolved::DEFAULT_DEADLINE_DURATION_SECS,
+        ),
         provider_idle_timeout: Duration::from_secs(
-            crate::config::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+            crate::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
         ),
         completion_retry: crate::agent::completion_retry::CompletionRetryProfileFields::default(),
-        sampling: crate::config::SamplingConfig::default(),
+        sampling: crate::inference::resolved::SamplingConfig::default(),
     });
     let updated_tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
         "tools_id": "general-tools",
@@ -2030,7 +2032,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::admission::AdmissionRegistry::new(node.clone()),
+        crate::inference::admission::AdmissionRegistry::new(node.clone()),
         crate::retry::RetryPolicy {
             max_retries: 3,
             base_delay_ms: 5,
@@ -2141,7 +2143,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let supervisor = GenerationSupervisor::bootstrap(
         initial_snapshot,
-        crate::admission::AdmissionRegistry::new(node.clone()),
+        crate::inference::admission::AdmissionRegistry::new(node.clone()),
         crate::retry::RetryPolicy {
             max_retries: 1,
             base_delay_ms: 1,

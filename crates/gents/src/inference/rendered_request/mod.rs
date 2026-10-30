@@ -22,7 +22,7 @@ pub use sink::DefraRenderedRequestSink;
 /// the wrong capture scope. One-shot captures never join because no admission
 /// scope exists there.
 fn admission_join_for_scope(capture_scope: &str) -> Option<AdmissionJoin> {
-    let join = crate::admission::current_call_join()?;
+    let join = crate::inference::admission::current_call_join()?;
     let scope_kind = capture_scope.parse::<CaptureScope>().ok()?.kind;
     admission_kind_matches_scope(join.call_kind, scope_kind).then_some(AdmissionJoin {
         call_id: join.call_id,
@@ -30,15 +30,15 @@ fn admission_join_for_scope(capture_scope: &str) -> Option<AdmissionJoin> {
     })
 }
 
-/// Which admission [`CallKind`](crate::admission::CallKind) legitimately
+/// Which admission [`CallKind`](crate::inference::admission::CallKind) legitimately
 /// produces captures of which [`CaptureScopeKind`]. `OneShot` maps to nothing:
 /// one-shot runs have no admission scope at all, so a join observed under a
 /// oneshot capture could only be another loop's call.
 pub(crate) fn admission_kind_matches_scope(
-    call_kind: crate::admission::CallKind,
+    call_kind: crate::inference::admission::CallKind,
     scope_kind: CaptureScopeKind,
 ) -> bool {
-    use crate::admission::CallKind;
+    use crate::inference::admission::CallKind;
 
     matches!(
         (call_kind, scope_kind),
@@ -723,7 +723,7 @@ mod tests {
 
     #[test]
     fn admission_kinds_map_to_their_capture_scopes() {
-        use crate::admission::CallKind;
+        use crate::inference::admission::CallKind;
 
         let cases = [
             (CallKind::Inference, CaptureScopeKind::Inference, true),

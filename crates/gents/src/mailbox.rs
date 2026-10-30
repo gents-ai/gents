@@ -13,7 +13,7 @@ use crate::graphql::{
     escape_graphql_string, graphql_with_transaction_retry, rows, single_mutation_document,
     validate_collection_identifier, validate_graphql_name,
 };
-use crate::llm::tool::ToolDefinition;
+use crate::inference::llm::tool::ToolDefinition;
 
 mod dismiss;
 mod domain;
@@ -614,7 +614,7 @@ impl MailboxCreateTool {
     }
 }
 
-impl crate::llm::tool::Tool for MailboxCreateTool {
+impl crate::inference::llm::tool::Tool for MailboxCreateTool {
     const NAME: &'static str = FILE_MAILBOX_ITEM_TOOL_NAME;
     type Error = MailboxToolError;
     type Args = MailboxContentArgs;

@@ -7,7 +7,7 @@ use futures::FutureExt;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
-use crate::config::ResolvedAgent;
+use crate::inference::resolved::ResolvedAgent;
 use crate::retry::RetryPolicy;
 
 pub(super) async fn supervise_behaviors_with_runner<F, Fut>(

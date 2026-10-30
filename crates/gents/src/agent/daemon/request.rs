@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use tracing::Instrument;
 
 use super::{AgentDaemon, HandleRequestOutcome, RequestInterruptionSource};
-use crate::admission::{self, AdmissionCallContext, CallKind};
-use crate::compaction;
+use crate::inference::admission::{self, AdmissionCallContext, CallKind};
+use crate::inference::compaction;
 use crate::prompt::PromptBuilder;
 use crate::runtime_trace::RequestTraceAttrs;
 use crate::session;
@@ -42,7 +42,7 @@ pub(super) async fn prepare_unless_interrupted<T>(
 pub(super) async fn flush_received_preparation_partial(context: &str) -> Result<()> {
     match tokio::time::timeout(
         crate::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-        crate::rendered_request::scope::flush_received_auxiliary_partial(),
+        crate::inference::rendered_request::scope::flush_received_auxiliary_partial(),
     ).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(error)) => Err(super::ShutdownDrainFailure {
@@ -59,7 +59,7 @@ pub(super) async fn flush_received_preparation_partial(context: &str) -> Result<
 
 impl<M> AgentDaemon<M>
 where
-    M: crate::llm::rig_compat::ProviderModel,
+    M: crate::inference::llm::rig_compat::ProviderModel,
 {
     /// Size the exact first-turn provider request for session-compaction
     /// admission through the owned loop's assembly owner. The loop remains the
@@ -70,8 +70,8 @@ where
         request: &crate::watcher::AgentRequest,
         preamble: String,
         history: &[TaggedMessage],
-        skill_reminders: &[crate::llm::message::Message],
-        request_context_message: Option<&crate::llm::message::Message>,
+        skill_reminders: &[crate::inference::llm::message::Message],
+        request_context_message: Option<&crate::inference::llm::message::Message>,
         folded_prompts: &[crate::agent::loop_stream::FoldedPrompt],
         aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
         replay: &gents_loop::loop_stream::LoopReplayInput,
@@ -201,13 +201,13 @@ where
                 )
             })?
             .to_string();
-        let capture_context = crate::rendered_request::context_for_claimed_request(
+        let capture_context = crate::inference::rendered_request::context_for_claimed_request(
             &request,
             &request_commit_cid,
             self.agent_config.model_name.clone(),
             self.provider_family.clone(),
         );
-        let mut capture_scope = crate::rendered_request::scope_from_factory(
+        let mut capture_scope = crate::inference::rendered_request::scope_from_factory(
             capture_context.clone(),
             self.rendered_request_capture_factory.as_ref(),
         );
@@ -771,7 +771,9 @@ where
         });
 
         match capture_scope {
-            Some(scope) => crate::rendered_request::scope::scope_request(scope, handled).await,
+            Some(scope) => {
+                crate::inference::rendered_request::scope::scope_request(scope, handled).await
+            }
             None => handled.await,
         }
     }

@@ -1,6 +1,6 @@
 use super::change_capture;
-use crate::llm::tool::Tool;
-use crate::llm::tool::ToolDefinition;
+use crate::inference::llm::tool::Tool;
+use crate::inference::llm::tool::ToolDefinition;
 use anyhow::Result;
 use gents_fs_runner::protocol::{
     GlobArgs as NativeGlobArgs, GrepArgs as NativeGrepArgs, ListFilesArgs as NativeListFilesArgs,
@@ -82,8 +82,8 @@ impl Tool for ListFilesTool {
     type Args = ListFilesArgs;
     type Output = String;
 
-    fn footprint(&self, _args: &ListFilesArgs) -> crate::llm::tool::ToolFootprint {
-        crate::llm::tool::ToolFootprint::Read
+    fn footprint(&self, _args: &ListFilesArgs) -> crate::inference::llm::tool::ToolFootprint {
+        crate::inference::llm::tool::ToolFootprint::Read
     }
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
@@ -156,7 +156,7 @@ impl Tool for ListFilesTool {
         Some(change_capture::unchanged_output())
     }
 
-    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+    fn into_dyn_error(error: Self::Error) -> crate::inference::llm::tool::ToolError {
         error.into_dispatch_error()
     }
 }
@@ -168,8 +168,8 @@ impl Tool for ReadFileTool {
     type Args = ReadFileArgs;
     type Output = String;
 
-    fn footprint(&self, _args: &ReadFileArgs) -> crate::llm::tool::ToolFootprint {
-        crate::llm::tool::ToolFootprint::Read
+    fn footprint(&self, _args: &ReadFileArgs) -> crate::inference::llm::tool::ToolFootprint {
+        crate::inference::llm::tool::ToolFootprint::Read
     }
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
@@ -258,7 +258,7 @@ impl Tool for ReadFileTool {
         Some(change_capture::unchanged_output())
     }
 
-    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+    fn into_dyn_error(error: Self::Error) -> crate::inference::llm::tool::ToolError {
         error.into_dispatch_error()
     }
 }
@@ -270,8 +270,8 @@ impl Tool for GlobTool {
     type Args = GlobArgs;
     type Output = String;
 
-    fn footprint(&self, _args: &GlobArgs) -> crate::llm::tool::ToolFootprint {
-        crate::llm::tool::ToolFootprint::Read
+    fn footprint(&self, _args: &GlobArgs) -> crate::inference::llm::tool::ToolFootprint {
+        crate::inference::llm::tool::ToolFootprint::Read
     }
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
@@ -341,7 +341,7 @@ impl Tool for GlobTool {
         Some(change_capture::unchanged_output())
     }
 
-    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+    fn into_dyn_error(error: Self::Error) -> crate::inference::llm::tool::ToolError {
         error.into_dispatch_error()
     }
 }
@@ -353,8 +353,8 @@ impl Tool for GrepTool {
     type Args = GrepArgs;
     type Output = String;
 
-    fn footprint(&self, _args: &GrepArgs) -> crate::llm::tool::ToolFootprint {
-        crate::llm::tool::ToolFootprint::Read
+    fn footprint(&self, _args: &GrepArgs) -> crate::inference::llm::tool::ToolFootprint {
+        crate::inference::llm::tool::ToolFootprint::Read
     }
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
@@ -431,7 +431,7 @@ impl Tool for GrepTool {
         Some(change_capture::unchanged_output())
     }
 
-    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+    fn into_dyn_error(error: Self::Error) -> crate::inference::llm::tool::ToolError {
         error.into_dispatch_error()
     }
 }

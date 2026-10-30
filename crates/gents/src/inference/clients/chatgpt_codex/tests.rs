@@ -61,7 +61,7 @@ async fn routing_affinity_isolates_concurrent_executions_without_capture() {
     let second = RoutingAffinity::start(true, true, Some("same-session".into())).unwrap();
     let run = |state: Arc<RoutingAffinity>, token: &'static str| async move {
         scope(Some(state.clone()), async move {
-            assert!(crate::rendered_request::scope::current_scope().is_none());
+            assert!(crate::inference::rendered_request::scope::current_scope().is_none());
             let mut headers = HeaderMap::new();
             headers.insert("x-codex-turn-state", HeaderValue::from_static(token));
             retain_turn_state(&headers);
@@ -259,9 +259,11 @@ async fn codex_affinity_transport_captures_first_response_and_reuses_it_on_follo
 
 #[tokio::test]
 async fn the_captured_row_is_the_body_codex_rewrote_not_the_one_rig_serialized() {
-    use crate::rendered_request::scope::{arm, scope_request, test_scope, CaptureScopeKind};
-    use crate::rendered_request::transport::CountingInner;
-    use crate::rendered_request::{
+    use crate::inference::rendered_request::scope::{
+        arm, scope_request, test_scope, CaptureScopeKind,
+    };
+    use crate::inference::rendered_request::transport::CountingInner;
+    use crate::inference::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, RenderedCompletionRequest, RenderedRequestCaptureSink,
         RenderedRequestContext,
     };
@@ -270,7 +272,9 @@ async fn the_captured_row_is_the_body_codex_rewrote_not_the_one_rig_serialized()
     let terminal = CountingInner::default();
     let client = ChatGptCodexHttpClient::with_inner(
         CountingBearer::new("tok"),
-        crate::rendered_request::RenderedRequestCapturingHttpClient::new(terminal.clone()),
+        crate::inference::rendered_request::RenderedRequestCapturingHttpClient::new(
+            terminal.clone(),
+        ),
     );
 
     let seen: Arc<Mutex<Vec<RenderedCompletionRequest>>> = Arc::new(Mutex::new(Vec::new()));

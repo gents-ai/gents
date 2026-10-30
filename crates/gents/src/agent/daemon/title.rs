@@ -8,7 +8,7 @@ use gents_protocol::request_admission::RequestPurpose;
 use tokio::sync::watch;
 
 use super::{AgentDaemon, ShutdownDrainFailure};
-use crate::admission::{self, AdmissionCallContext, CallKind};
+use crate::inference::admission::{self, AdmissionCallContext, CallKind};
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
 use crate::session;
 use crate::streaming::DefraStreamWriter;
@@ -33,14 +33,14 @@ async fn flush_received_title_partial(context: &str) -> Result<()> {
 #[derive(Clone)]
 pub(super) struct AuxiliaryTask<M>
 where
-    M: crate::llm::rig_compat::ProviderModel,
+    M: crate::inference::llm::rig_compat::ProviderModel,
 {
     node: Arc<EmbeddedNode>,
-    agent_config: Arc<crate::config::ResolvedAgent>,
+    agent_config: Arc<crate::inference::resolved::ResolvedAgent>,
     provider_family: Option<String>,
     model: Arc<M>,
     verifier: crate::request_admission::AgentRequestAdmissionVerifier,
-    capture_factory: Option<crate::rendered_request::RenderedRequestCaptureFactory>,
+    capture_factory: Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
     service_admission: crate::runtime_service::RuntimeServiceAdmission,
 }
 
@@ -56,7 +56,7 @@ enum AuxiliaryResult {
 
 impl<M> AgentDaemon<M>
 where
-    M: crate::llm::rig_compat::ProviderModel,
+    M: crate::inference::llm::rig_compat::ProviderModel,
 {
     pub(super) fn auxiliary_task(&self) -> AuxiliaryTask<M> {
         AuxiliaryTask {
@@ -170,7 +170,7 @@ struct TitleGeneration<'a> {
 
 impl<M> AuxiliaryTask<M>
 where
-    M: crate::llm::rig_compat::ProviderModel,
+    M: crate::inference::llm::rig_compat::ProviderModel,
 {
     async fn run(self, request: AgentRequest, shutdown: watch::Receiver<bool>) -> Result<()> {
         self.run_owned(request, shutdown, None).await.map(|_| ())
@@ -373,13 +373,13 @@ where
             .request_commit_cid()
             .context("claimed auxiliary request has no exact commit CID")?;
         let generation = lifecycle.execution_generation()?.to_owned();
-        let capture_context = crate::rendered_request::context_for_claimed_request(
+        let capture_context = crate::inference::rendered_request::context_for_claimed_request(
             &request,
             commit_cid,
             self.agent_config.model_name.clone(),
             self.provider_family.clone(),
         );
-        let mut capture_scope = crate::rendered_request::scope_from_factory(
+        let mut capture_scope = crate::inference::rendered_request::scope_from_factory(
             capture_context,
             self.capture_factory.as_ref(),
         )
@@ -401,7 +401,7 @@ where
         );
         admission::scope_request(
             admission_context,
-            crate::rendered_request::scope::scope_request(capture_scope, async {
+            crate::inference::rendered_request::scope::scope_request(capture_scope, async {
                 lifecycle.begin_owned_execution(writer).await?;
                 if request.purpose == RequestPurpose::AccessReview {
                     return self
@@ -436,7 +436,7 @@ where
                         &self.agent_config,
                         title_generation_preamble(),
                         0,
-                        crate::rendered_request::CaptureScopeKind::Title,
+                        crate::inference::rendered_request::CaptureScopeKind::Title,
                     );
                     config.temperature = Some(0.0);
                     config.max_tokens =
@@ -501,7 +501,7 @@ where
                 attempt,
                 Box::pin(crate::agent::loop_stream::run_loop_to_text::<M>(
                     (*self.model).clone(),
-                    crate::llm::message::Message::user(prompt.to_string()),
+                    crate::inference::llm::message::Message::user(prompt.to_string()),
                     Vec::new(),
                     Arc::new(Vec::new()),
                     config.clone(),

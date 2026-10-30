@@ -132,7 +132,7 @@ const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "GENTS_CHATGPT_CODEX_CLIENT_VERSI
 
 #[derive(Clone, Default)]
 pub struct ChatGptCodexPolicy {
-    pub service_tier: Option<crate::config::ServiceTier>,
+    pub service_tier: Option<crate::inference::resolved::ServiceTier>,
 }
 
 impl crate::inference::auth::http::OAuthHttpPolicy for ChatGptCodexPolicy {
@@ -164,7 +164,7 @@ impl crate::inference::auth::http::OAuthHttpPolicy for ChatGptCodexPolicy {
             if let Some(patched) = self.service_tier.and_then(|tier| tier.patch(&body).ok()) {
                 body = patched.into();
             }
-            let call = crate::admission::current_call_join();
+            let call = crate::inference::admission::current_call_join();
             let affinity = gents_loop::provider_input::routing_affinity::current();
             tracing::info!(
                 call_id = call.as_ref().map(|call| call.call_id.as_str()),
@@ -235,7 +235,7 @@ fn retain_turn_state(headers: &HeaderMap) {
         .get("x-codex-turn-state")
         .and_then(|header| header.to_str().ok());
     let retained = affinity.as_ref().and_then(|affinity| affinity.token());
-    let call = crate::admission::current_call_join();
+    let call = crate::inference::admission::current_call_join();
     // Opaque routing tokens may carry provider state. Record presence and
     // equality only; body comparisons use the existing rendered captures.
     tracing::info!(
@@ -363,17 +363,17 @@ fn sse_events(sse_body: &str) -> Vec<Value> {
 }
 
 pub async fn build_responses_client(
-    cache: Arc<crate::usage_observation::UsageCache>,
+    cache: Arc<crate::inference::usage_observation::UsageCache>,
     node: Arc<EmbeddedNode>,
     node_did: &str,
     account_ref: Option<&str>,
     endpoint: &str,
-    service_tier: Option<crate::config::ServiceTier>,
+    service_tier: Option<crate::inference::resolved::ServiceTier>,
 ) -> Result<
     rig::providers::openai::Client<
         ChatGptCodexHttpClient<
             DbCredentialBearer,
-            crate::rendered_request::RenderedRequestCapturingHttpClient<
+            crate::inference::rendered_request::RenderedRequestCapturingHttpClient<
                 crate::inference::clients::provider_http::ProviderHttpClient,
             >,
         >,
@@ -392,14 +392,14 @@ pub async fn build_responses_client(
     let headers =
         build_chatgpt_codex_headers(credential.account_id.as_deref(), credential.is_fedramp)?;
     let endpoint = normalize_endpoint(endpoint);
-    let usage = crate::usage_observation::UsageReporter::new(
+    let usage = crate::inference::usage_observation::UsageReporter::new(
         cache,
         node,
-        crate::usage_observation::UsageAccount::for_credential(&credential),
+        crate::inference::usage_observation::UsageAccount::for_credential(&credential),
     );
     let http = ChatGptCodexHttpClient::with_inner(
         bearer,
-        crate::rendered_request::RenderedRequestCapturingHttpClient::new(
+        crate::inference::rendered_request::RenderedRequestCapturingHttpClient::new(
             crate::inference::clients::provider_http::ProviderHttpClient::with_usage(
                 Default::default(),
                 usage,

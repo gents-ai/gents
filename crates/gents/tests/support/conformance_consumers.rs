@@ -1486,7 +1486,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "admission::registry::contract_tests::generated_inference_registry_cases_drive_real_permits",
             package: "gents",
-            source_path: "crates/gents/src/admission/registry_contract_tests.rs",
+            source_path: "crates/gents/src/inference/admission/registry_contract_tests.rs",
             module_path: "admission::registry::contract_tests",
             function: "generated_inference_registry_cases_drive_real_permits",
         },
@@ -1633,7 +1633,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "admission::tests::generated_slot_accounting_fleet_cases_match_admission_runtime_boundary",
             package: "gents",
-            source_path: "crates/gents/src/admission/tests.rs",
+            source_path: "crates/gents/src/inference/admission/tests.rs",
             module_path: "admission::tests",
             function: "generated_slot_accounting_fleet_cases_match_admission_runtime_boundary",
         },
@@ -1647,21 +1647,21 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "admission::tests::rust_inference_call_state_vocabulary_matches_lean_model",
             package: "gents",
-            source_path: "crates/gents/src/admission/tests.rs",
+            source_path: "crates/gents/src/inference/admission/tests.rs",
             module_path: "admission::tests",
             function: "rust_inference_call_state_vocabulary_matches_lean_model",
         },
         ConformanceConsumer::RustTest {
             id: "admission::tests::rust_inference_call_terminal_reason_vocabulary_matches_lean_model",
             package: "gents",
-            source_path: "crates/gents/src/admission/tests.rs",
+            source_path: "crates/gents/src/inference/admission/tests.rs",
             module_path: "admission::tests",
             function: "rust_inference_call_terminal_reason_vocabulary_matches_lean_model",
         },
         ConformanceConsumer::RustTest {
             id: "admission::tests::rust_inference_call_transition_table_matches_lean_contract",
             package: "gents",
-            source_path: "crates/gents/src/admission/tests.rs",
+            source_path: "crates/gents/src/inference/admission/tests.rs",
             module_path: "admission::tests",
             function: "rust_inference_call_transition_table_matches_lean_contract",
         },
@@ -1682,7 +1682,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "rendered_request::encoding::tests::generated_storage_cases_drive_the_lossless_codec",
             package: "gents",
-            source_path: "crates/gents/src/rendered_request/encoding.rs",
+            source_path: "crates/gents/src/inference/rendered_request/encoding.rs",
             module_path: "rendered_request::encoding::tests",
             function: "generated_storage_cases_drive_the_lossless_codec",
         },
@@ -2606,14 +2606,14 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "compaction::tests::generated_rolling_cases_drive_the_production_commit_precondition",
             package: "gents",
-            source_path: "crates/gents/src/compaction/tests.rs",
+            source_path: "crates/gents/src/inference/compaction/tests.rs",
             module_path: "compaction::tests",
             function: "generated_rolling_cases_drive_the_production_commit_precondition",
         },
         ConformanceConsumer::RustTest {
             id: "compaction::tests::generated_reduction_engine_cases_drive_shared_decision_outcome",
             package: "gents",
-            source_path: "crates/gents/src/compaction/tests.rs",
+            source_path: "crates/gents/src/inference/compaction/tests.rs",
             module_path: "compaction::tests",
             function: "generated_reduction_engine_cases_drive_shared_decision_outcome",
         },

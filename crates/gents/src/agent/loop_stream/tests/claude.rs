@@ -356,7 +356,7 @@ async fn run_claude_fixture_turns(
             .completion_model("claude-sonnet-5");
     let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![echo_tool()]);
     let mut config = owned_config(4);
-    config.on_rendered_request = Some(crate::rendered_request::scope::ambient_arming_sink(
+    config.on_rendered_request = Some(crate::inference::rendered_request::scope::ambient_arming_sink(
         scope_kind,
     ));
     config.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
@@ -372,7 +372,7 @@ async fn run_claude_fixture_turns(
             .expect("claimed request commit CID")
             .to_owned(),
         scope_kind,
-        crate::llm::backend_client::claude_subscription_replay_issuer()
+        crate::inference::llm::backend_client::claude_subscription_replay_issuer()
             .expect("Claude Messages route"),
         crate::provider_input::ProviderInputProfile::ClaudeMessages,
     );
@@ -381,9 +381,9 @@ async fn run_claude_fixture_turns(
         .expect("claimed request commit CID")
         .to_owned();
     let capture_factory =
-        crate::rendered_request::defra_rendered_request_capture_factory(node.clone());
-    let capture_scope = crate::rendered_request::scope_from_factory(
-        crate::rendered_request::context_for_claimed_request(
+        crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone());
+    let capture_scope = crate::inference::rendered_request::scope_from_factory(
+        crate::inference::rendered_request::context_for_claimed_request(
             lifecycle.request(),
             &request_commit_cid,
             "claude-sonnet-5".to_owned(),
@@ -427,7 +427,7 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
     use crate::inference::clients::claude_messages::fixtures::{
         blocking_lock_fixtures_for_test, install_messages_sse_fixtures, sse_fixture_final_text,
     };
-    use crate::llm::backend_client::{build_backend_client, BackendClient};
+    use crate::inference::llm::backend_client::{build_backend_client, BackendClient};
     use rig::client::CompletionClient;
 
     let _guard = blocking_lock_fixtures_for_test();
@@ -470,7 +470,7 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
                     "claude-sonnet-5",
                 ));
             let scope_kind = gents_protocol::rendered_request::CaptureScopeKind::Inference;
-            config.on_rendered_request = Some(crate::rendered_request::scope::ambient_arming_sink(
+            config.on_rendered_request = Some(crate::inference::rendered_request::scope::ambient_arming_sink(
                 scope_kind,
             ));
             let request_commit_cid = lifecycle
@@ -486,9 +486,9 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
                 crate::provider_input::ProviderInputProfile::ClaudeMessages,
             );
             let capture_factory =
-                crate::rendered_request::defra_rendered_request_capture_factory(node.clone());
-            let capture_scope = crate::rendered_request::scope_from_factory(
-                crate::rendered_request::context_for_claimed_request(
+                crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone());
+            let capture_scope = crate::inference::rendered_request::scope_from_factory(
+                crate::inference::rendered_request::context_for_claimed_request(
                     lifecycle.request(),
                     &request_commit_cid,
                     "claude-sonnet-5".to_owned(),
@@ -554,7 +554,7 @@ async fn captured_claude_sends(
         );
         assert_eq!(row["source"], expected_source, "Claude origin is physical");
         assert_eq!(row["request_commit_cid"].as_str(), Some(request_commit_cid));
-        let (body, _) = crate::rendered_request::decode_capture_pair(
+        let (body, _) = crate::inference::rendered_request::decode_capture_pair(
             &crate::config_client::ConfigAccess::local(node.clone()),
             u32::try_from(row["capture_version"].as_u64().expect("capture version"))
                 .expect("version fits u32"),

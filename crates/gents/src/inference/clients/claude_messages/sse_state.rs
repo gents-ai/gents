@@ -472,7 +472,7 @@ impl MessagesSseState {
                         self.last_reasoning_index = Some(index);
                         events.push(RawStreamingChoice::Reasoning {
                             id: None,
-                            content: crate::llm::rig_compat::to_rig_reasoning_part(
+                            content: crate::inference::llm::rig_compat::to_rig_reasoning_part(
                                 &ReasoningContent::Text {
                                     text,
                                     signature: Some(signature),
@@ -490,7 +490,7 @@ impl MessagesSseState {
                         self.last_reasoning_index = Some(index);
                         events.push(RawStreamingChoice::Reasoning {
                             id: None,
-                            content: crate::llm::rig_compat::to_rig_reasoning_part(
+                            content: crate::inference::llm::rig_compat::to_rig_reasoning_part(
                                 &ReasoningContent::Redacted { data },
                             ),
                         });

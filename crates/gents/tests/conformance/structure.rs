@@ -122,7 +122,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ),
         (
             "StorageWriteGate",
-            WorkspaceTest("crates/gents/src/admission/stream_guard/conformance.rs"),
+            WorkspaceTest("crates/gents/src/inference/admission/stream_guard/conformance.rs"),
         ),
         (
             "NativeCompletion",

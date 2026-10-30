@@ -12,7 +12,7 @@ use rig::one_or_many::OneOrMany;
 use rig::wasm_compat::WasmCompatSend;
 
 use super::*;
-use crate::llm::message::{AssistantContent, Message, Reasoning};
+use crate::inference::llm::message::{AssistantContent, Message, Reasoning};
 
 fn core_request(reasoning: &str) -> CompletionRequest {
     let messages = vec![
@@ -27,8 +27,10 @@ fn core_request(reasoning: &str) -> CompletionRequest {
     CompletionRequest {
         model: None,
         preamble: Some("system preamble".to_string()),
-        chat_history: OneOrMany::many(crate::llm::rig_compat::to_rig_messages(&messages))
-            .expect("non-empty history"),
+        chat_history: OneOrMany::many(crate::inference::llm::rig_compat::to_rig_messages(
+            &messages,
+        ))
+        .expect("non-empty history"),
         documents: vec![rig::completion::Document {
             id: "document-1".to_string(),
             text: "provider-visible document payload".to_string(),
@@ -280,7 +282,7 @@ fn responses_projection_matches_rig_then_production_normalization() {
     .expect("Rig Responses DTO");
     let mut actual = serde_json::to_value(dto).expect("serialize Rig Responses DTO");
     set_streaming_fields(&mut actual, false);
-    crate::llm::responses_normalize::normalize_responses_assistant_items(&mut actual);
+    crate::inference::llm::responses_normalize::normalize_responses_assistant_items(&mut actual);
 
     assert_eq!(projected_body, actual);
     assert!(projected_body
@@ -413,7 +415,7 @@ async fn openrouter_projection_matches_the_actual_rig_wire_body() {
 }
 
 fn claude_image_request(images: usize, as_images: bool) -> CompletionRequest {
-    use crate::llm::message::{
+    use crate::inference::llm::message::{
         DocumentSourceKind, Image, ImageMediaType, ToolCall, ToolFunction, ToolResultContent,
         UserContent,
     };
@@ -450,8 +452,10 @@ fn claude_image_request(images: usize, as_images: bool) -> CompletionRequest {
         },
     ];
     let mut request = core_request("unused");
-    request.chat_history =
-        OneOrMany::many(crate::llm::rig_compat::to_rig_messages(&messages)).unwrap();
+    request.chat_history = OneOrMany::many(crate::inference::llm::rig_compat::to_rig_messages(
+        &messages,
+    ))
+    .unwrap();
     request
 }
 
@@ -494,12 +498,12 @@ fn claude_images_are_estimated_at_their_token_ceiling() {
 #[test]
 fn claude_messages_projection_is_the_messages_body_regardless_of_wire() {
     let mut request = core_request("claude-visible reasoning");
-    request.chat_history = OneOrMany::many(crate::llm::rig_compat::to_rig_messages(&[
+    request.chat_history = OneOrMany::many(crate::inference::llm::rig_compat::to_rig_messages(&[
         Message::Assistant {
             id: None,
             content: vec![AssistantContent::Reasoning(Reasoning {
                 id: None,
-                content: vec![crate::llm::message::ReasoningContent::Text {
+                content: vec![crate::inference::llm::message::ReasoningContent::Text {
                     text: "claude-visible reasoning".to_owned(),
                     signature: Some("provider-signature".to_owned()),
                 }],
@@ -633,7 +637,7 @@ async fn modeled_service_tiers_match_the_terminal_responses_body() {
         if !case.allowed || !matches!(case.family.as_str(), "OpenAiCompatible" | "ChatGptCodex") {
             continue;
         }
-        let tier: Option<crate::config::ServiceTier> =
+        let tier: Option<crate::inference::resolved::ServiceTier> =
             serde_json::from_value(serde_json::to_value(&case.requested).unwrap()).unwrap();
         let family = BackendProviderKind::parse_optional(Some(&case.family)).unwrap();
         let terminal = WireCapturingClient::default();

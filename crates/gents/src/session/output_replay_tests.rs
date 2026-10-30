@@ -109,7 +109,7 @@ impl ReplayFixture {
         storage: CaptureStorage,
         wire: Option<ReplayWire>,
     ) -> Option<CapturedRequest> {
-        use crate::rendered_request::{
+        use crate::inference::rendered_request::{
             build_rendered_completion_request, AssemblyBuildPath, AssemblyTrace,
             DefraRenderedRequestSink, RenderedRequestComponents, RenderedRequestContext,
         };
@@ -174,7 +174,7 @@ impl ReplayFixture {
                 .await
                 .expect("corrupt capture row"),
             CaptureStorage::MissingDeltaBase => {
-                use crate::rendered_request::encoding::{
+                use crate::inference::rendered_request::encoding::{
                     encode_against, encode_container, encode_full, BaseWitness,
                 };
                 let mut value = body.clone();
@@ -1076,7 +1076,7 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
             }
         })
         .collect::<Vec<_>>();
-    let issuer = crate::llm::backend_client::claude_subscription_replay_issuer()
+    let issuer = crate::inference::llm::backend_client::claude_subscription_replay_issuer()
         .unwrap()
         .unwrap();
     let selected = select_replay(
@@ -1185,7 +1185,7 @@ async fn unverifiable_capture_drops_its_reasoning_without_failing_the_request() 
             id,
             content,
         }];
-        let issuer = crate::llm::backend_client::claude_subscription_replay_issuer()
+        let issuer = crate::inference::llm::backend_client::claude_subscription_replay_issuer()
             .unwrap()
             .unwrap();
         let selected = select_replay(
@@ -1823,22 +1823,23 @@ async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits(
         .unwrap()
     {
         let version = row["capture_version"].as_u64().unwrap() as u32;
-        let record = crate::rendered_request::encoding::decode_capture_record(
+        let record = crate::inference::rendered_request::encoding::decode_capture_record(
             version,
             row["request_json"].as_str().unwrap(),
-            crate::rendered_request::CapturePayloadKind::RequestBody,
+            crate::inference::rendered_request::CapturePayloadKind::RequestBody,
         )
         .unwrap();
-        if let crate::rendered_request::encoding::DecodedRecord::Tree(tree) = &record {
+        if let crate::inference::rendered_request::encoding::DecodedRecord::Tree(tree) = &record {
             assert!(
                 tree.height <= 1,
                 "fixture has at most one internal manifest level"
             );
             roots.insert(tree.root.doc_id.clone());
         }
-        for entry in crate::rendered_request::manifest_leaf_entries(fixture.node.as_ref(), record)
-            .await
-            .unwrap()
+        for entry in
+            crate::inference::rendered_request::manifest_leaf_entries(fixture.node.as_ref(), record)
+                .await
+                .unwrap()
         {
             if !roots.contains(&entry.doc_id) {
                 block_docs.insert(entry.doc_id);
@@ -1851,12 +1852,14 @@ async fn a_pass_with_many_selected_turns_batches_capture_rows_and_block_commits(
     );
     let expected_commit_statements = [roots.len(), block_docs.len()]
         .into_iter()
-        .map(|count| count.div_ceil(crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH))
+        .map(|count| {
+            count.div_ceil(crate::inference::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH)
+        })
         .sum::<usize>();
 
     let ((batched, commit_statements), capture_queries) =
         crate::session::count_capture_row_queries(
-            crate::rendered_request::commits::count_field_commit_statements(
+            crate::inference::rendered_request::commits::count_field_commit_statements(
                 super::output::replay_tags::resolve_canonical_replay_tags(
                     &fixture.node,
                     fixture.scope(),
@@ -1932,8 +1935,8 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
             ]}
         ]
     });
-    let layout = crate::rendered_request::encoding::capture_block_layout(&body).unwrap();
-    let chunks = crate::rendered_request::encoding::chunk_capture_layout(&layout);
+    let layout = crate::inference::rendered_request::encoding::capture_block_layout(&body).unwrap();
+    let chunks = crate::inference::rendered_request::encoding::chunk_capture_layout(&layout);
     let index = chunks
         .iter()
         .position(|chunk| {
@@ -1949,7 +1952,7 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
         .expect("the marker is in this block");
     poisoned[at] = b'k';
     assert_ne!(
-        crate::rendered_request::encoding::block_content_key(&poisoned),
+        crate::inference::rendered_request::encoding::block_content_key(&poisoned),
         chunks[index].content_key
     );
     let created = fixture
@@ -1992,16 +1995,19 @@ async fn a_capture_pinning_a_block_that_does_not_hash_drops_only_its_own_turn() 
         let stored = row["request_json"].as_str().unwrap();
         let mut pins_poison = false;
         for kind in [
-            crate::rendered_request::CapturePayloadKind::RequestBody,
-            crate::rendered_request::CapturePayloadKind::ProvenancePayload,
+            crate::inference::rendered_request::CapturePayloadKind::RequestBody,
+            crate::inference::rendered_request::CapturePayloadKind::ProvenancePayload,
         ] {
-            let record =
-                crate::rendered_request::encoding::decode_capture_record(version, stored, kind)
-                    .unwrap();
-            let entries =
-                crate::rendered_request::manifest_leaf_entries(fixture.node.as_ref(), record)
-                    .await
-                    .unwrap();
+            let record = crate::inference::rendered_request::encoding::decode_capture_record(
+                version, stored, kind,
+            )
+            .unwrap();
+            let entries = crate::inference::rendered_request::manifest_leaf_entries(
+                fixture.node.as_ref(),
+                record,
+            )
+            .await
+            .unwrap();
             pins_poison |= entries.iter().any(|entry| entry.doc_id == poisoned_doc);
         }
         referencing += pins_poison as usize;

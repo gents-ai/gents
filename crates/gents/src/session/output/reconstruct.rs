@@ -89,7 +89,9 @@ pub(super) async fn preload_request_output_segments(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    for chunk in distinct.chunks(crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH) {
+    for chunk in
+        distinct.chunks(crate::inference::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH)
+    {
         let filter = chunk
             .iter()
             .map(|request_doc_id| {

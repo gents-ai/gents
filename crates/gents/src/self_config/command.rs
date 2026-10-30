@@ -271,7 +271,7 @@ fn required_resource_id<'a>(value: Option<&'a String>, label: &str) -> Result<&'
 
 #[derive(Clone)]
 pub struct ConfigCommandTool {
-    pub(super) usage_cache: Arc<crate::usage_observation::UsageCache>,
+    pub(super) usage_cache: Arc<crate::inference::usage_observation::UsageCache>,
     pub(super) node: Arc<EmbeddedNode>,
     pub(super) node_did: String,
     pub(super) identity: Option<Arc<dyn NodeIdentity>>,

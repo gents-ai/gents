@@ -17,7 +17,9 @@ async fn load_replay_request_facts_batch(
         .into_iter()
         .collect::<Vec<_>>();
     let mut facts = BTreeMap::new();
-    for chunk in distinct.chunks(crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH) {
+    for chunk in
+        distinct.chunks(crate::inference::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH)
+    {
         let ids = chunk
             .iter()
             .map(|request_doc_id| {

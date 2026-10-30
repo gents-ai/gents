@@ -298,7 +298,7 @@ async fn build_authenticated_http(
     .await?;
     Ok(XaiGrokOAuthHttpClient::with_inner(
         bearer,
-        crate::rendered_request::RenderedRequestCapturingHttpClient::<
+        crate::inference::rendered_request::RenderedRequestCapturingHttpClient::<
             crate::inference::clients::provider_http::ProviderHttpClient,
         >::default(),
     ))
@@ -306,7 +306,7 @@ async fn build_authenticated_http(
 
 pub type CapturingXaiGrokOAuthHttpClient = XaiGrokOAuthHttpClient<
     DbCredentialBearer,
-    crate::rendered_request::RenderedRequestCapturingHttpClient<
+    crate::inference::rendered_request::RenderedRequestCapturingHttpClient<
         crate::inference::clients::provider_http::ProviderHttpClient,
     >,
 >;
@@ -623,9 +623,11 @@ mod tests {
     /// only composing the real stack catches it.
     #[tokio::test]
     async fn the_captured_row_carries_the_store_false_grok_injects() {
-        use crate::rendered_request::scope::{arm, scope_request, test_scope, CaptureScopeKind};
-        use crate::rendered_request::transport::CountingInner;
-        use crate::rendered_request::{
+        use crate::inference::rendered_request::scope::{
+            arm, scope_request, test_scope, CaptureScopeKind,
+        };
+        use crate::inference::rendered_request::transport::CountingInner;
+        use crate::inference::rendered_request::{
             AssemblyBuildPath, AssemblyTrace, RenderedCompletionRequest,
             RenderedRequestCaptureSink, RenderedRequestContext,
         };
@@ -634,7 +636,9 @@ mod tests {
         let terminal = CountingInner::default();
         let client = XaiGrokOAuthHttpClient::with_inner(
             CountingBearer::new("tok"),
-            crate::rendered_request::RenderedRequestCapturingHttpClient::new(terminal.clone()),
+            crate::inference::rendered_request::RenderedRequestCapturingHttpClient::new(
+                terminal.clone(),
+            ),
         );
 
         let seen: Arc<Mutex<Vec<RenderedCompletionRequest>>> = Arc::new(Mutex::new(Vec::new()));

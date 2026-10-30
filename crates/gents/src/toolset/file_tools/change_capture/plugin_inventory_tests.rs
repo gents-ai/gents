@@ -1,6 +1,6 @@
 use super::*;
 use crate::config_client::ConfigAccess;
-use crate::llm::tool::Tool;
+use crate::inference::llm::tool::Tool;
 use crate::tool_call_lifecycle::admission_fixture::{
     published_admission_with_owner, PublishedAdmissionOptions,
 };

@@ -56,7 +56,7 @@ pub(super) fn test_agent(identity: Arc<dyn NodeIdentity>) -> Arc<ResolvedAgent> 
         context_window: 8_192,
         max_output_tokens: 1_024,
         max_turns: 2,
-        max_turns_provenance: crate::config::MaxTurnsProvenance::Default,
+        max_turns_provenance: crate::inference::resolved::MaxTurnsProvenance::Default,
         system_prompt: "system".to_string(),
         tools: AgentToolSurfaceConfig::meta_only(),
         compaction: None,
@@ -66,7 +66,7 @@ pub(super) fn test_agent(identity: Arc<dyn NodeIdentity>) -> Arc<ResolvedAgent> 
         stream_liveness_timeout: Duration::from_secs(5),
         deadline_duration: Duration::from_secs(30),
         provider_idle_timeout: Duration::from_secs(
-            crate::config::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+            crate::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
         ),
         completion_retry: CompletionRetryProfileFields::default(),
         sampling: SamplingConfig::default(),

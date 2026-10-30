@@ -12,7 +12,7 @@ use rig::http_client::{
 };
 use rig::wasm_compat::WasmCompatSend;
 
-use crate::usage_observation::UsageReporter;
+use crate::inference::usage_observation::UsageReporter;
 
 /// Rig's reqwest client, except that a non-success response keeps its
 /// rate-limit headers: Rig's own implementation discards them before they can

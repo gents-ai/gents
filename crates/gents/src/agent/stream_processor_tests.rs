@@ -1,11 +1,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::llm::message::{
+use crate::inference::llm::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResultContent,
     UserContent,
 };
-use crate::llm::HookAction;
+use crate::inference::llm::HookAction;
 use gents_loop::provider_input::ProviderInputProfile;
 
 use super::*;
@@ -21,7 +21,7 @@ mod cadence;
 
 #[test]
 fn claude_signed_final_seals_preview_without_duplicating_bytes() {
-    use crate::llm::message::ReasoningContent;
+    use crate::inference::llm::message::ReasoningContent;
 
     let mut accumulator = AssistantTurnAccumulator::default();
     accumulator.push_reasoning_delta(None, "考");
@@ -96,8 +96,8 @@ fn claude_signed_final_seals_preview_without_duplicating_bytes() {
 
 #[test]
 fn generated_reasoning_delta_cases_coalesce_native_parts() {
+    use crate::inference::llm::message::ReasoningContent;
     use crate::lean_vocab_test::{lean_reasoning_delta_cases, LeanReasoningDeltaPart as Part};
-    use crate::llm::message::ReasoningContent;
 
     for case in lean_reasoning_delta_cases() {
         let mut accumulator = AssistantTurnAccumulator::default();
@@ -539,10 +539,10 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
     }
 
     assert!(processor.has_observable_activity());
-    use crate::rendered_request::scope::{
+    use crate::inference::rendered_request::scope::{
         arm, claim_pending, current_audit_sender, scope_request, RequestCaptureScope,
     };
-    use crate::rendered_request::{
+    use crate::inference::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
     };
     let capture_sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
@@ -562,7 +562,7 @@ async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_
     ));
     scope_request(scope, async {
         let label = arm(
-            crate::rendered_request::CaptureScopeKind::Inference,
+            crate::inference::rendered_request::CaptureScopeKind::Inference,
             0,
             0,
             AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new()),
@@ -893,7 +893,7 @@ fn tool_result_item_with_call_id(
     internal_id: &str,
 ) -> Result<LoopStreamItem, crate::error::LoopStreamError> {
     Ok(LoopStreamItem::ToolResult {
-        tool_result: crate::llm::message::ToolResult {
+        tool_result: crate::inference::llm::message::ToolResult {
             id: tool_id.to_string(),
             call_id: call_id.map(ToOwned::to_owned),
             content: vec![ToolResultContent::text(result_json)],
@@ -1034,7 +1034,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         )
         .await;
     assert!(
-        matches!(action, crate::llm::ToolCallHookAction::Continue),
+        matches!(action, crate::inference::llm::ToolCallHookAction::Continue),
         "tool call persistence failed: {action:?}"
     );
     assert!(matches!(
@@ -1218,7 +1218,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
             r#"{"path":"/work/entry.c"}"#,
         )
         .await,
-        crate::llm::ToolCallHookAction::Continue
+        crate::inference::llm::ToolCallHookAction::Continue
     ));
 
     let queue = gents_protocol::request_input::RequestQueue {
@@ -1451,7 +1451,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         assert!(matches!(
             hook.on_tool_call("read_file", Some(call_id.clone()), &internal_id, &args,)
                 .await,
-            crate::llm::ToolCallHookAction::Continue
+            crate::inference::llm::ToolCallHookAction::Continue
         ));
         assert!(matches!(
             hook.on_tool_result(
@@ -1599,7 +1599,7 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
         .on_tool_call("discover_tools", None, "call-1", args)
         .await;
     assert!(
-        matches!(action, crate::llm::ToolCallHookAction::Continue),
+        matches!(action, crate::inference::llm::ToolCallHookAction::Continue),
         "{action:?}"
     );
     assert!(matches!(
@@ -1931,7 +1931,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         .unwrap();
     let corrupt_call: Result<LoopStreamItem, crate::error::LoopStreamError> =
         Ok(LoopStreamItem::ToolCall {
-            tool_call: crate::llm::rig_compat::from_rig_tool_call(
+            tool_call: crate::inference::llm::rig_compat::from_rig_tool_call(
                 &rig::completion::message::ToolCall {
                     id: "result-1".to_string(),
                     call_id: Some("call-1".to_string()),
@@ -1967,7 +1967,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
             crate::test_support::CORRUPT_TOOL_ARGS_589,
         )
         .await,
-        crate::llm::ToolCallHookAction::Continue
+        crate::inference::llm::ToolCallHookAction::Continue
     ));
     assert!(matches!(
         hook.on_tool_result(
@@ -2019,7 +2019,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
 
 #[test]
 fn coalesced_reasoning_fragments_encode_as_one_native_stream() {
-    use crate::llm::message::ReasoningContent;
+    use crate::inference::llm::message::ReasoningContent;
     use crate::streaming::native_encoding::encode_native_message;
 
     let mut accumulator = AssistantTurnAccumulator::default();

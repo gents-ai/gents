@@ -40,7 +40,8 @@ async fn usage_wiring_codex_client_records_under_its_account_key() {
     use rig::client::CompletionClient;
     use rig::completion::CompletionModel;
     let did = "did:key:z6MkUsageWireCodexA";
-    let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
+    let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
+        std::sync::Arc::default();
     let node = crate::inference::auth::credential::test_support::test_node().await;
     let row = seed_codex_account(&node, did, Some("acct-key-a")).await;
     let url = crate::inference::clients::provider_http::tests::one_shot_server(
@@ -61,7 +62,7 @@ async fn usage_wiring_codex_client_records_under_its_account_key() {
     let stored = crate::inference::clients::provider_http::tests::stored_usage_eventually(
         &cache,
         &node,
-        &crate::usage_observation::UsageAccount::for_credential(&row),
+        &crate::inference::usage_observation::UsageAccount::for_credential(&row),
     )
     .await
     .unwrap();
@@ -73,7 +74,8 @@ async fn usage_wiring_codex_key_backfill_lands_under_the_key() {
     use rig::client::CompletionClient;
     use rig::completion::CompletionModel;
     let did = "did:key:z6MkUsageWireCodexKey";
-    let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
+    let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
+        std::sync::Arc::default();
     let node = crate::inference::auth::credential::test_support::test_node().await;
     let mut row = seed_codex_account(&node, did, None).await;
     let url = crate::inference::clients::provider_http::tests::server_for(
@@ -108,7 +110,7 @@ async fn usage_wiring_codex_key_backfill_lands_under_the_key() {
             "auth": { "kind": "node_oauth" },
         }))
         .unwrap();
-    let stored = crate::usage_observation::usage_for_backend(
+    let stored = crate::inference::usage_observation::usage_for_backend(
         &cache,
         &crate::config_client::ConfigAccess::local(node.clone()),
         did,

@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use super::fixtures::*;
 use super::sse_body::{stream_sse_body, stream_sse_body_observed};
 use super::*;
-use crate::llm::message::{
+use crate::inference::llm::message::{
     AssistantContent, Image, Message, ReasoningContent, ToolCall, ToolFunction, ToolResultContent,
     UserContent,
 };
@@ -98,7 +98,7 @@ fn request_from_native(
     history: Vec<Message>,
     tools: Vec<ToolDefinition>,
 ) -> CompletionRequest {
-    let rig_history = crate::llm::rig_compat::to_rig_messages(&history);
+    let rig_history = crate::inference::llm::rig_compat::to_rig_messages(&history);
     CompletionRequest {
         model: None,
         preamble: preamble.map(str::to_string),
@@ -286,8 +286,8 @@ fn messages_body_threads_tool_result() {
 fn tool_result_images_reach_the_wire_body() {
     let image = |data: &str, mime: &str| {
         ToolResultContent::Image(Image {
-            data: crate::llm::message::DocumentSourceKind::Base64(data.into()),
-            media_type: crate::llm::message::ImageMediaType::from_mime_type(mime),
+            data: crate::inference::llm::message::DocumentSourceKind::Base64(data.into()),
+            media_type: crate::inference::llm::message::ImageMediaType::from_mime_type(mime),
             detail: None,
             additional_params: None,
         })
@@ -357,8 +357,8 @@ fn tool_result_images_on_the_wire(images: &[String]) -> Vec<Value> {
             content: vec![UserContent::tool_result(
                 id,
                 vec![ToolResultContent::Image(Image {
-                    data: crate::llm::message::DocumentSourceKind::Base64(data.clone()),
-                    media_type: Some(crate::llm::message::ImageMediaType::PNG),
+                    data: crate::inference::llm::message::DocumentSourceKind::Base64(data.clone()),
+                    media_type: Some(crate::inference::llm::message::ImageMediaType::PNG),
                     detail: None,
                     additional_params: None,
                 })],
@@ -732,7 +732,7 @@ async fn split_multibyte_sse_signature_retains_exact_utf8() {
     .expect("bounded SSE decode");
     assert!(events.iter().any(|event| match event {
         Ok(RawStreamingChoice::Reasoning { content, .. }) => matches!(
-            crate::llm::rig_compat::from_rig_reasoning_part(content),
+            crate::inference::llm::rig_compat::from_rig_reasoning_part(content),
             ReasoningContent::Text { signature: Some(signature), .. } if signature == "署名"
         ),
         _ => false,
@@ -790,11 +790,11 @@ async fn first_text_event_is_observable_before_the_body_is_exhausted() {
 
 #[tokio::test]
 async fn cancellation_drains_received_signature_without_polling_provider_again() {
-    use crate::rendered_request::scope::{
+    use crate::inference::rendered_request::scope::{
         arm, claim_pending, current_audit_sender, drain_ready_audit, scope_request, test_scope,
         CaptureScopeKind,
     };
-    use crate::rendered_request::{
+    use crate::inference::rendered_request::{
         AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
     };
     use gents_loop::provider_audit::ClaudeAuditEvent;
@@ -969,7 +969,7 @@ fn generated_claude_wire_start_cases_drive_native_parser() {
                             return None;
                         };
                         let ReasoningContent::Text { text, signature } =
-                            crate::llm::rig_compat::from_rig_reasoning_part(content)
+                            crate::inference::llm::rig_compat::from_rig_reasoning_part(content)
                         else {
                             panic!("{}: modeled text reasoning", case.name)
                         };
@@ -1054,7 +1054,7 @@ async fn transport_429_usage_cap_reports_reset_time() {
     .await
     .err()
     .expect("429");
-    let classified = crate::llm::rig_compat::classify_completion_error(
+    let classified = crate::inference::llm::rig_compat::classify_completion_error(
         &rig::agent::StreamingError::Completion(err),
     )
     .error;
@@ -1177,7 +1177,7 @@ async fn unsupported_replay_body_is_a_permanent_request_error() {
     .err()
     .expect("unsupported replay block");
     assert!(matches!(error, CompletionError::RequestError(_)), "{error}");
-    let classified = crate::llm::rig_compat::classify_completion_error(
+    let classified = crate::inference::llm::rig_compat::classify_completion_error(
         &rig::agent::StreamingError::Completion(error),
     )
     .error;
@@ -1218,7 +1218,7 @@ fn unsupported_replay_preflight_is_a_permanent_request_error() {
         "{error}"
     );
     assert!(matches!(
-        crate::llm::rig_compat::classify_completion_error(&error).error,
+        crate::inference::llm::rig_compat::classify_completion_error(&error).error,
         crate::error::InferenceError::PermanentFailure { .. }
     ));
 }
@@ -1232,9 +1232,9 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
         .expect("runtime")
         .block_on(async {
             let node = crate::inference::auth::credential::test_support::test_node().await;
-            let cache: std::sync::Arc<crate::usage_observation::UsageCache> =
+            let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
                 std::sync::Arc::default();
-            let account = crate::usage_observation::UsageAccount::Backend {
+            let account = crate::inference::usage_observation::UsageAccount::Backend {
                 node_did: "did:key:z6MkUsageWireClaudeLive".into(),
                 provider: "ClaudeCliSubscription".into(),
                 backend_id: "backend-usage-claude".into(),
@@ -1258,7 +1258,7 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
                 RapidHashSet::new(),
                 &bearer,
                 &ReqwestClient::new(),
-                Some(crate::usage_observation::UsageReporter::new(
+                Some(crate::inference::usage_observation::UsageReporter::new(
                     cache.clone(),
                     node.clone(),
                     account.clone(),

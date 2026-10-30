@@ -1,18 +1,18 @@
-use crate::llm::ToolChoice;
+use crate::inference::llm::ToolChoice;
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
-use crate::admission::{AdmissionRegistry, AdmittedCompletionModel};
 use crate::agent::completion_retry::CompletionRetryPolicy;
 use crate::agent::loop_stream::{AggregateTokenBudget, LoopConfig};
-use crate::config::{ReasoningEffort, ResolvedAgent};
 use crate::graphql::escape_graphql_string;
+use crate::inference::admission::{AdmissionRegistry, AdmittedCompletionModel};
 use crate::inference::backends::provider::BackendProviderKind;
+use crate::inference::rendered_request::CaptureScopeKind;
+use crate::inference::resolved::{ReasoningEffort, ResolvedAgent};
 use crate::lifecycle::ExecutionOrigin;
 use crate::openai_wire::OpenAiWireApi;
 use crate::provider_usage;
-use crate::rendered_request::CaptureScopeKind;
 use crate::watcher::AgentRequest;
 
 pub(crate) fn effective_max_tokens(
@@ -23,7 +23,7 @@ pub(crate) fn effective_max_tokens(
 }
 
 pub(crate) fn agent_connection_fingerprint(agent_config: &ResolvedAgent) -> String {
-    crate::admission::backend_connection_fingerprint(
+    crate::inference::admission::backend_connection_fingerprint(
         &crate::inference::backends::registry::BackendFields {
             backend_id: agent_config.backend_id.clone(),
             backend_provider_kind: agent_config.backend_provider_kind,
@@ -40,7 +40,9 @@ pub(crate) fn agent_connection_fingerprint(agent_config: &ResolvedAgent) -> Stri
 /// key rotation is visible only through the keyed fingerprints.
 pub(crate) fn agent_slot_fingerprint(agent_config: &ResolvedAgent) -> String {
     let compaction = agent_config.compaction_inference.as_ref().map(|inference| {
-        crate::admission::backend_connection_fingerprint(&inference.backend.backend_fields())
+        crate::inference::admission::backend_connection_fingerprint(
+            &inference.backend.backend_fields(),
+        )
     });
     format!(
         "{agent_config:?}|connection={}|compaction_connection={compaction:?}",
@@ -54,9 +56,9 @@ pub(crate) fn build_admitted_model<C>(
     agent_config: &ResolvedAgent,
 ) -> AdmittedCompletionModel<C::CompletionModel>
 where
-    C: crate::llm::rig_compat::ProviderClient,
+    C: crate::inference::llm::rig_compat::ProviderClient,
 {
-    crate::llm::rig_compat::admitted_model(
+    crate::inference::llm::rig_compat::admitted_model(
         client,
         admission,
         agent_connection_fingerprint(agent_config),
@@ -134,9 +136,9 @@ pub(crate) fn loop_config(
         ),
         structured_output: None,
         tool_choice: (tool_count > 0).then_some(ToolChoice::Auto),
-        on_rendered_request: Some(crate::rendered_request::scope::ambient_arming_sink(
-            capture_scope,
-        )),
+        on_rendered_request: Some(
+            crate::inference::rendered_request::scope::ambient_arming_sink(capture_scope),
+        ),
         turn_compactor: None,
         active_reduction_keys: Vec::new(),
         reduction_chain_keys: Vec::new(),
@@ -671,14 +673,14 @@ mod tests;
 
 /// The enclosing request later supplies deadline and ledger.
 pub(crate) async fn build_compaction_engine(
-    cache: std::sync::Arc<crate::usage_observation::UsageCache>,
+    cache: std::sync::Arc<crate::inference::usage_observation::UsageCache>,
     node: std::sync::Arc<EmbeddedNode>,
     agent_config: &ResolvedAgent,
     admission: AdmissionRegistry,
     build_timeout: std::time::Duration,
 ) -> anyhow::Result<
     Option<(
-        std::sync::Arc<dyn crate::compaction::ReductionEngine>,
+        std::sync::Arc<dyn crate::inference::compaction::ReductionEngine>,
         String,
     )>,
 > {
@@ -686,7 +688,7 @@ pub(crate) async fn build_compaction_engine(
         anyhow::ensure!(
             matches!(
                 agent_config.compaction_strategy().reduction_mode(),
-                crate::compaction::ReductionMode::StripOnly
+                crate::inference::compaction::ReductionMode::StripOnly
             ) || agent_config
                 .compaction
                 .as_ref()
@@ -698,7 +700,7 @@ pub(crate) async fn build_compaction_engine(
     };
     if matches!(
         agent_config.compaction_strategy().reduction_mode(),
-        crate::compaction::ReductionMode::StripOnly
+        crate::inference::compaction::ReductionMode::StripOnly
     ) {
         return Ok(None);
     }
@@ -732,7 +734,7 @@ pub(crate) async fn build_compaction_engine(
         crate::document_config::BackendAuth::NodeOAuth { .. } => "no-key".to_owned(),
         _ => summary.completion_client_api_key()?,
     };
-    let client = crate::llm::backend_client::build_backend_client(
+    let client = crate::inference::llm::backend_client::build_backend_client(
         cache,
         node,
         &summary,
@@ -748,16 +750,16 @@ pub(crate) async fn build_compaction_engine(
     ));
     let config = loop_config(&summary, String::new(), 0, CaptureScopeKind::Compaction);
     let backend_id = inference.backend.backend_id.clone();
-    let engine = crate::llm::backend_client::with_backend_client!(client, |client| {
+    let engine = crate::inference::llm::backend_client::with_backend_client!(client, |client| {
         let model = std::sync::Arc::new(build_admitted_model(client, admission, &summary));
-        crate::compaction::backend_scoped_reduction_engine(
+        crate::inference::compaction::backend_scoped_reduction_engine(
             std::sync::Arc::new(
-                crate::compaction::ProviderReductionEngine::new(model, config)
+                crate::inference::compaction::ProviderReductionEngine::new(model, config)
                     .with_source_input_counter(source_counter)
                     .with_summary_output_limit(inference.max_output_tokens()?),
             ),
             backend_id,
-        ) as std::sync::Arc<dyn crate::compaction::ReductionEngine>
+        ) as std::sync::Arc<dyn crate::inference::compaction::ReductionEngine>
     });
     Ok(Some((engine, provider_family)))
 }

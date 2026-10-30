@@ -4,7 +4,9 @@ use anyhow::{Context, Result};
 use gents::document_config::InferenceProfile;
 use gents::inference::auth::credential::{backend_account, AccountSummary};
 use gents::inference::backends::provider::BackendProviderOauthExt;
-use gents::usage_observation::{usage_view, AccountUsageRead, UsageRead, UsageTrigger, UsageView};
+use gents::inference::usage_observation::{
+    usage_view, AccountUsageRead, UsageRead, UsageTrigger, UsageView,
+};
 use gents::{BackendProviderKind, InferenceBackend};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -519,9 +521,13 @@ fn usage_cells(row: &AccountRow) -> Vec<[String; 5]> {
                 )
             });
             let source = match window.source {
-                gents::usage_observation::account_usage::UsageSource::Header => "headers",
-                gents::usage_observation::account_usage::UsageSource::Endpoint => "read",
-                gents::usage_observation::account_usage::UsageSource::Error => "rejected",
+                gents::inference::usage_observation::account_usage::UsageSource::Header => {
+                    "headers"
+                }
+                gents::inference::usage_observation::account_usage::UsageSource::Endpoint => "read",
+                gents::inference::usage_observation::account_usage::UsageSource::Error => {
+                    "rejected"
+                }
             };
             let source = match (&reason, index) {
                 (Some(reason), 0) => format!("{source} {reason}"),

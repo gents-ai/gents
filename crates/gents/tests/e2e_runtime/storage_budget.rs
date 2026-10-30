@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gents::defra_node::EmbeddedNode;
-use gents::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
+use gents::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents::{CompactionStrategy, Gents, NodeIdentity, ToolCeiling};
 use serde_json::Value;
 

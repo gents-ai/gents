@@ -1713,11 +1713,14 @@ mod tests {
             .iter()
             .find(|resolved| resolved.agent_id == agent_id)
             .expect("init default agent resolves");
-        assert_eq!(resolved.max_turns, gents::config::DEFAULT_MAX_TURNS);
+        assert_eq!(
+            resolved.max_turns,
+            gents::inference::resolved::DEFAULT_MAX_TURNS
+        );
         assert_eq!(resolved.max_turns, 1_000);
         assert_eq!(
             resolved.max_turns_provenance,
-            gents::config::MaxTurnsProvenance::Default
+            gents::inference::resolved::MaxTurnsProvenance::Default
         );
     }
 
@@ -1796,7 +1799,7 @@ mod tests {
         assert_eq!(resolved.max_turns, 250);
         assert_eq!(
             resolved.max_turns_provenance,
-            gents::config::MaxTurnsProvenance::ExecutionProfile
+            gents::inference::resolved::MaxTurnsProvenance::ExecutionProfile
         );
     }
 

@@ -222,7 +222,7 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
         .into_iter()
         .map(|value| value.as_str())
         .chain(
-            crate::config::ReasoningEffort::ALL
+            crate::inference::resolved::ReasoningEffort::ALL
                 .into_iter()
                 .map(|value| value.as_str()),
         )
@@ -266,7 +266,7 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
                 .map(|value| serde_json::to_value(value).unwrap()),
         )
         .chain(
-            crate::compaction::CompactionStrategy::ALL
+            crate::inference::compaction::CompactionStrategy::ALL
                 .into_iter()
                 .map(|value| serde_json::to_value(value).unwrap()),
         )
@@ -576,7 +576,7 @@ async fn pack_tool(
 async fn config_call(
     tools: &[Box<dyn ToolDyn>],
     argv: &[&str],
-) -> Result<String, crate::llm::tool::ToolError> {
+) -> Result<String, crate::inference::llm::tool::ToolError> {
     tools
         .iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -909,8 +909,8 @@ fn argv_of(words: &[&str]) -> Vec<String> {
     words.iter().map(|word| (*word).to_owned()).collect()
 }
 
-fn config_error_message(error: crate::llm::tool::ToolError) -> String {
-    let crate::llm::tool::ToolError::ToolCallError(error) = error else {
+fn config_error_message(error: crate::inference::llm::tool::ToolError) -> String {
+    let crate::inference::llm::tool::ToolError::ToolCallError(error) = error else {
         panic!("missing typed config error: {error}");
     };
     let envelope: Value =
@@ -922,7 +922,7 @@ fn config_error_message(error: crate::llm::tool::ToolError) -> String {
 }
 
 async fn config_call_message(
-    tools: &[Box<dyn crate::llm::tool::ToolDyn>],
+    tools: &[Box<dyn crate::inference::llm::tool::ToolDyn>],
     argv: Vec<String>,
 ) -> Result<String, String> {
     let tool = tools
@@ -937,7 +937,7 @@ async fn config_call_message(
 async fn reselection_tools(
     label: &str,
     hold_pack_install: bool,
-) -> Vec<Box<dyn crate::llm::tool::ToolDyn>> {
+) -> Vec<Box<dyn crate::inference::llm::tool::ToolDyn>> {
     let node = build_agent_node().await;
     let identity = node_identity(label);
     let owner = identity.did().to_string();
@@ -2040,7 +2040,7 @@ async fn structured_config_preview_and_apply_round_trip_literal_prompt() {
 }
 
 pub(super) async fn call_config_tool(
-    tools: &[Box<dyn crate::llm::tool::ToolDyn>],
+    tools: &[Box<dyn crate::inference::llm::tool::ToolDyn>],
     argv: Vec<String>,
 ) -> Result<String, String> {
     let tool = tools
@@ -2054,7 +2054,7 @@ pub(super) async fn call_config_tool(
 
 #[tokio::test]
 async fn outcome_schema_error_returns_an_executable_schema_recovery() {
-    use crate::llm::tool::Tool;
+    use crate::inference::llm::tool::Tool;
     let node = build_agent_node().await;
     let identity = node_identity("schema-recovery");
     let owner = identity.did().to_string();
@@ -2084,7 +2084,7 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
     }
     let trigger = json!({"argv":["trigger","create","on-delivery"],"set":{"task_id":"handle","source":{"kind":"event","event_source_id":"deliveries"}}});
     let error = tool.call(trigger.to_string()).await.unwrap_err();
-    let crate::llm::tool::ToolError::ToolCallError(error) = error else {
+    let crate::inference::llm::tool::ToolError::ToolCallError(error) = error else {
         panic!("{error}")
     };
     let failure: Value = serde_json::from_str(&error.to_string()).unwrap();
@@ -2138,7 +2138,7 @@ async fn config_errors_name_the_next_call() {
         .unwrap();
     let failure = |args: Value| async move {
         let error = tool.call(args.to_string()).await.unwrap_err();
-        let crate::llm::tool::ToolError::ToolCallError(error) = error else {
+        let crate::inference::llm::tool::ToolError::ToolCallError(error) = error else {
             panic!("missing typed config error: {error}");
         };
         serde_json::from_str::<Value>(&error.to_string()).unwrap()
@@ -2286,7 +2286,7 @@ async fn config_execution_receipts_separate_rejected_syntax_from_write_dispatch(
     ] {
         let text = match tool.call(args.to_string()).await {
             Ok(text) => text,
-            Err(crate::llm::tool::ToolError::ToolCallError(error)) => error.to_string(),
+            Err(crate::inference::llm::tool::ToolError::ToolCallError(error)) => error.to_string(),
             Err(error) => panic!("missing typed result for {args}: {error}"),
         };
         let value: Value = serde_json::from_str(&text).unwrap();
@@ -3078,8 +3078,8 @@ async fn cleanup_previews_and_removes_exact_unreferenced_cycles_atomically() {
 }
 
 fn take_agent_tool(
-    tools: Vec<Box<dyn crate::llm::tool::ToolDyn>>,
-) -> Box<dyn crate::llm::tool::ToolDyn> {
+    tools: Vec<Box<dyn crate::inference::llm::tool::ToolDyn>>,
+) -> Box<dyn crate::inference::llm::tool::ToolDyn> {
     tools
         .into_iter()
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
@@ -5072,15 +5072,15 @@ async fn engineer_configures_targets_executions_and_itself_but_cannot_lock_out()
     assert_eq!(defaults["document"]["execution_id"], "default-execution");
     assert_eq!(
         defaults["effective"]["max_turns"],
-        crate::config::DEFAULT_MAX_TURNS
+        crate::inference::resolved::DEFAULT_MAX_TURNS
     );
     assert_eq!(
         defaults["effective"]["provider_idle_timeout_secs"],
-        crate::config::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS
+        crate::inference::resolved::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS
     );
     assert_eq!(
         defaults["effective"]["deadline_duration_secs"],
-        crate::config::DEFAULT_DEADLINE_DURATION_SECS
+        crate::inference::resolved::DEFAULT_DEADLINE_DURATION_SECS
     );
     assert!(defaults["effective"]["max_total_tokens"].is_null());
     assert!(defaults["document"]["max_turns"].is_null());
@@ -5647,7 +5647,7 @@ async fn account_state_rows(node: &std::sync::Arc<defra_node::EmbeddedNode>) -> 
 }
 
 async fn seed_account_view(
-    cache: &crate::usage_observation::UsageCache,
+    cache: &crate::inference::usage_observation::UsageCache,
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
     owner: &str,
 ) {
@@ -5727,24 +5727,26 @@ async fn seed_account_view(
     crate::config_client::write_inference_profile_document(&access, &profile)
         .await
         .unwrap();
-    crate::usage_observation::record_usage(
+    crate::inference::usage_observation::record_usage(
         cache,
         node,
-        &crate::usage_observation::UsageAccount::Credential {
+        &crate::inference::usage_observation::UsageAccount::Credential {
             doc_id: None,
             node_did: owner.to_string(),
             provider: provider.to_string(),
             account_ref: None,
         },
-        crate::usage_observation::account_usage::UsageReport {
-            windows: vec![crate::usage_observation::account_usage::UsageWindow {
-                label: "5h".into(),
-                window_minutes: Some(300),
-                used_pct: 42.0,
-                resets_at: None,
-                source: crate::usage_observation::account_usage::UsageSource::Header,
-                observed_at: chrono::Utc::now(),
-            }],
+        crate::inference::usage_observation::account_usage::UsageReport {
+            windows: vec![
+                crate::inference::usage_observation::account_usage::UsageWindow {
+                    label: "5h".into(),
+                    window_minutes: Some(300),
+                    used_pct: 42.0,
+                    resets_at: None,
+                    source: crate::inference::usage_observation::account_usage::UsageSource::Header,
+                    observed_at: chrono::Utc::now(),
+                },
+            ],
             ..Default::default()
         },
     )
@@ -5758,12 +5760,14 @@ async fn config_backend_accounts_lists_accounts_and_usage_read_only() {
     let identity = node_identity("config-accounts");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "alpha").await;
-    let cache = std::sync::Arc::new(crate::usage_observation::UsageCache::with_endpoints(
-        crate::usage_observation::UsageEndpoints {
-            claude_usage: "http://127.0.0.1:9/usage".into(),
-            grok_billing: "http://127.0.0.1:9/billing".into(),
-        },
-    ));
+    let cache = std::sync::Arc::new(
+        crate::inference::usage_observation::UsageCache::with_endpoints(
+            crate::inference::usage_observation::UsageEndpoints {
+                claude_usage: "http://127.0.0.1:9/usage".into(),
+                grok_billing: "http://127.0.0.1:9/billing".into(),
+            },
+        ),
+    );
     seed_account_view(&cache, &node, &owner).await;
     let mut tool_config = config(&["node", "profile", "backend"]);
     tool_config.agent_id = "alpha".into();

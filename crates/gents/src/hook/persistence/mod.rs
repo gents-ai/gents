@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use crate::llm::message::Message;
-use crate::llm::{HookAction, ToolCallHookAction};
+use crate::inference::llm::message::Message;
+use crate::inference::llm::{HookAction, ToolCallHookAction};
 use serde::Deserialize;
 use serde_json::json;
 use tracing::Instrument;

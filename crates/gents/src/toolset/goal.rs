@@ -1,4 +1,4 @@
-use crate::llm::tool::{Tool, ToolDefinition, ToolDyn};
+use crate::inference::llm::tool::{Tool, ToolDefinition, ToolDyn};
 use serde::Deserialize;
 use serde_json::json;
 

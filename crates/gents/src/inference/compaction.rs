@@ -9,7 +9,7 @@ use futures::future::BoxFuture;
 pub use gents_loop::compaction::*;
 
 pub(crate) fn reduction_options_for_agent(
-    behavior: &crate::config::ResolvedAgent,
+    behavior: &crate::inference::resolved::ResolvedAgent,
 ) -> anyhow::Result<ReductionOptions> {
     let mut options = ReductionOptions {
         mode: behavior.compaction_strategy().reduction_mode(),
@@ -56,7 +56,7 @@ impl ReductionEngine for BackendScopedReductionEngine {
     fn retention_target(
         &self,
         configured_keep_recent: usize,
-        messages: &[crate::llm::message::Message],
+        messages: &[crate::inference::llm::message::Message],
         admission: ReductionAdmission,
         options: &ReductionOptions,
         context_window: usize,
@@ -72,7 +72,7 @@ impl ReductionEngine for BackendScopedReductionEngine {
 
     fn reduce<'a>(
         &'a self,
-        messages: Vec<crate::llm::message::Message>,
+        messages: Vec<crate::inference::llm::message::Message>,
         context_window: usize,
         options: &'a ReductionOptions,
         admission: ReductionAdmission,
@@ -81,7 +81,7 @@ impl ReductionEngine for BackendScopedReductionEngine {
             .inner
             .reduce(messages, context_window, options, admission);
         let backend_id = self.backend_id.clone();
-        Box::pin(async move { crate::admission::scope_backend(&backend_id, work).await })
+        Box::pin(async move { crate::inference::admission::scope_backend(&backend_id, work).await })
     }
 }
 

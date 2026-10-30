@@ -98,13 +98,13 @@ pub async fn load_session_context_details(
         if capture["source"].as_str() != Some("openai_chat_completions") {
             return Ok(None);
         }
-        let body = crate::rendered_request::decode_capture_json(
+        let body = crate::inference::rendered_request::decode_capture_json(
             access,
             capture_version,
             capture["request_json"]
                 .as_str()
                 .context("missing captured provider request")?,
-            crate::rendered_request::CapturePayloadKind::RequestBody,
+            crate::inference::rendered_request::CapturePayloadKind::RequestBody,
         )
         .await?;
         chat_details(&body, context.accounting.components.messages as u64).map(Some)

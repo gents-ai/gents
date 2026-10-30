@@ -1126,7 +1126,9 @@ fn usage_account_for_backend_follows_node_oauth() {
             node_did: A.to_string(),
             provider: "XaiGrokOAuth".to_string(),
             backend_id: "backend-usage-a".to_string(),
-            connection: crate::admission::backend_connection_fingerprint(&api_key.backend_fields()),
+            connection: crate::inference::admission::backend_connection_fingerprint(
+                &api_key.backend_fields()
+            ),
         }
     );
     let oauth = oauth_backend(
@@ -1386,7 +1388,7 @@ async fn newer_observations_win_and_backend_edits_get_an_empty_cache() {
 
 #[tokio::test]
 async fn default_limits_tool_reads_live_then_uses_cache_without_exposing_credentials() {
-    use crate::llm::tool::Tool;
+    use crate::inference::llm::tool::Tool;
     let node = node().await;
     let cache = Arc::new(UsageCache::default());
     let row = credential(A, None, Some("provider-key-SECRET"));

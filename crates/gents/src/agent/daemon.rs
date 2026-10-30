@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::llm::rig_compat::ProviderModel;
+use crate::inference::llm::rig_compat::ProviderModel;
 use anyhow::Result;
 use tokio::task::JoinError;
 
@@ -38,9 +38,9 @@ impl ShutdownDrainFailure {
 }
 
 use super::runtime::StartupBarrier;
-use crate::compaction::{ReductionEngine, ReductionOptions};
-use crate::config::ResolvedAgent;
 use crate::hook::FailurePolicy;
+use crate::inference::compaction::{ReductionEngine, ReductionOptions};
+use crate::inference::resolved::ResolvedAgent;
 use crate::prompt::LayeredPromptBuilder;
 use crate::runtime_trace::{record_current_claim_outcome, record_current_request_outcome};
 use crate::watcher::AgentRequest;
@@ -118,13 +118,13 @@ where
     compaction_provider_family: Option<String>,
     model: Arc<M>,
     preamble: String,
-    loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,
+    loop_tools: Arc<Vec<Box<dyn crate::inference::llm::tool::ToolDyn>>>,
     prompt_builder: LayeredPromptBuilder,
     compactor: Arc<dyn ReductionEngine>,
     compaction_options: ReductionOptions,
     hook_failure_policy: FailurePolicy,
     rendered_request_capture_factory:
-        Option<crate::rendered_request::RenderedRequestCaptureFactory>,
+        Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
     background_tool_registry: crate::hook::BackgroundToolRegistry,
     background_execution_registry: crate::hook::BackgroundExecutionRegistry,
     inference_observations: crate::inference_observation::InferenceObservationRegistry,
@@ -188,11 +188,11 @@ where
     pub(super) provider_family: Option<String>,
     pub(super) model: Arc<M>,
     pub(super) preamble: String,
-    pub(super) loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,
+    pub(super) loop_tools: Arc<Vec<Box<dyn crate::inference::llm::tool::ToolDyn>>>,
     pub(super) prompt_builder: LayeredPromptBuilder,
     pub(super) hook_failure_policy: FailurePolicy,
     pub(super) rendered_request_capture_factory:
-        Option<crate::rendered_request::RenderedRequestCaptureFactory>,
+        Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
     pub(super) background_tool_registry: crate::hook::BackgroundToolRegistry,
     pub(super) background_execution_registry: crate::hook::BackgroundExecutionRegistry,
     pub(super) startup_barrier: Arc<StartupBarrier>,

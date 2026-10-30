@@ -1388,7 +1388,7 @@ must refine them through DB-visible state updates.
 The main conformance files are:
 
 - `crates/gents/tests/state_machine_conformance.rs`
-- `crates/gents/src/admission/tests.rs`
+- `crates/gents/src/inference/admission/tests.rs`
 - `crates/gents-protocol/src/client_protocol/tests.rs`
 - `crates/gents-cli/src/desired_state/tests.rs`
 - `Proofs/Conformance/Gents.lean`

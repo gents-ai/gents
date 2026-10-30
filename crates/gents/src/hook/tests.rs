@@ -3,11 +3,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use crate::llm::message::{
+use crate::inference::llm::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResultContent,
     UserContent,
 };
-use crate::llm::{HookAction, ToolCallHookAction};
+use crate::inference::llm::{HookAction, ToolCallHookAction};
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_loop::provider_input::ProviderInputProfile;
 use serde_json::json;
@@ -3222,7 +3222,7 @@ async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
         part,
         AssistantContent::Reasoning(reasoning)
             if matches!(reasoning.content.as_slice(),
-                [crate::llm::message::ReasoningContent::Text { text, .. }]
+                [crate::inference::llm::message::ReasoningContent::Text { text, .. }]
                     if text == "First weigh the trade-offs, then answer.")
     )));
 
@@ -3998,7 +3998,7 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
     let text = r#"gents_exec: {"ok":false,"status":"exit_nonzero","exit_code":1}"#;
     let outcome = crate::tool_call_lifecycle::ToolOutcome::from_dispatch(
         "bash",
-        Err(crate::llm::tool::ToolError::ReportedFailure {
+        Err(crate::inference::llm::tool::ToolError::ReportedFailure {
             class: crate::tool_call_lifecycle::FailureClass::ToolReturnedError,
             text: text.to_string(),
         }),

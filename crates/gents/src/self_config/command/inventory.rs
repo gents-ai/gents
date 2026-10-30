@@ -5,7 +5,7 @@ impl ConfigCommandTool {
     pub(super) async fn account_inventory(&self) -> Result<String> {
         use crate::inference::auth::credential::backend_account;
         use crate::inference::backends::provider::BackendProviderOauthExt;
-        use crate::usage_observation::{read_node_usage, UsageTrigger};
+        use crate::inference::usage_observation::{read_node_usage, UsageTrigger};
         let access = crate::config_client::ConfigAccess::local(self.node.clone());
         let node_did = self.node_did.as_str();
         let accounts = crate::inference::auth::credential::list_accounts(&access, node_did).await?;

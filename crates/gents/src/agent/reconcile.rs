@@ -6,9 +6,9 @@ use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::{JoinError, JoinSet};
 use tracing::Instrument;
 
-use crate::admission::AdmissionRegistry;
 use crate::agent::worker_capacity::WorkerCapacity;
-use crate::config::ResolvedAgent;
+use crate::inference::admission::AdmissionRegistry;
+use crate::inference::resolved::ResolvedAgent;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;

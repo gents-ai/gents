@@ -1,5 +1,5 @@
 use super::*;
-use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
+use crate::inference::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use crate::store::identity::NodeIdentity;
 
 struct PanickingTool;

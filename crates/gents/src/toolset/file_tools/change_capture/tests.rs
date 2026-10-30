@@ -1,7 +1,7 @@
 use super::*;
 use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
-use crate::llm::tool::Tool;
+use crate::inference::llm::tool::Tool;
 use crate::tool_call_lifecycle::admission_fixture::{
     published_admission, PublishedAdmissionOptions,
 };

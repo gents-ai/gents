@@ -105,7 +105,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -463,16 +463,16 @@ struct LeaseBlockingTool {
     entered: Option<Arc<AtomicBool>>,
 }
 
-impl crate::llm::tool::ToolDyn for LeaseBlockingTool {
+impl crate::inference::llm::tool::ToolDyn for LeaseBlockingTool {
     fn name(&self) -> String {
         "lease_block".into()
     }
     fn definition<'a>(
         &'a self,
         _: String,
-    ) -> crate::llm::tool::BoxFuture<'a, crate::llm::tool::ToolDefinition> {
+    ) -> crate::inference::llm::tool::BoxFuture<'a, crate::inference::llm::tool::ToolDefinition> {
         Box::pin(async {
-            crate::llm::tool::ToolDefinition {
+            crate::inference::llm::tool::ToolDefinition {
                 name: "lease_block".into(),
                 description: "wait for lease replacement".into(),
                 parameters: serde_json::json!({"type":"object"}),
@@ -482,7 +482,7 @@ impl crate::llm::tool::ToolDyn for LeaseBlockingTool {
     fn call<'a>(
         &'a self,
         _: String,
-    ) -> crate::llm::tool::BoxFuture<'a, Result<String, crate::llm::tool::ToolError>> {
+    ) -> crate::inference::llm::tool::BoxFuture<'a, Result<String, crate::inference::llm::tool::ToolError>> {
         let entered = self.entered.clone();
         Box::pin(async move {
             if let Some(entered) = entered {
@@ -514,12 +514,12 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
         model: Arc::new(LeaseLossProvider),
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(vec![
-            Box::new(LeaseBlockingTool { entered: None }) as Box<dyn crate::llm::tool::ToolDyn>
+            Box::new(LeaseBlockingTool { entered: None }) as Box<dyn crate::inference::llm::tool::ToolDyn>
         ]),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -720,7 +720,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -960,11 +960,11 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         preamble: prompt.preamble().to_owned(),
         loop_tools: Arc::new(vec![Box::new(LeaseBlockingTool {
             entered: Some(tool_entered.clone()),
-        }) as Box<dyn crate::llm::tool::ToolDyn>]),
+        }) as Box<dyn crate::inference::llm::tool::ToolDyn>]),
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -1142,7 +1142,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     let mut agent_config = test_agent();
     {
         let agent_config = Arc::get_mut(&mut agent_config).unwrap();
-        agent_config.stream_batch_ms = crate::config::DEFAULT_STREAM_BATCH_MS;
+        agent_config.stream_batch_ms = crate::inference::resolved::DEFAULT_STREAM_BATCH_MS;
         agent_config.stream_liveness_timeout = lease;
         agent_config.deadline_duration = Duration::from_secs(120);
     }
@@ -1172,7 +1172,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),
@@ -1312,7 +1312,7 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
         prompt_builder: prompt,
         hook_failure_policy: FailurePolicy::default(),
         rendered_request_capture_factory: Some(
-            crate::rendered_request::defra_rendered_request_capture_factory(node.clone()),
+            crate::inference::rendered_request::defra_rendered_request_capture_factory(node.clone()),
         ),
         background_tool_registry: BackgroundToolRegistry::default(),
         background_execution_registry: BackgroundExecutionRegistry::default(),

@@ -28,7 +28,8 @@ const OPENAI_USAGE_HEADERS: &[(&str, &str)] = &[
 
 #[tokio::test]
 async fn usage_wiring_openai_compatible_records_under_the_backend_id() {
-    let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
+    let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
+        std::sync::Arc::default();
     let node = crate::inference::auth::credential::test_support::test_node().await;
     for (wire, backend_id) in [
         (crate::OpenAiWireApi::ChatCompletions, "backend-usage-chat"),
@@ -55,7 +56,8 @@ async fn usage_wiring_openai_compatible_records_under_the_backend_id() {
 
         one_openai_completion(client).await;
 
-        let account = crate::usage_observation::UsageAccount::for_agent(&behavior).unwrap();
+        let account =
+            crate::inference::usage_observation::UsageAccount::for_agent(&behavior).unwrap();
         let stored = crate::inference::clients::provider_http::tests::stored_usage_eventually(
             &cache, &node, &account,
         )
@@ -68,7 +70,8 @@ async fn usage_wiring_openai_compatible_records_under_the_backend_id() {
 
 #[tokio::test]
 async fn usage_wiring_backend_without_id_has_no_reporter() {
-    let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
+    let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
+        std::sync::Arc::default();
     let node = crate::inference::auth::credential::test_support::test_node().await;
     let url = crate::inference::clients::provider_http::tests::one_shot_server(
         "200 OK",
@@ -95,5 +98,5 @@ async fn usage_wiring_backend_without_id_has_no_reporter() {
     one_openai_completion(client).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    assert!(crate::usage_observation::UsageAccount::for_agent(&behavior).is_none());
+    assert!(crate::inference::usage_observation::UsageAccount::for_agent(&behavior).is_none());
 }

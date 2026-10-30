@@ -421,7 +421,9 @@ async fn apply_model_selection(
                     (profile.reasoning_effort, model.reasoning_efforts.as_ref())
                 {
                     anyhow::ensure!(
-                        gents::config::admits_reasoning_effort(&backend, effort, supported),
+                        gents::inference::resolved::admits_reasoning_effort(
+                            &backend, effort, supported
+                        ),
                         "selected model does not advertise configured reasoning effort {effort:?}"
                     );
                 }

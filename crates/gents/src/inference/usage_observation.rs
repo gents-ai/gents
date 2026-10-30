@@ -13,13 +13,13 @@ use rig::http_client::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config::ResolvedAgent;
 use crate::config_client::ConfigAccess;
 use crate::document_config::{BackendAuth, InferenceBackend};
 use crate::inference::auth::credential::{
     resolve_oauth_credential, AccountPick, BearerSource, OAuthCredential,
 };
 use crate::inference::backends::provider::BackendProviderOauthExt;
+use crate::inference::resolved::ResolvedAgent;
 
 /// Provider clients bind a physical credential row or a keyed backend
 /// connection identity. Inventory reads resolve the currently configured
@@ -71,7 +71,7 @@ impl UsageAccount {
                 node_did: node_did.to_string(),
                 provider: backend.provider_kind.as_str().to_string(),
                 backend_id: backend.backend_id.clone(),
-                connection: crate::admission::backend_connection_fingerprint(
+                connection: crate::inference::admission::backend_connection_fingerprint(
                     &backend.backend_fields(),
                 ),
             },
@@ -715,14 +715,14 @@ pub(crate) struct ProviderLimitsArgs {}
 #[error("{0}")]
 pub(crate) struct ProviderLimitsError(#[from] anyhow::Error);
 
-impl crate::llm::tool::Tool for ProviderLimitsTool {
+impl crate::inference::llm::tool::Tool for ProviderLimitsTool {
     const NAME: &'static str = "provider_limits";
     type Error = ProviderLimitsError;
     type Args = ProviderLimitsArgs;
     type Output = String;
 
-    async fn definition(&self, _prompt: String) -> crate::llm::tool::ToolDefinition {
-        crate::llm::tool::ToolDefinition {
+    async fn definition(&self, _prompt: String) -> crate::inference::llm::tool::ToolDefinition {
+        crate::inference::llm::tool::ToolDefinition {
             name: Self::NAME.into(),
             description: "Read this node's provider limits, resets and freshness. Contacts usage endpoints when the last read is older than five minutes; selects no account.".into(),
             parameters: serde_json::json!({"type":"object", "properties":{}, "additionalProperties":false}),

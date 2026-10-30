@@ -6,9 +6,9 @@ use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::node_readiness::AgentReadinessUnavailableReason;
 
-use crate::admission::BackendAvailability;
-use crate::config::ResolvedAgent;
 use crate::document_config::Agent as AgentDocument;
+use crate::inference::admission::BackendAvailability;
+use crate::inference::resolved::ResolvedAgent;
 use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
 use crate::tool_surface::ResolvedToolSelection;
 
@@ -111,13 +111,16 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         if let Some(observation) = view.backend_observations.get(&backend.backend_id) {
             backend_admission_configs.insert(
                 backend.backend_id.clone(),
-                crate::admission::BackendAdmissionConfig::from_backend(backend, observation)?
-                    .with_measured_unhealthy(
-                        measured_health
-                            .get(&backend.backend_id)
-                            .and_then(|health| health.state_for(backend))
-                            .is_some_and(|state| state.blocks_routing()),
-                    ),
+                crate::inference::admission::BackendAdmissionConfig::from_backend(
+                    backend,
+                    observation,
+                )?
+                .with_measured_unhealthy(
+                    measured_health
+                        .get(&backend.backend_id)
+                        .and_then(|health| health.state_for(backend))
+                        .is_some_and(|state| state.blocks_routing()),
+                ),
             );
         }
     }
@@ -374,8 +377,8 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
 
 fn ensure_inference_available(
     view: &DocumentRuntimeView,
-    inference: &crate::config::ResolvedInference,
-    admission_configs: &RapidHashMap<String, crate::admission::BackendAdmissionConfig>,
+    inference: &crate::inference::resolved::ResolvedInference,
+    admission_configs: &RapidHashMap<String, crate::inference::admission::BackendAdmissionConfig>,
     measured_health: &RapidHashMap<
         String,
         crate::inference::backends::health::BackendHealthSnapshot,
@@ -537,7 +540,7 @@ fn select_inference_documents<'a>(
 fn resolve_inference(
     view: &DocumentRuntimeView,
     id: &str,
-) -> Result<crate::config::ResolvedInference> {
+) -> Result<crate::inference::resolved::ResolvedInference> {
     let selected = select_inference_documents(view, id)?;
     let profile = selected.profile.clone();
     let backend = selected.backend.clone();
@@ -555,12 +558,12 @@ fn resolve_inference(
     let sampling = selected.sampling.cloned();
     let execution = selected.execution.cloned();
     let retry_policy = selected.retry_policy.cloned();
-    let advertised_model = crate::config::advertised_model_for_profile(
+    let advertised_model = crate::inference::resolved::advertised_model_for_profile(
         &backend,
         &profile,
         view.backend_observations.get(&backend.backend_id),
     )?;
-    let resolved = crate::config::ResolvedInference {
+    let resolved = crate::inference::resolved::ResolvedInference {
         backend,
         profile,
         sampling,
@@ -613,7 +616,7 @@ fn skill_from_document(doc: &crate::document_config::SkillDocument) -> crate::sk
 
 #[cfg(test)]
 mod advertised_context_override_tests {
-    use crate::config::validate_advertised_context_override;
+    use crate::inference::resolved::validate_advertised_context_override;
 
     #[test]
     fn context_override_admission_matches_lean() {

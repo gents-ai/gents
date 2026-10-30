@@ -314,10 +314,10 @@ async fn modern_questions_require_correlated_replies_and_preserve_skip_claims() 
 
 #[tokio::test]
 async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
+    use crate::inference::llm::tool::Tool;
     use crate::lifecycle::{
         ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
     };
-    use crate::llm::tool::Tool;
     use crate::streaming::DefraStreamWriter;
     use crate::tool_call_lifecycle::runtime::{
         scope_request_tool_execution_with_session, scope_tool_request_identity,

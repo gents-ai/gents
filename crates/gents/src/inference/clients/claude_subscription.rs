@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::inference::auth::claude::{CLAUDE_OAUTH_PRODUCT, CLAUDE_OAUTH_PROVIDER};
 use crate::inference::auth::credential::{BearerSource, DbCredentialBearer, OAuthRefreshKind};
-use crate::usage_observation::{UsageAccount, UsageReporter};
+use crate::inference::usage_observation::{UsageAccount, UsageReporter};
 
 pub const DEFAULT_BACKEND_ENDPOINT: &str = "claude-cli://subscription";
 pub const ANTHROPIC_API_ENDPOINT: &str = "https://api.anthropic.com/v1";
@@ -64,7 +64,7 @@ where
 
 impl ClaudeSubscriptionClient<DbCredentialBearer> {
     pub async fn build(
-        cache: Arc<crate::usage_observation::UsageCache>,
+        cache: Arc<crate::inference::usage_observation::UsageCache>,
         node: Arc<EmbeddedNode>,
         node_did: &str,
         account_ref: Option<&str>,

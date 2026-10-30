@@ -7,7 +7,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::*;
 use crate::error::InferenceError;
-use crate::llm::rig_compat::classify_completion_error;
+use crate::inference::llm::rig_compat::classify_completion_error;
 
 pub(crate) async fn one_shot_server(
     status: &'static str,
@@ -218,12 +218,14 @@ async fn overloaded_529_with_overage_rejected_stays_transient() {
 
 async fn openrouter_stream_error(url: &str) -> rig::completion::CompletionError {
     let client: rig::providers::openrouter::Client<
-        crate::rendered_request::RenderedRequestCapturingHttpClient<ProviderHttpClient>,
+        crate::inference::rendered_request::RenderedRequestCapturingHttpClient<ProviderHttpClient>,
     > = rig::providers::openrouter::Client::builder()
         .api_key("test-key")
         .base_url(url)
         .http_client(
-            crate::rendered_request::RenderedRequestCapturingHttpClient::<ProviderHttpClient>::default(),
+            crate::inference::rendered_request::RenderedRequestCapturingHttpClient::<
+                ProviderHttpClient,
+            >::default(),
         )
         .build()
         .expect("client");
@@ -281,8 +283,8 @@ async fn openrouter_in_flight_402_waits_for_retry_after() {
 
 const USAGE_DID: &str = "did:key:z6MkUsageA";
 
-fn usage_account(backend_id: &str) -> crate::usage_observation::UsageAccount {
-    crate::usage_observation::UsageAccount::Backend {
+fn usage_account(backend_id: &str) -> crate::inference::usage_observation::UsageAccount {
+    crate::inference::usage_observation::UsageAccount::Backend {
         node_did: USAGE_DID.to_string(),
         provider: "ChatGptCodex".to_string(),
         backend_id: backend_id.to_string(),
@@ -291,11 +293,11 @@ fn usage_account(backend_id: &str) -> crate::usage_observation::UsageAccount {
 }
 
 async fn usage_client(
-    cache: &std::sync::Arc<crate::usage_observation::UsageCache>,
+    cache: &std::sync::Arc<crate::inference::usage_observation::UsageCache>,
     backend_id: &str,
 ) -> (std::sync::Arc<defra_node::EmbeddedNode>, ProviderHttpClient) {
     let node = crate::inference::auth::credential::test_support::test_node().await;
-    let reporter = crate::usage_observation::UsageReporter::new(
+    let reporter = crate::inference::usage_observation::UsageReporter::new(
         cache.clone(),
         node.clone(),
         usage_account(backend_id),
@@ -307,14 +309,14 @@ async fn usage_client(
 }
 
 pub(crate) async fn stored_usage_eventually(
-    cache: &crate::usage_observation::UsageCache,
+    cache: &crate::inference::usage_observation::UsageCache,
     node: &std::sync::Arc<defra_node::EmbeddedNode>,
-    account: &crate::usage_observation::UsageAccount,
-) -> Option<crate::usage_observation::UsageObservation> {
+    account: &crate::inference::usage_observation::UsageAccount,
+) -> Option<crate::inference::usage_observation::UsageObservation> {
     let access = crate::config_client::ConfigAccess::local(node.clone());
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let stored = crate::usage_observation::load_usage(cache, &access, account)
+        let stored = crate::inference::usage_observation::load_usage(cache, &access, account)
             .await
             .expect("load usage");
         if stored.is_some() || tokio::time::Instant::now() >= deadline {
@@ -331,7 +333,8 @@ const CODEX_USAGE_HEADERS: &[(&str, &str)] = &[
 
 #[tokio::test]
 async fn usage_capture_success_send_records_header_windows() {
-    let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
+    let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
+        std::sync::Arc::default();
     let (node, client) = usage_client(&cache, "backend-usage-send").await;
     let url = one_shot_server("200 OK", CODEX_USAGE_HEADERS, r#"{"ok":true}"#).await;
     client.send::<Bytes, Bytes>(post(&url)).await.expect("200");
@@ -349,7 +352,8 @@ async fn usage_capture_success_send_records_header_windows() {
 
 #[tokio::test]
 async fn usage_capture_streaming_success_records_header_windows() {
-    let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
+    let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
+        std::sync::Arc::default();
     let (node, client) = usage_client(&cache, "backend-usage-stream").await;
     let url = one_shot_server("200 OK", CODEX_USAGE_HEADERS, "data: {}\n\n").await;
     let response = client.send_streaming(post(&url)).await.expect("200");
@@ -364,7 +368,8 @@ async fn usage_capture_streaming_success_records_header_windows() {
 
 #[tokio::test]
 async fn usage_capture_rejected_records_error_source_and_keeps_the_marker() {
-    let cache: std::sync::Arc<crate::usage_observation::UsageCache> = std::sync::Arc::default();
+    let cache: std::sync::Arc<crate::inference::usage_observation::UsageCache> =
+        std::sync::Arc::default();
     let (node, client) = usage_client(&cache, "backend-usage-rejected").await;
     let url = one_shot_server(
         "429 Too Many Requests",
@@ -399,7 +404,7 @@ async fn usage_capture_requires_no_persistent_schema() {
             .await
             .expect("node without schemas"),
     );
-    let reporter = crate::usage_observation::UsageReporter::new(
+    let reporter = crate::inference::usage_observation::UsageReporter::new(
         std::sync::Arc::default(),
         node,
         usage_account("backend-usage-failure"),

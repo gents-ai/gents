@@ -1,6 +1,6 @@
 use crate::cli::args::WriteArgs;
 use anyhow::Result;
-use gents::llm::tool::Tool;
+use gents::inference::llm::tool::Tool;
 
 pub(crate) async fn write(args: WriteArgs) -> Result<()> {
     let call: gents::application_write::WriteParams = serde_json::from_str(&args.call)?;

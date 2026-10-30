@@ -11,7 +11,9 @@ use super::executor::PluginExecutor;
 use super::store::InstalledPlugin;
 use super::PluginVerdict;
 use crate::document_config::{PluginToolRef, WriteToolField};
-use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDispatchResult, ToolDyn, ToolError};
+use crate::inference::llm::tool::{
+    BoxFuture, ToolDefinition, ToolDispatchResult, ToolDyn, ToolError,
+};
 use crate::tool_call_lifecycle::delivery::PluginToolWrites;
 use gents_loop::live_output::DeferredToolWrites;
 use gents_loop::tool_call_lifecycle::runtime::current_tool_runtime_context;
@@ -133,16 +135,17 @@ impl ToolDyn for PluginTool {
 
     fn call_with_receipt<'a>(&'a self, args: String) -> BoxFuture<'a, ToolDispatchResult> {
         Box::pin(async move {
-            let mut input: serde_json::Value = match crate::llm::tool::parse_tool_args(&args) {
-                Ok(input) => input,
-                Err(error) => {
-                    return ToolDispatchResult {
-                        result: Err(error),
-                        plugin_receipt: None,
-                        deferred_writes: None,
-                    };
-                }
-            };
+            let mut input: serde_json::Value =
+                match crate::inference::llm::tool::parse_tool_args(&args) {
+                    Ok(input) => input,
+                    Err(error) => {
+                        return ToolDispatchResult {
+                            result: Err(error),
+                            plugin_receipt: None,
+                            deferred_writes: None,
+                        };
+                    }
+                };
             if let Err(error) = fill_inputs(&mut input, &self.input_fields) {
                 return ToolDispatchResult {
                     result: Err(tool_error(format!("{error:#}"))),

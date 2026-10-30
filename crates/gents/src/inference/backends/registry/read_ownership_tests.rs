@@ -4,7 +4,7 @@ use tokio::sync::Notify;
 
 use super::lookup_backend_observation;
 use crate::defra_query::{CollectionScope, DefraQueryTool, QueryParams};
-use crate::llm::tool::Tool;
+use crate::inference::llm::tool::Tool;
 use crate::store::identity::NodeIdentity;
 use crate::{config_client::ConfigAccess, defra_node::EmbeddedNode};
 

@@ -1,6 +1,6 @@
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::escape_graphql_string;
-use crate::llm::message::{AssistantContent, Message, ToolResultContent, UserContent};
+use crate::inference::llm::message::{AssistantContent, Message, ToolResultContent, UserContent};
 use anyhow::{anyhow, Context, Result};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSource, PresentedPayload,

@@ -866,7 +866,7 @@ async fn usage_route(
 
 fn usage_command(signer_did: &str) -> crate::commands::accounts::UsageReadCommand {
     crate::commands::accounts::UsageReadCommand {
-        trigger: gents::usage_observation::UsageTrigger::Open,
+        trigger: gents::inference::usage_observation::UsageTrigger::Open,
         provider: None,
         signer_did: signer_did.to_string(),
         issued_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -907,7 +907,7 @@ async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
         async move {
             crate::commands::accounts::UsageReadCommand::signed(
                 identity.as_ref(),
-                gents::usage_observation::UsageTrigger::Open,
+                gents::inference::usage_observation::UsageTrigger::Open,
                 None,
             )
             .await

@@ -1,6 +1,6 @@
 use super::*;
 use crate::ensure_runtime_schemas;
-use crate::llm::message::{Text, ToolResult, ToolResultContent, UserContent};
+use crate::inference::llm::message::{Text, ToolResult, ToolResultContent, UserContent};
 use crate::test_support::first_content;
 
 #[tokio::test]
@@ -119,7 +119,7 @@ async fn history_reconstruction_batches_distinct_requests() {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let session_id = "session-many-request-scans";
-    let count = crate::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH + 3;
+    let count = crate::inference::rendered_request::commits::FIELD_COMMIT_ALIAS_BATCH + 3;
     for index in 0..count {
         let request = format!("doc-{index}");
         import_history_observation(

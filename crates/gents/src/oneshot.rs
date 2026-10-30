@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use crate::llm::message::Message;
-use crate::llm::rig_compat::{ProviderClient, ProviderModel};
-use crate::llm::tool::ToolDyn;
+use crate::inference::llm::message::Message;
+use crate::inference::llm::rig_compat::{ProviderClient, ProviderModel};
+use crate::inference::llm::tool::ToolDyn;
 use anyhow::{anyhow, Context, Result};
 use defra_node::EmbeddedNode;
 use gents_loop::loop_stream::TaggedMessage;
@@ -10,8 +10,8 @@ use gents_loop::output_obligation::OutputObligationCheck;
 
 use crate::agent::stream_processor::{StreamAction, StreamProcessor};
 use crate::completion_factory::loop_config;
-use crate::config::ResolvedAgent;
 use crate::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
+use crate::inference::resolved::ResolvedAgent;
 use crate::lifecycle::TerminalizeResult;
 use crate::lifecycle::{ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TriggerLineage};
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
@@ -60,7 +60,7 @@ pub async fn run_openai_oneshot_with_tools(
         tool_surface.background_tools(),
     );
 
-    let client = crate::llm::backend_client::build_backend_client(
+    let client = crate::inference::llm::backend_client::build_backend_client(
         tool_runtime.usage_cache.clone(),
         node.clone(),
         agent,
@@ -71,7 +71,7 @@ pub async fn run_openai_oneshot_with_tools(
     let provider_family = Some(client.provider_family().to_owned());
     let replay_issuer = client.replay_issuer()?;
 
-    crate::llm::backend_client::with_backend_client!(client, |client| {
+    crate::inference::llm::backend_client::with_backend_client!(client, |client| {
         run_oneshot_with_completion_client(
             node,
             agent,
@@ -126,7 +126,7 @@ where
         agent,
         prompt_builder.preamble().to_owned(),
         tools.len(),
-        crate::rendered_request::CaptureScopeKind::OneShot,
+        crate::inference::rendered_request::CaptureScopeKind::OneShot,
     );
     config.replay.issuer = replay_issuer;
     run_oneshot_owned(
@@ -256,8 +256,8 @@ where
     config.output_obligation_gate = output_obligation_gate
         .clone()
         .map(|gate| Arc::new(gate) as Arc<dyn OutputObligationCheck>);
-    let capture_scope = crate::rendered_request::scope_from_factory(
-        crate::rendered_request::RenderedRequestContext {
+    let capture_scope = crate::inference::rendered_request::scope_from_factory(
+        crate::inference::rendered_request::RenderedRequestContext {
             request_doc_id: request.doc_id.clone(),
             request_commit_cid,
             request_id: request.request_id.clone(),
@@ -268,7 +268,11 @@ where
             model_name: agent.model_name.clone(),
             provider_family,
         },
-        Some(&crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
+        Some(
+            &crate::inference::rendered_request::defra_rendered_request_capture_factory(
+                node.clone(),
+            ),
+        ),
     );
 
     let history = match prompt_builder.build(&[], &[]).await {
@@ -375,7 +379,8 @@ where
             async {
                 match capture_scope {
                     Some(scope) => {
-                        crate::rendered_request::scope::scope_request(scope, inference).await
+                        crate::inference::rendered_request::scope::scope_request(scope, inference)
+                            .await
                     }
                     None => inference.await,
                 }

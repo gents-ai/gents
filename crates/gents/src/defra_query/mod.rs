@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::llm::tool::ToolDefinition;
-use crate::llm::tool::{Tool, ToolDyn};
+use crate::inference::llm::tool::ToolDefinition;
+use crate::inference::llm::tool::{Tool, ToolDyn};
 use anyhow::anyhow;
 use defra_node::EmbeddedNode;
 use serde_json::json;

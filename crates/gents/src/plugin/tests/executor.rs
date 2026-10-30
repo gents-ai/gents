@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use super::{build_plugin_pack, ECHO_WAT};
 use crate::document_config::PluginToolRef;
-use crate::llm::tool::ToolDyn;
+use crate::inference::llm::tool::ToolDyn;
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::store::{self, InstalledPlugin};
 use crate::plugin::tool::PluginTool;

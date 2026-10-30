@@ -3,7 +3,7 @@ use serde_json::{json, Map, Value};
 
 use crate::config_client::ConfigAccess;
 use crate::document_config::QueryToolDecl;
-use crate::llm::tool::{Tool, ToolDefinition};
+use crate::inference::llm::tool::{Tool, ToolDefinition};
 
 use super::query::{self, CollectionScope, DefraQueryParams, MAX_LIMIT};
 
@@ -549,7 +549,7 @@ mod tests {
 
     use super::*;
     use crate::document_config::{QueryToolDecl, WriteToolField, WriteToolFieldFill};
-    use crate::llm::tool::Tool;
+    use crate::inference::llm::tool::Tool;
     use defra_node::EmbeddedNode;
 
     #[tokio::test]

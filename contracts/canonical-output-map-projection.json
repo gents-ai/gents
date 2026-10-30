@@ -69,7 +69,7 @@
       "generated_groups": ["compaction_reducer_cases", "compaction_cursor_cases"],
       "fixture_status": "summary_only",
       "native_owner_paths": [
-        "crates/gents/src/compaction.rs",
+        "crates/gents/src/inference/compaction.rs",
         "crates/gents/src/provider_input.rs",
         "crates/gents/src/agent/daemon/request.rs",
         "crates/gents/src/session/compaction_entries.rs"
@@ -77,7 +77,7 @@
       "consumer_paths": [
         "crates/gents/tests/conformance/streaming_compaction.rs",
         "crates/gents/tests/conformance/compaction_gate.rs",
-        "crates/gents/src/compaction/tests.rs",
+        "crates/gents/src/inference/compaction/tests.rs",
         "crates/gents/src/provider_input/tests.rs",
         "crates/gents/tests/conformance/prompt_assembly.rs"
       ],
@@ -116,7 +116,7 @@
       "constructors": [],
       "generated_groups": ["compaction_projection_join_cases", "compaction_canonical_projection_cases", "repaired_projection_admission_cases"],
       "fixture_status": "concrete_inputs",
-      "native_owner_paths": ["crates/gents/src/provider_input.rs", "crates/gents/src/compaction.rs", "crates/gents-loop/src/loop_stream/request_assembly.rs"],
+      "native_owner_paths": ["crates/gents/src/provider_input.rs", "crates/gents/src/inference/compaction.rs", "crates/gents-loop/src/loop_stream/request_assembly.rs"],
       "consumer_paths": ["crates/gents/src/lean_vocab_test/compaction_projection_join.rs", "crates/gents/src/lean_vocab_test/compaction_canonical_projection.rs"],
       "native_status": "pending",
       "required_cases": [
@@ -301,17 +301,17 @@
       "fixture_status": "not_exported",
       "native_owner_paths": [
         "crates/gents/src/provider_input.rs",
-        "crates/gents/src/llm/rig_compat.rs",
+        "crates/gents/src/inference/llm/rig_compat.rs",
         "crates/gents-loop/src/loop_stream/request_assembly.rs",
         "crates/gents/src/agent/loop_stream.rs",
-        "crates/gents/src/compaction.rs"
+        "crates/gents/src/inference/compaction.rs"
       ],
       "consumer_paths": [
         "crates/gents/src/provider_input/tests.rs",
         "crates/gents/tests/conformance/prompt_assembly.rs",
         "crates/gents/src/agent/loop_stream/tests/request_assembly.rs",
         "crates/gents/src/agent/loop_stream/tests/capture.rs",
-        "crates/gents/src/compaction/tests.rs"
+        "crates/gents/src/inference/compaction/tests.rs"
       ],
       "native_status": "pending",
       "required_cases": [

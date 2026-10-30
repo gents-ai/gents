@@ -17,7 +17,7 @@ pub struct PackInferenceProfileOption {
     pub profile_id: String,
     pub display_name: Option<String>,
     pub model_name: String,
-    pub reasoning_effort: Option<crate::config::ReasoningEffort>,
+    pub reasoning_effort: Option<crate::inference::resolved::ReasoningEffort>,
     pub backend_id: String,
     pub backend_name: Option<String>,
     pub provider_kind: Option<crate::inference::backends::provider::BackendProviderKind>,

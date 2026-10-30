@@ -7,9 +7,9 @@ use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinSet;
 use tokio_util::task::AbortOnDropHandle;
 
-use crate::admission::BackendAdmissionConfig;
 use crate::agent::worker_capacity::WorkerCapacity;
-use crate::config::ResolvedAgent;
+use crate::inference::admission::BackendAdmissionConfig;
+use crate::inference::resolved::ResolvedAgent;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::startup_readiness::{BuildOutcome, BuildStanding};

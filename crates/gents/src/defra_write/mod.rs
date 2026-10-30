@@ -1,4 +1,4 @@
-use crate::llm::tool::ToolDefinition;
+use crate::inference::llm::tool::ToolDefinition;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Map, Value};
 
@@ -242,7 +242,7 @@ impl BoundedWriteTool {
     }
 }
 
-impl crate::llm::tool::Tool for BoundedWriteTool {
+impl crate::inference::llm::tool::Tool for BoundedWriteTool {
     const NAME: &'static str = PLACEHOLDER_TOOL_NAME;
 
     type Error = DefraWriteError;

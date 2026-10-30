@@ -21,8 +21,8 @@ pub use observation::{
 mod snapshot;
 pub use snapshot::{load_session_history_snapshot, load_session_history_snapshot_with_access};
 
-use crate::llm::tool::ToolDefinition;
-use crate::llm::tool::{Tool, ToolDyn};
+use crate::inference::llm::tool::ToolDefinition;
+use crate::inference::llm::tool::{Tool, ToolDyn};
 use anyhow::{anyhow, Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -122,7 +122,7 @@ pub struct SessionInvestigationSnapshot {
     pub parent_inclusive_audit_usage: Vec<super::ParentAuditUsageObservation>,
     pub compactions: Vec<SessionCompactionEvent>,
     pub latest_context: Option<super::context_budget::LastRequestContextSnapshot>,
-    pub compaction_strategy: crate::compaction::CompactionStrategy,
+    pub compaction_strategy: crate::inference::compaction::CompactionStrategy,
     pub compaction_threshold: Option<f64>,
     pub context_window: Option<i64>,
     pub parent_request_ids: Vec<String>,

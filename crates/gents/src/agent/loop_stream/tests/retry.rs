@@ -548,7 +548,7 @@ async fn repeated_reasoning_rejection_fails_after_its_one_repair() {
 #[tokio::test]
 async fn owned_hook_observes_retry_and_clears_after_execution() {
     use crate::inference_observation::{InferenceKey, InferenceObservationRegistry};
-    use crate::rendered_request::scope::{scope_request, test_scope};
+    use crate::inference::rendered_request::scope::{scope_request, test_scope};
     let (_node, hook, _writer, lifecycle) = owned_test_hook().await;
     let request = lifecycle.request();
     let registry = InferenceObservationRegistry::default();
@@ -560,7 +560,7 @@ async fn owned_hook_observes_retry_and_clears_after_execution() {
     };
     let guard = Arc::new(registry.begin(key.clone()).unwrap());
     let hook = hook.with_inference_observation(Some(guard.clone()));
-    let context = crate::rendered_request::context_for_claimed_request(
+    let context = crate::inference::rendered_request::context_for_claimed_request(
         request,
         "",
         "test-model".into(),

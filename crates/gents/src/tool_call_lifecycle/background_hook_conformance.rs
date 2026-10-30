@@ -5,16 +5,17 @@ use std::sync::Arc;
 
 struct PendingTool;
 
-impl crate::llm::tool::ToolDyn for PendingTool {
+impl crate::inference::llm::tool::ToolDyn for PendingTool {
     fn name(&self) -> String {
         "slow_tool".into()
     }
     fn definition<'a>(
         &'a self,
         _prompt: String,
-    ) -> crate::llm::tool::BoxFuture<'a, crate::llm::tool::ToolDefinition> {
+    ) -> crate::inference::llm::tool::BoxFuture<'a, crate::inference::llm::tool::ToolDefinition>
+    {
         Box::pin(async {
-            crate::llm::tool::ToolDefinition {
+            crate::inference::llm::tool::ToolDefinition {
                 name: "slow_tool".into(),
                 description: "test tool".into(),
                 parameters: serde_json::json!({"type":"object"}),
@@ -24,7 +25,10 @@ impl crate::llm::tool::ToolDyn for PendingTool {
     fn call<'a>(
         &'a self,
         _args: String,
-    ) -> crate::llm::tool::BoxFuture<'a, Result<String, crate::llm::tool::ToolError>> {
+    ) -> crate::inference::llm::tool::BoxFuture<
+        'a,
+        Result<String, crate::inference::llm::tool::ToolError>,
+    > {
         Box::pin(std::future::pending())
     }
 }
@@ -47,7 +51,7 @@ async fn publish_hook_action(
     internal_id: &str,
     tool_name: &str,
     args: serde_json::Value,
-) -> (crate::llm::ToolCallHookAction, String) {
+) -> (crate::inference::llm::ToolCallHookAction, String) {
     writer
         .start_provider_attempt(
             &owner.request().doc_id,
@@ -99,7 +103,7 @@ async fn publish_hook_call(
 ) -> (serde_json::Value, String) {
     let (action, header) =
         publish_hook_action(hook, writer, owner, turn, internal_id, tool_name, args).await;
-    let crate::llm::ToolCallHookAction::Skip { reason } = action else {
+    let crate::inference::llm::ToolCallHookAction::Skip { reason } = action else {
         panic!("accepted hook call {internal_id} did not return a result: {action:?}");
     };
     (serde_json::from_str(&reason).unwrap(), header)
@@ -220,7 +224,7 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
         serde_json::json!({"tool_call_id":handle}),
     )
     .await;
-    let crate::llm::ToolCallHookAction::Terminate { reason } = denied else {
+    let crate::inference::llm::ToolCallHookAction::Terminate { reason } = denied else {
         panic!("{originating_name}: mismatched physical header must fail closed: {denied:?}");
     };
     assert!(

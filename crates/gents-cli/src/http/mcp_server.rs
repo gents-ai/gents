@@ -97,7 +97,7 @@ impl DefraQueryMcp {
             collection: args.collection,
             options: args.options,
         };
-        gents::llm::tool::Tool::call(&tool, call)
+        gents::inference::llm::tool::Tool::call(&tool, call)
             .await
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
     }

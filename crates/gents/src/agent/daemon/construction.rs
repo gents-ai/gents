@@ -4,8 +4,8 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use super::{auxiliary_tasks, AgentDaemon, AgentDaemonInit};
-use crate::compaction::{ProviderReductionEngine, ReductionEngine, ReductionOptions};
-use crate::llm::rig_compat::ProviderModel;
+use crate::inference::compaction::{ProviderReductionEngine, ReductionEngine, ReductionOptions};
+use crate::inference::llm::rig_compat::ProviderModel;
 
 impl<M> AgentDaemon<M>
 where
@@ -33,14 +33,15 @@ where
             agent_config.as_ref(),
             preamble.clone(),
             0,
-            crate::rendered_request::CaptureScopeKind::Compaction,
+            crate::inference::rendered_request::CaptureScopeKind::Compaction,
         );
         compaction_config.max_turns = 0;
         let compactor = Arc::new(ProviderReductionEngine::new(
             model.clone(),
             compaction_config,
         ));
-        let compaction_options = crate::compaction::reduction_options_for_agent(&agent_config)?;
+        let compaction_options =
+            crate::inference::compaction::reduction_options_for_agent(&agent_config)?;
 
         Ok(Self {
             node,

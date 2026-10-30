@@ -1,5 +1,5 @@
 use super::*;
-use crate::admission::BackendAdmissionConfig;
+use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::lean_vocab_test::lean_backend_health_admission_cases;
 use crate::OpenAiWireApi;
@@ -104,7 +104,7 @@ fn generated_backend_health_admission_cases_match_registry_and_admission_policy(
             .expect("valid backend config and observation");
 
         assert_eq!(
-            crate::admission::document_configured_from_fields(
+            crate::inference::admission::document_configured_from_fields(
                 backend.enabled,
                 observation.probe_status.as_deref().unwrap()
             ),
@@ -221,7 +221,7 @@ fn resolve_backend_api_key_errors_when_env_var_named_but_unset() {
     backend.auth = BackendAuth::Environment {
         variable: "BACKEND_REGISTRY_TEST_KEY_MISSING_1338".into(),
     };
-    let error = crate::config::resolve_backend_api_key(&backend)
+    let error = crate::inference::resolved::resolve_backend_api_key(&backend)
         .expect_err("missing selected credential must fail");
     let message = format!("{error:#}");
     assert!(message.contains(&backend.backend_id), "{message}");
@@ -759,8 +759,8 @@ async fn operator_discovery_publishes_scoped_credential_free_catalog() -> Result
         catalog.models[0].reasoning_efforts.as_deref(),
         Some(
             [
-                crate::config::ReasoningEffort::Low,
-                crate::config::ReasoningEffort::High
+                crate::inference::resolved::ReasoningEffort::Low,
+                crate::inference::resolved::ReasoningEffort::High
             ]
             .as_slice()
         )
@@ -839,15 +839,18 @@ async fn generated_catalog_refreshes_preserve_payload_commits_and_latest_freshne
         let mut previous = Vec::new();
         for field in fields {
             previous.push(
-                crate::rendered_request::commits::field_commit(&access, doc_id, field).await?,
+                crate::inference::rendered_request::commits::field_commit(&access, doc_id, field)
+                    .await?,
             );
         }
         let mut writes = [0_u64; 2];
         for action in case["actions"].as_array().unwrap() {
             record_model_catalog(&node, &backend, catalog_action(action, &backend)?).await?;
             for (index, field) in fields.iter().enumerate() {
-                let current =
-                    crate::rendered_request::commits::field_commit(&access, doc_id, field).await?;
+                let current = crate::inference::rendered_request::commits::field_commit(
+                    &access, doc_id, field,
+                )
+                .await?;
                 writes[index] += u64::from(current != previous[index]);
                 previous[index] = current;
             }

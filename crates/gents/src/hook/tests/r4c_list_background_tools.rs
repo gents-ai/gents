@@ -1,9 +1,9 @@
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
-use gents::llm::tool::BoxFuture;
-use gents::llm::tool::ToolDefinition;
-use gents::llm::tool::{ToolDyn, ToolError};
-use gents::llm::ToolCallHookAction;
+use gents::inference::llm::tool::BoxFuture;
+use gents::inference::llm::tool::ToolDefinition;
+use gents::inference::llm::tool::{ToolDyn, ToolError};
+use gents::inference::llm::ToolCallHookAction;
 use gents::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use serde_json::{json, Value};
 

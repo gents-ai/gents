@@ -314,7 +314,11 @@ pub(super) async fn validate_advertised_profiles(
             &backend.backend_id,
         )
         .await?;
-        crate::config::advertised_model_for_profile(&backend, &profile, observation.as_ref())?;
+        crate::inference::resolved::advertised_model_for_profile(
+            &backend,
+            &profile,
+            observation.as_ref(),
+        )?;
     }
     Ok(())
 }

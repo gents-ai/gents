@@ -1,4 +1,4 @@
-use crate::llm::message::Message;
+use crate::inference::llm::message::Message;
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};

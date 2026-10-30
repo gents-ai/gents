@@ -6,7 +6,6 @@ extern crate self as gents;
 pub(crate) mod support;
 
 pub mod adapter_projection;
-pub(crate) mod admission;
 pub mod agent;
 pub mod application_write;
 pub mod background_completion;
@@ -15,9 +14,7 @@ pub mod background_tools;
 pub mod blocked_turn;
 pub(crate) mod callback;
 pub mod codex_shim_binding;
-pub mod compaction;
 pub(crate) mod completion_factory;
-pub mod config;
 pub mod config_client;
 pub mod configuration_discovery;
 pub mod defra_query;
@@ -67,7 +64,6 @@ pub mod starter_recipes;
 pub mod startup_readiness;
 pub mod startup_recovery;
 pub mod store;
-pub mod usage_observation;
 
 #[cfg(test)]
 pub(crate) mod test_support {
@@ -143,10 +139,11 @@ pub(crate) mod test_support {
             .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
         body["stream"] = serde_json::Value::Bool(true);
         body["stream_options"] = serde_json::json!({ "include_usage": true });
-        let inner = crate::rendered_request::transport::CountingInner::default();
-        let transport = crate::rendered_request::transport::RenderedRequestCapturingHttpClient::new(
-            inner.clone(),
-        );
+        let inner = crate::inference::rendered_request::transport::CountingInner::default();
+        let transport =
+            crate::inference::rendered_request::transport::RenderedRequestCapturingHttpClient::new(
+                inner.clone(),
+            );
         let outbound = rig::http_client::Request::builder()
             .method("POST")
             .uri("https://scripted-provider.invalid/v1/chat/completions")
@@ -300,7 +297,6 @@ pub(crate) mod test_support {
          \"service_id\": \"observability-mcp\", \"tool_name\": \"list_hosts\"}";
 }
 pub mod lifecycle;
-pub mod llm;
 pub mod log_rate;
 pub mod mailbox;
 pub(crate) mod managed_exec;
@@ -313,7 +309,6 @@ pub mod periodic_recovery;
 pub mod prompt;
 pub mod provider_context_reduction;
 pub mod registry;
-pub mod rendered_request;
 mod request_admission;
 #[doc(hidden)]
 pub use request_admission::final_claim_admission_disposition;
@@ -360,9 +355,6 @@ pub use adapter_projection::{
     AtifStep, AtifStepSource, AtifToolCall, AtifTrajectory, ProjectionContext,
     ProjectionRedactionMode, ATIF_SCHEMA_VERSION,
 };
-pub use admission::call_state_holds_backend_slot;
-pub use admission::BackendAdmissionConfig;
-pub use admission::{document_configured_from_fields, InferenceCall, InferenceCallRecoveryReport};
 pub use agent::{
     AgentBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
     ProcessLifecycleState, RuntimeSnapshotObserver,
@@ -375,13 +367,6 @@ pub use background_completion_diagnostics::{
 pub use background_tools::load_caused_request_terminal;
 pub use background_tools::status_projection::OutputEvidence;
 pub use callback::reject_secret_bearing_callback_fields;
-pub use compaction::CompactionStrategy;
-pub use config::{
-    ReasoningEffort, ResolvedAgent, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD,
-    DEFAULT_CONTEXT_WINDOW, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS,
-    DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
-    DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
-};
 pub use config_client::ConfigAccess;
 pub use defra_node;
 #[cfg(test)]
@@ -408,6 +393,11 @@ pub use health_checker::{
 pub use hook::{
     BackgroundExecutionRegistry, BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats,
 };
+pub use inference::admission::call_state_holds_backend_slot;
+pub use inference::admission::BackendAdmissionConfig;
+pub use inference::admission::{
+    document_configured_from_fields, InferenceCall, InferenceCallRecoveryReport,
+};
 pub use inference::backends::health::{
     probe_backends_cycle, run_backend_probe_cycle, spawn_backend_prober, BackendHealthMap,
     BackendHealthSnapshot, BackendHealthState, BackendProberOptions, ProbeCycleOutcome,
@@ -418,6 +408,13 @@ pub use inference::backends::provider::{
 pub use inference::backends::registry::{
     record_discovered_catalog_on, record_model_catalog_in_txn, InferenceBackend,
     HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS,
+};
+pub use inference::compaction::CompactionStrategy;
+pub use inference::resolved::{
+    ReasoningEffort, ResolvedAgent, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD,
+    DEFAULT_CONTEXT_WINDOW, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS,
+    DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+    DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 pub use interrupt::{
     fetch_interrupt_requested_at, fetch_interrupt_requested_at_by_doc_id, interrupt_request,

@@ -2,15 +2,15 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::llm::rig_compat::ProviderClient;
-use crate::llm::tool::ToolDyn;
+use crate::inference::llm::rig_compat::ProviderClient;
+use crate::inference::llm::tool::ToolDyn;
 use anyhow::Result;
 use tokio::sync::{mpsc, watch, Mutex};
 
-use crate::admission::AdmissionRegistry;
 use crate::agent::daemon::{AgentDaemon, AgentDaemonInit};
 use crate::completion_factory::build_admitted_model;
 use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
+use crate::inference::admission::AdmissionRegistry;
 use crate::prompt::LayeredPromptBuilder;
 use crate::tool_surface::{self, ToolRuntimeContext, ToolSurface};
 use crate::watcher::AgentRequest;
@@ -22,7 +22,7 @@ pub(super) struct RuntimeContext {
     pub(super) admission_registry: AdmissionRegistry,
     pub(super) hook_failure_policy: crate::hook::FailurePolicy,
     pub(super) rendered_request_capture_factory:
-        Option<crate::rendered_request::RenderedRequestCaptureFactory>,
+        Option<crate::inference::rendered_request::RenderedRequestCaptureFactory>,
     pub(super) background_execution_registry: BackgroundExecutionRegistry,
     pub(super) inference_observations: crate::inference_observation::InferenceObservationRegistry,
     pub(super) startup_barrier: Arc<StartupBarrier>,
@@ -45,7 +45,7 @@ pub struct StartupBarrier {
 }
 
 impl StartupBarrier {
-    pub(super) fn new(agents: &[Arc<crate::config::ResolvedAgent>]) -> Self {
+    pub(super) fn new(agents: &[Arc<crate::inference::resolved::ResolvedAgent>]) -> Self {
         let pending: BTreeSet<(String, u64)> = agents
             .iter()
             .map(|agent_config| (agent_config.agent_id.clone(), 1))
@@ -116,7 +116,7 @@ impl StartupBarrier {
 impl RuntimeContext {
     pub(super) async fn run_agent(
         &self,
-        agent_config: Arc<crate::config::ResolvedAgent>,
+        agent_config: Arc<crate::inference::resolved::ResolvedAgent>,
         tool_surface: Arc<ToolSurface>,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
         capacity: Arc<crate::agent::worker_capacity::WorkerCapacity>,
@@ -161,7 +161,7 @@ impl RuntimeContext {
             "building agent runtime"
         );
 
-        let client = crate::llm::backend_client::build_backend_client(
+        let client = crate::inference::llm::backend_client::build_backend_client(
             self.tool_runtime.usage_cache.clone(),
             self.node.clone(),
             agent_config.as_ref(),
@@ -172,7 +172,7 @@ impl RuntimeContext {
         let provider_family = Some(client.provider_family().to_owned());
         let replay_issuer = client.replay_issuer()?;
 
-        crate::llm::backend_client::with_backend_client!(client, |client| {
+        crate::inference::llm::backend_client::with_backend_client!(client, |client| {
             Box::pin(self.run_agent_with_client(
                 agent_config,
                 provider_family,
@@ -198,7 +198,7 @@ impl RuntimeContext {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_agent_with_client<C>(
         &self,
-        agent_config: Arc<crate::config::ResolvedAgent>,
+        agent_config: Arc<crate::inference::resolved::ResolvedAgent>,
         provider_family: Option<String>,
         replay_issuer: Option<gents_loop::claude_messages_body::ReplayIssuer>,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
@@ -276,7 +276,7 @@ impl RuntimeContext {
 mod startup_barrier_tests {
     use super::*;
 
-    fn agent_config(agent_id: &str) -> Arc<crate::config::ResolvedAgent> {
+    fn agent_config(agent_id: &str) -> Arc<crate::inference::resolved::ResolvedAgent> {
         Arc::new(
             crate::agent::PendingAgent::new(agent_id).build_with_identity_for_test(
                 crate::KeyIdentity::load_or_create(

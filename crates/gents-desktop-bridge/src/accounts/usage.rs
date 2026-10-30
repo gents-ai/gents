@@ -42,7 +42,7 @@ pub(crate) async fn account_usage_views(
     node_did: &str,
     reads: Option<&gents_server::accounts::UsageReads>,
 ) -> anyhow::Result<Vec<AccountUsageView>> {
-    use gents::usage_observation::{account_usage::UsageSource, UsageRead};
+    use gents::inference::usage_observation::{account_usage::UsageSource, UsageRead};
 
     let backends = access
         .transact_readonly("desktop.usage_views", |txn| {
@@ -111,9 +111,9 @@ pub async fn read(
         .operator_access(node_did)
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
     let trigger = if request.refresh {
-        gents::usage_observation::UsageTrigger::Refresh
+        gents::inference::usage_observation::UsageTrigger::Refresh
     } else {
-        gents::usage_observation::UsageTrigger::Open
+        gents::inference::usage_observation::UsageTrigger::Open
     };
     let reads = async {
         let signer = core.operator_signer(node_did)?;

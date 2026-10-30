@@ -1,5 +1,5 @@
-use crate::llm::tool::Tool;
-use crate::llm::tool::ToolDefinition;
+use crate::inference::llm::tool::Tool;
+use crate::inference::llm::tool::ToolDefinition;
 use rapidhash::RapidHashSet;
 use rmcp::model::{ListToolsResult, Tool as McpTool};
 use serde::Deserialize;
@@ -147,7 +147,7 @@ impl Tool for DescribeToolTool {
         }
     }
 
-    fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
+    fn into_dyn_error(error: Self::Error) -> crate::inference::llm::tool::ToolError {
         error.into_dispatch_error()
     }
 }

@@ -189,7 +189,7 @@ where
             ])
         })
         .collect::<Vec<_>>();
-    Ok(crate::rendered_request::sha256_canonical_json(
+    Ok(crate::inference::rendered_request::sha256_canonical_json(
         &serde_json::json!(projection),
     )?)
 }
@@ -372,7 +372,7 @@ pub(crate) struct NewExactSessionCompaction<'a> {
 pub(crate) async fn save_exact_compaction_entry(
     node: &std::sync::Arc<EmbeddedNode>,
     input: NewExactSessionCompaction<'_>,
-    reduction: crate::compaction::ExactReduction<'_>,
+    reduction: crate::inference::compaction::ExactReduction<'_>,
 ) -> Result<CompactionEntry> {
     save_compaction_entry_with_requester_did(
         node,

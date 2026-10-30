@@ -50,7 +50,8 @@ impl ProbeSchedule {
 }
 
 pub(super) fn probe_configuration_fingerprint(backend: &InferenceBackend) -> String {
-    let connection = crate::admission::backend_connection_fingerprint(&backend.backend_fields());
+    let connection =
+        crate::inference::admission::backend_connection_fingerprint(&backend.backend_fields());
     format!(
         "{connection}:connect={:?}:discovery={:?}",
         backend.connect_timeout_secs, backend.discovery_timeout_secs

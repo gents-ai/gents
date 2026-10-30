@@ -12,7 +12,7 @@ fn policy_denial_reaches_dispatch_as_typed_failure() {
     let expected = denial.tool_error_payload();
 
     match ToolError::policy_denial(denial).into_dispatch_error() {
-        crate::llm::tool::ToolError::ReportedFailure { class, text } => {
+        crate::inference::llm::tool::ToolError::ReportedFailure { class, text } => {
             assert_eq!(class, FailureClass::PolicyDenied);
             assert_eq!(text, expected);
         }

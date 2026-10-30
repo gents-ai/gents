@@ -2,14 +2,14 @@ use rig::completion::ToolDefinition;
 
 use super::*;
 use crate::inference::auth::credential::test_support::{seed_credential, test_node};
-use crate::llm::message::Message;
+use crate::inference::llm::message::Message;
 
 fn request_from_native(
     preamble: Option<&str>,
     history: Vec<Message>,
     tools: Vec<ToolDefinition>,
 ) -> CompletionRequest {
-    let rig_history = crate::llm::rig_compat::to_rig_messages(&history);
+    let rig_history = crate::inference::llm::rig_compat::to_rig_messages(&history);
     CompletionRequest {
         model: None,
         preamble: preamble.map(str::to_string),
@@ -344,11 +344,13 @@ async fn usage_wiring_claude_built_client_holds_its_account_reporter() {
             .usage
             .as_ref()
             .map(|reporter| reporter.account.clone()),
-        Some(crate::usage_observation::UsageAccount::Credential {
-            doc_id: Some(doc_id),
-            node_did: did.to_string(),
-            provider: CLAUDE_OAUTH_PROVIDER.to_string(),
-            account_ref: Some("acct-ref-2".into()),
-        })
+        Some(
+            crate::inference::usage_observation::UsageAccount::Credential {
+                doc_id: Some(doc_id),
+                node_did: did.to_string(),
+                provider: CLAUDE_OAUTH_PROVIDER.to_string(),
+                account_ref: Some("acct-ref-2".into()),
+            }
+        )
     );
 }

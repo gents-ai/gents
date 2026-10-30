@@ -1429,13 +1429,15 @@ mod provider_account_tests {
 
     #[tokio::test]
     async fn usage_views_follow_each_backend_with_source_age_and_honest_unknowns() {
-        use gents::usage_observation::account_usage::{UsageReport, UsageSource, UsageWindow};
-        use gents::usage_observation::{
+        use gents::inference::usage_observation::account_usage::{
+            UsageReport, UsageSource, UsageWindow,
+        };
+        use gents::inference::usage_observation::{
             read_account_usage, read_node_usage, record_usage, UsageAccount, UsageEndpoints,
             UsageRead, UsageTrigger,
         };
 
-        let cache = gents::usage_observation::UsageCache::default();
+        let cache = gents::inference::usage_observation::UsageCache::default();
         let node = serving_node().await;
         let access = gents::ConfigAccess::local(node.clone());
         let node_did = "did:key:zAgent";

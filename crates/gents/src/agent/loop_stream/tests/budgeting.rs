@@ -50,7 +50,7 @@ fn generated_turn_budget_cases_drive_every_completion_dispatch() {
             .turn_input_tokens
             .iter()
             .map(|tokens| {
-                crate::compaction::ReductionAdmission::for_context(
+                crate::inference::compaction::ReductionAdmission::for_context(
                     crate::provider_input::budget::ContextCalibration::default().context(*tokens),
                     compaction_budget,
                 )
@@ -418,7 +418,7 @@ async fn nested_compaction_charges_the_same_request_budget() {
                 config,
             )
             .await
-            .map_err(crate::compaction::CompactionError::GuidedBudgetExhausted)?;
+            .map_err(crate::inference::compaction::CompactionError::GuidedBudgetExhausted)?;
             Ok(TurnCompactionOutcome::Reduced {
                 messages: vec![TaggedMessage::unassociated(Message::user(
                     "compacted prompt",
@@ -504,7 +504,7 @@ async fn per_turn_compaction_preserves_canonical_budget_exhaustion() {
     loop_config.compaction_threshold = 0.25;
     loop_config.turn_compactor = Some(Arc::new(move |_request| {
         Box::pin(async move {
-            Err(crate::compaction::CompactionError::GuidedBudgetExhausted(
+            Err(crate::inference::compaction::CompactionError::GuidedBudgetExhausted(
                 gents_loop::loop_stream::OneShotError::LoopStream(rig_compat::loop_verdict_error(
                     crate::error::LoopVerdict::AggregateTokenBudgetExhausted,
                     format!(
@@ -863,10 +863,10 @@ async fn reduction_cannot_fit_is_typed_and_never_dispatched() {
         Some(&error as &(dyn std::error::Error + 'static)),
         |cause| cause.source(),
     )
-    .find_map(|cause| cause.downcast_ref::<crate::compaction::ReductionError>());
+    .find_map(|cause| cause.downcast_ref::<crate::inference::compaction::ReductionError>());
     assert!(matches!(
         reduction,
-        Some(crate::compaction::ReductionError::CannotFit)
+        Some(crate::inference::compaction::ReductionError::CannotFit)
     ));
     assert_eq!(capture_calls.load(Ordering::SeqCst), 0);
     assert!(model.seen_max_tokens().await.is_empty());
@@ -1234,7 +1234,7 @@ fn generated_budget_cases_drive_dynamic_output_compaction_trigger() {
             case.name
         );
         assert_eq!(
-            crate::compaction::ReductionAdmission::for_context(
+            crate::inference::compaction::ReductionAdmission::for_context(
                 crate::provider_input::budget::ContextCalibration::default().context(input_tokens),
                 compaction_budget,
             )
@@ -1300,7 +1300,7 @@ fn generated_compaction_trigger_cases_drive_the_production_trigger() {
             "{}: compaction input budget drifted from Lean",
             case.name
         );
-        let admission = crate::compaction::ReductionAdmission::for_context(context, budget)
+        let admission = crate::inference::compaction::ReductionAdmission::for_context(context, budget)
             .map(|admission| (admission.input_tokens(), admission.effective_input_budget()));
         assert_eq!(
             admission,
@@ -1544,7 +1544,7 @@ async fn provider_context_overflow_without_a_compactor_fails_with_its_reason() {
     assert!(collected.attempts.iter().all(|attempt| !attempt.will_retry));
 }
 
-type CapturedAccounting = Arc<std::sync::Mutex<Vec<crate::rendered_request::ContextAccounting>>>;
+type CapturedAccounting = Arc<std::sync::Mutex<Vec<crate::inference::rendered_request::ContextAccounting>>>;
 
 fn capture_accounting(loop_config: &mut LoopConfig) -> CapturedAccounting {
     let captured = CapturedAccounting::default();
@@ -1704,7 +1704,7 @@ async fn anchored_compaction_run(
     first_output_tokens: u64,
 ) -> (
     Vec<(usize, usize)>,
-    Vec<crate::rendered_request::ContextAccounting>,
+    Vec<crate::inference::rendered_request::ContextAccounting>,
 ) {
     let model = UsageScriptedModel::new(vec![
         usage_echo_tool_turn(UsageResponse {

@@ -630,7 +630,7 @@ async fn results_put_the_answer_first_and_execution_metadata_last() {
         .call(json!({"argv":["profile","preview"],"options":{"agent":"nope"},"set":{"display_name":"x"}}).to_string())
         .await
     {
-        Err(crate::llm::tool::ToolError::ToolCallError(error)) => error.to_string(),
+        Err(crate::inference::llm::tool::ToolError::ToolCallError(error)) => error.to_string(),
         other => panic!("expected an error: {other:?}"),
     };
     order(&error, &["error", "recovery", "config_execution"]);
@@ -1216,7 +1216,7 @@ async fn structured_failure(tools: &Tools, args: Value) -> Value {
         .find(|tool| tool.name() == CONFIG_TOOL_NAME)
         .unwrap();
     match tool.call(args.to_string()).await {
-        Err(crate::llm::tool::ToolError::ToolCallError(error)) => {
+        Err(crate::inference::llm::tool::ToolError::ToolCallError(error)) => {
             serde_json::from_str(&error.to_string()).unwrap()
         }
         other => panic!("expected structured failure for {args}: {other:?}"),

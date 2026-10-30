@@ -361,7 +361,9 @@ pub(super) fn build_session_investigation(
                 ) / 10_000.0
             })
             .or_else(|| compaction.and_then(|config| config.threshold))
-            .or(Some(crate::config::DEFAULT_COMPACTION_THRESHOLD)),
+            .or(Some(
+                crate::inference::resolved::DEFAULT_COMPACTION_THRESHOLD,
+            )),
         context_window: latest_context
             .as_ref()
             .and_then(|context| i64::try_from(context.accounting.context_window).ok())
@@ -418,7 +420,7 @@ pub(super) struct CompactionConfigDetailRow {
     #[serde(default)]
     compaction_id: String,
     #[serde(default)]
-    strategy: Option<crate::compaction::CompactionStrategy>,
+    strategy: Option<crate::inference::compaction::CompactionStrategy>,
     #[serde(default)]
     threshold: Option<f64>,
 }

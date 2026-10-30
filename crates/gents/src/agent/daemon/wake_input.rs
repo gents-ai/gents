@@ -119,7 +119,7 @@ pub(super) async fn load(
             let mut notifications = Vec::with_capacity(headers.len());
             for header in headers {
                 let (_, message) = reader.load_message(&header.doc_id).await?;
-                anyhow::ensure!(matches!(message, crate::llm::message::Message::User { .. }), "wake notification is not user input");
+                anyhow::ensure!(matches!(message, crate::inference::llm::message::Message::User { .. }), "wake notification is not user input");
                 let mut row = TaggedMessage::unassociated(message);
                 row.physical_header = Some(header.doc_id);
                 notifications.push(row);
@@ -148,9 +148,9 @@ mod tests {
                 if let Some(key) = &row.notification_key {
                     assert!(case.claimed.contains(key) || !case.current_keys.contains(key));
                 }
-                let mut native = TaggedMessage::unassociated(crate::llm::message::Message::user(
-                    "equal content",
-                ));
+                let mut native = TaggedMessage::unassociated(
+                    crate::inference::llm::message::Message::user("equal content"),
+                );
                 native.physical_header = Some(row.header.clone());
                 native
             };

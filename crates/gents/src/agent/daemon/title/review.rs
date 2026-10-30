@@ -7,8 +7,8 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use super::{AgentDaemon, AuxiliaryResult, AuxiliaryTask};
-use crate::admission::{self, CallKind};
 use crate::agent::loop_stream::AggregateTokenBudget;
+use crate::inference::admission::{self, CallKind};
 use crate::watcher::AgentRequest;
 
 #[cfg(test)]
@@ -34,8 +34,8 @@ impl WorkspaceReviewer {
     }
 }
 
-fn visible_context(message: &crate::llm::message::Message) -> Option<String> {
-    use crate::llm::message::Message;
+fn visible_context(message: &crate::inference::llm::message::Message) -> Option<String> {
+    use crate::inference::llm::message::Message;
 
     let label = match message {
         Message::System { .. } => return None,
@@ -48,7 +48,7 @@ fn visible_context(message: &crate::llm::message::Message) -> Option<String> {
 
 impl<M> AgentDaemon<M>
 where
-    M: crate::llm::rig_compat::ProviderModel,
+    M: crate::inference::llm::rig_compat::ProviderModel,
 {
     pub(in crate::agent::daemon) fn workspace_reviewer(
         &self,
@@ -69,7 +69,7 @@ where
 
 impl<M> AuxiliaryTask<M>
 where
-    M: crate::llm::rig_compat::ProviderModel,
+    M: crate::inference::llm::rig_compat::ProviderModel,
 {
     pub(super) fn workspace_reviewer(
         self,
@@ -199,7 +199,8 @@ impl ReviewInput {
         policy: String,
         action: serde_json::Value,
         current_request: &str,
-        history: impl DoubleEndedIterator<Item = &'a crate::llm::message::Message> + ExactSizeIterator,
+        history: impl DoubleEndedIterator<Item = &'a crate::inference::llm::message::Message>
+            + ExactSizeIterator,
     ) -> Result<Self> {
         let history_len = history.len();
         let mut input = Self {
@@ -274,7 +275,7 @@ impl Drop for ReviewBudgetGuard {
 
 impl<M> AuxiliaryTask<M>
 where
-    M: crate::llm::rig_compat::ProviderModel,
+    M: crate::inference::llm::rig_compat::ProviderModel,
 {
     pub(super) async fn execute_review(
         &self,
@@ -316,7 +317,7 @@ where
             &self.agent_config,
             PREAMBLE.to_owned(),
             0,
-            crate::rendered_request::CaptureScopeKind::AccessReview,
+            crate::inference::rendered_request::CaptureScopeKind::AccessReview,
         );
         config.max_turns = 1;
         config.retry_policy = crate::agent::completion_retry::CompletionRetryPolicy::no_retry();
@@ -327,7 +328,7 @@ where
             1,
             Box::pin(crate::agent::loop_stream::run_loop_to_text::<M>(
                 (*self.model).clone(),
-                crate::llm::message::Message::user(request.content.clone()),
+                crate::inference::llm::message::Message::user(request.content.clone()),
                 Vec::new(),
                 Arc::new(Vec::new()),
                 config,
