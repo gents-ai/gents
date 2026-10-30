@@ -58,7 +58,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "session_message::agent_tools_tests::explicit_steer_checks_the_physical_head_at_publication",
             package: "gents",
-            source_path: "crates/gents/src/session_message.rs",
+            source_path: "crates/gents/src/session_message/agent_tools_tests.rs",
             module_path: "session_message::agent_tools_tests",
             function: "explicit_steer_checks_the_physical_head_at_publication",
         },
@@ -72,21 +72,21 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "session_message::agent_tools_tests::steer_reachability_matches_lean",
             package: "gents",
-            source_path: "crates/gents/src/session_message.rs",
+            source_path: "crates/gents/src/session_message/agent_tools_tests.rs",
             module_path: "session_message::agent_tools_tests",
             function: "steer_reachability_matches_lean",
         },
         ConformanceConsumer::RustTest {
             id: "session_message::delivery_conformance::agent_delivery_matches_lean",
             package: "gents",
-            source_path: "crates/gents/src/session_message.rs",
+            source_path: "crates/gents/src/session_message/delivery_conformance.rs",
             module_path: "session_message::delivery_conformance",
             function: "agent_delivery_matches_lean",
         },
         ConformanceConsumer::RustTest {
             id: "session_message::agent_tools_tests::interrupt_delivery_latches_only_the_prepublication_head",
             package: "gents",
-            source_path: "crates/gents/src/session_message.rs",
+            source_path: "crates/gents/src/session_message/agent_tools_tests.rs",
             module_path: "session_message::agent_tools_tests",
             function: "interrupt_delivery_latches_only_the_prepublication_head",
         },
@@ -1745,7 +1745,7 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "session_message::agent_tools_tests::session_target_authority_matches_lean_owner",
             package: "gents",
-            source_path: "crates/gents/src/session_message.rs",
+            source_path: "crates/gents/src/session_message/agent_tools_tests.rs",
             module_path: "session_message::agent_tools_tests",
             function: "session_target_authority_matches_lean_owner",
         },

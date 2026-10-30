@@ -6,7 +6,7 @@ use gents_protocol::session::AgentSession;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::session_target_allowed;
+use super::target::session_target_allowed;
 use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
 use crate::session_origin::{SessionLineage, SessionScope};
