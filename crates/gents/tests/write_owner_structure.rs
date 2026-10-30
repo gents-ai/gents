@@ -1802,7 +1802,7 @@ const DOWNCAST_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/eval/runner/freeze.rs", 1),
     ("crates/gents/src/eval/runner/mod.rs", 1),
     ("crates/gents/src/file_inventory/operator.rs", 1),
-    ("crates/gents/src/goal.rs", 2),
+    ("crates/gents/src/goal/creation.rs", 2),
     ("crates/gents/src/graphql.rs", 1),
     ("crates/gents/src/home.rs", 3),
     ("crates/gents/src/hook/persistence/background_tools.rs", 1),
