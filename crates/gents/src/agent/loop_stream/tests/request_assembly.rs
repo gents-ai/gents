@@ -1142,6 +1142,7 @@ async fn drive_generated_turn_input(
                         "compacted prompt",
                     ))],
                     reduction_key: "folded-first-turn".to_string(),
+                    commit: TurnReductionCommit::new(|| async { Ok(()) }),
                 })
             })
         }));

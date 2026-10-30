@@ -68,6 +68,20 @@ def rebuiltInput (w : Case) : Option (Nat × List Nat) :=
   | .ok (.dispatch projected _) => some (projected.checkpoint, projected.retainedSuffix)
   | _ => none
 
+def budget (w : Case) : Nat :=
+  PromptAssembly.Budget.effectiveInputBudget
+    (PromptAssembly.Budget.configuredThresholdBudget w.contextWindow w.thresholdBasisPoints)
+    w.contextWindow
+
+/-- Durable request-local reductions after the case, from an empty request. -/
+def committedReductions (w : Case) : Nat :=
+  match projectRequest (project w) (estimate w) w.source, result w with
+  | .ok initial, .ok dispatch =>
+      (commitRequestLocalAfterRebuild { reductions := [] }
+        (reduce w.source initial.inputTokens (budget w) w.canFit w.prefixLength w.checkpoint)
+        dispatch).reductions.length
+  | _, _ => 0
+
 def outputTokens (w : Case) : Option Nat :=
   match result w with | .ok (.dispatch _ tokens) => some tokens | _ => none
 
@@ -94,6 +108,10 @@ theorem expected_results : cases.map (fun w => resultName (result w)) =
     ["initial_projection_failed", "initial_estimate_failed", "not_needed", "dispatch",
      "rebuild_failed", "rebuilt_estimate_failed", "rebuilt_still_over", "zero_output_capacity", "zero_output_capacity",
      "zero_output_capacity", "dispatch", "dispatch", "cannot_fit", "cannot_fit", "cannot_fit"] := by
+  native_decide
+
+theorem expected_committed_reductions : cases.map committedReductions =
+    [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0] := by
   native_decide
 
 end Conformance.ContractCases.CompactionProjectionJoin

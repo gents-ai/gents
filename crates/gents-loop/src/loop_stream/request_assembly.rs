@@ -902,6 +902,7 @@ mod replay_error_tests {
     /// the raw estimate but over it at the session ratio.
     fn under_raw_over_calibrated_config(
         compactor_calls: Arc<std::sync::atomic::AtomicUsize>,
+        commits: Arc<std::sync::atomic::AtomicUsize>,
     ) -> LoopConfig {
         let mut config = replay_assembly_config();
         config.context_window = 100_000;
@@ -910,13 +911,18 @@ mod replay_error_tests {
             crate::provider_input::budget::ContextCalibration::with_ratio(20_000);
         config.turn_compactor = Some(Arc::new(move |_request: TurnCompactionRequest| {
             compactor_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            Box::pin(async {
+            let commits = commits.clone();
+            Box::pin(async move {
                 Ok(TurnCompactionOutcome::Reduced {
                     messages: vec![
                         TaggedMessage::unassociated(Message::user("s".repeat(160_000))),
                         TaggedMessage::unassociated(Message::user("compacted prompt")),
                     ],
                     reduction_key: "still-too-big".to_string(),
+                    commit: crate::loop_stream::TurnReductionCommit::new(move || async move {
+                        commits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Ok(())
+                    }),
                 })
             })
         }));
@@ -926,7 +932,8 @@ mod replay_error_tests {
     #[tokio::test]
     async fn rebuilt_request_over_the_calibrated_budget_cannot_fit_and_keeps_the_session() {
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let config = under_raw_over_calibrated_config(calls.clone());
+        let commits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let config = under_raw_over_calibrated_config(calls.clone(), commits.clone());
         let original_history = vec![TaggedMessage::unassociated(Message::user(
             "h".repeat(400_000),
         ))];
@@ -959,6 +966,11 @@ mod replay_error_tests {
         .expect_err("the rebuilt request is over the provider budget at the session ratio");
 
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            commits.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "a reduction whose rebuilt request cannot fit is discarded, not committed"
+        );
         assert!(
             format!("{error:?}").contains("CannotFit"),
             "the post-reduction check counts provider tokens: {error:?}"
@@ -1803,36 +1815,8 @@ where
         prior_reduction_keys: reduction_chain_keys.clone(),
     })
     .await
-    .map_err(|error| {
-        if matches!(
-            error,
-            super::TurnCompactionError::Compaction(
-                crate::compaction::CompactionError::Reduction(
-                    crate::compaction::ReductionError::CannotFit
-                ) | crate::compaction::CompactionError::ReplayCheckpoint(_)
-                    | crate::compaction::CompactionError::ReplayEvidence(_)
-            )
-        ) {
-            return StreamingError::Completion(CompletionError::RequestError(Box::new(error)))
-                .into();
-        }
-        error.aggregate_token_budget_exhaustion().map_or_else(
-            || {
-                StreamingError::Completion(CompletionError::ProviderError(format!(
-                    "per-turn provider-input compaction failed: {}",
-                    ErrorChain(&error)
-                )))
-                .into()
-            },
-            |reason| {
-                crate::rig_compat::loop_verdict_error(
-                    crate::error::LoopVerdict::AggregateTokenBudgetExhausted,
-                    reason,
-                )
-            },
-        )
-    })?;
-    let (mut compacted, reduction_key, reason) = match outcome {
+    .map_err(turn_compaction_failure)?;
+    let (mut compacted, staged, reason) = match outcome {
         TurnCompactionOutcome::ProviderViewRepaired { messages } => (
             messages,
             None,
@@ -1841,9 +1825,10 @@ where
         TurnCompactionOutcome::Reduced {
             messages,
             reduction_key,
+            commit,
         } => (
             messages,
-            Some(reduction_key),
+            Some((reduction_key, commit)),
             ContextCompactionReason::Compacted,
         ),
         TurnCompactionOutcome::CannotFit => {
@@ -1915,6 +1900,13 @@ where
         );
     }
 
+    let reduction_key = match staged {
+        Some((reduction_key, commit)) => {
+            commit.run().await.map_err(turn_compaction_failure)?;
+            Some(reduction_key)
+        }
+        None => None,
+    };
     *history = rebuilt_history;
     *new_messages = rebuilt_new_messages;
     config.context_calibration.invalidate_anchor();
@@ -1931,6 +1923,35 @@ where
             pre_compaction_input_tokens: Some(pre_compaction_tokens),
         },
     ))
+}
+
+fn turn_compaction_failure(error: super::TurnCompactionError) -> crate::error::LoopStreamError {
+    if matches!(
+        error,
+        super::TurnCompactionError::Compaction(
+            crate::compaction::CompactionError::Reduction(
+                crate::compaction::ReductionError::CannotFit
+            ) | crate::compaction::CompactionError::ReplayCheckpoint(_)
+                | crate::compaction::CompactionError::ReplayEvidence(_)
+        )
+    ) {
+        return StreamingError::Completion(CompletionError::RequestError(Box::new(error))).into();
+    }
+    error.aggregate_token_budget_exhaustion().map_or_else(
+        || {
+            StreamingError::Completion(CompletionError::ProviderError(format!(
+                "per-turn provider-input compaction failed: {}",
+                ErrorChain(&error)
+            )))
+            .into()
+        },
+        |reason| {
+            crate::rig_compat::loop_verdict_error(
+                crate::error::LoopVerdict::AggregateTokenBudgetExhausted,
+                reason,
+            )
+        },
+    )
 }
 
 pub(super) async fn repair_and_rebuild_request<M>(
