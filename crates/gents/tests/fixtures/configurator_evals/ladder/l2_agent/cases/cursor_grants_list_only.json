@@ -6,7 +6,6 @@
     {
       "stage_id": "configure",
       "prompt": "Create an assistant named Cursor for planning in conversation. Give it its own instructions and tool permissions, appropriate for its role: help me plan using only what we discuss, without accessing files or running commands. Give it no tools beyond conversation. Use our existing model settings. Keep your own role and permissions unchanged.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "crew_spec_match",

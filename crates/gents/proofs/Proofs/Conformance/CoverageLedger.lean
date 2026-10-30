@@ -2438,6 +2438,11 @@ def caseCoverage : List CoverageEntry :=
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
       "prompt_assembly_cases"
+      "PromptAssemblyCompactionTriggerCases"
+      "agent::loop_stream::tests::generated_compaction_trigger_cases_drive_the_production_trigger")
+      "prompt-assembly" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "prompt_assembly_cases"
       "PromptAssemblyRetentionCases"
       "agent::loop_stream::tests::generated_retention_cases_drive_production_compaction_target")
       "prompt-assembly" [Surface.runtimeInternal]

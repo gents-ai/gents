@@ -15,7 +15,10 @@ use crate::provider_usage;
 use crate::rendered_request::CaptureScopeKind;
 use crate::watcher::AgentRequest;
 
-fn effective_max_tokens(max_output_tokens: usize, sampling_max_tokens: Option<u64>) -> Option<u64> {
+pub(crate) fn effective_max_tokens(
+    max_output_tokens: usize,
+    sampling_max_tokens: Option<u64>,
+) -> Option<u64> {
     sampling_max_tokens.or_else(|| u64::try_from(max_output_tokens).ok())
 }
 
@@ -72,16 +75,20 @@ pub(crate) fn loop_config(
     tool_count: usize,
     capture_scope: CaptureScopeKind,
 ) -> LoopConfig {
+    let provider_input_counter = std::sync::Arc::new(
+        crate::provider_input::ProviderInputCounter::new(
+            agent_config.backend_provider_kind,
+            agent_config.openai_wire_api,
+            agent_config.model_name.clone(),
+        )
+        .with_service_tier(agent_config.service_tier),
+    );
+    let context_calibration = crate::provider_input::budget::ContextCalibration::prior_for(
+        provider_input_counter.profile(),
+    );
     LoopConfig {
         replay: Default::default(),
-        provider_input_counter: std::sync::Arc::new(
-            crate::provider_input::ProviderInputCounter::new(
-                agent_config.backend_provider_kind,
-                agent_config.openai_wire_api,
-                agent_config.model_name.clone(),
-            )
-            .with_service_tier(agent_config.service_tier),
-        ),
+        provider_input_counter,
         preamble: Some(preamble),
         context_message: None,
         temperature: agent_config.sampling.temperature,
@@ -135,6 +142,7 @@ pub(crate) fn loop_config(
         resume_from_history: false,
         context_window: agent_config.context_window,
         compaction_threshold: agent_config.compaction_threshold(),
+        context_calibration,
         retry_policy: CompletionRetryPolicy::scheduled_default(),
         provider_idle_timeout: Some(agent_config.provider_idle_timeout),
         deadline: None,
@@ -288,6 +296,222 @@ async fn load_prior_charged_tokens(
     .map_err(|error| {
         anyhow::anyhow!("decoding InferenceCall usage for request_doc_id={request_doc_id}: {error}")
     })
+}
+
+#[derive(Debug, Deserialize)]
+struct CalibrationCallRow {
+    #[serde(default)]
+    prompt_tokens: Option<i64>,
+    #[serde(default)]
+    completion_tokens: Option<i64>,
+    #[serde(default)]
+    cached_input_tokens: Option<i64>,
+    #[serde(default)]
+    cache_creation_input_tokens: Option<i64>,
+    #[serde(default)]
+    usage_completeness: Option<String>,
+    #[serde(default)]
+    context_accounting_json: Option<String>,
+}
+
+/// Inference calls scanned for the session's calibration window; most carry
+/// usable usage, so only failed or unaccounted calls are skipped.
+const CALIBRATION_CALL_SCAN: usize =
+    4 * crate::provider_input::budget::CALIBRATION_OBSERVATION_WINDOW;
+
+/// The provider-input calibration a request starts from, from this session's
+/// inference calls with this agent's model and estimator: the ratios of the
+/// newest calls with usable usage fill the observation window, and the newest
+/// informative call anchors when it has usable usage. Without any, the
+/// newest call's dispatched ratio, else the profile's prior, and no anchor.
+/// Calibration only raises estimates, so an unreadable history keeps the
+/// prior rather than failing the request.
+pub(crate) async fn context_calibration_for_session(
+    node: &EmbeddedNode,
+    agent_config: &ResolvedAgent,
+    node_did: &str,
+    session_id: &str,
+) -> crate::provider_input::budget::ContextCalibration {
+    let profile = crate::provider_input::ProviderInputProfile::resolve(
+        agent_config.backend_provider_kind,
+        agent_config.openai_wire_api,
+    );
+    match load_session_calibration_rows(
+        node,
+        node_did,
+        &agent_config.agent_id,
+        session_id,
+        &agent_config.model_name,
+    )
+    .await
+    {
+        Ok(rows) => {
+            let seed = session_calibration_seed(&rows, profile.estimator_name());
+            let prior = seed.dispatched_ratio.unwrap_or_else(|| {
+                crate::provider_input::budget::ContextCalibration::prior_for(profile)
+                    .ratio_basis_points()
+            });
+            let calibration = crate::provider_input::budget::ContextCalibration::with_observations(
+                prior,
+                seed.observations,
+            );
+            match seed.anchor {
+                Some(anchor) => calibration.anchored_at(anchor),
+                None => calibration,
+            }
+        }
+        Err(error) => {
+            tracing::warn!(
+                session_id,
+                error = format!("{error:#}"),
+                "loading the session's provider-input calibration failed; using the profile prior"
+            );
+            crate::provider_input::budget::ContextCalibration::prior_for(profile)
+        }
+    }
+}
+
+/// The session's inference calls made by this agent with this model, newest
+/// first. A session can be run by more than one agent (handoffs, tests);
+/// another agent's calls describe another preamble and tool set, so they
+/// neither observe nor anchor this one.
+async fn load_session_calibration_rows(
+    node: &EmbeddedNode,
+    node_did: &str,
+    agent_id: &str,
+    session_id: &str,
+    model_name: &str,
+) -> anyhow::Result<Vec<CalibrationCallRow>> {
+    let query = format!(
+        r#"{{
+            InferenceCall(
+                filter: {{ _and: [
+                    {{ node_did: {{ _eq: "{}" }} }},
+                    {{ agent_id: {{ _eq: "{}" }} }},
+                    {{ session_id: {{ _eq: "{}" }} }},
+                    {{ model_name: {{ _eq: "{}" }} }},
+                    {{ call_kind: {{ _eq: "inference" }} }}
+                ] }},
+                order: [{{ queued_at: DESC }}, {{ call_seq: DESC }}],
+                limit: {CALIBRATION_CALL_SCAN}
+            ) {{
+                prompt_tokens
+                completion_tokens
+                cached_input_tokens
+                cache_creation_input_tokens
+                usage_completeness
+                context_accounting_json
+            }}
+        }}"#,
+        escape_graphql_string(node_did),
+        escape_graphql_string(agent_id),
+        escape_graphql_string(session_id),
+        escape_graphql_string(model_name),
+    );
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "load_session_calibration_rows",
+    )
+    .await?;
+    match response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("InferenceCall"))
+    {
+        None | Some(serde_json::Value::Null) => Ok(Vec::new()),
+        Some(rows) => serde_json::from_value(rows.clone()).map_err(|error| {
+            anyhow::anyhow!("InferenceCall calibration payload is not a row array: {error}")
+        }),
+    }
+}
+
+/// What a session's recorded inference calls say about its calibration.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct CalibrationSeed {
+    /// Provider/estimate ratios of the newest calls with usable usage,
+    /// oldest first, at most the calibration window.
+    observations: Vec<u64>,
+    /// The ratio the newest informative call was dispatched with: the prior
+    /// when no call in the scan has usable usage.
+    dispatched_ratio: Option<u64>,
+    /// The newest informative call, when it has usable usage: an older call
+    /// is not a prefix of what followed the newest one.
+    anchor: Option<crate::provider_input::budget::ContextAnchor>,
+}
+
+/// One recorded call of this estimator: its usable usage as a ratio and
+/// anchor, and the ratio it was dispatched with.
+struct RecordedCalibration {
+    observation: Option<(u64, crate::provider_input::budget::ContextAnchor)>,
+    dispatched_ratio: Option<u64>,
+}
+
+/// A call counts as an observation when it recorded complete,
+/// contract-shaped usage at or above its own raw estimate. Rows from another
+/// estimator are a different scale. Rows written before Claude usage was
+/// normalized hold uncached input below the cache counters, and an input
+/// under the estimate is implausible for an undercounting estimator; neither
+/// is an observation, so neither can lower the ratio.
+fn recorded_calibration(row: &CalibrationCallRow, estimator: &str) -> Option<RecordedCalibration> {
+    let accounting = serde_json::from_str::<gents_protocol::rendered_request::ContextAccounting>(
+        row.context_accounting_json.as_deref()?,
+    )
+    .ok()
+    .filter(|accounting| accounting.estimator == estimator)?;
+    let estimated = accounting
+        .raw_estimated_input_tokens
+        .unwrap_or(accounting.estimated_input_tokens);
+    let counter = |value: Option<i64>| value.and_then(|value| u64::try_from(value).ok());
+    let observation = (row.usage_completeness.as_deref() == Some("complete"))
+        .then_some(())
+        .and_then(|()| {
+            provider_usage::contract_input_tokens(
+                counter(row.prompt_tokens)?,
+                counter(row.cached_input_tokens).unwrap_or(0),
+                counter(row.cache_creation_input_tokens).unwrap_or(0),
+            )
+        })
+        .filter(|observed| *observed >= estimated as u64)
+        .and_then(|observed| {
+            let ratio = crate::provider_input::budget::observed_input_ratio_basis_points(
+                observed, estimated,
+            )?;
+            Some((
+                ratio,
+                crate::provider_input::budget::ContextAnchor {
+                    input_tokens: observed,
+                    output_tokens: counter(row.completion_tokens).unwrap_or(0),
+                    estimated_input_tokens: estimated,
+                },
+            ))
+        });
+    Some(RecordedCalibration {
+        observation,
+        dispatched_ratio: accounting.input_calibration_basis_points,
+    })
+}
+
+/// The calibration seed of `rows`, newest first.
+fn session_calibration_seed(rows: &[CalibrationCallRow], estimator: &str) -> CalibrationSeed {
+    let recorded = rows
+        .iter()
+        .filter_map(|row| recorded_calibration(row, estimator))
+        .filter(|recorded| recorded.observation.is_some() || recorded.dispatched_ratio.is_some())
+        .collect::<Vec<_>>();
+    let mut observations = recorded
+        .iter()
+        .filter_map(|recorded| recorded.observation.map(|(ratio, _)| ratio))
+        .take(crate::provider_input::budget::CALIBRATION_OBSERVATION_WINDOW)
+        .collect::<Vec<_>>();
+    observations.reverse();
+    CalibrationSeed {
+        observations,
+        dispatched_ratio: recorded.first().and_then(|newest| newest.dispatched_ratio),
+        anchor: recorded
+            .first()
+            .and_then(|newest| newest.observation.map(|(_, anchor)| anchor)),
+    }
 }
 
 fn prior_usage_rows_from_response(

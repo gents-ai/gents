@@ -599,6 +599,7 @@ mod replay_error_tests {
             resume_from_history: false,
             context_window: 128_000,
             compaction_threshold: 0.75,
+            context_calibration: Default::default(),
             retry_policy: CompletionRetryPolicy::interactive_default(),
             provider_idle_timeout: None,
             deadline: None,
@@ -895,6 +896,87 @@ mod replay_error_tests {
             replay_resolution_error(error),
             StreamingError::Completion(CompletionError::ProviderError(_))
         ));
+    }
+
+    /// A compactor whose reduced transcript is under the provider budget by
+    /// the raw estimate but over it at the session ratio.
+    fn under_raw_over_calibrated_config(
+        compactor_calls: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> LoopConfig {
+        let mut config = replay_assembly_config();
+        config.context_window = 100_000;
+        config.compaction_threshold = 0.75;
+        config.context_calibration =
+            crate::provider_input::budget::ContextCalibration::with_ratio(20_000);
+        config.turn_compactor = Some(Arc::new(move |_request: TurnCompactionRequest| {
+            compactor_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async {
+                Ok(TurnCompactionOutcome::Reduced {
+                    messages: vec![
+                        TaggedMessage::unassociated(Message::user("s".repeat(160_000))),
+                        TaggedMessage::unassociated(Message::user("compacted prompt")),
+                    ],
+                    reduction_key: "still-too-big".to_string(),
+                })
+            })
+        }));
+        config
+    }
+
+    #[tokio::test]
+    async fn rebuilt_request_over_the_calibrated_budget_cannot_fit_and_keeps_the_session() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let config = under_raw_over_calibrated_config(calls.clone());
+        let original_history = vec![TaggedMessage::unassociated(Message::user(
+            "h".repeat(400_000),
+        ))];
+        let original_prompt = vec![TaggedMessage::unassociated(Message::user("next"))];
+        let mut history = original_history.clone();
+        let mut new_messages = original_prompt.clone();
+        let mut replay = LoopReplayInput::default();
+        let mut chain_keys = vec!["earlier-reduction".to_string()];
+        let mut active_keys = vec!["earlier-reduction".to_string()];
+        config
+            .context_calibration
+            .anchor_accepted(crate::provider_input::budget::ContextAnchor {
+                input_tokens: 1,
+                output_tokens: 0,
+                estimated_input_tokens: 1,
+            });
+
+        let error = build_budgeted_request(
+            &AssemblyOnlyModel,
+            &mut history,
+            &mut new_messages,
+            &[],
+            &config,
+            &mut replay,
+            3,
+            &mut chain_keys,
+            &mut active_keys,
+        )
+        .await
+        .expect_err("the rebuilt request is over the provider budget at the session ratio");
+
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(
+            format!("{error:?}").contains("CannotFit"),
+            "the post-reduction check counts provider tokens: {error:?}"
+        );
+        let rebuilt_raw =
+            crate::provider_input::estimate_json(&serde_json::json!("s".repeat(160_000))).unwrap();
+        assert!(
+            rebuilt_raw < 75_000,
+            "the raw estimate ({rebuilt_raw}) alone would have passed the 75k budget"
+        );
+        assert_eq!(history, original_history, "the transcript is unchanged");
+        assert_eq!(new_messages, original_prompt);
+        assert_eq!(chain_keys, vec!["earlier-reduction".to_string()]);
+        assert_eq!(active_keys, vec!["earlier-reduction".to_string()]);
+        assert!(
+            config.context_calibration.anchor().is_some(),
+            "a failed reduction keeps the anchor"
+        );
     }
 }
 
@@ -1279,6 +1361,7 @@ fn completion_request_input_tokens(
 pub(super) struct PreparedDispatch {
     request: CompletionRequest,
     projection: crate::provider_input::ProviderInputProjection,
+    context: crate::provider_input::budget::ContextEstimate,
 }
 
 impl PreparedDispatch {
@@ -1289,6 +1372,12 @@ impl PreparedDispatch {
     pub(super) fn projection(&self) -> &crate::provider_input::ProviderInputProjection {
         &self.projection
     }
+
+    /// The request's size in provider tokens under the calibration and
+    /// anchor in effect when this attempt was prepared.
+    pub(super) fn context(&self) -> crate::provider_input::budget::ContextEstimate {
+        self.context
+    }
 }
 
 pub(super) fn prepare_dispatch_attempt(
@@ -1297,21 +1386,31 @@ pub(super) fn prepare_dispatch_attempt(
     aggregate_token_budget: Option<&AggregateTokenBudget>,
 ) -> Result<PreparedDispatch, crate::error::LoopStreamError> {
     let mut request = assembled_request.clone();
-    let input_tokens =
+    let estimated_input_tokens =
         completion_request_input_tokens(&request, config.provider_input_counter.as_ref())?;
-    clamp_request_output_budget(&mut request, config, input_tokens);
-    ensure_context_can_dispatch(&request, config, input_tokens)?;
+    let context = config.context_calibration.context(estimated_input_tokens);
+    // The calibrated count triggers compaction and caps output, but only the
+    // raw count can refuse dispatch: the provider's own overflow rejection is
+    // recovered, an overestimate is not.
+    let configured_max_tokens = request.max_tokens;
+    clamp_request_output_budget(&mut request, config, context.tokens);
+    if request.max_tokens == Some(0) {
+        request.max_tokens = configured_max_tokens;
+        clamp_request_output_budget(&mut request, config, estimated_input_tokens);
+    }
+    ensure_context_can_dispatch(&request, config, estimated_input_tokens)?;
     super::aggregate_budget::clamp_request_aggregate_token_budget(
         &mut request,
         aggregate_token_budget,
-        input_tokens,
+        &context,
     )?;
     let projection =
         completion_request_input_components(&request, config.provider_input_counter.as_ref())?;
-    debug_assert_eq!(projection.estimated_input_tokens, input_tokens);
+    debug_assert_eq!(projection.estimated_input_tokens, estimated_input_tokens);
     Ok(PreparedDispatch {
         request,
         projection,
+        context,
     })
 }
 
@@ -1331,21 +1430,24 @@ pub(super) fn context_accounting_for_request(
 ) -> ContextAccounting {
     let request = dispatch.request();
     let projection = dispatch.projection();
-    let estimated_input_tokens = projection.estimated_input_tokens;
     ContextAccounting {
         accounting_version: CONTEXT_ACCOUNTING_VERSION,
         turn_index,
         attempt,
         estimator: projection.estimator.to_string(),
         components: projection.components.clone(),
-        estimated_input_tokens,
+        estimated_input_tokens: dispatch.context().tokens,
+        raw_estimated_input_tokens: Some(projection.estimated_input_tokens),
+        input_calibration_basis_points: Some(dispatch.context().ratio_basis_points),
+        anchored_input_tokens: dispatch.context().anchored,
         context_window: config.context_window,
         compaction_threshold_basis_points: crate::provider_input::budget::threshold_basis_points(
             config.compaction_threshold,
         ),
-        compaction_threshold_tokens: crate::provider_input::budget::threshold_budget(
+        compaction_threshold_tokens: crate::provider_input::budget::compaction_input_budget(
             config.context_window,
             config.compaction_threshold,
+            crate::provider_input::budget::configured_output_ceiling(config.max_tokens),
         ),
         configured_max_output_tokens: config.max_tokens,
         effective_max_output_tokens: request.max_tokens,
@@ -1527,7 +1629,7 @@ where
         completion_request_input_components(&request, config.provider_input_counter.as_ref())?;
     let before_tokens = projection.estimated_input_tokens;
 
-    let Some(compactor) = config.turn_compactor.as_ref() else {
+    if config.turn_compactor.is_none() {
         return Ok((
             request,
             TurnContextDecision {
@@ -1535,12 +1637,16 @@ where
                 pre_compaction_input_tokens: None,
             },
         ));
-    };
-    let Some(admission) = crate::compaction::ReductionAdmission::for_input(
-        before_tokens,
+    }
+    let provider_budget = crate::provider_input::budget::compaction_input_budget(
         config.context_window,
         config.compaction_threshold,
-    ) else {
+        crate::provider_input::budget::configured_output_ceiling(config.max_tokens),
+    );
+    let context = config.context_calibration.context(before_tokens);
+    let Some(admission) =
+        crate::compaction::ReductionAdmission::for_context(context, provider_budget)
+    else {
         return Ok((
             request,
             TurnContextDecision {
@@ -1549,6 +1655,141 @@ where
             },
         ));
     };
+    reduce_and_rebuild(
+        model,
+        history,
+        new_messages,
+        tools,
+        config,
+        replay,
+        turn_index,
+        reduction_chain_keys,
+        active_reduction_keys,
+        admission,
+        provider_budget,
+        context.tokens,
+    )
+    .await
+}
+
+/// Rebuild the turn's request after the provider rejected it as over its
+/// context window. The rejected request's provider/estimate ratio becomes the
+/// session's calibration, and the budget is the provider's limit
+/// (`overflow.limit`, else the configured window) less the output reserve, in
+/// this estimator's units at that ratio, so the reduced request is measured
+/// against what the provider will count.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn rebuild_after_provider_overflow<M>(
+    model: &M,
+    history: &mut Vec<TaggedMessage>,
+    new_messages: &mut Vec<TaggedMessage>,
+    tools: &[Box<dyn ToolDyn>],
+    config: &LoopConfig,
+    replay: &mut LoopReplayInput,
+    turn_index: usize,
+    reduction_chain_keys: &mut Vec<String>,
+    active_reduction_keys: &mut Vec<String>,
+    overflow: crate::error::ContextOverflow,
+    rejected_input_tokens: usize,
+) -> Result<(CompletionRequest, TurnContextDecision), crate::error::LoopStreamError>
+where
+    M: CompletionModel,
+{
+    use crate::provider_input::budget;
+    let provider_limit = overflow
+        .limit
+        .and_then(|limit| usize::try_from(limit).ok())
+        .map_or(config.context_window, |limit| {
+            limit.min(config.context_window)
+        });
+    let observed_input_tokens = overflow.input_tokens.map_or_else(
+        || {
+            u64::try_from(provider_limit)
+                .unwrap_or(u64::MAX)
+                .saturating_add(1)
+        },
+        u64::from,
+    );
+    config
+        .context_calibration
+        .observe(observed_input_tokens, rejected_input_tokens);
+    let ratio = config.context_calibration.ratio_basis_points();
+    let provider_budget = budget::compaction_input_budget(
+        provider_limit,
+        config.compaction_threshold,
+        budget::configured_output_ceiling(config.max_tokens),
+    );
+    let estimator_budget = config.context_calibration.estimator_budget(provider_budget);
+    let request =
+        assemble_provider_request(model, history, new_messages, tools, config, replay).await?;
+    let before_tokens =
+        completion_request_input_components(&request, config.provider_input_counter.as_ref())?
+            .estimated_input_tokens;
+    tracing::warn!(
+        target: "gents::agent::loop_stream",
+        turn = turn_index,
+        provider_limit,
+        observed_input_tokens,
+        rejected_input_tokens,
+        ratio_basis_points = ratio,
+        provider_budget,
+        estimator_budget,
+        "provider rejected the request as over its context window; compacting once"
+    );
+    reduce_and_rebuild(
+        model,
+        history,
+        new_messages,
+        tools,
+        config,
+        replay,
+        turn_index,
+        reduction_chain_keys,
+        active_reduction_keys,
+        crate::compaction::ReductionAdmission::required(before_tokens, estimator_budget),
+        provider_budget,
+        usize::try_from(observed_input_tokens).unwrap_or(usize::MAX),
+    )
+    .await
+}
+
+/// Run the turn compactor under `admission` and rebuild the request. The
+/// rebuilt request, in provider tokens (calibrated: the anchor describes the
+/// unreduced transcript), must fit `provider_budget`, the budget that
+/// admitted the reduction. `pre_compaction_tokens` is the unreduced
+/// request's size in provider tokens, for the accounting.
+///
+/// The transcript, replay keys and anchor change only when the rebuilt
+/// request fits: a reduction that fails, or cannot fit, leaves the session as
+/// it was.
+#[allow(clippy::too_many_arguments)]
+async fn reduce_and_rebuild<M>(
+    model: &M,
+    history: &mut Vec<TaggedMessage>,
+    new_messages: &mut Vec<TaggedMessage>,
+    tools: &[Box<dyn ToolDyn>],
+    config: &LoopConfig,
+    replay: &mut LoopReplayInput,
+    turn_index: usize,
+    reduction_chain_keys: &mut Vec<String>,
+    active_reduction_keys: &mut Vec<String>,
+    admission: crate::compaction::ReductionAdmission,
+    provider_budget: usize,
+    pre_compaction_tokens: usize,
+) -> Result<(CompletionRequest, TurnContextDecision), crate::error::LoopStreamError>
+where
+    M: CompletionModel,
+{
+    let Some(compactor) = config.turn_compactor.as_ref() else {
+        return Err(StreamingError::Completion(CompletionError::RequestError(Box::new(
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "provider input must be reduced but this completion loop has no per-turn compactor",
+            ),
+        )))
+        .into());
+    };
+    let before_tokens = admission.input_tokens();
     let provider_messages = history
         .iter()
         .chain(new_messages.iter())
@@ -1622,50 +1863,48 @@ where
             ),
         )))
     })?;
-    *history = compacted;
-    *new_messages = vec![compacted_prompt.clone()];
-    if let Some(reduction_key) = reduction_key {
-        reduction_chain_keys.push(reduction_key.clone());
-        active_reduction_keys.clear();
-        active_reduction_keys.push(reduction_key);
-    }
-
-    let rebuilt =
-        assemble_provider_request(model, history, new_messages, tools, config, replay).await?;
+    let mut rebuilt_history = compacted;
+    let mut rebuilt_new_messages = vec![compacted_prompt];
+    let rebuilt = assemble_provider_request(
+        model,
+        &mut rebuilt_history,
+        &mut rebuilt_new_messages,
+        tools,
+        config,
+        replay,
+    )
+    .await?;
     let rebuilt_projection =
         completion_request_input_components(&rebuilt, config.provider_input_counter.as_ref())?;
     let after_tokens = rebuilt_projection.estimated_input_tokens;
-    let effective_input_budget = crate::provider_input::budget::effective_input_budget(
-        config.context_window,
-        config.compaction_threshold,
-    );
+    // Provider tokens at the session ratio. Not anchored: the anchor counted
+    // the unreduced transcript, which this request no longer extends.
+    let after_context_tokens = config.context_calibration.calibrated(after_tokens);
     tracing::info!(
         target: "gents::agent::loop_stream",
         turn = turn_index,
         before_tokens,
         after_tokens,
-        effective_input_budget,
+        after_context_tokens,
+        provider_budget,
         context_window = config.context_window,
         max_output_tokens = config.max_tokens.unwrap_or_default(),
         "compacted provider input before completion dispatch"
     );
 
     let rebuilt_can_dispatch = crate::provider_input::budget::can_dispatch(
-        after_tokens,
+        after_context_tokens,
         config.context_window,
         crate::provider_input::budget::configured_output_ceiling(rebuilt.max_tokens),
     );
     if rebuilt_can_dispatch
-        && crate::compaction::ReductionAdmission::for_input(
-            after_tokens,
-            config.context_window,
-            config.compaction_threshold,
-        )
-        .is_some()
+        && crate::provider_input::budget::threshold_decision(after_context_tokens, provider_budget)
+            == crate::provider_input::budget::ThresholdDecision::ReduceEligible
     {
         tracing::warn!(
             estimated_input_tokens = after_tokens,
-            effective_input_budget,
+            after_context_tokens,
+            provider_budget,
             "provider input remains over threshold after reduction"
         );
         return Err(
@@ -1676,11 +1915,20 @@ where
         );
     }
 
+    *history = rebuilt_history;
+    *new_messages = rebuilt_new_messages;
+    config.context_calibration.invalidate_anchor();
+    if let Some(reduction_key) = reduction_key {
+        reduction_chain_keys.push(reduction_key.clone());
+        active_reduction_keys.clear();
+        active_reduction_keys.push(reduction_key);
+    }
+
     Ok((
         rebuilt,
         TurnContextDecision {
             reason,
-            pre_compaction_input_tokens: Some(before_tokens),
+            pre_compaction_input_tokens: Some(pre_compaction_tokens),
         },
     ))
 }
@@ -1698,5 +1946,10 @@ where
     repair_provider_input(history, new_messages)?;
     strip_all_reasoning(history);
     strip_all_reasoning(new_messages);
+    config.context_calibration.invalidate_anchor();
     build_core(model, history, new_messages, tools, config).await
 }
+
+#[cfg(test)]
+#[path = "request_assembly_dispatch_tests.rs"]
+mod dispatch_tests;

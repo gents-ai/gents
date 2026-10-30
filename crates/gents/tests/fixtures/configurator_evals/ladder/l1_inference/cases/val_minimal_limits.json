@@ -6,7 +6,6 @@
     {
       "stage_id": "discover",
       "prompt": "For quick questions I want to keep costs down. Check our current model and limits and suggest the smallest change that would help. Explain first; do not change anything yet.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",
@@ -133,7 +132,6 @@
     {
       "stage_id": "configure",
       "prompt": "Set your allowance to 8 turns and 60,000 total tokens per request. Leave the other settings alone and keep using the same model and connection.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "documents",

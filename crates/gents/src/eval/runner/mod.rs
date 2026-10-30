@@ -2693,7 +2693,7 @@ mod tests {
                         {"kind": "file", "name": "notes", "glob": "**/*.txt"}
                     ]
                 },
-                {"stage_id": "bare", "prompt": "p", "deadline_secs": 60},
+                {"stage_id": "bare", "prompt": "p"},
                 {
                     "stage_id": "seeded",
                     "seed": {"collection": "Event", "document": {"kind": "signup"}},
@@ -2713,8 +2713,9 @@ mod tests {
 
         assert_eq!(
             (stages[0].stage_id.as_str(), stages[0].deadline_secs),
-            ("declared", 60)
+            ("declared", Some(60))
         );
+        assert_eq!(stages[1].deadline_secs, None);
         assert_eq!(
             stages[0].captures,
             vec![

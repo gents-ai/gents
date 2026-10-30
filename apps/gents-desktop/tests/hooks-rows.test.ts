@@ -1,11 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { createElement } from "react";
 import type { TaskHook } from "@source-inc/gents-desktop-client/generated/TaskHook";
 import {
   formatCommand,
+  HooksRows,
   hooksFromDraft,
   splitCommand,
   toHookDraft,
 } from "../src/ui/screens/agent/HooksRows";
+
+vi.mock("../src/lib/nativeShell", () => ({}));
 
 const hook = (command: string[]): TaskHook => ({
   hook_id: "verify",
@@ -27,6 +32,67 @@ const CASES: string[][] = [
 ];
 
 describe("task hook commands", () => {
+  it("lets a user enter skip codes in a before hook", () => {
+    const change = vi.fn();
+    const draft = toHookDraft({ ...hook(["./gate"]), phase: "before" });
+    try {
+      render(
+        createElement(HooksRows, { id: "task", value: [draft], onChange: change }),
+      );
+      fireEvent.change(screen.getByRole("textbox", { name: "Skip exit codes" }), {
+        target: { value: "10, 11" },
+      });
+      expect(hooksFromDraft(change.mock.lastCall![0])).toEqual([
+        { ...hook(["./gate"]), phase: "before", skip_exit_codes: [10, 11] },
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+  it("offers skip codes only on before hooks, while still letting stale codes be cleared", () => {
+    try {
+      render(
+        createElement(HooksRows, {
+          id: "task",
+          value: [
+            toHookDraft(hook(["./after"])),
+            { ...toHookDraft(hook(["./stale"])), skipExitCodes: "10" },
+          ],
+          onChange: vi.fn(),
+        }),
+      );
+      const [after, stale] = screen.getAllByRole("textbox", {
+        name: "Skip exit codes",
+      });
+      expect(after).toBeDisabled();
+      expect(stale).toBeEnabled();
+    } finally {
+      cleanup();
+    }
+  });
+  it("preserves configured gate exit codes when editing other hook fields", () => {
+    const gate: TaskHook = {
+      ...hook(["./gate"]),
+      phase: "before",
+      skip_exit_codes: [10, 11],
+    };
+    const draft = toHookDraft(gate);
+    expect(hooksFromDraft([draft])).toEqual([gate]);
+    expect(hooksFromDraft([{ ...draft, command: "./gate --verbose" }])).toEqual([
+      { ...gate, command: ["./gate", "--verbose"] },
+    ]);
+  });
+
+  it("rejects invalid skip codes and codes on non-before hooks", () => {
+    const gate = toHookDraft({ ...hook(["./gate"]), phase: "before" });
+    for (const skipExitCodes of ["0", "256", "1,", "1.5", "-1"]) {
+      expect(hooksFromDraft([{ ...gate, skipExitCodes }])).toMatch(/skip codes/);
+    }
+    expect(
+      hooksFromDraft([{ ...gate, phase: "finally", skipExitCodes: "10" }]),
+    ).toMatch(/only supported before/);
+  });
+
   it("round-trips every argv through its one-line form", () => {
     for (const argv of CASES) {
       expect(splitCommand(formatCommand(argv)), JSON.stringify(argv)).toEqual(argv);

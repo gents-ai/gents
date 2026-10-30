@@ -3,7 +3,7 @@
   "eval_definitions": [
     {
       "definition_id": "configurator-l3-datastore",
-      "comparability_version": 8,
+      "comparability_version": 9,
       "title": "The Engineer \u2014 Datastore L3 component: schema, scoped surface, selection, live call",
       "subject": {
         "kind": "agent",

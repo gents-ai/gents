@@ -6,7 +6,6 @@
     {
       "stage_id": "configure",
       "prompt": "Create an assistant named Scout for finding information. Give it its own instructions and tool permissions, appropriate for its role: find relevant local files and report what they say. It must not modify files or run shell commands. Use our existing model settings. Keep your own role and permissions unchanged.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "crew_spec_match",
@@ -222,7 +221,6 @@
     {
       "stage_id": "reentry",
       "prompt": "I am back to finish setting up Scout. Check whether it already has what we agreed and finish only what is missing. I want one Scout, with the same role and permissions.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "crew_spec_match",

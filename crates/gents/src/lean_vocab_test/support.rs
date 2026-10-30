@@ -453,6 +453,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) prompt_assembly_budget_cases: Vec<LeanPromptAssemblyBudgetCase>,
     pub(crate) prompt_assembly_turn_budget_cases: Vec<LeanPromptAssemblyTurnBudgetCase>,
     pub(crate) prompt_assembly_retention_cases: Vec<LeanPromptAssemblyRetentionCase>,
+    pub(crate) prompt_assembly_compaction_trigger_cases:
+        Vec<LeanPromptAssemblyCompactionTriggerCase>,
     pub(crate) prompt_assembly_claude_map_cases: Vec<LeanPromptAssemblyClaudeMapCase>,
     pub(crate) prompt_assembly_claude_body_cases: Vec<LeanPromptAssemblyClaudeBodyCase>,
     pub(crate) prompt_assembly_claude_attribution_cases:
@@ -3445,6 +3447,11 @@ pub(crate) fn lean_prompt_assembly_budget_cases() -> &'static [LeanPromptAssembl
 pub(crate) fn lean_prompt_assembly_turn_budget_cases() -> &'static [LeanPromptAssemblyTurnBudgetCase]
 {
     &lean_contract_snapshot().prompt_assembly_turn_budget_cases
+}
+
+pub(crate) fn lean_prompt_assembly_compaction_trigger_cases(
+) -> &'static [LeanPromptAssemblyCompactionTriggerCase] {
+    &lean_contract_snapshot().prompt_assembly_compaction_trigger_cases
 }
 
 pub(crate) fn lean_prompt_assembly_retention_cases() -> &'static [LeanPromptAssemblyRetentionCase] {

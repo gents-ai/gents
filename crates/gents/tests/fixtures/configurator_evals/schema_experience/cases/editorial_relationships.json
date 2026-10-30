@@ -6,7 +6,6 @@
     {
       "stage_id": "configure",
       "prompt": "We need an editorial database: Writer { name, stories } and Story { headline, draft, writer }. Name and headline are text; draft is true/false. One writer has many stories and each story has one writer. Make both sides navigable. The headline also needs English word search with BM25; this is keyword relevance, not vector similarity.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "schema",

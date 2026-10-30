@@ -2520,6 +2520,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_turn_budget_cases_drive_every_completion_dispatch",
         },
         ConformanceConsumer::RustTest {
+            id: "agent::loop_stream::tests::generated_compaction_trigger_cases_drive_the_production_trigger",
+            package: "gents",
+            source_path: "crates/gents/src/agent/loop_stream/tests/budgeting.rs",
+            module_path: "agent::loop_stream::tests",
+            function: "generated_compaction_trigger_cases_drive_the_production_trigger",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::loop_stream::tests::generated_retention_cases_drive_production_compaction_target",
             package: "gents",
             source_path: "crates/gents/src/agent/loop_stream/tests/budgeting.rs",

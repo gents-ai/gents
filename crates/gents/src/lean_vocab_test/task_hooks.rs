@@ -7,6 +7,7 @@ pub(crate) struct LeanTaskHook {
     pub(crate) phase: String,
     pub(crate) command: Vec<String>,
     pub(crate) timeout_secs: Option<i64>,
+    pub(crate) skip_exit_codes: Vec<i64>,
     pub(crate) effective_timeout_secs: u64,
 }
 

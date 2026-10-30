@@ -71,6 +71,9 @@ def executionLeaseFailure (reason : String) : Bool :=
 
 structure RequestEvidence where
   state : Option RequestState
+  /-- Set only when the stage opted into a wall-clock deadline and the runner
+  interrupted the request at it; a stage without one waits for the request's
+  own terminal state, so `.deadline` is reachable only through that opt-in. -/
   interruptedOnDeadline : Bool
   toolBudgetExhausted : Bool
   executionLeaseLost : Bool

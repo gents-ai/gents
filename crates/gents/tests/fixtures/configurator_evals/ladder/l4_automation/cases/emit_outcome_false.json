@@ -11,7 +11,6 @@
     {
       "stage_id": "configure",
       "prompt": "Whenever a new QuietNote record arrives, handle its message yourself and acknowledge it. Let separate records run independently. Do not retain an extra completion record. The QuietNote records already have a message field. Set this up now; I will send records later.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -180,7 +179,6 @@
           "handoff_id": "emit-outcome-false-1"
         }
       },
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "captured_fields_match",

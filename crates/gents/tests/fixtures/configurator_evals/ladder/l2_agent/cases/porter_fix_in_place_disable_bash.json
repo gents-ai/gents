@@ -6,7 +6,6 @@
     {
       "stage_id": "configure",
       "prompt": "Create an assistant named Porter for repository inspection. Give it its own instructions and tool permissions, appropriate for its role: read local files and run read-only inspection commands. It must not modify anything. Use our existing model settings. Keep your own role and permissions unchanged.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "crew_spec_match",
@@ -222,7 +221,6 @@
     {
       "stage_id": "disable_bash",
       "prompt": "Porter should no longer be able to run commands. Keep its ability to read files and its other settings; update the existing assistant.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "crew_spec_match",

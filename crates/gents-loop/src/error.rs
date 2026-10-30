@@ -81,8 +81,15 @@ pub enum InferenceError {
     #[error("{0}")]
     UsageLimited(crate::provider_limit::UsageLimit),
 
+    /// The provider rejected the request because its input exceeds the
+    /// model's context window. `input_tokens` and `limit` are the provider's
+    /// own counts when its message states them.
     #[error("context length exceeded: {reason}")]
-    ContextLengthExceeded { reason: String },
+    ContextLengthExceeded {
+        reason: String,
+        input_tokens: Option<u32>,
+        limit: Option<u32>,
+    },
 
     #[error("retries exhausted ({max_retries} attempts): {last_error}")]
     RetriesExhausted {
@@ -244,9 +251,11 @@ pub fn classify_loop_failure(cause: &LoopFailureCause, message: &str) -> Classif
         } => ProviderReport::default(),
         _ => ProviderReport::classify_failure_text(&text),
     };
-    let error = if report.context_length_exceeded {
+    let error = if let Some(overflow) = report.context_overflow {
         InferenceError::ContextLengthExceeded {
             reason: text.clone(),
+            input_tokens: overflow.input_tokens,
+            limit: overflow.limit,
         }
     } else {
         classify_cause(cause, &report, &text)
@@ -309,11 +318,17 @@ fn classify_cause(cause: &LoopFailureCause, report: &ProviderReport, text: &str)
 /// parse 400s as `BadRequestError` with a `line/column/(char` position, the
 /// Claude Messages parser's `MessagesParseError` fail-closed `tool_use` causes
 /// and `ProviderRefusal` (`stop_reason: refusal`), and the Anthropic/OpenAI
-/// rejections of replayed thinking or encrypted reasoning. This is the one
-/// reader of that text; the loop decides on the report.
+/// rejections of replayed thinking or encrypted reasoning, and the context
+/// overflow rejections: Anthropic's 400 `prompt is too long: N tokens > M
+/// maximum`, OpenAI's `context_length_exceeded` / `maximum context length is
+/// M tokens ... resulted in N tokens`, xAI's `maximum prompt length is M ...
+/// contains N tokens`, and the generic `input is too long` / `exceeds the
+/// context window`. A 413 is a body-size limit, not a token overflow, so the
+/// status alone never reports one. This is the one reader of that text; the
+/// loop decides on the report.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProviderReport {
-    pub context_length_exceeded: bool,
+    pub context_overflow: Option<ContextOverflow>,
     /// A 400 for a tool call whose JSON the provider could not parse.
     pub malformed_tool_call: bool,
     /// The Claude Messages parser refused an unsafe `tool_use` stream.
@@ -341,8 +356,10 @@ impl ProviderReport {
             .any(|pattern| text.contains(pattern.as_str()))
         };
         Self {
-            context_length_exceeded: text.contains("context_length_exceeded")
-                || text.contains("maximum context length"),
+            context_overflow: CONTEXT_OVERFLOW_MARKERS
+                .iter()
+                .any(|marker| lower.contains(marker))
+                .then(|| ContextOverflow::from_lowercase_text(&lower)),
             malformed_tool_call: text.contains("BadRequestError")
                 && text.contains(" line ")
                 && text.contains(" column ")
@@ -376,6 +393,83 @@ impl ProviderReport {
     }
 }
 
+const CONTEXT_OVERFLOW_MARKERS: &[&str] = &[
+    "prompt is too long",
+    "input is too long",
+    "context_length_exceeded",
+    "maximum context length",
+    "maximum prompt length",
+    "exceeds the context window",
+    "exceed context limit",
+];
+
+/// The token counts a provider's context overflow rejection states, when it
+/// states them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ContextOverflow {
+    /// The provider's count of the rejected request's input.
+    pub input_tokens: Option<u32>,
+    /// The provider's maximum input for the model.
+    pub limit: Option<u32>,
+}
+
+impl ContextOverflow {
+    fn from_lowercase_text(lower: &str) -> Self {
+        let first = |markers: &[&str]| {
+            markers
+                .iter()
+                .find_map(|marker| leading_count_after(lower, marker))
+        };
+        // Claude reports `input + max_tokens > limit` when the input fits but
+        // the requested output does not.
+        let summed_limit = lower
+            .split_once("exceed context limit:")
+            .and_then(|(_, rest)| leading_count_after(rest, ">"));
+        Self {
+            input_tokens: requested_message_tokens(lower).or_else(|| {
+                first(&[
+                    "prompt is too long:",
+                    "exceed context limit:",
+                    "resulted in",
+                    "request contains",
+                    "you requested",
+                ])
+            }),
+            limit: summed_limit.or_else(|| {
+                first(&[
+                    "tokens >",
+                    "maximum context length is",
+                    "maximum prompt length is",
+                ])
+            }),
+        }
+    }
+}
+
+/// OpenAI's `you requested N tokens (X in the messages, Y in the completion)`
+/// counts the requested completion too; the input is the messages share.
+fn requested_message_tokens(lower: &str) -> Option<u32> {
+    let (_, rest) = lower.split_once("you requested")?;
+    let (_, breakdown) = rest.split_once("tokens (")?;
+    let messages = leading_count_after(breakdown, "")?;
+    let (counted, _) = breakdown.split_once(',')?;
+    counted
+        .trim_end()
+        .ends_with("in the messages")
+        .then_some(messages)
+}
+
+fn leading_count_after(text: &str, marker: &str) -> Option<u32> {
+    let (_, rest) = text.split_once(marker)?;
+    let rest = rest.trim_start();
+    let digits = rest
+        .char_indices()
+        .take_while(|(_, character)| character.is_ascii_digit() || *character == ',')
+        .map(|(index, character)| index + character.len_utf8())
+        .last()?;
+    rest[..digits].replace(',', "").parse().ok()
+}
+
 #[cfg(test)]
 #[path = "error_tests.rs"]
-mod tests;
+pub(crate) mod tests;

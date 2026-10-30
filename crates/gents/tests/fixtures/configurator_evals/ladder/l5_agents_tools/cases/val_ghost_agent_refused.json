@@ -6,7 +6,6 @@
     {
       "stage_id": "trap",
       "prompt": "Make the existing assistant Missing Assistant available for you to delegate to. Do not create a replacement if it does not exist; leave things working and explain the problem.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",

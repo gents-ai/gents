@@ -18,6 +18,24 @@ pub fn charged_usage_total(usage: Usage) -> u64 {
     usage.input_tokens.saturating_add(usage.output_tokens)
 }
 
+/// The provider's whole count of one call's input under the usage contract
+/// (input includes cache reads and writes). A report whose cache counters
+/// exceed its input does not meet the contract, as rows written before Claude
+/// usage was normalized do not, and yields nothing.
+pub fn contract_input_tokens(input_tokens: u64, cache_read: u64, cache_write: u64) -> Option<u64> {
+    (input_tokens > 0 && input_tokens >= cache_read.saturating_add(cache_write))
+        .then_some(input_tokens)
+}
+
+/// [`contract_input_tokens`] of a rig usage report.
+pub fn contract_usage_input_tokens(usage: &Usage) -> Option<u64> {
+    contract_input_tokens(
+        usage.input_tokens,
+        usage.cached_input_tokens,
+        usage.cache_creation_input_tokens,
+    )
+}
+
 fn charged_from_persisted_parts(
     prompt_tokens: Option<i64>,
     completion_tokens: Option<i64>,

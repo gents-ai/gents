@@ -104,6 +104,7 @@ pub(crate) struct LeanPromptAssemblyBudgetCase {
     pub(crate) prompt_tokens: usize,
     pub(crate) request_tokens: usize,
     pub(crate) effective_input_budget: usize,
+    pub(crate) compaction_input_budget: usize,
     pub(crate) effective_output_tokens: usize,
     pub(crate) should_compact: bool,
     pub(crate) provider_safe: bool,
@@ -118,10 +119,44 @@ pub(crate) struct LeanPromptAssemblyTurnBudgetCase {
     pub(crate) threshold_basis_points: usize,
     pub(crate) configured_threshold_budget: usize,
     pub(crate) effective_input_budget: usize,
+    pub(crate) compaction_input_budget: usize,
     pub(crate) turn_input_tokens: Vec<usize>,
     pub(crate) turn_output_tokens: Vec<usize>,
     pub(crate) turn_should_compact: Vec<bool>,
     pub(crate) turn_can_dispatch: Vec<bool>,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LeanContextAnchor {
+    pub(crate) input_tokens: u64,
+    pub(crate) output_tokens: u64,
+    pub(crate) estimated_input_tokens: usize,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LeanReductionAdmission {
+    pub(crate) input_tokens: usize,
+    pub(crate) input_budget: usize,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct LeanPromptAssemblyCompactionTriggerCase {
+    pub(crate) name: String,
+    pub(crate) context_window: usize,
+    pub(crate) max_output_tokens: usize,
+    pub(crate) threshold_basis_points: u64,
+    pub(crate) prior_basis_points: u64,
+    pub(crate) seeded_observations: Vec<u64>,
+    pub(crate) observed: Vec<(u64, usize)>,
+    pub(crate) anchor: Option<LeanContextAnchor>,
+    pub(crate) invalidate: bool,
+    pub(crate) raw_input_tokens: usize,
+    pub(crate) ratio_basis_points: u64,
+    pub(crate) calibrated_tokens: usize,
+    pub(crate) anchored_tokens: Option<usize>,
+    pub(crate) context_tokens: usize,
+    pub(crate) compaction_input_budget: usize,
+    pub(crate) admission: Option<LeanReductionAdmission>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

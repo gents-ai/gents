@@ -1967,7 +1967,7 @@ const ERROR_TEXT_CLASSIFIER_ALLOWLIST: &[(&str, usize)] = &[
     // DefraDB duplicate-document rejection wording (no structured code)
     ("crates/gents-desktop-core/src/client/mutations/chat/request/receipt.rs", 2),
     // provider text through Rig's ProviderError(String) (ProviderReport)
-    ("crates/gents-loop/src/error.rs", 22),
+    ("crates/gents-loop/src/error.rs", 21),
     // serde_json schema-mismatch message prefixes
     ("crates/gents-loop/src/tool.rs", 3),
     // tool errors erased by Rig's ToolCallError

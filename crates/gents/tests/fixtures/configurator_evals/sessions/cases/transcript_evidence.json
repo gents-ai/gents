@@ -6,7 +6,6 @@
     {
       "stage_id": "record",
       "prompt": "Record this incident note: The upload retry keeps its checkpoint until the server acknowledges the batch. Reply only Recorded.",
-      "deadline_secs": 300,
       "checks": [
         {
           "check": "final_message_matches",
@@ -24,7 +23,6 @@
     {
       "stage_id": "investigate",
       "prompt": "Use sessions to find our earlier incident note about upload retries. Quote the checkpoint rule and include the canonical source message ID so I can verify it.",
-      "deadline_secs": 300,
       "checks": [
         {
           "check": "final_message_matches",

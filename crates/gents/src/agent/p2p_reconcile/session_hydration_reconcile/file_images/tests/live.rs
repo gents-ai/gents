@@ -1023,6 +1023,48 @@ async fn exercise_revocation(at: PauseAt, reset_refusal: bool, shared: bool) -> 
             "shared reader changed canonical captured bytes"
         );
     }
+    if shared && at == PauseAt::Delivered {
+        source_node
+            .delete_dac_actor_relationship(
+                source.did(),
+                "ToolFileChange",
+                &image,
+                "reader",
+                client.did(),
+            )
+            .await?;
+        let entry = received_entry.as_ref().context("shared inventory entry")?;
+        let retained = receipt
+            .read_inventory_image(client_node.clone(), entry)
+            .await?
+            .context("previously served image became unreadable")?;
+        anyhow::ensure!(
+            retained == changes,
+            "retained image changed after revocation"
+        );
+
+        let mut fresh = demand.clone();
+        fresh.admission.request_key =
+            fresh.derive_retry_request_key(&uuid::Uuid::new_v4().to_string());
+        let fresh_doc = admit_on_client(&client_node, &fresh).await?;
+        push_documents_to_peer(
+            &client_node,
+            &source_peer,
+            vec![defra_p2p_adapter::P2pDocumentRequest {
+                collection: demand.collection_name().into(),
+                doc_id: fresh_doc,
+            }],
+        )
+        .await?;
+        receipt_row(&source_node, &fresh, "pending").await?;
+        reconcile_images(&store, &delivery).await?;
+        let refused_fresh = receipt_row(&client_node, &fresh, "rejected").await?;
+        let verified_fresh = verified(&refused_fresh, &fresh, client.as_ref()).await?;
+        anyhow::ensure!(
+            verified_fresh.selection() == &FileImageSelection::Rejected,
+            "fresh request was not refused after source permission was revoked"
+        );
+    }
     let retained = ConfigAccess::local(client_node.clone()).execute(&format!(
         r#"{{ ToolFileChange(docID: "{}") {{ _docID tool_call_doc_id request_doc_id node_did session_id requester_did file_changes }} }}"#,
         escape_graphql_string(&image),
@@ -1129,6 +1171,15 @@ async fn independent_enrolled_reader_preserves_author_and_revoked_image_refusal_
     tokio::time::timeout(
         Duration::from_secs(120),
         exercise_revocation(PauseAt::Selection, true, true),
+    )
+    .await?
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn independent_reader_revoked_after_delivery_requires_fresh_authorized_retry() -> Result<()> {
+    tokio::time::timeout(
+        Duration::from_secs(120),
+        exercise_revocation(PauseAt::Delivered, true, true),
     )
     .await?
 }

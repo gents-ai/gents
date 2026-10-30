@@ -10,6 +10,11 @@ inductive FailureClass
   encrypted content it cannot decrypt. Resending the identical body fails
   identically, so this class never resamples. -/
   | reasoningRejected
+  /-- The provider rejected the request because its input exceeds the
+  model's context window. Resending the identical body fails identically, so
+  this class never backs off or resamples; one forced reduction of the
+  provider input, budgeted from the provider's own limit, may make it fit. -/
+  | contextOverflow
   /-- The provider refused this account's quota while the account rotation
   (`AccountRotation.attempt`) holds another eligible account. The next attempt
   goes to that account at once: no backoff, no transport budget. -/
@@ -55,6 +60,8 @@ inductive Phase
   | retracted (failure : FailureClass) (error : String) (wake : Time)
   | backingOff (wake : Time)
   | repairing
+  /-- The one forced provider-input reduction after a context overflow. -/
+  | compacting
   | accepted (header : Nat)
   | acceptedToolFailed (header : Nat)
   | exhausted
@@ -70,6 +77,8 @@ structure State where
   transportUsed : Nat
   resampleUsed : Nat
   repairUsed : Bool
+  /-- The forced overflow reduction is a one-shot capability per completion. -/
+  compactUsed : Bool := false
   accountUsed : Nat := 0
   lastParseError : Option String
   now : Time

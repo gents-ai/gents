@@ -654,7 +654,6 @@
     {
       "stage_id": "access",
       "prompt": "Enable your general read access only to ScanDelivery, IndexedDelivery. Keep shell execution off and leave all other permissions alone. Inspect the available fields before preparing reports.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -675,7 +674,6 @@
     {
       "stage_id": "scan",
       "prompt": "The queued-delivery report feels slow. Inspect the plan for ScanDelivery, returning reference and status with a 20-row limit. Explain how records are found. Do not execute the report or change records or schema.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "final_message_matches",
@@ -1515,7 +1513,6 @@
     {
       "stage_id": "indexed",
       "prompt": "Now inspect the same queued-delivery report on IndexedDelivery without executing it. Compare its access path with the previous plan and tell me whether keeping this index is justified by this query. Distinguish what the plan proves from a recommendation about other workloads.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "final_message_matches",

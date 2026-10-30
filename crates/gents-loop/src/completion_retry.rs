@@ -3,7 +3,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use rand::Rng;
 
-use crate::error::{ClassifiedFailure, InferenceError};
+use crate::error::{ClassifiedFailure, ContextOverflow, InferenceError};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CompletionRetryProfileFields {
@@ -19,6 +19,7 @@ pub enum FailureClass {
     Transport,
     ParseBadRequest,
     ReasoningRejected,
+    ContextOverflow,
     Permanent,
 }
 
@@ -36,9 +37,9 @@ pub fn failure_class(failure: &ClassifiedFailure) -> FailureClass {
         | InferenceError::TransientFailure { .. }
         | InferenceError::Timeout { .. }
         | InferenceError::RateLimited { .. } => FailureClass::Transport,
+        InferenceError::ContextLengthExceeded { .. } => FailureClass::ContextOverflow,
         InferenceError::PermanentFailure { .. }
         | InferenceError::UsageLimited(_)
-        | InferenceError::ContextLengthExceeded { .. }
         | InferenceError::RetriesExhausted { .. } => FailureClass::Permanent,
     }
 }
@@ -178,9 +179,19 @@ pub enum RetryKind {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreStreamDirective {
-    RetryAfter { delay: Duration, kind: RetryKind },
+    RetryAfter {
+        delay: Duration,
+        kind: RetryKind,
+    },
     Repair,
-    Fail { reason: String },
+    /// Reduce the provider input under the provider's stated limit and issue
+    /// the completion once more.
+    CompactAndRetry {
+        overflow: ContextOverflow,
+    },
+    Fail {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,6 +207,7 @@ pub struct CompletionRetryState {
     transport_used: u32,
     resample_used: u32,
     repair_used: bool,
+    compaction_used: bool,
     last_parse_error: Option<String>,
 }
 
@@ -206,6 +218,7 @@ impl CompletionRetryState {
             transport_used: 0,
             resample_used: 0,
             repair_used: false,
+            compaction_used: false,
             last_parse_error: None,
         }
     }
@@ -216,6 +229,17 @@ impl CompletionRetryState {
 
     pub fn mark_repair_used(&mut self) {
         self.repair_used = true;
+    }
+
+    pub fn mark_compaction_used(&mut self) {
+        self.compaction_used = true;
+    }
+
+    /// The forced overflow reduction is one-shot per completion
+    /// (`CompletionRetry.State.compactUsed`): an accepted turn ends that
+    /// completion, so the next turn of the same request may compact again.
+    pub fn on_turn_accepted(&mut self) {
+        self.compaction_used = false;
     }
 
     pub fn on_pre_stream_failure(
@@ -229,6 +253,7 @@ impl CompletionRetryState {
             FailureClass::Permanent => PreStreamDirective::Fail {
                 reason: match error {
                     InferenceError::UsageLimited(limit) => limit.to_string(),
+                    InferenceError::PermanentFailure { .. } => error.to_string(),
                     _ => format!("permanent inference failure: {error}"),
                 },
             },
@@ -273,6 +298,24 @@ impl CompletionRetryState {
                     }
                 }
             }
+            FailureClass::ContextOverflow if self.compaction_used => PreStreamDirective::Fail {
+                reason: format!(
+                    "provider context overflow persisted after the one forced compaction: {error}"
+                ),
+            },
+            FailureClass::ContextOverflow => PreStreamDirective::CompactAndRetry {
+                overflow: match error {
+                    InferenceError::ContextLengthExceeded {
+                        input_tokens,
+                        limit,
+                        ..
+                    } => ContextOverflow {
+                        input_tokens: *input_tokens,
+                        limit: *limit,
+                    },
+                    _ => failure.report.context_overflow.unwrap_or_default(),
+                },
+            },
             FailureClass::ParseBadRequest => {
                 let is_fresh = self.last_parse_error.as_deref() != Some(error_text);
                 let resample_budget_spent = self.resample_used >= self.policy.max_resample;

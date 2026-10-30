@@ -1307,3 +1307,36 @@ fn refusal_stop_reason_surfaces_as_a_distinct_error() {
         "provider error text carries the refusal marker: {rendered}"
     );
 }
+
+#[test]
+fn structured_output_schema_is_sent_next_to_the_reasoning_effort() {
+    let mut request = echo_request();
+    request.additional_params = Some(json!({
+        (ADVERTISED_REASONING_EFFORTS_PARAM): ["low", "high"],
+        "output_config": {"effort": "high"},
+    }));
+    let schema = schemars::json_schema!({
+        "type": "object",
+        "properties": {"goal": {"type": "string"}},
+        "required": ["goal"],
+    });
+    request.output_schema = Some(schema.clone());
+    let body = build_messages_body("claude-sonnet-5", &request).unwrap();
+    assert_eq!(body["output_config"]["effort"], "high");
+    assert_eq!(
+        body["output_config"]["format"],
+        json!({"type": "json_schema", "schema": schema.as_value()})
+    );
+}
+
+#[test]
+fn an_unsendable_structured_output_schema_is_an_error_not_a_dropped_field() {
+    let mut request = echo_request();
+    request.output_schema = Some(schemars::Schema::from(true));
+    let error = build_messages_body("claude-sonnet-5", &request)
+        .expect_err("a non-object schema cannot be sent as output_config.format");
+    assert!(
+        error.to_string().contains("structured output requested"),
+        "{error}"
+    );
+}

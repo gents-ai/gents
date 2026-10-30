@@ -6,7 +6,6 @@
     {
       "stage_id": "configure",
       "prompt": "We're recording customer events. Please create CustomerEvent with customer (text), occurred_at (timestamp), and message (text). Our main screen shows one customer's most recent events first; add a compound index ordered first by customer, then by occurred_at descending. Different events can share the same timestamp.",
-      "deadline_secs": 600,
       "capture": [
         {
           "kind": "schema",

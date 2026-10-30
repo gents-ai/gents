@@ -100,7 +100,6 @@
     {
       "stage_id": "investigate",
       "prompt": "Find the partner rotation ledger session with sessions, even if another agent owns it. Report its session ID, title and whether it is closed. Include its canonical session document ID so I can check the source.",
-      "deadline_secs": 300,
       "checks": [
         {
           "check": "final_message_matches",

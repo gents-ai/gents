@@ -215,7 +215,10 @@ impl BoundedWriteTool {
                     value
                 }
                 Some(fill) => {
-                    filled = Value::String(fill.resolve(&field.name)?);
+                    let Some(value) = fill.resolve_optional(&field.name)? else {
+                        continue;
+                    };
+                    filled = Value::String(value);
                     &filled
                 }
             };

@@ -421,6 +421,22 @@
   },
   {
     "read": {
+      "path": "crates/gents/src/completion_factory.rs",
+      "collection": "InferenceCall",
+      "arguments": "filter: { _and: [ { node_did: { _eq: \"$GENTS_0$\" } }, { agent_id: { _eq: \"$GENTS_1$\" } }, { session_id: { _eq: \"$GENTS_2$\" } }, { model_name: { _eq: \"$GENTS_3$\" } }, { call_kind: { _eq: \"inference\" } } ] }, order: [{ queued_at: DESC }, { call_seq: DESC }], limit: $GENTS_CALIBRATION_CALL_SCAN$"
+    },
+    "bindings": [
+      {
+        "0": "probe",
+        "1": "probe",
+        "2": "probe",
+        "3": "probe",
+        "CALIBRATION_CALL_SCAN": "32"
+      }
+    ]
+  },
+  {
+    "read": {
       "path": "crates/gents/src/eval/runner/embedded/inspect.rs",
       "collection": "AgentRequest",
       "arguments": "filter: { node_did: { _eq: \"$GENTS_0$\" } }, order: { created_at: ASC }, limit: $GENTS_1$"

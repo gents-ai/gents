@@ -106,7 +106,9 @@ pub struct StageSpec {
     pub prompt: String,
     /// Written instead of submitting `prompt`.
     pub seed: Option<FixtureDocument>,
-    pub deadline_secs: u64,
+    /// Absent, the stage waits for its request's own terminal state.
+    #[serde(default)]
+    pub deadline_secs: Option<u64>,
     #[serde(default)]
     pub settle: bool,
     #[serde(default)]

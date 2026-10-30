@@ -68,6 +68,22 @@ impl WriteToolFieldFill {
     /// the bounded write and query tools so the correlation / source-field
     /// vocabulary cannot drift.
     pub fn resolve(&self, field_name: &str) -> Result<String> {
+        self.resolve_optional(field_name)?.ok_or_else(|| {
+            let source = match self {
+                Self::Correlation => "correlation",
+                Self::SourceField(source_field) => source_field,
+            };
+            anyhow::anyhow!(
+                "runtime-filled field `{field_name}` requires source field `{source}` in trigger context"
+            )
+        })
+    }
+
+    /// Like [`Self::resolve`], but a source field the trigger did not capture
+    /// (absent or null on the source document) resolves to `None`. Bounded
+    /// writes use this to omit an unset optional fill; query filters and
+    /// plugin inputs keep [`Self::resolve`] so a missing scope fails closed.
+    pub fn resolve_optional(&self, field_name: &str) -> Result<Option<String>> {
         let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
             .ok_or_else(|| {
                 anyhow::anyhow!(
@@ -78,20 +94,13 @@ impl WriteToolFieldFill {
             Self::Correlation => runtime
                 .correlation
                 .filter(|value| !value.trim().is_empty())
+                .map(Some)
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "runtime-filled field `{field_name}` requires a non-empty correlation"
                     )
                 }),
-            Self::SourceField(source_field) => runtime
-                .source_fields
-                .get(source_field)
-                .cloned()
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "runtime-filled field `{field_name}` requires source field `{source_field}` in trigger context"
-                    )
-                }),
+            Self::SourceField(source_field) => Ok(runtime.source_fields.get(source_field).cloned()),
         }
     }
 }

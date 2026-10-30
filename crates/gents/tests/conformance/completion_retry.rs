@@ -53,7 +53,7 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
     let cases = lean_completion_retry_cases();
     assert_eq!(
         cases.len(),
-        27,
+        30,
         "Lean should emit the finite CompletionRetry witness set"
     );
     assert_failure_class_bridge_matches_vocabulary();
@@ -89,6 +89,9 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
             "provider_reasoning_rejection_requires_retraction",
             "reasoning_rejection_moves_directly_to_repair",
             "reasoning_rejection_after_repair_is_exhausted",
+            "context_overflow_moves_directly_to_compaction",
+            "compact_issue_consumes_its_only_capability",
+            "context_overflow_after_compaction_is_exhausted",
             "provider_account_limit_requires_retraction",
             "account_limit_reissues_on_next_account_without_backoff",
             "account_hops_exhausted_is_terminal_for_policy",
@@ -100,6 +103,13 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
         assert_eq!(case.domain, "completionRetry");
         if let Some(origin) = case.failure_origin.as_deref() {
             assert_failure_origin_bridge(case, origin);
+        }
+        if case.name == "context_overflow_moves_directly_to_compaction" {
+            assert_eq!(case.expected_phase.as_deref(), Some("compacting"));
+            assert_context_overflow_compacts_once();
+        }
+        if case.name == "context_overflow_after_compaction_is_exhausted" {
+            assert_eq!(case.expected_phase.as_deref(), Some("exhausted"));
         }
         if case.name == "retry_wake_past_deadline_is_exhausted" {
             assert!(case.legal);
@@ -279,6 +289,7 @@ fn assert_failure_class_bridge_matches_vocabulary() {
             },
             "Invalid `signature` in `thinking` block",
         )),
+        class_name(class_of(&context_overflow(), CLAUDE_PROMPT_TOO_LONG)),
         class_name(class_of(
             &InferenceError::PermanentFailure {
                 reason: "bad request".to_string(),
@@ -292,6 +303,7 @@ fn assert_failure_class_bridge_matches_vocabulary() {
             "transport",
             "parse_bad_request",
             "reasoning_rejected",
+            "context_overflow",
             "permanent"
         ]
     );
@@ -524,8 +536,35 @@ fn class_name(class: FailureClass) -> &'static str {
         FailureClass::Transport => "transport",
         FailureClass::ParseBadRequest => "parse_bad_request",
         FailureClass::ReasoningRejected => "reasoning_rejected",
+        FailureClass::ContextOverflow => "context_overflow",
         FailureClass::Permanent => "permanent",
     }
+}
+
+const CLAUDE_PROMPT_TOO_LONG: &str = r#"Claude Messages HTTP 400 Bad Request (request-id -) body={"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 1001685 tokens > 1000000 maximum"}}"#;
+
+fn context_overflow() -> InferenceError {
+    InferenceError::ContextLengthExceeded {
+        reason: CLAUDE_PROMPT_TOO_LONG.to_string(),
+        input_tokens: Some(1_001_685),
+        limit: Some(1_000_000),
+    }
+}
+
+/// The modeled `schedule` of a retracted overflow is the one compaction;
+/// once spent, the next overflow is exhausted rather than backed off.
+fn assert_context_overflow_compacts_once() {
+    let mut state = CompletionRetryState::new(scheduled_like_policy());
+    assert!(matches!(
+        state.pre_stream(&context_overflow(), CLAUDE_PROMPT_TOO_LONG, now(), None),
+        PreStreamDirective::CompactAndRetry { .. }
+    ));
+    assert_eq!(state.retry_count(), 0);
+    state.mark_compaction_used();
+    assert!(matches!(
+        state.pre_stream(&context_overflow(), CLAUDE_PROMPT_TOO_LONG, now(), None),
+        PreStreamDirective::Fail { .. }
+    ));
 }
 
 fn scheduled_like_policy() -> CompletionRetryPolicy {

@@ -22,7 +22,6 @@
     {
       "stage_id": "access",
       "prompt": "I keep application records in Shipment. Enable your general read access only to Shipment, and general create/update/delete access only to Shipment if your native tools support it. Keep shell execution off and leave all other collection permissions alone. Inspect the available fields before working with records.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "tool_calls_expected",
@@ -43,7 +42,6 @@
     {
       "stage_id": "create",
       "prompt": "Add shipment NEW-83 going to Quito, queued, priority 4. Verify the saved record using a fresh read.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "captured_rows_count",
@@ -107,7 +105,6 @@
     {
       "stage_id": "update",
       "prompt": "Mark only NEW-83 delivered and confirm its stored status. Keep KEEP-41 queued.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "captured_fields_match",
@@ -189,7 +186,6 @@
     {
       "stage_id": "delete",
       "prompt": "Remove NEW-83 because it was a practice shipment. Verify it is gone and KEEP-41 still exists.",
-      "deadline_secs": 600,
       "checks": [
         {
           "check": "captured_rows_count",
