@@ -61,13 +61,20 @@ export function useComposerSend(agentId: string | null | undefined) {
       ? failure.message
       : null);
 
+  /* A first send adopts its session into the selection, which replaces the
+     new-session composer before the send returns; the route must still move
+     to the session, or New session stays the current route and does nothing. */
   const follow = (
     intentGeneration: ReturnType<typeof captureComposeIntent>,
     result: { sessionId: string } | null,
   ) => {
+    const adopted =
+      !selectedSessionId &&
+      !!result &&
+      stores.selection.getState().sessionId === result.sessionId;
     if (
       acceptsComposeIntent(intentGeneration) &&
-      mounted.current &&
+      (mounted.current || adopted) &&
       result &&
       result.sessionId !== selectedSessionId
     ) {
