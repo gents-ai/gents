@@ -1,4 +1,4 @@
-use rapidhash::{HashSetExt, RapidHashSet};
+use rapidhash::{HashMapExt, HashSetExt, RapidHashMap, RapidHashSet};
 use std::sync::Arc;
 
 use crate::agent::reconcile::SlotFailurePolicy as _;
