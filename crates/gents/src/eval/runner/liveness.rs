@@ -10,7 +10,7 @@ use crate::eval::{RunRecord, TrialRecord};
 pub const CANCEL_MARKER: &str = "cancel";
 
 pub fn run_dir(runs_dir: &Path, run_id: &str) -> Result<PathBuf> {
-    freeze::directory_name("run_id", run_id)?;
+    freeze::validate::directory_name("run_id", run_id)?;
     Ok(runs_dir.join(run_id))
 }
 

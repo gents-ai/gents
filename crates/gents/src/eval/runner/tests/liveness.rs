@@ -11,7 +11,7 @@ async fn run_and_resume_refuse_a_run_held_by_a_live_process() {
     let holder = ProgressWriter::new(&frozen.run_dir);
     let _held = holder.hold();
     let marker = request_cancel(&launching.runs_dir(), "run-held").unwrap();
-    let definition = frozen.run_dir.join(freeze::DEFINITION_FILE);
+    let definition = frozen.run_dir.join(freeze::snapshot::DEFINITION_FILE);
     let long_ago = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
     std::fs::File::options()
         .write(true)

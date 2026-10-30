@@ -53,7 +53,7 @@ async fn a_candidate_that_wins_every_case_is_accepted_and_reaches_ready_to_promo
     for split in [EvalSplit::Train, EvalSplit::Validation, EvalSplit::HeldOut] {
         for run_id in runs_started(&journal, split) {
             let frozen =
-                crate::eval::runner::freeze::frozen_captures(&request.runs_dir.join(&run_id))
+                crate::eval::runner::freeze::snapshot::frozen_captures(&request.runs_dir.join(&run_id))
                     .unwrap();
             assert_eq!(frozen, Some(vec![findings_capture()]), "{run_id}");
             started += 1;

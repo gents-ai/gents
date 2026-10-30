@@ -14,7 +14,7 @@ use crate::document_config::{EvalDefinition, EvalSplit};
 use crate::eval::checks::CheckRegistry;
 use crate::eval::report::load_run_rows;
 use crate::eval::runner::freeze;
-use crate::eval::runner::freeze::load_pack;
+use crate::eval::runner::freeze::pack::load_pack;
 use crate::eval::runner::{
     freeze_refused, resume, run, Capture, CellRequest, CellSource, RunOptions, RunOutcome,
     RunRequest, TrialExecutor,
@@ -72,7 +72,7 @@ pub fn validate_job_id(job_id: &str) -> Result<()> {
     if job_id.trim().is_empty() {
         return Err(refused(format!("job_id {job_id:?} must not be blank")));
     }
-    freeze::directory_name("job_id", job_id).map_err(as_job_refusal)
+    freeze::validate::directory_name("job_id", job_id).map_err(as_job_refusal)
 }
 
 pub fn job_dir(jobs_dir: &Path, job_id: &str) -> PathBuf {
@@ -262,7 +262,7 @@ pub(crate) async fn execute_run(
                     .with_context(|| format!("loading pack {}", dir.display()))
             })
             .collect::<Result<Vec<_>>>()?;
-        let captures = freeze::frozen_captures(&request.runs_dir.join(&plan.run_id))?;
+        let captures = freeze::snapshot::frozen_captures(&request.runs_dir.join(&plan.run_id))?;
         check_run_matches_plan(
             &existing.origin,
             captures.as_deref(),
@@ -409,11 +409,11 @@ pub(crate) async fn load_definition(
     owner: &str,
     definition_id: &str,
 ) -> Result<EvalDefinition> {
-    freeze::load_definition(access, owner, definition_id).await
+    freeze::documents::load_definition(access, owner, definition_id).await
 }
 
 pub(crate) fn definition_ref(definition: &EvalDefinition) -> Result<DefinitionRef> {
-    freeze::definition_ref(definition)
+    freeze::documents::definition_ref(definition)
 }
 
 #[cfg(test)]
