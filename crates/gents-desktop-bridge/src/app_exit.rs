@@ -170,8 +170,9 @@ mod tests {
             .is_err());
         drop(preparation);
         assert!(!state.app_exit.is_quitting());
-        let registration = crate::tauri_commands::lifecycle::single_flight::register_client_start(&state)
-            .expect("failed exit permits client start retry");
+        let registration =
+            crate::tauri_commands::lifecycle::single_flight::register_client_start(&state)
+                .expect("failed exit permits client start retry");
         let crate::tauri_commands::lifecycle::single_flight::ClientStartRegistration::Claimed {
             progress_tx,
             progress_rx: _,

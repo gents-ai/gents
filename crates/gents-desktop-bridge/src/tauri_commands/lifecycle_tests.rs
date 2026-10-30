@@ -5,8 +5,10 @@ use super::core_start::{
     deliver_client_start, start_client_core_async, ClientStartDelivery, NO_STAGE_COMPLETED,
 };
 use super::exclusion::shutdown_excluded_client;
-use super::*;
+use gents_desktop_core::client::ClientCore;
 
+use super::*;
+use crate::state::ClientStartProgress;
 
 #[tokio::test]
 async fn a_stalled_client_start_keeps_the_store_locked_until_its_core_closes() {

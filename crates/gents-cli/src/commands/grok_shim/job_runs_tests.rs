@@ -1,6 +1,6 @@
 use gents_protocol::job::{
-    JobBudget, JobChildRow, JobOrigin, JobOutcome, JobPhase, JobPinSummary, JobProgress,
-    JobScope, JobUsage,
+    JobBudget, JobChildRow, JobOrigin, JobOutcome, JobPhase, JobPinSummary, JobProgress, JobScope,
+    JobUsage,
 };
 
 use super::*;

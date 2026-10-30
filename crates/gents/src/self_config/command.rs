@@ -21,7 +21,6 @@ mod reads;
 mod skill;
 mod validate;
 
-use agents::{agent_params, default_agent_params};
 use args::{
     extract_agent_target, extract_allow_drop, parse_limit, parse_patch, parse_patch_args,
     ParsedArgs,
