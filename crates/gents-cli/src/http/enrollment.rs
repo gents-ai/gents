@@ -417,7 +417,7 @@ mod tests {
                 .await
                 .expect("nonce test node"),
         );
-        gents::migration::ensure_all_runtime_migrations(node.clone())
+        gents::store::schema::migration::ensure_all_runtime_migrations(node.clone())
             .await
             .expect("nonce schema");
         node

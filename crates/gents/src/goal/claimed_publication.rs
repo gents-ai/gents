@@ -2,12 +2,12 @@ mod wait_observation;
 
 use super::*;
 use crate::config_client::ConfigApplyTxn;
-use crate::identity::{NodeIdentity, RegisteredIdentity};
 use crate::lifecycle::materialize::{sign_request, RequestSigner};
 use crate::lifecycle::queue::{
     goal_continuation_agent, goal_continuation_identity, prepare_goal_continuation,
 };
 use crate::request_admission::{verify_runtime_local_control_receipt, SIGNED_REQUEST_FIELDS};
+use crate::store::identity::{NodeIdentity, RegisteredIdentity};
 use gents_protocol::row::AgentRequestRow;
 
 pub(crate) async fn publish_claimed_continuation(

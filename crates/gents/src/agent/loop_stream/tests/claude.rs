@@ -439,7 +439,7 @@ fn anthropic_api_key_client_runs_a_messages_turn_on_fixtures() {
             install_messages_sse_fixtures(vec![sse_fixture_final_text("done")]);
             let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
 
-            let identity = crate::identity::KeyIdentity::load_or_create(
+            let identity = crate::store::identity::KeyIdentity::load_or_create(
                 std::env::temp_dir()
                     .join(format!("anthropic-key-turn-{}.key", uuid::Uuid::new_v4())),
                 None,

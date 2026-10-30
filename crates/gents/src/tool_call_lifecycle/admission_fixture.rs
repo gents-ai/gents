@@ -2,8 +2,8 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use defra_node::EmbeddedNode;
 
-use crate::identity::NodeIdentity;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
+use crate::store::identity::NodeIdentity;
 use crate::streaming::DefraStreamWriter;
 use crate::tool_call_lifecycle::{AwaitMode, ToolCallLifecycle};
 
@@ -462,7 +462,7 @@ pub async fn published_admission_with_owner(
         builder = builder.with_p2p(test_p2p_config());
     }
     let node = Arc::new(builder.build().await?);
-    crate::schema::ensure_runtime_schemas(&node).await?;
+    crate::store::schema::ensure_runtime_schemas(&node).await?;
     let identity = options.real_identity.then_some(physical_identity);
     let node_did = identity.as_ref().map_or_else(
         || "did:test:test".to_owned(),

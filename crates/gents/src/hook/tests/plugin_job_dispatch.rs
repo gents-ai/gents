@@ -1,5 +1,4 @@
 use super::*;
-use crate::identity::NodeIdentity;
 use crate::pack::{write_home_install, HomePackInstall, InstalledVia, PackKind};
 use crate::plugin::executor::PluginExecutor;
 use crate::plugin::store;
@@ -9,6 +8,7 @@ use crate::plugin_job::input::tests::{insert, live_settings};
 use crate::plugin_job::keys::{job_session_id, job_spawn_key};
 use crate::plugin_job::records::{read_pin, read_progress, read_step_state, write_pin_in_txn};
 use crate::plugin_job::JobBinding;
+use crate::store::identity::NodeIdentity;
 use crate::tool_call_lifecycle::admission_fixture::{fixture_job_pin, write_fixture_job_pin};
 use gents_protocol::job::{
     DynamicMode, JobPin, JobPolicy, JobState, PluginDataDeclaration, PluginJobDeclaration,
@@ -190,7 +190,8 @@ fn install_plugin(
 async fn step0(output: Value, options: Options) -> Step0 {
     let dir = tempfile::tempdir().unwrap();
     let identity =
-        crate::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None).unwrap();
+        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
+            .unwrap();
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(dir.path())
@@ -284,8 +285,9 @@ async fn bind_request_at_hop(
     hop: u32,
     cause: Option<(String, String)>,
 ) {
-    let identity = crate::identity::RegisteredIdentity::from_registered_did(&hook.node_did, None)
-        .expect("registered job fixture identity");
+    let identity =
+        crate::store::identity::RegisteredIdentity::from_registered_did(&hook.node_did, None)
+            .expect("registered job fixture identity");
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,

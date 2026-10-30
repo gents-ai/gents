@@ -1,5 +1,5 @@
 use super::AwaitMode;
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 use crate::tool_call_lifecycle::admission_fixture::{
     claimed_signed_request, complete_child, materialize_session_message,
     publish_accepted_on_claimed_request,
@@ -80,7 +80,9 @@ async fn generated_background_completion_queue_case_uses_accepted_session_messag
             .await
             .unwrap(),
     );
-    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    crate::store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     crate::test_support::install_test_agent(&node, node_did, "general").await;
     let parent_id = format!("queue-deadline-coalesce-parent-{}", uuid::Uuid::new_v4());
     let session_id = case.session_id.to_string();

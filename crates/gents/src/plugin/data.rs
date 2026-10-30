@@ -316,7 +316,7 @@ pub fn admit_write(
                 }
                 .into(),
                 granted,
-                application: !crate::migration::DEFAULT_REGISTRY
+                application: !crate::store::schema::migration::DEFAULT_REGISTRY
                     .managed_names()
                     .any(|name| name == collection),
                 protected: crate::document_config::PROTECTED_DATASTORE_COLLECTIONS

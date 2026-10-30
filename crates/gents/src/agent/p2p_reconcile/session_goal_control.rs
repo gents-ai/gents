@@ -12,7 +12,7 @@ use super::session_command_authority::{current_admission, AuthorScope};
 use super::session_commands::{CommandRow, FIELDS};
 use crate::config_client::{ConfigAccess, IdempotentTransactionRetry};
 use crate::graphql::escape_graphql_string;
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 
 pub(super) async fn has_verified_receipt(
     identity: &dyn NodeIdentity,

@@ -1005,9 +1005,9 @@ pub(super) mod tests {
     use crate::config::{ResolvedAgent, SamplingConfig};
     use crate::error::LoopFailureCause;
     use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
-    use crate::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
     use crate::llm::tool::ToolDyn;
     use crate::prompt::LayeredPromptBuilder;
+    use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
     use crate::tool_surface::AgentToolSurfaceConfig;
     use crate::watcher::AgentRequest;
     use anyhow::Context;

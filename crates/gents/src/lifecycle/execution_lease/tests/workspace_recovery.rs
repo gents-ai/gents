@@ -1,12 +1,13 @@
 use super::*;
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 use crate::TriggerSource;
 
 #[tokio::test]
 async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_workspace_changes() {
     let dir = tempfile::tempdir().unwrap();
     let identity =
-        crate::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None).unwrap();
+        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
+            .unwrap();
     let did = identity.did();
     let node = Arc::new(
         EmbeddedNode::builder()

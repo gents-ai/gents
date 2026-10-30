@@ -372,7 +372,7 @@ async fn fork_in_txn(
     let agent = params.target_agent_id.unwrap_or(&parent.agent_id);
     let agent_document = crate::config_client::read_desired_state_document_in_txn(
         txn,
-        crate::collection::Collection::Agent,
+        crate::store::collection::Collection::Agent,
         params.caller_node_did,
         agent,
     )

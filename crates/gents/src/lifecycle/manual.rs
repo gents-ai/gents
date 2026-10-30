@@ -117,8 +117,8 @@ mod tests {
         write_manual_agent_request, write_manual_agent_request_with_conversation_title,
         ManualRequestTarget,
     };
-    use crate::identity::{KeyIdentity, NodeIdentity};
-    use crate::schema::ensure_runtime_schemas;
+    use crate::store::identity::{KeyIdentity, NodeIdentity};
+    use crate::store::schema::ensure_runtime_schemas;
 
     async fn test_node() -> (Arc<EmbeddedNode>, String) {
         let temp = tempfile::tempdir().unwrap();

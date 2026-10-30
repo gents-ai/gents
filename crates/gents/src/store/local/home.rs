@@ -208,7 +208,7 @@ pub fn store_lock_held<'a>(
             .or_else(|| cause.downcast_ref::<HomeError>()?.lock_held())
             .or_else(|| {
                 cause
-                    .downcast_ref::<crate::store_key::StoreKeyError>()?
+                    .downcast_ref::<crate::store::local::store_key::StoreKeyError>()?
                     .lock_held()
             })
     })

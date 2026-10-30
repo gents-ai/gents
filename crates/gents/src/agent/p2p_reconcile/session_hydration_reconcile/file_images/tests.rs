@@ -232,7 +232,7 @@ async fn an_unpaired_image_demand_cannot_reach_delivery() {
 
 #[tokio::test]
 async fn signed_image_receipts_commit_only_to_the_exact_pending_demand() {
-    use crate::identity::KeyIdentity;
+    use crate::store::identity::KeyIdentity;
     let root = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(root.path().join("node.key"), None).unwrap();
     let node = Arc::new(

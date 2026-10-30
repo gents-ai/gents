@@ -1979,7 +1979,9 @@ mod tests {
 
     async fn access() -> ConfigAccess {
         let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+        crate::store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
         ConfigAccess::local(node)
     }
 

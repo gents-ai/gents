@@ -80,9 +80,9 @@ fn capture_native(
 
 fn runtime_credentials(home: &Path) -> Result<Vec<PathBuf>> {
     let mut paths = standard_runtime_credentials(home);
-    match std::fs::symlink_metadata(crate::home::init_config_path(home)) {
+    match std::fs::symlink_metadata(crate::store::local::home::init_config_path(home)) {
         Ok(_) => {
-            let config = crate::home::read_init_config::<serde_json::Value, serde_json::Value>(home)?
+            let config = crate::store::local::home::read_init_config::<serde_json::Value, serde_json::Value>(home)?
                 .context("Runtime identity configuration changed during command isolation. Retry the command.")?;
             paths.extend(config.key_path.map(PathBuf::from));
         }
@@ -94,9 +94,9 @@ fn runtime_credentials(home: &Path) -> Result<Vec<PathBuf>> {
 
 fn standard_runtime_credentials(home: &Path) -> Vec<PathBuf> {
     vec![
-        crate::home::keys_dir(home),
-        home.join(crate::home::P2P_SECRET_KEY_FILE_NAME),
-        crate::home::init_config_path(home),
+        crate::store::local::home::keys_dir(home),
+        home.join(crate::store::local::home::P2P_SECRET_KEY_FILE_NAME),
+        crate::store::local::home::init_config_path(home),
     ]
 }
 

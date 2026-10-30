@@ -140,7 +140,7 @@ async fn test_node() -> (tempfile::TempDir, Arc<EmbeddedNode>, String) {
             .await
             .expect("embedded node"),
     );
-    gents::schema::ensure_runtime_schemas(&node)
+    gents::store::schema::ensure_runtime_schemas(&node)
         .await
         .expect("runtime schemas");
     super::super::seed_test_agent_configuration(

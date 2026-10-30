@@ -8,8 +8,8 @@ use super::*;
 #[cfg(test)]
 mod contract_tests;
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::identity::NodeIdentity;
 use crate::session::SessionOwnerRow;
+use crate::store::identity::NodeIdentity;
 
 pub(crate) const SOURCES: [&str; 3] = ["Goal", "AgentSession", "GoalObservation"];
 

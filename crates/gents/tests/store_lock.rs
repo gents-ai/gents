@@ -1,7 +1,7 @@
 use std::fs;
 use std::sync::{Mutex, MutexGuard};
 
-use gents::home::{default_data_dir, lock_home_store, lock_store};
+use gents::store::local::home::{default_data_dir, lock_home_store, lock_store};
 
 static FORK_EXCLUSION: Mutex<()> = Mutex::new(());
 
@@ -41,8 +41,8 @@ fn a_held_store_lock_is_classified_with_its_home_and_holder() {
     let data = home.path().join("data");
     std::fs::create_dir_all(&data).unwrap();
 
-    let _held = gents::home::lock_store(home.path(), &data).unwrap();
-    let error = gents::home::lock_store(home.path(), &data).unwrap_err();
+    let _held = gents::store::local::home::lock_store(home.path(), &data).unwrap();
+    let error = gents::store::local::home::lock_store(home.path(), &data).unwrap_err();
 
     let held = error
         .lock_held()

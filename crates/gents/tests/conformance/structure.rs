@@ -134,7 +134,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ),
         (
             "StoreEncryptionUpgrade",
-            WorkspaceTest("crates/gents/src/store_key/upgrade/tests.rs"),
+            WorkspaceTest("crates/gents/src/store/local/store_key/upgrade/tests.rs"),
         ),
         (
             "StreamingResponse",

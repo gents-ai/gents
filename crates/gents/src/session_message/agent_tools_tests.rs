@@ -558,7 +558,7 @@ async fn signed_creation_waits_for_its_canonical_parent_evidence() {
 
 #[tokio::test]
 async fn remote_signed_creation_survives_parent_evidence_arriving_after_claim() {
-    use crate::identity::NodeIdentity;
+    use crate::store::identity::NodeIdentity;
     use crate::tool_call_lifecycle::admission_fixture::{
         materialize_session_message, published_admission_with_owner, test_p2p_config,
     };

@@ -1,6 +1,6 @@
 use super::*;
-use crate::identity::NodeIdentity;
 use crate::lifecycle::{RequestLifecycle, RequestTerminalOutcome, WorkspaceLineage};
+use crate::store::identity::NodeIdentity;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,7 +14,7 @@ async fn runtime_seal_case(unowned: bool) {
     let fx = Fixture::new();
     let db_dir = tempfile::tempdir().unwrap();
     let identity =
-        crate::identity::KeyIdentity::load_or_create(db_dir.path().join("agent.key"), None)
+        crate::store::identity::KeyIdentity::load_or_create(db_dir.path().join("agent.key"), None)
             .unwrap();
     let did = identity.did();
     let node = Arc::new(

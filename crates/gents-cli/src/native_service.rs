@@ -18,7 +18,7 @@ pub const SYSTEMD_UNIT: &str = "gents-runtime.service";
 #[cfg(all(feature = "native-e2e", debug_assertions))]
 pub const SYSTEMD_UNIT: &str = "gents-runtime-native-e2e.service";
 /// Exit status of `gents` when it refuses to open a store this build cannot
-/// read (`gents::storage_backend::IncompatibleStore`). Supervisors and the
+/// read (`gents::store::local::storage_backend::IncompatibleStore`). Supervisors and the
 /// desktop read it from the exit record to tell that refusal apart from a
 /// crash; systemd does not restart it. It is sysexits `EX_DATAERR`.
 pub const INCOMPATIBLE_STORE_EXIT_CODE: i32 = 65;
@@ -30,8 +30,10 @@ pub const FOREIGN_STORE_EXIT_CODE: i32 = 67;
 /// wrote with unsafe permissions (sysexits `EX_NOINPUT`).
 pub const INSECURE_KEY_EXIT_CODE: i32 = 66;
 
-pub fn incompatible_store_exit_code(kind: gents::storage_backend::IncompatibleStoreKind) -> i32 {
-    use gents::storage_backend::IncompatibleStoreKind;
+pub fn incompatible_store_exit_code(
+    kind: gents::store::local::storage_backend::IncompatibleStoreKind,
+) -> i32 {
+    use gents::store::local::storage_backend::IncompatibleStoreKind;
     match kind {
         IncompatibleStoreKind::InsecureKey => INSECURE_KEY_EXIT_CODE,
         IncompatibleStoreKind::ForeignVersion => FOREIGN_STORE_EXIT_CODE,
@@ -1388,16 +1390,18 @@ impl ServiceExit {
         self.refused_store().is_some()
     }
 
-    pub fn refused_store(&self) -> Option<gents::storage_backend::IncompatibleStoreKind> {
+    pub fn refused_store(
+        &self,
+    ) -> Option<gents::store::local::storage_backend::IncompatibleStoreKind> {
         match self.code {
             Some(INCOMPATIBLE_STORE_EXIT_CODE) => {
-                Some(gents::storage_backend::IncompatibleStoreKind::UnknownLineage)
+                Some(gents::store::local::storage_backend::IncompatibleStoreKind::UnknownLineage)
             }
             Some(FOREIGN_STORE_EXIT_CODE) => {
-                Some(gents::storage_backend::IncompatibleStoreKind::ForeignVersion)
+                Some(gents::store::local::storage_backend::IncompatibleStoreKind::ForeignVersion)
             }
             Some(INSECURE_KEY_EXIT_CODE) => {
-                Some(gents::storage_backend::IncompatibleStoreKind::InsecureKey)
+                Some(gents::store::local::storage_backend::IncompatibleStoreKind::InsecureKey)
             }
             _ => None,
         }

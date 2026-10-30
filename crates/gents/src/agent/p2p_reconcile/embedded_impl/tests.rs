@@ -34,9 +34,9 @@ use crate::defra_node::P2PConfig;
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
 use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
-use crate::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
 use crate::llm::tool::ToolDyn;
 use crate::prompt::LayeredPromptBuilder;
+use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
 use crate::tool_surface::AgentToolSurfaceConfig;
 use fixtures::{
     runtime_http_test_node, runtime_test_node_with_identity, wait_for_active_peer,

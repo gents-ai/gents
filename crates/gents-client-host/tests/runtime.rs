@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
-use gents::identity::NodeIdentity;
+use gents::store::identity::NodeIdentity;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
 use serde_json::{json, Value};
 #[cfg(unix)]

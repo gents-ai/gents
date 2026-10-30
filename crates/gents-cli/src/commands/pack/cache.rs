@@ -42,7 +42,7 @@ pub(super) fn prepare_recorded_cache(
     let (namespace, name) = super::split_namespace(coordinate);
     let expected = cache_root(Path::new(""), namespace, name, &record.digest)?;
     let recorded = Path::new(&record.assets);
-    let unscoped = Path::new(gents::home::PACKS_DIR_NAME)
+    let unscoped = Path::new(gents::store::local::home::PACKS_DIR_NAME)
         .join(name)
         .join(gents::pack_archive::digest_hex(&record.digest)?);
     anyhow::ensure!(
@@ -187,7 +187,7 @@ mod tests {
         assert!(error.to_string().contains("no materialized asset cache"));
         assert!(!home
             .path()
-            .join(gents::home::PACKS_DIR_NAME)
+            .join(gents::store::local::home::PACKS_DIR_NAME)
             .join(".materialized")
             .exists());
     }

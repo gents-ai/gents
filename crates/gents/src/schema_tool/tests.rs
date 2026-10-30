@@ -296,7 +296,7 @@ async fn schema_recovery_help_and_grant_are_independent_of_config() {
 
 #[tokio::test]
 async fn inline_lens_migration_transforms_existing_rows_through_native_owner() {
-    let wasm = crate::migration::fixture_lens_wasm();
+    let wasm = crate::store::schema::migration::fixture_lens_wasm();
     assert!(
         wasm.len() > 16,
         "schema migration coverage requires the fixture lens build"

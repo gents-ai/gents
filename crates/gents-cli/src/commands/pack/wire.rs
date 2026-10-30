@@ -5,7 +5,6 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::collection::Collection;
 use gents::config_client::{
     apply_desired_state_plan, read_desired_state_records_in_txn, ConfigAccess,
     DesiredStateApplyDocument, DesiredStateApplyPlan,
@@ -17,6 +16,7 @@ use gents::pack::home_install::recorded_provenance;
 use gents::pack::{installed_pack_documents, read_home_install, PackKind};
 use gents::plugin::authority::describe_plugin_authority;
 use gents::plugin::store::read_record;
+use gents::store::collection::Collection;
 use serde_json::{json, Value};
 
 use super::split_namespace;

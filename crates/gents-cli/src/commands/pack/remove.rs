@@ -29,7 +29,7 @@ pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
             documents_record = true;
         }
         anyhow::ensure!(
-            gents::home::init_config_path(&home).is_file(),
+            gents::store::local::home::init_config_path(&home).is_file(),
             "{coordinate} is not installed in {}",
             home.display()
         );
@@ -186,7 +186,7 @@ pub(crate) async fn ensure_home_plugins_unreferenced(
     home: &Path,
     plugins: &BTreeSet<String>,
 ) -> Result<()> {
-    if plugins.is_empty() || !gents::home::init_config_path(home).is_file() {
+    if plugins.is_empty() || !gents::store::local::home::init_config_path(home).is_file() {
         return Ok(());
     }
     let scope = crate::cli::ScopeArgs {

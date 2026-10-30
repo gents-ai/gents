@@ -1,5 +1,5 @@
 use crate::graphql::escape_graphql_string;
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 use crate::tool_call_lifecycle::ToolCallLifecycle;
 use std::sync::Arc;
 
@@ -126,7 +126,9 @@ async fn generated_absent_requester_process_control_uses_accepted_hook_calls() {
             .await
             .unwrap(),
     );
-    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    crate::store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     crate::test_support::install_test_agent(&node, &did, "general").await;
     let session_id = "background-hook-scope-session";
     let request_id = "background-hook-scope-origin";

@@ -55,7 +55,7 @@ pub(crate) async fn load_configured_task(
                 Box::pin(async move {
                     crate::config_client::read_desired_state_document_in_txn(
                         txn,
-                        crate::collection::Collection::Task,
+                        crate::store::collection::Collection::Task,
                         &owner,
                         &task_id,
                     )

@@ -171,7 +171,7 @@ pub fn cache_root(
         "invalid pack coordinate {namespace}/{name}"
     );
     Ok(home
-        .join(crate::home::PACKS_DIR_NAME)
+        .join(crate::store::local::home::PACKS_DIR_NAME)
         .join(".materialized")
         .join(namespace)
         .join(name)

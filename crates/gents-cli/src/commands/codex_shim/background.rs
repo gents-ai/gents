@@ -704,7 +704,7 @@ mod tests {
                 .expect("embedded node"),
         );
         if schemas_before_start {
-            gents::schema::ensure_runtime_schemas(&node)
+            gents::store::schema::ensure_runtime_schemas(&node)
                 .await
                 .expect("runtime schemas");
         }
@@ -735,7 +735,7 @@ mod tests {
             .expect("watcher should make its initial observation")
             .expect("watcher should signal first query attempt");
         if !schemas_before_start {
-            gents::schema::ensure_runtime_schemas(&node)
+            gents::store::schema::ensure_runtime_schemas(&node)
                 .await
                 .expect("runtime schemas");
         }
@@ -803,7 +803,7 @@ mod tests {
                 .await
                 .expect("embedded node"),
         );
-        gents::schema::ensure_runtime_schemas(&node)
+        gents::store::schema::ensure_runtime_schemas(&node)
             .await
             .expect("runtime schemas");
 

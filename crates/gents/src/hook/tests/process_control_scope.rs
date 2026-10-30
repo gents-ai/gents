@@ -44,8 +44,8 @@ async fn unowned_live_process_group_keeps_the_retained_owner_record() {
     assert!(registry.process_record("stale-call", "stale-doc").is_some());
     registry.process_records.remove("stale-doc");
 }
-use crate::identity::NodeIdentity;
 use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
+use crate::store::identity::NodeIdentity;
 
 struct PendingTool;
 
@@ -165,7 +165,8 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
     assert!(case.legal);
     let dir = tempfile::tempdir().unwrap();
     let identity =
-        crate::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None).unwrap();
+        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
+            .unwrap();
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(dir.path())
@@ -281,9 +282,11 @@ async fn accepted_cross_agent_process_controls_preserve_the_owners_running_job()
 async fn run_process_control_scope(requester_did: Option<&str>) {
     let dir = tempfile::tempdir().unwrap();
     let owner_identity =
-        crate::identity::KeyIdentity::load_or_create(dir.path().join("owner.key"), None).unwrap();
+        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("owner.key"), None)
+            .unwrap();
     let foreign_identity =
-        crate::identity::KeyIdentity::load_or_create(dir.path().join("foreign.key"), None).unwrap();
+        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("foreign.key"), None)
+            .unwrap();
     let owner_did = owner_identity.did();
     let foreign_did = foreign_identity.did();
     assert_ne!(owner_did, foreign_did);
@@ -534,9 +537,11 @@ mod job_control {
     impl JobHook {
         async fn new() -> Self {
             let dir = tempfile::tempdir().unwrap();
-            let identity =
-                crate::identity::KeyIdentity::load_or_create(dir.path().join("owner.key"), None)
-                    .unwrap();
+            let identity = crate::store::identity::KeyIdentity::load_or_create(
+                dir.path().join("owner.key"),
+                None,
+            )
+            .unwrap();
             let node = Arc::new(
                 EmbeddedNode::builder()
                     .data_path(dir.path())

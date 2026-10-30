@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 
-use crate::collection::Collection;
 use crate::document_config::InferenceProfile;
 use crate::oauth_credential::ServingAccount;
+use crate::store::collection::Collection;
 
 use super::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 

@@ -239,7 +239,7 @@
         "crates/gents/src/defra_write/mod.rs"
       ],
       "consumer_paths": [
-        "crates/gents/src/identity/tests.rs",
+        "crates/gents/src/store/identity/tests.rs",
         "crates/gents/tests/defradb_genesis_identity.rs"
       ],
       "native_status": "pending",

@@ -13,7 +13,7 @@ use super::session_commands::run_session_command_reconciler;
 use super::session_commands::{CommandRow, FIELDS};
 use crate::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use crate::graphql::escape_graphql_string;
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 
 pub(super) async fn verified_receipt(
     identity: &dyn NodeIdentity,

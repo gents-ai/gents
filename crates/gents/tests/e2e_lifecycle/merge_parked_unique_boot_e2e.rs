@@ -167,7 +167,7 @@ async fn merge_parked_unique_conflict_does_not_brick_boot() {
         }
     }
 
-    gents::migration::ensure_migrations(&home.node)
+    gents::store::schema::migration::ensure_migrations(&home.node)
         .await
         .expect("ensure_migrations after boot");
 

@@ -1,10 +1,10 @@
 use super::super::session_commands::{unanswered_commands, CommandKind, Sweep};
 use super::*;
-use crate::identity::KeyIdentity;
 use crate::lean_vocab_test::{
     LeanQueueManagementState, LeanSessionInputEditAuthority, LeanSessionInputEditCommand,
     LeanSessionInputEditStep, QueueImage,
 };
+use crate::store::identity::KeyIdentity;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };

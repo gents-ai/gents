@@ -57,8 +57,8 @@ fn refusal(reason: RuntimePreparationRefusal, message: impl Into<String>) -> any
 }
 
 fn refusal_reason(error: &anyhow::Error) -> RuntimePreparationRefusal {
-    if gents::store_key::store_key_unavailable(error.as_ref()).is_some()
-        || gents::identity::identity_key_unavailable(error.as_ref()).is_some()
+    if gents::store::local::store_key::store_key_unavailable(error.as_ref()).is_some()
+        || gents::store::identity::identity_key_unavailable(error.as_ref()).is_some()
     {
         RuntimePreparationRefusal::KeyAccess
     } else {
@@ -69,7 +69,7 @@ fn refusal_reason(error: &anyhow::Error) -> RuntimePreparationRefusal {
 }
 
 pub(crate) struct PreparedStartup {
-    pub(crate) reservation: gents::home::RuntimeStartupReservation,
+    pub(crate) reservation: gents::store::local::home::RuntimeStartupReservation,
     pub(crate) outcome: RuntimePreparationOutcome,
 }
 
@@ -116,15 +116,17 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
     let home = tokio::task::spawn_blocking(move || std::fs::canonicalize(home)).await??;
     let build = gents::runtime_service::executable_build_id().await?;
-    let reservation =
-        tokio::time::timeout(STARTUP_WAIT, gents::home::reserve_runtime_startup(&home))
-            .await
-            .map_err(|_| {
-                refusal(
-                    RuntimePreparationRefusal::StartupBusy,
-                    "Another runtime preparation is still in progress. Retry after it finishes.",
-                )
-            })??;
+    let reservation = tokio::time::timeout(
+        STARTUP_WAIT,
+        gents::store::local::home::reserve_runtime_startup(&home),
+    )
+    .await
+    .map_err(|_| {
+        refusal(
+            RuntimePreparationRefusal::StartupBusy,
+            "Another runtime preparation is still in progress. Retry after it finishes.",
+        )
+    })??;
     let (config, state) = tokio::task::spawn_blocking({
         let home = home.clone();
         move || read_home(&home)
@@ -193,8 +195,8 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
                     move || {
                         if let Some(encryption) = config.store_encryption.as_ref() {
                             encryption.load(
-                                &gents::store_key::home_key_file(&home),
-                                &gents::home::default_data_dir(&home),
+                                &gents::store::local::store_key::home_key_file(&home),
+                                &gents::store::local::home::default_data_dir(&home),
                             )?;
                         }
                         load_initialized_home_identity(&home, &config)
@@ -222,7 +224,7 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
                     _ => return Err(refusal(RuntimePreparationRefusal::Unavailable, "The observed runtime changed before retirement. Retry to inspect its state.")),
                 }
             }
-            tokio::time::timeout(STARTUP_WAIT, gents::home::wait_for_store_release(&home, &gents::home::default_data_dir(&home)))
+            tokio::time::timeout(STARTUP_WAIT, gents::store::local::home::wait_for_store_release(&home, &gents::store::local::home::default_data_dir(&home)))
                 .await.map_err(|_| refusal(RuntimePreparationRefusal::StoreBusy, "The retiring runtime has not released its store. Retry after shutdown finishes."))??;
             outcome = RuntimePreparationOutcome::Replaced;
         }
@@ -230,7 +232,7 @@ async fn prepare_inner(mut args: ServeArgs, runtime: tokio::runtime::Handle) -> 
     }
     tokio::task::spawn_blocking({
         let home = home.clone();
-        move || gents::home::lock_home_store(&home).map(drop)
+        move || gents::store::local::home::lock_home_store(&home).map(drop)
     })
     .await?
     .map_err(|error| {

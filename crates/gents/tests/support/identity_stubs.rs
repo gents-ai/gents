@@ -28,7 +28,10 @@ impl NodeIdentity for StubNodeIdentity {
         &self.did
     }
 
-    async fn sign(&self, _payload: &[u8]) -> Result<Vec<u8>, gents::identity::IdentityError> {
+    async fn sign(
+        &self,
+        _payload: &[u8],
+    ) -> Result<Vec<u8>, gents::store::identity::IdentityError> {
         panic!(
             "StubNodeIdentity::sign called for {} — routing tests must not sign",
             self.did
@@ -40,7 +43,7 @@ impl NodeIdentity for StubNodeIdentity {
         _did: &str,
         _payload: &[u8],
         _sig: &[u8],
-    ) -> Result<bool, gents::identity::IdentityError> {
+    ) -> Result<bool, gents::store::identity::IdentityError> {
         panic!(
             "StubNodeIdentity::verify called for {} — routing tests must not verify",
             self.did
@@ -80,7 +83,7 @@ impl NodeIdentity for SigningStubNodeIdentity {
         &self.did
     }
 
-    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, gents::identity::IdentityError> {
+    async fn sign(&self, payload: &[u8]) -> Result<Vec<u8>, gents::store::identity::IdentityError> {
         Ok(self.signature(payload))
     }
 
@@ -89,7 +92,7 @@ impl NodeIdentity for SigningStubNodeIdentity {
         did: &str,
         payload: &[u8],
         signature: &[u8],
-    ) -> Result<bool, gents::identity::IdentityError> {
+    ) -> Result<bool, gents::store::identity::IdentityError> {
         Ok(did == self.did && signature == self.signature(payload))
     }
 

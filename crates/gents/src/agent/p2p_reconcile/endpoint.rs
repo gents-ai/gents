@@ -6,7 +6,7 @@ use gents_protocol::network_token::EndpointRecord;
 use tokio_util::sync::CancellationToken;
 
 use crate::graphql::escape_graphql_string;
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct EndpointBinding {
@@ -27,7 +27,7 @@ async fn endpoint_heartbeat(
     identity: Arc<dyn NodeIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let Some(p2p) = crate::identity::node_p2p(&node) else {
+    let Some(p2p) = crate::store::identity::node_p2p(&node) else {
         tracing::debug!("PeerEndpoint heartbeat idle because embedded node has no P2P transport");
         cancel.cancelled().await;
         return Ok(());

@@ -1,3 +1,5 @@
+pub mod migration;
+
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 
@@ -27,9 +29,9 @@ pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
     if let Some(access) = crate::config_client::ConfigAccess::claimed_for_node(node) {
         return Ok(access
             .run_local_owned(|node| async move {
-                crate::migration::ensure_migrations_borrowed(node.as_ref()).await
+                crate::store::schema::migration::ensure_migrations_borrowed(node.as_ref()).await
             })
             .await?);
     }
-    Ok(crate::migration::ensure_migrations_borrowed(node).await?)
+    Ok(crate::store::schema::migration::ensure_migrations_borrowed(node).await?)
 }

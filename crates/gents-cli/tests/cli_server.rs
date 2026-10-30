@@ -265,16 +265,17 @@ async fn server_error_after_runtime_spawn_drains_the_runtime() -> Result<()> {
     );
 
     let data_dir = home_dir.join(".gents").join("data");
-    let node = gents::store_key::open_home_store_key(&home_dir.join(".gents"), &data_dir)
-        .await?
-        .encrypt(
-            EmbeddedNode::builder()
-                .data_path(&data_dir)
-                .with_storage_backend(StorageBackend::Regolith),
-        )
-        .build()
-        .await
-        .with_context(|| format!("opening embedded node at {}", data_dir.display()))?;
+    let node =
+        gents::store::local::store_key::open_home_store_key(&home_dir.join(".gents"), &data_dir)
+            .await?
+            .encrypt(
+                EmbeddedNode::builder()
+                    .data_path(&data_dir)
+                    .with_storage_backend(StorageBackend::Regolith),
+            )
+            .build()
+            .await
+            .with_context(|| format!("opening embedded node at {}", data_dir.display()))?;
     let response = node
         .execute(&format!(
             r#"{{ NodeReadiness(filter: {{ node_did: {{ _eq: "{}" }} }}, limit: 1) {{
@@ -2918,8 +2919,10 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
     access
         .add_collection("type McpParcel { reference: String status: String }")
         .await?;
-    let bearer =
-        gents::identity::defradb_bearer_authorization(&node_did, &format!("127.0.0.1:{port}"))?;
+    let bearer = gents::store::identity::defradb_bearer_authorization(
+        &node_did,
+        &format!("127.0.0.1:{port}"),
+    )?;
     let config =
         StreamableHttpClientTransportConfig::with_uri(format!("http://127.0.0.1:{port}/mcp"))
             .auth_header(bearer.strip_prefix("Bearer ").unwrap());

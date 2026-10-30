@@ -1768,7 +1768,7 @@ async fn set_goal_over_http_transactions_computes_the_same_baseline() {
     // Canonical runtime schema bootstrap (AgentRequest, InferenceCall, Goal,
     // migrations): raw served nodes have an empty schema, matching
     // EmbeddedHome::open_with_identity's initialize_schemas path.
-    gents::schema::ensure_runtime_schemas(&node)
+    gents::store::schema::ensure_runtime_schemas(&node)
         .await
         .expect("runtime schemas");
     let endpoint = format!("http://{address}/api/v0/graphql");

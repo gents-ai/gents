@@ -134,7 +134,7 @@ pub(super) async fn save(
     let reviewer = if request.mode == Mode::AutoReview {
         // Configuring the Task may use only the existing signer cache; opening
         // the permission picker must not unlock a runtime identity.
-        if !gents::identity::can_mint_defradb_bearer(&local.key.node_did) {
+        if !gents::store::identity::can_mint_defradb_bearer(&local.key.node_did) {
             return Err(BridgeError::new(BridgeErrorCode::Unsupported,
                 "Open Runtime Settings to connect this runtime's configuration before choosing Approve for me."));
         }
@@ -431,7 +431,7 @@ mod tests {
         )
         .unwrap();
         assert!(workspace::get(&home, &other_key).unwrap().is_none());
-        assert!(!gents::identity::can_mint_defradb_bearer(&owner));
+        assert!(!gents::store::identity::can_mint_defradb_bearer(&owner));
         let unavailable = save(
             &core,
             WorkspacePermissionsSaveRequest {

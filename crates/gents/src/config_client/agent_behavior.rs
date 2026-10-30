@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 
-use crate::collection::Collection;
+use crate::store::collection::Collection;
 use crate::AgentDocument as Agent;
 
 #[cfg(test)]

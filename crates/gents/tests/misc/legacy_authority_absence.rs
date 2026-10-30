@@ -181,7 +181,7 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
         .expect("signed direct materializer source boundary");
     assert!(!signed_direct_materializer.contains("add_AgentRequest(input:"));
     assert!(!signed_direct_materializer.contains("status: \"processing\""));
-    assert!(signed_direct_materializer.contains("Arc<dyn crate::identity::NodeIdentity>"));
+    assert!(signed_direct_materializer.contains("Arc<dyn crate::store::identity::NodeIdentity>"));
     assert!(signed_direct_materializer.contains("build_signed_request"));
     assert!(signed_direct_materializer.contains("verify_fresh_local_self_request"));
     assert!(signed_direct_materializer.contains("claim_with_identity"));

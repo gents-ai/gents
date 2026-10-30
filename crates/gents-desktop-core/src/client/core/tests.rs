@@ -117,7 +117,7 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     drop(core);
 
     assert_eq!(
-        gents::home::lock_store(&home, &data).is_err(),
+        gents::store::local::home::lock_store(&home, &data).is_err(),
         claim_held_for("caller_cancelled"),
         "the claim observation after shutdown waiter cancellation"
     );
@@ -130,7 +130,7 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     .await
     .expect("native shutdown returns before the claim is released");
     assert_eq!(
-        gents::home::lock_store(&home, &data).is_err(),
+        gents::store::local::home::lock_store(&home, &data).is_err(),
         claim_held_for("native_returned"),
         "the claim observation after native shutdown return"
     );
@@ -141,7 +141,7 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     let reacquired = tokio::task::spawn_blocking(move || {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
-            match gents::home::lock_store(&retry_home, &retry_data) {
+            match gents::store::local::home::lock_store(&retry_home, &retry_data) {
                 Ok(lock) => return lock,
                 Err(_) if std::time::Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(10));
@@ -157,7 +157,7 @@ async fn cancelled_shutdown_waiter_keeps_claim_until_node_shutdown_returns() {
     .expect("store lock probe panicked");
     drop(reacquired);
     assert_eq!(
-        gents::home::lock_store(&home, &data).is_err(),
+        gents::store::local::home::lock_store(&home, &data).is_err(),
         claim_held_for("access_released"),
         "the claim observation after access release"
     );
@@ -1319,9 +1319,12 @@ async fn the_client_store_is_encrypted_with_its_recorded_key() {
     let core = Arc::new(core);
     core.shutdown().await.expect("shutdown");
     drop(core);
-    let record: gents::store_key::StoreEncryption =
+    let record: gents::store::local::store_key::StoreEncryption =
         serde_json::from_slice(&std::fs::read(paths.store_encryption_path()).unwrap()).unwrap();
-    assert_eq!(record.custody, gents::store_key::StoreKeyCustody::File);
+    assert_eq!(
+        record.custody,
+        gents::store::local::store_key::StoreKeyCustody::File
+    );
     assert!(paths.store_key_path().is_file());
 
     let core =
@@ -1343,9 +1346,12 @@ async fn the_client_store_is_encrypted_with_its_recorded_key() {
         Err(error) => error,
     };
     assert_eq!(
-        gents::storage_backend::incompatible_store(error.as_ref(), paths.node_data_dir())
-            .map(|store| store.kind),
-        Some(gents::storage_backend::IncompatibleStoreKind::MissingStoreKey)
+        gents::store::local::storage_backend::incompatible_store(
+            error.as_ref(),
+            paths.node_data_dir()
+        )
+        .map(|store| store.kind),
+        Some(gents::store::local::storage_backend::IncompatibleStoreKind::MissingStoreKey)
     );
     assert!(
         !paths.store_key_path().exists(),
@@ -1397,7 +1403,7 @@ async fn hosted_enrollment_chat_commits_to_owner_without_replica_delivery() -> a
     let home = temp.path().join("runtime");
     std::fs::create_dir(&home)?;
     let key = home.join("node.key");
-    let owner = gents::identity::KeyIdentity::load_or_create(&key, None)?;
+    let owner = gents::store::identity::KeyIdentity::load_or_create(&key, None)?;
     let server = MockServer::start().await;
     let graphql = format!("{}/api/v0/graphql", server.uri());
     std::fs::write(
@@ -1694,7 +1700,7 @@ async fn send_into_a_node_owned_session_is_refused_before_it_is_written() -> any
     let home = temp.path().join("runtime");
     std::fs::create_dir(&home)?;
     let key = home.join("node.key");
-    let owner = gents::identity::KeyIdentity::load_or_create(&key, None)?;
+    let owner = gents::store::identity::KeyIdentity::load_or_create(&key, None)?;
     let server = MockServer::start().await;
     let graphql = format!("{}/api/v0/graphql", server.uri());
     std::fs::write(
@@ -1817,7 +1823,7 @@ async fn send_into_a_node_owned_session_is_refused_before_it_is_written() -> any
 
 #[tokio::test]
 async fn inference_activity_selects_authenticated_transport_by_peer_authority() {
-    use gents::identity::NodeIdentity as _;
+    use gents::store::identity::NodeIdentity as _;
     use identity::Identity as _;
     use wiremock::{
         matchers::{method, path},
@@ -1844,12 +1850,12 @@ async fn inference_activity_selects_authenticated_transport_by_peer_authority() 
         std::fs::create_dir_all(&home).unwrap();
         let key_path = home.join("node.key");
         let did = if authenticated {
-            gents::identity::KeyIdentity::load_or_create(&key_path, None)
+            gents::store::identity::KeyIdentity::load_or_create(&key_path, None)
                 .unwrap()
                 .did()
                 .to_owned()
         } else {
-            gents::identity::load_or_create_file_identity(&key_path)
+            gents::store::identity::load_or_create_file_identity(&key_path)
                 .unwrap()
                 .did()
                 .unwrap()

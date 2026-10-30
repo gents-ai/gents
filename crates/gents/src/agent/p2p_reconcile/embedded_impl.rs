@@ -39,7 +39,7 @@ impl EmbeddedRemoteP2pAdmin {
     }
 
     fn p2p(&self) -> RemoteP2pAdminResult<Arc<dyn defra_p2p_adapter::P2POperations>> {
-        crate::identity::node_p2p(&self.node).ok_or_else(|| {
+        crate::store::identity::node_p2p(&self.node).ok_or_else(|| {
             RemoteP2pAdminError::LocalError("embedded node has no P2P transport".into())
         })
     }
@@ -417,7 +417,7 @@ pub(super) async fn push_documents_to_peer(
 ) -> anyhow::Result<()> {
     use anyhow::Context as _;
 
-    let p2p = crate::identity::node_p2p(node)
+    let p2p = crate::store::identity::node_p2p(node)
         .context("embedded node has no P2P transport for hydration delivery")?;
     timeout(
         DEFAULT_EMBEDDED_ADMIN_TIMEOUT,

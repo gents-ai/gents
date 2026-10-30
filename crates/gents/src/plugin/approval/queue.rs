@@ -18,7 +18,7 @@ impl Queue {
     }
 
     pub(super) fn directory(self, home: &Path) -> PathBuf {
-        home.join(crate::home::PLUGIN_APPROVALS_DIR_NAME)
+        home.join(crate::store::local::home::PLUGIN_APPROVALS_DIR_NAME)
             .join(match self {
                 Self::Unscoped => "v2",
                 Self::Workspace => "v3",

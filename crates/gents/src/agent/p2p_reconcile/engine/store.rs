@@ -7,7 +7,7 @@ use chrono::Utc;
 use defra_node::EmbeddedNode;
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 
 use super::super::enrollment_reconcile::EnrollmentAuthorityHandle;
 use super::super::graphql_helpers::{

@@ -1,5 +1,5 @@
 use super::{ControlUpdateOutcome, DocumentRuntimeView};
-use crate::collection::Collection;
+use crate::store::collection::Collection;
 use anyhow::Result;
 
 /// Runtime-observed collections that are not themselves configuration.

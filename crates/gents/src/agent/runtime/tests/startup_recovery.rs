@@ -1,6 +1,6 @@
 use super::support::*;
 use super::*;
-use crate::identity::{KeyIdentity, NodeIdentity};
+use crate::store::identity::{KeyIdentity, NodeIdentity};
 
 const STARTUP_DEADLOCK_GUARD: Duration = Duration::from_secs(30);
 

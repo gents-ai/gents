@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn vocabulary_matches_canonical_lean_document_catalog() {
-        let lean = include_str!("../proofs/Proofs/ConfigDocuments.lean");
+        let lean = include_str!("../../proofs/Proofs/ConfigDocuments.lean");
         let expected: Vec<_> = lean
             .lines()
             .filter_map(|line| {
@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn authored_names_match_pack_config_document_roots() {
-        let pack = include_str!("document_config/pack_config.rs");
+        let pack = include_str!("../document_config/pack_config.rs");
         let roots: BTreeSet<_> = pack
             .lines()
             .filter_map(|line| {
@@ -215,7 +215,7 @@ mod tests {
     fn every_apply_collection_declares_the_recreate_identity_stamp() {
         for collection in Collection::ALL {
             let name = collection.graphql_type();
-            let baseline = crate::migration::DEFAULT_BASELINE
+            let baseline = crate::store::schema::migration::DEFAULT_BASELINE
                 .iter()
                 .find(|entry| entry.name == name)
                 .unwrap_or_else(|| panic!("{name} has no baseline schema"));

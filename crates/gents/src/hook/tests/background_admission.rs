@@ -1,5 +1,5 @@
 use super::*;
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 
 #[cfg(unix)]
 #[tokio::test]
@@ -415,7 +415,8 @@ async fn admission_harness(
 ) -> AdmissionHarness {
     let dir = tempfile::tempdir().unwrap();
     let identity =
-        crate::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None).unwrap();
+        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
+            .unwrap();
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(dir.path())

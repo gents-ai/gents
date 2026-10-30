@@ -260,7 +260,7 @@ async fn job_control_on_an_ended_job_row_is_already_terminal() {
 
 #[tokio::test]
 async fn job_control_routes_to_the_owner_without_a_replica_row() {
-    use gents::identity::{KeyIdentity, NodeIdentity};
+    use gents::store::identity::{KeyIdentity, NodeIdentity};
     use wiremock::matchers::{body_json, header_exists, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
     let server = MockServer::start().await;

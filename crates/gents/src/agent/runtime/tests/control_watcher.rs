@@ -1,8 +1,8 @@
 use super::support::*;
 use super::*;
 use crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET;
-use crate::identity::NodeIdentity;
 use crate::runtime_status::{ReconcilePhase, RECONCILE_PHASE_EVENT_TARGET};
+use crate::store::identity::NodeIdentity;
 use anyhow::Result;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex as StdMutex;

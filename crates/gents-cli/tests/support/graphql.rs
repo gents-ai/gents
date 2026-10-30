@@ -13,7 +13,7 @@ fn served_principals() -> &'static Mutex<RapidHashMap<u16, String>> {
 }
 
 pub fn register_served_home(home: &Path, port: u16) -> Result<()> {
-    let Some(config) = gents::home::read_init_config::<Value, Value>(home)? else {
+    let Some(config) = gents::store::local::home::read_init_config::<Value, Value>(home)? else {
         return Ok(());
     };
     let Some(key_path) = config.key_path.as_deref().filter(|path| !path.is_empty()) else {

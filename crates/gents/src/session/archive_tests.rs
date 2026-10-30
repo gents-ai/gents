@@ -38,12 +38,14 @@ fn authorized_archive_transitions_match_executed_model() {
     assert!(checked > 0 && checked_restored_generation);
 }
 
-async fn key(home: &std::path::Path, name: &str) -> crate::identity::KeyIdentity {
+async fn key(home: &std::path::Path, name: &str) -> crate::store::identity::KeyIdentity {
     let path = home.join(format!("{name}.key"));
-    tokio::task::spawn_blocking(move || crate::identity::KeyIdentity::load_or_create(path, None))
-        .await
-        .unwrap()
-        .unwrap()
+    tokio::task::spawn_blocking(move || {
+        crate::store::identity::KeyIdentity::load_or_create(path, None)
+    })
+    .await
+    .unwrap()
+    .unwrap()
 }
 
 async fn read_as(node: &Arc<EmbeddedNode>, actor: &dyn NodeIdentity) -> Result<AgentSession> {

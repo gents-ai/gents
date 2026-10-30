@@ -38,12 +38,16 @@ impl EvalContext {
     }
 
     pub(crate) fn jobs_dir(&self) -> PathBuf {
-        self.home_dir.join(gents::home::EVAL_DIR_NAME).join("jobs")
+        self.home_dir
+            .join(gents::store::local::home::EVAL_DIR_NAME)
+            .join("jobs")
     }
 }
 
 pub(crate) fn runs_dir(home_dir: &Path) -> PathBuf {
-    home_dir.join(gents::home::EVAL_DIR_NAME).join("runs")
+    home_dir
+        .join(gents::store::local::home::EVAL_DIR_NAME)
+        .join("runs")
 }
 
 pub(crate) struct Deps<'a> {

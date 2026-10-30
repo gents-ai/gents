@@ -3,7 +3,7 @@ use std::sync::Arc;
 use defra_node::EmbeddedNode;
 
 use super::*;
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 
 const FIXTURE_CLOSE: &[MailboxCloseCollection] = &[MailboxCloseCollection {
     collection: "MailboxFixture",
@@ -158,7 +158,7 @@ async fn stamping_rejects_missing_context_unknown_fields_and_unsupported_domain_
 async fn event_stage_materialization_persists_explicit_requester_lineage() {
     let key_path =
         std::env::temp_dir().join(format!("mailbox-event-stage-{}.key", uuid::Uuid::new_v4()));
-    let identity = crate::identity::KeyIdentity::load_or_create(key_path, None).unwrap();
+    let identity = crate::store::identity::KeyIdentity::load_or_create(key_path, None).unwrap();
     let node = Arc::new(
         EmbeddedNode::builder()
             .with_node_identity_did(identity.did())

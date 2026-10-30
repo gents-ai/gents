@@ -537,7 +537,7 @@ mod tests {
 
     #[tokio::test]
     async fn trigger_worker_inspection_reads_canonical_output_status_and_goal() {
-        use crate::identity::NodeIdentity;
+        use crate::store::identity::NodeIdentity;
         use crate::tool_call_lifecycle::admission_fixture::{
             claimed_signed_request_with_trigger_correlation, publish_accepted_on_claimed_request,
         };

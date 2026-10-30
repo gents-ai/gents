@@ -276,9 +276,9 @@ where
         .as_ref()
         .is_some_and(|error| error.code == BridgeErrorCode::IncompatibleLocalStore)
         || matches!(
-            gents::storage_backend::incompatible_store_kind(&gents::home::default_data_dir(
-                node_home
-            )),
+            gents::store::local::storage_backend::incompatible_store_kind(
+                &gents::store::local::home::default_data_dir(node_home)
+            ),
             Ok(Some(_))
         );
     let refused_store = refused.then(|| refused_runtime_store(node_home, refused_kind));

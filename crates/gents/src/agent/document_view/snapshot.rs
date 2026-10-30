@@ -18,7 +18,7 @@ use crate::agent::{
     agent_config_from_documents, assemble_node_and_agents, tool_selection_from_document,
     AgentBuildError, AgentDocumentInputs, AgentFactory, DocumentResolveContext,
 };
-use crate::identity::RuntimeNode;
+use crate::store::identity::RuntimeNode;
 use crate::tool_surface::AgentToolConfig;
 
 macro_rules! owned_doc {

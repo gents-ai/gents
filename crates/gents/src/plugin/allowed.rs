@@ -20,11 +20,11 @@ struct Stored {
 }
 
 fn file(home: &Path) -> PathBuf {
-    home.join(crate::home::ALLOWED_DIRS_FILE_NAME)
+    home.join(crate::store::local::home::ALLOWED_DIRS_FILE_NAME)
 }
 
 fn lock_file(home: &Path) -> PathBuf {
-    home.join(crate::home::ALLOWED_DIRS_LOCK_FILE_NAME)
+    home.join(crate::store::local::home::ALLOWED_DIRS_LOCK_FILE_NAME)
 }
 
 fn lock(home: &Path) -> Result<crate::file_lock::FileLock> {

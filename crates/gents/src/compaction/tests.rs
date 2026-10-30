@@ -1848,11 +1848,11 @@ async fn schema_invalid_structured_summary_is_retracted_and_resampled() {
 
 #[tokio::test]
 async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
-    use crate::identity::{KeyIdentity, NodeIdentity};
     use crate::rendered_request::scope::{
         armed_labels, scope_request, test_scope, CaptureScopeKind,
     };
     use crate::rendered_request::RenderedRequestCaptureSink;
+    use crate::store::identity::{KeyIdentity, NodeIdentity};
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
     };

@@ -1,6 +1,6 @@
 use super::*;
-use crate::identity::NodeIdentity;
 use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
+use crate::store::identity::NodeIdentity;
 
 struct PanickingTool;
 
@@ -28,7 +28,8 @@ impl ToolDyn for PanickingTool {
 async fn accepted_background_panic_terminalizes_and_notifies_before_release() {
     let dir = tempfile::tempdir().unwrap();
     let identity =
-        crate::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None).unwrap();
+        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
+            .unwrap();
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(dir.path())

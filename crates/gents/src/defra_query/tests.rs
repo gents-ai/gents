@@ -593,11 +593,13 @@ async fn count_is_filtered_total_and_find_is_a_stable_page() {
 async fn equal_collection_grants_read_only_the_bound_principals_acp_rows() {
     let keys = tempfile::tempdir().unwrap();
     let alice =
-        crate::identity::KeyIdentity::load_or_create(keys.path().join("alice.key"), None).unwrap();
+        crate::store::identity::KeyIdentity::load_or_create(keys.path().join("alice.key"), None)
+            .unwrap();
     let bob =
-        crate::identity::KeyIdentity::load_or_create(keys.path().join("bob.key"), None).unwrap();
-    let alice_did = crate::identity::NodeIdentity::did(&alice);
-    let bob_did = crate::identity::NodeIdentity::did(&bob);
+        crate::store::identity::KeyIdentity::load_or_create(keys.path().join("bob.key"), None)
+            .unwrap();
+    let alice_did = crate::store::identity::NodeIdentity::did(&alice);
+    let bob_did = crate::store::identity::NodeIdentity::did(&bob);
     let node = Arc::new(
         crate::defra_node::EmbeddedNode::builder()
             .with_node_identity_did(alice_did.to_owned())

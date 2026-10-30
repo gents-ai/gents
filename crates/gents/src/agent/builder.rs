@@ -24,9 +24,9 @@ use crate::config::{
 };
 use crate::health_checker::HealthCheckerOptions;
 use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
-use crate::identity::{NodeIdentity, RuntimeNode};
 use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
+use crate::store::identity::{NodeIdentity, RuntimeNode};
 use crate::tool_surface::{
     AgentToolSurfaceConfig, BashMode, CustomToolFactory, FileToolMode, ResolvedToolSelection,
     ToolCeiling,
@@ -695,7 +695,7 @@ impl PendingAgent {
 mod tests {
     use super::*;
     use crate::config::{MaxTurnsProvenance, DEFAULT_MAX_TURNS};
-    use crate::identity::KeyIdentity;
+    use crate::store::identity::KeyIdentity;
 
     fn test_identity(name: &str) -> KeyIdentity {
         let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));

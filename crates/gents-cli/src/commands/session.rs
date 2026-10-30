@@ -108,10 +108,10 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
     let node = access
         .local_node()
         .ok_or_else(|| anyhow::anyhow!("offline fork requires local DefraDB access"))?;
-    gents::migration::ensure_all_runtime_migrations(node.clone())
+    gents::store::schema::migration::ensure_all_runtime_migrations(node.clone())
         .await
         .context("ensuring runtime schemas")?;
-    gents::store_key::upgrade::finish(&data_dir)?;
+    gents::store::local::store_key::upgrade::finish(&data_dir)?;
 
     let outcome = fork(
         node,
@@ -139,7 +139,7 @@ async fn open_offline_fork_store(home: &Path, data_dir: &Path) -> Result<ConfigA
     );
     fs::create_dir_all(data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let claim = gents::home::lock_store(home, data_dir).map_err(|error| {
+    let claim = gents::store::local::home::lock_store(home, data_dir).map_err(|error| {
         let held = error.lock_held().is_some();
         let error = anyhow::Error::from(error);
         if held {

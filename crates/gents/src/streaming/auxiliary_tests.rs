@@ -29,7 +29,7 @@ use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEG
 #[tokio::test]
 async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
     use crate::config_client::ConfigApplyTxn;
-    use crate::identity::{KeyIdentity, NodeIdentity};
+    use crate::store::identity::{KeyIdentity, NodeIdentity};
     use gents_protocol::output::OutputOutcome;
     use gents_protocol::request_admission::{
         AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
@@ -44,7 +44,9 @@ async fn cancelled_title_flush_replays_committed_bytes_before_shutdown_close() {
             .await
             .unwrap(),
     );
-    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    crate::store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     crate::test_support::install_test_agent(&node, identity.did(), "general").await;
     let mut create = AgentRequestCreate::base(
         RequestPurpose::Normal,
@@ -429,7 +431,9 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
                 .await
                 .unwrap(),
         );
-        crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+        crate::store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
         let mut lifecycle = claimed(&node, &case.name).await;
         assert_eq!(
             case.authority.claimed_request_state, "claimed",
@@ -787,7 +791,9 @@ async fn generated_auxiliary_cases_drive_non_claude_sink_audit_without_publicati
                 .await
                 .unwrap(),
         );
-        crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+        crate::store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
         let mut lifecycle = claimed(&node, &case.name).await;
         let writer =
             DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(1));

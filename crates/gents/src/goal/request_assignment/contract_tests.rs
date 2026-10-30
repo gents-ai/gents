@@ -1,5 +1,5 @@
 use super::*;
-use crate::identity::{KeyIdentity, NodeIdentity};
+use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };

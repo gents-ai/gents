@@ -108,7 +108,7 @@ fn runtime_key_unlock_preserves_existing_keys_and_refuses_a_missing_key() {
     let config_bytes = std::fs::read(&config_path).unwrap();
     let config: serde_json::Value = serde_json::from_slice(&config_bytes).unwrap();
     let identity_path = std::path::Path::new(config["key_path"].as_str().unwrap());
-    let encryption_path = gents::store_key::home_key_file(&home);
+    let encryption_path = gents::store::local::store_key::home_key_file(&home);
     let identity = std::fs::read(identity_path).unwrap();
     let encryption = std::fs::read(&encryption_path).unwrap();
     let unlock = || {
@@ -136,7 +136,7 @@ fn runtime_key_unlock_preserves_existing_keys_and_refuses_a_missing_key() {
     assert!(!encryption_path.exists());
     assert!(std::fs::read(identity_path).unwrap() == identity);
     assert_eq!(std::fs::read(&config_path).unwrap(), config_bytes);
-    assert!(!gents::home::default_data_dir(&home)
+    assert!(!gents::store::local::home::default_data_dir(&home)
         .join("MANIFEST")
         .exists());
     assert!(!home.join("runtime.json").exists());

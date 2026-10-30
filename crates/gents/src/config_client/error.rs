@@ -31,7 +31,7 @@ pub enum ConfigClientError {
     #[error(transparent)]
     Protocol(#[from] gents_protocol::graphql::GraphqlError),
     #[error(transparent)]
-    Identity(Box<crate::identity::IdentityError>),
+    Identity(Box<crate::store::identity::IdentityError>),
     #[error(transparent)]
     Node(Box<defra_node::Error>),
     #[error(transparent)]
@@ -300,8 +300,8 @@ pub enum ConfigClientError {
     InjectedRollbackFailure,
 }
 
-impl From<crate::identity::IdentityError> for ConfigClientError {
-    fn from(error: crate::identity::IdentityError) -> Self {
+impl From<crate::store::identity::IdentityError> for ConfigClientError {
+    fn from(error: crate::store::identity::IdentityError) -> Self {
         Self::Identity(Box::new(error))
     }
 }
@@ -383,7 +383,7 @@ impl ConfigClientError {
 
     /// An identity key refused for its permissions, through the transparent
     /// identity variant and the access wrappers.
-    pub fn insecure_key(&self) -> Option<&crate::identity::InsecureKeyPermissions> {
+    pub fn insecure_key(&self) -> Option<&crate::store::identity::InsecureKeyPermissions> {
         match self {
             Self::Identity(error) => error.insecure_key(),
             Self::Response(crate::graphql::GraphqlResponseError::Access(error))

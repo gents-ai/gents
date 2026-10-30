@@ -14,11 +14,11 @@ use crate::config::{
 };
 use crate::health_checker::HealthCheckerOptions;
 use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
-use crate::identity::{NodeIdentity, RuntimeNode};
 use crate::mcp_pool::McpPool;
-use crate::migration;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableAgent};
+use crate::store::identity::{NodeIdentity, RuntimeNode};
+use crate::store::schema::migration;
 use crate::tool_surface::{
     AgentToolConfig, AgentToolSurfaceConfig, ResolvedToolSelection, ToolCeiling,
 };

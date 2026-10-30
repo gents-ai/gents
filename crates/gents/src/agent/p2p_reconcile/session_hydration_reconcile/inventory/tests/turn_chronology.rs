@@ -1,6 +1,6 @@
 use super::*;
-use crate::identity::NodeIdentity;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
+use crate::store::identity::NodeIdentity;
 use crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request;
 use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_admission::{

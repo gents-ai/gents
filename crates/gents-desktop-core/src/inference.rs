@@ -437,7 +437,7 @@ mod tests {
             .unwrap();
         assert!(authorization.starts_with("Bearer "));
         assert!(
-            gents::identity::defradb_bearer_authorization(node, "localhost").is_err(),
+            gents::store::identity::defradb_bearer_authorization(node, "localhost").is_err(),
             "the runtime signer must remain unavailable"
         );
     }

@@ -2081,7 +2081,7 @@ async fn an_install_naming_an_unresolved_plugin_is_refused_before_writing() {
 
 #[tokio::test]
 async fn remote_install_refuses_unverifiable_plugin_before_writes_and_installs_plugin_free_pack() {
-    use crate::identity::NodeIdentity;
+    use crate::store::identity::NodeIdentity;
 
     let root = tempfile::tempdir().unwrap();
     let key = root.path().join("remote-install.key");

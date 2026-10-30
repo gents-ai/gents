@@ -138,7 +138,7 @@ async fn managed_enrollment_discovers_restarted_endpoint_without_changing_author
         )
         .unwrap();
         std::fs::write(
-            home.join(gents::home::RUNTIME_STATE_FILE_NAME),
+            home.join(gents::store::local::home::RUNTIME_STATE_FILE_NAME),
             json!({
                 "node_name": "managed", "node_did": live_owner,
                 "graphql": graphql, "p2p_transport": "iroh", "p2p_peer_id": live_peer,

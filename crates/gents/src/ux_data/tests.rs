@@ -27,16 +27,18 @@ impl Fixture {
     async fn new() -> Self {
         let home = tempfile::tempdir().unwrap();
         let identity =
-            crate::identity::KeyIdentity::load_or_create(home.path().join("node.key"), None)
+            crate::store::identity::KeyIdentity::load_or_create(home.path().join("node.key"), None)
                 .unwrap();
         let node = Arc::new(
             EmbeddedNode::builder()
-                .with_node_identity_did(crate::identity::NodeIdentity::did(&identity))
+                .with_node_identity_did(crate::store::identity::NodeIdentity::did(&identity))
                 .build()
                 .await
                 .unwrap(),
         );
-        crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+        crate::store::schema::ensure_runtime_schemas(&node)
+            .await
+            .unwrap();
         node.add_collection("type BoardTask { title: String lane: String }")
             .await
             .unwrap();
@@ -53,7 +55,7 @@ impl Fixture {
         );
         let dev = home
             .path()
-            .join(crate::home::UX_PLUGINS_DIR_NAME)
+            .join(crate::store::local::home::UX_PLUGINS_DIR_NAME)
             .join("loose");
         std::fs::create_dir_all(&dev).unwrap();
         std::fs::write(dev.join(crate::ux_plugin::DEV_ENTRY), "export default {}").unwrap();

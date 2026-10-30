@@ -1,6 +1,6 @@
 use super::*;
-use crate::identity::NodeIdentity;
 use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
+use crate::store::identity::NodeIdentity;
 
 struct PendingTool;
 
@@ -55,7 +55,8 @@ async fn generated_background_budget_uses_accepted_dispatch() {
         .expect("modeled admission bound");
     let dir = tempfile::tempdir().unwrap();
     let identity =
-        crate::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None).unwrap();
+        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
+            .unwrap();
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(dir.path())
@@ -233,7 +234,8 @@ impl ToolDyn for NamedPendingTool {
 async fn configured_background_lifetimes_and_waits_follow_the_target() {
     let dir = tempfile::tempdir().unwrap();
     let identity =
-        crate::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None).unwrap();
+        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
+            .unwrap();
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(dir.path())
@@ -382,7 +384,8 @@ impl ToolDyn for NoisyTool {
 async fn background_completion_summary_honors_the_configured_output_budget() {
     let dir = tempfile::tempdir().unwrap();
     let identity =
-        crate::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None).unwrap();
+        crate::store::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)
+            .unwrap();
     let node = Arc::new(
         EmbeddedNode::builder()
             .data_path(dir.path())

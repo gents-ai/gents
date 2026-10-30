@@ -1,9 +1,9 @@
 use super::*;
 use crate::config_client::ConfigApplyTxn;
-use crate::identity::NodeIdentity;
 use crate::lifecycle::materialize::{sign_request, RequestSigner};
 use crate::lifecycle::queue::{goal_continuation_identity, prepare_goal_continuation};
 use crate::request_admission::{verify_request_receipt_signature, SIGNED_REQUEST_FIELDS};
+use crate::store::identity::NodeIdentity;
 use gents_protocol::row::AgentRequestRow;
 
 #[derive(Debug, Clone, Serialize)]

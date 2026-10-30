@@ -4,8 +4,8 @@ use tokio::sync::Notify;
 
 use super::lookup_backend_observation;
 use crate::defra_query::{CollectionScope, DefraQueryTool, QueryParams};
-use crate::identity::NodeIdentity;
 use crate::llm::tool::Tool;
+use crate::store::identity::NodeIdentity;
 use crate::{config_client::ConfigAccess, defra_node::EmbeddedNode};
 
 #[tokio::test]
@@ -13,7 +13,8 @@ async fn runtime_observation_reads_do_not_wait_for_the_mutation_gate() {
     const OBSERVATION_TIMEOUT: Duration = Duration::from_secs(10);
     let keys = tempfile::tempdir().unwrap();
     let identity =
-        crate::identity::KeyIdentity::load_or_create(keys.path().join("reader.key"), None).unwrap();
+        crate::store::identity::KeyIdentity::load_or_create(keys.path().join("reader.key"), None)
+            .unwrap();
     let owner = identity.did().to_owned();
     let node = Arc::new(
         EmbeddedNode::builder()

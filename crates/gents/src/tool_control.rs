@@ -918,7 +918,7 @@ mod tests {
     #[tokio::test]
     async fn owned_cancel_persists_custom_completion_reason_for_redrive() {
         use crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
-        use crate::identity::NodeIdentity;
+        use crate::store::identity::NodeIdentity;
         use crate::SIGNED_REQUEST_FIELDS;
         let data_path = std::env::temp_dir().join(format!(
             "agent-tool-control-custom-cancel-{}",
@@ -926,7 +926,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&data_path).unwrap();
         let identity = Arc::new(
-            crate::identity::KeyIdentity::load_or_create(data_path.join("agent.key"), None)
+            crate::store::identity::KeyIdentity::load_or_create(data_path.join("agent.key"), None)
                 .unwrap(),
         );
         let node = Arc::new(

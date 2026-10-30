@@ -10,8 +10,8 @@ use crate::file_inventory::{
     admit_demand, begin_client_progress, load_client_progress, receive_client_reply,
     verified_client_response, FileInventoryReceiver, VerifiedInventoryResponse,
 };
-use crate::identity::KeyIdentity;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
+use crate::store::identity::KeyIdentity;
 use crate::tool_call_lifecycle::admission_fixture::{
     ensure_fixture_session, publish_accepted_on_claimed_request,
 };

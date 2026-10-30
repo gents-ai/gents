@@ -35,7 +35,8 @@ impl Plan {
         };
         create.input.session_creation =
             Some(gents_protocol::request_input::SessionCreationIntent::AgentNew);
-        let signer = crate::identity::RegisteredIdentity::from_registered_did(node_did, None)?;
+        let signer =
+            crate::store::identity::RegisteredIdentity::from_registered_did(node_did, None)?;
         crate::sign_agent_request_create(&signer, create).await
     }
     pub(crate) fn hop(&self) -> u32 {
@@ -112,7 +113,7 @@ async fn target_goal_assignment(
         )
         .await;
     }
-    let verifier = crate::identity::RegisteredIdentity::from_registered_did(
+    let verifier = crate::store::identity::RegisteredIdentity::from_registered_did(
         cause.caller_node_did.clone(),
         None,
     )?;

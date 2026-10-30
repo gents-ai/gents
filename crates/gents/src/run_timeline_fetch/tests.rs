@@ -273,7 +273,7 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
     use std::{sync::Arc, time::Duration};
 
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::schema::ensure_runtime_schemas(node.as_ref())
+    crate::store::schema::ensure_runtime_schemas(node.as_ref())
         .await
         .unwrap();
     let response = node

@@ -8,11 +8,11 @@ use gents_protocol::request_input::RequestInput;
 
 use super::{AgentRequestAdmissionError, AgentRequestAdmissionVerifier};
 use crate::agent::p2p_reconcile::enrollment_authority_channel;
-use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::lean_vocab_test::{
     lean_title_request_admission_cases, LeanRequestPurpose, LeanTitleRequestAdmissionCase,
 };
-use crate::schema::ensure_runtime_schemas;
+use crate::store::identity::{KeyIdentity, NodeIdentity};
+use crate::store::schema::ensure_runtime_schemas;
 
 fn native_purpose(purpose: LeanRequestPurpose) -> RequestPurpose {
     purpose.into()

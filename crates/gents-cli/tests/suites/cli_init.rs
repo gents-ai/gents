@@ -603,7 +603,7 @@ fn init_hosted_preset_error_can_retry_with_the_same_identity_and_store_key() -> 
     let node_did = stored["node_did"].as_str().context("recorded identity")?;
     let identity_path = stored["key_path"].as_str().context("recorded key path")?;
     let identity_bytes = fs::read(identity_path)?;
-    let store_key_path = gents::store_key::home_key_file(&runtime_home);
+    let store_key_path = gents::store::local::store_key::home_key_file(&runtime_home);
     let store_key_bytes = fs::read(&store_key_path)?;
     assert!(runtime_home.join("data/MANIFEST").exists());
 
@@ -676,11 +676,12 @@ async fn init_identity_only_writes_stable_real_did_without_runtime_config() -> R
     let agent_name = "store";
     let first = run_init_json(&home_dir, &["--identity-only", "--node-name", agent_name])?;
     let first_node_did = node_did_from_init(&first)?;
-    let identity_path = gents::home::default_key_path(&home_dir.join(".gents"), agent_name);
+    let identity_path =
+        gents::store::local::home::default_key_path(&home_dir.join(".gents"), agent_name);
     let identity_bytes = fs::read(&identity_path)?;
     assert_ne!(
         identity_path,
-        gents::store_key::home_key_file(&home_dir.join(".gents"))
+        gents::store::local::store_key::home_key_file(&home_dir.join(".gents"))
     );
     assert_eq!(identity_bytes.len(), 64);
 
@@ -1360,14 +1361,14 @@ async fn init_reuses_recorded_store_custody_and_refuses_an_unrecorded_key() -> R
     let agent_name = format!("cli-store-key-{}", Uuid::new_v4().simple());
 
     run_init_json(&home_dir, &["--identity-only", "--node-name", &agent_name])?;
-    let config_path = gents::home::init_config_path(&home);
+    let config_path = gents::store::local::home::init_config_path(&home);
     let recorded = read_json_file(&config_path)?["store_encryption"].clone();
     assert_eq!(
         recorded,
         serde_json::json!({"version": 1, "custody": "file"}),
         "{recorded}"
     );
-    let key_file = gents::store_key::home_key_file(&home);
+    let key_file = gents::store::local::store_key::home_key_file(&home);
     let key = fs::read(&key_file)?;
     run_init_json(&home_dir, &["--identity-only", "--node-name", &agent_name])?;
     assert_eq!(fs::read(&key_file)?, key, "re-init reuses the recorded key");
@@ -1402,8 +1403,8 @@ async fn init_reuses_recorded_store_custody_and_refuses_an_unrecorded_key() -> R
 fn init_refuses_an_explicit_identity_path_that_collides_with_the_store_key() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let home_dir = temp.path().join("home");
-    let key_path = gents::store_key::home_key_file(&home_dir.join(".gents"));
-    gents::identity::load_or_create_file_identity(&key_path)?;
+    let key_path = gents::store::local::store_key::home_key_file(&home_dir.join(".gents"));
+    gents::store::identity::load_or_create_file_identity(&key_path)?;
     let original = fs::read(&key_path)?;
     let error = run_init_json(
         &home_dir,
@@ -1419,7 +1420,7 @@ fn init_refuses_an_explicit_identity_path_that_collides_with_the_store_key() -> 
         "{error:#}"
     );
     assert_eq!(fs::read(&key_path)?, original);
-    gents::identity::load_file_identity(&key_path)?;
+    gents::store::identity::load_file_identity(&key_path)?;
     assert!(!home_dir.join(".gents/init.json").exists());
     Ok(())
 }

@@ -371,7 +371,7 @@ where
     Open: FnOnce() -> Opening + Send + 'static,
     Opening: std::future::Future<Output = Result<EmbeddedHome>>,
 {
-    crate::storage_backend::drive_unsendable(runtime, open)
+    crate::store::local::storage_backend::drive_unsendable(runtime, open)
         .await
         .context("opening a trial home")?
 }

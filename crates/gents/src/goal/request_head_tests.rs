@@ -1,6 +1,6 @@
 use super::*;
-use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::lifecycle::queue::prepare_goal_continuation;
+use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 use rapidhash::{HashMapExt, RapidHashMap};
 use serde::Deserialize;

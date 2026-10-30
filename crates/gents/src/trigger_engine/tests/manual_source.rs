@@ -184,7 +184,7 @@ async fn production_materializer_persists_event_source_document_lineage() {
 
 #[tokio::test]
 async fn production_event_fire_into_a_paired_client_session_adopts_its_requester() {
-    use crate::identity::NodeIdentity;
+    use crate::store::identity::NodeIdentity;
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = integration_test_agent("general");

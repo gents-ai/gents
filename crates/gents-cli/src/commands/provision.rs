@@ -120,7 +120,7 @@ async fn ensure_home_identity(
     bootstrap_macos_secure_enclave: bool,
     keychain_label: Option<&str>,
     secure_enclave_label: Option<&str>,
-    store_key_custody: gents::store_key::StoreKeyCustodyChoice,
+    store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice,
 ) -> Result<ProvisionIdentityReport> {
     let bootstrap_count = [
         bootstrap_file_identity,
@@ -232,12 +232,12 @@ mod tests {
             false,
             None,
             None,
-            gents::store_key::StoreKeyCustodyChoice::File,
+            gents::store::local::store_key::StoreKeyCustodyChoice::File,
         )
         .await
         .unwrap();
-        let before = std::fs::read(gents::home::init_config_path(&home)).unwrap();
-        let runtime_lock = gents::home::lock_home_store(&home).unwrap();
+        let before = std::fs::read(gents::store::local::home::init_config_path(&home)).unwrap();
+        let runtime_lock = gents::store::local::home::lock_home_store(&home).unwrap();
         let observed = ensure_home_identity(
             &home,
             "different-requested-name",
@@ -246,7 +246,7 @@ mod tests {
             false,
             None,
             None,
-            gents::store_key::StoreKeyCustodyChoice::File,
+            gents::store::local::store_key::StoreKeyCustodyChoice::File,
         )
         .await
         .unwrap();
@@ -254,7 +254,7 @@ mod tests {
         assert_eq!(observed.node_did, original.node_did);
         assert_eq!(observed.node_name, "owner");
         assert_eq!(
-            std::fs::read(gents::home::init_config_path(&home)).unwrap(),
+            std::fs::read(gents::store::local::home::init_config_path(&home)).unwrap(),
             before
         );
         drop(runtime_lock);
@@ -262,7 +262,7 @@ mod tests {
         let new_home = temp.path().join("new-home");
         let data = crate::default_data_dir(&new_home);
         std::fs::create_dir_all(&data).unwrap();
-        let _held = gents::home::lock_store(&new_home, &data).unwrap();
+        let _held = gents::store::local::home::lock_store(&new_home, &data).unwrap();
         let error = match ensure_home_identity(
             &new_home,
             "owner",
@@ -271,14 +271,14 @@ mod tests {
             false,
             None,
             None,
-            gents::store_key::StoreKeyCustodyChoice::File,
+            gents::store::local::store_key::StoreKeyCustodyChoice::File,
         )
         .await
         {
             Ok(_) => panic!("bootstrap must hold the exclusive store lock"),
             Err(error) => error,
         };
-        assert!(gents::home::store_lock_held(error.as_ref()).is_some());
-        assert!(!gents::home::init_config_path(&new_home).exists());
+        assert!(gents::store::local::home::store_lock_held(error.as_ref()).is_some());
+        assert!(!gents::store::local::home::init_config_path(&new_home).exists());
     }
 }

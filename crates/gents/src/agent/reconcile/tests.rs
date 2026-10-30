@@ -13,9 +13,9 @@ use crate::backend_provider::BackendProviderKind;
 use crate::config::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
-use crate::identity::{KeyIdentity, NodeIdentity as _, RuntimeNode};
 use crate::lean_vocab_test::lean_runtime_reconcile_case;
 use crate::runtime_status::RuntimeStatusHandle;
+use crate::store::identity::{KeyIdentity, NodeIdentity as _, RuntimeNode};
 use crate::tool_surface::{AgentToolSurfaceConfig, ToolCeiling, ToolSurface};
 use crate::watcher::AgentRequest;
 
@@ -29,7 +29,7 @@ fn test_identity(name: &str) -> KeyIdentity {
 }
 
 fn stub_runtime_node() -> Arc<RuntimeNode> {
-    let identity: Arc<dyn crate::identity::NodeIdentity> = Arc::new(
+    let identity: Arc<dyn crate::store::identity::NodeIdentity> = Arc::new(
         KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("stub-runtime-node-{}.key", uuid::Uuid::new_v4())),
             None,

@@ -15,8 +15,8 @@ fn reserved_paths(home: &Path) -> [PathBuf; 7] {
         crate::plugin::approval::lock_file(home),
         home.join(crate::plugin::approval::workspace::FILE),
         home.join(crate::plugin::approval::workspace::LOCK),
-        home.join(crate::home::PLUGIN_APPROVALS_DIR_NAME),
-        home.join(crate::home::PERMISSION_STAGING_DIR_NAME),
+        home.join(crate::store::local::home::PLUGIN_APPROVALS_DIR_NAME),
+        home.join(crate::store::local::home::PERMISSION_STAGING_DIR_NAME),
     ]
 }
 
@@ -132,7 +132,7 @@ pub(crate) fn write_permission_file(
             .file_name()
             .context("permission target has no name")?,
     );
-    let directory = home.join(crate::home::PERMISSION_STAGING_DIR_NAME);
+    let directory = home.join(crate::store::local::home::PERMISSION_STAGING_DIR_NAME);
     #[cfg(unix)]
     let create = {
         use std::os::unix::fs::DirBuilderExt;

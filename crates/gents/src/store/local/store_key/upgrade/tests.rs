@@ -1,5 +1,5 @@
 use super::*;
-use crate::store_key::StoreKeyCustodyChoice;
+use crate::store::local::store_key::StoreKeyCustodyChoice;
 
 type Result<T, E = Box<dyn std::error::Error + Send + Sync>> = std::result::Result<T, E>;
 
@@ -51,12 +51,12 @@ async fn assert_contents(
     assert!(RegolithStore::open(data).is_err());
     assert!(RegolithStore::open_with_options(
         data,
-        crate::storage_backend::regolith_options().with_encryption_key([0x55; 32])
+        crate::store::local::storage_backend::regolith_options().with_encryption_key([0x55; 32])
     )
     .is_err());
     let encrypted = RegolithStore::open_with_options(
         data,
-        crate::storage_backend::regolith_options().with_encryption_key(*key.0),
+        crate::store::local::storage_backend::regolith_options().with_encryption_key(*key.0),
     )?;
     let decrypted = encrypted.new_txn(true).await?;
     for (k, v) in entries {
@@ -261,7 +261,7 @@ async fn partial_copy_restarts_and_a_lost_materialized_key_is_never_regenerated(
     let (record, key) = prepare(&data, &key_file)?;
     let stage = RegolithStore::open_with_options(
         staging_path(&data),
-        crate::storage_backend::regolith_options().with_encryption_key(*key.0),
+        crate::store::local::storage_backend::regolith_options().with_encryption_key(*key.0),
     )?;
     let mut write = stage.new_txn(false).await?;
     write.set(b"stale-entry", b"must not survive retry").await?;
@@ -291,7 +291,7 @@ async fn partial_copy_restarts_and_a_lost_materialized_key_is_never_regenerated(
     assert_contents(&data, &key, &entries).await?;
     let store = RegolithStore::open_with_options(
         &data,
-        crate::storage_backend::regolith_options().with_encryption_key(*key.0),
+        crate::store::local::storage_backend::regolith_options().with_encryption_key(*key.0),
     )?;
     let read = store.new_txn(true).await?;
     assert!(read.get(b"stale-entry").await?.is_none());

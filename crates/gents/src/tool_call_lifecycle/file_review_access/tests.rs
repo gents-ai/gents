@@ -1,5 +1,5 @@
 use super::*;
-use crate::identity::KeyIdentity;
+use crate::store::identity::KeyIdentity;
 use gents_protocol::file_image_hydration::FILE_IMAGE_RECEIPT_VERSION;
 use gents_protocol::session_hydration::HydrationRequest;
 

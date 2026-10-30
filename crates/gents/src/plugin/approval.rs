@@ -176,7 +176,7 @@ fn lock(home: &Path) -> Result<crate::file_lock::FileLock> {
 }
 
 pub(super) fn lock_file(home: &Path) -> PathBuf {
-    home.join(crate::home::PLUGIN_APPROVALS_LOCK_FILE_NAME)
+    home.join(crate::store::local::home::PLUGIN_APPROVALS_LOCK_FILE_NAME)
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {

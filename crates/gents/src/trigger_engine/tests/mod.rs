@@ -16,7 +16,6 @@ use super::*;
 use crate::config::{ResolvedAgent, SamplingConfig};
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
-use crate::identity::{KeyIdentity, RuntimeNode};
 use crate::lean_vocab_test::{
     assert_lean_to_defradb_vocabulary_matches, lean_event_group_case_count, lean_event_group_cases,
     lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases, LeanTriggerDispatchCase,
@@ -26,6 +25,7 @@ use crate::runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot,
     ResolvedSchedule, ResolvedTask, ScheduleCadence,
 };
+use crate::store::identity::{KeyIdentity, RuntimeNode};
 use crate::tool_surface::AgentToolSurfaceConfig;
 use crate::trigger_engine::event_source::EventSource;
 use crate::trigger_engine::manual_source::ManualSource;
@@ -61,15 +61,15 @@ where
     removed
 }
 
-fn stub_principal() -> Arc<crate::identity::RuntimeNode> {
-    let identity: Arc<dyn crate::identity::NodeIdentity> = Arc::new(
+fn stub_principal() -> Arc<crate::store::identity::RuntimeNode> {
+    let identity: Arc<dyn crate::store::identity::NodeIdentity> = Arc::new(
         KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("stub-principal-{}.key", uuid::Uuid::new_v4())),
             None,
         )
         .unwrap(),
     );
-    Arc::new(crate::identity::RuntimeNode {
+    Arc::new(crate::store::identity::RuntimeNode {
         node_did: identity.did().to_string(),
         identity,
         default_agent_id: String::new(),
@@ -555,7 +555,7 @@ fn snapshot_from_trigger_contract(
 }
 
 fn integration_test_agent(behavior_name: &str) -> Arc<ResolvedAgent> {
-    let identity: Arc<dyn crate::identity::NodeIdentity> = Arc::new(
+    let identity: Arc<dyn crate::store::identity::NodeIdentity> = Arc::new(
         KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("{behavior_name}-{}.key", uuid::Uuid::new_v4())),
             None,

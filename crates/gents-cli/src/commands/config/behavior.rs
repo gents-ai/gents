@@ -362,7 +362,7 @@ mod tests {
                 .expect("embedded node boots"),
         );
         ensure_runtime_schemas(&node).await?;
-        let identity = gents::identity::KeyIdentity::load_or_create(
+        let identity = gents::store::identity::KeyIdentity::load_or_create(
             tempdir.path().join("identity.key"),
             None,
         )?;

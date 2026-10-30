@@ -1566,7 +1566,7 @@ async fn initialized_trace_node(
         .context("loading initialized trace identity")?;
 
     let data = agent_home.join("data");
-    gents::store_key::open_home_store_key(agent_home, &data)
+    gents::store::local::store_key::open_home_store_key(agent_home, &data)
         .await?
         .encrypt(
             EmbeddedNode::builder()

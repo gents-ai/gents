@@ -14,7 +14,7 @@ fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
     let key = workspace::WorkspaceKey::canonical("node", "requester", "agent", &root).unwrap();
     workspace::save_mode(&home, &key, 0, workspace::Mode::FullAccess, None).unwrap();
     std::fs::write(
-        home.join(crate::home::ALLOWED_DIRS_FILE_NAME),
+        home.join(crate::store::local::home::ALLOWED_DIRS_FILE_NAME),
         "operator permission data",
     )
     .unwrap();
@@ -67,9 +67,9 @@ async fn kernel_guard_preserves_work_and_denies_permission_names_links_and_moves
         CommandExecutionMode::Unrestricted,
     ] {
         let (_directory, root, home) = fixture();
-        let state = home.join(crate::home::ALLOWED_DIRS_FILE_NAME);
-        let staging = home.join(crate::home::PERMISSION_STAGING_DIR_NAME);
-        let questions = home.join(crate::home::PLUGIN_APPROVALS_DIR_NAME);
+        let state = home.join(crate::store::local::home::ALLOWED_DIRS_FILE_NAME);
+        let staging = home.join(crate::store::local::home::PERMISSION_STAGING_DIR_NAME);
+        let questions = home.join(crate::store::local::home::PLUGIN_APPROVALS_DIR_NAME);
         for (script, allowed) in [
             ("printf allowed > \"$1/ordinary.tmp\" && mv \"$1/ordinary.tmp\" \"$1/ordinary\"", true),
             ("/usr/bin/git init -q \"$1/project\" && printf source > \"$1/project/source\" && /usr/bin/git -C \"$1/project\" add source && /usr/bin/git -C \"$1/project\" -c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false -c core.hooksPath=/dev/null commit -qm Record", true),
@@ -107,7 +107,7 @@ async fn kernel_guard_preserves_work_and_denies_permission_names_links_and_moves
 async fn read_only_commands_keep_the_permission_guard() {
     let (_directory, root, home) = fixture();
     let target = home
-        .join(crate::home::ALLOWED_DIRS_FILE_NAME)
+        .join(crate::store::local::home::ALLOWED_DIRS_FILE_NAME)
         .to_str()
         .unwrap()
         .to_owned();
@@ -192,7 +192,7 @@ async fn guarded_commands_build_and_run_a_rust_workspace() {
         );
         assert!(output.ends_with(b"built"));
         assert_eq!(
-            std::fs::read(home.join(crate::home::ALLOWED_DIRS_FILE_NAME)).unwrap(),
+            std::fs::read(home.join(crate::store::local::home::ALLOWED_DIRS_FILE_NAME)).unwrap(),
             b"operator permission data"
         );
     }
@@ -213,7 +213,10 @@ async fn configured_cli_tools_keep_the_guard_and_declared_environment() {
     });
     for (target, allowed) in [
         (root.join("cli-output"), true),
-        (home.join(crate::home::ALLOWED_DIRS_FILE_NAME), false),
+        (
+            home.join(crate::store::local::home::ALLOWED_DIRS_FILE_NAME),
+            false,
+        ),
     ] {
         let scope =
             workspace::for_request(Some(&home), "node", Some("requester"), "agent", Some(&root))
@@ -242,8 +245,8 @@ async fn bounded_commands_protect_runtime_keys_without_workspace_consent() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     let home = root.join("custom-runtime");
-    std::fs::create_dir_all(crate::home::keys_dir(&home)).unwrap();
-    let key = crate::home::default_key_path(&home, "fixture");
+    std::fs::create_dir_all(crate::store::local::home::keys_dir(&home)).unwrap();
+    let key = crate::store::local::home::default_key_path(&home, "fixture");
     std::fs::write(&key, "fixture identity").unwrap();
     let scope = ToolWorkspaceScope {
         runtime_home: Some(home),

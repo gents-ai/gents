@@ -340,7 +340,7 @@ async fn stage_request(
         )
         .await?;
     } else if existing_destination {
-        let verifier = crate::identity::RegisteredIdentity::from_registered_did(
+        let verifier = crate::store::identity::RegisteredIdentity::from_registered_did(
             cause.caller_node_did.clone(),
             None,
         )?;

@@ -462,7 +462,7 @@ async fn operator_inventory_authenticates_and_replays_native_metadata() {
         .unwrap();
     assert!(response.status().is_client_error());
     let wrong_audience =
-        gents::identity::defradb_bearer_authorization(owner, "other.invalid").unwrap();
+        gents::store::identity::defradb_bearer_authorization(owner, "other.invalid").unwrap();
     let response = client
         .post(&url)
         .header(header::AUTHORIZATION, wrong_audience)
@@ -583,7 +583,8 @@ async fn inference_settings_authenticates_the_client_before_reading_configuratio
         .unwrap();
     assert!(response.status().is_client_error());
     let foreign_audience =
-        gents::identity::defradb_bearer_authorization(identity.did(), "other.invalid").unwrap();
+        gents::store::identity::defradb_bearer_authorization(identity.did(), "other.invalid")
+            .unwrap();
     let response = client
         .get(&url)
         .header(header::AUTHORIZATION, foreign_audience)
@@ -894,7 +895,7 @@ async fn account_usage_route_refuses_unsigned_and_foreign_signers() {
             .await
             .unwrap(),
     );
-    gents::migration::ensure_all_runtime_migrations(node.clone())
+    gents::store::schema::migration::ensure_all_runtime_migrations(node.clone())
         .await
         .unwrap();
     let state = state();

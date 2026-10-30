@@ -629,7 +629,7 @@ mod tests {
                     .await
                     .unwrap(),
             );
-            gents::schema::ensure_runtime_schemas(node.as_ref())
+            gents::store::schema::ensure_runtime_schemas(node.as_ref())
                 .await
                 .unwrap();
             let ids = fixtures::seed_lineage_case(&node, case, did).await;

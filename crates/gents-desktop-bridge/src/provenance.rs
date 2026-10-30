@@ -512,7 +512,7 @@ mod tests {
                     .await
                     .unwrap(),
             );
-            gents::schema::ensure_runtime_schemas(node.as_ref())
+            gents::store::schema::ensure_runtime_schemas(node.as_ref())
                 .await
                 .unwrap();
             let ids = seed_lineage_case(&node, case, did).await;

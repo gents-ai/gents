@@ -72,7 +72,7 @@ pub(crate) fn lock_init_store(
     home_dir: &Path,
     data_dir: &Path,
     overwrite: bool,
-) -> Result<gents::home::StoreLock> {
+) -> Result<gents::store::local::home::StoreLock> {
     let user_home = std::env::home_dir();
     lock_init_store_for_user(home_dir, data_dir, overwrite, user_home.as_deref())
 }
@@ -82,7 +82,7 @@ pub(crate) fn lock_init_store_for_user(
     data_dir: &Path,
     overwrite: bool,
     user_home: Option<&Path>,
-) -> Result<gents::home::StoreLock> {
+) -> Result<gents::store::local::home::StoreLock> {
     let home = if overwrite {
         crate::overwritable_home(home_dir, user_home)?
     } else {
@@ -91,24 +91,25 @@ pub(crate) fn lock_init_store_for_user(
     let Some(home) = home else {
         fs::create_dir_all(data_dir)
             .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-        return Ok(gents::home::lock_store(home_dir, data_dir)?);
+        return Ok(gents::store::local::home::lock_store(home_dir, data_dir)?);
     };
     let data_dir = overwrite_data_dir(home_dir, &home, data_dir)?;
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let lock = gents::home::lock_store(home_dir, &data_dir)?;
+    let lock = gents::store::local::home::lock_store(home_dir, &data_dir)?;
     let overwritten_encryption = read_init_config(&home)
         .ok()
         .flatten()
         .and_then(|config| config.store_encryption)
         .or_else(|| {
-            gents::store_key::upgrade::pending_record(&data_dir)
+            gents::store::local::store_key::upgrade::pending_record(&data_dir)
                 .ok()
                 .flatten()
         });
     dangerously_overwrite_home(&home, lock.path())?;
     if let Some(record) = overwritten_encryption {
-        if let Err(error) = record.delete_key(&gents::store_key::home_key_file(&home)) {
+        if let Err(error) = record.delete_key(&gents::store::local::store_key::home_key_file(&home))
+        {
             tracing::warn!(home = %home.display(), error = %gents_protocol::error_chain::ErrorChain(&error),
                 "could not remove the overwritten home's store key");
         }
@@ -236,7 +237,7 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
         .await
         .context("creating or loading node identity key")?;
 
-    gents::storage_backend::reject_legacy_store(&data_dir)?;
+    gents::store::local::storage_backend::reject_legacy_store(&data_dir)?;
     let mut stored = StoredInitConfig {
         home: home_dir.to_string_lossy().to_string(),
         node_name: args.node_name.clone(),
@@ -258,7 +259,8 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
         &mut stored,
     )
     .await?;
-    let mut node_builder = gents::store_key::persistent_builder(&data_dir, &store_key)?;
+    let mut node_builder =
+        gents::store::local::store_key::persistent_builder(&data_dir, &store_key)?;
     if let Some(node_identity_did) = initialized_identity.node_identity_did.as_ref() {
         node_builder = node_builder.with_node_identity_did(node_identity_did.clone());
     }
@@ -274,8 +276,8 @@ async fn init_home(mut args: InitArgs) -> Result<Value> {
         .context("init requires claimed local DefraDB access")?
         .clone();
     let result = async {
-        gents::migration::ensure_all_runtime_migrations(init_node.clone()).await?;
-        gents::store_key::upgrade::finish(&data_dir)?;
+        gents::store::schema::migration::ensure_all_runtime_migrations(init_node.clone()).await?;
+        gents::store::local::store_key::upgrade::finish(&data_dir)?;
         let summary = initialize_runtime_home(
             &access,
             &args,
@@ -597,7 +599,7 @@ pub(crate) struct IdentityOnlyHomeOptions<'a> {
     pub(crate) tool_package: ToolPackageArg,
     pub(crate) tool_root: Option<&'a Path>,
     pub(crate) reset: bool,
-    pub(crate) store_key_custody: gents::store_key::StoreKeyCustodyChoice,
+    pub(crate) store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice,
 }
 
 struct HomeIdentityOptions<'a> {
@@ -657,7 +659,7 @@ pub(crate) async fn write_identity_only_home_metadata(
     let tool_ceiling = tool_ceiling_for_package(options.tool_package);
     let tool_root = resolve_tool_root_for_package(options.tool_package, options.tool_root)?
         .map(|path| path.to_string_lossy().to_string());
-    gents::storage_backend::reject_legacy_store(&data_dir)?;
+    gents::store::local::storage_backend::reject_legacy_store(&data_dir)?;
     let mut stored = StoredInitConfig {
         home: options.home.to_string_lossy().to_string(),
         node_name: options.node_name.to_string(),
@@ -705,19 +707,23 @@ pub(crate) async fn write_identity_only_home_metadata(
 async fn initialize_home_store(
     home: &Path,
     data_path: &Path,
-    choice: gents::store_key::StoreKeyCustodyChoice,
+    choice: gents::store::local::store_key::StoreKeyCustodyChoice,
     stored: &mut StoredInitConfig,
-) -> Result<gents::store_key::StoreKey> {
-    let key_file = gents::store_key::home_key_file(home);
+) -> Result<gents::store::local::store_key::StoreKey> {
+    let key_file = gents::store::local::store_key::home_key_file(home);
     let record = match read_init_config(home)? {
         Some(_) => {
-            let key =
-                gents::store_key::open_home_store_key_with_custody(home, data_path, choice).await?;
+            let key = gents::store::local::store_key::open_home_store_key_with_custody(
+                home, data_path, choice,
+            )
+            .await?;
             stored.store_encryption =
                 read_init_config(home)?.and_then(|config| config.store_encryption);
             return Ok(key);
         }
-        None => gents::store_key::StoreEncryption::prepare(choice, &key_file, data_path)?,
+        None => {
+            gents::store::local::store_key::StoreEncryption::prepare(choice, &key_file, data_path)?
+        }
     };
     stored.store_encryption = Some(record.clone());
     write_init_config(home, stored)?;
@@ -1483,7 +1489,7 @@ mod inference_seed_tests;
 mod tests {
     use super::*;
 
-    fn overwrite(home: &Path, user_home: &Path) -> Result<gents::home::StoreLock> {
+    fn overwrite(home: &Path, user_home: &Path) -> Result<gents::store::local::home::StoreLock> {
         lock_init_store_for_user(home, &home.join("data"), true, Some(user_home))
     }
 
@@ -1557,7 +1563,7 @@ mod tests {
         assert!(real.join("data").is_dir());
         for alias in [link.join("data"), real.join("data")] {
             assert!(
-                gents::home::lock_store(&real, &alias).is_err(),
+                gents::store::local::home::lock_store(&real, &alias).is_err(),
                 "{alias:?} takes the lock init holds"
             );
         }
@@ -1596,11 +1602,11 @@ mod tests {
         let held = lock_init_store(&home, &data, false).expect("init locks a fresh store");
         assert!(data.is_dir());
         assert!(
-            gents::home::lock_store(&home, &data).is_err(),
+            gents::store::local::home::lock_store(&home, &data).is_err(),
             "a runtime cannot open the store while init runs"
         );
         drop(held);
-        gents::home::lock_store(&home, &data).expect("init releases the store");
+        gents::store::local::home::lock_store(&home, &data).expect("init releases the store");
     }
 
     #[test]
@@ -1614,7 +1620,7 @@ mod tests {
 
         let user_home = temp.path().join("user");
         fs::create_dir_all(&user_home).unwrap();
-        let runtime = gents::home::lock_store(&home, &data).unwrap();
+        let runtime = gents::store::local::home::lock_store(&home, &data).unwrap();
         assert!(
             overwrite(&home, &user_home).is_err(),
             "a store a runtime has open is not wiped"
@@ -1631,7 +1637,7 @@ mod tests {
             "the held lock file survives the wipe"
         );
         assert!(
-            gents::home::lock_store(&home, &data).is_err(),
+            gents::store::local::home::lock_store(&home, &data).is_err(),
             "the lock init holds is the one a runtime would take"
         );
     }

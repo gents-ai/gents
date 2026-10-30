@@ -27,11 +27,11 @@ use super::session_hydration_closure::{
 };
 use super::templates::{conjunctive_string_eq, decode_pairing_filters};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use crate::identity::NodeIdentity;
 use crate::session::canonical_rows::{
     decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
     AGENT_OUTPUT_SEGMENT_FIELDS,
 };
+use crate::store::identity::NodeIdentity;
 
 mod file_images;
 mod inventory;

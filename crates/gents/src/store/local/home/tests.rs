@@ -12,7 +12,8 @@ fn store_lock_contention_classifies_through_every_owner_wrapper() {
     };
     assert_eq!(held_by(anyhow::anyhow!(held())), Some(7));
     assert_eq!(held_by(super::HomeError::LockHeld(held()).into()), Some(7));
-    let key = crate::store_key::StoreKeyError::Home(super::HomeError::LockHeld(held()));
+    let key =
+        crate::store::local::store_key::StoreKeyError::Home(super::HomeError::LockHeld(held()));
     assert_eq!(key.lock_held().and_then(|held| held.holder_pid), Some(7));
     assert_eq!(held_by(key.into()), Some(7));
     assert_eq!(held_by(super::HomeError::HomeDirUnresolved.into()), None);

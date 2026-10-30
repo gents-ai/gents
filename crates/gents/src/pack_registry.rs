@@ -403,7 +403,7 @@ pub async fn fetch_pack(
             let hex = crate::pack_archive::digest_hex(&advertised)
                 .context("the registry advertised a malformed digest")?;
             Ok(home
-                .join(crate::home::PACKS_DIR_NAME)
+                .join(crate::store::local::home::PACKS_DIR_NAME)
                 .join("store")
                 .join("by-download")
                 .join(hex))
@@ -428,7 +428,7 @@ pub async fn fetch_pack(
     let archive = match (cached, &store, &index, cache_home) {
         (Some(archive), _, _, _) => archive,
         (None, Some(store), Some(index), Some(home)) => {
-            let staging_dir = home.join(crate::home::PACKS_DIR_NAME);
+            let staging_dir = home.join(crate::store::local::home::PACKS_DIR_NAME);
             std::fs::create_dir_all(&staging_dir)
                 .with_context(|| format!("creating {}", staging_dir.display()))?;
             let mut staged = tempfile::NamedTempFile::new_in(&staging_dir)
@@ -504,12 +504,12 @@ pub mod credentials {
     use anyhow::{Context, Result};
 
     fn path(home: &Path) -> PathBuf {
-        home.join(crate::home::REGISTRY_DIR_NAME)
+        home.join(crate::store::local::home::REGISTRY_DIR_NAME)
             .join("credentials.json")
     }
 
     fn lock_path(home: &Path) -> PathBuf {
-        home.join(crate::home::REGISTRY_DIR_NAME)
+        home.join(crate::store::local::home::REGISTRY_DIR_NAME)
             .join("credentials.json.lock")
     }
 
@@ -686,7 +686,7 @@ mod tests {
 
         let index_entry = home
             .path()
-            .join(crate::home::PACKS_DIR_NAME)
+            .join(crate::store::local::home::PACKS_DIR_NAME)
             .join("store")
             .join("by-name")
             .join("gents")

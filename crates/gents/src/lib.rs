@@ -24,7 +24,6 @@ pub mod claude_oauth;
 pub mod claude_oauth_refresh;
 pub mod claude_subscription;
 pub mod codex_shim_binding;
-pub mod collection;
 pub mod compaction;
 pub(crate) mod completion_factory;
 pub mod config;
@@ -44,9 +43,7 @@ pub mod file_lock;
 pub mod goal;
 pub mod graphql;
 pub mod health_checker;
-pub mod home;
 pub mod hook;
-pub mod identity;
 pub mod inference_http;
 pub mod inference_observation;
 pub mod inference_setup;
@@ -82,8 +79,7 @@ pub(crate) mod provider_usage;
 pub mod starter_recipes;
 pub mod startup_readiness;
 pub mod startup_recovery;
-pub mod storage_backend;
-pub mod store_key;
+pub mod store;
 pub mod usage_observation;
 pub mod xai_grok_oauth;
 pub mod xai_oauth_login;
@@ -324,7 +320,6 @@ pub mod mailbox;
 pub(crate) mod managed_exec;
 pub mod mcp_pool;
 pub mod meta_tools;
-pub mod migration;
 pub mod native_executor_status;
 pub mod oneshot;
 pub mod optimization;
@@ -349,7 +344,6 @@ pub(crate) mod runtime_snapshot;
 pub(crate) mod runtime_status;
 pub(crate) mod runtime_trace;
 pub mod schedule_cron;
-pub mod schema;
 pub mod schema_tool;
 pub mod self_config;
 pub mod session;
@@ -404,7 +398,6 @@ pub use background_completion_diagnostics::{
 pub use background_tools::load_caused_request_terminal;
 pub use background_tools::status_projection::OutputEvidence;
 pub use callback::reject_secret_bearing_callback_fields;
-pub use collection::{Collection, DESIRED_STATE_APPLY_ORDER};
 pub use compaction::CompactionStrategy;
 pub use config::{
     ReasoningEffort, ResolvedAgent, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD,
@@ -437,11 +430,6 @@ pub use health_checker::{
 };
 pub use hook::{
     BackgroundExecutionRegistry, BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats,
-};
-pub use identity::{
-    load_macos_keychain_identity, load_macos_secure_enclave_identity,
-    load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
-    KeyIdentity, NodeIdentity, RegisteredIdentity, RuntimeNode, ServiceAccount,
 };
 pub use interrupt::{
     fetch_interrupt_requested_at, fetch_interrupt_requested_at_by_doc_id, interrupt_request,
@@ -484,9 +472,17 @@ pub use runtime_snapshot::{
     ResolvedEventTrigger, ResolvedSchedule, ResolvedTask, ScheduleCadence,
     MAX_EVENT_TRIGGER_GROUP_DOCS,
 };
+pub use session::load_history;
+pub use session::{fork, fork_via_http, ForkError, ForkOutcome, ForkParams};
+pub use store::collection::{Collection, DESIRED_STATE_APPLY_ORDER};
+pub use store::identity::{
+    load_macos_keychain_identity, load_macos_secure_enclave_identity,
+    load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
+    KeyIdentity, NodeIdentity, RegisteredIdentity, RuntimeNode, ServiceAccount,
+};
 #[cfg(feature = "agent-memory")]
-pub use schema::NODE_MEMORY_SCHEMA;
-pub use schema::{
+pub use store::schema::NODE_MEMORY_SCHEMA;
+pub use store::schema::{
     ensure_runtime_schemas, AGENT_MESSAGE_SCHEMA, AGENT_OUTPUT_SEGMENT_SCHEMA,
     AGENT_REQUEST_SCHEMA, AGENT_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA,
     COMPACTION_ENTRY_SCHEMA, GOAL_SCHEMA, INFERENCE_BACKEND_SCHEMA, INFERENCE_CALL_SCHEMA,
@@ -494,8 +490,6 @@ pub use schema::{
     OAUTH_CREDENTIAL_SCHEMA, SCHEDULE_SCHEMA, TASK_SCHEMA, TOOLS_SCHEMA,
     TOOL_SERVICE_HEALTH_STATE_SCHEMA, TOOL_SERVICE_REGISTRY_SCHEMA,
 };
-pub use session::load_history;
-pub use session::{fork, fork_via_http, ForkError, ForkOutcome, ForkParams};
 pub use streaming::{DefraStreamWriter, StreamWriter, MAX_LIVE_REASONING_BYTES};
 pub use template::{
     check_template_vocabulary, parse_template_for_validation, render_template, TemplateError,

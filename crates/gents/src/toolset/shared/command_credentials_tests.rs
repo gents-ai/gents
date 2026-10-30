@@ -191,16 +191,18 @@ fn runtime_credentials_include_the_configured_identity_and_store_keys() {
     write_identity_config(&home, &custom_key);
     let protection = CredentialProtection::capture(runtime_credentials(&home).unwrap()).unwrap();
     assert!(protection.paths.contains(&custom_key));
-    assert!(protection.paths.contains(&crate::home::keys_dir(&home)));
     assert!(protection
         .paths
-        .contains(&home.join(crate::home::P2P_SECRET_KEY_FILE_NAME)));
+        .contains(&crate::store::local::home::keys_dir(&home)));
+    assert!(protection
+        .paths
+        .contains(&home.join(crate::store::local::home::P2P_SECRET_KEY_FILE_NAME)));
 }
 
 fn write_identity_config(home: &Path, custom_key: &Path) {
-    crate::home::write_init_config(
+    crate::store::local::home::write_init_config(
         home,
-        &crate::home::StoredInitConfig::<String, String> {
+        &crate::store::local::home::StoredInitConfig::<String, String> {
             home: home.to_str().unwrap().into(),
             node_name: "fixture".into(),
             node_did: "node".into(),

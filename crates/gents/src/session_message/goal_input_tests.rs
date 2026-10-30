@@ -1,6 +1,6 @@
 use super::plan::PlannedWrite;
 use super::*;
-use crate::identity::{KeyIdentity, NodeIdentity};
+use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::goal_control::SessionGoalObservation;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
@@ -34,7 +34,9 @@ async fn generated_session_messages_capture_target_goal_before_signing() {
             .await
             .unwrap(),
     );
-    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    crate::store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     for identity in &identities {
         crate::test_support::install_test_agent(&node, identity.did(), "agent").await;
     }

@@ -1071,9 +1071,9 @@ async fn runtime_home_changes_exclude_cached_servers_without_workspace_consent()
     let first_home = root.join("first-runtime");
     let second_home = root.join("second-runtime");
     for home in [&first_home, &second_home] {
-        std::fs::create_dir_all(crate::home::keys_dir(home)).unwrap();
+        std::fs::create_dir_all(crate::store::local::home::keys_dir(home)).unwrap();
         std::fs::write(
-            crate::home::default_key_path(home, "fixture"),
+            crate::store::local::home::default_key_path(home, "fixture"),
             "fixture credential",
         )
         .unwrap();
@@ -1175,9 +1175,9 @@ async fn pooled_server_restarts_when_same_runtime_home_credential_path_changes()
     std::fs::write(&first_key, "first identity credential").unwrap();
     std::fs::write(&second_key, "second identity credential").unwrap();
     let write_config = |key_path: &std::path::Path| {
-        crate::home::write_init_config(
+        crate::store::local::home::write_init_config(
             &home,
-            &crate::home::StoredInitConfig::<String, String> {
+            &crate::store::local::home::StoredInitConfig::<String, String> {
                 home: home.to_string_lossy().into_owned(),
                 node_name: "fixture".into(),
                 node_did: "did:key:fixture".into(),
@@ -1274,7 +1274,7 @@ async fn operator_guard_selection_excludes_cached_unprotected_servers() {
     let root = directory.path().canonicalize().unwrap();
     let home = root.join("runtime");
     std::fs::create_dir(&home).unwrap();
-    let private = home.join(crate::home::ALLOWED_DIRS_FILE_NAME);
+    let private = home.join(crate::store::local::home::ALLOWED_DIRS_FILE_NAME);
     std::fs::write(&private, "private permission fixture").unwrap();
     let ordinary = root.join("ordinary.txt");
     std::fs::write(&ordinary, "ordinary file").unwrap();

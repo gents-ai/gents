@@ -5,7 +5,7 @@ fn state() -> (tempfile::TempDir, DesktopAppState) {
     let config = BridgeConfig {
         home: HomePolicy::FixedRoot(temp.path().join("desktop")),
         bootstrap: BootstrapPolicy::PairedRemoteOnly,
-        store_key_custody: gents::store_key::StoreKeyCustodyChoice::File,
+        store_key_custody: gents::store::local::store_key::StoreKeyCustodyChoice::File,
         ..Default::default()
     };
     let policy = resolve_policy(&config, None).expect("policy");

@@ -358,7 +358,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         for collection in manifest.expect.collection_counts.keys() {
             counts.insert(collection.clone(), count_rows(&graphql, collection).await);
         }
-        let signer_identity = gents::identity::commit_signer_identity_for_did(&node_did)?;
+        let signer_identity = gents::store::identity::commit_signer_identity_for_did(&node_did)?;
         let provenance = if manifest.expect.signed_provenance {
             let mut evidence = Vec::with_capacity(stages.len());
             for stage in &stages {

@@ -191,7 +191,7 @@ impl GraphqlEndpoint {
             Some(port) => format!("{host}:{port}"),
             None => host.to_string(),
         };
-        Ok(Some(crate::identity::defradb_bearer_authorization(
+        Ok(Some(crate::store::identity::defradb_bearer_authorization(
             did, &audience,
         )?))
     }
@@ -270,7 +270,10 @@ impl ConfigAccess {
         Self::Local(LocalConfigAccess::new(node))
     }
 
-    pub fn claimed_local(node: Arc<EmbeddedNode>, claim: crate::home::StoreLock) -> Result<Self> {
+    pub fn claimed_local(
+        node: Arc<EmbeddedNode>,
+        claim: crate::store::local::home::StoreLock,
+    ) -> Result<Self> {
         Ok(Self::Local(LocalConfigAccess::claimed(node, claim)?))
     }
 

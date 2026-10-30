@@ -536,7 +536,7 @@ impl P2pTool {
                 let network_id = projection.network_id.context(
                     "this node has no enrollment Network; the running server creates it at startup",
                 )?;
-                let p2p = crate::identity::node_p2p(&self.node)
+                let p2p = crate::store::identity::node_p2p(&self.node)
                     .context("P2P is not running on this node")?;
                 let validity = options.get("valid_for_secs").map_or(
                     Ok(crate::agent::p2p_reconcile::enrollment_offer::DEFAULT_OFFER_VALIDITY),

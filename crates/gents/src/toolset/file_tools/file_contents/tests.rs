@@ -133,12 +133,12 @@ async fn observations_in_one_session_have_separate_file_documents_and_read_back_
     assert_ne!(documents[0], documents[1]);
     assert_ne!(documents[1], documents[2]);
     assert_ne!(documents[0], documents[2]);
-    let reader = crate::identity::KeyIdentity::load_or_create(
+    let reader = crate::store::identity::KeyIdentity::load_or_create(
         admission.path.join("review-reader.key"),
         None,
     )
     .unwrap();
-    use crate::identity::NodeIdentity;
+    use crate::store::identity::NodeIdentity;
     admission
         .node
         .add_dac_actor_relationship(
@@ -284,7 +284,7 @@ async fn concurrent_edits_of_one_path_keep_observation_documents_distinct() {
 #[tokio::test]
 #[ignore = "manual equivalent-workload retained-storage measurement"]
 async fn measure_per_observation_file_history_storage() {
-    use crate::identity::NodeIdentity;
+    use crate::store::identity::NodeIdentity;
 
     fn directory_bytes(path: &std::path::Path) -> std::io::Result<u64> {
         let mut bytes = 0;
@@ -308,7 +308,8 @@ async fn measure_per_observation_file_history_storage() {
 
     async fn measure(root: &std::path::Path, text_versions: bool, revisions: &[String]) -> u64 {
         let key =
-            crate::identity::KeyIdentity::load_or_create(root.join("identity.key"), None).unwrap();
+            crate::store::identity::KeyIdentity::load_or_create(root.join("identity.key"), None)
+                .unwrap();
         let node_did = key.did().to_owned();
         let data = root.join("node");
         let node = defra_node::EmbeddedNode::builder()

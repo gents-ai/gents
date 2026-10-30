@@ -21,7 +21,9 @@ pub(crate) fn ensure_local_request_signer(
     home: Option<&Path>,
     target_node_did: &str,
 ) -> Result<()> {
-    if gents::identity::RegisteredIdentity::from_registered_did(target_node_did, None).is_ok() {
+    if gents::store::identity::RegisteredIdentity::from_registered_did(target_node_did, None)
+        .is_ok()
+    {
         return Ok(());
     }
     let home = crate::resolve_home_dir(home);
@@ -406,7 +408,7 @@ pub(crate) async fn prepare_cli_goal_input(
     if input.goal_assignment.is_some() {
         return Ok(input);
     }
-    let verifier = gents::identity::RegisteredIdentity::from_registered_did(node_did, None)?;
+    let verifier = gents::store::identity::RegisteredIdentity::from_registered_did(node_did, None)?;
     gents::goal::prepare_goal_input(
         access,
         &verifier,

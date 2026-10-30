@@ -17,7 +17,7 @@ use serde::Deserialize;
 
 use crate::agent::p2p_reconcile::{EnrollmentAuthorityHandle, PeerAdmissionAuthority};
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 use crate::watcher::AgentRequest;
 
 #[derive(Debug)]
@@ -292,9 +292,11 @@ pub(crate) async fn terminalize_pending_request_rejection(
 pub async fn sign_agent_request_create_as_registered_target(
     request: &mut gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<()> {
-    let identity =
-        crate::identity::RegisteredIdentity::from_registered_did(request.node_did.clone(), None)
-            .context("load registered target runtime identity for AgentRequest authoring")?;
+    let identity = crate::store::identity::RegisteredIdentity::from_registered_did(
+        request.node_did.clone(),
+        None,
+    )
+    .context("load registered target runtime identity for AgentRequest authoring")?;
     sign_agent_request_create(&identity, request).await
 }
 
@@ -868,9 +870,9 @@ pub(crate) async fn load_request_context_in_txn(
     Option<crate::document_config::Tools>,
     Vec<crate::document_config::AgentTargetDocument>,
 )> {
-    use crate::collection::Collection;
     use crate::config_client::read_desired_state_document_in_txn as read;
     use crate::document_config::{Agent, AgentContext, AgentTargetDocument, Tools};
+    use crate::store::collection::Collection;
     let agent: Agent = serde_json::from_value(
         read(txn, Collection::Agent, owner, agent_id)
             .await?
@@ -1001,7 +1003,7 @@ pub fn verify_request_receipt_signature(row: &AgentRequestRow) -> Result<()> {
     let fields = row_signing_fields(row)?;
     validate_signing_fields(&fields)?;
     anyhow::ensure!(
-        crate::identity::verify_did_signature(
+        crate::store::identity::verify_did_signature(
             &admission.signer_did,
             &admission.signing_payload(&fields),
             &admission.signature,
@@ -1235,8 +1237,8 @@ mod tests {
 
     use super::AgentRequestAdmissionVerifier;
     use crate::agent::p2p_reconcile::enrollment_authority_channel;
-    use crate::identity::{KeyIdentity, NodeIdentity};
-    use crate::schema::ensure_runtime_schemas;
+    use crate::store::identity::{KeyIdentity, NodeIdentity};
+    use crate::store::schema::ensure_runtime_schemas;
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 
     #[tokio::test]
@@ -1518,7 +1520,7 @@ mod tests {
 
     async fn refused_pending_request_under_session(
         node: &defra_node::EmbeddedNode,
-        identity: &crate::identity::KeyIdentity,
+        identity: &crate::store::identity::KeyIdentity,
         request_id: &str,
         session_id: &str,
     ) -> String {

@@ -123,9 +123,8 @@ pub async fn resume_session(
     let node_did = node_did.to_owned();
     let session_id = session_id.to_owned();
     let requester_did = requester_did.map(str::to_owned);
-    let identity = Arc::new(crate::identity::RegisteredIdentity::from_registered_did(
-        &node_did, None,
-    )?);
+    let identity =
+        Arc::new(crate::store::identity::RegisteredIdentity::from_registered_did(&node_did, None)?);
     let actor = ::identity::Did::new(node_did.clone())?;
     crate::config_client::ConfigAccess::transact_local_write(
         node,

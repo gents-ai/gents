@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
-use gents::identity::{KeyIdentity, NodeIdentity};
+use gents::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };

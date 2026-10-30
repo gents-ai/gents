@@ -2,7 +2,7 @@ use gents_protocol::goal_control::{SessionGoalControl, SessionGoalControlReceipt
 
 use super::*;
 use crate::config_client::ConfigAccess;
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 
 mod provenance;
 #[cfg(test)]

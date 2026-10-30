@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::config_client::ConfigAccess;
-use crate::identity::{KeyIdentity, NodeIdentity};
+use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -18,7 +18,9 @@ async fn generated_captures_use_signed_storage_and_fresh_admission() {
             .await
             .unwrap(),
     );
-    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    crate::store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     let owner = crate::graphql::escape_graphql_string(identity.did());
     for mutation in [
         format!(

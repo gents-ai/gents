@@ -386,8 +386,11 @@ async fn p2p_rejects_foreign_actor_and_preserves_another_overlays_owner() {
     assert!(scoped.overlay("mixed-route").await.unwrap().is_some());
     let key_dir = tempfile::tempdir().unwrap();
     let foreign = Arc::new(
-        crate::identity::KeyIdentity::load_or_create(key_dir.path().join("foreign.key"), None)
-            .unwrap(),
+        crate::store::identity::KeyIdentity::load_or_create(
+            key_dir.path().join("foreign.key"),
+            None,
+        )
+        .unwrap(),
     );
     let tool = P2pTool::new(db.node.clone(), Some(foreign), true, EndpointScope::all());
     assert!(Tool::call(

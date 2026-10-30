@@ -274,7 +274,7 @@ impl ClientCore {
             .into_iter()
             .find(|record| record.node_did == node)
             .context("Connect this runtime before setting up access review.")?;
-        anyhow::ensure!(gents::identity::can_mint_defradb_bearer(node),
+        anyhow::ensure!(gents::store::identity::can_mint_defradb_bearer(node),
             "Open Runtime Settings to connect this runtime's configuration before choosing Approve for me.");
         let access = crate::local_runtime::operator_endpoint(&record)
             .map(ConfigAccess::Graphql)

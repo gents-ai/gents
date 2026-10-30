@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::escape_graphql_string;
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 
 const ARCHIVE_REVISION_LIMIT: u64 = i64::MAX as u64;
 

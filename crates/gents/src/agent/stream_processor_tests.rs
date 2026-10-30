@@ -1122,9 +1122,10 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         "agent-stream-processor-inline-tool-result-{}",
         uuid::Uuid::new_v4()
     ));
-    use crate::identity::NodeIdentity;
+    use crate::store::identity::NodeIdentity;
     let identity =
-        crate::identity::KeyIdentity::load_or_create(data_path.join("agent.key"), None).unwrap();
+        crate::store::identity::KeyIdentity::load_or_create(data_path.join("agent.key"), None)
+            .unwrap();
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
             .with_node_identity_did(identity.did())

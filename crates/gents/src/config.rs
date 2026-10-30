@@ -6,8 +6,8 @@ use anyhow::Result;
 use crate::agent::completion_retry::CompletionRetryProfileFields;
 use crate::backend_provider::BackendProviderKind;
 use crate::compaction::CompactionStrategy;
-use crate::identity::{NodeIdentity, RuntimeNode};
 use crate::openai_wire::OpenAiWireApi;
+use crate::store::identity::{NodeIdentity, RuntimeNode};
 use crate::tool_surface::AgentToolSurfaceConfig;
 
 pub const DEFAULT_CONTEXT_WINDOW: usize = 131_072;
@@ -585,7 +585,7 @@ pub fn advertised_model_for_profile(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::KeyIdentity;
+    use crate::store::identity::KeyIdentity;
 
     fn stub_node() -> Arc<RuntimeNode> {
         let identity = Arc::new(

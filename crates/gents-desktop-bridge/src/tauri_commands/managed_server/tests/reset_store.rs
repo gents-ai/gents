@@ -3,7 +3,7 @@ use super::*;
 fn record_reset_store_key(
     home: &Path,
     desktop: &gents_desktop_core::client::DesktopPaths,
-    record: &gents::store_key::StoreEncryption,
+    record: &gents::store::local::store_key::StoreEncryption,
 ) {
     let mut init: serde_json::Value =
         serde_json::from_slice(&std::fs::read(home.join("init.json")).unwrap()).unwrap();
@@ -21,11 +21,11 @@ fn reset_file_store_keys_allow_fresh_setup_and_archives_remain_readable() {
         let temp = tempfile::tempdir().unwrap();
         let temp = std::fs::canonicalize(temp.path()).unwrap();
         let (home, desktop) = dirty_home(&temp);
-        let key_file = gents::store_key::home_key_file(&home);
+        let key_file = gents::store::local::store_key::home_key_file(&home);
         std::fs::remove_file(home.join("data/MANIFEST")).unwrap();
         std::fs::remove_file(desktop.node_data_dir().join("MANIFEST")).unwrap();
-        let record = gents::store_key::StoreEncryption::prepare(
-            gents::store_key::StoreKeyCustodyChoice::File,
+        let record = gents::store::local::store_key::StoreEncryption::prepare(
+            gents::store::local::store_key::StoreKeyCustodyChoice::File,
             &key_file,
             &home.join("data"),
         )
@@ -80,8 +80,8 @@ fn reset_file_store_keys_allow_fresh_setup_and_archives_remain_readable() {
                 "other identity"
             );
         }
-        let fresh = gents::store_key::StoreEncryption::prepare(
-            gents::store_key::StoreKeyCustodyChoice::File,
+        let fresh = gents::store::local::store_key::StoreEncryption::prepare(
+            gents::store::local::store_key::StoreKeyCustodyChoice::File,
             &key_file,
             &home.join("data"),
         )
@@ -108,9 +108,9 @@ fn reset_keychain_custody_keeps_archives_and_retryable_deletion_records() {
         let temp = tempfile::tempdir().unwrap();
         let temp = std::fs::canonicalize(temp.path()).unwrap();
         let (home, desktop) = dirty_home(&temp);
-        let record = gents::store_key::StoreEncryption {
-            version: gents::store_key::STORE_ENCRYPTION_VERSION,
-            custody: gents::store_key::StoreKeyCustody::MacosKeychain {
+        let record = gents::store::local::store_key::StoreEncryption {
+            version: gents::store::local::store_key::STORE_ENCRYPTION_VERSION,
+            custody: gents::store::local::store_key::StoreKeyCustody::MacosKeychain {
                 keychain_label: "test-only-label".into(),
             },
         };
@@ -166,7 +166,7 @@ fn reset_keychain_custody_keeps_archives_and_retryable_deletion_records() {
 
 #[test]
 fn reset_pending_upgrade_retires_its_artifacts_and_recorded_custody_together() {
-    use gents::store_key::{upgrade, StoreEncryption, StoreKeyCustodyChoice};
+    use gents::store::local::store_key::{upgrade, StoreEncryption, StoreKeyCustodyChoice};
     for choice in [StoreKeyCustodyChoice::File, StoreKeyCustodyChoice::Keychain] {
         for disposition in [HomeResetDisposition::Delete, HomeResetDisposition::Archive] {
             let temp = tempfile::tempdir().unwrap();
@@ -174,7 +174,10 @@ fn reset_pending_upgrade_retires_its_artifacts_and_recorded_custody_together() {
             let (home, desktop) = dirty_home(&temp);
             write(&home.join("keys/other.key"), "keep");
             let stores = [
-                (home.join("data"), gents::store_key::home_key_file(&home)),
+                (
+                    home.join("data"),
+                    gents::store::local::store_key::home_key_file(&home),
+                ),
                 (
                     desktop.node_data_dir().to_path_buf(),
                     desktop.store_key_path().to_path_buf(),
@@ -268,8 +271,8 @@ fn a_foreign_store_is_never_deleted_by_the_bridge() {
     let (home, desktop) = dirty_home(&temp);
     let plan = plan_home_reset(
         Some(&home),
-        Some(gents::storage_backend::IncompatibleStore {
-            kind: gents::storage_backend::IncompatibleStoreKind::ForeignVersion,
+        Some(gents::store::local::storage_backend::IncompatibleStore {
+            kind: gents::store::local::storage_backend::IncompatibleStoreKind::ForeignVersion,
             data_path: home.join("data"),
         }),
         None,
@@ -303,7 +306,7 @@ fn an_insecure_old_key_scopes_the_home_like_a_refused_store() {
     let (home, desktop) = dirty_home(&temp);
     let refused = refused_runtime_store(
         &home,
-        Some(gents::storage_backend::IncompatibleStoreKind::InsecureKey),
+        Some(gents::store::local::storage_backend::IncompatibleStoreKind::InsecureKey),
     );
     assert_eq!(refused.data_path, home.join("keys"));
     let preview = plan_home_reset(
@@ -363,7 +366,7 @@ fn the_store_lock_neither_moves_nor_changes_the_confirmation() {
     .unwrap()
     .preview();
 
-    let lock = gents::home::lock_store(&home, &home.join("data")).unwrap();
+    let lock = gents::store::local::home::lock_store(&home, &home.join("data")).unwrap();
     let locked = plan_home_reset(
         Some(&home),
         refused(),
@@ -399,7 +402,7 @@ async fn an_opener_cannot_create_the_store_while_a_storeless_home_is_retired() {
     std::fs::remove_dir_all(home.join("data")).unwrap();
     let refused = refused_runtime_store(
         &home,
-        Some(gents::storage_backend::IncompatibleStoreKind::InsecureKey),
+        Some(gents::store::local::storage_backend::IncompatibleStoreKind::InsecureKey),
     );
 
     let lock = lock_home_for_retirement(&home).unwrap();
@@ -425,7 +428,7 @@ async fn an_opener_cannot_create_the_store_while_a_storeless_home_is_retired() {
         tokio::spawn(async move {
             barrier.wait().await;
             std::fs::create_dir_all(home.join("data")).unwrap();
-            gents::home::lock_store(&home, &home.join("data")).is_ok()
+            gents::store::local::home::lock_store(&home, &home.join("data")).is_ok()
         })
     };
     barrier.wait().await;
@@ -449,7 +452,7 @@ async fn an_opener_cannot_create_the_store_while_a_storeless_home_is_retired() {
         "a store created under the lock is not retired"
     );
     drop(lock);
-    assert!(gents::home::lock_store(&home, &home.join("data")).is_ok());
+    assert!(gents::store::local::home::lock_store(&home, &home.join("data")).is_ok());
 }
 
 #[test]
@@ -521,8 +524,8 @@ fn a_store_from_another_build_is_not_reported_as_older() {
     let (home, desktop) = dirty_home(&temp);
     let preview = plan_home_reset(
         Some(&home),
-        Some(gents::storage_backend::IncompatibleStore {
-            kind: gents::storage_backend::IncompatibleStoreKind::ForeignVersion,
+        Some(gents::store::local::storage_backend::IncompatibleStore {
+            kind: gents::store::local::storage_backend::IncompatibleStoreKind::ForeignVersion,
             data_path: home.join("data"),
         }),
         None,

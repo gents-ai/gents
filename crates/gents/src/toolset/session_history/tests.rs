@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use crate::identity::{KeyIdentity, NodeIdentity};
 use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 use crate::llm::tool::Tool;
 use crate::session::canonical_rows::{
     output_segment_create_variables, transcript_message_create_variables,
     CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
+use crate::store::identity::{KeyIdentity, NodeIdentity};
 
 use super::inference::{aggregate_inference_usage, inference_turns};
 use super::*;

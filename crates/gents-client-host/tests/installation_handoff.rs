@@ -162,7 +162,7 @@ async fn a_host_without_retirement_control_releases_history_through_its_idle_lif
         }
         assert!(acknowledged);
         loop {
-            match gents::home::lock_store(paths.root(), paths.node_data_dir()) {
+            match gents::store::local::home::lock_store(paths.root(), paths.node_data_dir()) {
                 Ok(lock) => {
                     drop(lock);
                     break;

@@ -190,7 +190,9 @@ pub async fn load_dynamic_run(
             .await
             .map_err(unreadable)?
             .into_iter()
-            .filter(|(collection, _)| *collection == crate::collection::Collection::AgentTarget)
+            .filter(|(collection, _)| {
+                *collection == crate::store::collection::Collection::AgentTarget
+            })
             .map(|(_, id)| id)
             .collect();
         shipped.push((pack.coordinate, ids));
@@ -265,7 +267,7 @@ pub fn validate_name(home: &Path, name: &str) -> Result<(), PromoteRefusal> {
         crate::pack::home_install::read_home_install(home, &coordinate),
         Ok(None)
     ) || home
-        .join(crate::home::PLUGINS_DIR_NAME)
+        .join(crate::store::local::home::PLUGINS_DIR_NAME)
         .join("installed")
         .join(NAMESPACE)
         .join(format!("{name}.json"))
@@ -467,7 +469,8 @@ pub struct PromotionRecord {
 }
 
 pub fn promoted_dir(home: &Path) -> PathBuf {
-    home.join(crate::home::PACKS_DIR_NAME).join("promoted")
+    home.join(crate::store::local::home::PACKS_DIR_NAME)
+        .join("promoted")
 }
 
 pub fn write_promotion(home: &Path, record: &PromotionRecord) -> Result<()> {

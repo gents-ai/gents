@@ -3,7 +3,9 @@ use super::*;
 #[tokio::test]
 async fn session_token_usage_breakdown_sums_to_the_total() {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    crate::store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     let owner = "did:key:z6MkTestOwner";
     let request = format!(
         r#"mutation {{ create_AgentRequest(input: {{
@@ -69,7 +71,9 @@ async fn session_token_usage_breakdown_sums_to_the_total() {
 #[tokio::test]
 async fn auto_resume_field_round_trips_through_the_live_schema() {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    crate::store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     let owner = "did:key:z6MkTestOwner";
     let goal = set_goal(&node, owner, "session", Some("ship"), None, None)
         .await
@@ -92,7 +96,9 @@ async fn auto_resume_field_round_trips_through_the_live_schema() {
 
 async fn auto_resume_access() -> crate::ConfigAccess {
     let node = std::sync::Arc::new(crate::test_support::node_builder().build().await.unwrap());
-    crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+    crate::store::schema::ensure_runtime_schemas(&node)
+        .await
+        .unwrap();
     crate::ConfigAccess::local(node)
 }
 

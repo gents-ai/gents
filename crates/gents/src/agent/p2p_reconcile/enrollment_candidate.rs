@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::config_client::ConfigAccess;
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 
 use super::enrollment_store::RequestRow;
 
@@ -38,7 +38,7 @@ pub async fn request_enrollment(
     identity: &dyn NodeIdentity,
     offer_token: &str,
 ) -> Result<EnrollmentRequestRecord> {
-    let p2p = crate::identity::node_p2p(node).context("this node has no P2P transport")?;
+    let p2p = crate::store::identity::node_p2p(node).context("this node has no P2P transport")?;
     let offer = decode_offer(offer_token).context("decoding server enrollment offer")?;
     verify_enrollment_offer(&p2p, identity, &offer).await?;
     confirm_network_admin_pin(node, &offer).await?;

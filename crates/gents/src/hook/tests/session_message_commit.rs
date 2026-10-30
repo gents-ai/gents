@@ -1,6 +1,6 @@
 use super::*;
 use crate::config_client::ConfigApplyTxn;
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 
 async fn write_config<T>(node: &Arc<EmbeddedNode>, collection: crate::Collection, document: &T)
 where
@@ -153,7 +153,7 @@ async fn a_lost_commit_receipt_is_decided_by_the_durable_row() {
         crate::KeyIdentity::load_or_create(dir.path().join("test-agent.key"), None).unwrap();
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
-            .with_node_identity_did(crate::identity::NodeIdentity::did(&identity))
+            .with_node_identity_did(crate::store::identity::NodeIdentity::did(&identity))
             .data_path(dir.path())
             .build()
             .await

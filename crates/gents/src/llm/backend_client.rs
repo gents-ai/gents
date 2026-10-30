@@ -331,8 +331,8 @@ mod usage_tests;
 mod tests {
     use super::*;
     use crate::agent::PendingAgent;
-    use crate::identity::KeyIdentity;
     use crate::oauth_credential::BearerSource;
+    use crate::store::identity::KeyIdentity;
 
     async fn test_node() -> Arc<EmbeddedNode> {
         Arc::new(crate::test_support::node_builder().build().await.unwrap())
@@ -500,7 +500,7 @@ mod tests {
     #[tokio::test]
     async fn backend_account_reference_builds_with_its_own_account() {
         let node = test_node().await;
-        crate::migration::ensure_all_runtime_migrations(node.clone())
+        crate::store::schema::migration::ensure_all_runtime_migrations(node.clone())
             .await
             .unwrap();
         for (kind, wire, provider) in [
@@ -568,7 +568,7 @@ mod tests {
     #[tokio::test]
     async fn two_profiles_on_two_accounts_are_served_by_their_own() {
         let node = test_node().await;
-        crate::migration::ensure_all_runtime_migrations(node.clone())
+        crate::store::schema::migration::ensure_all_runtime_migrations(node.clone())
             .await
             .unwrap();
         for (kind, wire, provider) in [
@@ -619,7 +619,7 @@ mod tests {
     #[tokio::test]
     async fn backend_account_reference_never_falls_back_to_the_original_account() {
         let node = test_node().await;
-        crate::migration::ensure_all_runtime_migrations(node.clone())
+        crate::store::schema::migration::ensure_all_runtime_migrations(node.clone())
             .await
             .unwrap();
         let mut codex = test_agent(
@@ -651,7 +651,7 @@ mod tests {
     #[tokio::test]
     async fn each_oauth_provider_kind_yields_the_expected_client_variant() {
         let node = test_node().await;
-        crate::migration::ensure_all_runtime_migrations(node.clone())
+        crate::store::schema::migration::ensure_all_runtime_migrations(node.clone())
             .await
             .unwrap();
 

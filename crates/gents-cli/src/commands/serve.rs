@@ -609,7 +609,7 @@ async fn serve_foreground(
         .unwrap_or_else(|| default_data_dir(&home_dir));
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
-    let store_lock = gents::home::lock_store(&home_dir, &data_dir)?;
+    let store_lock = gents::store::local::home::lock_store(&home_dir, &data_dir)?;
     crate::network_settings::NetworkSettings::read(&home_dir)?.fill_unset(&mut args);
     let http_ip = args
         .http_addr
@@ -654,7 +654,7 @@ async fn serve_foreground(
         .clone()
         .or_else(|| init_config.as_ref().map(|config| config.node_name.clone()))
         .unwrap_or_else(|| DEFAULT_NODE_NAME.to_string());
-    gents::home::ensure_home_identity_can_serve(&home_dir)?;
+    gents::store::local::home::ensure_home_identity_can_serve(&home_dir)?;
     let server_identity =
         resolve_server_identity(&args, init_config.as_ref(), &home_dir, &node_name)?;
     let identity = server_identity.identity;
@@ -767,7 +767,7 @@ async fn serve_foreground(
     );
     if let Some(node_identity_did) = server_identity.node_identity_did.as_deref() {
         anyhow::ensure!(
-            gents::identity::can_mint_defradb_bearer(node_identity_did),
+            gents::store::identity::can_mint_defradb_bearer(node_identity_did),
             "identity {node_identity_did} has no exportable private key, so it cannot own the served node's access control; re-initialize the home with a file or macos-keychain identity to serve it"
         );
     }
@@ -810,10 +810,10 @@ async fn serve_foreground(
     let mut grok_shim_handle = None;
     let serve_result: Result<()> = async {
         wait_for_embedded_http_bind(http_addr, &bind_probe_path, &bind_probe_token).await?;
-        if let Err(error) = gents::migration::ensure_all_runtime_migrations(node.clone()).await {
-            return Err(gents::storage_backend::classify_store_error(error, &data_dir).into());
+        if let Err(error) = gents::store::schema::migration::ensure_all_runtime_migrations(node.clone()).await {
+            return Err(gents::store::local::storage_backend::classify_store_error(error, &data_dir).into());
         }
-        gents::store_key::upgrade::finish(&data_dir)?;
+        gents::store::local::store_key::upgrade::finish(&data_dir)?;
         let schema = gents::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
             .await
             .context("reading client route collection versions after migrations")?;
@@ -896,7 +896,7 @@ async fn serve_foreground(
             let p2p_status =
                 load_local_server_p2p_status(node.as_ref(), args.p2p_transport, p2p_admission)
                     .await?;
-            if let Some(p2p) = gents::identity::node_p2p(&node) {
+            if let Some(p2p) = gents::store::identity::node_p2p(&node) {
                 *enrollment_offer_issuer.write().await =
                     Some(crate::http::enrollment::EnrollmentOfferIssuer::new(
                         identity.clone(),
@@ -1555,7 +1555,7 @@ fn has_node_did(did: &str) -> bool {
 }
 
 fn default_p2p_secret_key_path(home_dir: &Path) -> PathBuf {
-    home_dir.join(gents::home::P2P_SECRET_KEY_FILE_NAME)
+    home_dir.join(gents::store::local::home::P2P_SECRET_KEY_FILE_NAME)
 }
 
 fn resolve_server_p2p_config(
@@ -1716,7 +1716,7 @@ async fn load_local_server_p2p_status(
             "p2p_admission": admission,
         })),
         P2pTransportArg::Iroh => {
-            let p2p = gents::identity::node_p2p(node).ok_or_else(|| {
+            let p2p = gents::store::identity::node_p2p(node).ok_or_else(|| {
                 anyhow::anyhow!(
                     "P2P transport was requested but is not available on the embedded node"
                 )
@@ -1816,7 +1816,7 @@ mod grok_shim_tests {
         use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir().unwrap();
         let key = temp.path().join("keys").join("local.key");
-        gents::identity::load_or_create_file_identity(&key).unwrap();
+        gents::store::identity::load_or_create_file_identity(&key).unwrap();
         fs::set_permissions(&key, fs::Permissions::from_mode(0o644)).unwrap();
         let args = parse_server(&["--key-path", key.to_str().unwrap()]);
 
@@ -1824,11 +1824,12 @@ mod grok_shim_tests {
             Ok(_) => panic!("an insecure key must not load"),
             Err(error) => error,
         };
-        let store = gents::storage_backend::incompatible_store(error.as_ref(), Path::new(""))
-            .expect("typed refusal");
+        let store =
+            gents::store::local::storage_backend::incompatible_store(error.as_ref(), Path::new(""))
+                .expect("typed refusal");
         assert_eq!(
             store.kind,
-            gents::storage_backend::IncompatibleStoreKind::InsecureKey
+            gents::store::local::storage_backend::IncompatibleStoreKind::InsecureKey
         );
         assert_eq!(
             crate::native_service::incompatible_store_exit_code(store.kind),

@@ -11,7 +11,7 @@ use serde::Deserialize;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
-use crate::identity::NodeIdentity;
+use crate::store::identity::NodeIdentity;
 
 use super::enrollment_store::{EnrollmentProjection, GraphqlEnrollmentStore};
 use super::graphql_helpers::{graphql_string_list_literal, rows};
@@ -1020,8 +1020,8 @@ mod tests {
 
     use super::*;
     use crate::agent::p2p_reconcile::enrollment_store::{ActiveEnrollment, RevokedEnrollment};
-    use crate::identity::KeyIdentity;
     use crate::request_admission::AgentRequestAdmissionVerifier;
+    use crate::store::identity::KeyIdentity;
 
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -1399,7 +1399,7 @@ mod tests {
             KeyIdentity::load_or_create(member_dir.path().join("member.key"), None).unwrap(),
         );
         let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
-        crate::schema::ensure_runtime_schemas(node.as_ref())
+        crate::store::schema::ensure_runtime_schemas(node.as_ref())
             .await
             .unwrap();
         crate::test_support::install_test_agent(&node, target.did(), "behavior-1").await;

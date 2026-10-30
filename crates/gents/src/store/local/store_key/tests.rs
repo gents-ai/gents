@@ -1,5 +1,5 @@
 use super::*;
-use crate::storage_backend::incompatible_store;
+use crate::store::local::storage_backend::incompatible_store;
 use storage::corekv::{AppendLog, Reader, Store, Writer};
 
 const ACCESS_TOKEN: &str = "at-rest-access-token-5f0c1d";
@@ -27,7 +27,7 @@ async fn read_log_head(store: &dyn Store, log: &AppendLog) -> Option<Vec<u8>> {
 }
 
 async fn write_credential(node: &defra_node::EmbeddedNode) {
-    crate::schema::ensure_runtime_schemas(node)
+    crate::store::schema::ensure_runtime_schemas(node)
         .await
         .expect("schemas");
     let response = node
@@ -172,7 +172,7 @@ async fn an_encrypted_store_keeps_credential_tokens_off_disk_and_reopens_with_it
     reopened.shutdown().await;
 
     let plain = temp.path().join("plain");
-    let mut plain_options = crate::storage_backend::regolith_options();
+    let mut plain_options = crate::store::local::storage_backend::regolith_options();
     plain_options.engine = plain_options
         .engine
         .compression(regolith::CompressionType::None);
@@ -258,7 +258,7 @@ fn recorded_creation_intent_resumes_without_replacing_a_stores_missing_key() {
 #[test]
 fn only_a_definitely_absent_keychain_item_is_a_missing_key() {
     let data = Path::new("/tmp/gents-home/data");
-    let missing = keychain_failure(crate::identity::macos::ERR_SEC_ITEM_NOT_FOUND, data);
+    let missing = keychain_failure(crate::store::identity::macos::ERR_SEC_ITEM_NOT_FOUND, data);
     assert_eq!(
         incompatible_store(&missing, data).map(|store| store.kind),
         Some(IncompatibleStoreKind::MissingStoreKey)
@@ -284,7 +284,7 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
     let identity = crate::KeyIdentity::load_or_create(home.join("identity.key"), None).unwrap();
     let node_did = crate::NodeIdentity::did(&identity);
     std::fs::write(
-        crate::home::init_config_path(&home),
+        crate::store::local::home::init_config_path(&home),
         serde_json::to_vec(&serde_json::json!({
             "home": home, "node_name": "a", "node_did": node_did,
             "key_path": "identity.key", "tool_ceiling": "readonly", "tool_root": null
@@ -292,7 +292,7 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
         .unwrap(),
     )
     .unwrap();
-    let data = crate::home::default_data_dir(&home);
+    let data = crate::store::local::home::default_data_dir(&home);
     let plain = defra_node::EmbeddedNode::builder()
         .with_node_identity_did(node_did)
         .data_path(&data)
@@ -307,7 +307,7 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
     let log = arrival_log();
     let plaintext_store = storage::RegolithStore::open_with_options(
         &data,
-        crate::storage_backend::regolith_options(),
+        crate::store::local::storage_backend::regolith_options(),
     )
     .unwrap();
     append_log_entry(
@@ -331,7 +331,7 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
     let key = open_home_store_key_with_custody(&home, &data, StoreKeyCustodyChoice::File)
         .await
         .unwrap();
-    let config = crate::home::read_init_config::<String, String>(&home)
+    let config = crate::store::local::home::read_init_config::<String, String>(&home)
         .unwrap()
         .unwrap();
     assert_eq!(config.node_did, node_did);
@@ -356,7 +356,7 @@ async fn a_plaintext_home_upgrades_without_changing_identity_or_documents() {
 
     let encrypted_store = storage::RegolithStore::open_with_options(
         &data,
-        crate::storage_backend::regolith_options().with_encryption_key(*key.0),
+        crate::store::local::storage_backend::regolith_options().with_encryption_key(*key.0),
     )
     .unwrap();
     assert_eq!(
@@ -467,13 +467,13 @@ fn a_store_key_is_never_printed() {
 fn an_unrecorded_identity_file_is_preserved_for_every_custody_choice() {
     let temp = tempfile::tempdir().unwrap();
     let key_file = home_key_file(temp.path());
-    crate::identity::load_or_create_file_identity(&key_file).unwrap();
+    crate::store::identity::load_or_create_file_identity(&key_file).unwrap();
     let original = std::fs::read(&key_file).unwrap();
     for choice in [StoreKeyCustodyChoice::File, StoreKeyCustodyChoice::Keychain] {
         let error =
             StoreEncryption::prepare(choice, &key_file, &temp.path().join("data")).unwrap_err();
         assert!(error.to_string().contains("refusing to replace"), "{error}");
         assert_eq!(std::fs::read(&key_file).unwrap(), original);
-        crate::identity::load_file_identity(&key_file).unwrap();
+        crate::store::identity::load_file_identity(&key_file).unwrap();
     }
 }

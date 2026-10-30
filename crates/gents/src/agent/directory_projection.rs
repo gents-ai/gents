@@ -259,8 +259,10 @@ impl GraphqlDirectoryStore {
 #[async_trait]
 impl DirectoryStore for GraphqlDirectoryStore {
     async fn load_source_snapshot(&self) -> Result<SourceSnapshot> {
-        let (fields, _) =
-            crate::config_client::config_projection(crate::collection::Collection::Agent, None)?;
+        let (fields, _) = crate::config_client::config_projection(
+            crate::store::collection::Collection::Agent,
+            None,
+        )?;
         let query = format!(
             "{{ Node {{ node_did display_name default_agent_id enabled }} NodeReadiness {{ node_did snapshot_json updated_at }} Agent {{ {} }} }}",
             fields.join(" "),
@@ -468,7 +470,7 @@ fn parse_runtime_states(response: &QueryResponse) -> Result<BTreeMap<String, (St
 
 fn config_documents<T>(
     response: &QueryResponse,
-    collection: crate::collection::Collection,
+    collection: crate::store::collection::Collection,
 ) -> Result<BTreeMap<(String, String), T>>
 where
     T: serde::de::DeserializeOwned,
@@ -517,7 +519,7 @@ where
 fn parse_agents(response: &QueryResponse) -> Result<BTreeMap<String, Vec<AgentInfo>>> {
     let documents = config_documents::<crate::document_config::Agent>(
         response,
-        crate::collection::Collection::Agent,
+        crate::store::collection::Collection::Agent,
     )?;
     let mut agents: BTreeMap<String, Vec<AgentInfo>> = BTreeMap::new();
     for ((owner, _), agent) in documents {
