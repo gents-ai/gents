@@ -13,6 +13,8 @@ use std::time::Duration;
 
 mod execute;
 mod files;
+mod notices;
+mod recovery;
 mod stage;
 #[cfg(test)]
 mod tests;
@@ -67,6 +69,18 @@ struct Receipt {
 }
 impl Receipt {
     async fn transition(&mut self, action: Action, message: &str) -> Result<()> {
+        let mut receipt = self.clone();
+        let message = message.to_owned();
+        receipt = tokio::task::spawn_blocking(move || {
+            receipt.transition_sync(action, &message)?;
+            Ok::<_, anyhow::Error>(receipt)
+        })
+        .await??;
+        *self = receipt;
+        Ok(())
+    }
+
+    fn transition_sync(&mut self, action: Action, message: &str) -> Result<()> {
         let expected = self.phase;
         let mut receipt = self.clone();
         receipt.phase = expected
@@ -74,27 +88,23 @@ impl Receipt {
             .context("invalid managed update transition")?;
         receipt.message = message.to_owned();
         receipt.updated_at = chrono::Utc::now().to_rfc3339();
-        let saved = tokio::task::spawn_blocking(move || -> Result<Receipt> {
-            // The helper and submitting process share a receipt, so a stale
-            // acknowledgement must never overwrite a terminal helper failure.
-            let lock = std::fs::OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .read(true)
-                .write(true)
-                .open(receipt.directory.join("receipt.lock"))?;
-            lock.lock()?;
-            let path = receipt.directory.join("receipt.json");
-            let current: Receipt = files::read_json(&path)?;
-            anyhow::ensure!(
-                current.operation_id == receipt.operation_id && current.phase == expected,
-                "managed update receipt changed; read service update-status"
-            );
-            files::write_json(&path, &receipt)?;
-            Ok(receipt)
-        })
-        .await??;
-        *self = saved;
+        // The helper and submitting process share a receipt, so a stale
+        // acknowledgement must never overwrite a terminal helper failure.
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(receipt.directory.join("receipt.lock"))?;
+        lock.lock()?;
+        let path = receipt.directory.join("receipt.json");
+        let current: Receipt = files::read_json(&path)?;
+        anyhow::ensure!(
+            current.operation_id == receipt.operation_id && current.phase == expected,
+            "managed update receipt changed; read service update-status"
+        );
+        files::write_json(&path, &receipt)?;
+        *self = receipt;
         Ok(())
     }
 }
@@ -104,6 +114,10 @@ fn service_config(plan: &Plan) -> Result<NativeServiceConfig> {
         plan.home.clone(),
         operation_dir(&plan.home, plan.id).join("gents"),
     )?;
+    if !plan.intent.executable_update {
+        config.executable = NativeServiceManager::new(config.clone())?
+            .definition_executable(&plan.prior_definition)?;
+    }
     config.service_config_dir = plan.service_config_dir.clone();
     config.user_home = plan.user_home.clone();
     Ok(config)
@@ -187,6 +201,8 @@ pub(crate) async fn submit(args: ServiceUpdateArgs) -> Result<()> {
 async fn wait_for_helper(plan: &Plan, limit: Duration) -> Result<()> {
     let path = operation_dir(&plan.home, plan.id).join("helper-ready.json");
     tokio::time::timeout(limit, async {
+        let mut changes =
+            files::Changes::watch(path.parent().context("operation directory")?).await?;
         loop {
             if tokio::fs::try_exists(&path).await? {
                 let ready: HelperReady = files::read_json_async(&path).await?;
@@ -196,7 +212,7 @@ async fn wait_for_helper(plan: &Plan, limit: Duration) -> Result<()> {
                 );
                 return Ok::<_, anyhow::Error>(());
             }
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            changes.changed().await?;
         }
     })
     .await
@@ -226,11 +242,33 @@ where
 
 pub(crate) async fn status(home: Option<PathBuf>, id: uuid::Uuid) -> Result<()> {
     let home = resolve_home_dir(home.as_deref());
-    let receipt = tokio::task::spawn_blocking(move || {
-        files::read_json::<Receipt>(&operation_dir(&home, id).join("receipt.json"))
+    let receipt = tokio::task::spawn_blocking(move || -> Result<Receipt> {
+        let directory = operation_dir(&home, id);
+        let receipt: Receipt = files::read_json(&directory.join("receipt.json"))?;
+        if matches!(
+            receipt.phase,
+            Phase::Accepted | Phase::Retired | Phase::Released | Phase::BackedUp | Phase::Installed
+        ) {
+            let plan: Plan = files::read_json(&directory.join("plan.json"))?;
+            anyhow::ensure!(
+                plan.id == id && plan.home == std::fs::canonicalize(&home)?,
+                "update plan does not match home"
+            );
+            if let Ok(_helper) = files::lock(&directory.join("helper.lock")) {
+                NativeServiceManager::new(service_config(&plan)?)?
+                    .register_updater(&directory, id)?;
+            }
+        }
+        Ok(receipt)
     })
     .await??;
     emit(&receipt).await
+}
+
+pub(crate) use notices::watch_notices;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+pub(crate) fn executable_digest(path: &Path) -> Result<String> {
+    files::digest(path)
 }
 
 pub(crate) async fn check(home: Option<PathBuf>) -> Result<()> {
@@ -272,6 +310,11 @@ fn metadata(schema_checked: bool) -> serde_json::Value {
 }
 
 pub(crate) async fn run(home: PathBuf, id: uuid::Uuid) -> Result<()> {
+    let guarded_home = home.clone();
+    tokio::task::spawn_blocking(move || {
+        refuse_self_disruption(&guarded_home, &ServiceAction::Restart)
+    })
+    .await??;
     let directory = operation_dir(&home, id);
     let lock_dir = directory.clone();
     let _lock =
@@ -283,7 +326,7 @@ pub(crate) async fn run(home: PathBuf, id: uuid::Uuid) -> Result<()> {
     );
     let mut receipt: Receipt = files::read_json_async(&directory.join("receipt.json")).await?;
     if matches!(receipt.phase, Phase::Healthy | Phase::Failed) {
-        return Ok(());
+        return cleanup_helper(&plan).await;
     }
     // This is a readiness observation, not authority to retire. The helper
     // still authenticates the node/build through the existing control owner.
@@ -293,13 +336,56 @@ pub(crate) async fn run(home: PathBuf, id: uuid::Uuid) -> Result<()> {
     };
     let ready_path = directory.join("helper-ready.json");
     tokio::task::spawn_blocking(move || files::write_json(&ready_path, &ready)).await??;
-    let result = execute::apply(&plan, &mut receipt).await;
+    let mut reservation = None;
+    let result = execute::apply(&plan, &mut receipt, &mut reservation).await;
     if let Err(error) = result {
         // No automatic binary rollback: opening a newer store can make the
         // old executable incompatible. Keep the cold backup for explicit recovery.
-        receipt.transition(Action::Fail, &format!("{error:#}. No data reset or automatic store rollback. Inspect this receipt and backup before external recovery.")).await?;
+        let recovery = recovery::restore_unstarted(&plan, receipt.phase, &mut reservation).await;
+        let detail = match recovery {
+            Ok(true) => "Prior runtime restored using the verified compatible build; store data was not rolled back.".to_owned(),
+            Ok(false) => "No data reset or automatic store rollback. Inspect this receipt and backup before external recovery.".to_owned(),
+            Err(error) => format!("Prior runtime recovery unavailable: {error:#}. No data reset or automatic store rollback."),
+        };
+        let current: Receipt = files::read_json_async(&directory.join("receipt.json")).await?;
+        if !matches!(current.phase, Phase::Healthy | Phase::Failed) {
+            receipt = current;
+            receipt
+                .transition(Action::Fail, &format!("{error:#}. {detail}"))
+                .await?;
+        }
     }
-    Ok(())
+    cleanup_helper(&plan).await
+}
+
+async fn cleanup_helper(plan: &Plan) -> Result<()> {
+    // Manually invoked recovery/status tests have no registered helper. Do not
+    // touch the user's native manager unless this operation owns a definition.
+    let directory = operation_dir(&plan.home, plan.id);
+    let Ok(platform) = crate::native_service::NativeServicePlatform::current() else {
+        return Ok(());
+    };
+    let mut config = NativeServiceConfig::new(plan.home.clone(), directory.join("helper"))?;
+    config.service_config_dir = plan.service_config_dir.clone();
+    config.user_home = plan.user_home.clone();
+    let registered = match platform {
+        crate::native_service::NativeServicePlatform::Macos => directory.join("updater.plist"),
+        crate::native_service::NativeServicePlatform::Linux => {
+            config.service_config_dir.join(format!(
+                "{}.update-{}.service",
+                crate::native_service::SERVICE_LABEL,
+                plan.id
+            ))
+        }
+    };
+    if !tokio::fs::try_exists(registered).await? {
+        return Ok(());
+    }
+    let id = plan.id;
+    tokio::task::spawn_blocking(move || {
+        NativeServiceManager::new(config)?.unregister_updater(&directory, id)
+    })
+    .await?
 }
 
 pub(crate) fn refuse_self_disruption(home: &Path, action: &ServiceAction) -> Result<()> {

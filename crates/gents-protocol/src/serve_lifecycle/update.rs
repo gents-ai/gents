@@ -29,6 +29,14 @@ pub enum Action {
 }
 
 impl Phase {
+    pub fn can_restore_prior(self, candidate_may_have_opened: bool, same_build: bool) -> bool {
+        (!candidate_may_have_opened || same_build)
+            && matches!(
+                self,
+                Self::Retired | Self::Released | Self::BackedUp | Self::Installed
+            )
+    }
+
     pub fn step(self, action: Action) -> Option<Self> {
         match (self, action) {
             (Self::Staged, Action::Register(true)) => Some(Self::Registered),
@@ -57,6 +65,16 @@ mod tests {
         for case in cases {
             let phase: Phase = serde_json::from_value(case["phase"].clone()).unwrap();
             let flag = case["flag"].as_bool().unwrap();
+            assert_eq!(
+                phase.can_restore_prior(flag, false),
+                case["can_restore"].as_bool().unwrap(),
+                "{case}"
+            );
+            assert_eq!(
+                phase.can_restore_prior(flag, true),
+                case["can_restore_same_build"].as_bool().unwrap(),
+                "{case}"
+            );
             let action = match case["action"].as_str().unwrap() {
                 "register" => Action::Register(flag),
                 "acknowledge" => Action::Acknowledge,

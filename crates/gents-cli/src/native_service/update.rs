@@ -7,6 +7,108 @@ impl<R> NativeServiceManager<R>
 where
     R: CommandRunner,
 {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) fn installed_executable_path(&self) -> Result<PathBuf> {
+        self.definition_executable(&fs::read(self.config.definition_path(self.platform))?)
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) fn definition_owned_by_home(&self) -> Result<bool> {
+        let path = self.config.definition_path(self.platform);
+        if !path.is_file() {
+            return Ok(false);
+        }
+        Ok(
+            normalize_absolute(&installed_home(self.platform, &fs::read(path)?)?)?
+                == normalize_absolute(&self.config.home)?,
+        )
+    }
+
+    /// A managed update is an explicit executable selection. Automatic desktop
+    /// package refresh must not replace it with the package's possibly older
+    /// build. This path observation is a negative overwrite fence, not identity
+    /// or authorization; the existing native home checks still apply.
+    pub fn has_managed_executable(&self) -> Result<bool> {
+        let path = self.config.definition_path(self.platform);
+        if !path.is_file() {
+            return Ok(false);
+        }
+        let installed = normalize_absolute(&self.definition_executable(&fs::read(path)?)?)?;
+        let root =
+            normalize_absolute(&self.config.home)?.join(gents::home::SERVICE_UPDATES_DIR_NAME);
+        let Ok(relative) = installed.strip_prefix(root) else {
+            return Ok(false);
+        };
+        let mut components = relative.components();
+        Ok(components
+            .next()
+            .and_then(|c| c.as_os_str().to_str())
+            .is_some_and(|s| uuid::Uuid::parse_str(s).is_ok())
+            && components.next().is_some_and(|c| c.as_os_str() == "gents")
+            && components.next().is_none())
+    }
+
+    /// Automatic desktop mutations must yield while a native handoff owns its
+    /// definition. Expired operations that never acknowledged cannot retire.
+    pub fn pending_update(&self) -> Result<Option<uuid::Uuid>> {
+        let root = self.config.home.join(gents::home::SERVICE_UPDATES_DIR_NAME);
+        if !root.is_dir() {
+            return Ok(None);
+        }
+        for entry in fs::read_dir(root)? {
+            let entry = entry?;
+            let Some(id) = entry
+                .file_name()
+                .to_str()
+                .and_then(|s| uuid::Uuid::parse_str(s).ok())
+            else {
+                continue;
+            };
+            let path = entry.path();
+            if !path.join("receipt.json").is_file() {
+                continue;
+            }
+            let receipt: serde_json::Value =
+                serde_json::from_slice(&fs::read(path.join("receipt.json"))?)?;
+            let phase: gents_protocol::serve_lifecycle::update::Phase =
+                serde_json::from_value(receipt["phase"].clone())?;
+            if matches!(
+                phase,
+                gents_protocol::serve_lifecycle::update::Phase::Healthy
+                    | gents_protocol::serve_lifecycle::update::Phase::Failed
+            ) {
+                continue;
+            }
+            if matches!(
+                phase,
+                gents_protocol::serve_lifecycle::update::Phase::Staged
+                    | gents_protocol::serve_lifecycle::update::Phase::Registered
+            ) {
+                let plan: serde_json::Value =
+                    serde_json::from_slice(&fs::read(path.join("plan.json"))?)?;
+                let deadline = chrono::DateTime::parse_from_rfc3339(
+                    plan["accepted_deadline"]
+                        .as_str()
+                        .context("update acceptance deadline")?,
+                )?;
+                if chrono::Utc::now() >= deadline {
+                    continue;
+                }
+            }
+            return Ok(Some(id));
+        }
+        Ok(None)
+    }
+
+    pub(crate) fn definition_executable(&self, bytes: &[u8]) -> Result<PathBuf> {
+        self.ensure_owned_definition(bytes)?;
+        executable(self.platform, bytes)
+    }
+
+    pub(crate) fn restore_unstarted_definition(&self, expected: &[u8], prior: &[u8]) -> Result<()> {
+        self.install_update_definition(expected, prior)
+    }
+
     pub(crate) fn update_snapshot(&self) -> Result<(Vec<u8>, PathBuf, bool)> {
         let bytes = fs::read(self.config.definition_path(self.platform))?;
         self.ensure_owned_definition(&bytes)?;
@@ -103,8 +205,44 @@ where
             "service must be unloaded before replacement"
         );
         atomic_write(&path, replacement)?;
+        #[cfg(unix)]
+        fs::File::open(path.parent().context("native service directory")?)?.sync_all()?;
         if self.platform == NativeServicePlatform::Linux {
             self.run_checked("systemctl", &["--user".into(), "daemon-reload".into()])?;
+        }
+        Ok(())
+    }
+
+    /// Remove only this operation's fixed helper registration after its terminal
+    /// receipt is durable. Unloading our own job may terminate this process.
+    pub(crate) fn unregister_updater(&self, directory: &Path, id: uuid::Uuid) -> Result<()> {
+        let label = format!("{SERVICE_LABEL}.update-{id}");
+        match self.platform {
+            NativeServicePlatform::Macos => {
+                let path = directory.join("updater.plist");
+                if path.exists() {
+                    fs::remove_file(path)?;
+                }
+                let target = format!("gui/{}/{label}", self.current_uid()?);
+                let _ = self.run_allow_failure("launchctl", &["bootout".into(), target.into()])?;
+            }
+            NativeServicePlatform::Linux => {
+                let unit = format!("{label}.service");
+                let path = self.config.service_config_dir.join(&unit);
+                if path.exists() {
+                    fs::remove_file(path)?;
+                }
+                self.run_checked("systemctl", &["--user".into(), "daemon-reload".into()])?;
+                let _ = self.run_allow_failure(
+                    "systemctl",
+                    &[
+                        "--user".into(),
+                        "stop".into(),
+                        "--no-block".into(),
+                        unit.into(),
+                    ],
+                )?;
+            }
         }
         Ok(())
     }
@@ -229,6 +367,34 @@ mod tests {
             stderr_path: Some(root.join("stderr.log")),
         }
     }
+    #[test]
+    fn desktop_preserves_explicit_update_selection_and_yields_to_pending_handoffs() {
+        for platform in [NativeServicePlatform::Macos, NativeServicePlatform::Linux] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut config = config(dir.path());
+            let id = uuid::Uuid::new_v4();
+            let operation = config
+                .home
+                .join(gents::home::SERVICE_UPDATES_DIR_NAME)
+                .join(id.to_string());
+            fs::create_dir_all(&operation).unwrap();
+            config.executable = operation.join("gents");
+            let manager =
+                NativeServiceManager::with_runner(config.clone(), platform, Runner::default());
+            fs::write(
+                config.definition_path(platform),
+                manager.render_definition().unwrap(),
+            )
+            .unwrap();
+            assert!(manager.has_managed_executable().unwrap());
+            fs::write(operation.join("receipt.json"), r#"{"phase":"accepted"}"#).unwrap();
+            assert_eq!(manager.pending_update().unwrap(), Some(id));
+            fs::write(operation.join("receipt.json"), r#"{"phase":"healthy"}"#).unwrap();
+            assert_eq!(manager.pending_update().unwrap(), None);
+            assert!(manager.has_managed_executable().unwrap());
+        }
+    }
+
     #[test]
     fn replacement_preserves_properties_and_environment_on_both_supervisors() {
         for platform in [NativeServicePlatform::Macos, NativeServicePlatform::Linux] {

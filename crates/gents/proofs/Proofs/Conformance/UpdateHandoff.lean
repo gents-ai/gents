@@ -17,6 +17,6 @@ def casesJson : String :=
     .backedUp, .installed, .healthy, .failed]
   (toJson (phases.flatMap fun phase => actions.map fun (name, flag, action) =>
     Json.mkObj [("phase", toJson (phaseName phase)), ("action", toJson name),
-      ("flag", toJson flag), ("next", match step phase action with
+      ("flag", toJson flag), ("can_restore", toJson (canRestore phase flag false)), ("can_restore_same_build", toJson (canRestore phase flag true)), ("next", match step phase action with
         | some next => toJson (phaseName next) | none => Json.null)])).compress
 end Conformance.UpdateHandoff

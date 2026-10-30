@@ -1,6 +1,6 @@
 use super::files::{
-    backup_inventory, copy_executable, digest, lock, private_dir, read_json,
-    validate_native_executable, write_json,
+    backup_inventory, copy_executable, digest, private_dir, read_json, validate_native_executable,
+    write_json,
 };
 use super::*;
 use std::fs::{self, File};
@@ -12,7 +12,7 @@ pub(super) fn prepare(
 ) -> Result<(Plan, Receipt, File)> {
     let root = home.join(gents::home::SERVICE_UPDATES_DIR_NAME);
     private_dir(&root)?;
-    let submission_lock = lock(&root.join("submission.lock"))?;
+    let submission_lock = super::files::submission_lock(&root.join("submission.lock"))?;
     let directory = operation_dir(&home, id);
     if directory.join("plan.json").is_file() {
         let plan: Plan = read_json(&directory.join("plan.json"))?;
@@ -71,6 +71,7 @@ pub(super) fn prepare(
             "candidate SHA-256 mismatch; runtime unchanged"
         );
     }
+    super::files::check_backup_capacity(&home, &root)?;
     let intent = Intent {
         digest: expected.clone(),
         executable_update: args.executable.is_some(),
@@ -78,13 +79,7 @@ pub(super) fn prepare(
         environment,
         drain_timeout_secs: args.drain_timeout_secs,
     };
-    for entry in fs::read_dir(&root)? {
-        let path = entry?.path().join("receipt.json");
-        if path.is_file() {
-            let receipt: Receipt = read_json(&path)?;
-            anyhow::ensure!(matches!(receipt.phase, Phase::Healthy | Phase::Failed), "update {} already pending; inspect service update-status before submitting another operation", receipt.operation_id);
-        }
-    }
+    reject_pending(&root)?;
     let init = read_init_config(&home)?.context("home is not initialized")?;
     let state = read_runtime_state(&home)?.context("runtime has no endpoint")?;
     anyhow::ensure!(
@@ -147,9 +142,19 @@ pub(super) fn prepare(
             && probe["arch"] == std::env::consts::ARCH,
         "candidate platform or handoff protocol mismatch"
     );
-    let config = NativeServiceConfig::new(home.clone(), directory.join("gents"))?;
+    let target = if intent.executable_update {
+        directory.join("gents")
+    } else {
+        old_executable.clone()
+    };
+    let config = NativeServiceConfig::new(home.clone(), target.clone())?;
     let next_definition = NativeServiceManager::new(config.clone())?
         .update_definition(&definition, intent.environment.as_ref())?;
+    anyhow::ensure!(
+        NativeServiceManager::new(config.clone())?.definition_executable(&next_definition)?
+            == target,
+        "rendered service executable does not match the verified target"
+    );
     // The asynchronous owner verifies that the installed executable's digest
     // equals the signed live build before registering any updater.
     let plan = Plan {
@@ -187,4 +192,42 @@ pub(super) fn prepare(
     fs::rename(temp.keep(), &directory)?;
     File::open(&root)?.sync_all()?;
     Ok((plan, receipt, submission_lock))
+}
+
+/// Unpublished staging directories cannot own an operation. An abandoned
+/// pre-acceptance operation expires under the same CAS lock as acknowledgement;
+/// an accepted operation is never cleared merely because its helper is absent.
+pub(super) fn reject_pending(root: &Path) -> Result<()> {
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let Some(id) = entry
+            .file_name()
+            .to_str()
+            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+        else {
+            continue;
+        };
+        let directory = entry.path();
+        let path = directory.join("receipt.json");
+        if !path.is_file() {
+            continue;
+        }
+        let mut receipt: Receipt = read_json(&path)?;
+        anyhow::ensure!(receipt.operation_id == id, "operation receipt ID mismatch");
+        if matches!(receipt.phase, Phase::Staged | Phase::Registered) {
+            let plan: Plan = read_json(&directory.join("plan.json"))?;
+            if chrono::Utc::now() >= chrono::DateTime::parse_from_rfc3339(&plan.accepted_deadline)?
+            {
+                // The CAS can lose to acknowledgement. Re-read the durable
+                // state; an accepted winner must continue blocking new work.
+                let _ = receipt.transition_sync(
+                    Action::Fail,
+                    "Acceptance deadline expired before retirement; runtime unchanged",
+                );
+                receipt = read_json(&path)?;
+            }
+        }
+        anyhow::ensure!(matches!(receipt.phase, Phase::Healthy | Phase::Failed), "update {} already pending; inspect service update-status before submitting another operation", receipt.operation_id);
+    }
+    Ok(())
 }

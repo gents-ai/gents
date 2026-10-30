@@ -7,7 +7,6 @@ on:
       - '.github/workflows/managed-runtime-update.yml'
       - '.github/scripts/test-managed-self-update.py'
       - 'crates/gents-cli/src/service_update*'
-      - 'crates/gents-cli/src/service_update/**'
       - 'crates/gents-cli/src/native_service*'
       - 'crates/gents-cli/src/native_service/**'
       - 'crates/gents-cli/src/cli/args.rs'
@@ -15,8 +14,19 @@ on:
       - 'crates/gents-cli/src/commands/prepare_runtime*'
       - 'crates/gents-cli/src/http/runtime_control.rs'
       - 'crates/gents/src/runtime_service.rs'
+      - 'crates/gents/src/agent/runtime/startup.rs'
+      - 'crates/gents-desktop-bridge/**'
+      - 'crates/gents/src/tool_call_lifecycle/**'
+      - 'crates/gents/src/mailbox/**'
+      - 'crates/gents/src/agent.rs'
+      - 'crates/gents-cli/src/commands/serve.rs'
+      - 'crates/gents-cli/src/network_settings.rs'
+      - 'crates/gents-cli/src/home_state.rs'
+      - 'crates/gents-protocol/src/serve_lifecycle/**'
+      - 'crates/gents-cli/src/service_update/**'
       - 'crates/gents/src/home.rs'
       - 'crates/gents/src/toolset/shared/command.rs'
+      - 'crates/gents/src/toolset/shared/command_credentials*'
       - 'crates/gents-migration/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -60,7 +70,19 @@ jobs:
         run: |
           rustup toolchain install
           rustup target add wasm32-unknown-unknown wasm32-wasip1
+      - name: Restore Rust dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: managed-runtime-update
+          cache-on-failure: "true"
+          cache-workspace-crates: "false"
+          cache-bin: "false"
       - name: Build isolated native-service executable
         run: cargo build --locked -p gents-cli --bin gents --features native-e2e --profile fast-dev
       - name: Exercise agent update and supervised recovery
-        run: python3 .github/scripts/test-managed-self-update.py --binary target/fast-dev/gents
+        run: |
+          python3 .github/scripts/test-managed-self-update.py --binary target/fast-dev/gents
+          python3 .github/scripts/test-managed-self-update.py --binary target/fast-dev/gents --scenario backup-failure
+          python3 .github/scripts/test-managed-self-update.py --binary target/fast-dev/gents --scenario busy-timeout
+          python3 .github/scripts/test-managed-self-update.py --binary target/fast-dev/gents --scenario health-failure
+          python3 .github/scripts/test-managed-self-update.py --binary target/fast-dev/gents --scenario config-health-failure
