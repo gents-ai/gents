@@ -10,8 +10,11 @@ flags are evaluated at their shipped defaults (`tengu_tidy_frost` and
 `tengu_stellar_drift` off, `tengu_prompt_cache_1h_config` on its built-in
 allowlist): the client cannot observe a server-side assignment. The
 second-breakpoint features (`divergesAtMessageId`, cache keepalive, fork pins)
-and mid-conversation system messages are not reachable from a Gents request,
-which hoists system rows into `system`.
+and mid-conversation system text are not reachable from a Gents request, which
+hoists system rows into `system`. The one system row a request carries is the
+empty per-turn effort row (`ClaudeBody.perTurnEffort`); `dsn` skips every
+`api_system` row when it picks the breakpoint and marks one only when its
+content is a non-blank string, so the empty row is never marked.
 -/
 
 namespace PromptAssembly.ClaudeCache
@@ -41,6 +44,8 @@ def blank (text : String) : Bool := text.toList.all jsWhitespace
 inductive Role where
   | user
   | assistant
+  /-- An `api_system` row (`role: "system"`). -/
+  | system
   deriving DecidableEq, Repr
 
 inductive Block where
@@ -84,10 +89,12 @@ def stampable : Block → Bool
   | .thinking | .redactedThinking | .fallback => false
   | .other _ => true
 
-/-- `lsn`: an assistant message is skipped when its last block cannot carry a
-breakpoint. -/
+/-- `lsn` and the `api_system` skip in `dsn`: an assistant message is skipped
+when its last block cannot carry a breakpoint, and a system row is always
+skipped. -/
 def eligible (message : Message) : Bool :=
   match message.role, message.content with
+  | .system, _ => false
   | .user, _ => true
   | .assistant, .str _ => true
   | .assistant, .blocks blocks => blocks.getLast?.any stampable
@@ -124,6 +131,7 @@ def placeOne (marked : Bool) (message : Message) : Placed :=
       { role := .assistant, blocks := some blocks, text := none,
         marker := if marked && blocks.getLast?.any stampable then some (blocks.length - 1)
           else none }
+  | .system, .blocks blocks => { role := .system, blocks := some blocks, text := none, marker := none }
 
 def placeFrom (target : Option Nat) : Nat → List Message → List Placed
   | _, [] => []
@@ -169,6 +177,33 @@ theorem placeFrom_marks_at_most_one (target : Option Nat) (i : Nat) (messages : 
 theorem place_marks_at_most_one (caching skipWrite : Bool) (messages : List Message) :
     ((place caching skipWrite messages).filter (·.marker.isSome)).length ≤ 1 :=
   placeFrom_marks_at_most_one _ 0 messages
+
+theorem lastEligibleBelow_eligible (messages : List Message) (bound i : Nat)
+    (h : lastEligibleBelow messages bound = some i) : messages[i]?.any eligible = true := by
+  unfold lastEligibleBelow at h
+  have hmem := List.mem_of_getLast? h
+  simpa using (List.mem_filter.mp hmem).2
+
+theorem eligible_is_not_system (message : Message) (h : eligible message = true) :
+    message.role ≠ .system := by
+  obtain ⟨role, content⟩ := message
+  cases role <;> simp_all [eligible]
+
+/-- The breakpoint never lands on a system row, so the per-turn effort row is
+sent exactly as built. -/
+theorem markerIndex_skips_system (messages : List Message) (skipWrite : Bool) (i : Nat)
+    (h : markerIndex messages skipWrite = some i) :
+    ∃ m, messages[i]? = some m ∧ m.role ≠ .system := by
+  have hi : messages[i]?.any eligible = true := by
+    unfold markerIndex at h
+    split at h
+    · rename_i hs
+      obtain ⟨j, _, hj⟩ := Option.bind_eq_some.mp h
+      exact lastEligibleBelow_eligible _ _ _ hj
+    · exact lastEligibleBelow_eligible _ _ _ h
+  cases hm : messages[i]? with
+  | none => simp [hm] at hi
+  | some m => exact ⟨m, rfl, eligible_is_not_system m (by simpa [hm] using hi)⟩
 
 theorem marked_assistant_block_stampable (marked : Bool) (blocks : List Block) (k : Nat)
     (h : (placeOne marked ⟨.assistant, .blocks blocks⟩).marker = some k) :

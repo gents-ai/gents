@@ -96,6 +96,9 @@ pub struct Message {
     pub role: Role,
     /// The turn body.
     pub content: MessageContent,
+    /// The per-turn control of a system row, serialized after `content`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_config: Option<OutputConfig>,
 }
 
 impl Message {
@@ -115,6 +118,8 @@ pub enum Role {
     User,
     /// The assistant.
     Assistant,
+    /// A system row (`api_system`): the per-turn effort control.
+    System,
 }
 
 /// A message body: a bare string or an array of blocks.

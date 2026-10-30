@@ -196,14 +196,8 @@ pub fn select(model: &ModelTraits<'_>, request: &Request) -> Vec<&'static str> {
         THINKING_BINDING_CONTROLS,
         first_party_only && first_party_default_url && request.thinking,
     );
-    // Display updates replace redacted thinking whenever a thinking request
-    // takes them (`Xon` defaults to `connector_text`).
-    let display_updates = request.thinking
-        && !request.show_thinking_summaries
-        && !request.experimental_betas_disabled
-        && interleaved
-        && request.provider.first_party_like();
-    if display_updates {
+    // Display updates replace redacted thinking whenever a thinking request takes them.
+    if display_updates(model, request) {
         push_once(&mut betas, THINKING_DISPLAY_UPDATES, true);
         betas.retain(|beta| *beta != REDACT_THINKING);
     }
@@ -229,6 +223,19 @@ pub fn select(model: &ModelTraits<'_>, request: &Request) -> Vec<&'static str> {
         betas.retain(|beta| THIRD_PARTY_BETAS.contains(beta));
     }
     betas
+}
+
+/// Whether the request takes `thinking-display-updates` and sends
+/// `thinking.display = "updates"` (`Xon` defaults to `connector_text`, `yYn`
+/// gates the beta): a thinking request on a first-party-like provider that
+/// allows interleaved thinking and experimental betas, without summaries.
+/// `select` and the body's thinking decision share this one predicate.
+pub fn display_updates(model: &ModelTraits<'_>, request: &Request) -> bool {
+    request.thinking
+        && !request.show_thinking_summaries
+        && !request.experimental_betas_disabled
+        && model.interleaved_thinking(request.provider)
+        && request.provider.first_party_like()
 }
 
 /// Betas Bedrock takes in the request body rather than the header (`FEn`).

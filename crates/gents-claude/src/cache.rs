@@ -74,9 +74,11 @@ fn stampable(block: &ContentBlock) -> bool {
     }
 }
 
-/// Whether the message may hold the breakpoint (Claude Code `lsn`).
+/// Whether the message may hold the breakpoint (Claude Code `lsn`; `dsn` skips
+/// every system row).
 fn eligible(message: &Message) -> bool {
     match (message.role, &message.content) {
+        (Role::System, _) => false,
         (Role::User, _) | (Role::Assistant, MessageContent::Text(_)) => true,
         (Role::Assistant, MessageContent::Blocks(blocks)) => blocks.last().is_some_and(stampable),
     }

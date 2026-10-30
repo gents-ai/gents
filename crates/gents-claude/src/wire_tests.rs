@@ -75,6 +75,7 @@ fn default_main_thread_body_bytes() {
             citations: None,
             cache_control: marked(),
         }]),
+        output_config: None,
     };
     let expected = format!(
         r#"{{"model":"claude-opus-5-5","messages":[{{"role":"user","content":[{{"type":"text","text":"hi","cache_control":{{"type":"ephemeral"}}}}]}}],{SYSTEM}{TAIL}"#
@@ -100,6 +101,7 @@ fn tool_round_bytes() {
                     cache_control: None,
                 },
             ]),
+            output_config: None,
         },
         Message {
             role: Role::User,
@@ -112,6 +114,7 @@ fn tool_round_bytes() {
                 },
                 text("next"),
             ]),
+            output_config: None,
         },
     ];
     let expected = format!(
@@ -124,6 +127,7 @@ fn user_text(t: &str) -> MessagesRequest {
     request(vec![Message {
         role: Role::User,
         content: MessageContent::Text(t.to_owned()),
+        output_config: None,
     }])
 }
 
@@ -358,5 +362,21 @@ fn output_config_format_follows_effort() {
     assert_eq!(
         serde_json::to_string(&c).unwrap(),
         r#"{"effort":"high","format":{"type":"json_schema"}}"#
+    );
+}
+
+#[test]
+fn per_turn_effort_row_bytes() {
+    let row = Message {
+        role: Role::System,
+        content: MessageContent::Blocks(Vec::new()),
+        output_config: Some(OutputConfig {
+            effort: Some("medium".to_owned()),
+            format: None,
+        }),
+    };
+    assert_eq!(
+        serde_json::to_string(&row).unwrap(),
+        r#"{"role":"system","content":[],"output_config":{"effort":"medium"}}"#
     );
 }

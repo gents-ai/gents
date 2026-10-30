@@ -182,6 +182,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_origin_cases_pick_the_wire_mode",
         },
         ConformanceConsumer::RustTest {
+            id: "gents_claude::body::tests::generated_field_cases_decide_the_body_fields",
+            package: "gents-claude",
+            source_path: "crates/gents-claude/src/body_tests.rs",
+            module_path: "gents_claude::body::tests",
+            function: "generated_field_cases_decide_the_body_fields",
+        },
+        ConformanceConsumer::RustTest {
+            id: "gents_claude::body::tests::generated_field_row_cases_place_the_per_turn_row",
+            package: "gents-claude",
+            source_path: "crates/gents-claude/src/body_tests.rs",
+            module_path: "gents_claude::body::tests",
+            function: "generated_field_row_cases_place_the_per_turn_row",
+        },
+        ConformanceConsumer::RustTest {
             id: "gents_claude::rotation::tests::generated_rotation_select_cases_choose_the_account",
             package: "gents-claude",
             source_path: "crates/gents-claude/src/rotation_tests.rs",

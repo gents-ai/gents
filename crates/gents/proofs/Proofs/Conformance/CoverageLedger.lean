@@ -2473,6 +2473,16 @@ def caseCoverage : List CoverageEntry :=
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "prompt_assembly_cases"
+      "PromptAssemblyClaudeFieldCases"
+      "gents_claude::body::tests::generated_field_cases_decide_the_body_fields")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "prompt_assembly_cases"
+      "PromptAssemblyClaudeFieldRowCases"
+      "gents_claude::body::tests::generated_field_row_cases_place_the_per_turn_row")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "prompt_assembly_cases"
       "PromptAssemblyClaudeStreamCases"
       "conformance::prompt_assembly::generated_claude_stream_cases_drive_the_messages_parser")
       "prompt-assembly" [Surface.runtimeInternal]

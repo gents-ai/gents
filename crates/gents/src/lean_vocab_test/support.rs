@@ -461,6 +461,8 @@ pub(crate) struct LeanContractSnapshot {
         Vec<LeanPromptAssemblyClaudeAttributionCase>,
     pub(crate) prompt_assembly_claude_cache_cases: Vec<LeanPromptAssemblyClaudeCacheCase>,
     pub(crate) prompt_assembly_claude_origin_cases: Vec<LeanPromptAssemblyClaudeOriginCase>,
+    pub(crate) prompt_assembly_claude_field_cases: Vec<LeanPromptAssemblyClaudeFieldCase>,
+    pub(crate) prompt_assembly_claude_field_row_cases: Vec<LeanPromptAssemblyClaudeFieldRowCase>,
     pub(crate) prompt_assembly_claude_stream_cases: Vec<LeanPromptAssemblyClaudeStreamCase>,
     pub(crate) prompt_assembly_claude_thinking_stream_cases:
         Vec<LeanPromptAssemblyClaudeThinkingStreamCase>,

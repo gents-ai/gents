@@ -283,6 +283,87 @@ pub(crate) struct LeanPromptAssemblyClaudeOriginCase {
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeFieldFacts {
+    pub(crate) adaptive: bool,
+    pub(crate) always_thinks: bool,
+    pub(crate) thinking_supported: bool,
+    pub(crate) rejects_disabled: bool,
+    pub(crate) accepts_temperature: bool,
+    pub(crate) effort_capable: bool,
+    pub(crate) max_effort: bool,
+    pub(crate) xhigh_effort: bool,
+    pub(crate) caps_effort_when_disabled: bool,
+    pub(crate) per_turn_effort: bool,
+    pub(crate) output_default: u64,
+    pub(crate) output_upper: u64,
+    pub(crate) default_effort: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeFieldThinkingConfig {
+    pub(crate) kind: String,
+    pub(crate) mechanical: bool,
+    pub(crate) budget: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeFieldRequest {
+    pub(crate) thinking: LeanPromptAssemblyClaudeFieldThinkingConfig,
+    pub(crate) max_tokens_override: Option<u64>,
+    pub(crate) requested_effort: Option<String>,
+    pub(crate) first_party: bool,
+    pub(crate) first_party_default_url: bool,
+    pub(crate) experimental_betas_disabled: bool,
+    pub(crate) agentic: bool,
+    pub(crate) fork: bool,
+    pub(crate) display_updates: bool,
+    pub(crate) context_management_beta: bool,
+    pub(crate) per_turn_control_beta: bool,
+    pub(crate) previous_message_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeFieldThinking {
+    pub(crate) kind: String,
+    pub(crate) budget: Option<u64>,
+    pub(crate) updates: bool,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeFieldDiagnostics {
+    pub(crate) present: bool,
+    pub(crate) previous_message_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeFieldCase {
+    pub(crate) name: String,
+    pub(crate) facts: LeanPromptAssemblyClaudeFieldFacts,
+    pub(crate) request: LeanPromptAssemblyClaudeFieldRequest,
+    pub(crate) max_tokens: u64,
+    pub(crate) thinking: LeanPromptAssemblyClaudeFieldThinking,
+    pub(crate) temperature: Option<u64>,
+    pub(crate) context_management: bool,
+    pub(crate) effort: Option<String>,
+    pub(crate) diagnostics: LeanPromptAssemblyClaudeFieldDiagnostics,
+    pub(crate) per_turn_effort: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeFieldRowCase {
+    pub(crate) name: String,
+    pub(crate) is_user: Vec<bool>,
+    pub(crate) index: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanPromptAssemblyClaudeStreamCase {
     pub(crate) name: String,
     pub(crate) surface: Vec<String>,

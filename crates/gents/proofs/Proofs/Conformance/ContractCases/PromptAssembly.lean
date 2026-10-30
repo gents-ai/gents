@@ -1036,6 +1036,119 @@ def promptAssemblyClaudeOriginCases : List PromptAssemblyClaudeOriginCase := Id.
             cases := cases ++ [{ name, origin, mode := wireMode origin, identity := identity origin }]
   return cases
 
+structure PromptAssemblyClaudeFieldCase where
+  name : String
+  facts : PromptAssembly.ClaudeBody.ModelFacts
+  request : PromptAssembly.ClaudeBody.Request
+  decision : PromptAssembly.ClaudeBody.Decision
+  deriving Repr
+
+open PromptAssembly.ClaudeBody in
+/-- Representative model fact sets: an always-thinking adaptive model, a
+temperature-free adaptive model that caps effort when thinking is off, an
+adaptive model with a default and a `max` effort, a budget model with effort,
+a budget model without effort, and a model without thinking. -/
+def claudeFieldFactSets : List (String × ModelFacts) :=
+  [ ("opus55", { adaptive := true, alwaysThinks := true, thinkingSupported := true
+                 rejectsDisabled := true, acceptsTemperature := false, effortCapable := true
+                 maxEffort := true, xhighEffort := true, capsEffortWhenDisabled := false
+                 perTurnEffort := true, outputDefault := 128000, outputUpper := 128000
+                 defaultEffort := some "medium" })
+  , ("opus5", { adaptive := true, alwaysThinks := false, thinkingSupported := true
+                rejectsDisabled := false, acceptsTemperature := false, effortCapable := true
+                maxEffort := true, xhighEffort := true, capsEffortWhenDisabled := true
+                perTurnEffort := false, outputDefault := 64000, outputUpper := 128000
+                defaultEffort := some "high" })
+  , ("sonnet46", { adaptive := true, alwaysThinks := false, thinkingSupported := true
+                   rejectsDisabled := false, acceptsTemperature := true, effortCapable := true
+                   maxEffort := true, xhighEffort := false, capsEffortWhenDisabled := false
+                   perTurnEffort := false, outputDefault := 32000, outputUpper := 128000
+                   defaultEffort := none })
+  , ("opus45", { adaptive := false, alwaysThinks := false, thinkingSupported := true
+                 rejectsDisabled := false, acceptsTemperature := true, effortCapable := true
+                 maxEffort := false, xhighEffort := false, capsEffortWhenDisabled := false
+                 perTurnEffort := false, outputDefault := 32000, outputUpper := 64000
+                 defaultEffort := none })
+  , ("haiku45", { adaptive := false, alwaysThinks := false, thinkingSupported := true
+                  rejectsDisabled := false, acceptsTemperature := true, effortCapable := false
+                  maxEffort := false, xhighEffort := false, capsEffortWhenDisabled := false
+                  perTurnEffort := false, outputDefault := 32000, outputUpper := 64000
+                  defaultEffort := none })
+  , ("claude3", { adaptive := false, alwaysThinks := false, thinkingSupported := false
+                  rejectsDisabled := false, acceptsTemperature := true, effortCapable := false
+                  maxEffort := false, xhighEffort := false, capsEffortWhenDisabled := false
+                  perTurnEffort := false, outputDefault := 8192, outputUpper := 8192
+                  defaultEffort := none }) ]
+
+open PromptAssembly.ClaudeBody in
+def claudeFieldBaseRequest : Request :=
+  { thinking := .adaptive, maxTokensOverride := none, requestedEffort := none
+    firstParty := true, firstPartyDefaultUrl := true, experimentalBetasDisabled := false
+    agentic := true, fork := false, displayUpdates := true, contextManagementBeta := true
+    perTurnControlBeta := true, previousMessageId := none }
+
+open PromptAssembly.ClaudeBody in
+def claudeFieldThinkingConfigs : List (String × ThinkingConfig) :=
+  [ ("adaptive", .adaptive), ("disabled", .disabled false), ("mechanical", .disabled true)
+  , ("enabled_default", .enabled none), ("enabled_4000", .enabled (some 4000))
+  , ("enabled_100", .enabled (some 100)), ("enabled_huge", .enabled (some 1000000)) ]
+
+open PromptAssembly.ClaudeBody in
+private def claudeFieldCase (name : String) (facts : ModelFacts) (request : Request) :
+    PromptAssemblyClaudeFieldCase :=
+  { name, facts, request, decision := evaluate facts request }
+
+open PromptAssembly.ClaudeBody in
+/-- Every thinking config against every fact set with each override and each
+requested effort, then the request flags against the decisions they gate. -/
+def promptAssemblyClaudeFieldCases : List PromptAssemblyClaudeFieldCase := Id.run do
+  let mut cases := []
+  for (fname, facts) in claudeFieldFactSets do
+    for (tname, thinking) in claudeFieldThinkingConfigs do
+      for (oname, override) in [("none", none), ("500", some 500), ("2000", some 2000), ("zero", some 0)] do
+        let request := { claudeFieldBaseRequest with thinking, maxTokensOverride := override }
+        cases := cases ++ [claudeFieldCase s!"{fname}-{tname}-override_{oname}" facts request]
+      for effort in ["low", "xhigh", "max", "ultra"] do
+        let request := { claudeFieldBaseRequest with thinking, requestedEffort := some effort }
+        cases := cases ++ [claudeFieldCase s!"{fname}-{tname}-effort_{effort}" facts request]
+  let some (_, opus) := claudeFieldFactSets.head? | return cases
+  for firstParty in [true, false] do
+    for url in [true, false] do
+      for disabled in [false, true] do
+        for (aname, agentic, fork) in [("neither", false, false), ("agentic", true, false), ("fork", false, true)] do
+          for previous in [none, some "msg_01"] do
+            let request := { claudeFieldBaseRequest with
+              firstParty, firstPartyDefaultUrl := url, experimentalBetasDisabled := disabled
+              agentic, fork, previousMessageId := previous }
+            cases := cases ++ [claudeFieldCase
+              s!"diagnostics-fp{firstParty}-url{url}-nobetas{disabled}-{aname}-prev{previous.isSome}" opus request]
+  for (fname, facts) in claudeFieldFactSets do
+    for (tname, thinking) in claudeFieldThinkingConfigs.take 4 do
+      for firstParty in [true, false] do
+        for display in [true, false] do
+          for context in [true, false] do
+            for perTurn in [true, false] do
+              let request := { claudeFieldBaseRequest with
+                thinking, firstParty, displayUpdates := display, contextManagementBeta := context
+                perTurnControlBeta := perTurn }
+              cases := cases ++ [claudeFieldCase
+                s!"gates-{fname}-{tname}-fp{firstParty}-display{display}-context{context}-perturn{perTurn}" facts request]
+  return cases
+
+structure PromptAssemblyClaudeFieldRowCase where
+  name : String
+  isUser : List Bool
+  index : Option Nat
+  deriving Repr
+
+/-- Every sequence of up to four messages, user or not. -/
+def promptAssemblyClaudeFieldRowCases : List PromptAssemblyClaudeFieldRowCase :=
+  let sequences : Nat → List (List Bool) := fun n =>
+    (List.range (2 ^ n)).map fun bits => (List.range n).map fun i => bits / 2 ^ i % 2 == 1
+  (List.range 5).flatMap fun n => (sequences n).map fun isUser =>
+    { name := s!"roles-{String.intercalate "" (isUser.map fun u => if u then "u" else "a")}"
+      isUser, index := PromptAssembly.ClaudeBody.rowIndex isUser }
+
 structure PromptAssemblyClaudeCacheCase where
   name : String
   caching : Bool
@@ -1083,6 +1196,11 @@ def promptAssemblyClaudeCacheCases : List PromptAssemblyClaudeCacheCase :=
   , cacheCase "subagent_keeps_five_minutes" [⟨.user, .str "q"⟩] (mainThread := false)
   , cacheCase "overage_keeps_five_minutes" [⟨.user, .str "q"⟩] (usingOverage := true)
   , cacheCase "api_key_keeps_five_minutes" [⟨.user, .str "q"⟩] (subscriber := false)
+  , cacheCase "per_turn_effort_row_is_skipped"
+      [⟨.user, .str "q"⟩, ⟨.system, .blocks []⟩]
+  , cacheCase "per_turn_effort_row_is_skipped_on_skip_write"
+      [⟨.user, .str "q"⟩, ⟨.assistant, .str "a"⟩, ⟨.user, .str "r"⟩, ⟨.system, .blocks []⟩]
+      (skipWrite := true)
   ]
 
 structure PromptAssemblyClaudeStreamCase where

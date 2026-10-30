@@ -36,10 +36,11 @@ fn block_of(kind: &str, t: Option<&str>) -> ContentBlock {
 }
 
 fn role_of(role: &str) -> Role {
-    if role == "user" {
-        Role::User
-    } else {
-        Role::Assistant
+    match role {
+        "user" => Role::User,
+        "assistant" => Role::Assistant,
+        "system" => Role::System,
+        other => panic!("unknown role {other}"),
     }
 }
 
@@ -70,6 +71,7 @@ fn generated_cache_cases_place_the_breakpoint() {
                 Message {
                     role: role_of(m["role"].as_str().unwrap()),
                     content,
+                    output_config: None,
                 }
             })
             .collect();
@@ -165,6 +167,7 @@ fn msg(role: Role, blocks: Vec<ContentBlock>) -> Message {
     Message {
         role,
         content: MessageContent::Blocks(blocks),
+        output_config: None,
     }
 }
 
@@ -200,14 +203,17 @@ fn skip_write_picks_the_previous_eligible() {
         Message {
             role: Role::User,
             content: MessageContent::Text("a".to_owned()),
+            output_config: None,
         },
         Message {
             role: Role::Assistant,
             content: MessageContent::Text("b".to_owned()),
+            output_config: None,
         },
         Message {
             role: Role::User,
             content: MessageContent::Text("c".to_owned()),
+            output_config: None,
         },
     ];
     place(&mut m, true, true, &cc());
@@ -246,10 +252,10 @@ fn property_single_valid_marker() {
         let n = rng.random_range(0..6);
         let mut messages: Vec<Message> = (0..n)
             .map(|_| {
-                let role = if rng.random_bool(0.5) {
-                    Role::User
-                } else {
-                    Role::Assistant
+                let role = match rng.random_range(0..5) {
+                    0 | 1 => Role::User,
+                    2 | 3 => Role::Assistant,
+                    _ => Role::System,
                 };
                 let content = if rng.random_bool(0.25) {
                     // Lean marks a string body as is, even when empty, so strings stay non-empty here.
@@ -261,7 +267,11 @@ fn property_single_valid_marker() {
                             .collect(),
                     )
                 };
-                Message { role, content }
+                Message {
+                    role,
+                    content,
+                    output_config: None,
+                }
             })
             .collect();
         place(
@@ -276,6 +286,7 @@ fn property_single_valid_marker() {
                 for b in blocks {
                     if b.cache_control().is_some() {
                         marked += 1;
+                        assert_ne!(m.role, Role::System);
                         if m.role == Role::Assistant {
                             assert!(!matches!(
                                 b,
