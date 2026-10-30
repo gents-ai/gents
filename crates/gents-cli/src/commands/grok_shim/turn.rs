@@ -6,6 +6,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use defra_node::EmbeddedNode;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::{json, Value};
 use tokio::sync::{oneshot, Mutex};
 
@@ -2082,10 +2083,14 @@ impl TurnManager {
         let Some(request_row) = request_rows.first() else {
             return Ok(None);
         };
-        let lifecycle_state = request_row
+        let Some(lifecycle_state) = request_row
             .get("lifecycle_state")
             .and_then(Value::as_str)
-            .unwrap_or_default();
+            .map(RequestLifecycleState::parse)
+            .transpose()?
+        else {
+            return Ok(None);
+        };
         let interrupted_at = request_row
             .get("interrupt_requested_at")
             .and_then(Value::as_str)
@@ -2161,24 +2166,27 @@ fn is_background_activity(payload: &Value) -> bool {
 }
 
 pub(super) fn stop_reason_from_rows(
-    lifecycle_state: &str,
+    lifecycle_state: RequestLifecycleState,
     interrupt_requested_at: Option<&str>,
 ) -> Option<StopReason> {
     let interrupted_at_nonempty = interrupt_requested_at
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
     match lifecycle_state {
-        "interrupted" => Some(StopReason::Cancelled),
-        "completed" => Some(StopReason::EndTurn),
-        "failed" => Some(StopReason::Error),
-        "superseded" | "dead" => {
+        RequestLifecycleState::Interrupted => Some(StopReason::Cancelled),
+        RequestLifecycleState::Completed => Some(StopReason::EndTurn),
+        RequestLifecycleState::Failed => Some(StopReason::Error),
+        RequestLifecycleState::Superseded | RequestLifecycleState::Dead => {
             if interrupted_at_nonempty {
                 Some(StopReason::Cancelled)
             } else {
                 Some(StopReason::Error)
             }
         }
-        _ => None,
+        RequestLifecycleState::WorkspaceBindingPending
+        | RequestLifecycleState::Pending
+        | RequestLifecycleState::Claimed
+        | RequestLifecycleState::Processing => None,
     }
 }
 
@@ -2403,33 +2411,33 @@ mod tests {
     #[test]
     fn stop_reason_projection_prefers_interrupted_lifecycle() {
         assert_eq!(
-            stop_reason_from_rows("interrupted", None),
+            stop_reason_from_rows(RequestLifecycleState::Interrupted, None),
             Some(StopReason::Cancelled)
         );
         assert_eq!(
-            stop_reason_from_rows("completed", None),
+            stop_reason_from_rows(RequestLifecycleState::Completed, None),
             Some(StopReason::EndTurn)
         );
         assert_eq!(
-            stop_reason_from_rows("failed", None),
+            stop_reason_from_rows(RequestLifecycleState::Failed, None),
             Some(StopReason::Error)
         );
-        assert_eq!(stop_reason_from_rows("processing", None), None);
+        assert_eq!(stop_reason_from_rows(RequestLifecycleState::Processing, None), None);
     }
 
     #[test]
     fn stop_reason_projection_maps_interrupted_at_marker() {
         assert_eq!(
-            stop_reason_from_rows("processing", Some("2026-01-01T00:00:00Z")),
+            stop_reason_from_rows(RequestLifecycleState::Processing, Some("2026-01-01T00:00:00Z")),
             None
         );
-        assert_eq!(stop_reason_from_rows("processing", Some("  ")), None);
+        assert_eq!(stop_reason_from_rows(RequestLifecycleState::Processing, Some("  ")), None);
         assert_eq!(
-            stop_reason_from_rows("superseded", Some("2026-01-01T00:00:00Z")),
+            stop_reason_from_rows(RequestLifecycleState::Superseded, Some("2026-01-01T00:00:00Z")),
             Some(StopReason::Cancelled)
         );
         assert_eq!(
-            stop_reason_from_rows("superseded", None),
+            stop_reason_from_rows(RequestLifecycleState::Superseded, None),
             Some(StopReason::Error)
         );
     }

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents::config_client::ConfigAccess;
 use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::session_origin::load_session;
@@ -79,11 +80,16 @@ impl SubagentFinishStatus {
     }
 
     fn of(request: &AgentRequestRow) -> Option<Self> {
-        match request.lifecycle_state.map(|state| state.as_str()) {
-            Some("completed") => Some(Self::Completed),
-            Some("interrupted") => Some(Self::Cancelled),
-            Some("failed" | "dead" | "superseded") => Some(Self::Failed),
-            _ => None,
+        match request.lifecycle_state? {
+            RequestLifecycleState::Completed => Some(Self::Completed),
+            RequestLifecycleState::Interrupted => Some(Self::Cancelled),
+            RequestLifecycleState::Failed
+            | RequestLifecycleState::Dead
+            | RequestLifecycleState::Superseded => Some(Self::Failed),
+            RequestLifecycleState::WorkspaceBindingPending
+            | RequestLifecycleState::Pending
+            | RequestLifecycleState::Claimed
+            | RequestLifecycleState::Processing => None,
         }
     }
 }
@@ -418,8 +424,10 @@ async fn snapshot(
     let status = SubagentFinishStatus::of(latest)
         .map(SubagentFinishStatus::wire_name)
         .unwrap_or_else(
-            || match latest.lifecycle_state.map(|state| state.as_str()) {
-                Some("pending" | "claimed") => "initializing",
+            || match latest.lifecycle_state {
+                Some(RequestLifecycleState::Pending | RequestLifecycleState::Claimed) => {
+                    "initializing"
+                }
                 _ => "running",
             },
         );

@@ -222,7 +222,7 @@ fn a_queued_message_the_runtime_ends_unclaimed_keeps_its_terminal_state() {
     assert!(matches!(
         snapshot.timeline_items.last(),
         Some(RenderedTimelineItem::PendingUserTurn { request_id, lifecycle_state, .. })
-            if request_id == "dropped" && lifecycle_state.as_deref() == Some("interrupted")
+            if request_id == "dropped" && *lifecycle_state == Some(RequestLifecycleState::Interrupted)
     ));
 }
 
@@ -351,6 +351,6 @@ fn a_selected_message_the_head_never_published_is_queued_again_not_delivered() {
     assert!(failed.timeline_items.iter().any(|item| matches!(
         item,
         RenderedTimelineItem::PendingUserTurn { request_id, lifecycle_state, folded_into_request_id: None, .. }
-            if request_id == "selected" && lifecycle_state.as_deref() == Some("pending")
+            if request_id == "selected" && *lifecycle_state == Some(RequestLifecycleState::Pending)
     )));
 }

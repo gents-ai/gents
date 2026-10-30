@@ -388,7 +388,7 @@ const queuedTurn = (requestId: string, content: string) => ({
   requestId,
   content,
   selectedSkillIds: [],
-  lifecycleState: "pending",
+  lifecycleState: "pending" as const,
   foldedIntoRequestId: null,
   origin: null,
   createdAt: "2026-10-07T12:00:00Z",

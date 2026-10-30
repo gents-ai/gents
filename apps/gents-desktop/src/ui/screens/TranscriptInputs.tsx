@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Bot, Clock, Play, Timer, Workflow, Zap } from "lucide-react";
 import type {
   RenderedTimelineItem,
+  RequestLifecycleState,
   RequestOriginView,
 } from "@source-inc/gents-desktop-client";
 import type { NodeView } from "../../hooks/fleetStore";
@@ -20,10 +21,10 @@ import { holdRow } from "@/lib/scroll";
 import { Markdown } from "./Markdown";
 
 export function pendingInputState(
-  lifecycleState: string | null | undefined,
+  lifecycleState: RequestLifecycleState | null | undefined,
   foldedIntoRequestId?: string | null,
 ): string | null {
-  if (foldedIntoRequestId) return null;
+  if (foldedIntoRequestId || !lifecycleState) return null;
   switch (lifecycleState) {
     case "interrupted":
       return "Not sent · interrupted";
@@ -31,7 +32,12 @@ export function pendingInputState(
       return "Not sent · failed";
     case "dead":
       return "Not sent · expired";
-    default:
+    case "workspaceBindingPending":
+    case "pending":
+    case "claimed":
+    case "processing":
+    case "completed":
+    case "superseded":
       return null;
   }
 }

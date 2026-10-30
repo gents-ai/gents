@@ -811,8 +811,8 @@ fn session_snapshot_binds_request_lifecycle_operator_ui_cases() {
         );
         if let Some(pending) = snapshot.pending_turn.as_ref() {
             assert_eq!(
-                pending.lifecycle_state.as_deref(),
-                Some(request_state_for_turn(Some(expected)).as_str()),
+                pending.lifecycle_state,
+                Some(request_state_for_turn(Some(expected))),
                 "{}",
                 case.name
             );
@@ -1280,7 +1280,7 @@ fn refused_latest_request_observation_keeps_the_failed_turn_reason_retry_and_pro
     let pending = snapshot.pending_turn.expect("refused prompt stays visible");
     assert_eq!(pending.request_id, "req-2");
     assert_eq!(pending.content, "run the disallowed skill");
-    assert_eq!(pending.lifecycle_state.as_deref(), Some("failed"));
+    assert_eq!(pending.lifecycle_state, Some(RequestLifecycleState::Failed));
     assert!(
         snapshot
             .timeline_items

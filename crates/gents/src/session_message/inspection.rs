@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::message::{AssistantContent, Message, UserContent};
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
@@ -178,7 +179,7 @@ fn decode_queued_input(row: &Value) -> Result<gents_protocol::request_input::Req
 }
 
 async fn queued_steering(txn: &ConfigApplyTxn<'_>, scope: &str) -> Result<Value> {
-    let response = txn.execute(&format!("{{AgentRequest(filter: {{{scope}, purpose: {{_eq: \"normal\"}}, lifecycle_state: {{_eq: \"pending\"}}}}, order: [{{created_at: ASC}}, {{request_id: ASC}}], limit: {}) {{request_id input created_at}}}}", STATUS_LIMIT + 1)).await?;
+    let response = txn.execute(&format!("{{AgentRequest(filter: {{{scope}, purpose: {{_eq: \"normal\"}}, lifecycle_state: {{_eq: \"{pending}\"}}}}, order: [{{created_at: ASC}}, {{request_id: ASC}}], limit: {}) {{request_id input created_at}}}}", STATUS_LIMIT + 1, pending = RequestLifecycleState::Pending.as_str())).await?;
     let pending = rows(&response, "AgentRequest")?;
     let mut queued = Vec::new();
     for row in pending.iter().take(STATUS_LIMIT) {

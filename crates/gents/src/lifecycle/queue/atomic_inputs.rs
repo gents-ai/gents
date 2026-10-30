@@ -371,7 +371,7 @@ async fn background_completion_transaction_attempt(
                     filter: {{
                         session_id: {{ _eq: "{escaped_session_id}" }},
                         node_did: {{ _eq: "{escaped_node_did}" }},
-                        lifecycle_state: {{ _eq: "pending" }}
+                        lifecycle_state: {{ _eq: "{pending}" }}
                     }},
                     order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
                 ) {{
@@ -387,7 +387,7 @@ async fn background_completion_transaction_attempt(
                     retry_key
                 }}
             }}"#,
-            crate::session::canonical_rows::AGENT_MESSAGE_FIELDS,
+            crate::session::canonical_rows::AGENT_MESSAGE_FIELDS, pending = RequestLifecycleState::Pending.as_str()
         ))
         .await?;
     let notifications = response["data"]["notification"]
@@ -581,7 +581,7 @@ async fn background_completion_transaction_attempt(
                         txn,
                         &parent.node_did,
                         &lower.request_id,
-                        "superseded",
+                        RequestLifecycleState::Superseded,
                         "raised to the hop of a later completion",
                         &now,
                     )

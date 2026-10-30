@@ -9,6 +9,7 @@ use gents::session_origin::{
 };
 use gents::toolset::is_session_message_tool;
 use gents_desktop_core::client::ClientCore;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 
@@ -162,7 +163,13 @@ async fn caused_calls(
     let state_of = states
         .iter()
         .filter_map(|row| Some((text(row, "_docID")?, row)))
-        .collect::<BTreeMap<_, _>>();
+        .map(|(doc_id, row)| {
+            let state = text(row, "lifecycle_state")
+                .map(|state| RequestLifecycleState::parse(&state))
+                .transpose()?;
+            Ok((doc_id, state))
+        })
+        .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
     let call_doc_ids = caused.keys().map(String::as_str).collect::<Vec<_>>();
     let mut calls = Vec::new();
     // Bounded lookups, never an empty list literal in a database operation.
@@ -194,7 +201,7 @@ async fn caused_calls(
         .flat_map(|(call, shown)| {
             let state_of = &state_of;
             shown.into_iter().filter_map(move |request| {
-                let state = state_of.get(&request.request_doc_id)?;
+                let lifecycle_state = *state_of.get(&request.request_doc_id)?;
                 Some(CausedCallView {
                     request_id: text(call, "request_id")?,
                     tool_call_id: text(call, "tool_call_id")?,
@@ -203,7 +210,7 @@ async fn caused_calls(
                         node_did: request.scope.node_did,
                         session_id: request.scope.session_id,
                         requester_did: request.scope.requester_did,
-                        lifecycle_state: text(state, "lifecycle_state"),
+                        lifecycle_state,
                         created_at: Some(request.created_at),
                     },
                 })

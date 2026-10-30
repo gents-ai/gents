@@ -786,7 +786,7 @@ async fn terminalize_execution_in_txn(
         txn,
         agent,
         &row.request_id,
-        effective_outcome.request_state().as_str(),
+        effective_outcome.request_state(),
         outcome_reason,
         &timestamp,
     )

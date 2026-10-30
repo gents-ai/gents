@@ -5,6 +5,7 @@ import type {
   DesktopOperationsSnapshot,
   LinkedSessionView,
   RenderedToolCallView,
+  RequestLifecycleState,
   SessionProvenanceView,
   SessionSummary,
 } from "@source-inc/gents-desktop-client";
@@ -18,6 +19,32 @@ export type Worker = {
   nodeDid: string;
   summary: SessionSummary | null;
   link: LinkedSessionView;
+};
+
+export type RequestPhase = "waiting" | "working" | "done" | "failed" | "stopped";
+
+export function requestPhase(state: RequestLifecycleState): RequestPhase {
+  switch (state) {
+    case "workspaceBindingPending":
+    case "pending":
+    case "claimed":
+      return "waiting";
+    case "processing":
+      return "working";
+    case "completed":
+      return "done";
+    case "failed":
+    case "dead":
+      return "failed";
+    case "interrupted":
+    case "superseded":
+      return "stopped";
+  }
+}
+
+export const requestIsLive = (state: RequestLifecycleState | null): boolean => {
+  const phase = state ? requestPhase(state) : null;
+  return phase === "waiting" || phase === "working";
 };
 
 export type Reached = {

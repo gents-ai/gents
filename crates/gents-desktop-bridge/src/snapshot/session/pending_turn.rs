@@ -83,9 +83,7 @@ pub(super) fn project_pending_turn(
     }
     let folded_into = gents::lifecycle::folded_into(request);
 
-    let lifecycle_state = request
-        .lifecycle_state
-        .map(|state| state.as_str().to_string());
+    let lifecycle_state = request.lifecycle_state;
     let content = normalize_optional(request.content.as_deref())
         .or_else(|| request_input.has_authored_input("").then(String::new))?;
     let owner = gents::lifecycle::input_message_owner(request);
