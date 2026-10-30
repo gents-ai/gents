@@ -196,14 +196,14 @@ pub(super) fn read_only_argument_denial(
     )
 }
 
-fn executable_name_lookup_key(raw: &str) -> Option<String> {
+pub(super) fn executable_name_lookup_key(raw: &str) -> Option<String> {
     Path::new(raw)
         .file_name()
         .and_then(|name| name.to_str())
         .map(str::to_string)
 }
 
-fn validate_network_mode(
+pub(super) fn validate_network_mode(
     command: &str,
     args: &[String],
     policy: &CommandExecutionPolicy,

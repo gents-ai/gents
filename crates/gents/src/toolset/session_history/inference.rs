@@ -78,7 +78,7 @@ pub(super) fn aggregate_inference_usage(rows: &[InferenceDetailRow]) -> Result<S
 
 pub(super) fn latest_context_from_detail_rows(
     rows: &[InferenceDetailRow],
-) -> Result<Option<super::context_budget::LastRequestContextSnapshot>> {
+) -> Result<Option<super::super::context_budget::LastRequestContextSnapshot>> {
     let Some(row) = rows
         .iter()
         .filter(|row| row.call_kind.as_deref() == Some("inference"))
@@ -97,7 +97,7 @@ pub(super) fn latest_context_from_detail_rows(
         return Ok(None);
     };
     let encoded = row.context_accounting_json.as_deref().unwrap_or_default();
-    Ok(Some(super::context_budget::LastRequestContextSnapshot {
+    Ok(Some(super::super::context_budget::LastRequestContextSnapshot {
         request_id: row.request_id.clone(),
         call_id: row.call_id.clone(),
         call_sequence: row.call_seq,

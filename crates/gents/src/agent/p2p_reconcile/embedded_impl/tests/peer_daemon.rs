@@ -1,7 +1,7 @@
 use super::*;
 
 #[derive(Clone)]
-struct CountingReplyModel(Arc<AtomicUsize>);
+pub(super) struct CountingReplyModel(Arc<AtomicUsize>);
 
 #[allow(refining_impl_trait)]
 impl CompletionModel for CountingReplyModel {
@@ -77,7 +77,7 @@ pub(super) fn test_agent(identity: Arc<dyn NodeIdentity>) -> Arc<ResolvedAgent> 
 pub(super) fn behavior_daemon(
     node: Arc<EmbeddedNode>,
     behavior: Arc<ResolvedAgent>,
-    authority: super::super::EnrollmentAuthorityHandle,
+    authority: crate::agent::p2p_reconcile::EnrollmentAuthorityHandle,
     calls: Arc<AtomicUsize>,
 ) -> AgentDaemon<CountingReplyModel> {
     let prompt_builder = LayeredPromptBuilder::for_agent(

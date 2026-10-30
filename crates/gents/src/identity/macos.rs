@@ -6,7 +6,7 @@ use defra_core::signing::RemoteSigner;
 #[cfg(target_os = "macos")]
 use defra_core::signing::{SigningConfig, SigningKeyType};
 #[cfg(target_os = "macos")]
-use identity::{FullIdentity as _, Identity as _, RawIdentity};
+use identity::{Identity as _, RawIdentity};
 
 #[cfg(target_os = "macos")]
 use super::{lowercase_hex, IdentityKeyUnavailable};

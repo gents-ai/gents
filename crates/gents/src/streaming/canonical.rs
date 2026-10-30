@@ -8,17 +8,18 @@ mod close;
 mod publish;
 mod source;
 
-pub(crate) use append::{append_in_txn, append_provider_segment};
+pub(crate) use append::append_provider_segment;
 #[cfg(test)]
-pub(crate) use append::{append_in_txn_at, append_provider_segment_at};
-pub(crate) use close::{close_provider_attempt, close_provider_attempt_at};
+pub(crate) use append::append_provider_segment_at;
+pub(crate) use close::close_provider_attempt;
+#[cfg(test)]
+pub(crate) use close::close_provider_attempt_at;
 pub(crate) use publish::publish_provider_turn;
 #[cfg(test)]
 pub(crate) use publish::publish_provider_turn_at;
 pub(super) use publish::publish_provider_turn_with_time;
 pub(crate) use source::{
-    retained_partial_blocks, validate_closed_source_extent, validate_source_physical_identities,
-    validate_source_purpose,
+    retained_partial_blocks, validate_closed_source_extent, validate_source_purpose,
 };
 
 pub(crate) struct ProviderPublicationPlan {

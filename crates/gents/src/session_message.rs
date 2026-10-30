@@ -1,14 +1,21 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
+#[cfg(test)]
 use defra_node::EmbeddedNode;
+#[cfg(test)]
+use std::sync::Arc;
+#[cfg(test)]
+use crate::config_client::ConfigAccess;
+#[cfg(test)]
+use crate::graphql::escape_graphql_string;
+#[cfg(test)]
+use crate::lifecycle::{SessionMessageCause, SessionMessageTarget};
+#[cfg(test)]
+use crate::session_origin::SessionScope;
+#[cfg(test)]
+use crate::tool_surface::AgentToolConfig;
 use serde::Deserialize;
 
-use std::sync::Arc;
 
-use crate::config_client::ConfigAccess;
-use crate::graphql::escape_graphql_string;
-use crate::lifecycle::{SessionMessageCause, SessionMessageTarget};
-use crate::session_origin::SessionScope;
-use crate::tool_surface::AgentToolConfig;
 
 #[cfg(test)]
 mod agent_tools_tests;
@@ -30,10 +37,12 @@ mod target;
 
 pub(crate) use body::{load_configured_task, render_body, render_task_body};
 pub(crate) use caused::{
-    kill, kill_caused_request, observe_caused_request, CausedObservation, KillOutcome,
+    kill, observe_caused_request, CausedObservation, KillOutcome,
 };
+#[cfg(test)]
+pub(crate) use commit::load_receipt;
 pub(crate) use commit::{
-    commit, load_receipt, stage_planned_write_in_txn, CommitError, SessionMessageReceipt,
+    commit, stage_planned_write_in_txn, CommitError, SessionMessageReceipt,
 };
 pub(crate) use discovery::{agent_session_list, AgentSessionListArgs};
 pub(crate) use inspection::{agent_session_read, AgentSessionReadArgs};

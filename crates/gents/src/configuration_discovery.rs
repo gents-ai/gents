@@ -19,7 +19,6 @@ mod text;
 
 use inventory::*;
 use paths::*;
-use skills::*;
 use text::*;
 
 pub const DISCOVERY_SCHEMA_VERSION: u32 = 1;

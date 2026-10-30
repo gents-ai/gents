@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{Barrier, Notify, Semaphore};
 
 use super::*;
+use crate::agent::ProcessLifecycleObserver;
 
 #[derive(Default)]
 struct RecordingObserver {

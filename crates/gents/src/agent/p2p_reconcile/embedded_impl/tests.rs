@@ -39,7 +39,7 @@ use crate::llm::tool::ToolDyn;
 use crate::prompt::LayeredPromptBuilder;
 use crate::tool_surface::AgentToolSurfaceConfig;
 use fixtures::{
-    collection_id, runtime_http_test_node, runtime_test_node_with_identity, wait_for_active_peer,
+    runtime_http_test_node, runtime_test_node_with_identity, wait_for_active_peer,
     wait_for_peer_info, wait_for_value,
 };
 use gents_protocol::enrollment::{

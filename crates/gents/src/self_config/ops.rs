@@ -1,24 +1,18 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
-use gents_protocol::job::PluginJobSettings;
 use identity::Did;
 use serde_json::{json, Map, Value};
 
-use crate::backend_provider::BackendProviderOauthExt;
 use crate::config_client::patch::{
-    apply_patch, diff_docs, ensure_admissible, FieldDelta, SelfConfigPatch, SelfConfigTarget,
+    apply_patch, ensure_admissible, FieldDelta, SelfConfigTarget,
 };
 use crate::config_client::{
-    apply_desired_state_plan, read_desired_state_record_in_txn, validate_desired_state_plan,
-    DesiredStateApplyDocument, DesiredStateApplyPlan,
+    apply_desired_state_plan, validate_desired_state_plan,
 };
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::document_config::{BackendAuth, IntegrationTools, SelfConfigTools, Tools};
 use crate::tool_surface::SelfConfigProcessCeiling;
-use crate::toolset::CommandNetworkMode;
 
 mod documents;
 mod grants;

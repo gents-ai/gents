@@ -96,18 +96,18 @@ async fn embedded_all_builtin_template_filters_pass_replicator_validation() {
     wait_for_active_peer(&local_admin).await;
     wait_for_active_peer(&remote_admin).await;
 
-    for template in super::super::templates::builtin_templates() {
+    for template in crate::agent::p2p_reconcile::templates::builtin_templates() {
         if template.collections.is_empty() {
             continue;
         }
         let filters = match &template.scope {
-            Scope::ClientRoute => super::super::policy::resolve_template_filters(
+            Scope::ClientRoute => crate::agent::p2p_reconcile::policy::resolve_template_filters(
                 template,
-                super::super::policy::PairingDirection::ClientToRuntime,
+                crate::agent::p2p_reconcile::policy::PairingDirection::ClientToRuntime,
                 "did:key:z6MkPeerForFilterValidation",
                 "did:key:z6MkSelfForFilterValidation",
             ),
-            _ => super::super::templates::scope_filter(
+            _ => crate::agent::p2p_reconcile::templates::scope_filter(
                 &template.scope,
                 template.collections,
                 "did:key:z6MkPeerForFilterValidation",

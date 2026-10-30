@@ -19,7 +19,7 @@ pub struct ProbeCycleOutcome {
 
 #[derive(Default)]
 pub(super) struct ProbeSchedule {
-    known: RapidHashMap<String, InferenceBackend>,
+    pub(super) known: RapidHashMap<String, InferenceBackend>,
 }
 
 impl ProbeSchedule {

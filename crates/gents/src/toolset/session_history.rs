@@ -9,6 +9,9 @@ pub use context_details::{load_session_context_details, SessionContextDetails};
 mod inference;
 mod investigation;
 pub use investigation::load_session_investigation;
+use investigation::{
+    AgentDetailRow, CompactionConfigDetailRow, ContextDetailRow, ProfileDetailRow, ToolCallDetailRow,
+};
 mod observation;
 pub use observation::{
     load_pinned_request_context_observation, load_request_context_observation,

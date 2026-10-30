@@ -2,7 +2,9 @@ use super::observe::{classify_message_error, lookup_observed, source_denied};
 use super::{loading_or_settling, LiveObservation, LiveView};
 use crate::output::origin::{self, ObservedMessage};
 use crate::output::reconstruction::{self, ObservedSegment};
-use crate::output::{MessagePublication, PayloadRef, SourceClose, TranscriptMessage};
+use crate::output::{
+    MessagePublication, PayloadRef, ReconstructionError, SourceClose, TranscriptMessage,
+};
 
 fn referenced_target_close<'a>(
     observation: &LiveObservation<'a>,
