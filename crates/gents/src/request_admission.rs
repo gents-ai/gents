@@ -258,7 +258,7 @@ pub(crate) async fn terminalize_pending_request_rejection(
                     for row in rows {
                         crate::workspace::release_terminal_writer_binding(txn, row).await?;
                         if let Some(request_id) = row["request_id"].as_str() {
-                            crate::trigger_engine::durable::publish_request_outcome(
+                            crate::triggers::engine::durable::publish_request_outcome(
                                 txn, owner, request_id, RequestLifecycleState::Failed, reason, now,
                             )
                             .await?;

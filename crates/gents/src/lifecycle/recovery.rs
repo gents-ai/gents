@@ -25,7 +25,7 @@ impl RequestLifecycle {
         node_did: &str,
     ) -> Result<RecoveryReport> {
         let active = recover_active_requests(node, node_did).await?;
-        crate::trigger_engine::durable::recover_outcomes(node, node_did).await?;
+        crate::triggers::engine::durable::recover_outcomes(node, node_did).await?;
         let background_wakes_redriven = Self::redrive_failed_background_wakeups(node, node_did)
             .await?
             .redriven;

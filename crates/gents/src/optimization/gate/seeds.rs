@@ -55,7 +55,7 @@ fn failed_seeds(
                         "state_doc_id": identity,
                         "correlation_value": correlation,
                         "count": docs.len(),
-                        "complete": crate::trigger_engine::event_delivery::expected_group_count(
+                        "complete": crate::triggers::engine::event_delivery::expected_group_count(
                             group.expected_count.as_ref(), &docs
                         ).ok().flatten() == Some(docs.len()),
                         "docs": docs,

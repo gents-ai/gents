@@ -2180,7 +2180,10 @@ pub(crate) mod tests {
             .collect();
         assert!(secret.is_empty(), "{secret:?}");
         let value = serde_json::to_value(&input).unwrap();
-        assert_eq!(crate::callback::strip_secret_fields(value.clone()), value);
+        assert_eq!(
+            crate::triggers::callback::strip_secret_fields(value.clone()),
+            value
+        );
     }
 
     #[tokio::test]

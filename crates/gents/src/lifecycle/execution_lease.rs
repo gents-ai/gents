@@ -782,7 +782,7 @@ async fn terminalize_execution_in_txn(
         )
         .await?;
     }
-    crate::trigger_engine::durable::publish_request_outcome(
+    crate::triggers::engine::durable::publish_request_outcome(
         txn,
         agent,
         &row.request_id,

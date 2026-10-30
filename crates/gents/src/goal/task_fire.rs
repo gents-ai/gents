@@ -196,7 +196,7 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
             goal.parsed_status().is_some(),
             "existing Task Goal has an unknown status"
         );
-        crate::trigger_engine::durable::publish_goal_outcomes(
+        crate::triggers::engine::durable::publish_goal_outcomes(
             txn,
             &goal.node_did,
             &goal.goal_id,
@@ -282,7 +282,7 @@ pub(crate) async fn apply_claimed_task_goal_in_txn(
         input: {{goal_assignment_applied: true}}) {{_docID}} }}"#
     ))
     .await?;
-    crate::trigger_engine::durable::publish_goal_outcomes(
+    crate::triggers::engine::durable::publish_goal_outcomes(
         txn,
         &updated.node_did,
         &updated.goal_id,

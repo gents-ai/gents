@@ -473,7 +473,7 @@ async fn run_agent_owned(
     let trigger_engine_cancel = cancel.child_token();
     let trigger_engine_startup_barrier = startup_barrier.clone();
     let (manual_source, manual_trigger_handle) =
-        crate::trigger_engine::manual_source::ManualSource::new(trigger_engine_cancel.clone());
+        crate::triggers::engine::manual_source::ManualSource::new(trigger_engine_cancel.clone());
     let _ = agent.manual_trigger_handle.set(manual_trigger_handle);
     let trigger_engine_node_did = agent.node_did().to_string();
     let trigger_engine_runtime_observer = agent.runtime_snapshot_observer.clone();
@@ -482,7 +482,7 @@ async fn run_agent_owned(
             _ = trigger_engine_cancel.cancelled() => return,
             _ = trigger_engine_startup_barrier.wait_ready() => {}
         }
-        match crate::trigger_engine::production_materializer::recover_workspace_binding_pending_requests(
+        match crate::triggers::engine::production_materializer::recover_workspace_binding_pending_requests(
             &trigger_engine_node,
             &trigger_engine_node_did,
         )
@@ -495,41 +495,42 @@ async fn run_agent_owned(
             Ok(_) => {}
             Err(error) => tracing::warn!(%error, "workspace binding recovery sweep failed"),
         }
-        let materializer: Arc<dyn crate::trigger_engine::MaterializerHandle> = Arc::new(
-            crate::trigger_engine::production_materializer::ProductionMaterializer::new(
+        let materializer: Arc<dyn crate::triggers::engine::MaterializerHandle> = Arc::new(
+            crate::triggers::engine::production_materializer::ProductionMaterializer::new(
                 trigger_engine_node.clone(),
                 trigger_engine_materializer_snapshot_rx,
             ),
         );
-        let schedule_source: Box<dyn crate::trigger_engine::TriggerSource> =
-            Box::new(crate::trigger_engine::schedule_source::ScheduleSource::new(
+        let schedule_source: Box<dyn crate::triggers::engine::TriggerSource> = Box::new(
+            crate::triggers::engine::schedule_source::ScheduleSource::new(
                 trigger_engine_schedule_snapshot_rx,
                 trigger_engine_node.clone(),
                 trigger_engine_cancel.clone(),
-            ));
-        let event_source: Box<dyn crate::trigger_engine::TriggerSource> = Box::new(
-            crate::trigger_engine::event_source::EventSource::new(
+            ),
+        );
+        let event_source: Box<dyn crate::triggers::engine::TriggerSource> = Box::new(
+            crate::triggers::engine::event_source::EventSource::new(
                 trigger_engine_event_snapshot_rx,
                 trigger_engine_node.clone(),
                 trigger_engine_cancel.clone(),
             )
             .with_runtime_observer(trigger_engine_runtime_observer),
         );
-        let goal_source: Box<dyn crate::trigger_engine::TriggerSource> =
-            Box::new(crate::trigger_engine::goal_source::GoalSource::new(
+        let goal_source: Box<dyn crate::triggers::engine::TriggerSource> =
+            Box::new(crate::triggers::engine::goal_source::GoalSource::new(
                 trigger_engine_goal_snapshot_rx,
                 trigger_engine_node.clone(),
                 trigger_engine_cancel.clone(),
             ));
-        let manual_source_box: Box<dyn crate::trigger_engine::TriggerSource> =
+        let manual_source_box: Box<dyn crate::triggers::engine::TriggerSource> =
             Box::new(manual_source);
-        let sources: Vec<Box<dyn crate::trigger_engine::TriggerSource>> = vec![
+        let sources: Vec<Box<dyn crate::triggers::engine::TriggerSource>> = vec![
             schedule_source,
             event_source,
             goal_source,
             manual_source_box,
         ];
-        let engine = crate::trigger_engine::TriggerEngine::new(
+        let engine = crate::triggers::engine::TriggerEngine::new(
             trigger_engine_engine_snapshot_rx,
             materializer,
         );
@@ -551,7 +552,7 @@ async fn run_agent_owned(
             _ = callback_cancel.cancelled() => return,
             _ = callback_startup_barrier.wait_ready() => {}
         }
-        if let Err(error) = crate::callback::run_callback_engine(
+        if let Err(error) = crate::triggers::callback::run_callback_engine(
             callback_node,
             callback_node_did,
             callback_ceiling,

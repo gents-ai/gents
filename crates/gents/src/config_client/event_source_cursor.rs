@@ -124,11 +124,11 @@ async fn event_binding(
 
 fn cursor_key(owner: &str, consumer: &EventConsumer, collection: &str) -> String {
     match consumer {
-        EventConsumer::Trigger { trigger_id } => crate::trigger_engine::durable_fire_key(
+        EventConsumer::Trigger { trigger_id } => crate::triggers::engine::durable_fire_key(
             "arrival-cursor",
             &[owner, trigger_id, collection],
         ),
-        EventConsumer::CallbackBinding { binding_id } => crate::trigger_engine::durable_fire_key(
+        EventConsumer::CallbackBinding { binding_id } => crate::triggers::engine::durable_fire_key(
             "callback-arrival-cursor",
             &[owner, binding_id, collection],
         ),
@@ -205,7 +205,7 @@ pub(crate) async fn validate_event_admission(
         trigger_binding(txn, &fire.identity.owner_did, &fire.identity.trigger_id).await?;
     anyhow::ensure!(trigger.enabled, "event trigger is disabled");
     anyhow::ensure!(
-        crate::trigger_engine::durable::outcome_source_allowed(
+        crate::triggers::engine::durable::outcome_source_allowed(
             &source.source_collection,
             fire.emit_outcome,
         ),
@@ -422,7 +422,7 @@ pub(crate) async fn checkpoint_prefix(
             if !enabled {
                 return Ok(false);
             }
-            let filter = crate::trigger_engine::event_delivery::selection_filter(
+            let filter = crate::triggers::engine::event_delivery::selection_filter(
                 source.filter.as_deref(),
                 Some(("_docID", doc_id)),
             )?;
@@ -517,7 +517,8 @@ async fn admitted_callback_arrival(
     source_collection: &str,
     source_doc_id: &str,
 ) -> Result<bool> {
-    let key = crate::callback::idempotency_key(binding_id, source_collection, source_doc_id);
+    let key =
+        crate::triggers::callback::idempotency_key(binding_id, source_collection, source_doc_id);
     let response = txn
         .execute(&format!(
             "{{ CallbackInvocation(filter: {{owner_node_did: {{_eq: \"{}\"}}, idempotency_key: {{_eq: \"{}\"}}}}, limit: 2) {{ origin }} }}",

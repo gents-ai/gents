@@ -22,7 +22,7 @@ pub(crate) use execution_renewal::{renew_in_transaction, RenewalAttemptOutcome};
 mod terminal_binding;
 pub(crate) use terminal_binding::is_exact_invocation_reply;
 mod terminal_tools;
-pub use crate::trigger_engine::durable::request_arrival_order;
+pub use crate::triggers::engine::durable::request_arrival_order;
 #[cfg(test)]
 pub(crate) use execution_lease::revoke_execution_preserving_output_at;
 #[cfg(test)]

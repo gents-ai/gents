@@ -5,8 +5,8 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 
-use crate::event_delivery_contract::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
 use crate::tool_call_lifecycle::IllegalToolCallTransition;
+use crate::triggers::event_delivery::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
 use crate::UpdateSubscriptionSource;
 
 mod cooldown;

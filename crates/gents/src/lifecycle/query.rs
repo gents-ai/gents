@@ -196,12 +196,12 @@ pub(super) async fn claim_queue_allows(
     else {
         return Ok(false);
     };
-    observations.retain(|row| crate::trigger_engine::durable::claim_conflict(&candidate, row));
+    observations.retain(|row| crate::triggers::engine::durable::claim_conflict(&candidate, row));
     let doc_ids = observations
         .iter()
         .map(|row| row.document.clone())
         .collect::<Vec<_>>();
-    let order = crate::trigger_engine::durable::request_arrival_order(txn, &doc_ids).await?;
+    let order = crate::triggers::engine::durable::request_arrival_order(txn, &doc_ids).await?;
     let positions = order
         .iter()
         .enumerate()
@@ -214,7 +214,7 @@ pub(super) async fn claim_queue_allows(
         .iter()
         .find(|row| row.document == request.doc_id)
         .unwrap();
-    Ok(crate::trigger_engine::durable::observed_claim_allowed(
+    Ok(crate::triggers::engine::durable::observed_claim_allowed(
         candidate,
         &observations,
     ))
@@ -264,8 +264,8 @@ fn claim_observation(
     row: &AgentRequestRow,
     owner: &str,
     receipt: Option<&QueueReceipt>,
-) -> crate::trigger_engine::durable::ClaimObservation {
-    crate::trigger_engine::durable::ClaimObservation {
+) -> crate::triggers::engine::durable::ClaimObservation {
+    crate::triggers::engine::durable::ClaimObservation {
         document: row.doc_id.clone().unwrap_or_default(),
         owner: owner.to_owned(),
         session: row.session_id.clone().unwrap_or_default(),
