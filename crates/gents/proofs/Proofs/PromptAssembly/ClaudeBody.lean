@@ -379,4 +379,22 @@ theorem rowIndex_le_length (isUser : List Bool) (k : Nat) (h : rowIndex isUser =
       simp
       omega
 
+/-- `claude-sonnet-5` on a first-party request: adaptive, not always thinking, no
+temperature, effort `high` by default, no per-turn control. The Rust catalog
+consumer derives the same facts from the model's catalog entry. -/
+def sonnet5 : ModelFacts :=
+  { adaptive := true, alwaysThinks := false, thinkingSupported := true
+    rejectsDisabled := false, acceptsTemperature := false, effortCapable := true
+    maxEffort := true, xhighEffort := true, capsEffortWhenDisabled := false
+    perTurnEffort := false, outputDefault := 64000, outputUpper := 128000
+    defaultEffort := some "high" }
+
+/-- A turn of an interactive first-party session on a model with the context-management
+beta and display updates, asking for `requested` effort. -/
+def interactiveTurn (requested : Option String) : Request :=
+  { thinking := .adaptive, maxTokensOverride := none, requestedEffort := requested
+    firstParty := true, firstPartyDefaultUrl := true, experimentalBetasDisabled := false
+    agentic := true, fork := false, displayUpdates := true
+    contextManagementBeta := true, perTurnControlBeta := false, previousMessageId := none }
+
 end PromptAssembly.ClaudeBody

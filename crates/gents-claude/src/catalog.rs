@@ -226,7 +226,7 @@ pub fn find(id: &str) -> Option<&'static Model> {
 }
 
 /// Strips a trailing `[1m]`, case-insensitively.
-fn strip_1m_suffix(id: &str) -> &str {
+pub fn strip_1m_suffix(id: &str) -> &str {
     id.len()
         .checked_sub(SUFFIX_1M.len())
         .and_then(|cut| {

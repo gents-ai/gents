@@ -24,13 +24,20 @@ use crate::oauth_credential::BearerSource;
 use crate::rendered_request::RenderedRequestCapturingHttpClient;
 use gents_loop::provider_audit::{ClaudeAuditEvent, ClaudeBlockKind, ProviderAuditSender};
 
-pub const MESSAGES_URI: &str = "https://api.anthropic.com/v1/messages";
-pub(crate) const ANTHROPIC_VERSION: &str = "2023-06-01";
-pub(crate) const OAUTH_BETA: &str = "oauth-2025-04-20";
+use gents_claude::headers::{self, AgentHeaders, Auth, HeaderContext};
+use gents_claude::profile;
+use gents_claude::wire;
+use gents_loop::claude_messages_body::{plan_claude_request, ClaudeAccountContext};
+
+/// The Messages endpoint of Claude Code's first-party API, with the beta route every call uses.
+/// It is also the replay issuer's destination, so one const names both.
+pub const MESSAGES_URI: &str = "https://api.anthropic.com/v1/messages?beta=true";
+pub(crate) const ANTHROPIC_VERSION: &str = profile::ANTHROPIC_VERSION;
+pub(crate) const OAUTH_BETA: &str = gents_claude::betas::OAUTH;
 
 pub use gents_loop::claude_messages_body::{
-    apply_reasoning_parameters, build_messages_body, build_messages_body_native,
-    ADVERTISED_REASONING_EFFORTS_PARAM, CLAUDE_CODE_IDENTITY, SESSION_KEY_PARAM,
+    build_messages_body, ADVERTISED_REASONING_EFFORTS_PARAM, CLAUDE_CODE_IDENTITY,
+    SESSION_KEY_PARAM,
 };
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -328,6 +335,13 @@ impl MessagesSseState {
         };
         match kind {
             "message_start" => {
+                if let Some(id) = payload
+                    .get("message")
+                    .and_then(|message| message.get("id"))
+                    .and_then(Value::as_str)
+                {
+                    events.push(RawStreamingChoice::MessageId(id.to_owned()));
+                }
                 if let Some(usage) = payload
                     .get("message")
                     .and_then(|message| message.get("usage"))
@@ -949,6 +963,7 @@ async fn push_line_observed(
 pub async fn stream_messages<S>(
     model: &str,
     request: &CompletionRequest,
+    account: &ClaudeAccountContext,
     surface: RapidHashSet<String>,
     bearer: &S,
     http: &ReqwestClient,
@@ -960,7 +975,17 @@ pub async fn stream_messages<S>(
 where
     S: BearerSource,
 {
-    stream_messages_at(MESSAGES_URI, model, request, surface, bearer, http, usage).await
+    stream_messages_at(
+        MESSAGES_URI,
+        model,
+        request,
+        account,
+        surface,
+        bearer,
+        http,
+        usage,
+    )
+    .await
 }
 
 /// A failed open of a Messages stream; `rejected` is set when the provider answered with a non-success status.
@@ -978,10 +1003,12 @@ impl From<CompletionError> for MessagesOpenError {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn stream_messages_at<S>(
     uri: &str,
     model: &str,
     request: &CompletionRequest,
+    account: &ClaudeAccountContext,
     surface: RapidHashSet<String>,
     bearer: &S,
     http: &ReqwestClient,
@@ -993,15 +1020,20 @@ pub(crate) async fn stream_messages_at<S>(
 where
     S: BearerSource,
 {
-    open_messages_at(uri, model, request, surface, bearer, http, usage)
+    open_messages_at(uri, model, request, account, surface, bearer, http, usage)
         .await
         .map_err(|failure| failure.error)
 }
 
+/// Sends the planned request as Claude Code 2.1.311 would: the typed body bytes and the
+/// header set in Claude Code's insertion order. The HTTP client below still decides the
+/// wire casing and on-the-wire order; the `gents_claude` transport takes that over later.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn open_messages_at<S>(
     uri: &str,
     model: &str,
     request: &CompletionRequest,
+    account: &ClaudeAccountContext,
     surface: RapidHashSet<String>,
     bearer: &S,
     http: &ReqwestClient,
@@ -1013,13 +1045,13 @@ pub(crate) async fn open_messages_at<S>(
 where
     S: BearerSource,
 {
-    let body = build_messages_body(model, request).map_err(|error| {
+    let plan = plan_claude_request(model, request, account).map_err(|error| {
         CompletionError::RequestError(Box::new(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!("Claude Messages body: {error:#}"),
         )))
     })?;
-    let body_bytes = serde_json::to_vec(&body).map_err(|error| {
+    let body_bytes = wire::to_bytes(&plan.body).map_err(|error| {
         CompletionError::RequestError(Box::new(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             format!("encode Claude Messages body: {error}"),
@@ -1032,27 +1064,56 @@ where
     #[cfg(not(test))]
     let fixture: Option<String> = None;
 
-    let mut builder = Request::builder()
-        .method("POST")
-        .uri(uri)
-        .header("content-type", "application/json")
-        .header("anthropic-version", ANTHROPIC_VERSION);
-    if bearer.is_oauth() {
-        builder = builder.header("anthropic-beta", OAUTH_BETA);
+    let token = if fixture.is_none() {
+        bearer.current_bearer().await.map_err(|error| {
+            CompletionError::ProviderError(format!("Claude Messages bearer: {error}"))
+        })?
+    } else {
+        String::new()
+    };
+    let (platform, arch) = headers::host_platform();
+    let (os, arch) = (headers::platform_os(platform), headers::platform_arch(arch));
+    let client_request_id = uuid::Uuid::new_v4().to_string();
+    let header_context = HeaderContext {
+        entrypoint: plan.mode.entrypoint,
+        agent_sdk_version: None,
+        client_app: None,
+        workload: plan.mode.workload,
+        background: plan.mode.background,
+        session_id: &plan.session_id,
+        os: &os,
+        arch: &arch,
+        auth: if account.api_key {
+            Auth::ApiKey(&token)
+        } else {
+            Auth::Bearer(&token)
+        },
+        first_party_base_url: true,
+        agent: plan.agent.as_ref().map(|agent| AgentHeaders {
+            agent_id: &agent.agent_id,
+            parent_agent_id: agent.parent_agent_id.as_deref(),
+        }),
+        // Every Gents agent is operator-defined, which Claude Code types as a custom agent.
+        agent_type: plan.agent.as_ref().map(|_| headers::CUSTOM_AGENT_TYPE),
+        request_class: plan.mode.request_class,
+        prompt_id: Some(&plan.prompt_id),
+        betas: &plan.betas,
+        client_request_id: &client_request_id,
+        retry_count: 0,
+        timeout_ms: profile::REQUEST_TIMEOUT_MS,
+    };
+    let mut builder = Request::builder().method("POST").uri(uri);
+    for (name, header) in headers::request_headers(&header_context) {
+        let mut value = HeaderValue::from_str(&header.value).map_err(|error| {
+            CompletionError::ProviderError(format!("Claude Messages header {name}: {error}"))
+        })?;
+        value.set_sensitive(header.sensitive);
+        builder = builder.header(name, value);
     }
     if fixture.is_none() {
-        let token = bearer.current_bearer().await.map_err(|error| {
-            CompletionError::ProviderError(format!("Claude Messages bearer: {error}"))
-        })?;
-        let mut authorization =
-            HeaderValue::from_str(&format!("Bearer {token}")).map_err(|error| {
-                CompletionError::ProviderError(format!("Claude Messages auth header: {error}"))
-            })?;
-        authorization.set_sensitive(true);
-        builder = builder.header("authorization", authorization);
         tracing::info!(
             model = %model,
-            oauth = bearer.is_oauth(),
+            oauth = account.subscriber,
             "live Claude Messages HTTP send"
         );
     }

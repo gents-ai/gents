@@ -7,10 +7,13 @@ use gents_loop::provider_input::ProviderInputProfile;
 
 use rapidhash::{HashSetExt, RapidHashSet};
 
-use gents::claude_messages::{
-    build_messages_body_native, parse_messages_sse, parse_messages_sse_typed, CLAUDE_CODE_IDENTITY,
-};
+use gents::claude_messages::{parse_messages_sse, parse_messages_sse_typed};
 use gents::claude_subscription::ClaudeStreamResponse;
+use gents_claude::body::{Effort, ModelFacts};
+use gents_claude::{attribution, catalog, profile};
+use gents_loop::claude_messages_body::{
+    plan_with_ids, ClaudeAccountContext, ClaudeRequestContext, ClaudeRequestIds, MessagesBodyError,
+};
 use rig::completion::CompletionError;
 use rig::streaming::RawStreamingChoice;
 
@@ -1274,7 +1277,39 @@ fn replay_codec_outcome(
         Error::MissingSignature => "missingSignature",
         Error::EmptyRedacted => "malformedRedacted",
         Error::UnsupportedReasoning => "unsupportedReasoning",
+        Error::UnencodableToolInput => "unencodableToolInput",
     }
+}
+
+fn claude_request(
+    preamble: Option<&str>,
+    history: &[Message],
+    tools: Vec<rig::completion::ToolDefinition>,
+) -> rig::completion::CompletionRequest {
+    rig::completion::CompletionRequest {
+        model: None,
+        preamble: preamble.map(str::to_string),
+        chat_history: rig::OneOrMany::many(gents::llm::rig_compat::to_rig_messages(history))
+            .expect("at least one history row"),
+        documents: Vec::new(),
+        tools,
+        temperature: None,
+        max_tokens: Some(128),
+        tool_choice: None,
+        additional_params: None,
+        output_schema: None,
+    }
+}
+
+/// The body of an assistant-only history, as the replay cases drive it.
+fn native_messages_body(history: &[Message]) -> Result<serde_json::Value, MessagesBodyError> {
+    if history.is_empty() {
+        return Ok(serde_json::json!({"messages": []}));
+    }
+    gents::claude_messages::build_messages_body(
+        "claude-sonnet-5",
+        &claude_request(None, history, Vec::new()),
+    )
 }
 
 fn replay_checkpoint_outcome(
@@ -1471,9 +1506,8 @@ fn generated_claude_checkpoint_cases_bind_selected_assistant_projection() {
                         content: row.content.clone(),
                     })
                     .collect::<Vec<_>>();
-                let body =
-                    build_messages_body_native("claude-sonnet-5", None, Some(128), &native, &[])
-                        .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+                let body = native_messages_body(&native)
+                    .unwrap_or_else(|error| panic!("{}: {error}", case.name));
                 let actual = body["messages"]
                     .as_array()
                     .expect("messages")
@@ -1509,9 +1543,11 @@ fn generated_claude_replay_cases_drive_native_messages_body() {
     for case in cases {
         let content = native_claude_replay_content(&case.blocks);
         let history = [Message::Assistant { id: None, content }];
-        let result = build_messages_body_native("claude-sonnet-5", None, Some(128), &history, &[]);
+        let result = native_messages_body(&history);
         if case.outcome != "ok" {
-            let error = result.expect_err("modeled unsupported replay must fail closed");
+            let Err(MessagesBodyError::Codec(error)) = result else {
+                panic!("modeled unsupported replay must fail closed: {}", case.name);
+            };
             assert_eq!(replay_codec_outcome(&error), case.outcome, "{}", case.name);
             continue;
         }
@@ -1544,6 +1580,27 @@ fn generated_claude_replay_cases_drive_native_messages_body() {
     }
 }
 
+fn lean_facts(facts: &crate::lean_vocab_test::LeanPromptAssemblyClaudeFieldFacts) -> ModelFacts {
+    ModelFacts {
+        adaptive: facts.adaptive,
+        always_thinks: facts.always_thinks,
+        thinking_supported: facts.thinking_supported,
+        rejects_disabled: facts.rejects_disabled,
+        accepts_temperature: facts.accepts_temperature,
+        effort_capable: facts.effort_capable,
+        max_effort: facts.max_effort,
+        xhigh_effort: facts.xhigh_effort,
+        caps_effort_when_disabled: facts.caps_effort_when_disabled,
+        per_turn_effort: facts.per_turn_effort,
+        output_default: facts.output_default,
+        output_upper: facts.output_upper,
+        default_effort: facts
+            .default_effort
+            .as_deref()
+            .map(|name| Effort::parse(name).expect("a Lean effort name")),
+    }
+}
+
 #[test]
 fn generated_claude_body_cases_drive_the_body_builder() {
     let cases = lean_prompt_assembly_claude_body_cases();
@@ -1551,6 +1608,7 @@ fn generated_claude_body_cases_drive_the_body_builder() {
         !cases.is_empty(),
         "Lean emitted no PromptAssembly Claude body cases"
     );
+    let account = ClaudeAccountContext::projection();
     for case in cases {
         let history: Vec<Message> = case
             .rows
@@ -1563,7 +1621,7 @@ fn generated_claude_body_cases_drive_the_body_builder() {
                 } else if row == "other:assistant" {
                     Message::assistant("ok")
                 } else {
-                    Message::user("hi")
+                    Message::user(case.first_user_text.clone())
                 }
             })
             .collect();
@@ -1576,49 +1634,111 @@ fn generated_claude_body_cases_drive_the_body_builder() {
                 parameters: serde_json::json!({"type": "object"}),
             })
             .collect();
-        let mut body = build_messages_body_native(
-            "claude-sonnet-5",
-            case.preamble.as_deref(),
-            None,
-            &history,
-            &tools,
-        )
-        .expect("Claude body");
-        gents::claude_messages::apply_reasoning_parameters(
-            "claude-sonnet-5",
-            &serde_json::json!({
-                (gents::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM):
-                    case.supported_efforts,
-                "output_config": {"effort": case.effort}
-            }),
-            &mut body,
-        );
+        let mut request = claude_request(case.preamble.as_deref(), &history, tools);
+        request.additional_params = Some(serde_json::json!({
+            (gents::claude_messages::ADVERTISED_REASONING_EFFORTS_PARAM): case.supported_efforts,
+            "output_config": {"effort": case.effort}
+        }));
+        let context = ClaudeRequestContext::client_turn("conformance-session");
+        let ids = ClaudeRequestIds {
+            session: context.ids().session,
+            prompt: case.prompt_id.clone(),
+        };
+        let plan = plan_with_ids(&case.model, &request, &account, &context, &ids)
+            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+
+        let fingerprint = attribution::fingerprint(&case.first_user_text, profile::VERSION);
+        let expected = |text: &String| text.replace(&case.fingerprint_placeholder, &fingerprint);
         assert_eq!(
-            body["output_config"]["effort"].as_str(),
-            case.selected_effort.as_deref(),
+            expected(&case.system[0]),
+            expected(&case.attribution),
             "{}",
             case.name
         );
-        assert_eq!(
-            body.get("thinking").is_some(),
-            case.selected_effort.is_some(),
-            "{}",
-            case.name
-        );
-        let system: Vec<String> = body["system"]
-            .as_array()
-            .unwrap_or_else(|| panic!("case {} system array: {body}", case.name))
+        let system: Vec<String> = plan
+            .body
+            .system
             .iter()
-            .map(|block| block["text"].as_str().expect("text").to_string())
+            .map(|block| block.text.clone())
             .collect();
-        assert_eq!(system, case.system, "system blocks ({})", case.name);
-        assert_eq!(system[0], CLAUDE_CODE_IDENTITY, "case {}", case.name);
         assert_eq!(
-            body.get("tools").is_some(),
-            case.tools_present,
+            system,
+            case.system.iter().map(expected).collect::<Vec<_>>(),
+            "system blocks ({})",
+            case.name
+        );
+        assert_eq!(
+            plan.body
+                .system
+                .iter()
+                .map(|block| block.cache_control.is_some())
+                .collect::<Vec<_>>(),
+            case.system_marked,
+            "system markers ({})",
+            case.name
+        );
+        assert_eq!(
+            plan.body.tools.as_ref().map(Vec::len),
+            Some(case.tools.len()),
             "tools key ({})",
             case.name
         );
+        assert!(case.tools_present, "{}", case.name);
+
+        let catalog_facts = ModelFacts::of(catalog::find(&case.model).expect("a catalog model"));
+        assert_eq!(
+            catalog_facts,
+            lean_facts(&case.facts),
+            "facts ({})",
+            case.name
+        );
+        let body = serde_json::to_value(&plan.body).expect("body JSON");
+        assert_eq!(body["max_tokens"], case.max_tokens, "{}", case.name);
+        assert_eq!(
+            body["temperature"].as_u64(),
+            case.temperature,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            body.get("context_management").is_some(),
+            case.context_management,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            body["output_config"]["effort"].as_str(),
+            case.body_effort.as_deref(),
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            body.get("diagnostics").is_some(),
+            case.diagnostics.present,
+            "{}",
+            case.name
+        );
+        let thinking = &body["thinking"];
+        match case.thinking.kind.as_str() {
+            "none" => assert!(thinking.is_null(), "{}", case.name),
+            "disabled" => assert_eq!(thinking["type"], "disabled", "{}", case.name),
+            "adaptive" => {
+                assert_eq!(thinking["type"], "adaptive", "{}", case.name);
+                assert_eq!(
+                    thinking["display"].as_str() == Some("updates"),
+                    case.thinking.updates,
+                    "{}",
+                    case.name
+                );
+            }
+            "enabled" => assert_eq!(
+                thinking["budget_tokens"].as_u64(),
+                case.thinking.budget,
+                "{}",
+                case.name
+            ),
+            other => panic!("unknown thinking kind {other}"),
+        }
         let leaked = body["messages"]
             .as_array()
             .expect("messages")

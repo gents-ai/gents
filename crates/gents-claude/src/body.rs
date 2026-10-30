@@ -169,25 +169,56 @@ impl ModelFacts {
     /// nothing there; the names read are `rejects_disabled_thinking`,
     /// `thinking_disabled_effort_cap` and `per_turn_effort`.
     pub fn of(model: &catalog::Model) -> Self {
-        let id = model.id;
+        Self::from_parts(
+            model.id,
+            model.capabilities,
+            (
+                model.max_output_tokens.default,
+                model.max_output_tokens.upper,
+            ),
+            model.default_effort.and_then(Effort::parse),
+        )
+    }
+
+    /// The facts of a model the catalog does not list: no capability names,
+    /// Claude Code's fallback output limits (`claude-3-opus` and `-haiku` 4096,
+    /// `claude-3-sonnet` 8192, otherwise 32000 up to 128000) and no default effort.
+    /// The id-based exclusion lists still apply.
+    pub fn unlisted(id: &str) -> Self {
+        let limits = if id.contains("claude-3-opus") || id.contains("claude-3-haiku") {
+            (4096, 4096)
+        } else if id.contains("claude-3-sonnet") {
+            (8192, 8192)
+        } else {
+            (32_000, 128_000)
+        };
+        Self::from_parts(id, &[], limits, None)
+    }
+
+    fn from_parts(
+        id: &str,
+        capabilities: &[&str],
+        (output_default, output_upper): (u64, u64),
+        default_effort: Option<Effort>,
+    ) -> Self {
+        let has = |capability: &str| capabilities.contains(&capability);
         let claude3 = id.contains("claude-3-");
         let listed = |list: &[&str]| claude3 || list.contains(&id);
         let rejects_disabled = !listed(&KEEPS_DISABLED_ALLOWED);
         Self {
             adaptive: !listed(&NO_ADAPTIVE),
-            always_thinks: model.has("rejects_disabled_thinking") && rejects_disabled,
+            always_thinks: has("rejects_disabled_thinking") && rejects_disabled,
             thinking_supported: !claude3,
             rejects_disabled,
             accepts_temperature: listed(&TAKES_TEMPERATURE),
-            effort_capable: effort_capable(id, model.has("effort"), true),
+            effort_capable: effort_capable(id, has("effort"), true),
             max_effort: !listed(&NO_MAX_EFFORT),
             xhigh_effort: !listed(&NO_XHIGH_EFFORT),
-            caps_effort_when_disabled: model.has("thinking_disabled_effort_cap")
-                || id == "claude-opus-5",
-            per_turn_effort: model.has("per_turn_effort"),
-            output_default: model.max_output_tokens.default,
-            output_upper: model.max_output_tokens.upper,
-            default_effort: model.default_effort.and_then(Effort::parse),
+            caps_effort_when_disabled: has("thinking_disabled_effort_cap") || id == "claude-opus-5",
+            per_turn_effort: has("per_turn_effort"),
+            output_default,
+            output_upper,
+            default_effort,
         }
     }
 }

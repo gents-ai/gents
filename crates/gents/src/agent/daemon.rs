@@ -388,17 +388,37 @@ where
             .with_operator_tool_root(operator_root)
     }
 
+    /// The Claude request context a compaction summary call carries, when the backend is Claude's.
+    pub(super) async fn compaction_provider_params(
+        &self,
+        request: &crate::watcher::AgentRequest,
+    ) -> Result<Option<serde_json::Value>> {
+        let context = crate::claude_request_context::for_request(
+            &crate::config_client::ConfigAccess::local(self.node.clone()),
+            &self.agent_config,
+            request,
+            gents_claude::origin::Kind::Compaction,
+        )
+        .await?;
+        context
+            .as_ref()
+            .map(crate::claude_request_context::compaction_params)
+            .transpose()
+    }
+
     pub(super) fn compaction_options_for_request(
         &self,
         deadline: Option<chrono::DateTime<chrono::Utc>>,
         aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
         sampling_seed: Option<i64>,
         context_calibration: crate::provider_input::budget::ContextCalibration,
+        provider_params: Option<serde_json::Value>,
     ) -> ReductionOptions {
         ReductionOptions {
             deadline,
             aggregate_token_budget,
             sampling_seed,
+            provider_params,
             context_calibration: Some(context_calibration),
             ..self.compaction_options.clone()
         }

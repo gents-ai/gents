@@ -455,6 +455,7 @@ where
                             aggregate_token_budget.clone(),
                             effective_seed,
                             context_calibration.clone(),
+                            self.compaction_provider_params(&request).await?,
                         );
                         let projected = provider_view_tagged(history)?;
                         options.max_compacted_prefix_messages =

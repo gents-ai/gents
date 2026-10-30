@@ -4,6 +4,8 @@
 //! `J6o`, `rci`, `Tbe`). Lean: `PromptAssembly.ClaudeOrigin`, whose exhaustive
 //! cases bind [`Origin::wire_mode`].
 
+use serde::{Deserialize, Serialize};
+
 use crate::headers::RequestClass;
 use crate::system::SessionMode;
 
@@ -15,7 +17,8 @@ pub const PRINT_ENTRYPOINT: &str = "sdk-cli";
 pub const CRON_WORKLOAD: &str = "cron";
 
 /// How the request's session was created.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Cause {
     /// A client opened the session; it has no creation receipt.
     Client,
@@ -27,8 +30,16 @@ pub enum Cause {
     PluginJob,
 }
 
+impl Cause {
+    /// The session runs as a subagent of the session that opened it.
+    pub const fn subagent(self) -> bool {
+        matches!(self, Self::AgentNew | Self::PluginJob)
+    }
+}
+
 /// What the provider call is for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Kind {
     /// A turn of the agent loop.
     Turn,
@@ -41,7 +52,8 @@ pub enum Kind {
 }
 
 /// Where a request came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Origin {
     pub cause: Cause,
     /// The first session of the creation chain was opened by a client.
@@ -81,7 +93,30 @@ impl Origin {
     }
 
     pub const fn subagent(self) -> bool {
-        matches!(self.cause, Cause::AgentNew | Cause::PluginJob)
+        self.cause.subagent()
+    }
+
+    /// `cc_turn_origin` of the request's prompt: only a top-level turn is stamped
+    /// (a subagent's first prompt carries none), `scheduled` work first.
+    pub const fn turn_origin(self) -> Option<&'static str> {
+        if !matches!(self.kind, Kind::Turn) || self.subagent() {
+            return None;
+        }
+        Some(if self.scheduled {
+            "scheduled"
+        } else if self.interactive() {
+            "human"
+        } else {
+            "sdk"
+        })
+    }
+
+    /// `(cc_prompt_index, cc_turn_index)` of a turn whose history holds `prompts`
+    /// prompt rows; `None` when the turn is unstamped or a compaction summary
+    /// lost the position. Earlier prompts are taken to share this turn's origin.
+    pub fn turn_position(self, prompts: u64, position_lost: bool) -> Option<(u64, u64)> {
+        let origin = self.turn_origin()?;
+        (!position_lost).then(|| (if origin == "human" { prompts } else { 0 }, prompts.max(1)))
     }
 
     pub const fn wire_mode(self) -> WireMode {

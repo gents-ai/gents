@@ -894,6 +894,14 @@ def promptAssemblyClaudeMapCases : List PromptAssemblyClaudeMapCase :=
 
 structure PromptAssemblyClaudeBodyCase where
   name : String
+  /-- The model name the case sends; its facts are `facts`. -/
+  model : String
+  /-- The text of the history's first user message, which the version fingerprint hashes. -/
+  firstUserText : String
+  origin : PromptAssembly.ClaudeOrigin.Origin
+  promptId : String
+  /-- `system[0]`; `claudeFingerprintPlaceholder` stands for the SHA-256 fingerprint of
+  `firstUserText`, which the Rust attribution owner computes. -/
   attribution : String
   preamble : Option String
   rows : List String
@@ -904,31 +912,63 @@ structure PromptAssemblyClaudeBodyCase where
   supportedEfforts : Option (List String) := none
   effort : Option String := none
   selectedEffort : Option String := none
+  facts : PromptAssembly.ClaudeBody.ModelFacts
+  request : PromptAssembly.ClaudeBody.Request
+  decision : PromptAssembly.ClaudeBody.Decision
   deriving Repr
 
 private def msgTag : PromptAssembly.ClaudeMap.Msg → String
   | .system t => "system:" ++ t
   | .other tag => "other:" ++ tag
 
-def claudeCaseAttribution : String :=
-  PromptAssembly.ClaudeAttribution.header
-    { version := "2.1.311", fingerprint := "abc", entrypoint := "cli",
-      provider := .firstParty, firstPartyBaseUrl := true }
+def claudeFingerprintPlaceholder : String := "{fingerprint}"
+
+def claudeBodyPromptId : String := "0f8e9a3c-1b2d-4c5e-8f90-a1b2c3d4e5f6"
+
+def claudeBodyOrigin : PromptAssembly.ClaudeOrigin.Origin :=
+  { cause := .client, rootClient := true, scheduled := false, kind := .turn,
+    appendsSystemPrompt := false }
+
+private def isUserRow : PromptAssembly.ClaudeMap.Msg → Bool
+  | .other "user" => true
+  | _ => false
 
 private def claudeBodyCase (name : String) (preamble : Option String)
-    (rows : List PromptAssembly.ClaudeMap.Msg) (tools : List String) :
+    (rows : List PromptAssembly.ClaudeMap.Msg) (tools : List String)
+    (supported : Option (List String) := none) (effort : Option String := none) :
     PromptAssemblyClaudeBodyCase :=
   let (sys, _) := PromptAssembly.ClaudeMap.splitSystem rows
+  let origin := claudeBodyOrigin
+  let mode := PromptAssembly.ClaudeOrigin.wireMode origin
+  let position := PromptAssembly.ClaudeOrigin.turnPosition origin (rows.filter isUserRow).length false
+  let attribution := PromptAssembly.ClaudeAttribution.header
+    { version := "2.1.311", fingerprint := claudeFingerprintPlaceholder, entrypoint := mode.entrypoint,
+      provider := .firstParty, firstPartyBaseUrl := true, workload := mode.workload,
+      subagent := mode.subagent, promptId := some claudeBodyPromptId,
+      turnOrigin := PromptAssembly.ClaudeOrigin.turnOrigin origin,
+      promptIndex := position.map (·.1), turnIndex := position.map (·.2) }
   let blocks := PromptAssembly.ClaudeMap.systemBlocks
-    (claudeCaseAttribution :: PromptAssembly.ClaudeMap.cliIdentity :: (preamble.toList ++ sys))
+    (attribution :: PromptAssembly.ClaudeOrigin.identity origin :: (preamble.toList ++ sys))
+  let selected := PromptAssembly.ClaudeMap.selectedEffort supported effort
+  let request := PromptAssembly.ClaudeBody.interactiveTurn selected
   { name := name
-  , attribution := claudeCaseAttribution
+  , model := "claude-sonnet-5"
+  , firstUserText := "hi"
+  , origin := origin
+  , promptId := claudeBodyPromptId
+  , attribution := attribution
   , preamble := preamble
   , rows := rows.map msgTag
   , tools := tools
   , system := blocks.map (·.text)
   , systemMarked := blocks.map (·.marked)
-  , toolsPresent := (PromptAssembly.ClaudeMap.toolsField tools).isSome }
+  , toolsPresent := (PromptAssembly.ClaudeMap.toolsField tools).isSome
+  , supportedEfforts := supported
+  , effort := effort
+  , selectedEffort := selected
+  , facts := PromptAssembly.ClaudeBody.sonnet5
+  , request := request
+  , decision := PromptAssembly.ClaudeBody.evaluate PromptAssembly.ClaudeBody.sonnet5 request }
 
 def promptAssemblyClaudeBodyCases : List PromptAssemblyClaudeBodyCase :=
   [ claudeBodyCase "identity-only" none [.other "user"] []
@@ -937,20 +977,17 @@ def promptAssemblyClaudeBodyCases : List PromptAssemblyClaudeBodyCase :=
       [.system "S1", .other "user", .system "S2", .other "assistant"] ["echo"]
   , claudeBodyCase "system-rows-without-preamble" none
       [.system "workspace context", .other "user"] []
-  , claudeBodyCase "empty-tools-omitted" (some "P") [.other "user"] []
+  , claudeBodyCase "empty-tools-sent-as-empty-list" (some "P") [.other "user"] []
   , claudeBodyCase "two-tools-present" none [.other "user"] ["echo", "list_files"]
   , claudeBodyCase "empty-preamble-and-rows-dropped" (some "")
       [.system "", .other "user", .system "S1"] []
+  , claudeBodyCase "second-prompt-advances-the-indices" none
+      [.other "user", .other "assistant", .other "user"] []
   ]
   ++ ([none, some "low", some "medium", some "high", some "xhigh", some "max", some "ultra"].map fun effort =>
-    { (claudeBodyCase ("effort-" ++ effort.getD "absent") none [.other "user"] []) with
-      supportedEfforts := some ["low", "medium", "high", "xhigh", "max"]
-      effort := effort
-      selectedEffort := PromptAssembly.ClaudeMap.selectedEffort
-        (some ["low", "medium", "high", "xhigh", "max"]) effort })
-  ++ [{ (claudeBodyCase "effort-unknown-metadata" none [.other "user"] []) with
-        effort := some "high"
-        selectedEffort := PromptAssembly.ClaudeMap.selectedEffort none (some "high") }]
+    claudeBodyCase ("effort-" ++ effort.getD "absent") none [.other "user"] []
+      (some ["low", "medium", "high", "xhigh", "max"]) effort)
+  ++ [claudeBodyCase "effort-unknown-metadata" none [.other "user"] [] none (some "high")]
 
 structure PromptAssemblyClaudeAttributionCase where
   name : String
@@ -1003,6 +1040,9 @@ structure PromptAssemblyClaudeOriginCase where
   origin : PromptAssembly.ClaudeOrigin.Origin
   mode : PromptAssembly.ClaudeOrigin.WireMode
   identity : String
+  turnOrigin : Option String
+  /-- `turnPosition` for three prompt rows and a position that was not lost. -/
+  position : Option (Nat × Nat)
   deriving Repr
 
 open PromptAssembly.ClaudeOrigin in
@@ -1023,7 +1063,7 @@ open PromptAssembly.ClaudeOrigin in
 /-- Every origin: the mapping is total over a finite input, so the cases are
 exhaustive rather than sampled. -/
 def promptAssemblyClaudeOriginCases : List PromptAssemblyClaudeOriginCase := Id.run do
-  let mut cases := []
+  let mut cases : List PromptAssemblyClaudeOriginCase := []
   for cause in [Cause.client, .agentNew, .taskTrigger, .pluginJob] do
     for rootClient in [true, false] do
       for scheduled in [false, true] do
@@ -1033,7 +1073,11 @@ def promptAssemblyClaudeOriginCases : List PromptAssemblyClaudeOriginCase := Id.
             let name := s!"{claudeOriginCauseName cause}-{if rootClient then "root_client" else "root_other"}-"
               ++ s!"{if scheduled then "scheduled" else "unscheduled"}-{claudeOriginKindName kind}-"
               ++ s!"{if appends then "appends" else "bare"}"
-            cases := cases ++ [{ name, origin, mode := wireMode origin, identity := identity origin }]
+            let entry : PromptAssemblyClaudeOriginCase :=
+              { name := name, origin := origin, mode := wireMode origin
+              , identity := identity origin, turnOrigin := turnOrigin origin
+              , position := turnPosition origin 3 false }
+            cases := cases ++ [entry]
   return cases
 
 structure PromptAssemblyClaudeFieldCase where

@@ -193,3 +193,31 @@ fn device_id_is_a_stable_hex_digest() {
     assert_ne!(device_id(b"node-a"), device_id(b"node-b"));
     assert_eq!(device_id(b"node-a"), device_id(b"node-a"));
 }
+
+#[test]
+fn stable_uuid_is_a_deterministic_version_4_uuid() {
+    let id = stable_uuid(b"session-1");
+    assert_eq!(id, stable_uuid(b"session-1"));
+    assert_ne!(id, stable_uuid(b"session-2"));
+    assert!(crate::attribution::valid_uuid(&id));
+    let bytes = id.as_bytes();
+    assert_eq!(bytes[14], b'4', "version nibble of {id}");
+    assert!(
+        matches!(bytes[19], b'8' | b'9' | b'a' | b'b'),
+        "variant nibble of {id}"
+    );
+    assert_eq!(id, id.to_lowercase());
+    assert!(crate::attribution::valid_uuid(&stable_uuid(b"")));
+}
+
+#[test]
+fn agent_id_has_claude_codes_spawned_agent_shape() {
+    let id = agent_id(b"session-1");
+    assert_eq!(id, agent_id(b"session-1"));
+    assert_ne!(id, agent_id(b"session-2"));
+    assert_eq!(id.len(), 17);
+    assert!(id.starts_with('a'));
+    assert!(id[1..]
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)));
+}

@@ -12,6 +12,7 @@ use crate::llm::message::{
     AssistantContent, Image, Message, ReasoningContent, ToolCall, ToolFunction, ToolResultContent,
     UserContent,
 };
+use gents_loop::claude_messages_body::ClaudeRequestContext;
 
 #[test]
 fn cumulative_usage_keeps_start_counters_and_requires_message_stop() {
@@ -57,7 +58,8 @@ fn identity_matches_lean_body_witness_head() {
     let cases = crate::lean_vocab_test::lean_prompt_assembly_claude_body_cases();
     assert!(!cases.is_empty());
     for case in cases {
-        assert_eq!(case.system[0], CLAUDE_CODE_IDENTITY, "{}", case.name);
+        assert_eq!(case.system[0], case.attribution, "{}", case.name);
+        assert_eq!(case.system[1], CLAUDE_CODE_IDENTITY, "{}", case.name);
     }
 }
 
@@ -74,20 +76,19 @@ fn lean_effort_cases_drive_the_real_messages_request() {
         let body = build_messages_body("claude-sonnet-5", &request).unwrap();
         assert_eq!(
             body["output_config"]["effort"].as_str(),
-            case.selected_effort.as_deref(),
+            case.body_effort.as_deref(),
             "{}",
             case.name
-        );
-        assert_eq!(
-            body.get("thinking").is_some(),
-            case.selected_effort.is_some()
         );
         assert!(body.get("temperature").is_none());
         assert!(body.get(ADVERTISED_REASONING_EFFORTS_PARAM).is_none());
         assert!(body["output_config"].get("untrusted").is_none());
-        if case.selected_effort.is_some() {
-            assert_eq!(body["thinking"], json!({"type": "adaptive"}));
-        }
+        assert_eq!(
+            body["thinking"],
+            json!({"type": "adaptive", "display": "updates"}),
+            "{}",
+            case.name
+        );
     }
 }
 
@@ -145,22 +146,26 @@ fn messages_body_includes_gents_tools_and_system() {
     let body = build_messages_body("claude-sonnet-5", &echo_request()).unwrap();
     assert_eq!(body["model"], "claude-sonnet-5");
     assert_eq!(body["stream"], true);
-    assert_eq!(body["max_tokens"], 128);
+    assert_eq!(body["max_tokens"], 64_000, "Claude Code's catalog default");
     assert_eq!(body["tools"][0]["name"], "echo");
-    assert_eq!(body["system"][1]["text"], "You are helpful.");
+    assert_eq!(body["system"][2]["text"], "You are helpful.");
     assert_eq!(body["messages"][0]["role"], "user");
     assert_messages_body_has_no_sampling(&body);
 }
 
 #[test]
-fn messages_body_system_leads_with_claude_code_identity_then_preamble() {
+fn messages_body_system_leads_with_attribution_then_claude_code_identity_then_preamble() {
     let body = build_messages_body("claude-sonnet-5", &echo_request()).unwrap();
     let system = body["system"].as_array().expect("system array");
-    assert_eq!(system.len(), 2, "{body}");
-    assert_eq!(system[0]["type"], "text");
-    assert_eq!(system[0]["text"], CLAUDE_CODE_IDENTITY);
+    assert_eq!(system.len(), 3, "{body}");
+    assert!(system[0]["text"]
+        .as_str()
+        .unwrap()
+        .starts_with("x-anthropic-billing-header: cc_version=2.1.311."));
     assert_eq!(system[1]["type"], "text");
-    assert_eq!(system[1]["text"], "You are helpful.");
+    assert_eq!(system[1]["text"], CLAUDE_CODE_IDENTITY);
+    assert_eq!(system[2]["type"], "text");
+    assert_eq!(system[2]["text"], "You are helpful.");
 }
 
 #[test]
@@ -170,8 +175,8 @@ fn messages_body_system_is_identity_only_without_preamble() {
         request.preamble = preamble;
         let body = build_messages_body("claude-sonnet-5", &request).unwrap();
         let system = body["system"].as_array().expect("system array");
-        assert_eq!(system.len(), 1, "{body}");
-        assert_eq!(system[0]["text"], CLAUDE_CODE_IDENTITY);
+        assert_eq!(system.len(), 2, "{body}");
+        assert_eq!(system[1]["text"], CLAUDE_CODE_IDENTITY);
     }
 }
 
@@ -180,18 +185,18 @@ fn messages_body_routes_system_rows_after_identity_and_preamble() {
     let body = build_messages_body("claude-sonnet-5", &request_with_system_rows()).unwrap();
     let system = body["system"].as_array().expect("system");
     assert_eq!(system.len(), 3, "{body}");
-    assert_eq!(system[0]["text"], CLAUDE_CODE_IDENTITY);
-    assert_eq!(system[1]["text"], "You are helpful.");
-    assert_eq!(system[2]["text"], "workspace context");
+    assert_eq!(system[1]["text"], CLAUDE_CODE_IDENTITY);
+    assert_eq!(system[2]["text"], "You are helpful.\n\nworkspace context");
     assert_eq!(body["messages"].as_array().expect("messages").len(), 1);
     assert_eq!(body["messages"][0]["role"], "user");
 }
 
 #[test]
-fn messages_body_marks_two_cache_breakpoints() {
+fn messages_body_marks_the_system_blocks_and_the_final_message() {
     let body = build_messages_body("claude-sonnet-5", &request_with_system_rows()).unwrap();
     let system = body["system"].as_array().expect("system");
-    assert_eq!(system.last().unwrap()["cache_control"]["type"], "ephemeral");
+    assert_eq!(system[1]["cache_control"]["type"], "ephemeral");
+    assert_eq!(system[2]["cache_control"]["type"], "ephemeral");
     assert!(system[0].get("cache_control").is_none());
     let last_message = body["messages"].as_array().unwrap().last().unwrap().clone();
     let last_block = last_message["content"]
@@ -228,6 +233,11 @@ const MESSAGES_BODY_ALLOWED_KEYS: &[&str] = &[
     "messages",
     "tools",
     "system",
+    "metadata",
+    "thinking",
+    "context_management",
+    "output_config",
+    "diagnostics",
 ];
 
 fn assert_messages_body_has_no_sampling(body: &Value) {
@@ -315,7 +325,15 @@ fn tool_result_images_reach_the_wire_body() {
         vec![echo_tool()],
     );
     let bearer = crate::claude_subscription::ApiKeyBearer::new("placeholder-key");
-    let wire = captured_request(&bearer, &request);
+    let wire = captured_request(
+        &ClaudeAccountContext {
+            subscriber: false,
+            api_key: true,
+            ..test_account()
+        },
+        &bearer,
+        &request,
+    );
     let (_, body) = wire.split_once("\r\n\r\n").expect("HTTP body");
     let body: Value = serde_json::from_str(body).expect("JSON body");
     assert_eq!(
@@ -364,7 +382,15 @@ fn tool_result_images_on_the_wire(images: &[String]) -> Vec<Value> {
     }
     let request = request_from_native(None, history, vec![echo_tool()]);
     let bearer = crate::claude_subscription::ApiKeyBearer::new("placeholder-key");
-    let wire = captured_request(&bearer, &request);
+    let wire = captured_request(
+        &ClaudeAccountContext {
+            subscriber: false,
+            api_key: true,
+            ..test_account()
+        },
+        &bearer,
+        &request,
+    );
     let (_, body) = wire.split_once("\r\n\r\n").expect("HTTP body");
     let body: Value = serde_json::from_str(body).expect("JSON body");
     body["messages"]
@@ -478,11 +504,11 @@ fn past_the_image_count_the_oldest_images_become_notes() {
 }
 
 #[test]
-fn messages_body_omits_tools_key_when_surface_is_empty() {
+fn messages_body_sends_an_empty_tools_list_when_surface_is_empty() {
     let mut request = echo_request();
     request.tools.clear();
     let body = build_messages_body("claude-sonnet-5", &request).unwrap();
-    assert!(body.get("tools").is_none(), "{body}");
+    assert_eq!(body["tools"], json!([]), "{body}");
     let with_tools = build_messages_body("claude-sonnet-5", &echo_request()).unwrap();
     assert_eq!(with_tools["tools"][0]["name"], "echo");
     assert_eq!(with_tools["tools"].as_array().map(Vec::len), Some(1));
@@ -1042,6 +1068,7 @@ async fn transport_429_usage_cap_reports_reset_time() {
         &url,
         "claude-sonnet-5",
         &echo_request(),
+        &test_account(),
         RapidHashSet::new(),
         &bearer,
         &ReqwestClient::new(),
@@ -1076,6 +1103,7 @@ async fn transport_401_invalidates_the_bearer_once() {
         &url,
         "claude-sonnet-5",
         &echo_request(),
+        &test_account(),
         RapidHashSet::new(),
         &bearer,
         &ReqwestClient::new(),
@@ -1095,7 +1123,21 @@ async fn transport_401_invalidates_the_bearer_once() {
     );
 }
 
-fn captured_request<S>(bearer: &S, request: &CompletionRequest) -> String
+fn test_account() -> ClaudeAccountContext {
+    ClaudeAccountContext {
+        device_id: "cd".repeat(32),
+        account_uuid: "acct-test".into(),
+        subscriber: true,
+        using_overage: false,
+        api_key: false,
+    }
+}
+
+fn captured_request<S>(
+    account: &ClaudeAccountContext,
+    bearer: &S,
+    request: &CompletionRequest,
+) -> String
 where
     S: crate::oauth_credential::BearerSource,
 {
@@ -1114,6 +1156,7 @@ where
                 &url,
                 "claude-sonnet-5",
                 request,
+                account,
                 RapidHashSet::new(),
                 bearer,
                 &ReqwestClient::new(),
@@ -1124,34 +1167,269 @@ where
         })
 }
 
+fn header_lines(request: &str) -> Vec<(String, String)> {
+    request
+        .lines()
+        .skip(1)
+        .take_while(|line| !line.is_empty())
+        .filter_map(|line| line.split_once(": "))
+        .map(|(name, value)| (name.to_ascii_lowercase(), value.to_owned()))
+        .collect()
+}
+
+/// The names of Claude Code's header set that the request carries, in wire order.
+fn claude_code_header_names(request: &str) -> Vec<String> {
+    const CLAUDE_CODE_NAMES: &[&str] = &[
+        "accept",
+        "x-stainless-retry-count",
+        "x-stainless-timeout",
+        "x-stainless-lang",
+        "x-stainless-package-version",
+        "x-stainless-os",
+        "x-stainless-arch",
+        "x-stainless-runtime",
+        "x-stainless-runtime-version",
+        "anthropic-dangerous-direct-browser-access",
+        "anthropic-version",
+        "authorization",
+        "x-api-key",
+        "x-app",
+        "user-agent",
+        "x-claude-code-session-id",
+        "x-claude-code-agent-id",
+        "x-claude-code-parent-agent-id",
+        "x-claude-code-request-class",
+        "x-claude-code-agent-type",
+        "x-claude-code-prompt-id",
+        "content-type",
+        "anthropic-beta",
+        "x-client-request-id",
+    ];
+    header_lines(request)
+        .into_iter()
+        .map(|(name, _)| name)
+        .filter(|name| CLAUDE_CODE_NAMES.contains(&name.as_str()))
+        .collect()
+}
+
+fn header_value(request: &str, name: &str) -> Option<String> {
+    header_lines(request)
+        .into_iter()
+        .find(|(candidate, _)| candidate == name)
+        .map(|(_, value)| value)
+}
+
+fn request_with_context(context: &ClaudeRequestContext) -> CompletionRequest {
+    let mut request = echo_request();
+    request.additional_params = Some(json!({
+        gents_loop::claude_messages_body::CLAUDE_REQUEST_PARAM: context.to_param().unwrap()
+    }));
+    request
+}
+
+fn context_of(
+    cause: gents_claude::origin::Cause,
+    root_client: bool,
+    scheduled: bool,
+) -> ClaudeRequestContext {
+    ClaudeRequestContext {
+        origin: gents_claude::origin::Origin {
+            cause,
+            root_client,
+            scheduled,
+            kind: gents_claude::origin::Kind::Turn,
+            appends_system_prompt: true,
+        },
+        session_key: "session-wire".into(),
+        prompt_key: "request-wire".into(),
+        parent_session_id: None,
+        previous_request_id: None,
+        agent: Some(gents_loop::claude_messages_body::ClaudeAgentIdentity {
+            agent_id: "worker".into(),
+            parent_agent_id: Some("lead".into()),
+        }),
+    }
+}
+
+const MAIN_HEADER_NAMES: &[&str] = &[
+    "accept",
+    "x-stainless-retry-count",
+    "x-stainless-timeout",
+    "x-stainless-lang",
+    "x-stainless-package-version",
+    "x-stainless-os",
+    "x-stainless-arch",
+    "x-stainless-runtime",
+    "x-stainless-runtime-version",
+    "anthropic-dangerous-direct-browser-access",
+    "anthropic-version",
+    "authorization",
+    "x-app",
+    "user-agent",
+    "x-claude-code-session-id",
+    "x-claude-code-request-class",
+    "x-claude-code-prompt-id",
+    "content-type",
+    "anthropic-beta",
+    "x-client-request-id",
+];
+
 #[test]
-fn api_key_request_sends_bearer_and_version_without_oauth_beta() {
-    let bearer = crate::claude_subscription::ApiKeyBearer::new("placeholder-key");
-    let request = captured_request(&bearer, &echo_request());
-    let has = |expected: &str| {
-        request
-            .lines()
-            .any(|line| line.eq_ignore_ascii_case(expected))
-    };
-    assert!(has("authorization: Bearer placeholder-key"), "{request}");
-    assert!(has("anthropic-version: 2023-06-01"), "{request}");
-    assert!(
-        !request
-            .lines()
-            .any(|line| line.to_ascii_lowercase().starts_with("anthropic-beta")),
+fn a_main_turn_sends_claude_codes_header_set_in_its_order() {
+    let bearer = crate::claude_subscription::StaticBearer::new("access");
+    let context = context_of(gents_claude::origin::Cause::Client, true, false);
+    let request = captured_request(&test_account(), &bearer, &request_with_context(&context));
+    assert_eq!(
+        claude_code_header_names(&request),
+        MAIN_HEADER_NAMES,
         "{request}"
     );
+    let ids = context.ids();
+    assert_eq!(
+        header_value(&request, "authorization").as_deref(),
+        Some("Bearer access")
+    );
+    assert_eq!(header_value(&request, "x-app").as_deref(), Some("cli"));
+    assert_eq!(
+        header_value(&request, "x-claude-code-session-id"),
+        Some(ids.session)
+    );
+    assert_eq!(
+        header_value(&request, "x-claude-code-prompt-id"),
+        Some(ids.prompt)
+    );
+    assert_eq!(
+        header_value(&request, "x-claude-code-request-class").as_deref(),
+        Some("main")
+    );
+    assert_eq!(
+        header_value(&request, "x-stainless-retry-count").as_deref(),
+        Some("0")
+    );
+    assert_eq!(
+        header_value(&request, "x-stainless-timeout").as_deref(),
+        Some("600")
+    );
+    assert_eq!(
+        header_value(&request, "user-agent").as_deref(),
+        Some("claude-cli/2.1.311 (external, cli)")
+    );
+    let betas = header_value(&request, "anthropic-beta").unwrap();
+    assert!(
+        betas.starts_with("claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14"),
+        "{betas}"
+    );
+    assert!(uuid::Uuid::parse_str(&header_value(&request, "x-client-request-id").unwrap()).is_ok());
+}
+
+#[test]
+fn every_attempt_carries_a_fresh_client_request_id() {
+    let bearer = crate::claude_subscription::StaticBearer::new("access");
+    let id_of = || {
+        header_value(
+            &captured_request(&test_account(), &bearer, &echo_request()),
+            "x-client-request-id",
+        )
+    };
+    let (first, second) = (id_of(), id_of());
+    assert!(first.is_some() && first != second);
+}
+
+#[test]
+fn a_subagent_turn_adds_the_agent_headers_after_the_session_id() {
+    let bearer = crate::claude_subscription::StaticBearer::new("access");
+    let context = context_of(gents_claude::origin::Cause::AgentNew, true, false);
+    let request = captured_request(&test_account(), &bearer, &request_with_context(&context));
+    let mut expected: Vec<&str> = MAIN_HEADER_NAMES.to_vec();
+    let at = expected
+        .iter()
+        .position(|name| *name == "x-claude-code-session-id")
+        .unwrap()
+        + 1;
+    expected.splice(
+        at..at,
+        ["x-claude-code-agent-id", "x-claude-code-parent-agent-id"],
+    );
+    let class = expected
+        .iter()
+        .position(|name| *name == "x-claude-code-request-class")
+        .unwrap()
+        + 1;
+    expected.insert(class, "x-claude-code-agent-type");
+    assert_eq!(claude_code_header_names(&request), expected, "{request}");
+    assert_eq!(
+        header_value(&request, "x-claude-code-agent-type").as_deref(),
+        Some("custom")
+    );
+    assert_eq!(
+        header_value(&request, "x-claude-code-agent-id").as_deref(),
+        Some("worker")
+    );
+    assert_eq!(
+        header_value(&request, "x-claude-code-parent-agent-id").as_deref(),
+        Some("lead")
+    );
+    assert_eq!(
+        header_value(&request, "x-claude-code-request-class").as_deref(),
+        Some("subagent")
+    );
+    assert_eq!(header_value(&request, "x-app").as_deref(), Some("cli"));
+}
+
+#[test]
+fn a_scheduled_task_turn_is_a_background_print_session() {
+    let bearer = crate::claude_subscription::StaticBearer::new("access");
+    let context = context_of(gents_claude::origin::Cause::TaskTrigger, false, true);
+    let request = captured_request(&test_account(), &bearer, &request_with_context(&context));
+    assert_eq!(
+        claude_code_header_names(&request),
+        MAIN_HEADER_NAMES,
+        "{request}"
+    );
+    assert_eq!(header_value(&request, "x-app").as_deref(), Some("cli-bg"));
+    assert_eq!(
+        header_value(&request, "user-agent").as_deref(),
+        Some("claude-cli/2.1.311 (external, sdk-cli, workload/cron)")
+    );
+    assert_eq!(
+        header_value(&request, "x-claude-code-request-class").as_deref(),
+        Some("main")
+    );
+}
+
+#[test]
+fn api_key_request_sends_the_key_header_and_no_oauth_beta() {
+    let bearer = crate::claude_subscription::ApiKeyBearer::new("placeholder-key");
+    let account = ClaudeAccountContext {
+        subscriber: false,
+        api_key: true,
+        ..test_account()
+    };
+    let request = captured_request(&account, &bearer, &echo_request());
+    assert_eq!(
+        header_value(&request, "x-api-key").as_deref(),
+        Some("placeholder-key")
+    );
+    assert!(
+        header_value(&request, "authorization").is_none(),
+        "{request}"
+    );
+    assert_eq!(
+        header_value(&request, "anthropic-version").as_deref(),
+        Some("2023-06-01")
+    );
+    let betas = header_value(&request, "anthropic-beta").unwrap();
+    assert!(!betas.contains("oauth-2025-04-20"), "{betas}");
 }
 
 #[test]
 fn sign_in_request_keeps_the_oauth_beta() {
     let bearer = crate::claude_subscription::StaticBearer::new("access");
-    let request = captured_request(&bearer, &echo_request());
+    let request = captured_request(&test_account(), &bearer, &echo_request());
+    let betas = header_value(&request, "anthropic-beta").unwrap();
     assert!(
-        request
-            .lines()
-            .any(|line| line.eq_ignore_ascii_case("anthropic-beta: oauth-2025-04-20")),
-        "{request}"
+        betas.split(',').any(|beta| beta == "oauth-2025-04-20"),
+        "{betas}"
     );
 }
 
@@ -1163,6 +1441,7 @@ async fn unsupported_replay_body_is_a_permanent_request_error() {
         "http://127.0.0.1:1",
         "claude-sonnet-5",
         &request,
+        &test_account(),
         RapidHashSet::new(),
         &bearer,
         &ReqwestClient::new(),
@@ -1249,6 +1528,7 @@ fn usage_wiring_claude_live_messages_records_unified_headers() {
                 &url,
                 "claude-sonnet-5",
                 &echo_request(),
+                &test_account(),
                 RapidHashSet::new(),
                 &bearer,
                 &ReqwestClient::new(),
@@ -1347,6 +1627,16 @@ fn session_key_param_never_reaches_the_wire() {
     let plain = build_messages_body("claude-sonnet-5", &request).expect("body");
     request.additional_params = Some(json!({ SESSION_KEY_PARAM: "session-1" }));
     let keyed = build_messages_body("claude-sonnet-5", &request).expect("body");
-    assert_eq!(plain, keyed);
-    assert!(!keyed.to_string().contains("session"));
+    assert_ne!(plain, keyed, "the key selects the Claude session id");
+    assert!(!keyed.to_string().contains(SESSION_KEY_PARAM));
+    assert!(!keyed.to_string().contains("session-1"));
+    assert_eq!(plain["messages"], keyed["messages"]);
+}
+
+#[test]
+fn the_messages_uri_is_claude_codes_first_party_route() {
+    assert_eq!(
+        MESSAGES_URI,
+        format!("{}{}", profile::BASE_URL, profile::MESSAGES_PATH)
+    );
 }

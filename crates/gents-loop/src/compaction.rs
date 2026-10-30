@@ -170,6 +170,8 @@ pub struct ReductionOptions {
     /// summary chunks with it; an engine summarizing with another model keeps
     /// its own calibration.
     pub context_calibration: Option<crate::provider_input::budget::ContextCalibration>,
+    /// Provider parameters of the requesting call that its summary calls carry too.
+    pub provider_params: Option<serde_json::Value>,
 }
 
 impl Default for ReductionOptions {
@@ -185,6 +187,7 @@ impl Default for ReductionOptions {
             aggregate_token_budget: None,
             sampling_seed: None,
             context_calibration: None,
+            provider_params: None,
         }
     }
 }
@@ -726,7 +729,10 @@ where
             summary_config.max_tokens = Some(summary_max_output_tokens as u64);
             summary_config.aggregate_token_budget = options.aggregate_token_budget.clone();
             summary_config.additional_params = merge_optional_params(
-                summary_config.additional_params.take(),
+                merge_optional_params(
+                    summary_config.additional_params.take(),
+                    options.provider_params.clone(),
+                ),
                 options
                     .sampling_seed
                     .map(|seed| serde_json::json!({ "seed": seed })),

@@ -275,24 +275,6 @@ def promptAssemblyClaudeMapCaseJson
 def promptAssemblyClaudeMapCasesJson : String :=
   jsonArray (promptAssemblyClaudeMapCases.map promptAssemblyClaudeMapCaseJson)
 
-def promptAssemblyClaudeBodyCaseJson (witness : PromptAssemblyClaudeBodyCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"attribution\":" ++ jsonString witness.attribution ++ ","
-    ++ "\"preamble\":" ++ jsonOptionalString witness.preamble ++ ","
-    ++ "\"rows\":" ++ jsonStringArray witness.rows ++ ","
-    ++ "\"tools\":" ++ jsonStringArray witness.tools ++ ","
-    ++ "\"system\":" ++ jsonStringArray witness.system ++ ","
-    ++ "\"system_marked\":" ++ jsonArray (witness.systemMarked.map boolString) ++ ","
-    ++ "\"tools_present\":" ++ boolString witness.toolsPresent
-    ++ ",\"supported_efforts\":" ++ jsonOptionalStringArray witness.supportedEfforts
-    ++ ",\"effort\":" ++ jsonOptionalString witness.effort
-    ++ ",\"selected_effort\":" ++ jsonOptionalString witness.selectedEffort
-    ++ "}"
-
-def promptAssemblyClaudeBodyCasesJson : String :=
-  jsonArray (promptAssemblyClaudeBodyCases.map promptAssemblyClaudeBodyCaseJson)
-
 def claudeAttributionProviderName : PromptAssembly.ClaudeAttribution.Provider → String
   | .firstParty => "firstParty"
   | .vertex => "vertex"
@@ -347,6 +329,9 @@ def promptAssemblyClaudeOriginCaseJson (witness : PromptAssemblyClaudeOriginCase
     ++ ",\"request_class\":" ++ jsonString m.requestClass.name
     ++ ",\"main_thread_source\":" ++ boolString m.mainThreadSource
     ++ ",\"agentic\":" ++ boolString m.agentic
+    ++ ",\"turn_origin\":" ++ jsonOptionalString witness.turnOrigin
+    ++ ",\"prompt_index_after_three\":" ++ jsonOptionalNat (witness.position.map (·.1))
+    ++ ",\"turn_index_after_three\":" ++ jsonOptionalNat (witness.position.map (·.2))
     ++ "}"
 
 def promptAssemblyClaudeOriginCasesJson : String :=
@@ -404,6 +389,38 @@ def claudeFieldThinkingJson : Option PromptAssembly.ClaudeBody.Thinking → Stri
 def claudeFieldDiagnosticsJson : Option (Option String) → String
   | none => "{\"present\":false,\"previous_message_id\":null}"
   | some previous => "{\"present\":true,\"previous_message_id\":" ++ jsonOptionalString previous ++ "}"
+
+def promptAssemblyClaudeBodyCaseJson (witness : PromptAssemblyClaudeBodyCase) : String :=
+  let d := witness.decision
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"model\":" ++ jsonString witness.model ++ ","
+    ++ "\"first_user_text\":" ++ jsonString witness.firstUserText ++ ","
+    ++ "\"fingerprint_placeholder\":" ++ jsonString claudeFingerprintPlaceholder ++ ","
+    ++ "\"prompt_id\":" ++ jsonString witness.promptId ++ ","
+    ++ "\"attribution\":" ++ jsonString witness.attribution ++ ","
+    ++ "\"preamble\":" ++ jsonOptionalString witness.preamble ++ ","
+    ++ "\"rows\":" ++ jsonStringArray witness.rows ++ ","
+    ++ "\"tools\":" ++ jsonStringArray witness.tools ++ ","
+    ++ "\"system\":" ++ jsonStringArray witness.system ++ ","
+    ++ "\"system_marked\":" ++ jsonArray (witness.systemMarked.map boolString) ++ ","
+    ++ "\"tools_present\":" ++ boolString witness.toolsPresent
+    ++ ",\"supported_efforts\":" ++ jsonOptionalStringArray witness.supportedEfforts
+    ++ ",\"effort\":" ++ jsonOptionalString witness.effort
+    ++ ",\"selected_effort\":" ++ jsonOptionalString witness.selectedEffort
+    ++ ",\"facts\":" ++ claudeFieldFactsJson witness.facts
+    ++ ",\"request\":" ++ claudeFieldRequestJson witness.request
+    ++ ",\"max_tokens\":" ++ toString d.maxTokens
+    ++ ",\"thinking\":" ++ claudeFieldThinkingJson d.thinking
+    ++ ",\"temperature\":" ++ jsonOptionalNat d.temperature
+    ++ ",\"context_management\":" ++ boolString d.contextManagement
+    ++ ",\"body_effort\":" ++ jsonOptionalString d.effort
+    ++ ",\"diagnostics\":" ++ claudeFieldDiagnosticsJson d.diagnostics
+    ++ ",\"per_turn_effort\":" ++ jsonOptionalString d.perTurnEffort
+    ++ "}"
+
+def promptAssemblyClaudeBodyCasesJson : String :=
+  jsonArray (promptAssemblyClaudeBodyCases.map promptAssemblyClaudeBodyCaseJson)
 
 def promptAssemblyClaudeFieldCaseJson (witness : PromptAssemblyClaudeFieldCase) : String :=
   let d := witness.decision

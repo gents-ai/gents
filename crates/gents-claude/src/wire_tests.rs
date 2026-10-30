@@ -1,5 +1,3 @@
-use serde_json::json;
-
 use super::*;
 
 fn raw(text: &str) -> Box<RawValue> {
@@ -357,11 +355,21 @@ fn absent_keys_are_omitted_and_temperature_is_a_number() {
 fn output_config_format_follows_effort() {
     let c = OutputConfig {
         effort: Some("high".to_owned()),
-        format: Some(json!({"type": "json_schema"})),
+        format: Some(RawValue::from_string(r#"{"type":"json_schema"}"#.to_owned()).unwrap()),
     };
     assert_eq!(
         serde_json::to_string(&c).unwrap(),
         r#"{"effort":"high","format":{"type":"json_schema"}}"#
+    );
+}
+
+#[test]
+fn json_schema_format_keeps_type_before_the_schema_bytes() {
+    let schema = RawValue::from_string(r#"{"z":1,"a":{"y":2,"b":3}}"#.to_owned()).unwrap();
+    let format = OutputConfig::json_schema_format(&schema).unwrap();
+    assert_eq!(
+        format.get(),
+        r#"{"type":"json_schema","schema":{"z":1,"a":{"y":2,"b":3}}}"#
     );
 }
 

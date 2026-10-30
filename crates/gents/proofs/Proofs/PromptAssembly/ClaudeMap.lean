@@ -361,11 +361,12 @@ theorem splitSystem_partition (msgs : List Msg) :
     | system t => simp [splitSystem, isSystem, List.filter, h1, h2, h3]
     | other tag => simp [splitSystem, isSystem, List.filter, h1, h2, h3]
 
-def toolsField : List String → Option (List String)
-  | [] => none
-  | tools => some tools
+/-- Claude Code always sends `tools`, an empty list as `[]` (`lh` in the query
+generator); the key is only dropped under message-thread shaping, which Gents
+never enables. -/
+def toolsField (tools : List String) : Option (List String) := some tools
 
-theorem toolsField_empty : toolsField [] = none := rfl
+theorem toolsField_empty : toolsField [] = some [] := rfl
 
 theorem toolsField_nonempty (t : String) (rest : List String) :
     toolsField (t :: rest) = some (t :: rest) := rfl

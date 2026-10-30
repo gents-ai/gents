@@ -380,6 +380,7 @@ mod pool_client {
             .map(|id| ClaudeAccount {
                 credential_id: (*id).to_string(),
                 bearer: Arc::new(StaticBearer::new(id)),
+                identity: AccountIdentity::of_api_key("did"),
                 usage: Some(UsageReporter::new(
                     cache.clone(),
                     node.clone(),

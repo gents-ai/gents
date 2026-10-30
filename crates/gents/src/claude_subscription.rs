@@ -16,13 +16,16 @@ use rig::OneOrMany;
 use serde::{Deserialize, Serialize};
 
 use chrono::DateTime;
-use gents_claude::rotation::Family;
-use gents_loop::claude_messages_body::SESSION_KEY_PARAM;
+use gents_claude::metadata::device_id;
+use gents_claude::rotation::{tier, Family, Tier};
+use gents_loop::claude_messages_body::{ClaudeAccountContext, SESSION_KEY_PARAM};
 use gents_loop::provider_limit::{mark_account_rotated, ProviderLimitHeaders};
 
 use crate::claude_messages::{non_success_message, open_messages_at};
 use crate::claude_oauth::{CLAUDE_OAUTH_PRODUCT, CLAUDE_OAUTH_PROVIDER};
-use crate::oauth_credential::{BearerSource, DbCredentialBearer, OAuthRefreshKind};
+use crate::oauth_credential::{
+    BearerSource, DbCredentialBearer, OAuthCredential, OAuthRefreshKind,
+};
 use crate::usage_observation::now_unix_secs;
 use crate::usage_observation::{RotationFeed, UsageAccount, UsageCache, UsageReporter};
 
@@ -38,6 +41,53 @@ pub fn default_model_name() -> &'static str {
     DEFAULT_MODEL_ID
 }
 
+/// Who an account is to Anthropic: the install id, the account UUID and the credential kind
+/// that Claude Code puts into a request's metadata, betas and cache lifetime.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AccountIdentity {
+    device_id: String,
+    account_uuid: String,
+    api_key: bool,
+}
+
+impl AccountIdentity {
+    /// A subscription sign-in: the install id derives from the node and the credential, and
+    /// the account UUID is the account part of the credential's `organization:account` key.
+    pub(crate) fn of_credential(credential: &OAuthCredential) -> Self {
+        Self {
+            device_id: device_id(
+                format!("{}\n{}", credential.node_did, credential.credential_id).as_bytes(),
+            ),
+            account_uuid: credential
+                .provider_account_key
+                .as_deref()
+                .and_then(|key| key.split_once(':'))
+                .map(|(_, account)| account.to_owned())
+                .unwrap_or_default(),
+            api_key: false,
+        }
+    }
+
+    /// An API key: one install id per node, no account UUID.
+    pub(crate) fn of_api_key(node_did: &str) -> Self {
+        Self {
+            device_id: device_id(format!("{node_did}\napi-key").as_bytes()),
+            account_uuid: String::new(),
+            api_key: true,
+        }
+    }
+
+    pub(crate) fn context(&self, using_overage: bool) -> ClaudeAccountContext {
+        ClaudeAccountContext {
+            device_id: self.device_id.clone(),
+            account_uuid: self.account_uuid.clone(),
+            subscriber: !self.api_key,
+            using_overage,
+            api_key: self.api_key,
+        }
+    }
+}
+
 /// One Claude account a client can send with: its `OAuthCredential` id, bearer and usage reporter.
 pub(crate) struct ClaudeAccount<S>
 where
@@ -46,6 +96,7 @@ where
     pub(crate) credential_id: String,
     pub(crate) bearer: Arc<S>,
     pub(crate) usage: Option<Arc<UsageReporter>>,
+    pub(crate) identity: AccountIdentity,
 }
 
 /// Rotation over a pool backend's accounts, shared through the runtime's usage cache.
@@ -177,6 +228,7 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
         .await?;
         Ok(ClaudeAccount {
             credential_id: credential.credential_id.clone(),
+            identity: AccountIdentity::of_credential(&credential),
             bearer,
             usage: Some(UsageReporter::new(
                 cache.clone(),
@@ -188,12 +240,13 @@ impl ClaudeSubscriptionClient<DbCredentialBearer> {
 }
 
 impl ClaudeSubscriptionClient<ApiKeyBearer> {
-    pub fn with_api_key(key: String, usage: Option<Arc<UsageReporter>>) -> Self {
+    pub fn with_api_key(node_did: &str, key: String, usage: Option<Arc<UsageReporter>>) -> Self {
         Self {
             accounts: Arc::from([ClaudeAccount {
                 credential_id: String::new(),
                 bearer: Arc::new(ApiKeyBearer::new(key)),
                 usage,
+                identity: AccountIdentity::of_api_key(node_did),
             }]),
             rotation: None,
             http: ReqwestClient::new(),
@@ -212,6 +265,7 @@ where
                 credential_id: String::new(),
                 bearer,
                 usage: None,
+                identity: AccountIdentity::of_credential(&test_credential()),
             }]),
             rotation: None,
             http: ReqwestClient::new(),
@@ -314,6 +368,7 @@ where
                 crate::claude_messages::stream_messages(
                     &self.model,
                     request,
+                    &account.identity.context(false),
                     surface,
                     account.bearer.as_ref(),
                     &self.http,
@@ -344,6 +399,7 @@ where
                 .iter()
                 .map(|account| ClaudeAccount {
                     credential_id: account.credential_id.clone(),
+                    identity: account.identity.clone(),
                     bearer: account.bearer.clone(),
                     usage: account.usage.as_ref().map(|usage| {
                         usage.with_rotation(RotationFeed {
@@ -463,10 +519,15 @@ where
     let account = accounts
         .get(choice.index)
         .ok_or_else(|| CompletionError::ProviderError("Claude pool lost an account".to_string()))?;
+    // Only an account the pool is currently serving through paid overage draws it.
+    let using_overage = pool
+        .account_state(&choice.key)
+        .is_some_and(|state| tier(policy, now, family, &state) == Some(Tier::Overage));
     match open_messages_at(
         uri,
         model,
         request,
+        &account.identity.context(using_overage),
         surface,
         account.bearer.as_ref(),
         http,
@@ -507,6 +568,29 @@ impl BearerSource for ApiKeyBearer {
 
     fn is_oauth(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+fn test_credential() -> OAuthCredential {
+    OAuthCredential {
+        doc_id: None,
+        credential_id: "test-credential".to_owned(),
+        node_did: "did:key:z6MkTest".to_owned(),
+        provider: crate::claude_oauth::CLAUDE_OAUTH_PROVIDER.to_owned(),
+        access_token: String::new(),
+        refresh_token: String::new(),
+        id_token: None,
+        account_id: None,
+        chatgpt_plan_type: None,
+        is_fedramp: false,
+        access_token_expires_at: chrono::DateTime::UNIX_EPOCH,
+        last_refresh: None,
+        enabled: true,
+        account_ref: None,
+        connected_at: None,
+        provider_account_key: Some("org-test:account-test".to_owned()),
+        label: None,
     }
 }
 

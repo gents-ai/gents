@@ -34,14 +34,23 @@ fn generated_origin_cases_pick_the_wire_mode() {
     assert_eq!(cases.len(), 128, "the Lean cases enumerate every origin");
     for case in cases {
         let name = &case["name"];
-        let mode = Origin {
+        let origin = Origin {
             cause: cause(case["cause"].as_str().unwrap()),
             root_client: flag(case, "root_client"),
             scheduled: flag(case, "scheduled"),
             kind: kind(case["kind"].as_str().unwrap()),
             appends_system_prompt: flag(case, "appends_system_prompt"),
-        }
-        .wire_mode();
+        };
+        assert_eq!(origin.turn_origin(), case["turn_origin"].as_str(), "{name}");
+        assert_eq!(
+            origin.turn_position(3, false),
+            case["prompt_index_after_three"]
+                .as_u64()
+                .zip(case["turn_index_after_three"].as_u64()),
+            "{name}"
+        );
+        assert_eq!(origin.turn_position(3, true), None, "{name}");
+        let mode = origin.wire_mode();
         assert_eq!(
             identity_for(false, mode.session),
             case["identity"].as_str().unwrap(),
@@ -99,4 +108,21 @@ fn a_subagent_of_a_chat_stays_interactive_without_the_one_hour_source() {
     assert_eq!(mode.session, SessionMode::Interactive);
     assert!(mode.subagent && mode.agentic);
     assert!(!mode.main_thread_source);
+}
+
+#[test]
+fn the_origin_round_trips_through_its_wire_names() {
+    let origin = Origin {
+        cause: Cause::PluginJob,
+        root_client: true,
+        scheduled: false,
+        kind: Kind::OneShot,
+        appends_system_prompt: true,
+    };
+    let text = serde_json::to_string(&origin).unwrap();
+    assert_eq!(
+        text,
+        r#"{"cause":"plugin_job","root_client":true,"scheduled":false,"kind":"one_shot","appends_system_prompt":true}"#
+    );
+    assert_eq!(serde_json::from_str::<Origin>(&text).unwrap(), origin);
 }

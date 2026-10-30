@@ -326,6 +326,7 @@ pub(crate) async fn build_backend_client(
                 .map(|account| crate::usage_observation::UsageReporter::new(cache, node, account));
             Ok(BackendClient::AnthropicApiKey(
                 crate::claude_subscription::ClaudeSubscriptionClient::with_api_key(
+                    agent.node_did(),
                     api_key.to_owned(),
                     usage,
                 ),

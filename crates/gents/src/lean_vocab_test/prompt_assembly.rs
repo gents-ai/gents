@@ -184,6 +184,10 @@ pub(crate) struct LeanPromptAssemblyClaudeMapCase {
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanPromptAssemblyClaudeBodyCase {
     pub(crate) name: String,
+    pub(crate) model: String,
+    pub(crate) first_user_text: String,
+    pub(crate) fingerprint_placeholder: String,
+    pub(crate) prompt_id: String,
     pub(crate) attribution: String,
     pub(crate) preamble: Option<String>,
     pub(crate) rows: Vec<String>,
@@ -194,6 +198,15 @@ pub(crate) struct LeanPromptAssemblyClaudeBodyCase {
     pub(crate) supported_efforts: Option<Vec<String>>,
     pub(crate) effort: Option<String>,
     pub(crate) selected_effort: Option<String>,
+    pub(crate) facts: LeanPromptAssemblyClaudeFieldFacts,
+    pub(crate) request: LeanPromptAssemblyClaudeFieldRequest,
+    pub(crate) max_tokens: u64,
+    pub(crate) thinking: LeanPromptAssemblyClaudeFieldThinking,
+    pub(crate) temperature: Option<u64>,
+    pub(crate) context_management: bool,
+    pub(crate) body_effort: Option<String>,
+    pub(crate) diagnostics: LeanPromptAssemblyClaudeFieldDiagnostics,
+    pub(crate) per_turn_effort: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
@@ -280,6 +293,9 @@ pub(crate) struct LeanPromptAssemblyClaudeOriginCase {
     pub(crate) request_class: String,
     pub(crate) main_thread_source: bool,
     pub(crate) agentic: bool,
+    pub(crate) turn_origin: Option<String>,
+    pub(crate) prompt_index_after_three: Option<u64>,
+    pub(crate) turn_index_after_three: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]

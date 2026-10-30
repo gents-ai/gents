@@ -367,3 +367,20 @@ fn per_turn_row_is_inserted_after_the_first_user_run() {
     assert!(!insert_per_turn_row(&mut none, Effort::Low));
     assert_eq!(none.len(), 1);
 }
+
+#[test]
+fn an_unlisted_model_takes_the_fallback_limits_and_id_based_facts() {
+    let new = ModelFacts::unlisted("claude-sonnet-9");
+    assert_eq!((new.output_default, new.output_upper), (32_000, 128_000));
+    assert!(new.thinking_supported && new.adaptive && new.effort_capable);
+    assert_eq!(new.default_effort, None);
+    for (id, limits) in [
+        ("claude-3-opus-20240229", (4096, 4096)),
+        ("claude-3-haiku-20240307", (4096, 4096)),
+        ("claude-3-sonnet-20240229", (8192, 8192)),
+    ] {
+        let facts = ModelFacts::unlisted(id);
+        assert_eq!((facts.output_default, facts.output_upper), limits, "{id}");
+        assert!(!facts.thinking_supported && !facts.effort_capable, "{id}");
+    }
+}

@@ -150,6 +150,45 @@ theorem scheduled_work_is_cron (o : Origin) :
     (wireMode o).workload = some "cron" ↔ o.scheduled = true := by
   cases h : o.scheduled <;> simp [wireMode, h]
 
+/-- `cc_turn_origin` of the request's prompt (`wBs`). Only a top-level turn is
+stamped: a subagent's or workflow's first prompt carries none, and compaction,
+titles and one-shot calls build their own messages. Scheduled work is
+`scheduled` even in a chat (a wakeup stamps it), otherwise a client-rooted
+interactive prompt is `human` and a non-interactive one is `sdk`. -/
+def turnOrigin (o : Origin) : Option String :=
+  if o.kind == .turn && !o.subagent then
+    some (if o.scheduled then "scheduled" else if o.interactive then "human" else "sdk")
+  else none
+
+/-- `cc_prompt_index` and `cc_turn_index` of a turn from the number of prompt
+rows in its history (`mKn`): each prompt row opens a turn, and a human prompt
+also advances the prompt index. Gents does not record the origin of earlier
+prompts, so they are taken to share the current turn's. A compaction summary
+that lost the position leaves both unset. -/
+def turnPosition (o : Origin) (prompts : Nat) (positionLost : Bool) : Option (Nat × Nat) :=
+  match turnOrigin o with
+  | none => none
+  | some origin =>
+    if positionLost then none
+    else some (if origin == "human" then prompts else 0, max prompts 1)
+
+theorem subagent_turns_carry_no_turn_origin (o : Origin) (h : o.subagent = true) :
+    turnOrigin o = none := by
+  simp [turnOrigin, h]
+
+theorem auxiliary_calls_carry_no_turn_origin (o : Origin) (h : o.kind ≠ .turn) :
+    turnOrigin o = none := by
+  simp [turnOrigin, h]
+
+theorem unscheduled_client_turns_are_human (o : Origin) (hc : o.cause = .client)
+    (hk : o.kind = .turn) (hs : o.scheduled = false) : turnOrigin o = some "human" := by
+  simp [turnOrigin, Origin.subagent, Origin.interactive, hc, hk, hs]
+
+theorem lost_position_has_no_indices (o : Origin) (prompts : Nat) :
+    turnPosition o prompts true = none := by
+  unfold turnPosition
+  cases turnOrigin o <;> simp
+
 /-- The identity prefix a request sends (`f6n` on a first-party request). -/
 def identity (o : Origin) : String :=
   identityFor false (wireMode o).session

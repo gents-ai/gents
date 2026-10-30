@@ -46,6 +46,33 @@ pub fn device_id(seed: &[u8]) -> String {
     out
 }
 
+/// A deterministic version 4 UUID derived from `key`: the first 16 bytes of its SHA-256 with the
+/// version and variant bits set. Claude Code's session and prompt ids are random v4 UUIDs; Gents
+/// derives them from its own ids so a retry and the tool loop of one request share them.
+pub fn stable_uuid(key: &[u8]) -> String {
+    let digest = Sha256::digest(key);
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    uuid::Builder::from_random_bytes(bytes)
+        .into_uuid()
+        .hyphenated()
+        .to_string()
+}
+
+/// A deterministic subagent id derived from `key`: `a` and the first 8 bytes of its SHA-256 in
+/// lowercase hex. Claude Code gives each spawned agent `a` and 8 random bytes in hex (`$_()`);
+/// Gents derives it from the subagent's session id so every request of that session shares it.
+pub fn agent_id(key: &[u8]) -> String {
+    let digest = Sha256::digest(key);
+    let mut out = String::with_capacity(17);
+    out.push('a');
+    for byte in &digest[..8] {
+        out.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
+        out.push(char::from_digit(u32::from(byte & 15), 16).unwrap_or('0'));
+    }
+    out
+}
+
 /// `metadata.user_id`: `JSON.stringify` of the filtered extras followed by the identity.
 ///
 /// Extras keep their position when they collide with an identity key but take the

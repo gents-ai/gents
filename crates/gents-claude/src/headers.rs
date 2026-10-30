@@ -62,6 +62,9 @@ impl fmt::Debug for Auth<'_> {
     }
 }
 
+/// `x-claude-code-agent-type` of a user-defined agent (an `agent:custom` query source).
+pub const CUSTOM_AGENT_TYPE: &str = "custom";
+
 /// The identity of a subagent making the request.
 #[derive(Debug, Clone, Copy)]
 pub struct AgentHeaders<'a> {

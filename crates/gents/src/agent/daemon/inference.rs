@@ -296,6 +296,17 @@ where
                         self.loop_tools.len(),
                         self.account_hops,
                     )?;
+                    let claude_context = crate::claude_request_context::for_request(
+                        &crate::config_client::ConfigAccess::local(self.node.clone()),
+                        &self.agent_config,
+                        request,
+                        gents_claude::origin::Kind::Turn,
+                    )
+                    .await?;
+                    crate::claude_request_context::apply(
+                        &mut loop_config,
+                        claude_context.as_ref(),
+                    )?;
                     loop_config.deadline = request_deadline;
                     loop_config.context_calibration = context_calibration.clone();
                     loop_config.output_obligation_gate = output_obligation_gate
@@ -309,6 +320,10 @@ where
                         aggregate_token_budget,
                         effective_seed,
                         context_calibration.clone(),
+                        claude_context
+                            .as_ref()
+                            .map(crate::claude_request_context::compaction_params)
+                            .transpose()?,
                     );
                     let turn_node = self.node.clone();
                     let turn_request = request.clone();

@@ -14,7 +14,6 @@ use serde::de::{Deserializer, MapAccess, Visitor};
 use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
-use serde_json::Value;
 
 /// A failure producing the request bytes.
 #[derive(Debug, thiserror::Error)]
@@ -817,14 +816,30 @@ impl Serialize for ContextEdit {
 }
 
 /// The output configuration; callers set the whole block to `None` when both fields are.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct OutputConfig {
     /// The effort level.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
-    /// The structured output format.
+    /// The structured output format, kept as the caller's bytes so its key order survives.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub format: Option<Value>,
+    pub format: Option<Box<RawValue>>,
+}
+
+impl PartialEq for OutputConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.effort == other.effort && raw_opt_eq(&self.format, &other.format)
+    }
+}
+
+impl OutputConfig {
+    /// `{type:"json_schema", schema}` around a JSON schema, in Claude Code's key order.
+    pub fn json_schema_format(schema: &RawValue) -> Result<Box<RawValue>, WireError> {
+        Ok(RawValue::from_string(format!(
+            r#"{{"type":"json_schema","schema":{}}}"#,
+            schema.get()
+        ))?)
+    }
 }
 
 /// The diagnostics block; `previous_message_id` is always present, `null` when unset.
