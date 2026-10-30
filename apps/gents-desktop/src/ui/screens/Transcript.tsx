@@ -148,9 +148,12 @@ function ModelInputReduction({
         )}
       </div>
       <p className="mt-1">
-        {item.reductionCount.toLocaleString()} affected model inputs
-        {` · ${item.compactedCount.toLocaleString()} compacted`}
-        {` · ${item.repairedCount.toLocaleString()} repaired`}
+        {item.reductionCount.toLocaleString()} affected model{" "}
+        {item.reductionCount === 1 ? "input" : "inputs"}
+        {/* a compaction with its own marker is not counted here */}
+        {item.compactedCount > 0 &&
+          ` · ${item.compactedCount.toLocaleString()} compacted`}
+        {item.repairedCount > 0 && ` · ${item.repairedCount.toLocaleString()} repaired`}
         {item.latestEstimatedInputTokens == null
           ? " · latest estimate unavailable"
           : ` · latest estimate ${item.latestEstimatedInputTokens.toLocaleString()} tokens`}

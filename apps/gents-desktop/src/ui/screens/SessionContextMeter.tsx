@@ -17,6 +17,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/po
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { InfoTip } from "./InfoTip";
 import { compactTokens } from "@/lib/tokens";
+import { fullTime, shortTime } from "./TranscriptMarker";
 
 type LastRequest = NonNullable<DesktopSessionSnapshot["context"]["lastRequest"]>;
 
@@ -573,15 +574,22 @@ export function SessionContext({
                 .map((entry) => (
                   <li key={entry.compactionKey} className="flex justify-between gap-3">
                     <span>
-                      {entry.createdAt ? `${entry.createdAt} · ` : ""}
+                      {entry.createdAt && shortTime(entry.createdAt) && (
+                        <time
+                          dateTime={entry.createdAt}
+                          title={fullTime(entry.createdAt)}
+                        >
+                          {shortTime(entry.createdAt)} ·{" "}
+                        </time>
+                      )}
                       {entry.messagesCompacted == null
                         ? "Message count unavailable"
-                        : `${entry.messagesCompacted.toLocaleString()} messages`}
+                        : `${entry.messagesCompacted.toLocaleString()} ${entry.messagesCompacted === 1 ? "message" : "messages"}`}
                     </span>
                     <span className="text-right tabular-nums">
                       {entry.originalTokens == null || entry.compactedTokens == null
                         ? "Token estimates unavailable"
-                        : `${entry.originalTokens.toLocaleString()} → ${entry.compactedTokens.toLocaleString()}`}
+                        : `${compactTokens(entry.originalTokens)} → ${compactTokens(entry.compactedTokens)}`}
                     </span>
                   </li>
                 ))}

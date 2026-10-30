@@ -3,47 +3,81 @@ import { ChevronRight, FoldVertical } from "lucide-react";
 import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
 import { compactTokens } from "@/lib/tokens";
 import { cn } from "@gents/ui/lib/utils";
+import {
+  checkpointSections,
+  isLeadingSection,
+  sectionLabel,
+  type CheckpointSection,
+} from "@/lib/checkpoint";
 import { Markdown } from "./Markdown";
 
 /** A rule across the transcript naming something that happened between
     messages: a new day, a compaction. A marker with something to open is
-    not a separator, whose content is hidden from assistive technology. */
+    not a separator, whose content is hidden from assistive technology;
+    its whole middle, not the rule, is the button that opens it. */
 export function TranscriptMarker({
   icon,
   label,
   detail,
   time,
   testId,
-  interactive = false,
+  toggle,
 }: {
   icon?: ReactNode;
   label: ReactNode;
   detail?: ReactNode;
   time?: string | null;
   testId?: string;
-  interactive?: boolean;
+  toggle?: { open: boolean; controls: string; onToggle: () => void };
 }) {
+  const content = (
+    <>
+      {icon && (
+        <span aria-hidden className="shrink-0 [&_svg]:size-3.5">
+          {icon}
+        </span>
+      )}
+      <span className="truncate font-medium text-foreground/80 group-hover:text-foreground">
+        {label}
+      </span>
+      {toggle && (
+        <ChevronRight
+          aria-hidden
+          className={cn(
+            "size-3 shrink-0 transition-transform",
+            toggle.open && "rotate-90",
+          )}
+        />
+      )}
+      {detail && <span className="truncate">· {detail}</span>}
+      {time && (
+        <time dateTime={time} title={fullTime(time)} className="shrink-0">
+          · {clockTime(time)}
+        </time>
+      )}
+    </>
+  );
   return (
     <div
-      role={interactive ? undefined : "separator"}
+      role={toggle ? undefined : "separator"}
       data-testid={testId}
       className="flex items-center gap-3 py-1 text-xs text-muted-foreground"
     >
       <span aria-hidden className="h-px flex-1 bg-border/70" />
-      <span className="flex min-w-0 shrink items-center gap-1.5">
-        {icon && (
-          <span aria-hidden className="shrink-0 [&_svg]:size-3.5">
-            {icon}
-          </span>
-        )}
-        <span className="truncate font-medium text-foreground/80">{label}</span>
-        {detail && <span className="truncate">· {detail}</span>}
-        {time && (
-          <time dateTime={time} title={fullTime(time)} className="shrink-0">
-            · {clockTime(time)}
-          </time>
-        )}
-      </span>
+      {toggle ? (
+        <button
+          type="button"
+          aria-expanded={toggle.open}
+          aria-controls={toggle.controls}
+          title={toggle.open ? "Hide the summary" : "Show what the agent kept"}
+          onClick={toggle.onToggle}
+          className="group -my-0.5 flex min-w-0 shrink cursor-pointer items-center gap-1.5 rounded-md px-2 py-0.5 hover:bg-muted hover:text-foreground/80 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          {content}
+        </button>
+      ) : (
+        <span className="flex min-w-0 shrink items-center gap-1.5">{content}</span>
+      )}
       <span aria-hidden className="h-px flex-1 bg-border/70" />
     </div>
   );
@@ -78,11 +112,25 @@ const clockTime = (timestamp: string) =>
     minute: "2-digit",
   });
 
-const fullTime = (timestamp: string) =>
+export const fullTime = (timestamp: string) =>
   new Date(timestamp).toLocaleString(undefined, {
     dateStyle: "full",
     timeStyle: "short",
   });
+
+/** a time as a marker gives it, with its date when that isn't today, for
+    places without day markers around them; null when it can't be read */
+export function shortTime(timestamp: string, now = new Date()): string | null {
+  const day = dayOf(timestamp);
+  if (day === null) return null;
+  if (day === dayStart(now)) return clockTime(timestamp);
+  const date = new Date(timestamp);
+  return `${date.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: "short",
+    ...(date.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }),
+  })}, ${clockTime(timestamp)}`;
+}
 
 export function DayMarker({ day }: { day: number }) {
   return <TranscriptMarker label={dayLabel(day)} testId="day-marker" />;
@@ -133,26 +181,11 @@ export function CompactionMarker({
     <div data-testid="session-compaction-event" data-compaction-key={item.itemKey}>
       <TranscriptMarker
         icon={<FoldVertical />}
-        interactive={summary !== null}
-        label={
-          summary === null ? (
-            title
-          ) : (
-            <button
-              type="button"
-              aria-expanded={open}
-              aria-controls={panel}
-              title={open ? "Hide the summary" : "Show what the agent kept"}
-              onClick={() => setOpen((value) => !value)}
-              className="inline-flex cursor-pointer items-center gap-1 rounded-sm hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-            >
-              {title}
-              <ChevronRight
-                aria-hidden
-                className={cn("size-3 transition-transform", open && "rotate-90")}
-              />
-            </button>
-          )
+        label={title}
+        toggle={
+          summary === null
+            ? undefined
+            : { open, controls: panel, onToggle: () => setOpen((value) => !value) }
         }
         detail={
           before != null && after != null
@@ -167,38 +200,141 @@ export function CompactionMarker({
           role="region"
           aria-label="Compaction summary"
           data-testid="compaction-summary"
-          className="mx-auto mt-1 mb-2 max-w-prose rounded-lg border border-border/70 bg-muted/30 px-4 py-3 text-sm"
+          className="mt-1 mb-2 rounded-md border border-border/70 bg-muted/30 px-4 py-3 text-[13px] leading-[1.6]"
         >
-          <p className="mb-2 text-xs text-muted-foreground">
-            What the agent kept of the compacted messages
-          </p>
-          <div className="prose-app">
-            <Markdown>{summary}</Markdown>
-          </div>
-          <CompactionFiles label="Files read" files={filesRead} />
-          <CompactionFiles label="Files modified" files={filesModified} />
+          <CheckpointRows
+            summary={summary}
+            filesRead={filesRead}
+            filesModified={filesModified}
+          />
         </div>
       )}
     </div>
   );
 }
 
-function CompactionFiles({ label, files }: { label: string; files: string[] }) {
+/* the summary a row per section, a short label beside its text; the goal,
+   next actions, uncertainties and blockers show first */
+function CheckpointRows({
+  summary,
+  filesRead,
+  filesModified,
+}: {
+  summary: string;
+  filesRead: string[];
+  filesModified: string[];
+}) {
+  const [all, setAll] = useState(false);
+  const sections = checkpointSections(summary);
+  if (!sections) {
+    return (
+      <>
+        <div className="prose-app text-[13px]">
+          <Markdown>{summary}</Markdown>
+        </div>
+        {(filesRead.length > 0 || filesModified.length > 0) && (
+          <dl className="mt-2 grid grid-cols-[5rem_minmax(0,1fr)] gap-x-4 gap-y-3">
+            <FileRow label="Files read" files={filesRead} />
+            <FileRow label="Files modified" files={filesModified} />
+          </dl>
+        )}
+      </>
+    );
+  }
+  /* the entry's own file lists stand in for the ones written into the text */
+  const fileTitles = new Set([
+    ...(filesRead.length ? ["Files read"] : []),
+    ...(filesModified.length ? ["Files modified"] : []),
+  ]);
+  const shown = sections.filter((section) => !fileTitles.has(section.title));
+  const leading = shown.filter(isLeadingSection);
+  const first = leading.length ? leading : shown;
+  const rest = shown.length - first.length + fileTitles.size;
+  return (
+    <>
+      <dl className="grid grid-cols-[5rem_minmax(0,1fr)] gap-x-4 gap-y-3">
+        {(all ? shown : first).map((section) => (
+          <SectionRow key={section.title} section={section} />
+        ))}
+        {all && (
+          <>
+            <FileRow label="Files read" files={filesRead} />
+            <FileRow label="Files modified" files={filesModified} />
+          </>
+        )}
+      </dl>
+      {rest > 0 && (
+        <button
+          type="button"
+          aria-expanded={all}
+          onClick={() => setAll((value) => !value)}
+          className="mt-1.5 cursor-pointer rounded-sm text-xs text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
+          {all ? "Show less" : `Show ${rest} more`}
+        </button>
+      )}
+    </>
+  );
+}
+
+function SectionRow({ section }: { section: CheckpointSection }) {
+  const List = section.ordered ? "ol" : "ul";
+  return (
+    <>
+      <dt className="text-xs leading-[1.3rem] text-muted-foreground">
+        {sectionLabel(section.title)}
+      </dt>
+      <dd className="min-w-0 max-w-[72ch] text-foreground/90">
+        {section.text && <p>{inlineCode(section.text)}</p>}
+        {section.items.length > 0 && (
+          <List
+            className={cn(
+              "space-y-1 pl-4",
+              section.ordered ? "list-decimal" : "list-disc",
+              "marker:text-muted-foreground",
+            )}
+          >
+            {section.items.map((item, index) => (
+              <li key={index}>{inlineCode(item)}</li>
+            ))}
+          </List>
+        )}
+      </dd>
+    </>
+  );
+}
+
+function FileRow({ label, files }: { label: string; files: string[] }) {
   if (!files.length) return null;
   return (
-    <div className="mt-3">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <ul aria-label={label} className="mt-1 flex flex-wrap gap-1.5">
-        {files.map((file) => (
-          <li
-            key={file}
-            className="max-w-full truncate rounded border border-border/70 px-1.5 py-0.5 font-mono text-[11px]"
-            title={file}
-          >
-            {file}
-          </li>
-        ))}
-      </ul>
-    </div>
+    <>
+      <dt className="pt-0.5 text-xs text-muted-foreground">{sectionLabel(label)}</dt>
+      <dd className="min-w-0 max-w-[72ch] text-foreground/90">
+        <ul aria-label={label} className="flex flex-wrap gap-1">
+          {files.map((file) => (
+            <li
+              key={file}
+              className="max-w-full truncate rounded border border-border/70 px-1.5 py-px font-mono text-[11px]"
+              title={file}
+            >
+              {file}
+            </li>
+          ))}
+        </ul>
+      </dd>
+    </>
+  );
+}
+
+/* backtick spans as code; the rest of the checkpoint's Markdown is plain */
+function inlineCode(text: string) {
+  return text.split(/`([^`]+)`/).map((part, index) =>
+    index % 2 ? (
+      <code key={index} className="rounded bg-muted px-1 font-mono text-[12px]">
+        {part}
+      </code>
+    ) : (
+      part
+    ),
   );
 }

@@ -341,6 +341,37 @@ describe("session context meter (#1618)", () => {
     expect(screen.getByTestId("context-meter")).toHaveTextContent("1 compaction");
     expect(screen.queryByTestId("last-context-dispatch")).not.toBeInTheDocument();
   });
+  it("gives a compaction's time and tokens as the transcript's marker does", () => {
+    render(
+      <SessionContext
+        context={context({
+          sessionCompactionCount: 1,
+          compactions: [
+            {
+              compactionKey: "provider-context-reduction:1",
+              sequence: null,
+              messagesCompacted: 1,
+              originalTokens: 16_523,
+              compactedTokens: 516,
+              createdAt: "2026-10-29T21:14:59.563619Z",
+            },
+          ],
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("context-meter"));
+
+    const [entry] = within(
+      screen.getByRole("list", { name: "Recent session compactions" }),
+    ).getAllByRole("listitem");
+    expect(entry).toHaveTextContent("1 message");
+    expect(entry).toHaveTextContent("16.5k → 516");
+    expect(entry).not.toHaveTextContent("T21:14:59");
+    expect(entry.querySelector("time")).toHaveAttribute(
+      "dateTime",
+      "2026-10-29T21:14:59.563619Z",
+    );
+  });
   it("draws one bar over the window with a segment and legend row per part", () => {
     render(
       <SessionContext
