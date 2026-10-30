@@ -471,6 +471,7 @@ pub async fn capture_source_boundary(
     })
 }
 
+#[cfg(test)]
 pub(crate) async fn persist(
     node: &std::sync::Arc<EmbeddedNode>,
     input: NewProviderContextReduction<'_>,
