@@ -420,9 +420,8 @@ pub fn build_external_adapter_projection(
     capture: &crate::external_adapter_capture::ExternalAdapterCapture,
     context: &ProjectionContext,
 ) -> anyhow::Result<AdapterProjectionEnvelope> {
-    use crate::external_adapter_capture::{
-        import_external_adapter_capture_to_derived_view, langgraph_state_history_projection,
-    };
+    use crate::external_adapter_capture::import_external_adapter_capture_to_derived_view;
+    use crate::external_adapter_capture::langgraph::langgraph_state_history_projection;
     let imported = import_external_adapter_capture_to_derived_view(capture)?;
     let mapping = capture.mapping.as_ref().expect("import validated mapping");
     let view = &imported.view;
