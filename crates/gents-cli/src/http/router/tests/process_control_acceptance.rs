@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::config_client::{ConfigAccess, GraphqlEndpoint};
+use gents::store::config_client::{ConfigAccess, GraphqlEndpoint};
 use gents::NodeIdentity as _;
 use gents_protocol::process_control::{
     OperatorProcessControlRequest, ProcessControlOutcome, PROCESS_CONTROL_PATH,
@@ -98,8 +98,8 @@ async fn authenticated_process_control_stops_only_the_selected_native_worker() {
         .unwrap();
 
     let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let escaped_did = gents::graphql::escape_graphql_string(&did);
-    let escaped_agent = gents::graphql::escape_graphql_string(&agent_id);
+    let escaped_did = gents::store::graphql::escape_graphql_string(&did);
+    let escaped_agent = gents::store::graphql::escape_graphql_string(&agent_id);
     let session = "process-control-session";
     let mutation = format!(
         r#"mutation {{create_AgentSession(input: {{session_id: "{session}", node_did: "{escaped_did}", requester_did: "{escaped_did}", agent_id: "{escaped_agent}", created_at: "{created_at}", title: {{text: "fixture", source: "generated"}}}}) {{_docID}}}}"#
