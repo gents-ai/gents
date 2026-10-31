@@ -2,10 +2,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
-use gents::defra_write::BoundedWriteTool;
 use gents::documents::{WriteToolDecl, WriteToolField};
 use gents::inference::llm::tool::Tool;
 use gents::store::graphql::escape_graphql_string;
+use gents::tools::builtin::defra_write::BoundedWriteTool;
 use gents::{Collection, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};

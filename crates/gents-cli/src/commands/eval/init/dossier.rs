@@ -41,7 +41,9 @@ pub(super) fn runtime_collections() -> &'static BTreeMap<String, BTreeSet<String
                 let fields = collection
                     .fields
                     .into_iter()
-                    .filter(|field| !gents::defra_query::is_restricted_field(&name, &field.name))
+                    .filter(|field| {
+                        !gents::tools::builtin::defra_query::is_restricted_field(&name, &field.name)
+                    })
                     .map(|field| field.name)
                     .collect();
                 (name, fields)

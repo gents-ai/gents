@@ -4,7 +4,7 @@ use super::schema_fields::{
     validate_output_obligation_count_fields, IntrospectedFields,
 };
 use super::ConfigApplyTxn;
-use crate::defra_query::SchemaField;
+use crate::tools::builtin::defra_query::SchemaField;
 use crate::Collection;
 use anyhow::Result;
 use std::collections::{BTreeMap, BTreeSet};
@@ -165,7 +165,7 @@ pub fn validate_event_trigger_document_fields(
             };
             let own_field = |name: &String| {
                 !name.starts_with('_')
-                    && !crate::defra_query::schema::is_aggregate_pseudo_field(name)
+                    && !crate::tools::builtin::defra_query::schema::is_aggregate_pseudo_field(name)
             };
             let resolved_native_route_field = task.emit_outcome
                 && source.group.is_none()

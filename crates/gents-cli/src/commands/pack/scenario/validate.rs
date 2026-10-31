@@ -139,7 +139,8 @@ pub(super) fn validate_prompt_tool_contracts(
             .and_then(|datastore| datastore.enable_defra_query)
             .unwrap_or(false)
         {
-            advertised.insert(gents::defra_query::DEFRA_QUERY_TOOL_NAME.to_string());
+            advertised
+                .insert(gents::tools::builtin::defra_query::DEFRA_QUERY_TOOL_NAME.to_string());
         }
         if datastore
             .and_then(|settings| settings.write_collections.as_ref())

@@ -173,12 +173,12 @@
       "fixture_status": "not_exported",
       "native_owner_paths": [
         "crates/gents/src/store/config_client/txn.rs",
-        "crates/gents/src/defra_write/mod.rs",
+        "crates/gents/src/tools/builtin/defra_write/mod.rs",
         "crates/gents/src/request/lifecycle/execution_lease.rs"
       ],
       "consumer_paths": [
         "crates/gents/src/store/config_client/txn_owner_tests.rs",
-        "crates/gents/src/defra_write/tests.rs",
+        "crates/gents/src/tools/builtin/defra_write/tests.rs",
         "crates/gents/src/request/streaming/canonical_tests.rs"
       ],
       "native_status": "pending",
@@ -236,7 +236,7 @@
       "fixture_status": "not_exported",
       "native_owner_paths": [
         "crates/gents/src/store/config_client/txn.rs",
-        "crates/gents/src/defra_write/mod.rs"
+        "crates/gents/src/tools/builtin/defra_write/mod.rs"
       ],
       "consumer_paths": [
         "crates/gents/src/store/identity/tests.rs",

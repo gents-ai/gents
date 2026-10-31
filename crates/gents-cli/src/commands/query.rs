@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use gents::defra_query::{CollectionScope, DefraQueryParams};
 #[cfg(test)]
 use gents::store::config_client::GraphqlEndpoint;
+use gents::tools::builtin::defra_query::{CollectionScope, DefraQueryParams};
 use serde_json::{json, Value};
 
 use crate::cli::args::QueryArgs;
@@ -13,7 +13,7 @@ pub(crate) async fn run_defra_query(
     params: &DefraQueryParams,
     scope: &CollectionScope,
 ) -> Result<Value> {
-    gents::defra_query::execute_command(
+    gents::tools::builtin::defra_query::execute_command(
         &gents::store::config_client::ConfigAccess::Graphql(graphql.clone()),
         &params.clone().into(),
         scope,
@@ -49,16 +49,20 @@ pub(crate) async fn query(args: QueryArgs) -> Result<()> {
     let (access, _) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let (command, scope) = command_from_args(args)?;
-    let output = gents::defra_query::execute_command(&access, &command, &scope).await?;
+    let output =
+        gents::tools::builtin::defra_query::execute_command(&access, &command, &scope).await?;
     print_json(&output)?;
     Ok(())
 }
 
 fn command_from_args(
     args: QueryArgs,
-) -> Result<(gents::defra_query::QueryParams, CollectionScope)> {
+) -> Result<(
+    gents::tools::builtin::defra_query::QueryParams,
+    CollectionScope,
+)> {
     let (params, scope) = params_from_args(&args)?;
-    let mut command: gents::defra_query::QueryParams = params.into();
+    let mut command: gents::tools::builtin::defra_query::QueryParams = params.into();
     if let Some(verb) = args.verb {
         command.argv = vec![verb.clone()];
         if verb == "fields" || verb == "count" {

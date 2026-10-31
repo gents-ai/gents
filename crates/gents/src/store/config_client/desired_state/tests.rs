@@ -8,8 +8,8 @@ use super::validate::{
     validate_desired_state_plan, validate_event_trigger_document_fields, OutcomeSourceSchemaError,
 };
 use super::*;
-use crate::defra_query::SchemaField;
 use crate::store::config_client::ConfigAccess;
+use crate::tools::builtin::defra_query::SchemaField;
 use anyhow::Context;
 use defra_node::EmbeddedNode;
 use serde_json::json;

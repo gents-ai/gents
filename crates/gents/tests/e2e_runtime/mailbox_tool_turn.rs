@@ -69,7 +69,7 @@ async fn filing_a_mailbox_item_returns_a_receipt_and_the_turn_continues() {
                 enable_session_history_tool: Some(true),
                 ..Default::default()
             }),
-            self_config: Some(gents::self_config::engineer_self_config()),
+            self_config: Some(gents::tools::builtin::self_config::engineer_self_config()),
             ..Default::default()
         },
         vec![(

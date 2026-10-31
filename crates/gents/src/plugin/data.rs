@@ -511,7 +511,9 @@ impl Session {
         query: &DataQuery,
         max_output_bytes: usize,
     ) -> Result<Vec<Map<String, Value>>> {
-        use crate::defra_query::{build_paged_query, CollectionScope, DefraQueryParams};
+        use crate::tools::builtin::defra_query::{
+            build_paged_query, CollectionScope, DefraQueryParams,
+        };
         let data = &self.declaration;
         let collection = query.collection.as_str();
         let in_own_sdl = data.collections.iter().any(|c| c == collection);
@@ -556,7 +558,10 @@ impl Session {
                     |txn| {
                         let (filter, text) = (&filter, &text);
                         Box::pin(async move {
-                            crate::defra_query::validate_filter(txn, collection, filter).await?;
+                            crate::tools::builtin::defra_query::validate_filter(
+                                txn, collection, filter,
+                            )
+                            .await?;
                             Ok::<_, anyhow::Error>(txn.execute(text).await?)
                         })
                     },
@@ -568,7 +573,10 @@ impl Session {
                     .transact_readonly("plugin_data_calls.query", |txn| {
                         let (filter, text) = (&filter, &text);
                         Box::pin(async move {
-                            crate::defra_query::validate_filter(txn, collection, filter).await?;
+                            crate::tools::builtin::defra_query::validate_filter(
+                                txn, collection, filter,
+                            )
+                            .await?;
                             Ok::<_, anyhow::Error>(txn.execute(text).await?)
                         })
                     })

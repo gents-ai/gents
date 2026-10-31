@@ -65,7 +65,7 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
             behavior
                 .tags
                 .iter()
-                .any(|tag| tag == gents::self_config::ENGINEER_AGENT_TAG),
+                .any(|tag| tag == gents::tools::builtin::self_config::ENGINEER_AGENT_TAG),
             "{name}: the Engineer carries the protected Setup tag"
         );
         assert_eq!(
@@ -93,7 +93,7 @@ fn every_subject_is_the_desktop_engineer_on_an_eval_node() {
         let tools = &config.tools[0];
         assert_eq!(
             tools.self_config,
-            Some(gents::self_config::engineer_self_config()),
+            Some(gents::tools::builtin::self_config::engineer_self_config()),
             "{name}: the Setup self-config grant"
         );
         assert_eq!(
