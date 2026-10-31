@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Check, ChevronLeft, ChevronRight, Pencil, X } from "lucide-react";
 import type {
   MailboxItemView,
@@ -14,6 +14,8 @@ import { nodeOf } from "../../../hooks/fleetStore";
 import { useFleet } from "../../hooks/useFleet";
 import { agentName } from "../behavior";
 import { parseQuestion } from "../MailboxQuestion";
+import { Markdown } from "../Markdown";
+import { morph } from "@/lib/morph";
 
 /* a field the panel's composer hides as it opens is not one being written in */
 const writingElsewhere = (element: Element | null) =>
@@ -36,17 +38,32 @@ const drafts = new Map<string, Draft>();
 export function QuestionPanel({
   items,
   onTypeInstead,
+  className,
+  where,
+  icon,
+  aside,
+  kind,
 }: {
   items: readonly MailboxItemView[];
   /** the person would rather write a message; the question stays open */
-  onTypeInstead: () => void;
+  onTypeInstead?: () => void;
+  className?: string;
+  /** where and when it was asked, for a question shown outside its session */
+  where?: ReactNode;
+  /** what kind of item this is, where questions sit among other kinds */
+  icon?: ReactNode;
+  /** at the header's end, before its controls: when it was asked */
+  aside?: ReactNode;
+  /** a first header line, ahead of who asks: what kind of item this is */
+  kind?: ReactNode;
 }) {
   const [at, setAt] = useState(0);
   const shown = Math.min(at, items.length - 1);
   const item = items[shown];
   const question = item ? parseQuestion(item) : null;
   if (!item || !question) return null;
-  const step = (by: number) => setAt((items.length + shown + by) % items.length);
+  const step = (by: number) =>
+    morph(() => setAt((items.length + shown + by) % items.length));
   return (
     <QuestionForm
       key={item.itemId}
@@ -54,6 +71,11 @@ export function QuestionPanel({
       question={question}
       position={items.length > 1 ? { at: shown, of: items.length, step } : null}
       onTypeInstead={onTypeInstead}
+      className={className}
+      where={where}
+      icon={icon}
+      aside={aside}
+      kind={kind}
     />
   );
 }
@@ -63,11 +85,21 @@ function QuestionForm({
   question,
   position,
   onTypeInstead,
+  className,
+  where,
+  icon,
+  aside,
+  kind,
 }: {
   item: MailboxItemView;
   question: MailboxQuestion;
   position: { at: number; of: number; step: (by: number) => void } | null;
-  onTypeInstead: () => void;
+  onTypeInstead?: () => void;
+  className?: string;
+  where?: ReactNode;
+  icon?: ReactNode;
+  aside?: ReactNode;
+  kind?: ReactNode;
 }) {
   const {
     actions: { answerMailboxQuestion },
@@ -154,7 +186,7 @@ function QuestionForm({
 
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
     const typing = event.target instanceof HTMLInputElement;
-    if (event.key === "Escape") {
+    if (event.key === "Escape" && onTypeInstead) {
       event.preventDefault();
       onTypeInstead();
     } else if (
@@ -192,38 +224,31 @@ function QuestionForm({
       </Button>
     );
 
-  return (
-    <section
-      ref={root}
-      tabIndex={-1}
-      aria-label={`${agent} is asking`}
-      data-testid="question-panel"
-      onKeyDown={onKeyDown}
-      className="flex max-h-[60vh] flex-col rounded-2xl border border-border bg-raised shadow-xs outline-none"
-    >
-      <header className="flex shrink-0 items-center gap-2 px-4 pt-3 text-xs text-muted-foreground">
-        <span className="min-w-0 flex-1 truncate">{agent} is asking</span>
-        {position && (
-          <span className="flex items-center gap-0.5 tabular-nums">
-            <Button
-              variant="quiet"
-              size="icon-xs"
-              aria-label="Previous question"
-              onClick={() => position.step(-1)}
-            >
-              <ChevronLeft />
-            </Button>
-            {position.at + 1} of {position.of}
-            <Button
-              variant="quiet"
-              size="icon-xs"
-              aria-label="Next question"
-              onClick={() => position.step(1)}
-            >
-              <ChevronRight />
-            </Button>
-          </span>
-        )}
+  const controls = (
+    <>
+      {aside}
+      {position && (
+        <span className="flex items-center gap-0.5 tabular-nums">
+          <Button
+            variant="quiet"
+            size="icon-xs"
+            aria-label="Previous question"
+            onClick={() => position.step(-1)}
+          >
+            <ChevronLeft />
+          </Button>
+          {position.at + 1} of {position.of}
+          <Button
+            variant="quiet"
+            size="icon-xs"
+            aria-label="Next question"
+            onClick={() => position.step(1)}
+          >
+            <ChevronRight />
+          </Button>
+        </span>
+      )}
+      {onTypeInstead && (
         <Button
           variant="quiet"
           size="icon-xs"
@@ -233,11 +258,52 @@ function QuestionForm({
         >
           <X />
         </Button>
+      )}
+    </>
+  );
+
+  return (
+    <section
+      ref={root}
+      tabIndex={-1}
+      aria-label={`${agent} is asking`}
+      data-testid="question-panel"
+      onKeyDown={onKeyDown}
+      className={cn(
+        "flex min-h-0 max-h-[60vh] flex-col rounded-2xl border border-border bg-raised shadow-xs outline-none",
+        className,
+      )}
+    >
+      <header className="flex shrink-0 flex-col gap-2 px-4 pt-3 text-xs text-muted-foreground">
+        {/* with a kind line, the controls end it and who asks gets a line of
+            its own; without, one line holds both */}
+        {kind && (
+          <div className="flex items-center gap-2">
+            <span className="min-w-0 flex-1">{kind}</span>
+            {controls}
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          {icon}
+          <span className="min-w-0 flex-1 truncate">
+            {/* a kind line already says it is a question */}
+            {agent}
+            {kind ? null : " is asking"}
+            {where}
+          </span>
+          {!kind && controls}
+        </div>
       </header>
       <div className="min-h-0 overflow-y-auto px-4 pb-1">
         <h3 className="mt-1 mb-2 font-heading text-base font-normal break-words text-foreground">
           {question.prompt}
         </h3>
+        {/* the agent's own account of why it asks, when it gave one */}
+        {item.summary?.trim() && (
+          <div className="prose-app mb-3 text-sm text-muted-foreground">
+            <Markdown breaks>{item.summary}</Markdown>
+          </div>
+        )}
         {question.multi_select && (
           <p className="-mt-1 mb-2 text-xs text-muted-foreground">
             Choose any that apply

@@ -5,6 +5,9 @@ import { cn } from "@gents/ui/lib/utils";
 import { href, type Route } from "@/lib/router";
 import { NodeAvatar } from "@/screens/AgentAvatar";
 import { NodeHoverCard } from "@/screens/HoverCards";
+import { Kbd } from "@gents/ui/components/kbd";
+import { MAILBOX_KEYS } from "@/screens/Shortcuts";
+import { TOOLTIP_KBD } from "@/screens/Hint";
 import { FlyoutOpenContext } from "./RailFlyout";
 import { SyncHealth } from "./SyncHealth";
 import { navRowState, useNavItems, type NavContext, type NavItem } from "./navRegistry";
@@ -18,12 +21,14 @@ import {
 
 function RailItem({
   label,
+  keys,
   active,
   count,
   to,
   children,
 }: {
   label: string;
+  keys?: string;
   active?: boolean;
   count?: number;
   to: Route;
@@ -51,7 +56,10 @@ function RailItem({
           </span>
         ) : null}
       </TooltipTrigger>
-      <TooltipContent side="right">{label}</TooltipContent>
+      <TooltipContent side="right">
+        {label}
+        {keys && <Kbd className={TOOLTIP_KBD}>{keys}</Kbd>}
+      </TooltipContent>
     </Tooltip>
   );
 }
@@ -59,7 +67,7 @@ function RailItem({
 function RailNode({ route }: { route: Route }) {
   const node = useSelectedNode();
   const online = useOnline();
-  const nodeName = node?.node.displayName ?? null;
+  const nodeName = node ? (node.node.displayName ?? node.label) : null;
   if (!node)
     return (
       <a
@@ -151,6 +159,7 @@ export function Rail({ route, settings }: { route: Route; settings: ReactNode })
       </RailItem>
       <RailItem
         label="Mailbox"
+        keys={MAILBOX_KEYS}
         to={{ name: "mailbox" }}
         active={route.name === "mailbox"}
         count={mailboxCount}

@@ -44,6 +44,8 @@ export function StartedSessionsButton({
         aria-pressed={showing}
         className={cn(
           "relative h-7 shrink-0 gap-1 px-2 text-xs text-muted-foreground tabular-nums",
+          /* the avatars sit 4px from the top and bottom; the same at the left */
+          agents.length > 0 && "pl-1",
           showing && "bg-accent text-foreground",
           className,
         )}

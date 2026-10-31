@@ -1,0 +1,24 @@
+/* A card changing through morph() (morph.ts): its box animates from one size
+   to the next while its old and new contents cross-fade at their own size,
+   top aligned, so text never stretches. Edges stacked behind a card follow
+   it. */
+::view-transition-group(.morph-card),
+::view-transition-group(.morph-edge) {
+  animation-duration: 240ms;
+  animation-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+::view-transition-image-pair(.morph-card) {
+  overflow: clip;
+  border-radius: 1rem;
+}
+::view-transition-old(.morph-card),
+::view-transition-new(.morph-card) {
+  height: auto;
+  inset: 0 0 auto 0;
+  animation-duration: 240ms;
+}
+/* the rest of the page holds still rather than cross-fading */
+:root[data-morph]::view-transition-old(root),
+:root[data-morph]::view-transition-new(root) {
+  animation: none;
+}

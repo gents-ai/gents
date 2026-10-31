@@ -17,7 +17,7 @@ import { usePinnedSessions } from "@/preferences";
 import { useListViews } from "../app/listViews";
 import { passes } from "../lib/session-filter";
 
-import { folderOf, recentFolders } from "../../hooks/chatFolders";
+import { recentFolders, sessionFolder } from "../../hooks/chatFolders";
 import { useIncompatibleHome } from "../../hooks/useIncompatibleHome";
 import { useApp, useView } from "../app/AppContext";
 import { isLocalNode } from "../lib/firstRun";
@@ -182,7 +182,12 @@ export function useSelectedAgentId() {
 export function useChatFolder() {
   const { stores } = useApp();
   const sessionId = stores.selection.use.sessionId();
-  return useStore(stores.chat, (state) => folderOf(state.folders, sessionId));
+  const nodeDid = useSelectedNodeDid();
+  const homeDid = useHomeDid();
+  const folders = useStore(stores.chat, (state) => state.folders);
+  return useFleet((fleet) =>
+    sessionFolder(folders, fleet, homeDid, nodeDid, sessionId),
+  );
 }
 
 export function useRecentFolders() {

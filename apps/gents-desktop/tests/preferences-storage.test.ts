@@ -143,17 +143,26 @@ describe("list views read back from storage", () => {
     });
   });
 
-  it("discards obsolete per-list node picks while retaining content filters", () => {
+  it("discards obsolete per-list node picks and mailbox kinds, keeping the mailbox tab", () => {
     expect(
       restoreListViews({
         sessionNodes: ["a"],
         mailboxNodes: ["b"],
         mailboxKinds: ["failed", 1],
+        mailboxTab: "wrong",
+        mailboxOpen: { nodeDid: null, itemId: "kept", at: 0, where: "/mailbox" },
+        mailboxQuery: "kept",
       }),
     ).toEqual({
       sessionFilter: emptyFilter,
       recentFilter: emptyFilter,
-      mailboxKinds: ["failed"],
+      mailboxTab: "wrong",
+      mailboxOpen: null,
+      mailboxQuery: null,
     });
+  });
+
+  it("restores an unknown mailbox tab as all of it", () => {
+    expect(restoreListViews({ mailboxTab: "someday" }).mailboxTab).toBe("all");
   });
 });

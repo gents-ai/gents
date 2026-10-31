@@ -270,6 +270,11 @@ pub struct SessionSummary {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub unsendable_reason: Option<String>,
+    /// The folder the session's latest request ran with, as its node recorded
+    /// it: a path on that node's computer, absent when the request named none.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub cwd: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

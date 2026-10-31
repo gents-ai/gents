@@ -1,20 +1,19 @@
 import {
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CircleCheck,
   Clock,
   CircleHelp,
   CircleX,
-  CornerDownLeft,
   Flag,
   OctagonPause,
-  ScrollText,
   X,
 } from "lucide-react";
 import type { MailboxItemView } from "@source-inc/gents-desktop-client";
-import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import { ButtonGroup } from "@gents/ui/components/button-group";
-import { Checkbox } from "@gents/ui/components/checkbox";
+import { Dialog, DialogContent, DialogTitle } from "@gents/ui/components/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,13 +23,17 @@ import {
 import { Kbd } from "@gents/ui/components/kbd";
 import { cn } from "@gents/ui/lib/utils";
 import { href, navigate } from "@/lib/router";
-import { useState, type ComponentProps } from "react";
+import { useEffect, useRef, useState } from "react";
 import { agentName } from "./behavior";
 import type { ShellActions } from "@/../hooks/shellActions";
 import { NodeAgentStack } from "./NodeBehaviorStack";
 import { deadlineOf, dueSoon } from "./mailbox-triage";
+import { QuestionPanel } from "./session/QuestionPanel";
+import { morph } from "@/lib/morph";
+import { mailboxSeen, useNewItem } from "@/app/mailboxSeen";
 import { ChatDeliveryFeedback } from "./session/ChatDeliveryFeedback";
-import { parseQuestion, QuestionAnswer, useAnswerDelivery } from "./MailboxQuestion";
+import { parseQuestion, useAnswerDelivery } from "./MailboxQuestion";
+import { Hint } from "./Hint";
 import { Markdown } from "./Markdown";
 import { span, when } from "./time";
 import { useApp } from "@/app/AppContext";
@@ -38,263 +41,529 @@ import { toastFailure } from "@/lib/failure";
 import { listedSession, nodeOf } from "../../hooks/fleetStore";
 import { useFleet } from "@/hooks/useFleet";
 
-type BadgeVariant = ComponentProps<typeof Badge>["variant"];
-
 export const KIND: Record<
   string,
-  { icon: typeof CircleHelp; label: string; tone?: string; badge: BadgeVariant }
+  { icon: typeof CircleHelp; label: string; tone?: string }
 > = {
-  ask: { icon: CircleHelp, label: "Question", badge: "purple" },
-  gate: { icon: OctagonPause, label: "Gate", badge: "yellow" },
-  finished: { icon: CircleCheck, label: "Finished", badge: "success" },
-  failed: {
-    icon: CircleX,
-    label: "Failed",
-    tone: "text-destructive",
-    badge: "destructive",
-  },
-  flag: { icon: Flag, label: "Flag", badge: "secondary" },
+  ask: { icon: CircleHelp, label: "Question" },
+  gate: { icon: OctagonPause, label: "Gate" },
+  finished: { icon: CircleCheck, label: "Finished" },
+  failed: { icon: CircleX, label: "Failed", tone: "text-destructive" },
+  flag: { icon: Flag, label: "Flag" },
 };
 
-const STATUS: Record<string, { label: string; badge: BadgeVariant }> = {
-  open: { label: "Open", badge: "outline" },
-  acted: { label: "Acted on", badge: "secondary" },
-  dismissed: { label: "Dismissed", badge: "secondary" },
-  expired: { label: "Expired", badge: "destructive" },
-};
-
-const FOLD_CHARS = 600;
-
-const FOLD_LINES = 10;
-
-export function Item({
+/** One item of the mailbox: who sent it, its title, what kind it is and
+    where it came from, and when it came or falls due. The whole row opens it. */
+export function ItemRow({
   item: m,
   now,
-  selected,
-  onSelect,
-  last,
+  current,
+  onOpen,
 }: {
   item: MailboxItemView;
   now: number;
-  selected: boolean;
-  onSelect: (next: boolean) => void;
-  last: boolean;
+  /** the row open in the dialog, kept in view behind it */
+  current: boolean;
+  onOpen: () => void;
 }) {
+  const fresh = useNewItem(m);
   // The filer names the agent; a session may be listed by another node.
   const filer = useFleet((state) => nodeOf(state, m.nodeDid));
   const session = useFleet((state) => listedSession(state, m.nodeDid, m.sessionId));
-  const {
-    actions: { answerMailboxQuestion, dismissMailboxItem, openMailboxItem },
-  } = useApp();
-  const { pending: answerPending, confirmed: answerConfirmed } = useAnswerDelivery(m);
-  const kind = KIND[m.kind] ?? {
-    icon: CircleHelp,
-    label: m.kind,
-    badge: "secondary" as BadgeVariant,
+  const kind = kindOf(m);
+  const Icon = kind.icon;
+  const dismissible = isDismissible(m);
+  return (
+    <li data-testid="mailbox-item" className="group/row relative">
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-current={current || undefined}
+        className={cn(
+          "relative -mx-3 grid w-[calc(100%+1.5rem)] cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-lg px-3 py-2.5 text-left outline-none hover:bg-accent focus-visible:bg-accent",
+          current && "bg-accent",
+        )}
+      >
+        {/* not yet opened here: a dot in the gutter, the title a step stronger */}
+        {fresh && (
+          <span
+            role="img"
+            aria-label="New"
+            data-testid="mailbox-item-new"
+            className="absolute top-1/2 left-0 size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brand"
+          />
+        )}
+        <NodeAgentStack nodeDid={m.nodeDid} agentId={m.targetAgentId} />
+        <span className="min-w-0">
+          <span
+            className={cn(
+              "block truncate text-sm text-foreground",
+              fresh && "font-medium",
+            )}
+          >
+            {m.title}
+          </span>
+          <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+            <Icon aria-hidden className={cn("size-3 shrink-0", kind.tone)} />
+            <span className={cn("shrink-0", kind.tone)}>{kind.label}</span>
+            <span aria-hidden>·</span>
+            <span className="shrink-0">{agentName(m.targetAgentId, filer)}</span>
+            {m.sessionId && (
+              <>
+                <span aria-hidden>·</span>
+                <span className="truncate">{session?.title?.trim() || "Session"}</span>
+              </>
+            )}
+          </span>
+        </span>
+        <span
+          className={cn(
+            "self-start pt-0.5 text-xs whitespace-nowrap text-muted-foreground",
+            /* the time gives way to Dismiss under the pointer */
+            dismissible &&
+              "group-hover/row:invisible group-has-focus-visible/row:invisible [@media(hover:none)]:invisible",
+          )}
+        >
+          <When item={m} now={now} />
+        </span>
+      </button>
+      {dismissible && <RowDismiss item={m} />}
+    </li>
+  );
+}
+
+/** Dismiss without opening the item: shown over the row's time while the
+    pointer is on the row, and always where there is no pointer to hover.
+    Dismissing can't be undone, so it is this button only, with no key. */
+function RowDismiss({ item }: { item: MailboxItemView }) {
+  const { dismissMailboxItem } = useApp().actions;
+  return (
+    <Hint label="Dismiss">
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        aria-label={`Dismiss ${item.title}`}
+        className="absolute top-1/2 right-0 -translate-y-1/2 text-muted-foreground hover:text-foreground opacity-0 group-hover/row:opacity-100 group-has-focus-visible/row:opacity-100 [@media(hover:none)]:opacity-100"
+        onClick={() =>
+          dismissMailboxItem(item.itemId).catch((e: unknown) =>
+            toastFailure("dismiss the item", e),
+          )
+        }
+      >
+        <X />
+      </Button>
+    </Hint>
+  );
+}
+
+/* newer questions are answered or skipped, never dismissed */
+const isDismissible = (m: MailboxItemView) => {
+  const question = parseQuestion(m);
+  return !question || question.version < 2;
+};
+
+const kindOf = (m: MailboxItemView) =>
+  KIND[m.kind] ?? { icon: CircleHelp, label: m.kind };
+
+function KindIcon({ item, className }: { item: MailboxItemView; className?: string }) {
+  const kind = kindOf(item);
+  const Icon = kind.icon;
+  return (
+    <Icon
+      aria-label={kind.label}
+      role="img"
+      className={cn("shrink-0", kind.tone, className)}
+    />
+  );
+}
+
+/** when an item falls due, or else how long ago it came */
+function When({ item, now }: { item: MailboxItemView; now: number }) {
+  const deadline = deadlineOf(item);
+  // A passed deadline stays overdue until the runtime expires the item.
+  if (deadline !== null)
+    return (
+      <Due
+        due={span(Math.max(0, deadline - now))}
+        soon={dueSoon(deadline, now)}
+        overdue={deadline < now}
+      />
+    );
+  return (
+    <span className="tabular-nums">
+      <Age item={item} now={now} />
+    </span>
+  );
+}
+
+/* tints the dialog adds to a kind, seen one item at a time; in the list a
+   green row for every finished item would only distract */
+const OPENED_TONE: Record<string, string> = { finished: "text-success-foreground" };
+
+/** The opened item's kind as its icon and name. */
+function KindLabel({ item }: { item: MailboxItemView }) {
+  const kind = kindOf(item);
+  return (
+    <span
+      className={cn(
+        "flex shrink-0 items-center gap-1.5",
+        kind.tone ?? OPENED_TONE[item.kind],
+      )}
+    >
+      <KindIcon item={item} className="size-3.5" />
+      {kind.label}
+    </span>
+  );
+}
+
+function Age({ item, now }: { item: MailboxItemView; now: number }) {
+  const created = Number.isNaN(Date.parse(item.createdAt))
+    ? undefined
+    : new Date(item.createdAt).toLocaleString();
+  return (
+    <time dateTime={item.createdAt} title={created}>
+      {when(item.createdAt, now)}
+    </time>
+  );
+}
+
+/** The opened item, one of the list it was opened from, with the next ones
+    stacked behind it. ← and → or the arrows move through the list; answering
+    or dismissing moves on to the next, and past the last one it closes. A
+    question an agent is waiting on is the question panel the session shows;
+    anything else shows its details and its actions. */
+export function ItemDialog({
+  items,
+  openId,
+  lastAt,
+  now,
+  onOpen,
+  onClose,
+}: {
+  items: readonly MailboxItemView[];
+  openId: string | null;
+  /** where the open item last was in `items` */
+  lastAt: number;
+  now: number;
+  onOpen: (itemId: string, at: number) => void;
+  onClose: () => void;
+}) {
+  const at = openId === null ? -1 : items.findIndex((m) => m.itemId === openId);
+  /* the open item left the list, answered or dismissed here or elsewhere:
+     its place goes to the one after it */
+  useEffect(() => {
+    if (openId === null || at >= 0) return;
+    const place = Math.min(lastAt, items.length - 1);
+    const next = items[place];
+    if (next) onOpen(next.itemId, place);
+    else onClose();
+  }, [openId, at, lastAt, items, onOpen, onClose]);
+  const item = at >= 0 ? items[at]! : null;
+  const go = (index: number) => {
+    const next = items[index];
+    if (next) morph(() => onOpen(next.itemId, index));
   };
-  const status = STATUS[m.status] ?? {
-    label: m.status,
-    badge: "outline" as BadgeVariant,
-  };
+  const done = () => (at + 1 < items.length ? go(at + 1) : onClose());
+  return (
+    <Dialog open={openId !== null} onOpenChange={(open) => !open && onClose()}>
+      {item && (
+        <DialogContent
+          showCloseButton={false}
+          className="grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto] gap-2 overflow-visible bg-transparent p-0 shadow-none ring-0 sm:max-w-xl dark:ring-0"
+          /* the list stays readable behind, with the open row marked */
+          overlayProps={{
+            className: "bg-black/25 supports-backdrop-filter:backdrop-blur-[1px]",
+          }}
+          data-testid="mailbox-dialog"
+          onKeyDown={(e) => {
+            if (e.defaultPrevented || typing(e.target) || ownsArrows(e.target)) return;
+            if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+              e.preventDefault();
+              go(at + (e.key === "ArrowRight" ? 1 : -1));
+            }
+          }}
+        >
+          <div className="flex items-center justify-end gap-0.5 text-xs text-muted-foreground tabular-nums">
+            {items.length > 1 && (
+              <>
+                <Button
+                  variant="quiet"
+                  size="icon-xs"
+                  aria-label="Previous item"
+                  disabled={at === 0}
+                  onClick={() => go(at - 1)}
+                >
+                  <ChevronLeft />
+                </Button>
+                {at + 1} of {items.length}
+                <Button
+                  variant="quiet"
+                  size="icon-xs"
+                  aria-label="Next item"
+                  disabled={at === items.length - 1}
+                  onClick={() => go(at + 1)}
+                >
+                  <ChevronRight />
+                </Button>
+              </>
+            )}
+            <Button
+              variant="quiet"
+              size="icon-sm"
+              aria-label="Close mailbox"
+              onClick={onClose}
+            >
+              <X />
+            </Button>
+          </div>
+          <Opened
+            key={item.itemId}
+            item={item}
+            now={now}
+            behind={Math.min(2, items.length - at - 1)}
+            onDone={done}
+          />
+        </DialogContent>
+      )}
+    </Dialog>
+  );
+}
+
+const ownsArrows = (target: EventTarget) =>
+  target instanceof Element &&
+  Boolean(
+    target.closest(
+      '[role="menu"], [role="listbox"], [role="slider"], [role="tablist"]',
+    ),
+  );
+
+const typing = (target: EventTarget) =>
+  target instanceof HTMLElement &&
+  (target.isContentEditable || Boolean(target.closest("input, textarea, select")));
+
+/** the edges of the next items, behind the card and sized to it */
+function Stack({ behind }: { behind: number }) {
+  return (
+    <>
+      {behind >= 2 && (
+        <span
+          aria-hidden
+          className="absolute inset-x-6 top-4 -bottom-4 -z-10 rounded-2xl bg-popover/50 ring-1 ring-foreground/5 [view-transition-name:mailbox-stack-2] [view-transition-class:morph-edge]"
+        />
+      )}
+      {behind >= 1 && (
+        <span
+          aria-hidden
+          className="absolute inset-x-3 top-2 -bottom-2 -z-10 rounded-2xl bg-popover/80 ring-1 ring-foreground/10 [view-transition-name:mailbox-stack-1] [view-transition-class:morph-edge]"
+        />
+      )}
+    </>
+  );
+}
+
+function Opened({
+  item: m,
+  now,
+  behind,
+  onDone,
+}: {
+  item: MailboxItemView;
+  now: number;
+  behind: number;
+  onDone: () => void;
+}) {
+  const question = parseQuestion(m);
+  const { pending, confirmed, inFlight } = useAnswerDelivery(m);
+  const answered = pending || confirmed;
+  /* an answer already sent from here when the item opened shows where its
+     delivery stands rather than asking again */
+  const [answeredAtOpen] = useState(answered);
+  const [confirmedAtOpen] = useState(confirmed);
+  const moved = useRef(false);
+  /* an answer moves on once its delivery is confirmed, from the question or
+     from Resume; one whose delivery is uncertain stays, with Check and Resume */
+  useEffect(() => {
+    if (!question || !confirmed || confirmedAtOpen || moved.current) return;
+    moved.current = true;
+    onDone();
+  }, [question, confirmed, confirmedAtOpen, onDone]);
+  const asking =
+    question !== null && !answeredAtOpen && (!answered || inFlight || confirmed);
+  useEffect(() => mailboxSeen.open(m), [m]);
+  return (
+    <>
+      {/* a question's prompt is its heading; the dialog is named by the item */}
+      {asking && <DialogTitle className="sr-only">{m.title}</DialogTitle>}
+      <div className="relative min-h-0 min-w-0">
+        <Stack behind={behind} />
+        <div className="h-full min-h-0 [view-transition-name:mailbox-card] [view-transition-class:morph-card]">
+          {asking ? (
+            <QuestionPanel
+              items={[m]}
+              className="h-full max-h-full"
+              where={<AskedWhere item={m} />}
+              aside={
+                <span className="shrink-0 whitespace-nowrap">
+                  <When item={m} now={now} />
+                </span>
+              }
+              kind={<KindLabel item={m} />}
+              icon={
+                <NodeAgentStack
+                  nodeDid={m.nodeDid}
+                  agentId={m.targetAgentId}
+                  size="sm"
+                />
+              }
+            />
+          ) : (
+            <Details item={m} now={now} />
+          )}
+        </div>
+      </div>
+      <div className={cn(behind > 0 && "pt-3")}>
+        <Footer item={m} question={question} onDone={onDone} />
+      </div>
+    </>
+  );
+}
+
+/** " · in <session> · 4m ago", after the agent's name in a question's header */
+function AskedWhere({ item: m }: { item: MailboxItemView }) {
+  const session = useFleet((state) => listedSession(state, m.nodeDid, m.sessionId));
+  return (
+    <>
+      {m.sessionId && (
+        <>
+          {" · in "}
+          <a
+            href={href({ name: "session", sessionId: m.sessionId })}
+            className="text-foreground underline-offset-2 hover:underline"
+          >
+            {session?.title?.trim() || "a session"}
+          </a>
+        </>
+      )}
+    </>
+  );
+}
+
+function Details({ item: m, now }: { item: MailboxItemView; now: number }) {
+  const filer = useFleet((state) => nodeOf(state, m.nodeDid));
+  const session = useFleet((state) => listedSession(state, m.nodeDid, m.sessionId));
+  const { openMailboxItem } = useApp().actions;
   const question = parseQuestion(m);
   const body = [m.summary, m.payload && !question ? payloadMarkdown(m.payload) : null]
     .filter((part): part is string => Boolean(part?.trim()))
     .join("\n\n");
-  const foldable = body.length > FOLD_CHARS || body.split("\n").length > FOLD_LINES;
-  const [expanded, setExpanded] = useState(false);
-  const Icon = kind.icon;
-  const open = () => openItem(m, openMailboxItem);
-  const deadline = deadlineOf(m);
-  // A passed deadline stays overdue until the runtime expires the item.
-  const due = deadline === null ? null : span(Math.max(0, deadline - now));
-  const soon = dueSoon(deadline, now);
-  const age = when(m.createdAt, now);
-  const created = Number.isNaN(Date.parse(m.createdAt))
-    ? undefined
-    : new Date(m.createdAt).toLocaleString();
-  const time = (
-    <time dateTime={m.createdAt} title={created}>
-      {age}
-    </time>
-  );
-  const overdue = deadline !== null && deadline < now;
-  const agent = agentName(m.targetAgentId, filer);
   return (
-    <li
-      className="group/item relative"
-      data-testid="mailbox-item"
-      data-selected={selected || undefined}
+    <section
+      className="flex h-full min-h-0 flex-col gap-2 rounded-2xl bg-popover px-4 pt-3 pb-4 text-sm text-popover-foreground shadow-xl ring-1 ring-foreground/5 dark:ring-foreground/10 [&>*]:min-w-0"
+      onKeyDown={(e) => {
+        if (e.key !== "Enter" || !openable(m)) return;
+        if ((e.target as Element).closest(CONTROLS)) return;
+        e.preventDefault();
+        void openItem(m, openMailboxItem);
+      }}
     >
-      {/* the rail is one line for the whole list; the last card covers
-          it below its own glyph so the line ends there */}
-      {last && (
-        <span
-          aria-hidden="true"
-          className="absolute top-6 bottom-0 -left-10 w-6 bg-background"
-        />
-      )}
-      {/* the rail glyph is the card's kind until the pointer is over the
-          card, when it becomes the checkbox; it stays the checkbox while
-          the card is selected or the box has focus, so a keyboard reaches
-          it and a selection never hides itself */}
-      <span
-        className={cn(
-          "absolute top-3 -left-10 grid size-6 place-items-center rounded-full bg-background text-muted-foreground",
-          kind.tone,
-        )}
-        title={kind.label}
+      {/* the question panel's header, line for line: what and when, then who
+          and where */}
+      <div
+        className="grid gap-2 text-xs text-muted-foreground"
+        data-testid="mailbox-item-meta"
       >
-        <Icon
-          className={cn(
-            "col-start-1 row-start-1 size-4 transition-opacity duration-100 group-hover/item:opacity-0 group-focus-within/item:opacity-0 motion-reduce:transition-none",
-            selected && "opacity-0",
-          )}
-        />
-        <Checkbox
-          checked={selected}
-          onCheckedChange={(checked) => onSelect(Boolean(checked))}
-          aria-label={`Select: ${m.title}`}
-          className={cn(
-            "col-start-1 row-start-1 transition-opacity duration-100 group-hover/item:opacity-100 group-focus-within/item:opacity-100 motion-reduce:transition-none",
-            selected ? "opacity-100" : "opacity-0",
-          )}
-        />
-      </span>
-      <article
-        className={cn(
-          "cursor-default rounded-2xl border bg-raised px-4 pt-3 pb-5 transition-[border-color,box-shadow] duration-150 motion-reduce:transition-none",
-          selected
-            ? "border-brand/60 ring-1 ring-brand/30"
-            : "border-border/60 hover:border-border",
-        )}
-        onClick={(e) => {
-          if ((e.target as Element).closest(CONTROLS)) return;
-          if (!window.getSelection()?.isCollapsed) return;
-          onSelect(!selected);
-        }}
-      >
-        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-3 max-md:gap-y-2">
-          <div className="col-start-1 row-start-1 flex justify-end max-md:self-center md:mt-0.5 md:w-12">
-            <NodeAgentStack nodeDid={m.nodeDid} agentId={m.targetAgentId} />
-          </div>
-          <span className="col-start-2 row-start-1 flex items-center gap-3 self-center justify-self-end text-xs leading-5 text-muted-foreground md:hidden">
-            <Due due={due} soon={soon} />
-            {time}
+        <div className="flex items-center gap-2">
+          <span className="min-w-0 flex-1">
+            <KindLabel item={m} />
           </span>
-          <div className="min-w-0 max-md:col-span-full max-md:row-start-2 md:col-start-2 md:row-start-1">
-            <div className="flex items-baseline gap-3">
-              <h2 className="min-w-0 flex-1 font-heading text-sm font-medium text-pretty wrap-break-word text-heading">
-                {m.title}
-              </h2>
-              <span className="flex shrink-0 items-center gap-3 text-xs leading-5 text-muted-foreground max-md:hidden">
-                <Due due={due} soon={soon} />
-                {time}
-              </span>
-            </div>
-            <div
-              className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
-              data-testid="mailbox-item-meta"
-            >
-              <Badge variant={kind.badge}>{kind.label}</Badge>
-              <Badge variant={status.badge}>{status.label}</Badge>
-              <span>
-                from <span className="text-foreground">{agent}</span>
-              </span>
-              {m.sessionId && (
+          <span className="whitespace-nowrap">
+            <When item={m} now={now} />
+          </span>
+        </div>
+        <div className="flex min-w-0 items-center gap-2">
+          <NodeAgentStack nodeDid={m.nodeDid} agentId={m.targetAgentId} size="sm" />
+          <span className="min-w-0 truncate">
+            {agentName(m.targetAgentId, filer)}
+            {m.sessionId && (
+              <>
+                {" · in "}
                 <a
                   href={href({ name: "session", sessionId: m.sessionId })}
-                  className="max-w-64 truncate underline-offset-2 hover:text-foreground hover:underline"
+                  className="text-foreground underline-offset-2 hover:underline"
                 >
-                  in {session?.title?.trim() || "session"}
+                  {session?.title?.trim() || "a session"}
                 </a>
-              )}
-              {due && (
-                <span
-                  className={cn("whitespace-nowrap", overdue && "text-destructive")}
-                >
-                  {due}
-                </span>
-              )}
-            </div>
-            {body && (
-              <div className="mt-2 max-w-prose">
-                <div
-                  data-testid="mailbox-item-body"
-                  className={cn(
-                    "prose-app relative",
-                    foldable && !expanded && "max-h-48 overflow-hidden",
-                  )}
-                >
-                  <Markdown breaks>{body}</Markdown>
-                  {foldable && !expanded && (
-                    <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-raised to-transparent" />
-                  )}
-                </div>
-                {foldable && (
-                  <Button
-                    variant="quiet"
-                    size="xs"
-                    className="mt-1 -ml-2"
-                    aria-expanded={expanded}
-                    onClick={() => setExpanded((v) => !v)}
-                  >
-                    {expanded ? "Show less" : "Show more"}
-                  </Button>
-                )}
-              </div>
+              </>
             )}
-            {question && (
-              <QuestionAnswer
-                key={m.questionHash ?? m.payload ?? m.itemId}
-                question={question}
-                questionHash={m.questionHash}
-                onAnswer={(answer, view) => answerMailboxQuestion(m, answer, view)}
-                pending={answerPending}
-                confirmed={answerConfirmed}
-              />
-            )}
-            {question && <ChatDeliveryFeedback mailboxItem={m} />}
-            {m.action === "write_document" && m.expectedCollection && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                Answer with a{" "}
-                <span className="font-mono text-foreground">
-                  {m.expectedCollection}
-                </span>{" "}
-                document
-              </p>
-            )}
-          </div>
-          <div className="col-start-3 row-start-1 -mr-1 flex items-center gap-1 max-md:self-center md:-mt-1 md:self-start">
-            {openable(m) && (
-              <Button
-                size="icon-sm"
-                variant="ghost"
-                aria-label={openLabel(m)}
-                title={openLabel(m)}
-                onClick={() => void open()}
-              >
-                {m.action === "ack" ? <ScrollText /> : <CornerDownLeft />}
-              </Button>
-            )}
-          </div>
+          </span>
         </div>
-      </article>
-      {(!question || question.version < 2) && (
+      </div>
+      <div>
+        <DialogTitle className="mt-1 font-heading text-base font-normal text-pretty wrap-break-word text-foreground">
+          {m.title}
+        </DialogTitle>
+      </div>
+      {body && (
+        <div
+          data-testid="mailbox-item-body"
+          className="prose-app min-h-0 min-w-0 overflow-y-auto"
+        >
+          <Markdown breaks>{body}</Markdown>
+        </div>
+      )}
+      {question && <ChatDeliveryFeedback mailboxItem={m} />}
+      {m.action === "write_document" && m.expectedCollection && (
+        <p className="text-xs text-muted-foreground">
+          Answer with a{" "}
+          <span className="font-mono text-foreground">{m.expectedCollection}</span>{" "}
+          document
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** Dismiss, where the item allows it, and its way onward. */
+function Footer({
+  item: m,
+  question,
+  onDone,
+}: {
+  item: MailboxItemView;
+  question: ReturnType<typeof parseQuestion>;
+  onDone: () => void;
+}) {
+  const { dismissMailboxItem } = useApp().actions;
+  const dismissible = isDismissible(m);
+  return (
+    <div className="flex items-center justify-end gap-2">
+      {dismissible && (
         <Button
           size="sm"
           variant="raised"
-          className="-mt-3.5 mr-4 ml-auto flex h-7 w-fit rounded-full px-3 text-xs"
           onClick={() =>
-            dismissMailboxItem(m.itemId).then(
-              () => onSelect(false),
-              (e: unknown) => toastFailure("dismiss the item", e),
+            dismissMailboxItem(m.itemId).then(onDone, (e: unknown) =>
+              toastFailure("dismiss the item", e),
             )
           }
         >
           <X className="size-3" /> Dismiss
         </Button>
       )}
-    </li>
+      {/* a question is answered in its panel; the way onward is its session */}
+      {question
+        ? m.sessionId && (
+            <Button
+              size="sm"
+              variant="raised"
+              nativeButton={false}
+              render={<a href={href({ name: "session", sessionId: m.sessionId })} />}
+            >
+              Open session
+            </Button>
+          )
+        : openable(m) && <Primary item={m} />}
+    </div>
   );
 }
 
@@ -399,15 +668,23 @@ export function Primary({ item }: { item: MailboxItemView }) {
   );
 }
 
-function Due({ due, soon }: { due: string | null; soon: boolean }) {
+function Due({
+  due,
+  soon,
+  overdue = false,
+}: {
+  due: string | null;
+  soon: boolean;
+  overdue?: boolean;
+}) {
   if (!due) return null;
   return (
     <span
       className={cn(
         "inline-flex shrink-0 items-center gap-1 leading-5 tabular-nums",
-        soon ? "text-yellow" : "text-muted-foreground",
+        overdue ? "text-destructive" : soon ? "text-yellow" : "text-muted-foreground",
       )}
-      title={`Expires in ${due}`}
+      title={overdue ? "Past its deadline" : `Expires in ${due}`}
     >
       <Clock className="size-3" />
       {due}
