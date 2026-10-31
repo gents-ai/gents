@@ -1035,6 +1035,147 @@ async fn crud_exact_context_and_tools_preserve_shared_document_guards() {
     }
 }
 
+/// #3330 "Done when": a shared-Context edit is refused by default and
+/// accepted with the acknowledgement, and the receipt lists every agent.
+#[tokio::test]
+async fn shared_context_edit_is_refused_by_default_and_accepted_with_acknowledgement() {
+    let (node, owner, tools) = setup("shared-context-ack", &["node", "tools", "agent"]).await;
+    let worker = format!("{owner}:worker");
+    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let context_id = format!("{worker}:context");
+    // Two agents select one Context: the invoking agent and the worker.
+    ok(
+        &tools,
+        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+    )
+    .await;
+
+    let refusal = refused(
+        &tools,
+        json!({"argv":["context","update"],"target_id":context_id,"set":{"system_prompt":"Shared prompt."}}),
+    )
+    .await;
+    assert!(refusal.contains("unshared Context and Tools"), "{refusal}");
+    assert!(
+        refusal.contains("options.shared"),
+        "the refusal must point at the acknowledgement: {refusal}"
+    );
+    assert!(
+        refusal.contains("beh-test") && refusal.contains(&worker),
+        "the refusal must name every affected agent: {refusal}"
+    );
+
+    let receipt = ok(
+        &tools,
+        json!({"argv":["context","update"],"target_id":context_id,"options":{"shared":"acknowledge"},"set":{"system_prompt":"Shared prompt."}}),
+    )
+    .await;
+    assert_eq!(receipt["committed"], true);
+    let agents = receipt["shared"]["agents"]
+        .as_array()
+        .unwrap_or_else(|| panic!("receipt must list the affected agents: {receipt}"));
+    let mut named = agents
+        .iter()
+        .filter_map(Value::as_str)
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    named.sort();
+    assert_eq!(named, vec!["beh-test".to_string(), worker.clone()]);
+    let digest = receipt["shared"]["sha256"]
+        .as_str()
+        .unwrap_or_else(|| panic!("receipt must carry the new sha256: {receipt}"));
+    assert_eq!(digest.len(), 64, "{digest}");
+    assert!(digest.chars().all(|c| c.is_ascii_hexdigit()), "{digest}");
+
+    // The edit landed for both agents, not just the caller.
+    let read = ok(
+        &tools,
+        json!({"argv":["context","get"],"options":{"agent":"worker"}}),
+    )
+    .await;
+    assert_eq!(read["document"]["system_prompt"], "Shared prompt.");
+}
+
+/// The same rule for Tools, reached through a shared Context.
+#[tokio::test]
+async fn shared_tools_edit_is_refused_by_default_and_accepted_with_acknowledgement() {
+    let (node, owner, tools) = setup("shared-tools-ack", &["node", "tools", "agent"]).await;
+    let worker = format!("{owner}:worker");
+    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let context_id = format!("{worker}:context");
+    let tools_id = format!("{worker}:tools");
+    ok(
+        &tools,
+        json!({"argv":["agent","update","beh-test"],"set":{"context_id":context_id}}),
+    )
+    .await;
+
+    let refusal = refused(
+        &tools,
+        json!({"argv":["tools","update"],"target_id":tools_id,"set":{"tags":["shared"]}}),
+    )
+    .await;
+    assert!(refusal.contains("unshared Context and Tools"), "{refusal}");
+    assert!(refusal.contains("options.shared"), "{refusal}");
+
+    let receipt = ok(
+        &tools,
+        json!({"argv":["tools","update"],"target_id":tools_id,"options":{"shared":"acknowledge"},"set":{"tags":["shared"]}}),
+    )
+    .await;
+    assert_eq!(receipt["committed"], true);
+    let agents = receipt["shared"]["agents"]
+        .as_array()
+        .unwrap_or_else(|| panic!("receipt must list the affected agents: {receipt}"));
+    assert_eq!(agents.len(), 2, "{receipt}");
+    assert_eq!(
+        receipt["shared"]["sha256"].as_str().map(str::len),
+        Some(64),
+        "{receipt}"
+    );
+}
+
+/// An unshared edit keeps its old receipt: no `shared` block appears.
+#[tokio::test]
+async fn unshared_context_edit_receipt_has_no_shared_block() {
+    let (node, owner, tools) = setup("unshared-receipt", &["node", "tools", "agent"]).await;
+    let worker = format!("{owner}:worker");
+    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let context_id = format!("{worker}:context");
+    let receipt = ok(
+        &tools,
+        json!({"argv":["context","update"],"target_id":context_id,"set":{"system_prompt":"Private prompt."}}),
+    )
+    .await;
+    assert_eq!(receipt["committed"], true);
+    assert!(
+        receipt.get("shared").is_none(),
+        "an unshared edit must not grow a shared block: {receipt}"
+    );
+}
+
+/// `options.shared` accepts only the acknowledgement, and only where it means
+/// something.
+#[tokio::test]
+async fn shared_option_rejects_other_values_and_other_resources() {
+    let (node, owner, tools) = setup("shared-option", &["node", "tools", "agent"]).await;
+    let worker = format!("{owner}:worker");
+    crate::test_support::install_test_agent(&node, &owner, &worker).await;
+    let context_id = format!("{worker}:context");
+    let error = refused(
+        &tools,
+        json!({"argv":["context","update"],"target_id":context_id,"options":{"shared":"yes"},"set":{"system_prompt":"x"}}),
+    )
+    .await;
+    assert!(error.contains("acknowledge"), "{error}");
+    let error = refused(
+        &tools,
+        json!({"argv":["agent","update","beh-test"],"options":{"shared":"acknowledge"},"set":{"display_name":"x"}}),
+    )
+    .await;
+    assert!(error.contains("shared applies only"), "{error}");
+}
+
 #[tokio::test]
 async fn crud_backend_creation_preserves_auth_boundary() {
     let (_node, _owner, tools) = setup("crud-backend", &["backend"]).await;
