@@ -924,18 +924,18 @@ mod tests {
         let mut files = Vec::new();
         for surface in [
             "self_config",
-            "toolset",
+            "tools/native",
             "meta_tools",
-            "background_tools",
-            "tool_surface",
+            "tools/background/status",
+            "tools/surface",
         ] {
             sources(&root.join(surface), &mut files);
         }
         for module in [
-            "toolset.rs",
+            "tools/native.rs",
             "meta_tools.rs",
-            "background_tools.rs",
-            "tool_control.rs",
+            "tools/background/status.rs",
+            "tools/call/control.rs",
         ] {
             files.push(root.join(module));
         }
