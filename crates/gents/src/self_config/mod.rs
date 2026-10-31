@@ -150,6 +150,7 @@ fn fence_profile_pick(request: &mut ApplyRequest<'static>) {
 /// authorize a write.
 fn protect_working_agent(mut request: ApplyRequest<'static>) -> ApplyRequest<'static> {
     let target = request.target;
+    let acknowledged = request.shared_ack;
     let validate = request.validate;
     request.validate = Box::new(move |txn, anchor, stored, merged| {
         let validation = validate(txn, anchor, stored, merged);
@@ -159,51 +160,31 @@ fn protect_working_agent(mut request: ApplyRequest<'static>) -> ApplyRequest<'st
                 .get("node_did")
                 .and_then(Value::as_str)
                 .context("selected agent is missing node_did")?;
-            let agent_id = anchor
-                .doc
-                .get("agent_id")
-                .and_then(Value::as_str)
-                .context("selected agent is missing agent_id")?;
-            let require_only_referrer = |response: &Value,
-                                         collection: &str,
-                                         unique: &str,
-                                         expected: &str| {
-                let rows = response
-                    .get("data")
-                    .and_then(|data| data.get(collection))
-                    .and_then(Value::as_array)
-                    .with_context(|| format!("{collection} reference query missing rows"))?;
-                anyhow::ensure!(
-                    rows.len() == 1
-                        && rows[0].get(unique).and_then(Value::as_str) == Some(expected),
-                    "targeted configuration requires an unshared Context and Tools; clone the working agent before editing shared configuration"
-                );
-                Ok::<_, anyhow::Error>(())
+            // A Context or Tools that more than one agent selects is refused
+            // unless the caller acknowledged it; the refusal names every agent
+            // the write would reach.
+            let require_only_referrer = |agents: Vec<String>| -> Result<()> {
+                if acknowledged || agents.len() <= 1 {
+                    return Ok(());
+                }
+                Err(ops::shared_refusal(&agents))
             };
             if target == SelfConfigTarget::AgentContext || target == SelfConfigTarget::Tools {
                 let context_id = anchor.context.get("context_id").and_then(Value::as_str)
                     .context("selected agent has no context; create and select a Context before editing it or its Tools")?;
-                let escaped_owner = escape_graphql_string(owner);
-                let escaped_context = escape_graphql_string(context_id);
-                let response = txn
-                    .execute(&format!(
-                        r#"{{ Agent(filter: {{node_did: {{_eq: "{escaped_owner}"}}, context_id: {{_eq: "{escaped_context}"}}}}) {{agent_id}} }}"#
-                    ))
-                    .await?;
-                require_only_referrer(&response, "Agent", "agent_id", agent_id)?;
+                require_only_referrer(
+                    ops::shared_referrers(txn, SelfConfigTarget::AgentContext, owner, context_id)
+                        .await?,
+                )?;
                 if target == SelfConfigTarget::Tools {
                     let tools_id = stored
                         .get("tools_id")
                         .and_then(Value::as_str)
                         .context("selected Tools is missing tools_id")?;
-                    let escaped_owner = escape_graphql_string(owner);
-                    let escaped_tools = escape_graphql_string(tools_id);
-                    let response = txn
-                    .execute(&format!(
-                        r#"{{ AgentContext(filter: {{node_did: {{_eq: "{escaped_owner}"}}, tools_id: {{_eq: "{escaped_tools}"}}}}) {{context_id}} }}"#
-                    ))
-                    .await?;
-                    require_only_referrer(&response, "AgentContext", "context_id", context_id)?;
+                    require_only_referrer(
+                        ops::shared_referrers(txn, SelfConfigTarget::Tools, owner, tools_id)
+                            .await?,
+                    )?;
                 }
             }
             ops::guard_compaction_choice_in_txn(txn, target, anchor, stored, merged).await?;
@@ -212,6 +193,7 @@ fn protect_working_agent(mut request: ApplyRequest<'static>) -> ApplyRequest<'st
     });
     request
 }
+
 fn stored_host_root(stored: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
     serde_json::from_value::<crate::document_config::Tools>(serde_json::Value::Object(
         stored.clone(),
