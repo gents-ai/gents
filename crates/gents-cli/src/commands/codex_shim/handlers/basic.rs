@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
-use gents::config_client::load_inference_backend_in_txn;
 use gents::inference::usage_observation::{usage_for_backend, UsageObservation};
+use gents::store::config_client::load_inference_backend_in_txn;
 use gents_codex_protocol as codex;
 use serde_json::json;
 
@@ -284,9 +284,6 @@ mod tests {
     use std::time::Duration;
 
     use chrono::Utc;
-    use gents::config_client::{
-        write_inference_backend_document, write_inference_profile_document,
-    };
     use gents::defra_node::EmbeddedNode;
     use gents::documents::{AdvertisedModel, BackendAuth, BackendModelCatalog};
     use gents::inference::auth::credential::{
@@ -296,6 +293,9 @@ mod tests {
         UsageReport, UsageSource, UsageWindow,
     };
     use gents::inference::usage_observation::{load_usage, record_usage, UsageAccount};
+    use gents::store::config_client::{
+        write_inference_backend_document, write_inference_profile_document,
+    };
     use gents::{
         record_model_catalog_in_txn, BackendProviderKind, InferenceBackend, InferenceProfile,
     };
@@ -319,7 +319,9 @@ mod tests {
             fs_root: None,
             node,
             background_execution_registry: gents::BackgroundExecutionRegistry::default(),
-            graphql: gents::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1/graphql"),
+            graphql: gents::store::config_client::GraphqlEndpoint::anonymous(
+                "http://127.0.0.1/graphql",
+            ),
             node_did: Arc::from(DID),
             agent_id: Arc::from("default"),
             id_counter: Arc::new(AtomicU64::new(1)),

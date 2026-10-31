@@ -49,7 +49,7 @@ async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
                 gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
             );
             let collected = if input.acknowledged {
-                let (collected, fired) = crate::config_client::ConfigApplyTxn::
+                let (collected, fired) = crate::store::config_client::ConfigApplyTxn::
                     with_post_commit_receipt_loss_for_operation(
                         Some("test.unrelated_transaction"), collect,
                     ).await;
@@ -59,7 +59,7 @@ async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
                 );
                 collected
             } else {
-                let (collected, fired) = crate::config_client::ConfigApplyTxn::
+                let (collected, fired) = crate::store::config_client::ConfigApplyTxn::
                     with_post_commit_receipt_loss_for_operation(
                         Some("tool_call.start_running_canonical"), collect,
                     ).await;
@@ -82,7 +82,7 @@ async fn dispatch_receipt_loss_gates_real_hook_loop_invocation() {
                     "lost authority must stop the loop"
                 );
                 assert!(collected.tool_results.is_empty());
-                let rows = crate::config_client::ConfigAccess::local(node.clone())
+                let rows = crate::store::config_client::ConfigAccess::local(node.clone())
                     .execute("query { AgentToolCall { lifecycle_state } }")
                     .await
                     .unwrap();
@@ -236,12 +236,12 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
                     &mut lifecycle,
                     gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
                 );
-                let (collected, fired) = crate::config_client::ConfigApplyTxn::
+                let (collected, fired) = crate::store::config_client::ConfigApplyTxn::
                     with_post_commit_receipt_loss_for_operation(
                         Some("tool_call.start_running_canonical"), collect,
                     ).await;
 
-                let rows = crate::config_client::ConfigAccess::local(node.clone())
+                let rows = crate::store::config_client::ConfigAccess::local(node.clone())
                     .execute(
                         "query { AgentToolCall { lifecycle_state started_at tool_failure_class } }",
                     )
@@ -1251,7 +1251,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
                 create(&node, &segment).await;
             }
         }
-        let response = crate::graphql::graphql_with_transaction_retry(
+        let response = crate::store::graphql::graphql_with_transaction_retry(
             &node,
             &format!("query @explain(type: execute) {query}"),
             "explain request output",
@@ -1261,7 +1261,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
         let data = response.data.unwrap();
         let request_scan = scan(&data, "indexFetches")
             .unwrap_or_else(|| panic!("request output must report index execution work: {data}"));
-        let plan = crate::graphql::graphql_with_transaction_retry(
+        let plan = crate::store::graphql::graphql_with_transaction_retry(
             &node,
             &format!("query @explain {query}"),
             "explain request output plan",
@@ -1297,7 +1297,7 @@ async fn background_output_query_work_is_independent_of_principal_history() {
         assert_eq!(output, "output");
         assert_eq!(
             crate::tools::background::status::observe_canonical_tool_output_with_access(
-                &crate::config_client::ConfigAccess::local(node.clone()),
+                &crate::store::config_client::ConfigAccess::local(node.clone()),
                 "tool-doc",
                 &request_id,
                 "session",
@@ -1587,7 +1587,7 @@ async fn generated_child_admission_cases_drive_real_dispatcher() {
         let completed = completed.lock().unwrap().clone();
         let invoked = invoked.lock().unwrap().clone();
         assert_eq!(completed.len(), expected.len());
-        let rows = crate::config_client::ConfigAccess::local(node.clone())
+        let rows = crate::store::config_client::ConfigAccess::local(node.clone())
             .execute("query { AgentToolCall { plugin_effect_ordinal lifecycle_state } }")
             .await
             .unwrap();

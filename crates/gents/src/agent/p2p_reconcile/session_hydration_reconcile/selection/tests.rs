@@ -104,7 +104,7 @@ async fn canonical_selection_enumerates_multiple_native_cursor_pages() {
                         }}) {{ _docID }} }}"#
                         ))
                         .await?;
-                    let row = crate::graphql::single_mutation_document(
+                    let row = crate::store::graphql::single_mutation_document(
                         &response,
                         "create_CompactionEntry",
                     )?
@@ -139,8 +139,10 @@ async fn canonical_selection_enumerates_multiple_native_cursor_pages() {
                         None,
                     ))
                     .await?;
-                let (first, next) =
-                    crate::graphql::cursor_page::<serde_json::Value>(&response, "CompactionEntry")?;
+                let (first, next) = crate::store::graphql::cursor_page::<serde_json::Value>(
+                    &response,
+                    "CompactionEntry",
+                )?;
                 assert_eq!(first.len(), pages::PAGE_SIZE);
                 assert!(next.is_some());
                 let selected = load_hydration_selection_in_txn(txn, request).await?;

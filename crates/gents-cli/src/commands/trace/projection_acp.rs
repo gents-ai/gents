@@ -3,11 +3,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::adapter_projection::AdapterProjectionKind;
-use gents::graphql::escape_graphql_string;
 use gents::run_timeline::{
     RunTimeline, RunTimelineEvent, RunTimelineRows, TimelineRequestEvent, TimelineRequestRow,
     TimelineToolCallEvent,
 };
+use gents::store::graphql::escape_graphql_string;
 use serde::Deserialize;
 use serde_json::json;
 

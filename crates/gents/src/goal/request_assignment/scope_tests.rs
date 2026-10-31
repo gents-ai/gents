@@ -10,11 +10,11 @@ struct ReadScope {
 }
 
 #[async_trait::async_trait]
-impl crate::config_client::ConfigRead for ReadScope {
+impl crate::store::config_client::ConfigRead for ReadScope {
     async fn execute_read(
         &self,
         query: &str,
-    ) -> Result<Value, crate::config_client::ConfigClientError> {
+    ) -> Result<Value, crate::store::config_client::ConfigClientError> {
         if query.contains("AgentRequest(") {
             let rows = self
                 .rows
@@ -29,7 +29,7 @@ impl crate::config_client::ConfigRead for ReadScope {
         }
         self.history_reads.fetch_add(1, Ordering::Relaxed);
         if self.refuse_history {
-            return Err(crate::graphql::GraphqlResponseError::from(
+            return Err(crate::store::graphql::GraphqlResponseError::from(
                 gents_protocol::database_error::GraphqlFailure::new(
                     "Goal",
                     json!([{"message": "retained Goal history is unavailable"}]),

@@ -9,15 +9,15 @@ use gents::agent::p2p_reconcile::resolve_template;
 use gents::agent::p2p_reconcile::templates::{
     AGENT_TARGET_CALLER_TEMPLATE, AGENT_TARGET_HOST_TEMPLATE,
 };
-use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
 use gents::documents::{
     Agent, AgentContext, AgentTools, BashTools, HostTools, InferenceProfile, InferenceSampling,
     Tools,
 };
 use gents::goal::{set_goal, GoalStatus};
-use gents::graphql::escape_graphql_string;
 use gents::run_timeline_fetch::load_run_timeline_rows;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 use gents::tools::native::{
     AGENT_INTERRUPT_TOOL_NAME, AGENT_LIST_TOOL_NAME, AGENT_MESSAGE_TOOL_NAME, AGENT_NEW_TOOL_NAME,
 };
@@ -3886,7 +3886,7 @@ async fn apply_fixture_documents(
     node: &Arc<EmbeddedNode>,
     documents: Vec<(Collection, serde_json::Value)>,
 ) {
-    use gents::config_client::{
+    use gents::store::config_client::{
         apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
     };
 

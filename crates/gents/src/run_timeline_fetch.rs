@@ -4,8 +4,6 @@ use anyhow::{Context, Result};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::config_client::ConfigAccess;
-use crate::graphql::escape_graphql_string;
 use crate::run_timeline::{
     build_run_timeline, RunActivityRows, RunTimeline, RunTimelineRows, TimelineCompactionRow,
     TimelineGoalVersionRow, TimelineInferenceCallRow, TimelineMessageRow,
@@ -13,6 +11,8 @@ use crate::run_timeline::{
     TimelineRequestRow, TimelineSessionRow, TimelineToolCallRow,
 };
 use crate::run_timeline_fetch::event_loaders::resolve_timeline_messages_for_session;
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::escape_graphql_string;
 use gents_protocol::graphql::graphql_rows_from_response;
 
 const MAX_RUN_ACTIVITY_ROWS: usize = 10_000;
@@ -160,7 +160,7 @@ async fn name_serving_accounts(
     let backends = access
         .transact_readonly("timeline.serving_accounts", |txn| {
             Box::pin(async move {
-                crate::config_client::list_inference_backends_in_txn(txn, node_did).await
+                crate::store::config_client::list_inference_backends_in_txn(txn, node_did).await
             })
         })
         .await?;
@@ -893,7 +893,7 @@ mod tests {
             "auth": {"kind": "node_oauth"},
         }))
         .unwrap();
-        crate::config_client::write_inference_backend_document(&access, &original)
+        crate::store::config_client::write_inference_backend_document(&access, &original)
             .await
             .unwrap();
         let sign_in = |who: &str| {

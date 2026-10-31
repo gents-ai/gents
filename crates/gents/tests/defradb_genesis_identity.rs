@@ -60,8 +60,9 @@ fn created_id(response: &QueryResponse) -> Result<Option<String>> {
     if response.has_errors() {
         return Ok(None);
     }
-    let row = gents::graphql::single_mutation_document(response, "create_AgentOutputSegment")?
-        .context("successful create omitted its row")?;
+    let row =
+        gents::store::graphql::single_mutation_document(response, "create_AgentOutputSegment")?
+            .context("successful create omitted its row")?;
     Ok(Some(
         row.get("_docID")
             .and_then(serde_json::Value::as_str)

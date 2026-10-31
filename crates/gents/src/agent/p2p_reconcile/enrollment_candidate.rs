@@ -19,8 +19,8 @@ use serde_json::{json, Map};
 use tokio::time::timeout;
 use uuid::Uuid;
 
-use crate::config_client::ConfigAccess;
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use crate::store::identity::NodeIdentity;
 
 use super::enrollment_store::RequestRow;

@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use serde_json::{json, Value};
 
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 
 pub(crate) fn parameters(schema: &str) -> Result<Value> {
     let base = schema.trim_end_matches('!');

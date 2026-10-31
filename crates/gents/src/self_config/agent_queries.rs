@@ -8,9 +8,12 @@ pub(super) async fn node_default_agent(
         r#"{{ Node(filter: {{node_did: {{_eq: "{}"}}}}, limit: 2) {{ default_agent_id }} }}"#,
         escape_graphql_string(node_did)
     );
-    let response =
-        crate::graphql::graphql_with_transaction_retry(node, &query, "self_config.default_agent")
-            .await?;
+    let response = crate::store::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "self_config.default_agent",
+    )
+    .await?;
     let rows = response
         .data
         .as_ref()
@@ -173,7 +176,7 @@ pub(super) async fn agent_inspect(
 }
 
 pub(super) async fn guard_agent_profile_choice(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     current_agent: Option<&str>,
     clone_from: Option<&str>,

@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
 use gents::documents::Tools;
 use gents::pack::authoring::check_dir;
 use gents::pack::authoring::test::run_plugin_cases;
+use gents::store::config_client::ConfigAccess;
 use gents::tools::background::job::promote::{
     generate_pack, load_dynamic_run, validate_name, write_promotion, PromoteRefusal,
     PromotionRecord,
@@ -312,7 +312,7 @@ pub async fn promote(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::config_client::GraphqlEndpoint;
+    use gents::store::config_client::GraphqlEndpoint;
     use gents::tools::background::job::promote::gate;
     use gents_protocol::job::{JobOrigin, JobPinSummary, JobScope, JobState, JobView};
 

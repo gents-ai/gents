@@ -5,7 +5,7 @@ use defra_node::EmbeddedNode;
 use gents_protocol::network_token::EndpointRecord;
 use tokio_util::sync::CancellationToken;
 
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -103,7 +103,7 @@ async fn tick_endpoint(
         .await
         .context("signing PeerEndpoint binding")?;
     let mutation = peer_endpoint_upsert_mutation(&record);
-    crate::config_client::ConfigAccess::write_local_response(
+    crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "p2p.upsert_endpoint_heartbeat",
         &mutation,

@@ -2,15 +2,15 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use clap::Parser;
-use gents::config_client::{
-    apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
 use gents::documents::EvalSplit;
 use gents::eval::checks::CheckRegistry;
 use gents::eval::runner::embedded::EmbeddedHome;
 use gents::eval::runner::{
     run, CellRequest, CellSource, RunOptions, RunOutcome, RunRequest, ScriptKey, ScriptedExecutor,
     TrialEvidence, TrialExecutor,
+};
+use gents::store::config_client::{
+    apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use gents::{Collection, ConfigAccess};
 use serde_json::{json, Value};

@@ -449,7 +449,7 @@ pub async fn wait_for_completed_tool_calls(
 /// physical-tool-document owner; a completed tool can precede replicated
 /// delivery briefly, so wait for the addressed reply to become visible.
 pub async fn canonical_tool_result_text(graphql: &str, call: &Value) -> Result<String> {
-    use gents::config_client::ConfigAccess;
+    use gents::store::config_client::ConfigAccess;
     use gents::tools::call::lifecycle::{load_tool_call_result, render_tool_result};
 
     let required = |field: &str| -> Result<&str> {

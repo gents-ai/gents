@@ -1,5 +1,5 @@
-use crate::graphql::escape_graphql_string;
-pub(super) use crate::graphql::{first_row, graphql_string_list_literal, rows};
+use crate::store::graphql::escape_graphql_string;
+pub(super) use crate::store::graphql::{first_row, graphql_string_list_literal, rows};
 
 pub(super) fn graphql_nullable_string_literal(value: Option<&str>) -> String {
     value

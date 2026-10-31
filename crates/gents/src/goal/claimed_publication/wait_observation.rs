@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole};
 use serde_json::Value;
 
-use crate::config_client::ConfigApplyTxn;
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::ConfigApplyTxn;
+use crate::store::graphql::escape_graphql_string;
 use crate::tools::background::status::WaitToolArgs;
 use crate::tools::call::lifecycle::{query, ToolCallState};
 
@@ -101,7 +101,7 @@ pub(super) async fn observe_intentional_wait(
     match observe_waits(txn, parent_doc_id, node_did, session_id, requester_did).await {
         Ok(true) => WaitEvidence::Running,
         Ok(false) => WaitEvidence::Absent,
-        Err(error) if crate::config_client::is_transaction_step_unavailable(&error) => {
+        Err(error) if crate::store::config_client::is_transaction_step_unavailable(&error) => {
             WaitEvidence::Unavailable(error)
         }
         Err(error) => WaitEvidence::Invalid(error),

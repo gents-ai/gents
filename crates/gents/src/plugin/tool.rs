@@ -199,7 +199,7 @@ fn bound_schema(
     let mut seen = std::collections::BTreeSet::new();
     for field in fields {
         anyhow::ensure!(
-            crate::graphql::validate_graphql_name(&field.name).is_ok()
+            crate::store::graphql::validate_graphql_name(&field.name).is_ok()
                 && field.fill.is_some()
                 && !field.required
                 && seen.insert(&field.name),

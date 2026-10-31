@@ -488,7 +488,7 @@ pub(crate) fn assignment_allows(assigned: Option<&str>, observed: Option<&str>) 
 }
 
 pub(super) async fn retire_stale_assignment_continuations_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     goal: &GoalDocument,
     only_doc: Option<&str>,
     now: &str,
@@ -502,7 +502,7 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
         r#"{{AgentRequest(filter: {{node_did: {{_eq: "{owner}"}}, session_id: {{_eq: "{session}"}}}}) {{{}}}}}"#,
         crate::request::admission::SIGNED_REQUEST_FIELDS
     )).await?;
-    let requests: Vec<AgentRequestRow> = crate::graphql::rows(&response, "AgentRequest")?;
+    let requests: Vec<AgentRequestRow> = crate::store::graphql::rows(&response, "AgentRequest")?;
     let pending = requests
         .iter()
         .filter(|row| {
@@ -565,7 +565,7 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
             .data
             .as_ref()
             .and_then(|data| data.get("update_AgentRequest"))
-            .is_some_and(crate::graphql::response_has_documents)
+            .is_some_and(crate::store::graphql::response_has_documents)
         {
             crate::triggers::engine::durable::publish_request_outcome(
                 txn,
@@ -582,7 +582,7 @@ pub(super) async fn retire_stale_assignment_continuations_in_txn(
 }
 
 pub(crate) async fn assignment_request_id_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     goal: &GoalDocument,
 ) -> Result<Option<String>> {
     let Some(root) = goal.assignment_root_request_doc_id.as_deref() else {
@@ -592,7 +592,7 @@ pub(crate) async fn assignment_request_id_in_txn(
         r#"{{AgentRequest(filter: {{_docID: {{_eq: "{}"}}, node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{request_id}}}}"#,
         escape_graphql_string(root), escape_graphql_string(&goal.node_did), escape_graphql_string(&goal.session_id)
     )).await?;
-    let requests: Vec<AgentRequestRow> = crate::graphql::rows(&response, "AgentRequest")?;
+    let requests: Vec<AgentRequestRow> = crate::store::graphql::rows(&response, "AgentRequest")?;
     anyhow::ensure!(
         requests.len() == 1,
         "Goal assignment has no unique request in its owner/session"
@@ -601,7 +601,7 @@ pub(crate) async fn assignment_request_id_in_txn(
 }
 
 pub(super) async fn load_session_requests(
-    txn: &impl crate::config_client::ConfigRead,
+    txn: &impl crate::store::config_client::ConfigRead,
     node_did: &str,
     session_id: &str,
 ) -> Result<Vec<AgentRequestRow>> {

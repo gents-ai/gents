@@ -6,9 +6,9 @@ use gents::agent::p2p_reconcile::{
     run_enrollment_reconciler, run_pairing_reconciler, EmbeddedRemoteP2pAdmin, PairingDirection,
     RemoteP2pAdmin, CLIENT_TEMPLATE, CLIENT_TO_RUNTIME_COLLECTIONS,
 };
-use gents::config_client::ConfigAccess;
-use gents::graphql::escape_graphql_string;
 use gents::request::lifecycle::{prepare_pending_user_edit, PendingMessageEdit, PendingQueueEdit};
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
 };
@@ -84,7 +84,7 @@ async fn write_command(db: &TestDb, command: &SessionInputEdit) -> String {
     }}) {{ _docID }} }}"#, escape_graphql_string(&command.command_id), escape_graphql_string(&command.requester_did), peer,
         escape_graphql_string(&command.node_did), escape_graphql_string(&command.session_id),
         escape_graphql_string(&serde_json::to_string(command).unwrap()))).await.unwrap();
-    gents::graphql::created_doc_id(&response, "AgentSessionInputEdit").unwrap()
+    gents::store::graphql::created_doc_id(&response, "AgentSessionInputEdit").unwrap()
 }
 
 #[tokio::test]
@@ -400,7 +400,7 @@ impl RemoteEdit<'_> {
             .write("test.remote_active", &active.graphql_mutation().unwrap())
             .await
             .unwrap();
-        let active_doc = gents::graphql::created_doc_id(&written, "AgentRequest").unwrap();
+        let active_doc = gents::store::graphql::created_doc_id(&written, "AgentRequest").unwrap();
         request_ids.insert(active_id, active.request_id.clone());
         for entry in initial["pending"].as_array().unwrap() {
             let id = entry["request_id"].as_u64().unwrap();
@@ -440,7 +440,7 @@ impl RemoteEdit<'_> {
                 .unwrap();
             doc_ids.insert(
                 id,
-                gents::graphql::created_doc_id(&written, "AgentRequest").unwrap(),
+                gents::store::graphql::created_doc_id(&written, "AgentRequest").unwrap(),
             );
             request_ids.insert(id, original.request_id.clone());
             wait_row(
@@ -694,7 +694,7 @@ async fn persisted_edit_survives_database_reopen_and_receipt_replay_is_idempoten
         )
         .await
         .unwrap();
-    let original_doc = gents::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    let original_doc = gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
     let edit = PendingQueueEdit {
         expected_request_doc_ids: vec![original_doc.clone()],
         selected_request_doc_ids: vec![original_doc.clone()],
@@ -923,7 +923,7 @@ async fn local_edit_command_as(
         )
         .await
         .unwrap();
-    let original_id = gents::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+    let original_id = gents::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
     let edit = PendingQueueEdit {
         expected_request_doc_ids: vec![original_id.clone()],
         selected_request_doc_ids: vec![original_id.clone()],

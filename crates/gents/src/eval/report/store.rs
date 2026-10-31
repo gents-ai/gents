@@ -7,14 +7,14 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use crate::config_client::ConfigAccess;
 use crate::eval::report::build::{build, EvalReport};
 use crate::eval::report::refused;
 use crate::eval::runner::freeze::documents::{definition_ref, load_definition};
 use crate::eval::runner::freeze::snapshot::read_frozen_definition;
 use crate::eval::runner::{freeze_refused, run_dir};
 use crate::eval::{load_run, load_trials, load_verdicts, RunHeader, RunRecord};
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::escape_graphql_string;
 
 /// Every run `owner` has, oldest first (`created_at`, then `run_id`).
 pub async fn load_runs(access: &ConfigAccess, owner: &str) -> Result<Vec<RunRecord>> {

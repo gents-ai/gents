@@ -13,7 +13,7 @@ use serde_json::json;
 /// pack and its dependencies. `explicit` is false only when the pack is
 /// installed as another pack's dependency.
 pub(crate) async fn install_documents_pack(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     owner: &str,
     pack: &PackSource,
     args: &PackInstallArgs,
@@ -28,7 +28,7 @@ pub(crate) async fn install_documents_pack(
             .await
             .into_iter()
             .collect::<Result<Vec<_>>>()?;
-    if let gents::config_client::ConfigAccess::Graphql(endpoint) = access {
+    if let gents::store::config_client::ConfigAccess::Graphql(endpoint) = access {
         let mut needs_runtime_store = false;
         if args.scope.graphql.is_some() {
             for source in std::iter::once(pack).chain(dependencies.iter()) {
@@ -72,7 +72,7 @@ pub(crate) async fn install_documents_pack(
 }
 
 pub(crate) async fn install_documents_pack_resolved(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     owner: &str,
     pack: &PackSource,
     args: &PackInstallArgs,
@@ -279,7 +279,7 @@ pub(super) fn check_wire_target(manifest: &PackManifest, wire: &[String]) -> Res
 /// Wires each plugin `pack` shipped into each of `agents`, agent by agent,
 /// through the same writer as `gents pack wire`.
 pub(crate) async fn wire_pack_plugins(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     owner: &str,
     home: &std::path::Path,
     pack: &PackSource,
@@ -306,7 +306,7 @@ pub(crate) async fn wire_pack_plugins(
 /// tasks may retain the database after a handle drops, so shutdown must finish
 /// before this command releases its access. HTTP access has no owned node here.
 pub(super) async fn install_documents_command(
-    access: gents::config_client::ConfigAccess,
+    access: gents::store::config_client::ConfigAccess,
     pack: &PackSource,
     args: &PackInstallArgs,
 ) -> Result<()> {

@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{run_finally, HookCommandResult, ManagedTaskHookExec, TaskHookCancellation};
 use crate::documents::{TaskHook, TaskHookPhase};
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::tools::exec::ownership::{
     HostRecord, HostRecordStore, ProcessIdentity, ProcessRecorder,
 };
@@ -275,7 +275,7 @@ async fn request_resolved(node: &EmbeddedNode, request_doc_id: &str) -> Result<b
     )
     .await?;
     Ok(
-        match crate::graphql::first_row::<Row>(&response, "AgentRequest")? {
+        match crate::store::graphql::first_row::<Row>(&response, "AgentRequest")? {
             None => true,
             Some(row) => row.lifecycle_state.is_some_and(|state| state.is_terminal()),
         },

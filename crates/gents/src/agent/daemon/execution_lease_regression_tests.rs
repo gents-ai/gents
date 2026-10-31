@@ -161,7 +161,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
             _ = &mut process => panic!("request exited before both reasoning chunks were processed"),
         }
     }).await.expect("both provider chunks must be processed");
-    let escaped = crate::graphql::escape_graphql_string(&doc_id);
+    let escaped = crate::store::graphql::escape_graphql_string(&doc_id);
     let query = format!(
         r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
     );
@@ -188,12 +188,12 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
             "completed" | "failed" | "dead" => {
                 format!(
                     "lifecycle_state: \"{}\"",
-                    crate::graphql::escape_graphql_string(loss)
+                    crate::store::graphql::escape_graphql_string(loss)
                 )
             }
             _ => panic!("unsupported ownership-loss fixture"),
         };
-        let access = crate::config_client::ConfigAccess::local(node.clone());
+        let access = crate::store::config_client::ConfigAccess::local(node.clone());
         access
             .write(
                 "test.shutdown_prior_ownership_loss",
@@ -256,7 +256,7 @@ async fn graceful_shutdown_reasoning_case(fail_drain: bool, prior_ownership_loss
 
     if fail_drain {
         let (result, injected_writes) =
-            crate::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+            crate::store::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
                 Some(1),
                 async {
                     shutdown_tx.send_replace(true);
@@ -582,7 +582,7 @@ async fn lease_poll_ownership_loss_does_not_fail_a_running_tool() {
             _ = &mut observe_running => {}
             _ = &mut process => panic!("daemon exited before the accepted tool reached running"),
         }
-        let escaped = crate::graphql::escape_graphql_string(&request_doc_id);
+        let escaped = crate::store::graphql::escape_graphql_string(&request_doc_id);
         let replaced = node.execute(&format!(r#"mutation {{ update_AgentRequest(filter:{{_docID:{{_eq:"{escaped}"}}}},input:{{execution_generation:"replacement-generation"}}){{_docID}} }}"#)).await;
         assert!(!replaced.has_errors(), "{:?}", replaced.errors);
         (&mut process).await.expect("lease replacement handling completes");
@@ -771,7 +771,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
         let request_doc_id = request.doc_id.clone();
         let session_id = request.session_id.clone();
         let requester_did = request.requester_did.clone();
-        let escaped_doc = crate::graphql::escape_graphql_string(&request_doc_id);
+        let escaped_doc = crate::store::graphql::escape_graphql_string(&request_doc_id);
         let query = format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc}" }} }}) {{
                 lifecycle_state execution_generation execution_lease_expires_at terminal_output
@@ -940,7 +940,7 @@ async fn eight_silent_provider_streams_renew_until_explicitly_interrupted_withou
 async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
     let node = Arc::new(crate::test_support::node_builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let agent_config = test_agent();
     let node_did = agent_config.node_did().to_owned();
     let identity = agent_config.node_identity().clone();
@@ -1023,7 +1023,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let process = daemon.process_request(request, shutdown_rx);
     tokio::pin!(process);
-    let escaped_request_doc = crate::graphql::escape_graphql_string(&request_doc_id);
+    let escaped_request_doc = crate::store::graphql::escape_graphql_string(&request_doc_id);
     tokio::time::timeout(Duration::from_secs(10), async {
         let wait_for_blocked_tool = async {
             loop {
@@ -1083,7 +1083,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         }},
         "created_at": chrono::Utc::now().to_rfc3339(),
     });
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.daemon_post_latch_wake",
@@ -1106,7 +1106,7 @@ async fn daemon_interrupt_completion_preserves_wake_published_after_latch() {
         .await
         .expect("interrupted daemon request should terminalize")
         .expect("interrupted request handling completes");
-    let wake_id = crate::graphql::escape_graphql_string(wake_id);
+    let wake_id = crate::store::graphql::escape_graphql_string(wake_id);
     let result = access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{wake_id}" }} }}) {{ lifecycle_state }} AgentRequestParent: AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_request_doc}" }} }}) {{ lifecycle_state terminal_output }} }}"#
@@ -1230,7 +1230,7 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     .expect("active stream completes across multiple lease durations")
     .expect("active request handling completes");
 
-    let request_id = crate::graphql::escape_graphql_string(&request_id);
+    let request_id = crate::store::graphql::escape_graphql_string(&request_id);
     let result = node
         .execute(&format!(
             r#"{{
@@ -1367,7 +1367,7 @@ async fn deadline_closes_received_openai_reasoning_without_another_provider_call
     .expect("request deadline must stop the nonterminal provider")
     .expect("deadline request handling completes");
 
-    let escaped = crate::graphql::escape_graphql_string(&doc_id);
+    let escaped = crate::store::graphql::escape_graphql_string(&doc_id);
     let response = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ lifecycle_state }} }}"#

@@ -84,7 +84,7 @@ pub(super) async fn run(case: &Value) {
                 let created = txn.execute_with_variables(
                     "mutation($input: GoalMutationInputArg!) {create_Goal(input: $input) {_docID}}", &json!({"input":input}),
                 ).await?;
-                let id = crate::graphql::created_doc_id(&created, "Goal")?;
+                let id = crate::store::graphql::created_doc_id(&created, "Goal")?;
                 txn.execute(&format!(r#"mutation {{delete_Goal(docID: "{}") {{_docID}}}}"#, escape_graphql_string(&id))).await?;
                 Ok::<_, anyhow::Error>(id)
             })
@@ -113,7 +113,7 @@ pub(super) async fn run(case: &Value) {
         .execute("{GoalCreationClaim {_docID creation_key goal_id objective token_budget}}")
         .await
         .unwrap();
-    let current = crate::graphql::newest_document_composite_commit(
+    let current = crate::store::graphql::newest_document_composite_commit(
         node,
         &original.doc_id,
         "test.replacement_revision",

@@ -35,14 +35,14 @@ use super::records::{
 };
 use super::settings::effective_ceiling;
 use super::JobBinding;
-use crate::config_client::ConfigAccess;
-use crate::graphql::graphql_string_list_literal;
 use crate::plugin::data::DataCaller;
 use crate::plugin::data::StampContext;
 use crate::plugin::job_calls::JobCaller;
 use crate::plugin::store::InstalledPlugin;
 use crate::plugin::PluginVerdict;
 use crate::request::lifecycle::SessionMessageCause;
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::graphql_string_list_literal;
 use crate::tools::background::status::ProcessControlScope;
 use crate::tools::call::hook::persistence::{
     count_live_backgrounded_rows_in, MAX_BACKGROUNDED_TOOLS_PER_PARENT,
@@ -452,7 +452,7 @@ struct SessionPin {
 
 /// The handles of the caller session's other job rows of `tool_name`, read through `txn`.
 async fn taken_handles(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     session_id: &str,
     tool_name: &str,
     row_doc_id: &str,
@@ -460,8 +460,8 @@ async fn taken_handles(
     let response = txn
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "{}" }} }}) {{ _docID job_pin }} }}"#,
-            crate::graphql::escape_graphql_string(session_id),
-            crate::graphql::escape_graphql_string(tool_name)
+            crate::store::graphql::escape_graphql_string(session_id),
+            crate::store::graphql::escape_graphql_string(tool_name)
         ))
         .await?;
     let rows: Vec<SessionPin> = serde_json::from_value(

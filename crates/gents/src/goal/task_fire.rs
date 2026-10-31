@@ -132,7 +132,7 @@ pub fn validate_task_goal_declaration(
 }
 
 pub(crate) async fn apply_claimed_task_goal_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     request: &crate::request::watcher::AgentRequest,
     now: &str,
 ) -> Result<()> {

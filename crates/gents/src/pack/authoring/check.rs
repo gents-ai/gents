@@ -170,7 +170,7 @@ pub fn load_config(archive: &PackArchive) -> Result<crate::documents::PackConfig
         &|path| archive.asset(path).map(Vec::from),
         &|_| None,
     )?;
-    crate::config_client::DesiredStateApplyPlan::from_pack_config(&config)?;
+    crate::store::config_client::DesiredStateApplyPlan::from_pack_config(&config)?;
     Ok(config)
 }
 

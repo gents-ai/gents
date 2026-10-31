@@ -1,9 +1,9 @@
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::row::{
     decode_node_readiness_snapshot, project_node_readiness_summary, NodeReadinessRow,
     ProjectedNodeReadinessSummary,

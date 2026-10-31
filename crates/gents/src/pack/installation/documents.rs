@@ -3,9 +3,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use crate::config_client::{ConfigAccess, SchemaInstallPlan};
 use crate::documents::PackConfig;
 use crate::pack::archive::PackArchive;
+use crate::store::config_client::{ConfigAccess, SchemaInstallPlan};
 
 use super::super::home_install::materialize_asset_pack;
 use super::super::{
@@ -299,8 +299,11 @@ pub async fn prepare_document_pack_install(
                 let sdl = archive.asset(path)?;
                 schemas.push((
                     path.to_owned(),
-                    crate::config_client::preview_schema_install(access, std::str::from_utf8(sdl)?)
-                        .await?,
+                    crate::store::config_client::preview_schema_install(
+                        access,
+                        std::str::from_utf8(sdl)?,
+                    )
+                    .await?,
                 ));
                 assets.insert(path.to_owned(), sdl.to_vec());
             }
@@ -565,11 +568,11 @@ pub async fn install_prepared_document_pack(
         let sdl = std::str::from_utf8(archive.asset(path)?)?;
         schemas.push((
             path,
-            crate::config_client::preview_schema_install(access, sdl).await?,
+            crate::store::config_client::preview_schema_install(access, sdl).await?,
         ));
     }
     for (path, plan) in schemas {
-        crate::config_client::apply_schema_install(
+        crate::store::config_client::apply_schema_install(
             access,
             std::str::from_utf8(archive.asset(path)?)?,
             &plan.artifact_digest,
@@ -676,7 +679,7 @@ pub async fn apply_prepared_dependency_schemas(
 ) -> Result<()> {
     for dependency in &prepared.dependencies {
         for (path, plan) in &dependency.schemas {
-            crate::config_client::apply_schema_install(
+            crate::store::config_client::apply_schema_install(
                 access,
                 std::str::from_utf8(&dependency.assets[path])?,
                 &plan.artifact_digest,

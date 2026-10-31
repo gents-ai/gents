@@ -2,9 +2,6 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
-use gents::config_client::{
-    apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
 use gents::documents::{EvalSplit, InferenceBackend, InferenceProfile};
 use gents::eval::checks::CheckRegistry;
 use gents::eval::runner::embedded::{EmbeddedExecutor, EmbeddedHome};
@@ -13,6 +10,9 @@ use gents::eval::runner::{
     TrialExecutor, TrialLocator,
 };
 use gents::eval::{load_trials, load_verdicts, Anchor, OutcomeKind, ProviderReason, TrialRecord};
+use gents::store::config_client::{
+    apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+};
 use gents::{Collection, ConfigAccess, DocumentRuntimeOptions};
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -319,7 +319,7 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
             .join(locator(trial(&trials, "seeded")).home_hint.unwrap())
             .join("home");
         let home = EmbeddedHome::open_retained(&retained).await.unwrap();
-        let state = gents::graphql::graphql_with_transaction_retry(
+        let state = gents::store::graphql::graphql_with_transaction_retry(
             &home.node,
             "{ Trigger { trigger_id last_status last_error } AgentRequest { request_id lifecycle_state failure_reason session_id requester_did } AgentSession { session_id node_did requester_did agent_id } }",
             "failed routing canary",
@@ -358,7 +358,7 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
         .join(locator(seeded).home_hint.expect("a retained home"))
         .join("home");
     let home = EmbeddedHome::open_retained(&home_dir).await.unwrap();
-    let fired = gents::graphql::graphql_with_transaction_retry(
+    let fired = gents::store::graphql::graphql_with_transaction_retry(
         &home.node,
         r#"{ AgentRequest(filter: { caused_by_trigger_id: { _eq: "seed-trigger" } }) { content } }"#,
         "canary fired request content",
@@ -378,7 +378,7 @@ async fn seed_stage_routes_to_session(existing_session: bool) {
         "the fired request carries the trigger source header and the seed body: {fired_content:?}"
     );
     if existing_session {
-        let routed = gents::graphql::graphql_with_transaction_retry(
+        let routed = gents::store::graphql::graphql_with_transaction_retry(
             &home.node,
             r#"{ AgentRequest(filter: { caused_by_trigger_id: { _eq: "seed-trigger" } }) { session_id } AgentSession { node_did session_id created_at } }"#,
             "canary supplied destination",

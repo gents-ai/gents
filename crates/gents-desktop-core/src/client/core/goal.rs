@@ -35,8 +35,10 @@ impl ClientCore {
         gents::goal::prepare_goal_input(
             &self
                 .operator_observation_graphql(node_did)
-                .map(gents::config_client::ConfigAccess::Graphql)
-                .unwrap_or_else(|| gents::config_client::ConfigAccess::local(self.node_arc())),
+                .map(gents::store::config_client::ConfigAccess::Graphql)
+                .unwrap_or_else(|| {
+                    gents::store::config_client::ConfigAccess::local(self.node_arc())
+                }),
             &self.node_identity,
             node_did,
             session_id,
@@ -64,8 +66,10 @@ impl ClientCore {
             &self
                 .operator_observation_graphql(node_did)
                 .filter(|endpoint| !endpoint.is_anonymous())
-                .map(gents::config_client::ConfigAccess::Graphql)
-                .unwrap_or_else(|| gents::config_client::ConfigAccess::local(self.node_arc())),
+                .map(gents::store::config_client::ConfigAccess::Graphql)
+                .unwrap_or_else(|| {
+                    gents::store::config_client::ConfigAccess::local(self.node_arc())
+                }),
             &self.node_identity,
             node_did,
             session_id,

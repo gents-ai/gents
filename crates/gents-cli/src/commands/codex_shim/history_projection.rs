@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents_codex_protocol as codex;
 use gents_codex_protocol::MessagePhase;
 use gents_protocol::client_protocol::{derive_persisted_attempt, RequestLifecycleState};
@@ -737,7 +737,7 @@ async fn decode_canonical_message_rows(
     state: &ShimState,
     response: &Value,
 ) -> Result<Vec<MessageRow>> {
-    let access = gents::config_client::ConfigAccess::local(state.node.clone());
+    let access = gents::store::config_client::ConfigAccess::local(state.node.clone());
     let mut messages = Vec::new();
     let mut physical_ids = BTreeSet::new();
     for raw in raw_rows(response, "AgentMessage") {
@@ -776,7 +776,7 @@ async fn decode_tool_rows(
     session_id: &str,
     requester: Option<&str>,
 ) -> Result<Vec<ToolRow>> {
-    let access = gents::config_client::ConfigAccess::local(state.node.clone());
+    let access = gents::store::config_client::ConfigAccess::local(state.node.clone());
     let mut tools = Vec::new();
     for row in raw_rows(response, "AgentToolCall") {
         if row.get("request_doc_id").is_none_or(Value::is_null) {

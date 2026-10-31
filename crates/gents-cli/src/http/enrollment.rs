@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::{Duration, SecondsFormat, Utc};
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use gents::NodeIdentity;
 use gents_protocol::enrollment::{
     derive_enrollment_id, EnrollmentOfferRecord, EnrollmentOperatorAction,
@@ -151,7 +151,7 @@ async fn consume_operator_nonce(
             }}) {{ _docID }}
         }}"#
     );
-    match gents::config_client::ConfigAccess::write_local(
+    match gents::store::config_client::ConfigAccess::write_local(
         node,
         "cli.enrollment.consume_operator_nonce",
         &mutation,
@@ -332,7 +332,7 @@ pub async fn ensure_enrollment_network(
                     }}) {{ _docID }}
                 }}"#
             );
-            gents::config_client::ConfigAccess::write_local(
+            gents::store::config_client::ConfigAccess::write_local(
                 node,
                 "cli.enrollment.create_agent_network",
                 &mutation,
@@ -348,7 +348,7 @@ pub async fn ensure_enrollment_network(
 mod tests {
     use super::*;
     use gents::defra_node::{EmbeddedNode, StorageBackend};
-    use gents::graphql::ensure_no_errors;
+    use gents::store::graphql::ensure_no_errors;
     use gents_protocol::enrollment::ENROLLMENT_PROTOCOL_VERSION;
     use gents_protocol::enrollment::{
         EnrollmentOperatorAction, EnrollmentOperatorQuery,

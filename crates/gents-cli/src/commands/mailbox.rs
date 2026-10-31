@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
-use gents::config_client::ConfigAccess;
-use gents::graphql::escape_graphql_string;
 use gents::session::mailbox::{MailboxItem, MailboxStatus, MAILBOX_FIELDS};
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 
 use crate::cli::args::{
     MailboxAccessArgs, MailboxCommand, MailboxItemArgs, MailboxListArgs, MailboxReplyArgs,
@@ -68,7 +68,7 @@ async fn reply(args: MailboxReplyArgs) -> Result<()> {
 
 async fn access_and_principal(
     args: &MailboxAccessArgs,
-) -> Result<(gents::config_client::ConfigAccess, String)> {
+) -> Result<(gents::store::config_client::ConfigAccess, String)> {
     let principal =
         resolve_node_did(args.home.as_deref(), None).context("resolving mailbox node DID")?;
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;

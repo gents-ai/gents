@@ -6,9 +6,9 @@ use futures::FutureExt;
 use gents_protocol::row::AgentRequestRow;
 
 use super::EmbeddedHome;
-use crate::config_client::ConfigAccess;
 use crate::eval::runner::TrialLocator;
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::escape_graphql_string;
 
 const MAX_REQUESTS: usize = 1_000;
 const READ_TIMEOUT: Duration = Duration::from_secs(30);

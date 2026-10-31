@@ -194,7 +194,7 @@ pub fn oauth_credential_id(node_did: &str, provider: &str) -> String {
 #[cfg(test)]
 mod tests;
 pub fn oauth_credential_by_id_query(credential_id: &str) -> String {
-    let credential_id = crate::graphql::escape_graphql_string(credential_id);
+    let credential_id = crate::store::graphql::escape_graphql_string(credential_id);
     format!(
         r#"query {{
             OAuthCredential(
@@ -214,7 +214,7 @@ pub fn oauth_credential_upsert_mutation(credential: &OAuthCredential) -> String 
     let add_input = render_oauth_input(&fields, &[]);
     // `node_did` is immutable, so the update branch must omit it on this DefraDB pin.
     let update_input = render_oauth_input(&fields, SET_ONCE_FIELDS);
-    let credential_id = crate::graphql::escape_graphql_string(&credential.credential_id);
+    let credential_id = crate::store::graphql::escape_graphql_string(&credential.credential_id);
     format!(
         r#"mutation {{
             upsert_OAuthCredential(
@@ -257,8 +257,8 @@ pub fn pick_oauth_credential<'c>(
 }
 
 fn enabled_oauth_credentials_query(node_did: &str, provider: &str, fields: &str) -> String {
-    let node_did = crate::graphql::escape_graphql_string(node_did);
-    let provider = crate::graphql::escape_graphql_string(provider);
+    let node_did = crate::store::graphql::escape_graphql_string(node_did);
+    let provider = crate::store::graphql::escape_graphql_string(provider);
     format!(
         r#"query {{
             OAuthCredential(
@@ -275,7 +275,7 @@ fn enabled_oauth_credentials_query(node_did: &str, provider: &str, fields: &str)
 }
 
 pub async fn resolve_oauth_credential(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     provider: &str,
     pick: AccountPick<'_>,
@@ -291,7 +291,7 @@ pub async fn resolve_oauth_credential(
 }
 
 pub(crate) async fn provider_default_account_ref(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     provider: &str,
 ) -> Result<Option<String>> {
@@ -303,7 +303,7 @@ pub(crate) async fn provider_default_account_ref(
 }
 
 pub(crate) async fn resolve_oauth_credential_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     provider: &str,
     pick: AccountPick<'_>,
@@ -362,7 +362,7 @@ pub async fn lookup_oauth_credential_by_id(
     node: &EmbeddedNode,
     credential_id: &str,
 ) -> Result<Option<OAuthCredential>> {
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &oauth_credential_by_id_query(credential_id),
         "lookup_oauth_credential_by_id",
@@ -376,7 +376,7 @@ pub async fn lookup_oauth_credential_by_id(
 }
 
 pub fn oauth_credentials_for_node_query(node_did: &str) -> String {
-    let node_did = crate::graphql::escape_graphql_string(node_did);
+    let node_did = crate::store::graphql::escape_graphql_string(node_did);
     format!(
         r#"query {{
             OAuthCredential(filter: {{ node_did: {{ _eq: "{node_did}" }} }}) {{
@@ -387,7 +387,7 @@ pub fn oauth_credentials_for_node_query(node_did: &str) -> String {
 }
 
 pub fn oauth_credential_by_doc_id_query(doc_id: &str) -> String {
-    let doc_id = crate::graphql::escape_graphql_string(doc_id);
+    let doc_id = crate::store::graphql::escape_graphql_string(doc_id);
     format!(
         r#"query {{
             OAuthCredential(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
@@ -401,7 +401,7 @@ pub async fn list_oauth_credentials(
     node: &EmbeddedNode,
     node_did: &str,
 ) -> Result<Vec<OAuthCredential>> {
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &oauth_credentials_for_node_query(node_did),
         "list_oauth_credentials",
@@ -414,7 +414,7 @@ pub async fn list_oauth_credentials(
 }
 
 pub async fn list_oauth_credentials_on(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
 ) -> Result<Vec<OAuthCredential>> {
     let response = access
@@ -431,7 +431,7 @@ pub async fn lookup_oauth_credential_by_doc_id(
     node: &EmbeddedNode,
     doc_id: &str,
 ) -> Result<Option<OAuthCredential>> {
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &oauth_credential_by_doc_id_query(doc_id),
         "lookup_oauth_credential_by_doc_id",
@@ -449,9 +449,12 @@ pub async fn upsert_oauth_credential(
     credential: &OAuthCredential,
 ) -> Result<String> {
     let mutation = oauth_credential_upsert_mutation(credential);
-    let response =
-        crate::config_client::ConfigAccess::write_local(node, "oauth_credential.upsert", &mutation)
-            .await?;
+    let response = crate::store::config_client::ConfigAccess::write_local(
+        node,
+        "oauth_credential.upsert",
+        &mutation,
+    )
+    .await?;
     Ok(gents_protocol::graphql::extract_mutation_doc_id(
         &response,
         "OAuthCredential",
@@ -459,7 +462,7 @@ pub async fn upsert_oauth_credential(
 }
 
 pub async fn upsert_oauth_credential_on(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     credential: &OAuthCredential,
 ) -> Result<String> {
     let mutation = oauth_credential_upsert_mutation(credential);
@@ -524,8 +527,8 @@ fn sign_in_product(provider: &str) -> Option<OAuthProduct> {
 }
 
 fn oauth_credentials_of_provider_query(node_did: &str, provider: &str) -> String {
-    let node_did = crate::graphql::escape_graphql_string(node_did);
-    let provider = crate::graphql::escape_graphql_string(provider);
+    let node_did = crate::store::graphql::escape_graphql_string(node_did);
+    let provider = crate::store::graphql::escape_graphql_string(provider);
     format!(
         r#"query {{
             OAuthCredential(filter: {{
@@ -539,7 +542,7 @@ fn oauth_credentials_of_provider_query(node_did: &str, provider: &str) -> String
 }
 
 async fn provider_rows_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     provider: &str,
 ) -> Result<Vec<OAuthCredential>> {
@@ -610,10 +613,10 @@ pub(crate) fn preset_account_backend(
 }
 
 async fn write_account_backend(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     backend: &crate::InferenceBackend,
 ) -> Result<()> {
-    crate::config_client::write_inference_backend_in_txn(txn, backend)
+    crate::store::config_client::write_inference_backend_in_txn(txn, backend)
         .await
         .context(
             "the account's backend could not be stored, so the sign-in was not saved; \
@@ -622,7 +625,7 @@ async fn write_account_backend(
 }
 
 async fn sync_account_backend(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     credential: &OAuthCredential,
     old_label: Option<&str>,
 ) -> Result<()> {
@@ -630,7 +633,7 @@ async fn sync_account_backend(
         return Ok(());
     };
     let serving: Vec<_> =
-        crate::config_client::list_inference_backends_in_txn(txn, &credential.node_did)
+        crate::store::config_client::list_inference_backends_in_txn(txn, &credential.node_did)
             .await?
             .into_iter()
             .filter(|backend| backend.auth.oauth_account_ref() == Some(account_ref))
@@ -692,7 +695,7 @@ fn next_free_label(rows: &[OAuthCredential], provider: &str) -> String {
 }
 
 pub async fn store_sign_in(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     credential: OAuthCredential,
     label: Option<&str>,
 ) -> Result<SignIn> {
@@ -754,7 +757,7 @@ fn sign_in_match(
 }
 
 async fn store_sign_in_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     mut credential: OAuthCredential,
     label: Option<String>,
 ) -> Result<SignIn> {
@@ -798,7 +801,7 @@ async fn store_sign_in_in_txn(
                     {}
                 }}) {{ _docID }}
             }}"#,
-            crate::graphql::escape_graphql_string(&doc_id),
+            crate::store::graphql::escape_graphql_string(&doc_id),
             render_oauth_input(&fields, &set_once),
         );
         txn.execute(&mutation).await?;
@@ -841,7 +844,7 @@ async fn store_sign_in_in_txn(
                 {}
             }}) {{ _docID }}
         }}"#,
-        crate::graphql::escape_graphql_string(&credential.credential_id),
+        crate::store::graphql::escape_graphql_string(&credential.credential_id),
         render_oauth_input(&fields, &[]),
     );
     let response = txn.execute(&mutation).await?;
@@ -863,12 +866,12 @@ async fn store_sign_in_in_txn(
 }
 
 async fn original_account_profiles(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     credential: &OAuthCredential,
 ) -> Result<Vec<String>> {
     use crate::inference::backends::provider::BackendProviderOauthExt;
     let backends: Vec<_> =
-        crate::config_client::list_inference_backends_in_txn(txn, &credential.node_did)
+        crate::store::config_client::list_inference_backends_in_txn(txn, &credential.node_did)
             .await?
             .into_iter()
             .filter(|backend| {
@@ -880,7 +883,7 @@ async fn original_account_profiles(
             .map(|backend| backend.backend_id)
             .collect();
     Ok(
-        crate::config_client::list_inference_profiles_in_txn(txn, &credential.node_did)
+        crate::store::config_client::list_inference_profiles_in_txn(txn, &credential.node_did)
             .await?
             .into_iter()
             .filter(|profile| backends.contains(&profile.backend_id))
@@ -1033,13 +1036,13 @@ fn account_filter(node_did: &str, credential_id: Option<&str>) -> String {
         .map(|id| {
             format!(
                 r#", credential_id: {{ _eq: "{}" }}"#,
-                crate::graphql::escape_graphql_string(id)
+                crate::store::graphql::escape_graphql_string(id)
             )
         })
         .unwrap_or_default();
     format!(
         r#"{{ node_did: {{ _eq: "{}" }}, provider: {{ _in: [{providers}] }}{credential} }}"#,
-        crate::graphql::escape_graphql_string(node_did)
+        crate::store::graphql::escape_graphql_string(node_did)
     )
 }
 
@@ -1048,7 +1051,7 @@ fn account_not_found(credential_id: &str) -> anyhow::Error {
 }
 
 pub async fn list_accounts(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
 ) -> Result<Vec<AccountSummary>> {
     let response = access
@@ -1086,7 +1089,7 @@ pub async fn list_accounts(
 }
 
 pub async fn set_account_label(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     credential_id: &str,
     label: &str,
@@ -1118,7 +1121,7 @@ pub async fn set_account_label(
                     .context("stored OAuthCredential has no _docID")?;
                 txn.execute(&format!(
                     r#"mutation {{ update_OAuthCredential(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ {} }}) {{ _docID }} }}"#,
-                    crate::graphql::escape_graphql_string(doc_id),
+                    crate::store::graphql::escape_graphql_string(doc_id),
                     gents_protocol::graphql::nullable_string_field("label", Some(&label)),
                 ))
                 .await?;
@@ -1134,7 +1137,7 @@ pub async fn set_account_label(
 }
 
 pub async fn set_account_enabled(
-    access: &crate::config_client::ConfigAccess,
+    access: &crate::store::config_client::ConfigAccess,
     node_did: &str,
     credential_id: &str,
     enabled: bool,
@@ -1153,7 +1156,7 @@ pub async fn set_account_enabled(
 }
 
 pub async fn remove_account_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     credential_id: &str,
 ) -> Result<()> {
@@ -1180,7 +1183,7 @@ fn ensure_matched(response: &Value, field: &str, credential_id: &str) -> Result<
     if response
         .get("data")
         .and_then(|data| data.get(field))
-        .is_some_and(crate::graphql::response_has_documents)
+        .is_some_and(crate::store::graphql::response_has_documents)
     {
         Ok(())
     } else {
@@ -1199,7 +1202,7 @@ fn oauth_credential_input_fields(credential: &OAuthCredential) -> Vec<(&'static 
     let field = |name: &str, value: &str| {
         format!(
             r#"{name}: "{}""#,
-            crate::graphql::escape_graphql_string(value)
+            crate::store::graphql::escape_graphql_string(value)
         )
     };
     let datetime_field = |name: &str, value: Option<DateTime<Utc>>| {
@@ -1456,11 +1459,11 @@ fn refresh_update_mutation(
     let document = match &credential.doc_id {
         Some(doc_id) => format!(
             r#"_docID: {{ _eq: "{}" }}"#,
-            crate::graphql::escape_graphql_string(doc_id)
+            crate::store::graphql::escape_graphql_string(doc_id)
         ),
         None => format!(
             r#"credential_id: {{ _eq: "{}" }}"#,
-            crate::graphql::escape_graphql_string(&credential.credential_id)
+            crate::store::graphql::escape_graphql_string(&credential.credential_id)
         ),
     };
     let fields: Vec<_> = oauth_credential_input_fields(credential)
@@ -1478,7 +1481,7 @@ fn refresh_update_mutation(
                 }}
             ) {{ _docID }}
         }}"#,
-        crate::graphql::escape_graphql_string(stored_refresh_token),
+        crate::store::graphql::escape_graphql_string(stored_refresh_token),
         render_oauth_input(&fields, &[]),
     )
 }
@@ -1677,7 +1680,7 @@ impl DbCredentialBearer {
         let mut last_error = None;
         let mut delay_ms = 200u64;
         for attempt in 0..3u32 {
-            match crate::config_client::ConfigAccess::write_local(
+            match crate::store::config_client::ConfigAccess::write_local(
                 &self.node,
                 "oauth_credential.refresh",
                 &mutation,
@@ -1688,7 +1691,7 @@ impl DbCredentialBearer {
                     let written = response
                         .get("data")
                         .and_then(|data| data.get("update_OAuthCredential"))
-                        .is_some_and(crate::graphql::response_has_documents);
+                        .is_some_and(crate::store::graphql::response_has_documents);
                     return Ok(if written {
                         RefreshPersist::Written
                     } else {
@@ -1878,145 +1881,6 @@ mod serving_account_tests;
 
 #[cfg(test)]
 mod resolver_tests;
-mod serving_account_tests {
-    use super::*;
-    use crate::documents::BackendAuth;
-
-    fn account(account_ref: Option<&str>, label: &str, enabled: bool) -> AccountSummary {
-        AccountSummary {
-            credential_id: format!(
-                "claude-subscription:did:key:z6MkTest{}",
-                account_ref.unwrap_or("")
-            ),
-            provider: crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER.into(),
-            account_ref: account_ref.map(str::to_owned),
-            label: label.into(),
-            identity: Some("IDENTITY".into()),
-            plan: None,
-            enabled,
-            default: account_ref.is_none(),
-            access_token_expires_at: Utc::now(),
-            connected_at: None,
-        }
-    }
-
-    fn backend(
-        name: &str,
-        provider_kind: &str,
-        auth: BackendAuth,
-        enabled: bool,
-    ) -> crate::InferenceBackend {
-        serde_json::from_value(json!({
-            "node_did": "did:key:z6MkTest", "backend_id": name, "name": name,
-            "provider_kind": provider_kind, "endpoint": "http://127.0.0.1:1/v1",
-            "auth": auth, "enabled": enabled,
-        }))
-        .unwrap()
-    }
-
-    fn oauth(account_ref: Option<&str>) -> BackendAuth {
-        BackendAuth::NodeOAuth {
-            account_ref: account_ref.map(str::to_owned),
-        }
-    }
-
-    fn accounts() -> Vec<AccountSummary> {
-        vec![
-            account(None, "Claude", true),
-            account(Some("acct-b"), "label-b", false),
-        ]
-    }
-
-    #[test]
-    fn an_account_backend_names_its_account() {
-        let original = backend("claude", "ClaudeCliSubscription", oauth(None), true);
-        assert_eq!(
-            serving_account(&original, &accounts()),
-            ServingAccount {
-                label: "Claude".into(),
-                state: AccountState::Enabled,
-                provider: Some(crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER),
-            }
-        );
-        let b = backend(
-            "label-b",
-            "ClaudeCliSubscription",
-            oauth(Some("acct-b")),
-            true,
-        );
-        assert_eq!(
-            serving_account(&b, &accounts()),
-            ServingAccount {
-                label: "label-b".into(),
-                state: AccountState::Disabled,
-                provider: Some(crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER),
-            }
-        );
-    }
-
-    #[test]
-    fn a_backend_whose_account_is_gone_is_missing_by_its_name() {
-        let gone = backend(
-            "label-gone",
-            "ClaudeCliSubscription",
-            oauth(Some("acct-other")),
-            true,
-        );
-        assert_eq!(
-            serving_account(&gone, &accounts()),
-            ServingAccount {
-                label: "label-gone".into(),
-                state: AccountState::Missing,
-                provider: Some(crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER),
-            }
-        );
-    }
-
-    #[test]
-    fn an_api_key_backend_is_its_own_account() {
-        let key = BackendAuth::ApiKey {
-            key: "key-SECRET".into(),
-        };
-        for (enabled, state) in [
-            (true, AccountState::Enabled),
-            (false, AccountState::Disabled),
-        ] {
-            let api = backend("OpenAI", "OpenAiCompatible", key.clone(), enabled);
-            assert_eq!(
-                serving_account(&api, &accounts()),
-                ServingAccount {
-                    label: "OpenAI".into(),
-                    state,
-                    provider: None,
-                }
-            );
-        }
-    }
-
-    #[test]
-    fn the_serving_account_holds_no_identity() {
-        for backend in [
-            backend("claude", "ClaudeCliSubscription", oauth(None), true),
-            backend(
-                "label-gone",
-                "ClaudeCliSubscription",
-                oauth(Some("acct-other")),
-                true,
-            ),
-        ] {
-            let json = serde_json::to_value(serving_account(&backend, &accounts())).unwrap();
-            let text = json.to_string();
-            assert!(
-                !text.contains("IDENTITY") && !text.contains("SECRET"),
-                "{text}"
-            );
-            assert_eq!(
-                json["state"],
-                serving_account(&backend, &accounts()).state.as_str()
-            );
-        }
-    }
-}
 
 #[cfg(test)]
 mod sign_in_tests;
@@ -2026,1185 +1890,6 @@ mod lifecycle_tests;
 
 #[cfg(test)]
 mod backfill_tests;
-mod lifecycle_tests {
-    use super::test_support::{test_node, unsigned_jwt};
-    use super::*;
-    use crate::config_client::ConfigAccess;
-    use crate::inference::auth::claude::CLAUDE_OAUTH_PROVIDER;
-    use crate::inference::clients::chatgpt_codex::CHATGPT_CODEX_PROVIDER;
-    use crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
-
-    #[derive(Debug, Clone, Copy)]
-    enum Product {
-        ChatGpt,
-        Claude,
-        Grok,
-    }
-    const PRODUCTS: [Product; 3] = [Product::ChatGpt, Product::Claude, Product::Grok];
-
-    impl Product {
-        fn provider(self) -> &'static str {
-            match self {
-                Self::ChatGpt => CHATGPT_CODEX_PROVIDER,
-                Self::Claude => CLAUDE_OAUTH_PROVIDER,
-                Self::Grok => XAI_OAUTH_PROVIDER,
-            }
-        }
-
-        fn sign_in(self, did: &str, who: &str, refresh_token: &str) -> OAuthCredential {
-            match self {
-                Self::ChatGpt => {
-                    let auth = json!({
-                        "chatgpt_account_id": "acct-ws",
-                        "chatgpt_account_user_id": format!("member-{who}"),
-                    });
-                    OAuthCredential::from_login_tokens(
-                        did,
-                        CHATGPT_CODEX_PROVIDER,
-                        &unsigned_jwt(
-                            json!({ "https://api.openai.com/auth": { "chatgpt_account_id": "acct-ws" } }),
-                        ),
-                        unsigned_jwt(json!({ "https://api.openai.com/auth": auth })),
-                        refresh_token.to_string(),
-                        Utc::now(),
-                    )
-                }
-                Self::Claude => crate::inference::auth::claude::credential_from_login_tokens(
-                    did,
-                    CLAUDE_OAUTH_PROVIDER,
-                    &crate::inference::auth::claude::ClaudeLoginTokens {
-                        access_token: "access-TEST".into(),
-                        refresh_token: refresh_token.into(),
-                        expires_in: Some(3600),
-                        scope: None,
-                        account_id: Some(format!("label-{who}")),
-                        organization_uuid: Some("org-1".into()),
-                        account_uuid: Some(format!("account-{who}")),
-                    },
-                    Utc::now(),
-                ),
-                Self::Grok => crate::inference::auth::xai_login::credential_from_login_tokens(
-                    did,
-                    XAI_OAUTH_PROVIDER,
-                    &crate::inference::auth::xai_login::XaiLoginTokens {
-                        access_token: unsigned_jwt(json!({
-                            "principal_type": "user",
-                            "principal_id": format!("principal-{who}"),
-                        })),
-                        refresh_token: refresh_token.into(),
-                        id_token: None,
-                        expires_in: Some(900),
-                    },
-                    Utc::now(),
-                ),
-            }
-        }
-    }
-
-    async fn access() -> ConfigAccess {
-        ConfigAccess::local(test_node().await)
-    }
-
-    async fn store(access: &ConfigAccess, credential: OAuthCredential) -> SignIn {
-        store_sign_in(access, credential, None).await.unwrap()
-    }
-
-    async fn rows(access: &ConfigAccess, did: &str, provider: &str) -> Vec<OAuthCredential> {
-        list_oauth_credentials_on(access, did)
-            .await
-            .unwrap()
-            .into_iter()
-            .filter(|row| row.provider == provider)
-            .collect()
-    }
-
-    async fn set_enabled(access: &ConfigAccess, credential_id: &str, enabled: bool) {
-        let mutation = format!(
-            r#"mutation {{ update_OAuthCredential(filter: {{ credential_id: {{ _eq: "{credential_id}" }} }}, input: {{ enabled: {enabled} }}) {{ _docID }} }}"#
-        );
-        access.write("test.set_enabled", &mutation).await.unwrap();
-    }
-
-    fn did(test: &str, product: Product) -> String {
-        format!("did:key:z6MkTest{test}{product:?}")
-    }
-
-    #[tokio::test]
-    async fn a_first_sign_in_is_the_original_account() {
-        let access = access().await;
-        for product in PRODUCTS {
-            let did = did("First", product);
-            let signed = store(&access, product.sign_in(&did, "a", "refresh-1")).await;
-            assert_eq!(signed.result, SignInResult::Added, "{product:?}");
-            let stored = rows(&access, &did, product.provider()).await;
-            assert_eq!(stored.len(), 1, "{product:?}");
-            assert_eq!(
-                stored[0].credential_id,
-                oauth_credential_id(&did, product.provider())
-            );
-            assert_eq!(stored[0].account_ref, None, "{product:?}");
-            assert!(stored[0].connected_at.is_some(), "{product:?}");
-        }
-    }
-
-    #[tokio::test]
-    async fn another_account_is_added_beside_the_first() {
-        let access = access().await;
-        for product in PRODUCTS {
-            let did = did("Another", product);
-            let provider = product.provider();
-            store(&access, product.sign_in(&did, "a", "refresh-a")).await;
-            let first = rows(&access, &did, provider).await.remove(0);
-
-            let signed = store(&access, product.sign_in(&did, "b", "refresh-b")).await;
-            assert_eq!(signed.result, SignInResult::Added, "{product:?}");
-            let stored = rows(&access, &did, provider).await;
-            assert_eq!(stored.len(), 2, "{product:?}");
-            let kept = stored
-                .iter()
-                .find(|row| row.doc_id == first.doc_id)
-                .expect("the first row is kept");
-            assert_eq!(kept, &first, "{product:?}: the first account is untouched");
-            let added = stored
-                .iter()
-                .find(|row| row.doc_id != first.doc_id)
-                .unwrap();
-            assert_eq!(added.refresh_token, "refresh-b");
-            let reference = added.account_ref.clone().expect("a minted reference");
-            assert!(!reference.is_empty() && !reference.contains("did:"));
-            assert_ne!(added.account_ref, first.account_ref);
-            assert_eq!(added.credential_id, format!("{provider}:{did}:{reference}"));
-            assert!(added.connected_at.unwrap() >= first.connected_at.unwrap());
-
-            let resolve = |pick| resolve_oauth_credential(&access, &did, provider, pick);
-            let by_ref = resolve(AccountPick::Reference(Some(&reference)))
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(by_ref.credential_id, added.credential_id);
-            let original = resolve(AccountPick::Reference(None))
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(original.credential_id, first.credential_id);
-        }
-    }
-
-    #[tokio::test]
-    async fn the_same_account_refreshes_in_place() {
-        let access = access().await;
-        for product in PRODUCTS {
-            let did = did("Same", product);
-            let provider = product.provider();
-            let first = store(&access, product.sign_in(&did, "a", "refresh-1")).await;
-            assert_eq!(first.result, SignInResult::Added, "{product:?}");
-            let before = rows(&access, &did, provider).await.remove(0);
-            assert!(before.connected_at.is_some(), "{product:?}");
-            set_enabled(&access, &before.credential_id, false).await;
-
-            let again = store(&access, product.sign_in(&did, "a", "refresh-2")).await;
-            assert_eq!(again.result, SignInResult::Refreshed, "{product:?}");
-            let stored = rows(&access, &did, provider).await;
-            assert_eq!(stored.len(), 1, "{product:?}");
-            let after = &stored[0];
-            assert_eq!(after.doc_id, before.doc_id);
-            assert_eq!(after.credential_id, before.credential_id);
-            assert_eq!(after.account_ref, before.account_ref);
-            assert_eq!(after.connected_at, before.connected_at);
-            assert_eq!(after.refresh_token, "refresh-2");
-            assert!(after.enabled, "{product:?}");
-        }
-    }
-
-    #[tokio::test]
-    async fn two_concurrent_first_sign_ins_both_store() {
-        let access = access().await;
-        for product in PRODUCTS {
-            let did = did("Concurrent", product);
-            let (a, b) = tokio::join!(
-                store_sign_in(&access, product.sign_in(&did, "a", "refresh-a"), None),
-                store_sign_in(&access, product.sign_in(&did, "b", "refresh-b"), None),
-            );
-            a.unwrap();
-            b.unwrap();
-            let stored = rows(&access, &did, product.provider()).await;
-            assert_eq!(stored.len(), 2, "{product:?}");
-            assert_eq!(
-                stored
-                    .iter()
-                    .filter(|row| row.account_ref.is_none())
-                    .count(),
-                1,
-                "{product:?}"
-            );
-        }
-    }
-
-    fn chatgpt_with(
-        did: &str,
-        access_auth: Value,
-        id_claims: Value,
-        refresh_token: &str,
-    ) -> OAuthCredential {
-        OAuthCredential::from_login_tokens(
-            did,
-            CHATGPT_CODEX_PROVIDER,
-            &unsigned_jwt(id_claims),
-            unsigned_jwt(json!({ "https://api.openai.com/auth": access_auth })),
-            refresh_token.to_string(),
-            Utc::now(),
-        )
-    }
-
-    fn claude(
-        did: &str,
-        label: &str,
-        account: Option<&str>,
-        refresh_token: &str,
-    ) -> OAuthCredential {
-        crate::inference::auth::claude::credential_from_login_tokens(
-            did,
-            CLAUDE_OAUTH_PROVIDER,
-            &crate::inference::auth::claude::ClaudeLoginTokens {
-                access_token: "access-TEST".into(),
-                refresh_token: refresh_token.into(),
-                expires_in: Some(3600),
-                scope: None,
-                account_id: Some(label.into()),
-                organization_uuid: account.map(|_| "org-1".into()),
-                account_uuid: account.map(str::to_owned),
-            },
-            Utc::now(),
-        )
-    }
-
-    fn grok(did: &str, principal_id: &str, refresh_token: &str) -> OAuthCredential {
-        crate::inference::auth::xai_login::credential_from_login_tokens(
-            did,
-            XAI_OAUTH_PROVIDER,
-            &crate::inference::auth::xai_login::XaiLoginTokens {
-                access_token: unsigned_jwt(
-                    json!({ "principal_type": "user", "principal_id": principal_id }),
-                ),
-                refresh_token: refresh_token.into(),
-                id_token: None,
-                expires_in: Some(900),
-            },
-            Utc::now(),
-        )
-    }
-
-    async fn seed_raw(access: &ConfigAccess, input: Value) {
-        access
-            .transact_write("test.seed_raw", |txn| {
-                let input = input.clone();
-                Box::pin(async move {
-                    txn.execute_with_variables(
-                        "mutation($input: OAuthCredentialMutationInputArg!) { create_OAuthCredential(input: $input) { _docID } }",
-                        &json!({ "input": input }),
-                    )
-                    .await
-                })
-            })
-            .await
-            .unwrap();
-    }
-
-    fn raw_row(did: &str, provider: &str) -> Value {
-        json!({
-            "credential_id": oauth_credential_id(did, provider),
-            "node_did": did,
-            "provider": provider,
-            "access_token": "placeholder-access",
-            "refresh_token": "placeholder-refresh",
-            "is_fedramp": false,
-            "access_token_expires_at": "2020-01-01T00:00:00Z",
-            "enabled": true,
-        })
-    }
-
-    #[tokio::test]
-    async fn a_chatgpt_account_matches_across_key_forms() {
-        let access = access().await;
-        let did = "did:key:z6MkTestKeyForms";
-        let id = json!({ "https://api.openai.com/auth": { "chatgpt_account_id": "acct-ws" }, "chatgpt_user_id": "user-a" });
-        let fallback_only = chatgpt_with(
-            did,
-            json!({ "chatgpt_account_id": "acct-ws" }),
-            id.clone(),
-            "refresh-1",
-        );
-        assert_eq!(
-            fallback_only.provider_account_key.as_deref(),
-            Some("acct-ws:user-a")
-        );
-        store(&access, fallback_only).await;
-
-        let both = chatgpt_with(
-            did,
-            json!({ "chatgpt_account_id": "acct-ws", "chatgpt_account_user_id": "member-a" }),
-            id,
-            "refresh-2",
-        );
-        let signed = store(&access, both).await;
-        assert_eq!(signed.result, SignInResult::Refreshed);
-        let stored = rows(&access, did, CHATGPT_CODEX_PROVIDER).await;
-        assert_eq!(stored.len(), 1);
-        assert_eq!(stored[0].refresh_token, "refresh-2");
-        assert_eq!(
-            stored[0].provider_account_key.as_deref(),
-            Some("acct-ws:user-a")
-        );
-    }
-
-    #[tokio::test]
-    async fn a_key_form_the_sign_in_does_not_compute_is_rewritten() {
-        let access = access().await;
-        let did = "did:key:z6MkTestKeyRewrite";
-        let id = json!({ "https://api.openai.com/auth": { "chatgpt_account_id": "acct-ws" }, "chatgpt_user_id": "user-a" });
-        let both = chatgpt_with(
-            did,
-            json!({ "chatgpt_account_id": "acct-ws", "chatgpt_account_user_id": "member-a" }),
-            id.clone(),
-            "refresh-1",
-        );
-        assert_eq!(both.provider_account_key.as_deref(), Some("member-a"));
-        store(&access, both).await;
-
-        let fallback_only = chatgpt_with(
-            did,
-            json!({ "chatgpt_account_id": "acct-ws" }),
-            id,
-            "refresh-2",
-        );
-        let signed = store(&access, fallback_only).await;
-        assert_eq!(signed.result, SignInResult::Refreshed);
-        let stored = rows(&access, did, CHATGPT_CODEX_PROVIDER).await;
-        assert_eq!(stored.len(), 1);
-        assert_eq!(
-            stored[0].provider_account_key.as_deref(),
-            Some("acct-ws:user-a")
-        );
-    }
-
-    #[tokio::test]
-    async fn an_upgraded_claude_row_with_its_own_account_id_is_filled() {
-        let access = access().await;
-        let did = "did:key:z6MkTestUpgradedClaude";
-        let mut input = raw_row(did, CLAUDE_OAUTH_PROVIDER);
-        input["account_id"] = json!("label-a");
-        seed_raw(&access, input).await;
-
-        let signed = store(
-            &access,
-            claude(did, "label-a", Some("account-a"), "refresh-1"),
-        )
-        .await;
-        assert_eq!(signed.result, SignInResult::Refreshed);
-        assert!(signed.identity_matched);
-        let stored = rows(&access, did, CLAUDE_OAUTH_PROVIDER).await;
-        assert_eq!(stored.len(), 1);
-        assert_eq!(
-            stored[0].credential_id,
-            oauth_credential_id(did, CLAUDE_OAUTH_PROVIDER)
-        );
-        assert_eq!(
-            stored[0].provider_account_key.as_deref(),
-            Some("org-1:account-a")
-        );
-    }
-
-    #[tokio::test]
-    async fn an_upgraded_claude_row_with_another_account_id_is_not_overwritten() {
-        let access = access().await;
-        let did = "did:key:z6MkTestUpgradedOther";
-        let mut input = raw_row(did, CLAUDE_OAUTH_PROVIDER);
-        input["account_id"] = json!("label-a");
-        seed_raw(&access, input).await;
-        let before = rows(&access, did, CLAUDE_OAUTH_PROVIDER).await.remove(0);
-
-        let signed = store(
-            &access,
-            claude(did, "label-b", Some("account-b"), "refresh-1"),
-        )
-        .await;
-        assert_eq!(signed.result, SignInResult::Added);
-        let stored = rows(&access, did, CLAUDE_OAUTH_PROVIDER).await;
-        assert_eq!(stored.len(), 2);
-        assert!(stored.contains(&before));
-    }
-
-    #[tokio::test]
-    async fn a_row_with_no_identity_is_filled() {
-        let access = access().await;
-        let did = "did:key:z6MkTestNoIdentity";
-        seed_raw(&access, raw_row(did, CHATGPT_CODEX_PROVIDER)).await;
-
-        let signed = store(&access, Product::ChatGpt.sign_in(did, "a", "refresh-1")).await;
-        assert_eq!(signed.result, SignInResult::Refreshed);
-        assert!(!signed.identity_matched);
-        let stored = rows(&access, did, CHATGPT_CODEX_PROVIDER).await;
-        assert_eq!(stored.len(), 1);
-        assert_eq!(stored[0].provider_account_key.as_deref(), Some("member-a"));
-    }
-
-    #[tokio::test]
-    async fn a_keyless_sign_in_adds_beside_a_keyed_row() {
-        let access = access().await;
-        let did = "did:key:z6MkTestKeyless";
-        store(
-            &access,
-            claude(did, "label-a", Some("account-a"), "refresh-1"),
-        )
-        .await;
-        let before = rows(&access, did, CLAUDE_OAUTH_PROVIDER).await.remove(0);
-
-        let signed = store(&access, claude(did, "label-a", None, "refresh-2")).await;
-        assert_eq!(signed.result, SignInResult::Added);
-        let stored = rows(&access, did, CLAUDE_OAUTH_PROVIDER).await;
-        assert_eq!(stored.len(), 2);
-        assert!(stored.contains(&before));
-    }
-
-    #[tokio::test]
-    async fn a_stored_key_beside_other_tokens_is_not_trusted() {
-        let access = access().await;
-        let did = "did:key:z6MkTestStaleKey";
-        let mut stale = grok(did, "principal-2", "refresh-1");
-        stale.provider_account_key = Some("user:principal-1".into());
-        seed_raw(
-            &access,
-            json!({
-                "credential_id": oauth_credential_id(did, XAI_OAUTH_PROVIDER),
-                "node_did": did,
-                "provider": XAI_OAUTH_PROVIDER,
-                "access_token": stale.access_token,
-                "refresh_token": "refresh-1",
-                "is_fedramp": false,
-                "access_token_expires_at": "2030-01-01T00:00:00Z",
-                "enabled": true,
-                "provider_account_key": "user:principal-1",
-            }),
-        )
-        .await;
-        let signed = store(&access, grok(did, "principal-2", "refresh-2")).await;
-        assert_eq!(signed.result, SignInResult::Refreshed);
-        assert_eq!(rows(&access, did, XAI_OAUTH_PROVIDER).await.len(), 1);
-
-        let member_b = Product::ChatGpt.sign_in(did, "b", "refresh-1");
-        seed_raw(
-            &access,
-            json!({
-                "credential_id": oauth_credential_id(did, CHATGPT_CODEX_PROVIDER),
-                "node_did": did,
-                "provider": CHATGPT_CODEX_PROVIDER,
-                "access_token": member_b.access_token,
-                "refresh_token": "refresh-1",
-                "id_token": member_b.id_token,
-                "account_id": "acct-ws",
-                "is_fedramp": false,
-                "access_token_expires_at": "2030-01-01T00:00:00Z",
-                "enabled": true,
-                "provider_account_key": "member-a",
-            }),
-        )
-        .await;
-        let signed = store(&access, Product::ChatGpt.sign_in(did, "b", "refresh-2")).await;
-        assert_eq!(signed.result, SignInResult::Refreshed);
-        assert_eq!(rows(&access, did, CHATGPT_CODEX_PROVIDER).await.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn a_claude_row_with_a_stale_key_is_not_overwritten() {
-        let access = access().await;
-        let did = "did:key:z6MkTestClaudeSkew";
-        store(
-            &access,
-            claude(did, "label-b", Some("account-1"), "refresh-1"),
-        )
-        .await;
-        let before = rows(&access, did, CLAUDE_OAUTH_PROVIDER).await.remove(0);
-
-        let signed = store(
-            &access,
-            claude(did, "label-a", Some("account-1"), "refresh-2"),
-        )
-        .await;
-        assert_eq!(signed.result, SignInResult::Added);
-        let signed = store(
-            &access,
-            claude(did, "label-b", Some("account-2"), "refresh-3"),
-        )
-        .await;
-        assert_eq!(signed.result, SignInResult::Added);
-        assert!(rows(&access, did, CLAUDE_OAUTH_PROVIDER)
-            .await
-            .contains(&before));
-    }
-
-    #[tokio::test]
-    async fn a_claude_row_matches_on_its_stored_key() {
-        let access = access().await;
-        let did = "did:key:z6MkTestClaudeKeys";
-        store(
-            &access,
-            claude(did, "label-1", Some("account-1"), "refresh-1"),
-        )
-        .await;
-        let second = store(
-            &access,
-            claude(did, "label-2", Some("account-2"), "refresh-2"),
-        )
-        .await;
-
-        let signed = store(
-            &access,
-            claude(did, "label-2", Some("account-2"), "refresh-3"),
-        )
-        .await;
-        assert_eq!(signed.result, SignInResult::Refreshed);
-        assert_eq!(signed.doc_id, second.doc_id);
-        assert_eq!(rows(&access, did, CLAUDE_OAUTH_PROVIDER).await.len(), 2);
-    }
-
-    #[tokio::test]
-    async fn padded_values_compare_trimmed() {
-        let access = access().await;
-        let did = "did:key:z6MkTestPadded";
-        store(&access, grok(did, "principal-1", "refresh-1")).await;
-        let padded = grok(did, "principal-1 ", "refresh-2");
-        assert_eq!(
-            padded.provider_account_key.as_deref(),
-            Some("user:principal-1 ")
-        );
-        let signed = store(&access, padded).await;
-        assert_eq!(signed.result, SignInResult::Refreshed);
-        assert_eq!(rows(&access, did, XAI_OAUTH_PROVIDER).await.len(), 1);
-
-        let mut input = raw_row(did, CLAUDE_OAUTH_PROVIDER);
-        input["account_id"] = json!("label-a");
-        input["provider_account_key"] = json!(" org-1:account-1 ");
-        seed_raw(&access, input).await;
-        let signed = store(
-            &access,
-            claude(did, "label-a", Some("account-1"), "refresh-3"),
-        )
-        .await;
-        assert_eq!(signed.result, SignInResult::Refreshed);
-        assert_eq!(rows(&access, did, CLAUDE_OAUTH_PROVIDER).await.len(), 1);
-    }
-
-    async fn labeled(access: &ConfigAccess, credential: OAuthCredential, label: &str) -> SignIn {
-        store_sign_in(access, credential, Some(label))
-            .await
-            .unwrap()
-    }
-
-    #[tokio::test]
-    async fn a_new_account_gets_the_next_free_name() {
-        let access = access().await;
-        for (product, name) in [
-            (Product::ChatGpt, "ChatGPT"),
-            (Product::Claude, "Claude"),
-            (Product::Grok, "Grok"),
-        ] {
-            let did = did("NextFree", product);
-            let a = store(&access, product.sign_in(&did, "a", "refresh-a")).await;
-            assert_eq!(
-                a.credential.label, None,
-                "{product:?}: the original shows {name}"
-            );
-            let b = store(&access, product.sign_in(&did, "b", "refresh-b")).await;
-            assert_eq!(
-                b.credential.label.as_deref(),
-                Some(format!("{name} 2").as_str())
-            );
-            let c = store(&access, product.sign_in(&did, "c", "refresh-c")).await;
-            assert_eq!(
-                c.credential.label.as_deref(),
-                Some(format!("{name} 3").as_str())
-            );
-            labeled(&access, product.sign_in(&did, "b", "refresh-b2"), "Work").await;
-            let d = store(&access, product.sign_in(&did, "d", "refresh-d")).await;
-            assert_eq!(
-                d.credential.label.as_deref(),
-                Some(format!("{name} 2").as_str())
-            );
-            let stored = rows(&access, &did, product.provider()).await;
-            let mut labels: Vec<_> = stored.iter().map(|row| row.label.clone()).collect();
-            labels.sort();
-            let expected = |n: &str| Some(format!("{name}{n}"));
-            assert_eq!(
-                labels,
-                {
-                    let mut expected = vec![
-                        None,
-                        expected(" 2"),
-                        expected(" 3"),
-                        Some("Work".to_string()),
-                    ];
-                    expected.sort();
-                    expected
-                },
-                "{product:?}"
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn a_label_names_and_a_refresh_renames() {
-        let access = access().await;
-        for product in PRODUCTS {
-            let did = did("Rename", product);
-            let signed = labeled(&access, product.sign_in(&did, "a", "refresh-1"), "Work").await;
-            assert_eq!(signed.credential.label.as_deref(), Some("Work"));
-            let signed = store(&access, product.sign_in(&did, "a", "refresh-2")).await;
-            assert_eq!(signed.credential.label.as_deref(), Some("Work"));
-            assert_eq!(
-                rows(&access, &did, product.provider()).await[0]
-                    .label
-                    .as_deref(),
-                Some("Work")
-            );
-            let signed =
-                labeled(&access, product.sign_in(&did, "a", "refresh-3"), "Personal").await;
-            assert_eq!(signed.result, SignInResult::Refreshed);
-            let stored = rows(&access, &did, product.provider()).await;
-            assert_eq!(stored.len(), 1);
-            assert_eq!(stored[0].label.as_deref(), Some("Personal"), "{product:?}");
-        }
-    }
-
-    #[tokio::test]
-    async fn labels_are_unique_per_provider_and_clean() {
-        let access = access().await;
-        let did = "did:key:z6MkTestLabels";
-        labeled(
-            &access,
-            Product::Claude.sign_in(did, "a", "refresh-1"),
-            "Work",
-        )
-        .await;
-        for taken in ["Work", " Work "] {
-            let error = store_sign_in(
-                &access,
-                Product::Claude.sign_in(did, "b", "refresh-2"),
-                Some(taken),
-            )
-            .await
-            .expect_err("a duplicate label");
-            assert!(error.to_string().contains("Work"), "{error}");
-        }
-        assert_eq!(rows(&access, did, CLAUDE_OAUTH_PROVIDER).await.len(), 1);
-        labeled(
-            &access,
-            Product::Grok.sign_in(did, "a", "refresh-1"),
-            "Work",
-        )
-        .await;
-
-        let long = "x".repeat(65);
-        for bad in ["", "   ", long.as_str(), "Work\nmore", "tab\there"] {
-            assert!(
-                store_sign_in(
-                    &access,
-                    Product::ChatGpt.sign_in(did, "a", "refresh-1"),
-                    Some(bad)
-                )
-                .await
-                .is_err(),
-                "{bad:?}"
-            );
-        }
-        assert!(rows(&access, did, CHATGPT_CODEX_PROVIDER).await.is_empty());
-        let max = "x".repeat(64);
-        labeled(
-            &access,
-            Product::ChatGpt.sign_in(did, "a", "refresh-1"),
-            &max,
-        )
-        .await;
-    }
-
-    fn node(access: &ConfigAccess) -> &Arc<EmbeddedNode> {
-        access.local_node().expect("tests run on a local node")
-    }
-
-    async fn backends(access: &ConfigAccess, did: &str) -> Vec<crate::InferenceBackend> {
-        crate::inference::backends::registry::list_all_backends(node(access))
-            .await
-            .unwrap()
-            .into_iter()
-            .filter(|backend| backend.node_did == did)
-            .collect()
-    }
-
-    fn preset(product: Product) -> crate::inference::backends::setup::InferenceConnectionSpec {
-        use crate::inference::backends::setup::{
-            InferenceAuthMethod as Auth, InferenceProviderId as Id,
-        };
-        let (provider, auth) = match product {
-            Product::ChatGpt => (Id::OpenAi, Auth::ChatGptOauth),
-            Product::Claude => (Id::Anthropic, Auth::ClaudeOauth),
-            Product::Grok => (Id::Grok, Auth::GrokOauth),
-        };
-        crate::inference::backends::setup::connection_spec(provider, auth, "").unwrap()
-    }
-
-    #[tokio::test]
-    async fn only_added_accounts_create_a_backend() {
-        let access = access().await;
-        for product in PRODUCTS {
-            let did = did("Backend", product);
-            store(&access, product.sign_in(&did, "a", "refresh-a")).await;
-            assert!(backends(&access, &did).await.is_empty(), "{product:?}");
-
-            let b = store(&access, product.sign_in(&did, "b", "refresh-b")).await;
-            let reference = b.credential.account_ref.clone().unwrap();
-            let stored = backends(&access, &did).await;
-            assert_eq!(stored.len(), 1, "{product:?}");
-            let backend = &stored[0];
-            let spec = preset(product);
-            assert_eq!(
-                backend.backend_id,
-                format!("{}-{reference}", product.provider())
-            );
-            assert_eq!(Some(backend.name.clone()), b.credential.label);
-            assert_eq!(
-                backend.auth,
-                crate::documents::BackendAuth::NodeOAuth {
-                    account_ref: Some(reference.clone())
-                }
-            );
-            assert_eq!(backend.provider_kind, spec.provider_kind);
-            assert_eq!(backend.openai_wire_api, spec.openai_wire_api);
-            assert_eq!(backend.endpoint, spec.endpoint);
-            assert!(backend.enabled);
-
-            store(&access, product.sign_in(&did, "b", "refresh-b2")).await;
-            let ids = |backends: Vec<crate::InferenceBackend>| {
-                backends
-                    .into_iter()
-                    .map(|backend| (backend.backend_id, backend.name))
-                    .collect::<Vec<_>>()
-            };
-            assert_eq!(
-                ids(backends(&access, &did).await),
-                ids(stored),
-                "{product:?}"
-            );
-            labeled(
-                &access,
-                product.sign_in(&did, "b", "refresh-b3"),
-                "Personal",
-            )
-            .await;
-            let renamed = backends(&access, &did).await;
-            assert_eq!(renamed.len(), 1);
-            assert_eq!(renamed[0].name, "Personal", "{product:?}");
-        }
-    }
-
-    #[tokio::test]
-    async fn each_accounts_backend_keeps_its_own_models() {
-        let access = access().await;
-        for product in PRODUCTS {
-            let did = did("Models", product);
-            let spec = preset(product);
-            let original = crate::InferenceBackend {
-                node_did: did.clone(),
-                backend_id: format!("{}-original", product.provider()),
-                name: "Original".into(),
-                provider_kind: spec.provider_kind,
-                openai_wire_api: spec.openai_wire_api,
-                endpoint: spec.endpoint.clone(),
-                auth: crate::documents::BackendAuth::NodeOAuth { account_ref: None },
-                connect_timeout_secs: None,
-                discovery_timeout_secs: None,
-                max_concurrent: None,
-                max_queue_depth: None,
-                enabled: true,
-                tags: Vec::new(),
-            };
-            crate::config_client::write_inference_backend_document(&access, &original)
-                .await
-                .unwrap();
-            store(&access, product.sign_in(&did, "a", "refresh-a")).await;
-            store(&access, product.sign_in(&did, "b", "refresh-b")).await;
-            let added = backends(&access, &did)
-                .await
-                .into_iter()
-                .find(|backend| backend.backend_id != original.backend_id)
-                .expect("the added account's backend");
-            for (backend, model) in [(&original, "model-a"), (&added, "model-b")] {
-                let advertised: crate::documents::AdvertisedModel = serde_json::from_value(json!({
-                    "model_name": model,
-                    "display_name": null,
-                    "context_window": null,
-                    "max_context_window": null,
-                    "max_output_tokens": null,
-                    "reasoning_efforts": null,
-                }))
-                .unwrap();
-                crate::inference::backends::registry::record_discovered_catalog_on(
-                    &access,
-                    backend,
-                    vec![advertised],
-                )
-                .await
-                .unwrap();
-            }
-            for (backend, model) in [(&original, "model-a"), (&added, "model-b")] {
-                let observation = crate::inference::backends::registry::lookup_backend_observation(
-                    node(&access),
-                    &did,
-                    &backend.backend_id,
-                )
-                .await
-                .unwrap()
-                .unwrap();
-                let models: Vec<_> = observation
-                    .catalogs
-                    .iter()
-                    .flat_map(|catalog| catalog.models.iter().map(|m| m.model_name.as_str()))
-                    .collect();
-                assert_eq!(models, [model], "{product:?}");
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn a_lost_backend_comes_back_at_the_next_sign_in() {
-        let access = access().await;
-        for product in PRODUCTS {
-            let did = did("LostBackend", product);
-            store(&access, product.sign_in(&did, "a", "refresh-a")).await;
-            let b = store(&access, product.sign_in(&did, "b", "refresh-b")).await;
-            let reference = b.credential.account_ref.clone().unwrap();
-            let serving = |backends: Vec<crate::InferenceBackend>| {
-                backends
-                    .into_iter()
-                    .filter(|backend| backend.auth.oauth_account_ref() == Some(reference.as_str()))
-                    .count()
-            };
-            let backend_id = format!("{}-{reference}", product.provider());
-            access
-                .write(
-                    "test.backend_rm",
-                    &format!(
-                        r#"mutation {{ delete_InferenceBackend(filter: {{ backend_id: {{ _eq: "{backend_id}" }} }}) {{ _docID }} }}"#
-                    ),
-                )
-                .await
-                .unwrap();
-            assert_eq!(serving(backends(&access, &did).await), 0);
-
-            let again = store(&access, product.sign_in(&did, "b", "refresh-b2")).await;
-            assert_eq!(again.result, SignInResult::Refreshed);
-            assert_eq!(serving(backends(&access, &did).await), 1, "{product:?}");
-            store(&access, product.sign_in(&did, "b", "refresh-b3")).await;
-            assert_eq!(serving(backends(&access, &did).await), 1, "{product:?}");
-        }
-    }
-
-    #[tokio::test]
-    async fn an_invalid_config_fails_an_add_with_a_clear_error() {
-        let access = access().await;
-        let did = "did:key:z6MkTestInvalidConfig";
-        store(&access, Product::Claude.sign_in(did, "a", "refresh-a")).await;
-        access
-            .write(
-                "test.seed_invalid_profile",
-                &format!(
-                    r#"mutation {{ create_InferenceProfile(input: {{ node_did: "{did}", profile_id: "profile-x", backend_id: "missing-backend", model_name: "model-x" }}) {{ _docID }} }}"#
-                ),
-            )
-            .await
-            .unwrap();
-
-        let error = store_sign_in(
-            &access,
-            Product::Claude.sign_in(did, "b", "refresh-b"),
-            None,
-        )
-        .await
-        .expect_err("an invalid config fails the add");
-        let text = format!("{error:#}");
-        assert!(text.contains("missing-backend"), "{text}");
-        assert!(text.contains("sign in again"), "{text}");
-        assert_eq!(rows(&access, did, CLAUDE_OAUTH_PROVIDER).await.len(), 1);
-        assert!(backends(&access, did).await.is_empty());
-    }
-
-    async fn remove(access: &ConfigAccess, did: &str, credential_id: &str) -> Result<()> {
-        access
-            .transact_write("test.remove_account", |txn| {
-                Box::pin(async move { remove_account_in_txn(txn, did, credential_id).await })
-            })
-            .await
-    }
-
-    #[tokio::test]
-    async fn list_accounts_is_ordered_token_free_and_marks_the_default() {
-        let access = access().await;
-        let did = "did:key:z6MkTestListAccounts";
-        let a = store(
-            &access,
-            Product::Claude.sign_in(did, "a", "refresh-SECRET-a"),
-        )
-        .await;
-        store(
-            &access,
-            Product::Claude.sign_in(did, "b", "refresh-SECRET-b"),
-        )
-        .await;
-        store(
-            &access,
-            Product::Claude.sign_in(did, "c", "refresh-SECRET-c"),
-        )
-        .await;
-        store(&access, Product::Grok.sign_in(did, "a", "refresh-SECRET-g")).await;
-        set_enabled(&access, &a.credential.credential_id, false).await;
-
-        let listed = list_accounts(&access, did).await.unwrap();
-        let rows = list_oauth_credentials_on(&access, did).await.unwrap();
-        assert_eq!(
-            listed
-                .iter()
-                .map(|account| &account.credential_id)
-                .collect::<Vec<_>>(),
-            rows.iter()
-                .map(|row| &row.credential_id)
-                .collect::<Vec<_>>()
-        );
-        for provider in [CLAUDE_OAUTH_PROVIDER, XAI_OAUTH_PROVIDER] {
-            let default =
-                resolve_oauth_credential(&access, did, provider, AccountPick::ProviderDefault)
-                    .await
-                    .unwrap()
-                    .unwrap();
-            let marked: Vec<_> = listed
-                .iter()
-                .filter(|account| account.provider == provider && account.default)
-                .map(|account| account.credential_id.clone())
-                .collect();
-            assert_eq!(marked, [default.credential_id], "{provider}");
-        }
-        let claude: Vec<_> = listed
-            .iter()
-            .filter(|account| account.provider == CLAUDE_OAUTH_PROVIDER)
-            .collect();
-        let mut labels: Vec<_> = claude
-            .iter()
-            .map(|account| account.label.as_str())
-            .collect();
-        labels.sort();
-        assert_eq!(labels, ["Claude", "Claude 2", "Claude 3"]);
-        let original = claude
-            .iter()
-            .find(|account| account.account_ref.is_none())
-            .unwrap();
-        assert!(!original.enabled);
-        assert_eq!(original.identity.as_deref(), Some("label-a"));
-        let text = serde_json::to_string(&listed).unwrap();
-        assert!(
-            !text.contains("SECRET") && !text.contains("access-TEST"),
-            "{text}"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_cloud_workspace_token_is_not_an_account() {
-        let access = access().await;
-        let did = "did:key:z6MkTestCloudToken";
-        let mut cloud = Product::Grok.sign_in(did, "a", "refresh-1");
-        cloud.provider = "gents-cloud".into();
-        cloud.credential_id = oauth_credential_id(did, "gents-cloud");
-        upsert_oauth_credential_on(&access, &cloud).await.unwrap();
-        let before = list_oauth_credentials_on(&access, did).await.unwrap();
-
-        assert!(list_accounts(&access, did).await.unwrap().is_empty());
-        let id = cloud.credential_id.as_str();
-        for error in [
-            set_account_label(&access, did, id, "Work")
-                .await
-                .unwrap_err(),
-            set_account_enabled(&access, did, id, false)
-                .await
-                .unwrap_err(),
-            remove(&access, did, id).await.unwrap_err(),
-        ] {
-            assert!(error.to_string().contains("not found"), "{error}");
-        }
-        assert_eq!(
-            list_oauth_credentials_on(&access, did).await.unwrap(),
-            before
-        );
-    }
-
-    #[tokio::test]
-    async fn a_label_change_is_validated_unique_and_renames_the_backend() {
-        let access = access().await;
-        let did = "did:key:z6MkTestSetLabel";
-        store(&access, Product::Claude.sign_in(did, "a", "refresh-a")).await;
-        let b = store(&access, Product::Claude.sign_in(did, "b", "refresh-b")).await;
-        let id = b.credential.credential_id.as_str();
-
-        set_account_label(&access, did, id, " Work ").await.unwrap();
-        let row = rows(&access, did, CLAUDE_OAUTH_PROVIDER)
-            .await
-            .into_iter()
-            .find(|row| row.credential_id == id)
-            .unwrap();
-        assert_eq!(row.label.as_deref(), Some("Work"));
-        let backend = backends(&access, did).await.remove(0);
-        assert_eq!(backend.name, "Work");
-
-        for bad in ["Claude", "", "a\u{7}b"] {
-            assert!(
-                set_account_label(&access, did, id, bad).await.is_err(),
-                "{bad:?}"
-            );
-        }
-
-        let mut custom = backend.clone();
-        custom.name = "Custom".into();
-        crate::config_client::write_inference_backend_document(&access, &custom)
-            .await
-            .unwrap();
-        set_account_label(&access, did, id, "Home").await.unwrap();
-        assert_eq!(backends(&access, did).await.remove(0).name, "Custom");
-    }
-
-    #[tokio::test]
-    async fn disable_keeps_the_tokens() {
-        let access = access().await;
-        let did = "did:key:z6MkTestDisable";
-        let a = store(&access, Product::Grok.sign_in(did, "a", "refresh-a")).await;
-        let before = rows(&access, did, XAI_OAUTH_PROVIDER).await.remove(0);
-        set_account_enabled(&access, did, &a.credential.credential_id, false)
-            .await
-            .unwrap();
-        let after = rows(&access, did, XAI_OAUTH_PROVIDER).await.remove(0);
-        assert!(!after.enabled);
-        assert_eq!(after.access_token, before.access_token);
-        assert_eq!(after.refresh_token, before.refresh_token);
-        set_account_enabled(&access, did, &a.credential.credential_id, true)
-            .await
-            .unwrap();
-        assert!(rows(&access, did, XAI_OAUTH_PROVIDER).await[0].enabled);
-    }
-
-    #[tokio::test]
-    async fn remove_deletes_the_row() {
-        let access = access().await;
-        let did = "did:key:z6MkTestRemove";
-        let a = store(&access, Product::ChatGpt.sign_in(did, "a", "refresh-a")).await;
-        let b = store(&access, Product::ChatGpt.sign_in(did, "b", "refresh-b")).await;
-        remove(&access, did, &b.credential.credential_id)
-            .await
-            .unwrap();
-        let left = rows(&access, did, CHATGPT_CODEX_PROVIDER).await;
-        assert_eq!(left.len(), 1);
-        assert_eq!(left[0].credential_id, a.credential.credential_id);
-        let error = remove(&access, did, &b.credential.credential_id)
-            .await
-            .unwrap_err();
-        assert!(error.to_string().contains("not found"), "{error}");
-    }
-
-    #[tokio::test]
-    async fn a_sign_in_after_removing_the_only_account_takes_the_original_slot() {
-        let access = access().await;
-        let did = "did:key:z6MkTestSlotReuse";
-        for product in PRODUCTS {
-            let spec = preset(product);
-            let original = crate::InferenceBackend {
-                node_did: did.to_owned(),
-                backend_id: format!("{}-original", product.provider()),
-                name: format!("{product:?}"),
-                provider_kind: spec.provider_kind,
-                openai_wire_api: spec.openai_wire_api,
-                endpoint: spec.endpoint,
-                auth: crate::documents::BackendAuth::NodeOAuth { account_ref: None },
-                connect_timeout_secs: None,
-                discovery_timeout_secs: None,
-                max_concurrent: None,
-                max_queue_depth: None,
-                enabled: true,
-                tags: Vec::new(),
-            };
-            crate::config_client::write_inference_backend_document(&access, &original)
-                .await
-                .unwrap();
-            let profile = serde_json::from_value(json!({
-                "node_did": did,
-                "profile_id": format!("{product:?}-profile"),
-                "backend_id": original.backend_id,
-                "model_name": "model-x",
-            }))
-            .unwrap();
-            crate::config_client::write_inference_profile_document(&access, &profile)
-                .await
-                .unwrap();
-        }
-        let a = store(&access, Product::Claude.sign_in(did, "a", "refresh-a")).await;
-        remove(&access, did, &a.credential.credential_id)
-            .await
-            .unwrap();
-        let b = store(&access, Product::Claude.sign_in(did, "b", "refresh-b")).await;
-        assert_eq!(b.result, SignInResult::Added);
-        assert_eq!(b.credential.credential_id, a.credential.credential_id);
-        assert_eq!(b.credential.account_ref, None);
-        assert_ne!(b.doc_id, a.doc_id);
-        let stored = rows(&access, did, CLAUDE_OAUTH_PROVIDER).await;
-        assert_eq!(stored.len(), 1);
-        assert_eq!(stored[0].refresh_token, "refresh-b");
-        assert_eq!(b.profiles, ["Claude-profile"]);
-        let note = b.profiles_note().expect("the sign-in names its profiles");
-        assert!(note.contains("Claude-profile"), "{note}");
-
-        let added = store(&access, Product::Claude.sign_in(did, "c", "refresh-c")).await;
-        assert!(added.profiles.is_empty());
-        assert_eq!(added.profiles_note(), None);
-    }
-
-    #[tokio::test]
-    async fn another_nodes_account_is_not_touched() {
-        let access = access().await;
-        let mine = "did:key:z6MkTestMine";
-        let theirs = "did:key:z6MkTestTheirs";
-        let signed = store(&access, Product::Claude.sign_in(theirs, "a", "refresh-a")).await;
-        let id = signed.credential.credential_id.as_str();
-        let before = rows(&access, theirs, CLAUDE_OAUTH_PROVIDER).await;
-        for error in [
-            set_account_label(&access, mine, id, "Work")
-                .await
-                .unwrap_err(),
-            set_account_enabled(&access, mine, id, false)
-                .await
-                .unwrap_err(),
-            remove(&access, mine, id).await.unwrap_err(),
-        ] {
-            assert!(error.to_string().contains("not found"), "{error}");
-        }
-        assert_eq!(rows(&access, theirs, CLAUDE_OAUTH_PROVIDER).await, before);
-    }
-
-    #[tokio::test]
-    async fn a_provider_no_backend_reads_is_refused() {
-        let access = access().await;
-        let did = "did:key:z6MkTestOtherProvider";
-        let mut credential = Product::Grok.sign_in(did, "a", "refresh-1");
-        credential.provider = "other-provider".into();
-        credential.credential_id = oauth_credential_id(did, "other-provider");
-        assert!(store_sign_in(&access, credential, None).await.is_err());
-        assert!(list_oauth_credentials_on(&access, did)
-            .await
-            .unwrap()
-            .is_empty());
-    }
-}
 
 #[cfg(test)]
 mod cooldown_tests;

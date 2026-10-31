@@ -9,13 +9,13 @@ use tokio::sync::{mpsc, watch, Mutex, Notify, Semaphore};
 use super::*;
 use crate::agent::PendingAgent;
 use crate::ensure_runtime_schemas;
-use crate::graphql::escape_graphql_string;
 use crate::inference::admission::BackendAdmissionConfig;
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::inference::resolved::{MaxTurnsProvenance, ResolvedAgent, DEFAULT_MAX_TURNS};
 use crate::lean_vocab_test::lean_runtime_reconcile_case;
 use crate::request::watcher::AgentRequest;
 use crate::runtime_status::RuntimeStatusHandle;
+use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, NodeIdentity as _, RuntimeNode};
 use crate::tools::surface::{AgentToolSurfaceConfig, ToolCeiling, ToolSurface};
 

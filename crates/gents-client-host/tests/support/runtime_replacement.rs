@@ -3,7 +3,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use gents_protocol::serve_lifecycle::{
     control::{
         RuntimeControlCommand, RuntimeControlDisposition, RuntimeControlReceipt, RuntimeOperation,
@@ -94,12 +94,12 @@ impl Fixture<'_> {
                 .join(gents::store::local::home::P2P_SECRET_KEY_FILE_NAME),
         )
         .await?;
-        let provider_query = format!("{{ InferenceBackend(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ _docID backend_id provider_kind endpoint }} }}", gents::graphql::escape_graphql_string(self.node_did));
+        let provider_query = format!("{{ InferenceBackend(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ _docID backend_id provider_kind endpoint }} }}", gents::store::graphql::escape_graphql_string(self.node_did));
         let providers = rows(
             self.access.execute(&provider_query).await?,
             "InferenceBackend",
         )?;
-        let session_query = format!("{{ AgentSession(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ _docID node_did session_id requester_did agent_id created_at }} }}", gents::graphql::escape_graphql_string(self.node_did), gents::graphql::escape_graphql_string(self.session));
+        let session_query = format!("{{ AgentSession(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ _docID node_did session_id requester_did agent_id created_at }} }}", gents::store::graphql::escape_graphql_string(self.node_did), gents::store::graphql::escape_graphql_string(self.session));
         let sessions = rows(self.access.execute(&session_query).await?, "AgentSession")?;
         let (mut replacement, ready) = self.start_replacement(original).await?;
         let RuntimePreparationResult::Ready {
@@ -183,7 +183,7 @@ impl Fixture<'_> {
             }
         }).await;
         if !matches!(&completion, Ok(Ok(()))) {
-            let query = format!("{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{ _docID request_id lifecycle_state content admission_signer_did }} }}", gents::graphql::escape_graphql_string(followup));
+            let query = format!("{{ AgentRequest(filter: {{request_id: {{_eq: \"{}\"}}}}) {{ _docID request_id lifecycle_state content admission_signer_did }} }}", gents::store::graphql::escape_graphql_string(followup));
             let observed = self.access.execute(&query).await;
             *id += 1;
             let snapshot = client.snapshot(*id).await;
@@ -191,7 +191,7 @@ impl Fixture<'_> {
             let routing_after = tokio::fs::read_to_string(self.home.join("runtime.json")).await?;
             anyhow::bail!("retained follow-up did not complete: {completion:?}; native input: {observed:?}; routing before: {routing_before}; routing after: {routing_after}; client: {snapshot}");
         }
-        let requests_query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, purpose: {{_eq: \"normal\"}}}}) {{ {} }} }}", gents::graphql::escape_graphql_string(self.node_did), gents::graphql::escape_graphql_string(self.session), gents::SIGNED_REQUEST_FIELDS);
+        let requests_query = format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}, purpose: {{_eq: \"normal\"}}}}) {{ {} }} }}", gents::store::graphql::escape_graphql_string(self.node_did), gents::store::graphql::escape_graphql_string(self.session), gents::SIGNED_REQUEST_FIELDS);
         let requests = self.access.execute(&requests_query).await?;
         let requests: Vec<gents_protocol::row::AgentRequestRow> =
             serde_json::from_value(requests["data"]["AgentRequest"].clone())?;

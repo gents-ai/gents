@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents_codex_protocol as codex;
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::usage::{TokenUsage, TokenUsageColumns, TokenUsageSummary};

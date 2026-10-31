@@ -2,7 +2,7 @@ mod approvals;
 mod interactive;
 pub(crate) mod streaming;
 
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};

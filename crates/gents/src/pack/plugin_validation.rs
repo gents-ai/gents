@@ -227,7 +227,7 @@ impl PackPlugin {
                 );
             }
             for field in data.stamped.keys() {
-                crate::graphql::validate_graphql_name(field).with_context(|| {
+                crate::store::graphql::validate_graphql_name(field).with_context(|| {
                     format!(
                         "plugin {name:?} data.stamped key {field:?} must be a GraphQL field name"
                     )

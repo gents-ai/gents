@@ -391,7 +391,7 @@ impl GraphqlEnrollmentStore {
 
         let mutation = decision_mutation(&decision, revision.as_ref());
         let committed = async {
-            let response = crate::config_client::ConfigAccess::write_local_response(
+            let response = crate::store::config_client::ConfigAccess::write_local_response(
                 &self.node,
                 "p2p.write_enrollment_decision",
                 &mutation,
@@ -531,7 +531,7 @@ impl GraphqlEnrollmentStore {
         revision.admin_sig = self.identity.sign(&revision.signing_payload()).await?;
         revision.validate_against_approval(&active.request, &active.decision)?;
         let mutation = revision_mutation(&revision);
-        let response = crate::config_client::ConfigAccess::write_local_response(
+        let response = crate::store::config_client::ConfigAccess::write_local_response(
             &self.node,
             "p2p.write_enrollment_revocation",
             &mutation,
@@ -697,7 +697,7 @@ impl GraphqlEnrollmentStore {
         receipt.admin_sig = self.identity.sign(&receipt.signing_payload()).await?;
         receipt.validate_against_approval(&active.request, &active.decision)?;
         let mutation = route_receipt_mutation(&receipt);
-        let committed = crate::config_client::ConfigAccess::write_local_response(
+        let committed = crate::store::config_client::ConfigAccess::write_local_response(
             &self.node,
             "p2p.write_enrollment_route_receipt",
             &mutation,
@@ -780,7 +780,7 @@ impl GraphqlEnrollmentStore {
     }
 
     pub async fn load_projection(&self) -> Result<EnrollmentProjection> {
-        let response = crate::graphql::graphql_with_transaction_retry(
+        let response = crate::store::graphql::graphql_with_transaction_retry(
             &self.node,
             ENROLLMENT_DOCUMENT_QUERY,
             "query authenticated enrollment documents",
@@ -791,7 +791,7 @@ impl GraphqlEnrollmentStore {
 
     pub(crate) async fn load_projection_in_txn(
         &self,
-        txn: &crate::config_client::ConfigApplyTxn<'_>,
+        txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     ) -> Result<EnrollmentProjection> {
         for collection in [
             "Network",
@@ -800,7 +800,7 @@ impl GraphqlEnrollmentStore {
             "NetworkAuthorizationRevision",
             "NetworkEnrollmentRouteReceipt",
         ] {
-            crate::graphql::fence_arrivals(txn, collection).await?;
+            crate::store::graphql::fence_arrivals(txn, collection).await?;
         }
         let response = txn
             .execute_local_response(ENROLLMENT_DOCUMENT_QUERY)
@@ -1962,7 +1962,7 @@ fn decision_mutation(
     decision: &EnrollmentDecisionRecord,
     revision: Option<&AuthorizationRevisionRecord>,
 ) -> String {
-    let escaped = |value: &str| crate::graphql::escape_graphql_string(value);
+    let escaped = |value: &str| crate::store::graphql::escape_graphql_string(value);
     let decision_sig = bs58::encode(&decision.admin_sig).into_string();
     let decision_input = format!(
         r#"{{
@@ -2025,7 +2025,7 @@ fn decision_mutation(
 }
 
 fn revision_mutation(revision: &AuthorizationRevisionRecord) -> String {
-    let escaped = |value: &str| crate::graphql::escape_graphql_string(value);
+    let escaped = |value: &str| crate::store::graphql::escape_graphql_string(value);
     let signature = bs58::encode(&revision.admin_sig).into_string();
     format!(
         r#"mutation {{
@@ -2056,7 +2056,7 @@ fn revision_mutation(revision: &AuthorizationRevisionRecord) -> String {
 }
 
 fn route_receipt_mutation(receipt: &EnrollmentRouteReceiptRecord) -> String {
-    let escaped = |value: &str| crate::graphql::escape_graphql_string(value);
+    let escaped = |value: &str| crate::store::graphql::escape_graphql_string(value);
     let admin_sig = bs58::encode(&receipt.admin_sig).into_string();
     format!(
         r#"mutation {{

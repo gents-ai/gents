@@ -67,7 +67,7 @@ pub(in crate::session) async fn load_sequenced_messages(
         AgentMessage(filter: {{ {session_scope}{bounds} }}, order: {{ sequence: ASC }}) {{ {AGENT_MESSAGE_FIELDS} }}
     }}"#
     );
-    let response = crate::graphql::graphql_response_with_transaction_retry(
+    let response = crate::store::graphql::graphql_response_with_transaction_retry(
         node,
         &query,
         "load_canonical_history",

@@ -1,7 +1,7 @@
-use gents::config_client::{
+use gents::documents::PackConfig;
+use gents::store::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyPlan,
 };
-use gents::documents::PackConfig;
 use gents::{ensure_node, Collection};
 use serde_json::json;
 
@@ -116,7 +116,7 @@ async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_de
                                 .await?
                                 .unwrap();
                         let expected = DesiredStateApplyPlan::new(vec![
-                            gents::config_client::DesiredStateApplyDocument {
+                            gents::store::config_client::DesiredStateApplyDocument {
                                 collection,
                                 add: value.clone(),
                                 update: value,
@@ -166,7 +166,7 @@ async fn session_create_returns_its_physical_receipt() {
                 &json!({"input":{"session_id":"receipt-session","node_did":"did:test:receipt","requester_did":null,"agent_id":"general","created_at":"2026-01-01T00:00:00Z","title":null,"provenance":{"fork":{"source_session_id":"parent","at_user_turn":0}}}}),
             ).await?;
             let response = gents::defra_node::QueryResponse::success(response["data"].clone());
-            let created = gents::graphql::single_mutation_document(&response, "create_AgentSession")?.expect("create must return a physical document");
+            let created = gents::store::graphql::single_mutation_document(&response, "create_AgentSession")?.expect("create must return a physical document");
             let id = created["_docID"].as_str().expect("physical ID");
             let stored = txn.execute("{ AgentSession { _docID session_id provenance } }").await?;
             assert_eq!(stored["data"]["AgentSession"].as_array().unwrap().len(), 1);

@@ -9,7 +9,9 @@ pub(crate) fn node_builder() -> defra_node::NodeBuilder {
     defra_node::EmbeddedNode::builder().with_node_identity_did(identity.did())
 }
 
-pub(crate) async fn seed_unsent_xai_effort(owner: &str) -> gents::config_client::ConfigAccess {
+pub(crate) async fn seed_unsent_xai_effort(
+    owner: &str,
+) -> gents::store::config_client::ConfigAccess {
     let node = std::sync::Arc::new(
         crate::shared::test_support::node_builder()
             .build()
@@ -29,7 +31,7 @@ pub(crate) async fn seed_unsent_xai_effort(owner: &str) -> gents::config_client:
             .await;
         assert!(!result.has_errors(), "{:?}", result.errors);
     }
-    gents::config_client::ConfigAccess::local(node)
+    gents::store::config_client::ConfigAccess::local(node)
 }
 
 pub(crate) fn xai_effort_backend(owner: &str) -> Value {
@@ -62,7 +64,7 @@ async fn catalog_freshness_reaches_cli_observation_reader() -> anyhow::Result<()
     }))?;
     gents::ensure_node(&node, &backend.node_did).await?;
     let access = gents::ConfigAccess::local(node.clone());
-    gents::config_client::write_inference_backend_document(&access, &backend).await?;
+    gents::store::config_client::write_inference_backend_document(&access, &backend).await?;
     for observed_at in ["2026-10-28T01:00:00Z", "2026-10-28T02:00:00Z"] {
         let catalog: gents::documents::BackendModelCatalog =
             serde_json::from_value(serde_json::json!({

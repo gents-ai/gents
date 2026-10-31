@@ -64,7 +64,7 @@ async fn child_states(h: &JobHarness, row_doc_id: &str) -> Vec<(String, String)>
     let response = ConfigAccess::local(h.db.node.clone())
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ caused_by_parent_tool_call_doc_id: {{ _eq: "{}" }} }}) {{ _docID lifecycle_state }} }}"#,
-            gents::graphql::escape_graphql_string(row_doc_id),
+            gents::store::graphql::escape_graphql_string(row_doc_id),
         ))
         .await
         .expect("read the job children");
@@ -90,7 +90,7 @@ async fn job_row_fields(h: &JobHarness, row_doc_id: &str) -> Value {
     let response = ConfigAccess::local(h.db.node.clone())
         .execute(&format!(
             r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state cancel_cause plugin_execution_receipt }} }}"#,
-            gents::graphql::escape_graphql_string(row_doc_id),
+            gents::store::graphql::escape_graphql_string(row_doc_id),
         ))
         .await
         .expect("read the job row");

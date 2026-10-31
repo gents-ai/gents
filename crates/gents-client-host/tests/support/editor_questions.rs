@@ -93,7 +93,7 @@ pub async fn verify(
     session: &str,
     author: &str,
 ) -> Result<Value> {
-    use gents::graphql::escape_graphql_string as escape;
+    use gents::store::graphql::escape_graphql_string as escape;
     let response = access.execute(&format!("{{ AgentRequest(filter: {{node_did: {{_eq: \"{}\"}}}}) {{ {} }} MailboxItem(filter: {{node_did: {{_eq: \"{}\"}}, session_id: {{_eq: \"{}\"}}}}) {{ {} }} }}", escape(node), gents::SIGNED_REQUEST_FIELDS, escape(node), escape(session), gents::session::mailbox::MAILBOX_FIELDS)).await?;
     let rows: Vec<AgentRequestRow> =
         serde_json::from_value(response["data"]["AgentRequest"].clone())?;

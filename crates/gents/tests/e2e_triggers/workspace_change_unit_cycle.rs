@@ -4,13 +4,13 @@ use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
-use gents::graphql::escape_graphql_string;
 use gents::pack::{
     bind_pack_install_config, declared_paths, digest_declared_assets, document_pack_schema_paths,
     install_pack_documents, load_pack_config, DriftPolicy, PackIdentity, PackInstallOptions,
     PackManifest,
 };
+use gents::store::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+use gents::store::graphql::escape_graphql_string;
 use gents::{Collection, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use serde_json::{json, Value};
 
@@ -657,7 +657,9 @@ async fn select_default_agent(
     access
         .transact_write("workspace_cycle.select_default_agent", |txn| {
             let plan = &plan;
-            Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                gents::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
         })
         .await
         .unwrap();
@@ -972,7 +974,9 @@ async fn install_inference(access: &ConfigAccess, owner: &str, endpoint: &str) {
     access
         .transact_write("workspace_cycle.install_inference", |txn| {
             let plan = &plan;
-            Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                gents::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
         })
         .await
         .unwrap();
@@ -1144,7 +1148,9 @@ async fn install_failure_inbox_triggers(access: &ConfigAccess, owner: &str) {
     access
         .transact_write("workspace_cycle.install_failure_inbox_triggers", |txn| {
             let plan = &plan;
-            Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                gents::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
         })
         .await
         .expect("install test-only failure outcome and inbox triggers");

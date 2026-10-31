@@ -5,7 +5,7 @@ use futures::future::BoxFuture;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::config_client::ConfigRead;
+use crate::store::config_client::ConfigRead;
 
 #[derive(Clone, Deserialize)]
 struct TypeRef {
@@ -102,7 +102,7 @@ fn validate_value<'a>(
             ty.kind
         );
         if !cache.contains_key(name) {
-            let query = format!("{{ __type(name: \"{}\") {{ inputFields {{ name type {{ kind name ofType {{ kind name ofType {{ kind name ofType {{ kind name }} }} }} }} }} }} }}", crate::graphql::escape_graphql_string(name));
+            let query = format!("{{ __type(name: \"{}\") {{ inputFields {{ name type {{ kind name ofType {{ kind name ofType {{ kind name ofType {{ kind name }} }} }} }} }} }} }}", crate::store::graphql::escape_graphql_string(name));
             let response = access.execute_read(&query).await?;
             let fields: Vec<InputField> =
                 serde_json::from_value(response["data"]["__type"]["inputFields"].clone())
@@ -162,7 +162,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
 
     #[tokio::test]
     async fn native_input_shapes_preserve_compounds_relationships_literals_and_aliases() {

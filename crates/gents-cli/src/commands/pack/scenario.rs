@@ -13,8 +13,8 @@ use crate::cli::args::{PackInitArgs, PackRunArgs, PackSeedArgs};
 use crate::graphql_access::post_graphql;
 use background::await_background_completion;
 use fan_in::verify_fan_in;
-use gents::config_client::ConfigAccess;
-use gents::graphql::escape_graphql_string;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::client_protocol::RequestLifecycleState;
 use load::{
     load_manifest, load_manifest_with, read_distribution_manifest, resolve_scenario_dir,

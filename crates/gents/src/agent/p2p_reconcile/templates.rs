@@ -549,7 +549,7 @@ pub fn admit_app_collections(requested: BTreeSet<String>) -> Option<BTreeSet<Str
 pub async fn read_client_replicated_schema(
     node: std::sync::Arc<defra_node::EmbeddedNode>,
 ) -> anyhow::Result<ReplicatedSchema> {
-    let access = crate::config_client::ConfigAccess::local(node);
+    let access = crate::store::config_client::ConfigAccess::local(node);
     let mut schema = ReplicatedSchema::new();
     for name in CLIENT_COLLECTIONS {
         let identity = access

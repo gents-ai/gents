@@ -11,7 +11,7 @@ pub(crate) async fn load_goal_creation_claim_fingerprint(
 }
 
 pub(crate) async fn load_goal_creation_claim_fingerprint_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
 ) -> Result<Option<GoalCreationFingerprint>> {
@@ -129,7 +129,7 @@ pub fn replacement_goal_identity(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn stage_goal_and_claim(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
     objective: &str,
@@ -278,7 +278,7 @@ pub(super) async fn stage_goal_and_claim(
         escape_graphql_string(now),
     ))
     .await?;
-    let doc_id = crate::graphql::created_doc_id(&created, "Goal")?;
+    let doc_id = crate::store::graphql::created_doc_id(&created, "Goal")?;
     let staged = StagedGoal {
         disposition: StagedGoalDisposition::Created,
         goal: GoalDocument {
@@ -369,7 +369,7 @@ async fn create_goal_for_session_inner(
     let requested_fingerprint = goal_creation_fingerprint(&create_request);
     let objective = requested_fingerprint.objective.as_str();
 
-    let result = crate::config_client::ConfigAccess::transact_local_write(
+    let result = crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "goal.create_for_session",

@@ -16,11 +16,11 @@ pub(crate) async fn native_queue_image(
         request_id: String,
         lifecycle_state: RequestLifecycleState,
     }
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let response = access
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ request_id lifecycle_state }} }}"#,
-            crate::graphql::escape_graphql_string(session_id)
+            crate::store::graphql::escape_graphql_string(session_id)
         ))
         .await
         .unwrap();

@@ -1,7 +1,7 @@
 use std::hash::{Hash, Hasher};
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 
 use super::super::bootstrap::normalize_required;
 use super::{find_request_in_scope, ClientCore, RefreshedRequestProjection};
@@ -284,7 +284,7 @@ impl ClientCore {
     ) -> Result<gents::run_timeline::RunTimeline> {
         normalize_required("node_did", node_did)?;
         let request_id = normalize_required("request_id", request_id)?;
-        let access = gents::config_client::ConfigAccess::local(self.node_arc());
+        let access = gents::store::config_client::ConfigAccess::local(self.node_arc());
         let timeline = tokio::time::timeout(
             std::time::Duration::from_secs(15),
             gents::run_timeline_fetch::load_run_timeline(&access, request_id),

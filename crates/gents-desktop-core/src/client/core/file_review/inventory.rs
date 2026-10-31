@@ -1,5 +1,5 @@
 use anyhow::{ensure, Context, Result};
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 use gents::tools::call::lifecycle::{load_tool_file_change_observation, ToolFileChangeRead};
 use gents_protocol::file_changes::{ToolFileChanges, FILE_CHANGES_VERSION};
 use gents_protocol::file_image_hydration::{FileImageDemand, FileImageInventoryReference};

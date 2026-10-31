@@ -1,7 +1,7 @@
 use anyhow::{ensure, Context, Result};
-use gents::config_client::config_projection;
 use gents::documents::{Schedule, Task};
-use gents::graphql::escape_graphql_string;
+use gents::store::config_client::config_projection;
+use gents::store::graphql::escape_graphql_string;
 use gents::Collection;
 use gents_desktop_core::client::ClientCore;
 

@@ -1,10 +1,10 @@
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use std::hash::{Hash, Hasher};
 use std::io::{self, IsTerminal, Write};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
@@ -962,10 +962,10 @@ async fn account_problems(
         return Vec::new();
     };
     let read = async {
-        let access = gents::config_client::ConfigAccess::Graphql(graphql.clone());
+        let access = gents::store::config_client::ConfigAccess::Graphql(graphql.clone());
         let did = submitted.node_did.as_str();
         anyhow::Ok((
-            gents::config_client::agent_accounts(&access, did, agent_id).await?,
+            gents::store::config_client::agent_accounts(&access, did, agent_id).await?,
             gents::inference::auth::credential::list_accounts(&access, did).await?,
         ))
     };

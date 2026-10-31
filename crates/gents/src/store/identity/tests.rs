@@ -66,9 +66,10 @@ async fn key_identity_signs_embedded_node_commits() {
         .and_then(serde_json::Value::as_str)
         .expect("created document id");
 
-    let commits = crate::graphql::composite_commits(&node, doc_id, "load signed fact versions")
-        .await
-        .unwrap();
+    let commits =
+        crate::store::graphql::composite_commits(&node, doc_id, "load signed fact versions")
+            .await
+            .unwrap();
     assert!(commits.iter().any(|commit| {
         commit
             .signature

@@ -1,9 +1,9 @@
 use anyhow::{anyhow, bail, ensure, Result};
 use serde_json::{json, Map, Value};
 
-use crate::config_client::ConfigAccess;
 use crate::documents::QueryToolDecl;
 use crate::inference::llm::tool::{Tool, ToolDefinition};
+use crate::store::config_client::ConfigAccess;
 
 use super::query::{self, CollectionScope, DefraQueryParams, MAX_LIMIT};
 
@@ -558,7 +558,7 @@ mod tests {
         )
         .await
         .unwrap();
-        crate::config_client::ConfigAccess::write_local_response(
+        crate::store::config_client::ConfigAccess::write_local_response(
             &node, "test.scalar_filter.seed",
             r#"mutation { add_ScalarRecord(input: {text: "measurement", count: 86, measure: 0.5, enabled: false}) {_docID} }"#,
         ).await.unwrap();
@@ -665,8 +665,8 @@ mod tests {
     async fn field_recovery_preserves_complete_contract_and_runtime_scope() {
         let node = node_with_findings().await;
         let text = format!("{}{}", "é".repeat(2001), "😀".repeat(300));
-        let mutation = format!("mutation {{ update_CandidateFinding(filter: {{finding_id: {{_eq: \"f1\"}}}}, input: {{title: \"{}\"}}) {{_docID}} }}", crate::graphql::escape_graphql_string(&text));
-        let response = crate::config_client::ConfigAccess::write_local_response(
+        let mutation = format!("mutation {{ update_CandidateFinding(filter: {{finding_id: {{_eq: \"f1\"}}}}, input: {{title: \"{}\"}}) {{_docID}} }}", crate::store::graphql::escape_graphql_string(&text));
+        let response = crate::store::config_client::ConfigAccess::write_local_response(
             &node,
             "test.field_recovery.seed",
             &mutation,
@@ -703,10 +703,10 @@ mod tests {
                 for page in [json!({"doc_id":doc,"field":"run_id"}),json!({"doc_id":doc,"field":"title","offset_bytes":1}),json!({"doc_id":doc,"field":"title","offset_bytes":2}),json!({"doc_id":doc,"field":"title","expected_hash":"changed"})] {
                     assert!(Tool::call(&tool,BoundedQueryParams(json!({"fields":["title"],"field_page":page}).as_object().unwrap().clone())).await.is_err());
                 }
-                let other = crate::config_client::ConfigAccess::local(node.clone()).execute("{ CandidateFinding(filter: {finding_id: {_eq: \"f2\"}}) {_docID} }").await.unwrap();
+                let other = crate::store::config_client::ConfigAccess::local(node.clone()).execute("{ CandidateFinding(filter: {finding_id: {_eq: \"f2\"}}) {_docID} }").await.unwrap();
                 let other_doc=&other["data"]["CandidateFinding"][0]["_docID"];
                 assert!(Tool::call(&tool,BoundedQueryParams(json!({"fields":["title"],"field_page":{"doc_id":other_doc,"field":"title"}}).as_object().unwrap().clone())).await.is_err());
-                crate::config_client::ConfigAccess::write_local(&node,"test.field_recovery.change",&format!("mutation {{update_CandidateFinding(docID: \"{}\", input: {{title: \"changed\"}}) {{_docID}}}}",crate::graphql::escape_graphql_string(&doc))).await.unwrap();
+                crate::store::config_client::ConfigAccess::write_local(&node,"test.field_recovery.change",&format!("mutation {{update_CandidateFinding(docID: \"{}\", input: {{title: \"changed\"}}) {{_docID}}}}",crate::store::graphql::escape_graphql_string(&doc))).await.unwrap();
                 assert!(Tool::call(&tool,BoundedQueryParams(json!({"fields":["title"],"field_page":{"doc_id":doc,"field":"title","offset_bytes":2,"expected_hash":hash.unwrap()}}).as_object().unwrap().clone())).await.is_err());
             }).await;
     }
@@ -714,7 +714,7 @@ mod tests {
     #[tokio::test]
     async fn actor_scoped_query_completes_while_mutation_gate_is_held() {
         let node = node_with_findings().await;
-        let holder = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
+        let holder = crate::store::config_client::ConfigApplyTxn::begin_local(&node, None)
             .await
             .unwrap();
         let mut declaration = decl();

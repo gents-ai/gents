@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 use anyhow::Result;
 use events::EventName;
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
 use gents::startup_readiness::StartupReadinessOptions;
+use gents::store::graphql::escape_graphql_string;
 use gents::{
     ensure_runtime_schemas, DocumentRuntimeOptions, Gents, NodeIdentity, ProcessLifecycleState,
     ToolCeiling,

@@ -4,7 +4,7 @@ use serde_json::{Map, Value};
 use super::{
     build_paged_query, build_query, CollectionSchema, CollectionScope, DefraQueryParams, MAX_LIMIT,
 };
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 
 pub(super) const SCORE_FIELD: &str = "_score";
 

@@ -4,8 +4,8 @@ use std::time::Duration;
 use gents::defra_node::EmbeddedNode;
 use gents::defra_write::BoundedWriteTool;
 use gents::documents::{WriteToolDecl, WriteToolField};
-use gents::graphql::escape_graphql_string;
 use gents::inference::llm::tool::Tool;
+use gents::store::graphql::escape_graphql_string;
 use gents::{Collection, DocumentRuntimeOptions, Gents, NodeIdentity, ToolCeiling};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
@@ -39,7 +39,9 @@ async fn apply_documents(
     node: &Arc<EmbeddedNode>,
     documents: Vec<(Collection, serde_json::Value)>,
 ) {
-    use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents::store::config_client::{
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
     let plan = DesiredStateApplyPlan::new(
         documents
             .into_iter()
@@ -53,7 +55,9 @@ async fn apply_documents(
     .unwrap();
     ConfigAccess::transact_local_write(node, None, "test.automation_configuration", |txn| {
         let plan = &plan;
-        Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
+        Box::pin(
+            async move { gents::store::config_client::apply_desired_state_plan(txn, plan).await },
+        )
     })
     .await
     .unwrap();

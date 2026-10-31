@@ -2,8 +2,8 @@ use crate::inference::llm::tool::ToolDefinition;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Map, Value};
 
-use crate::config_client::ConfigAccess;
 use crate::documents::WriteToolDecl;
+use crate::store::config_client::ConfigAccess;
 
 mod input;
 

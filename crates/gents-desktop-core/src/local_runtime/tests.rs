@@ -441,7 +441,7 @@ fn cached_operator_endpoint_does_not_load_a_cold_runtime_key() {
     assert!(!gents::store::identity::can_mint_defradb_bearer(&did));
     assert_eq!(
         cached_operator_endpoint(&record),
-        Some(gents::config_client::GraphqlEndpoint::anonymous(
+        Some(gents::store::config_client::GraphqlEndpoint::anonymous(
             HOSTED_GRAPHQL
         ))
     );
@@ -449,7 +449,7 @@ fn cached_operator_endpoint_does_not_load_a_cold_runtime_key() {
 
     assert_eq!(
         super::OperatorIdentityInteraction::default().endpoint(&record),
-        Some(gents::config_client::GraphqlEndpoint::as_principal(
+        Some(gents::store::config_client::GraphqlEndpoint::as_principal(
             HOSTED_GRAPHQL,
             &did
         ))
@@ -458,7 +458,7 @@ fn cached_operator_endpoint_does_not_load_a_cold_runtime_key() {
     std::fs::remove_file(key_path).unwrap();
     assert_eq!(
         cached_operator_endpoint(&record),
-        Some(gents::config_client::GraphqlEndpoint::as_principal(
+        Some(gents::store::config_client::GraphqlEndpoint::as_principal(
             HOSTED_GRAPHQL,
             &did
         ))
@@ -471,7 +471,7 @@ fn cached_operator_endpoint_keeps_unlocked_authority_on_its_hosted_endpoint() {
     let (home, did) = hosted_home(tempdir.path());
     assert_eq!(
         cached_operator_endpoint(&hosted_record(&home, &did, HOSTED_GRAPHQL)),
-        Some(gents::config_client::GraphqlEndpoint::as_principal(
+        Some(gents::store::config_client::GraphqlEndpoint::as_principal(
             HOSTED_GRAPHQL,
             &did
         ))
@@ -479,13 +479,15 @@ fn cached_operator_endpoint_keeps_unlocked_authority_on_its_hosted_endpoint() {
     let elsewhere = "http://127.0.0.1:9999/api/v0/graphql";
     assert_eq!(
         cached_operator_endpoint(&hosted_record(&home, &did, elsewhere)),
-        Some(gents::config_client::GraphqlEndpoint::anonymous(elsewhere))
+        Some(gents::store::config_client::GraphqlEndpoint::anonymous(
+            elsewhere
+        ))
     );
     let mut record = hosted_record(&home, &did, HOSTED_GRAPHQL);
     record.local_node_home = None;
     assert_eq!(
         cached_operator_endpoint(&record),
-        Some(gents::config_client::GraphqlEndpoint::anonymous(
+        Some(gents::store::config_client::GraphqlEndpoint::anonymous(
             HOSTED_GRAPHQL
         ))
     );

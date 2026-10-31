@@ -1,6 +1,6 @@
 use anyhow::Result;
-use gents::config_client::ConfigAccess;
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use serde_json::Value;
 
 use super::AcpServiceConfig;

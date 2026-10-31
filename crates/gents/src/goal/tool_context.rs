@@ -47,7 +47,7 @@ pub(crate) async fn load_goal_tool_context(
 }
 
 pub(super) async fn load_goal_tool_context_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     owner: &str,
     session: &str,
     request_id: &str,

@@ -1510,7 +1510,7 @@ mod provider_account_tests {
                 }),
             ),
         ] {
-            gents::config_client::write_inference_backend_document(&access, &backend)
+            gents::store::config_client::write_inference_backend_document(&access, &backend)
                 .await
                 .expect("store backend");
         }
@@ -1599,8 +1599,8 @@ mod provider_account_tests {
         let unbound_backend = format!("{}-{}", unbound.provider, unbound.account_ref.unwrap());
         access.write("test.remove_unbound_backend", &format!(
             "mutation {{ delete_InferenceBackend(filter: {{ node_did: {{ _eq: \"{}\" }}, backend_id: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
-            gents::graphql::escape_graphql_string(node_did),
-            gents::graphql::escape_graphql_string(&unbound_backend),
+            gents::store::graphql::escape_graphql_string(node_did),
+            gents::store::graphql::escape_graphql_string(&unbound_backend),
         )).await.unwrap();
         let mut live = read_node_usage(
             &cache,

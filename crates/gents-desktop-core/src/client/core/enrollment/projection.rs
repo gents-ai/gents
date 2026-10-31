@@ -6,7 +6,7 @@ use gents::agent::p2p_reconcile::enrollment::{
     DurableEnrollmentDocuments, EnrollmentOffer as PureOffer, EnrollmentRequest as PureRequest,
     NetworkAdminPin as PureAdminPin,
 };
-use gents::graphql::rows;
+use gents::store::graphql::rows;
 use gents::NodeIdentity;
 use gents_protocol::enrollment::{
     decode_offer, enrollment_schema_fingerprint, EnrollmentDecisionRecord, EnrollmentRequestRecord,

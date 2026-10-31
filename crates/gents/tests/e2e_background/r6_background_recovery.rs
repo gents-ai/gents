@@ -12,7 +12,7 @@ struct ToolCallRow {
 }
 
 async fn wait_for_running_tool(node: &gents::defra_node::EmbeddedNode, session_id: &str) -> String {
-    let session_id = gents::graphql::escape_graphql_string(session_id);
+    let session_id = gents::store::graphql::escape_graphql_string(session_id);
     for _ in 0..100 {
         let response = node
             .execute(&format!(
@@ -152,7 +152,7 @@ async fn run_recovery_crash_worker(ready_path: &std::path::Path) {
 }
 
 async fn load_tool_call(node: &gents::defra_node::EmbeddedNode, tool_call_id: &str) -> ToolCallRow {
-    let tool_call_id = gents::graphql::escape_graphql_string(tool_call_id);
+    let tool_call_id = gents::store::graphql::escape_graphql_string(tool_call_id);
     let query = format!(
         r#"{{
             AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }}, limit: 1) {{
@@ -168,7 +168,7 @@ async fn load_messages(
     node: &gents::defra_node::EmbeddedNode,
     session_id: &str,
 ) -> Vec<MessageRow> {
-    let session_id = gents::graphql::escape_graphql_string(session_id);
+    let session_id = gents::store::graphql::escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentMessage(
@@ -228,7 +228,7 @@ async fn load_wakes(
     node: &gents::defra_node::EmbeddedNode,
     session_id: &str,
 ) -> Vec<serde_json::Value> {
-    let session_id = gents::graphql::escape_graphql_string(session_id);
+    let session_id = gents::store::graphql::escape_graphql_string(session_id);
     let query = format!(
         r#"{{
             AgentRequest(

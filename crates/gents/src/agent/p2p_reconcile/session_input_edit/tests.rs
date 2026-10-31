@@ -88,7 +88,7 @@ impl Fixture {
             .write("test.edit.request", &create.graphql_mutation().unwrap())
             .await
             .unwrap();
-        crate::graphql::created_doc_id(&response, "AgentRequest").unwrap()
+        crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap()
     }
 
     async fn command(&self) -> SessionInputEdit {
@@ -136,7 +136,7 @@ impl Fixture {
     async fn submit(&self, command: &SessionInputEdit) -> String {
         let response = ConfigAccess::local(self.node.clone()).write("test.edit.intent", &format!(r#"mutation {{ create_AgentSessionInputEdit(input: {{ command_id: "{}", requester_did: "{}", node_did: "{}", session_id: "{}", intent_json: "{}" }}) {{ _docID }} }}"#,
             escape_graphql_string(&command.command_id), escape_graphql_string(&command.requester_did), escape_graphql_string(&command.node_did), escape_graphql_string(&command.session_id), escape_graphql_string(&serde_json::to_string(command).unwrap()))).await.unwrap();
-        crate::graphql::created_doc_id(&response, "AgentSessionInputEdit").unwrap()
+        crate::store::graphql::created_doc_id(&response, "AgentSessionInputEdit").unwrap()
     }
 
     async fn receipt(&self, id: &str) -> SessionInputEditReceipt {
@@ -449,7 +449,7 @@ async fn unanswered_sweep_discovers_malformed_command_for_transactional_validati
         )
         .await
         .unwrap();
-    let doc_id = crate::graphql::created_doc_id(&response, "AgentSessionInputEdit").unwrap();
+    let doc_id = crate::store::graphql::created_doc_id(&response, "AgentSessionInputEdit").unwrap();
 
     let unanswered = unanswered_commands(
         CommandKind::InputEdit,

@@ -1,5 +1,5 @@
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
@@ -442,7 +442,7 @@ impl ToolCallSnapshot {
         node: std::sync::Arc<EmbeddedNode>,
     ) -> anyhow::Result<String> {
         let message = gents::tools::call::lifecycle::load_tool_call_result(
-            &gents::config_client::ConfigAccess::local(node),
+            &gents::store::config_client::ConfigAccess::local(node),
             &self.doc_id,
             &self.node_did,
             &self.session_id,
@@ -457,7 +457,7 @@ impl ToolCallSnapshot {
         node: std::sync::Arc<EmbeddedNode>,
     ) -> anyhow::Result<String> {
         gents::tools::call::lifecycle::load_tool_call_arguments(
-            &gents::config_client::ConfigAccess::local(node),
+            &gents::store::config_client::ConfigAccess::local(node),
             &self.doc_id,
             &self.node_did,
             &self.session_id,

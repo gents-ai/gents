@@ -1,8 +1,8 @@
 use super::{DocumentRecord, DocumentRuntimeView};
-use crate::config_client::{config_projection, ConfigAccess, ConfigApplyTxn};
 use crate::documents::ensure_node;
-use crate::graphql::escape_graphql_string;
 use crate::store::collection::Collection;
+use crate::store::config_client::{config_projection, ConfigAccess, ConfigApplyTxn};
+use crate::store::graphql::escape_graphql_string;
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use rapidhash::{HashMapExt, RapidHashMap};

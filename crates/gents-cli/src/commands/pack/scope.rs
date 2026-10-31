@@ -84,7 +84,7 @@ pub(super) async fn resolve_plugin_slot_owner(
 
 pub(crate) async fn resolve_scope_owner(
     scope: &ScopeArgs,
-) -> Result<(gents::config_client::ConfigAccess, String)> {
+) -> Result<(gents::store::config_client::ConfigAccess, String)> {
     let (access, _) =
         crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
     let owner = super::super::config::binding::resolve_target_node_did(

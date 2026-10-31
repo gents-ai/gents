@@ -3,9 +3,9 @@ use defra_node::EmbeddedNode;
 
 use std::sync::Arc;
 
-use crate::config_client::ConfigAccess;
 use crate::request::lifecycle::SessionMessageTarget;
 use crate::session::origin::SessionScope;
+use crate::store::config_client::ConfigAccess;
 use crate::tools::surface::AgentToolConfig;
 
 pub(crate) async fn load_caller_session_tools(

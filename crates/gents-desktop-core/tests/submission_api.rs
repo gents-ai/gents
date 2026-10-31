@@ -32,9 +32,9 @@ async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
                     requester_did: {{ _eq: "{}" }}
                 }}) {{ _docID }}
             }}"#,
-            gents::graphql::escape_graphql_string(&session_id),
-            gents::graphql::escape_graphql_string(&node_did),
-            gents::graphql::escape_graphql_string(&node_did),
+            gents::store::graphql::escape_graphql_string(&session_id),
+            gents::store::graphql::escape_graphql_string(&node_did),
+            gents::store::graphql::escape_graphql_string(&node_did),
         ))
         .await;
     assert!(

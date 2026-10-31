@@ -695,7 +695,7 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
         gents::sign_agent_request_create(identity, &mut create)
             .await
             .unwrap();
-        gents::config_client::ConfigAccess::write_local(
+        gents::store::config_client::ConfigAccess::write_local(
             &db.node,
             "conformance.signed_completion_wake",
             &create.graphql_mutation().unwrap(),

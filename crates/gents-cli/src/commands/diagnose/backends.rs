@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::config_client::ConfigAccess;
-use gents::document_config::InferenceBackend;
+use gents::documents::InferenceBackend;
+use gents::store::config_client::ConfigAccess;
 use serde_json::{json, Value};
 
 use crate::shared::ConfigExportBundle;
@@ -168,7 +168,7 @@ const OAUTH_CREDENTIAL_DISCOVERY_NOTE: &str =
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::document_config::BackendAuth;
+    use gents::documents::BackendAuth;
     use std::sync::Arc;
 
     #[tokio::test]

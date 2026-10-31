@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 use gents::tools::background::job::control::operator_control;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::job::{

@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use gents::defra_node::{EmbeddedNode, QueryResponse};
-use gents::graphql::escape_graphql_string;
 use gents::session::canonical_rows::{
     decode_output_segment_row, OutputSegmentRow, AGENT_OUTPUT_SEGMENT_FIELDS,
 };
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::output::live::reconstruct_dense_prefix;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::OutputSource;

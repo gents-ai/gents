@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::agent::p2p_reconcile::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
-use gents::config_client::ConfigAccess;
 use gents::defra_node::{EmbeddedNode, HttpConfig, StorageBackend};
+use gents::store::config_client::ConfigAccess;
 use gents::{KeyIdentity, NodeIdentity};
 
 const SCHEMA: &str = "type NodeAccessProbe { name: String }";
@@ -55,7 +55,7 @@ async fn served_home(data_dir: &Path, principal: &str, address: SocketAddr) -> A
 fn insert(name: &str) -> String {
     format!(
         r#"mutation {{ create_NodeAccessProbe(input: {{ name: "{}" }}) {{ _docID }} }}"#,
-        gents::graphql::escape_graphql_string(name)
+        gents::store::graphql::escape_graphql_string(name)
     )
 }
 

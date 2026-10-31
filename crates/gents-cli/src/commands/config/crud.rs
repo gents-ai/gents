@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents::Collection;
 use serde_json::{json, Value};
 
@@ -220,7 +220,7 @@ pub(super) async fn query_collection(
             escape_graphql_string(id)
         ));
     }
-    let fields = gents::config_client::config_projection(spec.collection, None)?
+    let fields = gents::store::config_client::config_projection(spec.collection, None)?
         .0
         .join(" ");
     let query = format!(
@@ -374,7 +374,7 @@ fn print_table_row(cells: &[&str; 3], widths: &[usize; 3]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::config_client::{apply_desired_state_plan, DesiredStateApplyPlan};
+    use gents::store::config_client::{apply_desired_state_plan, DesiredStateApplyPlan};
     use std::sync::Arc;
 
     #[tokio::test]

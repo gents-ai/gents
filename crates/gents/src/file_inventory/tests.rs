@@ -652,7 +652,7 @@ async fn generated_refusals_verify_exact_demand() {
 
 #[tokio::test]
 async fn generated_reply_journals_preserve_immutable_outcomes() {
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
     use crate::tools::call::lifecycle::admission_fixture::{
         published_admission_with_owner, PublishedAdmissionOptions,
     };
@@ -780,7 +780,7 @@ async fn generated_reply_journals_preserve_immutable_outcomes() {
                 let response = txn.execute_with_variables(
                     "mutation($input: FileInventoryReplyMutationInputArg!) { create_FileInventoryReply(input: $input) { _docID } }",
                     &serde_json::json!({"input": input})).await?;
-                crate::graphql::created_doc_id(&response, "FileInventoryReply")
+                crate::store::graphql::created_doc_id(&response, "FileInventoryReply")
             })
         }).await.unwrap();
         if invalid == "foreign-owner" {
@@ -951,7 +951,7 @@ async fn generated_page_grants_bind_only_the_exact_metadata_document() {
 
 #[tokio::test]
 async fn native_inventory_admission_and_response_commit_preserve_attempts_and_rollback() {
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
     use crate::tools::call::lifecycle::admission_fixture::{
         published_admission_with_owner, PublishedAdmissionOptions,
     };
@@ -1075,7 +1075,7 @@ async fn native_inventory_admission_and_response_commit_preserve_attempts_and_ro
 
 #[tokio::test]
 async fn generated_preparation_retries_keep_the_original_snapshot() {
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
     use crate::tools::call::lifecycle::admission_fixture::{
         published_admission_with_owner, PublishedAdmissionOptions,
     };
@@ -1176,7 +1176,7 @@ async fn generated_preparation_retries_keep_the_original_snapshot() {
 
 #[tokio::test]
 async fn generated_client_scope_requires_a_unique_retained_admission() {
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
     use crate::tools::call::lifecycle::admission_fixture::{
         published_admission_with_owner, PublishedAdmissionOptions,
     };
@@ -1255,7 +1255,7 @@ async fn generated_client_scope_requires_a_unique_retained_admission() {
                 let (row, id) = (&row, &id);
                 Box::pin(async move {
                     txn.execute(&format!(r#"mutation {{ delete_FileInventoryProgress(docID: "{}") {{ _docID }} }}"#,
-                        crate::graphql::escape_graphql_string(id.as_str().unwrap()))).await?;
+                        crate::store::graphql::escape_graphql_string(id.as_str().unwrap()))).await?;
                     txn.execute_with_variables(
                         "mutation($input: FileInventoryProgressMutationInputArg!) { create_FileInventoryProgress(input: $input) { _docID } }",
                         &json!({"input":row}),
@@ -1281,7 +1281,7 @@ async fn generated_client_scope_requires_a_unique_retained_admission() {
 
 #[tokio::test]
 async fn generated_client_progress_survives_reload_and_rollback() {
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
     use crate::tools::call::lifecycle::admission_fixture::{
         published_admission_with_owner, PublishedAdmissionOptions,
     };
@@ -1588,7 +1588,7 @@ async fn generated_client_progress_survives_reload_and_rollback() {
 
 #[tokio::test]
 async fn generated_operator_inventory_requires_the_native_owner() {
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
     use crate::tools::call::lifecycle::admission_fixture::{
         ensure_fixture_session, published_admission_with_owner, PublishedAdmissionOptions,
     };

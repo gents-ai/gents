@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use gents::graphql::escape_graphql_string;
 use gents::request::lifecycle::{ClaimOutcome, ExecutionOrigin};
+use gents::store::graphql::escape_graphql_string;
 use gents::{interrupt_request, Gents, NodeIdentity, RequestLifecycle, ToolCeiling};
 use gents_protocol::output::{OutputOutcome, SourceClose, TerminalOutput};
 use gents_protocol::request_lifecycle::RequestLifecycleState;

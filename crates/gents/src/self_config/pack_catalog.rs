@@ -117,7 +117,7 @@ impl PackInstaller {
             expected_digest: None,
         };
         let distribution = self.resolve("get", &args).await?;
-        let access = crate::config_client::ConfigAccess::local(self.node.clone());
+        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
         let inference = crate::pack::inspect_pack_inference_bindings(
             &access,
             distribution.manifest(),
@@ -174,7 +174,7 @@ impl PackInstaller {
                 anyhow::ensure!(!matches!(record.kind, crate::pack::PackKind::Assets | crate::pack::PackKind::Plugins), "native removal of home-installed plugin/assets packs is unavailable; the existing pack removal owner must release plugin and home records together. Current installation is unchanged");
             }
         }
-        let access = crate::config_client::ConfigAccess::local(self.node.clone());
+        let access = crate::store::config_client::ConfigAccess::local(self.node.clone());
         let report = crate::pack::remove_pack(
             &access,
             self.core.node_did(),

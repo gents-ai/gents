@@ -97,7 +97,7 @@ pub(super) async fn preload_request_output_segments(
             .map(|request_doc_id| {
                 format!(
                     r#""{}""#,
-                    crate::graphql::escape_graphql_string(request_doc_id)
+                    crate::store::graphql::escape_graphql_string(request_doc_id)
                 )
             })
             .collect::<Vec<_>>()
@@ -150,7 +150,7 @@ pub(super) async fn load_referenced_segments(
     cache: &mut ReadCache,
 ) -> Result<Vec<super::super::canonical_rows::OutputSegmentRow>> {
     let requester = requester_did
-        .map(|did| format!(r#""{}""#, crate::graphql::escape_graphql_string(did)))
+        .map(|did| format!(r#""{}""#, crate::store::graphql::escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
     let close_ids = header
         .message
@@ -178,8 +178,8 @@ pub(super) async fn load_referenced_segments(
         }
         let query = format!(
             r#"{{ AgentOutputSegment(filter: {{ _docID: {{ _eq: "{}" }}, node_did: {{ _eq: "{}" }}, requester_did: {{ _eq: {requester} }} }}, limit: 2) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
-            crate::graphql::escape_graphql_string(&close_id),
-            crate::graphql::escape_graphql_string(node_did)
+            crate::store::graphql::escape_graphql_string(&close_id),
+            crate::store::graphql::escape_graphql_string(node_did)
         );
         let response = access.query(&query, "load_output_closure").await?;
         let rows = rows_value(&response, "AgentOutputSegment")?;

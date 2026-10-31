@@ -9,7 +9,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::{ensure_runtime_schemas, DocumentRuntimeOptions, Gents, KeyIdentity, NodeIdentity};
 
 // A full conformance run starts many embedded DefraDB nodes in parallel. On a

@@ -224,8 +224,8 @@ mod tests {
         hostname: &str,
         port: u16,
     ) {
-        let service_id = crate::graphql::escape_graphql_string(service_id);
-        let hostname = crate::graphql::escape_graphql_string(hostname);
+        let service_id = crate::store::graphql::escape_graphql_string(service_id);
+        let hostname = crate::store::graphql::escape_graphql_string(hostname);
         let mutation = format!(
             r#"mutation {{
             upsert_ToolServiceRegistry(

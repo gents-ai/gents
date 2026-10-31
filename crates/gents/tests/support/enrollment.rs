@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use gents::agent::p2p_reconcile::GraphqlEnrollmentStore;
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents::NodeIdentity;
 use gents_protocol::enrollment::{
     derive_enrollment_id, encode_offer, enrollment_schema_fingerprint, EnrollmentDecisionKind,

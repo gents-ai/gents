@@ -1,7 +1,7 @@
 use gents_protocol::goal_control::{SessionGoalControl, SessionGoalControlReceipt};
 
 use super::*;
-use crate::config_client::ConfigAccess;
+use crate::store::config_client::ConfigAccess;
 use crate::store::identity::NodeIdentity;
 
 mod provenance;
@@ -201,7 +201,7 @@ async fn publish(access: &ConfigAccess, command: &SessionGoalControl) -> Result<
             ),
         )
         .await?;
-    Ok(crate::graphql::created_doc_id(
+    Ok(crate::store::graphql::created_doc_id(
         &response,
         "AgentSessionGoalControl",
     )?)

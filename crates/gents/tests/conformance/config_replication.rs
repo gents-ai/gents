@@ -71,8 +71,8 @@ async fn signed_conversation_pairing_replays_agent_config_over_p2p() {
         ("req-phone-owned", PEER_DID),
         ("req-foreign-owned", FOREIGN_DID),
     ] {
-        let request_id = gents::graphql::escape_graphql_string(request_id);
-        let requester_did = gents::graphql::escape_graphql_string(requester_did);
+        let request_id = gents::store::graphql::escape_graphql_string(request_id);
+        let requester_did = gents::store::graphql::escape_graphql_string(requester_did);
         let response = source
             .node
             .execute(&format!(

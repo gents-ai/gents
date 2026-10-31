@@ -211,8 +211,8 @@ async fn desktop_task_run_defers_declared_goal_until_claim() -> Result<()> {
         .fire_task_now(&task, json!({"item": "release"}))
         .await?;
 
-    let request_doc_id = gents::graphql::escape_graphql_string(&request_doc_id);
-    let owner = gents::graphql::escape_graphql_string(&node_did);
+    let request_doc_id = gents::store::graphql::escape_graphql_string(&request_doc_id);
+    let owner = gents::store::graphql::escape_graphql_string(&node_did);
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc_id}" }} }} ) {{
@@ -227,7 +227,7 @@ async fn desktop_task_run_defers_declared_goal_until_claim() -> Result<()> {
             }}
         }}"#,
     );
-    let response = gents::graphql::graphql_with_transaction_retry(
+    let response = gents::store::graphql::graphql_with_transaction_retry(
         core.node(),
         &query,
         "test.desktop_task_before_claim",
@@ -261,7 +261,7 @@ async fn desktop_task_run_defers_declared_goal_until_claim() -> Result<()> {
         lifecycle.claim().await?,
         gents::request::lifecycle::ClaimOutcome::Claimed
     );
-    let response = gents::graphql::graphql_with_transaction_retry(
+    let response = gents::store::graphql::graphql_with_transaction_retry(
         core.node(),
         &query,
         "test.desktop_task_after_claim",

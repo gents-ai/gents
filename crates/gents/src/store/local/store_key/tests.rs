@@ -82,8 +82,8 @@ fn file_key(temp: &tempfile::TempDir) -> (StoreEncryption, StoreKey, PathBuf) {
 
 #[tokio::test]
 async fn encrypted_local_budget_accepts_and_reopens_a_megabyte_document() {
-    use crate::config_client::ConfigAccess;
-    use crate::graphql::escape_graphql_string;
+    use crate::store::config_client::ConfigAccess;
+    use crate::store::graphql::escape_graphql_string;
     use std::sync::Arc;
 
     let temp = tempfile::tempdir().unwrap();

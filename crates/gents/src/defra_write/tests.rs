@@ -5,8 +5,8 @@ use defra_node::EmbeddedNode;
 use serde_json::json;
 
 use super::BoundedWriteTool;
-use crate::config_client::ConfigAccess;
 use crate::documents::{WriteToolDecl, WriteToolField, WriteToolFieldFill};
+use crate::store::config_client::ConfigAccess;
 
 #[test]
 fn native_input_admission_matches_lean() {
@@ -583,7 +583,7 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
     for case in values {
         let maximum = case["maximum"].as_u64().unwrap() as usize;
         assert_eq!(
-            crate::graphql::canonical_positive_count(&case["value"], maximum),
+            crate::store::graphql::canonical_positive_count(&case["value"], maximum),
             case["expected"].as_u64().map(|n| n as usize),
             "parser: {case}"
         );
@@ -634,29 +634,32 @@ async fn generated_count_carriers_bind_admission_parser_and_storage() {
         .await
         .unwrap_or_else(|error| panic!("{schema}: {error:#}"));
         let query = format!("{{ {collection} {{ count }} }}");
-        let response =
-            crate::graphql::graphql_with_transaction_retry(&node, &query, "read count carrier")
-                .await
-                .unwrap();
+        let response = crate::store::graphql::graphql_with_transaction_retry(
+            &node,
+            &query,
+            "read count carrier",
+        )
+        .await
+        .unwrap();
         assert!(!response.has_errors(), "{schema}: {:?}", response.errors);
         let output = &response.data.as_ref().unwrap()[&collection][0]["count"];
         let maximum = crate::runtime_snapshot::MAX_EVENT_TRIGGER_GROUP_DOCS;
         let expected = case["probe_expected"].as_u64().map(|n| n as usize);
         assert_eq!(
-            crate::graphql::canonical_positive_count(&input, maximum),
+            crate::store::graphql::canonical_positive_count(&input, maximum),
             expected,
             "durable call argument: {schema}, {input}"
         );
         assert_eq!(
-            crate::graphql::canonical_positive_count(output, maximum),
+            crate::store::graphql::canonical_positive_count(output, maximum),
             expected,
             "stored document: {schema}, {input} -> {output}"
         );
         assert_eq!(
-            crate::graphql::canonical_positive_count(output, maximum).is_some(),
+            crate::store::graphql::canonical_positive_count(output, maximum).is_some(),
             admitted
         );
-        let introspection = crate::graphql::graphql_with_transaction_retry(
+        let introspection = crate::store::graphql::graphql_with_transaction_retry(
             &node,
             &crate::defra_query::introspection_query(&collection).unwrap(),
             "introspect count carrier",

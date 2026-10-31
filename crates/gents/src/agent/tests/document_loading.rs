@@ -204,7 +204,7 @@ where
 {
     let owner = owner.to_owned();
     let id = id.to_owned();
-    let value = crate::config_client::ConfigAccess::transact_local_write(
+    let value = crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.read_configuration",
@@ -213,7 +213,7 @@ where
             let id = &id;
             Box::pin(async move {
                 Ok::<_, anyhow::Error>(
-                    crate::config_client::read_desired_state_record_in_txn(
+                    crate::store::config_client::read_desired_state_record_in_txn(
                         txn, collection, owner, id,
                     )
                     .await?
@@ -237,20 +237,22 @@ where
     T: serde::Serialize,
 {
     let value = serde_json::to_value(document)?;
-    let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
-        crate::config_client::DesiredStateApplyDocument {
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
             collection,
             add: value.clone(),
             update: value,
         },
     ])?;
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.write_configuration",
         |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
         },
     )
     .await?;
@@ -471,9 +473,10 @@ async fn from_default_agent_documents_rejects_unresolved_agent_target() {
     });
     upsert_tools(&node, &tools).await;
 
-    let owner = crate::graphql::escape_graphql_string(&did);
-    let target_id =
-        crate::graphql::escape_graphql_string(&format!("{default_agent_id}:missing-behavior"));
+    let owner = crate::store::graphql::escape_graphql_string(&did);
+    let target_id = crate::store::graphql::escape_graphql_string(&format!(
+        "{default_agent_id}:missing-behavior"
+    ));
     let response = node.execute(&format!(r#"mutation {{ update_AgentTarget(filter: {{node_did: {{_eq: "{owner}"}}, target_id: {{_eq: "{target_id}"}}}}, input: {{agent_id: "missing-behavior"}}) {{_docID}} }}"#)).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let agent = Gents::from_default_agent_documents(
@@ -520,7 +523,7 @@ async fn from_default_agent_documents_loads_runnable_agents_and_tracks_unavailab
         .unwrap();
     set_probe_status(&node, &did, "code:backend", "healthy").await;
     set_probe_status(&node, &did, "unhealthy:backend", "unhealthy").await;
-    let owner = crate::graphql::escape_graphql_string(&did);
+    let owner = crate::store::graphql::escape_graphql_string(&did);
     let response = node.execute(&format!(r#"mutation {{ update_InferenceProfile(filter: {{node_did: {{_eq: "{owner}"}}, profile_id: {{_eq: "broken:inference"}}}}, input: {{backend_id: "backend-missing"}}) {{_docID}} }}"#)).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let agent = Gents::from_default_agent_documents(

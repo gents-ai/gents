@@ -1,5 +1,5 @@
 use super::*;
-use crate::config_client::{ConfigAccess, IdempotentTransactionRetry};
+use crate::store::config_client::{ConfigAccess, IdempotentTransactionRetry};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 #[tokio::test]

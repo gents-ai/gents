@@ -4,8 +4,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::graphql::escape_graphql_string;
 use gents::session::{fork, fork_via_http, ForkBoundary, ForkError, ForkOutcome, ForkParams};
+use gents::store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 use crate::cli::args::{ConfigListArgs, ConfigShowArgs, SessionCommand, SessionForkArgs};

@@ -828,8 +828,9 @@ async fn remote_wire_refuses_new_pin_before_http_access_but_allows_preview_and_r
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let home = tempfile::tempdir().unwrap();
-    let access =
-        gents::config_client::ConfigAccess::graphql(format!("http://{address}/api/v0/graphql"));
+    let access = gents::store::config_client::ConfigAccess::graphql(format!(
+        "http://{address}/api/v0/graphql"
+    ));
     let cases: Value =
         tokio::task::spawn_blocking(|| gents_lean_contract::load_contract_snapshot().unwrap())
             .await
@@ -898,7 +899,7 @@ async fn wire_refuses_even_the_initialized_homes_served_endpoint() {
         },
     )
     .unwrap();
-    let access = gents::config_client::ConfigAccess::graphql(url);
+    let access = gents::store::config_client::ConfigAccess::graphql(url);
     let request = super::super::wire::WireRequest {
         plugin: "acme/missing".into(),
         agent: "engineer".into(),

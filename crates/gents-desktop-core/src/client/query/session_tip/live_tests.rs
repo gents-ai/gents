@@ -1,5 +1,5 @@
 use super::*;
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 #[tokio::test]

@@ -81,21 +81,23 @@ pub(super) async fn insert_backend(
         "auth": {"kind": "unauthenticated"},
         "max_concurrent": 2
     });
-    let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
-        crate::config_client::DesiredStateApplyDocument {
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
             collection: crate::Collection::InferenceBackend,
             add: value.clone(),
             update: value,
         },
     ])
     .unwrap();
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.insert_backend",
         |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
         },
     )
     .await

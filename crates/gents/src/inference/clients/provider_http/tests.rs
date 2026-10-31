@@ -314,7 +314,7 @@ pub(crate) async fn stored_usage_eventually(
     account: &crate::inference::usage_observation::UsageAccount,
 ) -> Option<crate::inference::usage_observation::UsageObservation> {
     let access = crate::store::config_client::ConfigAccess::local(node.clone());
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         let stored = crate::inference::usage_observation::load_usage(cache, &access, account)

@@ -1,6 +1,6 @@
 use super::rows::dedupe_paths;
 use super::*;
-use crate::graphql::graphql_response_with_transaction_retry as execute_query_timed;
+use crate::store::graphql::graphql_response_with_transaction_retry as execute_query_timed;
 use anyhow::Context;
 use rapidhash::RapidHashSet;
 use std::collections::BTreeSet;
@@ -461,10 +461,10 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
     let escaped_request_id = &escaped_request_id;
     let escaped_request_doc_id = &escaped_request_doc_id;
     let requester_did_field = &requester_did_field;
-    crate::config_client::ConfigAccess::transact_local_idempotent(
+    crate::store::config_client::ConfigAccess::transact_local_idempotent(
         node,
         None,
-        crate::config_client::IdempotentTransactionRetry::Standard,
+        crate::store::config_client::IdempotentTransactionRetry::Standard,
         "session.save_compaction_entry",
         move |txn| {
             Box::pin(async move {

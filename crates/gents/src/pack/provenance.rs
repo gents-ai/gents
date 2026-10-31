@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 
 use super::PackManifest;
-use crate::config_client::ConfigAccess;
 use crate::documents::PackConfig;
+use crate::store::config_client::ConfigAccess;
 use crate::Collection;
 
 const PACK_ORIGIN_PREFIX: &str = "gents:pack:";
@@ -39,17 +39,17 @@ pub(super) async fn apply_pack_documents(
     pack: &super::installation::PackIdentity,
     config: &PackConfig,
     policy: super::installation::DriftPolicy,
-    expected: Vec<crate::config_client::DesiredStateExpectation>,
+    expected: Vec<crate::store::config_client::DesiredStateExpectation>,
 ) -> Result<super::installation::InstallReport> {
     let documents = super::installation::installable_documents(config)?;
-    let guard =
-        crate::config_client::DesiredStateApplyPlan::new(Vec::new())?.with_expected(expected)?;
+    let guard = crate::store::config_client::DesiredStateApplyPlan::new(Vec::new())?
+        .with_expected(expected)?;
     access
         .transact_write("pack.documents.install", |txn| {
             let documents = documents.clone();
             let guard = &guard;
             Box::pin(async move {
-                crate::config_client::apply_desired_state_plan(txn, guard).await?;
+                crate::store::config_client::apply_desired_state_plan(txn, guard).await?;
                 let report =
                     super::installation::install_in_txn(txn, owner, pack, documents, policy)
                         .await?;
@@ -66,9 +66,9 @@ pub(super) async fn apply_pack_documents(
 }
 
 pub(crate) async fn prepare_pack_plan_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
-    documents: &[crate::config_client::DesiredStateApplyDocument],
-) -> Result<crate::config_client::DesiredStateApplyPlan> {
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
+    documents: &[crate::store::config_client::DesiredStateApplyDocument],
+) -> Result<crate::store::config_client::DesiredStateApplyPlan> {
     let mut prepared = Vec::with_capacity(documents.len());
     for authored in documents {
         let mut document = authored.clone();
@@ -78,7 +78,7 @@ pub(crate) async fn prepare_pack_plan_in_txn(
         let id = document.add[document.collection.unique_field()]
             .as_str()
             .context("pack document is missing logical ID")?;
-        if let Some((_, live)) = crate::config_client::read_desired_state_record_in_txn(
+        if let Some((_, live)) = crate::store::config_client::read_desired_state_record_in_txn(
             txn,
             document.collection,
             owner,
@@ -90,13 +90,13 @@ pub(crate) async fn prepare_pack_plan_in_txn(
         }
         prepared.push(document);
     }
-    crate::config_client::DesiredStateApplyPlan::new(prepared)
+    crate::store::config_client::DesiredStateApplyPlan::new(prepared)
 }
 
 pub fn pack_document_digests(
     config: &crate::documents::PackConfig,
 ) -> Result<std::collections::BTreeMap<(String, String), String>> {
-    let plan = crate::config_client::DesiredStateApplyPlan::from_pack_config(config)?;
+    let plan = crate::store::config_client::DesiredStateApplyPlan::from_pack_config(config)?;
     plan.documents()
         .iter()
         .map(|document| {
@@ -118,7 +118,7 @@ pub(crate) fn pack_artifact_document_digest(value: &serde_json::Value) -> Result
         .as_object_mut()
         .context("pack document must be an object")?
         .remove("tags");
-    crate::config_client::desired_state_document_digest(&canonical)
+    crate::store::config_client::desired_state_document_digest(&canonical)
 }
 
 fn merge_tags(desired: &mut serde_json::Value, live: &serde_json::Value) -> Result<()> {
@@ -196,7 +196,7 @@ pub(super) fn stamp_pack_origin(
         let Some(field) = collection.dir_name() else {
             continue;
         };
-        let (fields, _) = crate::config_client::config_projection(collection, None)?;
+        let (fields, _) = crate::store::config_client::config_projection(collection, None)?;
         if !fields.contains(&"tags") {
             continue;
         }

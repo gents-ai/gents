@@ -18,7 +18,7 @@ pub async fn load_session_tip_store(
 }
 
 pub async fn load_session_tip_store_on(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     request: &AgentRequestRow,
 ) -> Result<ClientStore> {
     let query = tip_query(request, false)?;
@@ -36,7 +36,7 @@ pub async fn load_session_live_store(
 }
 
 pub async fn load_session_live_store_on(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     request: &AgentRequestRow,
 ) -> Result<ClientStore> {
     let query = tip_query(request, true)?;
@@ -104,7 +104,7 @@ pub async fn load_request_prompt_ownership(
 }
 
 pub async fn load_request_prompt_ownership_on(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     requests: &[AgentRequestRow],
 ) -> Result<RequestPromptOwnership> {
     let mut facts = RequestPromptOwnership::default();
@@ -437,7 +437,7 @@ fn tip_rows(data: &Value, request: &AgentRequestRow) -> Result<ClientStoreRows> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::config_client::ConfigAccess;
+    use gents::store::config_client::ConfigAccess;
     use gents_protocol::request_lifecycle::RequestLifecycleState;
 
     #[tokio::test]

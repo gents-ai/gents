@@ -1,7 +1,7 @@
 use super::*;
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::graphql::required_rows;
 use crate::session::origin::SessionScope;
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::graphql::required_rows;
 
 pub(super) async fn load_hydration_selection(
     node: &Arc<EmbeddedNode>,
@@ -483,7 +483,7 @@ pub(super) async fn load_effect_children(
     );
     let mut ignored = Vec::new();
     for parents in parents.chunks(pages::PAGE_SIZE) {
-        let parents = crate::graphql::graphql_string_list_literal(parents.iter().copied());
+        let parents = crate::store::graphql::graphql_string_list_literal(parents.iter().copied());
         let filter = format!(
             r#"plugin_parent_tool_call_doc_id: {{ _in: {parents} }}, node_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }}"#
         );

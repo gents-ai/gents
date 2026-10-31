@@ -226,7 +226,7 @@ pub async fn fork_session_before_message(
 #[cfg(test)]
 mod edit_fork_tests {
     use super::*;
-    use gents::config_client::ConfigAccess;
+    use gents::store::config_client::ConfigAccess;
 
     #[test]
     fn fork_wire_requires_the_retained_client_and_destination() {

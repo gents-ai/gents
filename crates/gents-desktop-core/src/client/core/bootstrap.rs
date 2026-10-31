@@ -91,14 +91,16 @@ impl ClientCore {
                 .await
                 .context("starting embedded desktop node")?,
         );
-        let store_access =
-            match gents::config_client::ConfigAccess::claimed_local(node.clone(), store_lock) {
-                Ok(access) => access,
-                Err(error) => {
-                    node.shutdown().await;
-                    return Err(error.into());
-                }
-            };
+        let store_access = match gents::store::config_client::ConfigAccess::claimed_local(
+            node.clone(),
+            store_lock,
+        ) {
+            Ok(access) => access,
+            Err(error) => {
+                node.shutdown().await;
+                return Err(error.into());
+            }
+        };
 
         checkpoint("embedded_node");
 
@@ -662,8 +664,8 @@ mod tests {
     #[tokio::test]
     async fn plaintext_client_upgrade_preserves_identity_history_and_subscription_metadata() {
         use gents::agent::p2p_reconcile::{EmbeddedRemoteP2pAdmin, RemoteP2pAdmin};
-        use gents::config_client::ConfigAccess;
-        use gents::graphql::escape_graphql_string;
+        use gents::store::config_client::ConfigAccess;
+        use gents::store::graphql::escape_graphql_string;
 
         let temp = tempfile::tempdir().unwrap();
         let paths = DesktopPaths::from_root(temp.path().join("client"));

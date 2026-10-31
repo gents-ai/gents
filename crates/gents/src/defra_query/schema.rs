@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use super::query::{collect_filter_field_keys, is_restricted_field, DefraQueryParams};
 use super::render::validate_identifier;
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaField {

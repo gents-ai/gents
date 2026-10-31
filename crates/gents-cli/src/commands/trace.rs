@@ -10,9 +10,9 @@ use gents::adapter_projection::{
     validate_adapter_projection_contract, AdapterProjectionKind, ProjectionContext,
     ProjectionRedactionMode,
 };
-use gents::graphql::escape_graphql_string;
 use gents::run_timeline::{build_run_timeline, RunTimelineRows, TimelineToolCallRow};
 use gents::run_timeline_fetch::{load_run_timeline, load_run_timeline_rows};
+use gents::store::graphql::escape_graphql_string;
 use gents::tools::call::lifecycle::ToolCallState;
 use gents::trace_export::{
     analyze_request_failure, analyze_tool_call_with_persisted_outcome, extract_raw_tool_call_json,

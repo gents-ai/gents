@@ -50,7 +50,7 @@ pub(super) async fn load_replay_capture_rows(
     {
         let filter = chunk
             .iter()
-            .map(|key| format!("\"{}\"", crate::graphql::escape_graphql_string(key)))
+            .map(|key| format!("\"{}\"", crate::store::graphql::escape_graphql_string(key)))
             .collect::<Vec<_>>()
             .join(", ");
         let query = format!(

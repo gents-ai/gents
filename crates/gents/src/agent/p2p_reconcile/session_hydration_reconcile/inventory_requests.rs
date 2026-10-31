@@ -1,12 +1,12 @@
 use super::super::session_hydration::decide_inventory_hydration;
 use super::*;
-use crate::config_client::ConfigAccess;
 use crate::file_inventory::delivery::{
     load_prepared_in_txn, load_prepared_page, prepare_page, sign_page_grant,
 };
 use crate::file_inventory::requests::{
     publish_response_in_txn, InventoryRequestRow, REQUEST_FIELDS,
 };
+use crate::store::config_client::ConfigAccess;
 use gents_protocol::file_inventory::{
     FileInventoryPageDemand, FileInventoryRefusalReason, FileInventoryReply, FileInventoryResponse,
 };

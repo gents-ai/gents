@@ -216,18 +216,18 @@ async fn observation_visible(
     ) {
         format!(
             r#"node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}"#,
-            crate::graphql::escape_graphql_string(&key.node),
-            crate::graphql::escape_graphql_string(&key.session)
+            crate::store::graphql::escape_graphql_string(&key.node),
+            crate::store::graphql::escape_graphql_string(&key.session)
         )
     } else {
         crate::session::session_scope_filter(&key.node, &key.session, Some(actor.as_ref()))
     };
-    let request = crate::graphql::escape_graphql_string(&key.request);
-    let generation = crate::graphql::escape_graphql_string(&key.generation);
+    let request = crate::store::graphql::escape_graphql_string(&key.request);
+    let generation = crate::store::graphql::escape_graphql_string(&key.generation);
     let query = format!(
         r#"{{ AgentSession(filter: {{{scope}}}, limit: 2) {{ _docID }} AgentRequest(filter: {{{scope}, request_id: {{_eq: "{request}"}}, execution_generation: {{_eq: "{generation}"}}}}, limit: 2) {{ _docID lifecycle_state }} }}"#
     );
-    crate::config_client::ConfigAccess::transact_local_readonly(
+    crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "inference_observation.authorize",
@@ -333,7 +333,7 @@ resources:
             )
             .await
             .unwrap();
-        let access = crate::config_client::ConfigAccess::local(node.clone());
+        let access = crate::store::config_client::ConfigAccess::local(node.clone());
         for schema in [
             format!("type AgentSession @branchable @policy(id: \"{policy}\", resource: \"documents\") {{ node_did: String session_id: String requester_did: String }}"),
             format!("type AgentRequest @branchable @policy(id: \"{policy}\", resource: \"documents\") {{ node_did: String session_id: String requester_did: String request_id: String execution_generation: String lifecycle_state: String }}"),
@@ -347,11 +347,11 @@ resources:
             generation: "generation".into(),
         };
         let requester_did = requester.did();
-        let (session_doc, request_doc) = crate::config_client::ConfigAccess::transact_local_write(&node, Some(owner_did), "test.activity.acp", |txn| {
+        let (session_doc, request_doc) = crate::store::config_client::ConfigAccess::transact_local_write(&node, Some(owner_did), "test.activity.acp", |txn| {
             Box::pin(async move {
                 let session = txn.execute_with_variables("mutation($input: AgentSessionMutationInputArg!) { create_AgentSession(input: $input) { _docID } }", &serde_json::json!({"input":{"node_did":"runtime","session_id":"session","requester_did":requester_did}})).await?;
                 let request = txn.execute_with_variables("mutation($input: AgentRequestMutationInputArg!) { create_AgentRequest(input: $input) { _docID } }", &serde_json::json!({"input":{"node_did":"runtime","session_id":"session","requester_did":requester_did,"request_id":"request","execution_generation":"generation","lifecycle_state":"processing"}})).await?;
-                Ok::<_, anyhow::Error>((crate::graphql::created_doc_id(&session, "AgentSession")?, crate::graphql::created_doc_id(&request, "AgentRequest")?))
+                Ok::<_, anyhow::Error>((crate::store::graphql::created_doc_id(&session, "AgentSession")?, crate::store::graphql::created_doc_id(&request, "AgentRequest")?))
             })
         }).await.unwrap();
         assert!(!observation_visible(&node, &actor, &key).await.unwrap());

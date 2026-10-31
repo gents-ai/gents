@@ -1,6 +1,6 @@
 use super::super::parse_query_rows;
 use super::*;
-use gents::config_client::ConfigAccess;
+use gents::store::config_client::ConfigAccess;
 use gents_protocol::graphql::graphql_input_literal;
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
 use rapidhash::{HashMapExt, RapidHashMap};
@@ -27,7 +27,8 @@ async fn generated_request_closures_use_exact_database_dependencies() {
     )
     .await
     .unwrap();
-    let missing_doc = gents::graphql::created_doc_id(&outside_scope, "AgentRequest").unwrap();
+    let missing_doc =
+        gents::store::graphql::created_doc_id(&outside_scope, "AgentRequest").unwrap();
     let mut seeded = Vec::new();
     for (case_index, case) in cases.enumerate() {
         let session = format!("{case_index}-{}", case["name"].as_str().unwrap());
@@ -96,7 +97,7 @@ async fn generated_request_closures_use_exact_database_dependencies() {
             .unwrap();
             docs.insert(
                 row["doc"].as_u64().unwrap(),
-                gents::graphql::created_doc_id(&result, "AgentRequest").unwrap(),
+                gents::store::graphql::created_doc_id(&result, "AgentRequest").unwrap(),
             );
         }
         for row in modeled {

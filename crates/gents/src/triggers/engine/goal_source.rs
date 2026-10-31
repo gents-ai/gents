@@ -9,7 +9,6 @@ use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
-use crate::config_client::ConfigAccess;
 use crate::goal::blocked_turn::last_failed_call_in_txn;
 use crate::goal::{
     claim_continuation, claim_retry_continuation, gate_claimed_goal_continuation,
@@ -22,9 +21,10 @@ use crate::goal::{
     GOAL_READINESS_WAIT_PREFIX, GOAL_TRIGGER_KIND, MAX_INFRASTRUCTURE_RETRIES,
 };
 use crate::goal::{publish_claimed_continuation, resume_at_reset};
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::request::watcher::AgentRequest;
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::store::identity::RegisteredIdentity;
 use crate::UpdateSubscriptionSource;
 

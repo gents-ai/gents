@@ -754,13 +754,13 @@ async fn owned_test_hook_with_identity_policy(
     } else {
         format!(
             r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", node_did: "did:test:test", agent_id: "general", session_id: "{}", request_hop: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "owned loop test", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(&request_id),
-            crate::graphql::escape_graphql_string(&session_id),
-            crate::graphql::escape_graphql_string(&request_id),
-            crate::graphql::escape_graphql_string(&now),
+            crate::store::graphql::escape_graphql_string(&request_id),
+            crate::store::graphql::escape_graphql_string(&session_id),
+            crate::store::graphql::escape_graphql_string(&request_id),
+            crate::store::graphql::escape_graphql_string(&now),
         )
     };
-    crate::config_client::ConfigAccess::write_local(
+    crate::store::config_client::ConfigAccess::write_local(
         &node,
         "agent.owned_loop_test_request",
         &mutation,
@@ -808,16 +808,16 @@ async fn owned_test_hook_with_identity_policy(
             )
             .await
             .unwrap();
-            let result = crate::config_client::ConfigAccess::local(node.clone())
+            let result = crate::store::config_client::ConfigAccess::local(node.clone())
                 .write("test.folded_request", &create.graphql_mutation().unwrap())
                 .await
                 .unwrap();
             let doc =
                 gents_protocol::graphql::extract_mutation_doc_id(&result, "AgentRequest").unwrap();
-            let loaded = crate::config_client::ConfigAccess::local(node.clone())
+            let loaded = crate::store::config_client::ConfigAccess::local(node.clone())
                 .execute(&format!(
                     r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
-                    crate::graphql::escape_graphql_string(&doc),
+                    crate::store::graphql::escape_graphql_string(&doc),
                     crate::request::admission::SIGNED_REQUEST_FIELDS,
                 ))
                 .await
@@ -829,11 +829,11 @@ async fn owned_test_hook_with_identity_policy(
             predecessor = id;
         }
     }
-    let loaded = crate::graphql::graphql_with_transaction_retry(
+    let loaded = crate::store::graphql::graphql_with_transaction_retry(
         &node,
         &format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
-            crate::graphql::escape_graphql_string(&request_id),
+            crate::store::graphql::escape_graphql_string(&request_id),
             crate::request::watcher::AGENT_REQUEST_FIELDS,
         ),
         "load owned loop test request",
@@ -841,7 +841,7 @@ async fn owned_test_hook_with_identity_policy(
     .await
     .unwrap();
     let row: gents_protocol::row::AgentRequestRow =
-        crate::graphql::first_row(&loaded, "AgentRequest")
+        crate::store::graphql::first_row(&loaded, "AgentRequest")
             .unwrap()
             .unwrap();
     let hook = DefraSessionHook::resume_with_identity_policy(

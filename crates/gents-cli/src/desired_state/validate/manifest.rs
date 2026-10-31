@@ -2,8 +2,8 @@ use super::super::DesiredStateManifest;
 use super::{automation, projection, tooling};
 
 pub(crate) fn validate_manifest(manifest: &DesiredStateManifest, errors: &mut Vec<String>) {
-    let plan =
-        gents::config_client::DesiredStateApplyPlan::from_pack_config(manifest).and_then(|plan| {
+    let plan = gents::store::config_client::DesiredStateApplyPlan::from_pack_config(manifest)
+        .and_then(|plan| {
             gents::documents::ConfigReferences::from_documents(
                 &manifest.node.node_did,
                 plan.documents()

@@ -4,7 +4,7 @@ use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 
 mod backed_request;
 pub mod blocked_turn;
@@ -133,7 +133,7 @@ pub use write::{
 /// Resume only a paused Goal; an interrupted/claimed execution must settle
 /// before a fresh continuation can be staged.
 pub(crate) async fn stage_session_resume_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     identity: &dyn crate::store::identity::NodeIdentity,
     node_did: &str,
     session_id: &str,

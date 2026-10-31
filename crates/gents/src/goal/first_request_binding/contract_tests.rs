@@ -1,5 +1,5 @@
 use super::*;
-use crate::config_client::ConfigAccess;
+use crate::store::config_client::ConfigAccess;
 use crate::store::identity::{KeyIdentity, NodeIdentity};
 use gents_protocol::request_admission::{
     AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
@@ -84,7 +84,7 @@ async fn generated_first_request_bindings_commit_exact_physical_roots() {
             )
             .await
             .unwrap();
-        let physical = crate::graphql::created_doc_id(&response, "AgentRequest").unwrap();
+        let physical = crate::store::graphql::created_doc_id(&response, "AgentRequest").unwrap();
         super::super::create_goal_for_session(&node, signer.did(), "session", "Start work", None)
             .await
             .unwrap();

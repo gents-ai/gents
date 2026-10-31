@@ -6,12 +6,12 @@ use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-use crate::config_client::config_projection;
 use crate::documents::{Task, TaskHook, TaskHookPhase};
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::request::lifecycle::RequestTerminalOutcome;
 use crate::request::watcher::AgentRequest;
 use crate::store::collection::Collection;
+use crate::store::config_client::config_projection;
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::tools::exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 
 #[path = "task_hooks/records.rs"]
@@ -562,7 +562,7 @@ async fn load_fire_task_id(
         "load task hook fire receipt",
     )
     .await?;
-    let rows: Vec<TaskIdRow> = crate::graphql::rows(&response, "TriggerFire")?;
+    let rows: Vec<TaskIdRow> = crate::store::graphql::rows(&response, "TriggerFire")?;
     anyhow::ensure!(
         rows.len() <= 1,
         "request {request_id:?} has multiple Task fire receipts"
@@ -587,7 +587,7 @@ async fn load_trigger_task_id(
         "load task hook trigger",
     )
     .await?;
-    let rows: Vec<TaskIdRow> = crate::graphql::rows(&response, "Trigger")?;
+    let rows: Vec<TaskIdRow> = crate::store::graphql::rows(&response, "Trigger")?;
     anyhow::ensure!(
         rows.len() <= 1,
         "ambiguous Trigger {trigger_id:?} for {node_did:?}"
@@ -610,7 +610,7 @@ async fn load_task(node: &EmbeddedNode, node_did: &str, task_id: &str) -> Result
         "load task hooks",
     )
     .await?;
-    let rows: Vec<serde_json::Value> = crate::graphql::rows(&response, "Task")?;
+    let rows: Vec<serde_json::Value> = crate::store::graphql::rows(&response, "Task")?;
     anyhow::ensure!(
         rows.len() <= 1,
         "ambiguous Task {task_id:?} for {node_did:?}"

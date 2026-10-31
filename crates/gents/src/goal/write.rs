@@ -8,20 +8,25 @@ pub async fn set_goal(
     status: Option<GoalStatus>,
     token_budget: Option<Option<i64>>,
 ) -> Result<GoalDocument> {
-    crate::config_client::ConfigAccess::transact_local_write(node, None, "goal.set", move |txn| {
-        Box::pin(async move {
-            set_goal_in_txn(
-                txn,
-                node_did,
-                session_id,
-                objective,
-                status,
-                token_budget,
-                None,
-            )
-            .await
-        })
-    })
+    crate::store::config_client::ConfigAccess::transact_local_write(
+        node,
+        None,
+        "goal.set",
+        move |txn| {
+            Box::pin(async move {
+                set_goal_in_txn(
+                    txn,
+                    node_did,
+                    session_id,
+                    objective,
+                    status,
+                    token_budget,
+                    None,
+                )
+                .await
+            })
+        },
+    )
     .await
 }
 
@@ -79,7 +84,7 @@ pub async fn set_goal_auto_resume_from_access(
 }
 
 pub(crate) async fn pause_goal_for_interrupt_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
 ) -> Result<()> {
@@ -103,7 +108,7 @@ pub(crate) async fn pause_goal_for_interrupt_in_txn(
 }
 
 pub(super) async fn set_goal_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
     objective: Option<&str>,
@@ -268,9 +273,12 @@ pub async fn delete_goal(node: &std::sync::Arc<EmbeddedNode>, goal: &GoalDocumen
             delete_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, node_did: {{ _eq: "{node_did}" }} }}) {{ _docID }}
         }}"#
     );
-    let response =
-        crate::config_client::ConfigAccess::write_local_response(node, "goal.delete", &mutation)
-            .await?;
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
+        node,
+        "goal.delete",
+        &mutation,
+    )
+    .await?;
     Ok(response
         .data
         .as_ref()
@@ -287,7 +295,7 @@ pub async fn delete_goals_for_session(
     let session_id = escape_graphql_string(session_id);
     let node_did = &node_did;
     let session_id = &session_id;
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "goal.delete_for_session",

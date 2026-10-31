@@ -20,7 +20,7 @@ pub(crate) fn write_manifest_root(
 }
 
 fn write_root(root: &Path, manifest: &DesiredStateManifest, force: bool) -> anyhow::Result<()> {
-    let plan = gents::config_client::DesiredStateApplyPlan::from_pack_config(manifest)?;
+    let plan = gents::store::config_client::DesiredStateApplyPlan::from_pack_config(manifest)?;
     gents::documents::ConfigReferences::from_documents(
         &manifest.node.node_did,
         plan.documents()

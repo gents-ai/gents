@@ -102,7 +102,7 @@ async fn generated_schema_argument_repair_cases_drive_owned_loop() {
     let rows = tool_call_rows(&node).await;
     assert_eq!(rows.len(), cases.len());
     assert!(rows.iter().all(|row| row["lifecycle_state"] == "completed"));
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     for (index, case) in cases.iter().enumerate() {
         let row = rows
             .iter()

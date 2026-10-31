@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::{anyhow, bail, Result};
 use chrono::Utc;
 use gents::documents::ToolServiceRegistry;
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::{
     run_health_check_cycle, HealthCheckerOptions, McpHealthCheckService, McpPool, ServiceHealthMap,
 };
@@ -240,7 +240,7 @@ mod probe_scope_tests {
     #[tokio::test]
     async fn registry_probe_resolves_the_node_and_service_compound_key() -> Result<()> {
         let (core, _tempdir) = crate::tests::support::boot_core().await;
-        gents::config_client::ConfigAccess::write_local(
+        gents::store::config_client::ConfigAccess::write_local(
             &core.node_arc(),
             "test.mcp_probe_scope",
             r#"mutation {

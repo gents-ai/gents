@@ -2,11 +2,11 @@ use crate::cli::*;
 use crate::shared::ResolvedBackendConfig;
 use crate::{resolve_node_did, BackendResolutionMode};
 use anyhow::{Context, Result};
-use gents::config_client::{
+use gents::documents::{BackendAuth, InferenceBackend};
+use gents::store::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn, set_backend_rotation,
     BackendRotation, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::documents::{BackendAuth, InferenceBackend};
 use gents::{discover_backend_models, BackendProviderKind, Collection};
 use serde_json::json;
 
@@ -372,7 +372,7 @@ mod tests {
                 "provider_kind": kind, "endpoint": endpoint, "auth": auth,
             }))
             .unwrap();
-            gents::config_client::write_inference_backend_document(&access, &backend)
+            gents::store::config_client::write_inference_backend_document(&access, &backend)
                 .await
                 .unwrap();
         }
@@ -383,7 +383,7 @@ mod tests {
         access
             .transact_readonly("test.backend.pool.read", |txn| {
                 Box::pin(async move {
-                    gents::config_client::load_inference_backend_in_txn(txn, DID, backend_id)
+                    gents::store::config_client::load_inference_backend_in_txn(txn, DID, backend_id)
                         .await?
                         .context("backend missing")
                 })
@@ -440,7 +440,7 @@ mod tests {
             "auth": {"kind": "node_oauth", "account_ref": "pinned"},
         }))
         .unwrap();
-        gents::config_client::write_inference_backend_document(&access, &pinned)
+        gents::store::config_client::write_inference_backend_document(&access, &pinned)
             .await
             .unwrap();
         pool_output(&access, DID, "claude", BackendRotation::Single)

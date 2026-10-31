@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::{
     cli_tool, default_agent_id_for_node, default_inference_profile_id_for_agent,
     DocumentRuntimeOptions, Gents, InferenceBackend, NodeIdentity, ToolCeiling,
@@ -105,11 +105,11 @@ async fn seed_live_agent_documents(
     backend: &LiveBackendConfig,
     target_backend: Option<&LiveBackendConfig>,
 ) -> Result<LiveAgentDocs> {
-    use gents::config_client::{
+    use gents::documents::PackConfig;
+    use gents::store::config_client::{
         apply_desired_state_plan, load_inference_backend_in_txn, ConfigAccess,
         DesiredStateApplyPlan,
     };
-    use gents::documents::PackConfig;
     use serde_json::json;
     let inference = inference::LiveInferenceSettings::from_env()?;
     let agent_id = default_agent_id_for_node(node_did);

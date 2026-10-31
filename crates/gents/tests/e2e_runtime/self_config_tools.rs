@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
-use gents::config_client::{
-    apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyPlan,
-};
 use gents::documents::PackConfig;
 use gents::self_config::build_self_config_tools;
+use gents::store::config_client::{
+    apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyPlan,
+};
 use gents::tools::surface::{
     BashMode, FileToolMode, SelfConfigProcessCeiling, SelfConfigToolConfig,
 };

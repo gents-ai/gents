@@ -7,7 +7,7 @@ use super::validate::{
     validate_manifest, validate_prompt_tool_contracts, validate_task_goal_declarations,
 };
 use crate::desired_state::interpolate::interpolate_with;
-use gents::graphql::validate_collection_identifier;
+use gents::store::graphql::validate_collection_identifier;
 
 pub(super) fn validate_source_pack_path(path: &Path) -> Result<()> {
     anyhow::ensure!(

@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
-use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents::config_client::ConfigAccess;
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::session::origin::load_session;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -423,14 +423,10 @@ async fn snapshot(
         .unwrap_or(0);
     let status = SubagentFinishStatus::of(latest)
         .map(SubagentFinishStatus::wire_name)
-        .unwrap_or_else(
-            || match latest.lifecycle_state {
-                Some(RequestLifecycleState::Pending | RequestLifecycleState::Claimed) => {
-                    "initializing"
-                }
-                _ => "running",
-            },
-        );
+        .unwrap_or_else(|| match latest.lifecycle_state {
+            Some(RequestLifecycleState::Pending | RequestLifecycleState::Claimed) => "initializing",
+            _ => "running",
+        });
     let duration = if latest.is_terminal() || started == 0 {
         progress.duration_ms
     } else {
@@ -812,7 +808,7 @@ mod tests {
             ))
             .await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        gents::graphql::single_mutation_document(&response, &format!("create_{collection}"))
+        gents::store::graphql::single_mutation_document(&response, &format!("create_{collection}"))
             .unwrap()
             .and_then(|document| document["_docID"].as_str().map(str::to_owned))
             .expect("created doc id")

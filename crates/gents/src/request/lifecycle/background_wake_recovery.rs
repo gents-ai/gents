@@ -5,12 +5,12 @@ use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::config_client::ConfigApplyTxn;
-use crate::graphql::escape_graphql_string;
 use crate::request::lifecycle::materialize::{
     build_signed_request, ParentLink, RequestIdentity, RequestSigner, RequestSpec, RetryLink,
 };
 use crate::request::lifecycle::ExecutionOrigin;
+use crate::store::config_client::ConfigApplyTxn;
+use crate::store::graphql::escape_graphql_string;
 use crate::tools::background::completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
 
 use super::queue::{row_queue, RequestQueue};
@@ -117,7 +117,7 @@ async fn load_candidates(
     Vec<AgentRequestRow>,
 )> {
     let node_did = escape_graphql_string(node_did);
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &format!(
             r#"{{
@@ -242,10 +242,10 @@ async fn redrive_one(
 ) -> Result<RedriveOutcome> {
     let request_id = uuid::Uuid::new_v4().to_string();
     let request_id = &request_id;
-    crate::config_client::ConfigAccess::transact_local_idempotent(
+    crate::store::config_client::ConfigAccess::transact_local_idempotent(
         node,
         None,
-        crate::config_client::IdempotentTransactionRetry::Standard,
+        crate::store::config_client::IdempotentTransactionRetry::Standard,
         "lifecycle.background_wake_redrive",
         move |txn| {
             Box::pin(async move { redrive_in_transaction(txn, candidate, request_id).await })

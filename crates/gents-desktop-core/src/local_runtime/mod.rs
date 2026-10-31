@@ -49,7 +49,7 @@ impl OperatorIdentityInteraction {
     pub(crate) fn endpoint(
         self,
         record: &crate::client::PeerRecord,
-    ) -> Option<gents::config_client::GraphqlEndpoint> {
+    ) -> Option<gents::store::config_client::GraphqlEndpoint> {
         match self {
             Self::Allow => operator_endpoint(record),
             Self::Prevent => cached_operator_endpoint(record),
@@ -132,17 +132,17 @@ struct StoredInitConfig {
 /// writes fail with the node's authorization error.
 pub fn operator_endpoint(
     record: &crate::client::PeerRecord,
-) -> Option<gents::config_client::GraphqlEndpoint> {
+) -> Option<gents::store::config_client::GraphqlEndpoint> {
     let url = record.operator_graphql()?;
     Some(match load_operator_node_identity(record) {
-        Ok(()) => gents::config_client::GraphqlEndpoint::as_principal(url, &record.node_did),
+        Ok(()) => gents::store::config_client::GraphqlEndpoint::as_principal(url, &record.node_did),
         Err(error) => {
             tracing::warn!(
                 node_did = %record.node_did,
                 error = %format!("{error:#}"),
                 "runtime node identity key unavailable; using anonymous operator access"
             );
-            gents::config_client::GraphqlEndpoint::anonymous(url)
+            gents::store::config_client::GraphqlEndpoint::anonymous(url)
         }
     })
 }
@@ -152,15 +152,15 @@ pub fn operator_endpoint(
 /// otherwise DefraDB receives an anonymous request and enforces its read policy.
 pub fn cached_operator_endpoint(
     record: &crate::client::PeerRecord,
-) -> Option<gents::config_client::GraphqlEndpoint> {
+) -> Option<gents::store::config_client::GraphqlEndpoint> {
     let url = record.operator_graphql()?;
     Some(
         if gents::store::identity::can_mint_defradb_bearer(&record.node_did)
             && hosted_runtime_home(record).is_ok()
         {
-            gents::config_client::GraphqlEndpoint::as_principal(url, &record.node_did)
+            gents::store::config_client::GraphqlEndpoint::as_principal(url, &record.node_did)
         } else {
-            gents::config_client::GraphqlEndpoint::anonymous(url)
+            gents::store::config_client::GraphqlEndpoint::anonymous(url)
         },
     )
 }

@@ -15,7 +15,7 @@ pub async fn session_token_usage(
     node_did: &str,
     session_id: &str,
 ) -> Result<i64> {
-    crate::config_client::ConfigAccess::transact_local_readonly(
+    crate::store::config_client::ConfigAccess::transact_local_readonly(
         node,
         None,
         "goal.session_usage",
@@ -25,7 +25,7 @@ pub async fn session_token_usage(
 }
 
 pub(super) async fn session_token_usage_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
 ) -> Result<i64> {
@@ -34,7 +34,7 @@ pub(super) async fn session_token_usage_in_txn(
 }
 
 pub(crate) async fn session_token_usage_breakdown_in_txn(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    txn: &crate::store::config_client::ConfigApplyTxn<'_>,
     node_did: &str,
     session_id: &str,
 ) -> Result<SessionTokenUsage> {

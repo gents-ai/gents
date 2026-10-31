@@ -6,7 +6,7 @@ use super::{
     build_query, discovery_payload, introspection_query, parse_collection_schema, CollectionScope,
     DefraQueryParams,
 };
-use crate::config_client::ConfigRead;
+use crate::store::config_client::ConfigRead;
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]

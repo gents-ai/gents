@@ -412,7 +412,7 @@ async fn native_child_controls_and_usage_follow_physical_lineage() {
         );
     }
     let node = &service.config.node;
-    let did = gents::graphql::escape_graphql_string(&service.config.node_did);
+    let did = gents::store::graphql::escape_graphql_string(&service.config.node_did);
     let child = wait_for_child_request(node).await;
     let child_session = child.session_id.as_deref().unwrap();
     let child_process = wait_for_running_bash_handle(node.as_ref(), child_session).await;

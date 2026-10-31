@@ -1,7 +1,7 @@
 use super::support::*;
 use super::*;
-use crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET;
 use crate::runtime_status::{ReconcilePhase, RECONCILE_PHASE_EVENT_TARGET};
+use crate::store::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET;
 use crate::store::identity::NodeIdentity;
 use anyhow::Result;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -142,17 +142,19 @@ async fn write_documents(
     let documents = documents
         .into_iter()
         .map(
-            |(collection, value)| crate::config_client::DesiredStateApplyDocument {
+            |(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
                 collection,
                 add: value.clone(),
                 update: value,
             },
         )
         .collect();
-    let plan = crate::config_client::DesiredStateApplyPlan::new(documents).unwrap();
-    crate::config_client::ConfigAccess::transact_local_write(node, None, operation, |txn| {
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(documents).unwrap();
+    crate::store::config_client::ConfigAccess::transact_local_write(node, None, operation, |txn| {
         let plan = &plan;
-        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+        Box::pin(
+            async move { crate::store::config_client::apply_desired_state_plan(txn, plan).await },
+        )
     })
     .await
     .unwrap();
@@ -206,21 +208,23 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         "tools_id": format!("{}:tools", agent.default_agent_id()),
         "system_prompt": "updated prompt"
     });
-    let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
-        crate::config_client::DesiredStateApplyDocument {
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
             collection: crate::Collection::AgentContext,
             add: context.clone(),
             update: context,
         },
     ])
     .unwrap();
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.context.update",
         |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
         },
     )
     .await
@@ -281,16 +285,22 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         "a visible reconcile must quiesce instead of polling the full runtime view"
     );
 
-    let context_id =
-        crate::graphql::escape_graphql_string(&format!("{}:context", agent.default_agent_id()));
+    let context_id = crate::store::graphql::escape_graphql_string(&format!(
+        "{}:context",
+        agent.default_agent_id()
+    ));
     let mutation = format!(
         r#"mutation {{ update_AgentContext(
         filter: {{context_id: {{_eq: "{context_id}"}}}},
         input: {{display_name: "Retagged context"}}) {{context_id}} }}"#
     );
-    crate::config_client::ConfigAccess::write_local(&node, "test.context.metadata", &mutation)
-        .await
-        .unwrap();
+    crate::store::config_client::ConfigAccess::write_local(
+        &node,
+        "test.context.metadata",
+        &mutation,
+    )
+    .await
+    .unwrap();
     let repeated = tokio::time::timeout(PROPOSAL_TIMEOUT, proposal_rx.recv())
         .await
         .expect("metadata write must reach reconcile owner")
@@ -655,8 +665,8 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
         "host": {"files": {"mode": "ReadOnly"}}
     }))
     .unwrap();
-    crate::config_client::write_tools_document(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+    crate::store::config_client::write_tools_document(
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         &tools,
     )
     .await
@@ -843,7 +853,7 @@ async fn record_plugin_install(
         explicit: true,
     };
     crate::pack::record_plugin_store_change(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         node_did,
         plugin_home,
         &identity.coordinate,
@@ -864,8 +874,8 @@ async fn write_tools_naming_plugin(
         "integrations": {"plugins": [{"plugin": "fixture/list_files"}]},
     }))
     .unwrap();
-    crate::config_client::write_tools_document(
-        &crate::config_client::ConfigAccess::local(node.clone()),
+    crate::store::config_client::write_tools_document(
+        &crate::store::config_client::ConfigAccess::local(node.clone()),
         &tools,
     )
     .await

@@ -77,7 +77,7 @@ pub(crate) async fn close_request_rows(
 }
 
 pub(crate) async fn close_request_rows_on(
-    access: &gents::config_client::ConfigAccess,
+    access: &gents::store::config_client::ConfigAccess,
     seeds: Vec<AgentRequestRow>,
 ) -> Result<Vec<AgentRequestRow>> {
     close_request_rows_with(seeds, |query| {

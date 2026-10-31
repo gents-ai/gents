@@ -1,4 +1,4 @@
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use std::path::Path;
 use std::time::Duration;
 
@@ -6,7 +6,7 @@ use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use tokio::process::{Child, Command};
 
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents_protocol::row::{
     decode_node_readiness_snapshot, NodeReadinessRow, NodeReadinessSnapshot,
 };

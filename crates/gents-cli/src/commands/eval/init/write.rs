@@ -3,13 +3,13 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents::config_client::{
-    apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyPlan,
-};
 use gents::documents::{EvalDefinition, EvalSplit};
 use gents::eval::runner::embedded::EmbeddedHome;
 use gents::pack::{
     interpolate, is_valid_pack_name, load_pack_config, PackInstallOptions, PackManifest,
+};
+use gents::store::config_client::{
+    apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyPlan,
 };
 use gents::{Collection, ConfigAccess};
 use serde_json::json;

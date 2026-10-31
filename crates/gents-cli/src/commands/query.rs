@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-#[cfg(test)]
-use gents::config_client::GraphqlEndpoint;
 use gents::defra_query::{CollectionScope, DefraQueryParams};
+#[cfg(test)]
+use gents::store::config_client::GraphqlEndpoint;
 use serde_json::{json, Value};
 
 use crate::cli::args::QueryArgs;
@@ -14,7 +14,7 @@ pub(crate) async fn run_defra_query(
     scope: &CollectionScope,
 ) -> Result<Value> {
     gents::defra_query::execute_command(
-        &gents::config_client::ConfigAccess::Graphql(graphql.clone()),
+        &gents::store::config_client::ConfigAccess::Graphql(graphql.clone()),
         &params.clone().into(),
         scope,
     )
@@ -161,7 +161,9 @@ mod tests {
         assert!(scope.is_unrestricted(), "no --allow-collection means all");
 
         let error = run_defra_query(
-            &gents::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1:1/api/v0/graphql"),
+            &gents::store::config_client::GraphqlEndpoint::anonymous(
+                "http://127.0.0.1:1/api/v0/graphql",
+            ),
             &params,
             &scope,
         )
@@ -179,7 +181,9 @@ mod tests {
         assert!(params.is_discovery(), "a lone `*` is the discovery request");
 
         let error = run_defra_query(
-            &gents::config_client::GraphqlEndpoint::anonymous("http://127.0.0.1:1/api/v0/graphql"),
+            &gents::store::config_client::GraphqlEndpoint::anonymous(
+                "http://127.0.0.1:1/api/v0/graphql",
+            ),
             &params,
             &scope,
         )

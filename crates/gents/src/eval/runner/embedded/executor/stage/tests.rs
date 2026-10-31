@@ -11,10 +11,10 @@ use crate::eval::runner::embedded::observe::{
     classify_request_outcome, request_evidence_from_query_data,
 };
 use crate::eval::runner::executor::{CaptureResult, FixtureDocument};
-use crate::graphql::graphql_with_transaction_retry;
 use crate::request::lifecycle::{
     build_signed_request, ExecutionOrigin, RequestIdentity, RequestSigner, RequestSpec,
 };
+use crate::store::graphql::graphql_with_transaction_retry;
 use crate::{ConfigAccess, DocumentRuntimeOptions};
 use serde_json::json;
 use std::sync::Arc;

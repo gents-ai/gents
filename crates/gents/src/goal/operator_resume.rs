@@ -1,8 +1,8 @@
 use super::*;
-use crate::config_client::ConfigApplyTxn;
 use crate::request::admission::{verify_request_receipt_signature, SIGNED_REQUEST_FIELDS};
 use crate::request::lifecycle::materialize::{sign_request, RequestSigner};
 use crate::request::lifecycle::queue::{goal_continuation_identity, prepare_goal_continuation};
+use crate::store::config_client::ConfigApplyTxn;
 use crate::store::identity::NodeIdentity;
 use gents_protocol::row::AgentRequestRow;
 
@@ -53,7 +53,7 @@ async fn resume_goal_request_inner<'a>(
         crate::ConfigAccess::Local(local) => {
             let node = local.node();
             let did = ::identity::Did::new(identity.did().to_owned())?;
-            crate::config_client::ConfigAccess::transact_local_write(
+            crate::store::config_client::ConfigAccess::transact_local_write(
                 node,
                 Some(did),
                 "goal.resume_request",
@@ -171,7 +171,7 @@ async fn existing_resume_receipt_in_txn(
 
 #[derive(Debug, Clone, Serialize)]
 pub struct GoalResumeOnReceipt {
-    pub switch: Option<crate::config_client::SwitchReceipt>,
+    pub switch: Option<crate::store::config_client::SwitchReceipt>,
     pub resume: GoalResumeReceipt,
 }
 
@@ -229,7 +229,7 @@ where
         Some(profile) => {
             let receipt = async {
                 let slots = plugin_slots(&profile)?;
-                crate::config_client::switch_profile_account(
+                crate::store::config_client::switch_profile_account(
                     access,
                     node_did,
                     &profile,

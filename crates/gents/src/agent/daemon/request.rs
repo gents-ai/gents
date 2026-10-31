@@ -43,7 +43,7 @@ pub(super) async fn prepare_unless_interrupted<T>(
 
 pub(super) async fn flush_received_preparation_partial(context: &str) -> Result<()> {
     match tokio::time::timeout(
-        crate::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+        crate::store::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
         crate::inference::rendered_request::scope::flush_received_auxiliary_partial(),
     ).await {
         Ok(Ok(_)) => Ok(()),

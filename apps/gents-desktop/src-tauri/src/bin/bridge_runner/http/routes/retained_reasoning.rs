@@ -21,13 +21,13 @@ pub(super) async fn retained_provider_reasoning(
         OutputSource, PayloadRef, SourceClose, StreamPayload,
     };
 
-    let node = gents::graphql::escape_graphql_string(node_did);
-    let session = gents::graphql::escape_graphql_string(session_id);
-    let logical = gents::graphql::escape_graphql_string(request_id);
+    let node = gents::store::graphql::escape_graphql_string(node_did);
+    let session = gents::store::graphql::escape_graphql_string(session_id);
+    let logical = gents::store::graphql::escape_graphql_string(request_id);
     let request_query = format!(
         r#"{{ AgentRequest(filter: {{ node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, request_id: {{ _eq: "{logical}" }} }}, limit: 2) {{ _docID }} }}"#
     );
-    let response = gents::graphql::graphql_with_transaction_retry(
+    let response = gents::store::graphql::graphql_with_transaction_retry(
         core.node(),
         &request_query,
         "retained reasoning request lookup",
@@ -45,11 +45,11 @@ pub(super) async fn retained_provider_reasoning(
         .and_then(serde_json::Value::as_str)
         .context("request omitted physical _docID")?
         .to_owned();
-    let physical = gents::graphql::escape_graphql_string(&request_doc_id);
+    let physical = gents::store::graphql::escape_graphql_string(&request_doc_id);
     let segment_query = format!(
         r#"{{ AgentOutputSegment(filter: {{ node_did: {{ _eq: "{node}" }}, session_id: {{ _eq: "{session}" }}, request_doc_id: {{ _eq: "{physical}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
     );
-    let response = gents::graphql::graphql_with_transaction_retry(
+    let response = gents::store::graphql::graphql_with_transaction_retry(
         core.node(),
         &segment_query,
         "retained reasoning segment lookup",

@@ -10,7 +10,7 @@ use gents_protocol::node_readiness::{
 
 use crate::defra_node::{EmbeddedNode, P2PConfig};
 use crate::eval::runner::embedded::EmbeddedHome;
-use crate::graphql::{
+use crate::store::graphql::{
     decode_composite_commits, escape_graphql_string, graphql_with_transaction_retry,
     CompositeCommit,
 };

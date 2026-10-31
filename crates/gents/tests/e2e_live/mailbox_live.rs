@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::documents::{DatastoreTools, SurfaceToolDecl, Tools};
-use gents::graphql::escape_graphql_string;
 use gents::session::mailbox::{canonical_mailbox_write_decl, list_mailbox_items, MailboxStatus};
+use gents::store::graphql::escape_graphql_string;
 use gents::{Collection, DatastoreToolSurfaceDocument, NodeIdentity};
 
 use crate::support::fixtures::{configure_agent_tools, test_identity};

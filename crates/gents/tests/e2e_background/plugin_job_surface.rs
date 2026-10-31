@@ -91,7 +91,7 @@ async fn parent_request_doc_id(h: &JobHarness) -> String {
     let response = ConfigAccess::local(h.db.node.clone())
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}-parent" }} }}, limit: 1) {{ _docID }} }}"#,
-            gents::graphql::escape_graphql_string(&h.session_id)
+            gents::store::graphql::escape_graphql_string(&h.session_id)
         ))
         .await
         .expect("read the parent request");
@@ -103,7 +103,7 @@ async fn parent_request_doc_id(h: &JobHarness) -> String {
 
 async fn session_texts(h: &JobHarness) -> Vec<String> {
     let node = h.db.node.as_ref();
-    let session_id = gents::graphql::escape_graphql_string(&h.session_id);
+    let session_id = gents::store::graphql::escape_graphql_string(&h.session_id);
     let response = node
         .execute(&format!(
             r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, order: {{ sequence: ASC }}) {{ _docID node_did requester_did }} }}"#

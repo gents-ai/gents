@@ -1,6 +1,6 @@
-use crate::config_client::ConfigApplyTxn;
-use crate::graphql::escape_graphql_string;
 use crate::session::origin::SessionScope;
+use crate::store::config_client::ConfigApplyTxn;
+use crate::store::graphql::escape_graphql_string;
 use crate::tools::native::FileChanges;
 use anyhow::{ensure, Context, Result};
 
@@ -95,7 +95,7 @@ pub(super) async fn retain_inventory(
         &serde_json::json!({"input": input}),
     ).await?;
     ensure!(
-        crate::graphql::mutation_documents(&result, "create_ToolFileInventory")?
+        crate::store::graphql::mutation_documents(&result, "create_ToolFileInventory")?
             .is_some_and(|rows| rows.len() == 1 && rows[0]["_docID"].as_str().is_some()),
         "file inventory projection was not retained"
     );
@@ -104,7 +104,7 @@ pub(super) async fn retain_inventory(
         let mut failures = FAIL_NEXT.lock().unwrap();
         if let Some(index) = failures.iter().position(|id| id == tool_call_doc_id) {
             failures.remove(index);
-            return Err(crate::config_client::classified_conflict_for_test().into());
+            return Err(crate::store::config_client::classified_conflict_for_test().into());
         }
     }
     Ok(())

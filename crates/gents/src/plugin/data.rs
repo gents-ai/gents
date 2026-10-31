@@ -401,7 +401,7 @@ pub struct DataCaller {
 #[derive(Clone)]
 enum DataAccess {
     Node(Arc<crate::defra_node::EmbeddedNode>, ::identity::Did),
-    Operator(crate::config_client::ConfigAccess),
+    Operator(crate::store::config_client::ConfigAccess),
 }
 
 impl DataCaller {
@@ -412,7 +412,10 @@ impl DataCaller {
         })
     }
 
-    pub fn operator(access: crate::config_client::ConfigAccess, node_did: &str) -> Result<Self> {
+    pub fn operator(
+        access: crate::store::config_client::ConfigAccess,
+        node_did: &str,
+    ) -> Result<Self> {
         ::identity::Did::new(node_did.to_owned())?;
         Ok(Self {
             access: DataAccess::Operator(access),
@@ -546,7 +549,7 @@ impl Session {
         )?;
         let response = match &self.caller.access {
             DataAccess::Node(node, actor) => {
-                crate::config_client::ConfigAccess::transact_local_readonly(
+                crate::store::config_client::ConfigAccess::transact_local_readonly(
                     node,
                     Some(actor.clone()),
                     "plugin_data_calls.query",

@@ -1,6 +1,6 @@
-use crate::config_client::ConfigAccess;
 use crate::defra_node::EmbeddedNode;
 use crate::inference::llm::tool::{Tool, ToolDefinition};
+use crate::store::config_client::ConfigAccess;
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -201,7 +201,7 @@ impl SchemaTool {
                     );
                 }
                 if words[0] == "collection" {
-                    crate::config_client::preview_schema_install(&access, text("sdl")?).await.context("collection create installs new schemas or verifies matching schemas; use collection update to evolve an existing schema")?;
+                    crate::store::config_client::preview_schema_install(&access, text("sdl")?).await.context("collection create installs new schemas or verifies matching schemas; use collection update to evolve an existing schema")?;
                 }
                 Value::Object(existing)
             }
@@ -268,8 +268,9 @@ impl SchemaTool {
         let result = match words.as_slice() {
             ["collection", "create"] => {
                 let plan =
-                    crate::config_client::preview_schema_install(&access, text("sdl")?).await?;
-                let installed = crate::config_client::apply_schema_install(
+                    crate::store::config_client::preview_schema_install(&access, text("sdl")?)
+                        .await?;
+                let installed = crate::store::config_client::apply_schema_install(
                     &access,
                     text("sdl")?,
                     &plan.artifact_digest,
@@ -319,7 +320,7 @@ async fn find_version(access: &ConfigAccess, id: &str) -> Result<Value> {
 }
 
 fn ensure_application_collection(name: &str) -> Result<()> {
-    crate::graphql::validate_collection_identifier(name)?;
+    crate::store::graphql::validate_collection_identifier(name)?;
     ensure!(!crate::store::schema::migration::DEFAULT_REGISTRY.managed_names().any(|n| n==name), "{name} is a Gents-managed schema; its evolution belongs to the product migration registry. Use config for its documents");
     Ok(())
 }
@@ -485,7 +486,7 @@ impl SchemaTool {
                 let recovery = if error.is::<SchemaDigestMismatch>() {
                     json!({"tool":"schema","args":preview_call(args)})
                 } else if let Some(mismatch) =
-                    crate::config_client::schema_install_mismatch(error.as_ref())
+                    crate::store::config_client::schema_install_mismatch(error.as_ref())
                 {
                     json!({"tool":"schema","args":{"argv":["collection","get"],"target_id":mismatch.collection}})
                 } else if error.is::<SchemaSdlFailure>() {

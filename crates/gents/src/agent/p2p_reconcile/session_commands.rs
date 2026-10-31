@@ -9,7 +9,7 @@ use gents_protocol::session_input_edit::SessionInputEdit;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::NodeIdentity;
 
 #[derive(Deserialize)]
@@ -63,7 +63,7 @@ pub(super) async fn unanswered_commands(
         Sweep::Unanswered => (", receipt_json: { _eq: null }", "_docID"),
         Sweep::Unverified => ("", "_docID intent_json receipt_json"),
     };
-    let response = crate::graphql::graphql_with_transaction_retry(
+    let response = crate::store::graphql::graphql_with_transaction_retry(
         node,
         &format!(
             r#"{{ {collection}(filter: {{ node_did: {{ _eq: "{}" }}{receipt_filter} }}) {{ {fields} }} }}"#,
@@ -78,10 +78,12 @@ pub(super) async fn unanswered_commands(
             #[serde(rename = "_docID")]
             doc_id: String,
         }
-        return Ok(crate::graphql::rows::<DocIdRow>(&response, collection)?
-            .into_iter()
-            .map(|row| row.doc_id)
-            .collect());
+        return Ok(
+            crate::store::graphql::rows::<DocIdRow>(&response, collection)?
+                .into_iter()
+                .map(|row| row.doc_id)
+                .collect(),
+        );
     }
 
     #[derive(Deserialize)]
@@ -92,7 +94,7 @@ pub(super) async fn unanswered_commands(
         receipt_json: Option<String>,
     }
     let mut unanswered = Vec::new();
-    for row in crate::graphql::rows::<Row>(&response, collection)? {
+    for row in crate::store::graphql::rows::<Row>(&response, collection)? {
         let Some(intent) = row.intent_json.as_deref() else {
             if row.receipt_json.is_none() {
                 unanswered.push(row.doc_id);
@@ -299,7 +301,7 @@ mod notification_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_client::ConfigAccess;
+    use crate::store::config_client::ConfigAccess;
     use crate::store::identity::KeyIdentity;
     use gents_protocol::goal_control::{
         GoalOperation, GoalRevision, SessionGoalControl, SESSION_GOAL_CONTROL_VERSION,
@@ -346,7 +348,7 @@ mod tests {
                 let response = txn.execute_with_variables("mutation($input: AgentSessionGoalControlMutationInputArg!) { create_AgentSessionGoalControl(input: $input) { _docID } }",
                     &serde_json::json!({"input": {"command_id": id, "node_did":identity.did(),
                         "requester_did": identity.did(), "session_id":"session", "intent_json":intent}})).await?;
-                ids.push(crate::graphql::created_doc_id(&response, "AgentSessionGoalControl")?);
+                ids.push(crate::store::graphql::created_doc_id(&response, "AgentSessionGoalControl")?);
             }
             Ok::<_, anyhow::Error>(ids)
         })).await.unwrap();

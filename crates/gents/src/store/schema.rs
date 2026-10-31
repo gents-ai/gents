@@ -26,7 +26,7 @@ pub use gents_protocol::schemas::{
 };
 
 pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
-    if let Some(access) = crate::config_client::ConfigAccess::claimed_for_node(node) {
+    if let Some(access) = crate::store::config_client::ConfigAccess::claimed_for_node(node) {
         return Ok(access
             .run_local_owned(|node| async move {
                 crate::store::schema::migration::ensure_migrations_borrowed(node.as_ref()).await

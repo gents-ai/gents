@@ -10,10 +10,10 @@ use crate::agent::p2p_reconcile::{
     templates::admit_app_collections, ActiveEnrollment, EmbeddedRemoteP2pAdmin,
     EnrollmentOfferIssuer, GraphqlEnrollmentStore, RemoteP2pAdmin,
 };
-use crate::config_client::ConfigAccess;
 use crate::defra_node::EmbeddedNode;
-use crate::graphql::{escape_graphql_string, validate_collection_identifier};
 use crate::inference::llm::tool::{Tool, ToolDefinition};
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::{escape_graphql_string, validate_collection_identifier};
 use crate::tools::surface::EndpointScope;
 use crate::NodeIdentity;
 use gents_protocol::enrollment::EnrollmentDecisionKind;
@@ -646,7 +646,7 @@ impl P2pTool {
                 }
                 ensure!(self.mutate, "P2P mutations are disabled by the tool grant");
                 let fields = format!("{{peer_id: {}, node_did: {}, collections: {}, replicator_addresses: {}, template: \"app-collections\", source: {}}}",
-                    quoted(peer), quoted(actor.did()), crate::graphql::graphql_string_list_literal(collections.iter().map(String::as_str)), crate::graphql::graphql_string_list_literal([active.request.candidate_ticket.as_str()]), quoted(OVERLAY_SOURCE));
+                    quoted(peer), quoted(actor.did()), crate::store::graphql::graphql_string_list_literal(collections.iter().map(String::as_str)), crate::store::graphql::graphql_string_list_literal([active.request.candidate_ticket.as_str()]), quoted(OVERLAY_SOURCE));
                 let unchanged = self
                     .mutate_overlay(peer, Some(desired.clone()), Some(fields))
                     .await?;
@@ -689,8 +689,9 @@ impl P2pTool {
                     .sync_documents(collection, &ids, Some(Duration::from_secs(10)))
                     .await;
                 validate_collection_identifier(collection)?;
-                let doc_ids =
-                    crate::graphql::graphql_string_list_literal(ids.iter().map(String::as_str));
+                let doc_ids = crate::store::graphql::graphql_string_list_literal(
+                    ids.iter().map(String::as_str),
+                );
                 let observed = ConfigAccess::local(self.node.clone())
                     .execute(&format!("{{{collection}(docIDs: {doc_ids}) {{_docID}}}}"))
                     .await?;

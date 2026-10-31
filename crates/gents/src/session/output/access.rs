@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use super::super::canonical_rows::{request_output_segments_query, AGENT_OUTPUT_SEGMENT_FIELDS};
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::store::config_client::{ConfigAccess, ConfigApplyTxn};
 
 #[derive(Clone, Copy)]
 pub(super) enum ReadAccess<'a, 'txn> {
@@ -178,31 +178,32 @@ impl ReadAccess<'_, '_> {
     }
 
     pub(super) async fn query(self, document: &str, operation: &str) -> Result<serde_json::Value> {
-        let response = match self {
-            Self::Node(node) => {
-                crate::graphql::graphql_response_with_transaction_retry(node, document, operation)
+        let response =
+            match self {
+                Self::Node(node) => {
+                    crate::store::graphql::graphql_response_with_transaction_retry(
+                        node, document, operation,
+                    )
                     .await?
-            }
-            Self::Txn(txn) => return Ok(txn.execute(document).await?),
-            Self::Config(access) => {
-                let value = access.execute(document).await?;
-                anyhow::ensure!(
-                    value
-                        .get("errors")
-                        .is_none_or(|errors| errors.is_null()
+                }
+                Self::Txn(txn) => return Ok(txn.execute(document).await?),
+                Self::Config(access) => {
+                    let value = access.execute(document).await?;
+                    anyhow::ensure!(
+                        value.get("errors").is_none_or(|errors| errors.is_null()
                             || errors.as_array().is_some_and(Vec::is_empty)),
-                    "{operation} failed: {}",
-                    value["errors"]
-                );
-                return Ok(value);
-            }
-        };
+                        "{operation} failed: {}",
+                        value["errors"]
+                    );
+                    return Ok(value);
+                }
+            };
         anyhow::ensure!(
             !response.has_errors(),
             "{operation} failed: {:?}",
             response.errors
         );
-        Ok(crate::graphql::into_data_envelope(response.data))
+        Ok(crate::store::graphql::into_data_envelope(response.data))
     }
 }
 

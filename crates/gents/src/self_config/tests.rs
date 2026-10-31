@@ -119,7 +119,7 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
             .clone()
     })
     .collect::<Vec<_>>();
-    for target in crate::config_client::patch::ALL_SELF_CONFIG_TARGETS {
+    for target in crate::store::config_client::patch::ALL_SELF_CONFIG_TARGETS {
         let contract = all_contracts
             .iter()
             .find(|contract| contract["collection"] == target.collection_name())
@@ -157,8 +157,8 @@ fn help_contracts_conform_to_canonical_types_and_enum_vocabulary() {
         let canonical = canonical.iter().copied().collect::<BTreeSet<_>>();
         assert_eq!(described, canonical, "{name} nested help drift");
     };
-    use crate::config_client::canonical_struct_fields;
     use crate::documents::*;
+    use crate::store::config_client::canonical_struct_fields;
     assert_fields(
         &shapes["host"],
         canonical_struct_fields::<HostTools>().unwrap(),
@@ -474,7 +474,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
         .expect_err("a digest not returned by preview is rejected");
     assert!(rejected.to_string().contains("preview again"));
 
-    let owner = crate::graphql::escape_graphql_string(&node_did);
+    let owner = crate::store::graphql::escape_graphql_string(&node_did);
     let tagged = node
         .execute(&format!(
             r#"mutation {{ update_Agent(filter: {{node_did: {{_eq: "{owner}"}}, agent_id: {{_eq: "fixture-worker"}}}}, input: {{tags: ["gents:pack:plugin_documents_fixture", "user:favorite"]}}) {{_docID}} }}"#
@@ -537,7 +537,7 @@ async fn pack_install_uses_current_node_and_inference_chain() {
     let response = node
         .execute(&format!(
             "{{ PackInstallation(filter: {{node_did: {{_eq: \"{}\"}}}}) {{_docID}} }}",
-            crate::graphql::escape_graphql_string(&node_did)
+            crate::store::graphql::escape_graphql_string(&node_did)
         ))
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
@@ -790,7 +790,9 @@ async fn config_tools_cannot_self_grant_pack_install() {
 }
 
 async fn operator_replace_tools(node: &Arc<defra_node::EmbeddedNode>, tools: Value) {
-    use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use crate::store::config_client::{
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
         collection: crate::Collection::Tools,
         add: tools.clone(),
@@ -799,7 +801,9 @@ async fn operator_replace_tools(node: &Arc<defra_node::EmbeddedNode>, tools: Val
     .unwrap();
     ConfigAccess::transact_local_write(node, None, "test.operator_tools", |txn| {
         let plan = &plan;
-        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+        Box::pin(
+            async move { crate::store::config_client::apply_desired_state_plan(txn, plan).await },
+        )
     })
     .await
     .unwrap();
@@ -2059,7 +2063,7 @@ async fn outcome_schema_error_returns_an_executable_schema_recovery() {
     let identity = node_identity("schema-recovery");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "beh-test").await;
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     access
         .add_collection("type Delivery { body: String }")
         .await
@@ -3255,7 +3259,7 @@ async fn agent_create_commits_and_resolves_after_restart() {
         created[0].display_name,
         Some("Research Assistant".to_string())
     );
-    let context_id = crate::graphql::escape_graphql_string(
+    let context_id = crate::store::graphql::escape_graphql_string(
         created[0]
             .context_id
             .as_deref()
@@ -3630,8 +3634,8 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
     std::fs::create_dir_all(&selected).unwrap();
     std::fs::create_dir_all(&sibling).unwrap();
     let selected_text = selected.to_string_lossy();
-    let escaped = crate::graphql::escape_graphql_string(&selected_text);
-    crate::config_client::ConfigAccess::write_local(
+    let escaped = crate::store::graphql::escape_graphql_string(&selected_text);
+    crate::store::config_client::ConfigAccess::write_local(
         &node,
         "test.self_config.workspace_root",
         &format!(
@@ -3677,12 +3681,12 @@ async fn direct_tools_preview_and_apply_enforce_and_persist_canonical_workspace_
         .expect("apply admits the selected root");
     let tools_id = format!("{agent_id}:tools");
     let persisted: crate::documents::Tools =
-        crate::config_client::ConfigAccess::local(node.clone())
+        crate::store::config_client::ConfigAccess::local(node.clone())
             .transact_write("test.self_config.read_tools", |txn| {
                 let owner = owner.clone();
                 let tools_id = tools_id.clone();
                 Box::pin(async move {
-                    let value = crate::config_client::read_desired_state_document_in_txn(
+                    let value = crate::store::config_client::read_desired_state_document_in_txn(
                         txn,
                         crate::Collection::Tools,
                         &owner,
@@ -3752,12 +3756,12 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         .expect("original transcript fixture");
 
     let selected_text = selected_root.to_string_lossy().into_owned();
-    let escaped_selected = crate::graphql::escape_graphql_string(&selected_text);
+    let escaped_selected = crate::store::graphql::escape_graphql_string(&selected_text);
     let fixture_actor = ::identity::Did::new(owner.clone()).expect("fixture creator DID");
     let workspace_root_mutation = format!(
         r#"mutation {{ create_WorkspaceRoot(input: {{root_path:"{escaped_selected}", enabled:true}}) {{_docID}} }}"#
     );
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
         Some(fixture_actor.clone()),
         "test.agent.workspace_root",
@@ -3931,7 +3935,7 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         )
         .await
         .expect("run the persisted request through the production owned loop");
-        let escaped_request_doc = crate::graphql::escape_graphql_string(&request_doc_id);
+        let escaped_request_doc = crate::store::graphql::escape_graphql_string(&request_doc_id);
         let observed = node
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{escaped_request_doc}"}}}}) {{lifecycle_state failure_reason terminal_output}} }}"#
@@ -4101,7 +4105,7 @@ async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "acct").await;
     let core = SelfConfigCore::new(node.clone(), owner.clone(), "acct".into()).unwrap();
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let store = |kind: &str, auth: Value| {
         let backend: crate::InferenceBackend = serde_json::from_value(json!({
             "node_did": owner, "backend_id": "acct:backend", "name": "Test inference",
@@ -4110,7 +4114,7 @@ async fn backend_self_config_cannot_set_or_change_an_oauth_account() {
         .unwrap();
         let access = &access;
         async move {
-            crate::config_client::write_inference_backend_document(access, &backend)
+            crate::store::config_client::write_inference_backend_document(access, &backend)
                 .await
                 .unwrap();
         }
@@ -4173,7 +4177,7 @@ async fn account_choice_core(
     let identity = node_identity(agent);
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, agent).await;
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     for (id, kind, auth) in [
         (
             "chat-original",
@@ -4196,7 +4200,7 @@ async fn account_choice_core(
             "endpoint": "http://127.0.0.1:1/v1", "auth": auth,
         }))
         .unwrap();
-        crate::config_client::write_inference_backend_document(&access, &backend)
+        crate::store::config_client::write_inference_backend_document(&access, &backend)
             .await
             .unwrap();
     }
@@ -4211,12 +4215,12 @@ async fn account_choice_core(
             "model_name": "test-model",
         }))
         .unwrap();
-        crate::config_client::write_inference_profile_document(&access, &profile)
+        crate::store::config_client::write_inference_profile_document(&access, &profile)
             .await
             .unwrap();
     }
     let compaction = format!("{agent}:compaction");
-    let plan = crate::config_client::DesiredStateApplyPlan::new(
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(
         [
             (
                 crate::Collection::Compaction,
@@ -4245,7 +4249,7 @@ async fn account_choice_core(
             ]
         }))
         .map(
-            |(collection, value)| crate::config_client::DesiredStateApplyDocument {
+            |(collection, value)| crate::store::config_client::DesiredStateApplyDocument {
                 collection,
                 add: value.clone(),
                 update: value,
@@ -4254,13 +4258,15 @@ async fn account_choice_core(
         .collect(),
     )
     .unwrap();
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         &node,
         None,
         "test.compaction",
         |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
         },
     )
     .await
@@ -4321,14 +4327,14 @@ async fn agent_profile_pick_cannot_switch_account() {
 async fn grok_accounts_core(agent: &str, original: bool, g2: bool) -> SelfConfigCore {
     let (node, _, core) = account_choice_core(agent).await;
     let owner = core.node_did().to_owned();
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let backend: crate::InferenceBackend = serde_json::from_value(json!({
         "node_did": owner, "backend_id": "grok-g2", "name": "grok-g2",
         "provider_kind": "XaiGrokOAuth", "endpoint": "http://127.0.0.1:1/v1",
         "auth": {"kind":"node_oauth","account_ref":"g2"},
     }))
     .unwrap();
-    crate::config_client::write_inference_backend_document(&access, &backend)
+    crate::store::config_client::write_inference_backend_document(&access, &backend)
         .await
         .unwrap();
     let profile: crate::documents::InferenceProfile = serde_json::from_value(json!({
@@ -4336,7 +4342,7 @@ async fn grok_accounts_core(agent: &str, original: bool, g2: bool) -> SelfConfig
         "model_name": "test-model",
     }))
     .unwrap();
-    crate::config_client::write_inference_profile_document(&access, &profile)
+    crate::store::config_client::write_inference_profile_document(&access, &profile)
         .await
         .unwrap();
     let provider = crate::inference::clients::xai_grok::XAI_OAUTH_PROVIDER;
@@ -4570,18 +4576,25 @@ async fn agent_clone_inherited_compaction_cannot_switch_account() {
         .map(|account| {
             let value = json!({"node_did": owner, "agent_id": format!("src-{account}"),
                 "context_id": format!("ctx-{account}"), "inference_profile_id": "p-original"});
-            crate::config_client::DesiredStateApplyDocument {
+            crate::store::config_client::DesiredStateApplyDocument {
                 collection: crate::Collection::Agent,
                 add: value.clone(),
                 update: value,
             }
         })
         .collect();
-    let plan = crate::config_client::DesiredStateApplyPlan::new(sources).unwrap();
-    crate::config_client::ConfigAccess::transact_local_write(&node, None, "test.sources", |txn| {
-        let plan = &plan;
-        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
-    })
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(sources).unwrap();
+    crate::store::config_client::ConfigAccess::transact_local_write(
+        &node,
+        None,
+        "test.sources",
+        |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
+        },
+    )
     .await
     .unwrap();
     let before = crate::list_agents(&node, &owner).await.unwrap();
@@ -5230,7 +5243,7 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
     let identity = node_identity("backend-catalog-read");
     let owner = identity.did().to_string();
     crate::test_support::install_test_agent(&node, &owner, "setup").await;
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let backend = |id: &str, kind: &str, auth: Value| -> crate::documents::InferenceBackend {
         serde_json::from_value(json!({
             "node_did": owner, "backend_id": id, "name": id, "provider_kind": kind,
@@ -5255,7 +5268,7 @@ async fn backend_reads_expose_operator_catalogs_without_credentials_or_provider_
     }]))
     .unwrap();
     for document in [&claude, &keyed] {
-        crate::config_client::write_inference_backend_document(&access, document)
+        crate::store::config_client::write_inference_backend_document(&access, document)
             .await
             .unwrap();
     }
@@ -5368,7 +5381,7 @@ async fn pack_search_uses_registry_pagination_without_installing() {
             .await
             .is_err());
     }
-    let access = crate::config_client::ConfigAccess::local(node);
+    let access = crate::store::config_client::ConfigAccess::local(node);
     assert!(
         crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
             .await
@@ -5407,7 +5420,7 @@ async fn pack_documents_install_and_release_documents_dependencies() {
     ];
     args.extend(slots);
     config_call(&tools, &args).await.unwrap();
-    let access = crate::config_client::ConfigAccess::local(node);
+    let access = crate::store::config_client::ConfigAccess::local(node);
     let rows = access
         .execute(
             r#"{ PackInstallation(filter: {coordinate: {_eq: "fixture/dependee_fixture"}}) { explicit required_by } }"#,
@@ -5550,7 +5563,7 @@ async fn pack_document_installation_uses_existing_lifecycle() {
     .unwrap();
     assert_eq!(preview["ready"], true, "{preview}");
     let digest = preview["artifact_digest"].as_str().unwrap();
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     assert!(
         crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
             .await
@@ -5685,7 +5698,7 @@ async fn seed_account_view(
     upsert_oauth_credential(node, &account(Some("acct-l2"), "Work", false))
         .await
         .unwrap();
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     for (backend_id, kind, auth, endpoint) in [
         (
             "backend-usage-claude",
@@ -5715,7 +5728,7 @@ async fn seed_account_view(
             "auth": auth,
         }))
         .unwrap();
-        crate::config_client::write_inference_backend_document(&access, &backend)
+        crate::store::config_client::write_inference_backend_document(&access, &backend)
             .await
             .unwrap();
     }
@@ -5726,7 +5739,7 @@ async fn seed_account_view(
         "model_name": "model-x",
     }))
     .unwrap();
-    crate::config_client::write_inference_profile_document(&access, &profile)
+    crate::store::config_client::write_inference_profile_document(&access, &profile)
         .await
         .unwrap();
     crate::inference::usage_observation::record_usage(
@@ -6050,7 +6063,7 @@ async fn public_agent_management_previews_without_publishing_and_checks_signer()
     let identity = node_identity("public-agent-management");
     let owner = identity.did().to_owned();
     crate::test_support::install_test_agent(&node, &owner, "seed").await;
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let mut args = ConfigureAgentParams {
         action: "preview".into(),
         operation: Some("create".into()),
@@ -6118,7 +6131,7 @@ async fn public_agent_edit_preserves_disabled_state_and_rejects_clone_options() 
     let mut stored = crate::load_agent(&node, "target").await.unwrap().unwrap();
     stored.enabled = false;
     crate::upsert_agent(&node, &stored).await.unwrap();
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let mut args = ConfigureAgentParams {
         action: "preview".into(),
         operation: Some("edit".into()),
@@ -6222,7 +6235,7 @@ async fn public_prompt_edits_require_an_existing_unshared_context_without_partia
     let mut sibling = crate::load_agent(&node, "sibling").await.unwrap().unwrap();
     sibling.context_id = shared.context_id;
     crate::upsert_agent(&node, &sibling).await.unwrap();
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let query = "query { Agent(order: {agent_id: ASC}) { agent_id display_name context_id inference_profile_id enabled } AgentContext(order: {context_id: ASC}) { context_id display_name system_prompt tools_id } }";
     let before = access.execute(query).await.unwrap();
     for (target, expected) in [
@@ -6433,21 +6446,23 @@ async fn grant_pack_install_for_test(
     tools_id: &str,
 ) {
     let value = json!({"node_did":owner,"tools_id":tools_id,"self_config":{"enable_self_config":true,"enable_pack_install":true}});
-    let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
-        crate::config_client::DesiredStateApplyDocument {
+    let plan = crate::store::config_client::DesiredStateApplyPlan::new(vec![
+        crate::store::config_client::DesiredStateApplyDocument {
             collection: crate::Collection::Tools,
             add: value.clone(),
             update: value,
         },
     ])
     .unwrap();
-    crate::config_client::ConfigAccess::transact_local_write(
+    crate::store::config_client::ConfigAccess::transact_local_write(
         node,
         None,
         "test.operator_grant",
         |txn| {
             let plan = &plan;
-            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, plan).await
+            })
         },
     )
     .await
@@ -6503,7 +6518,7 @@ async fn model_clone_is_atomically_grant_bounded_but_operator_clone_is_not() {
     operator_args.display_name = StringUpdate::Set("Operator clone".into());
     let operator: Value = serde_json::from_str(
         &configure_agent(
-            &crate::config_client::ConfigAccess::local(node.clone()),
+            &crate::store::config_client::ConfigAccess::local(node.clone()),
             &owner,
             identity.as_ref(),
             &operator_args,
@@ -6661,11 +6676,11 @@ async fn native_pack_local_install_inspection_selection_and_digest_fence() {
     let readback = config_call(&tools, &["tools", "get"]).await.unwrap();
     assert!(readback.contains("fixture/native_echo"));
     let persisted: crate::documents::Tools =
-        crate::config_client::ConfigAccess::local(node.clone())
+        crate::store::config_client::ConfigAccess::local(node.clone())
             .transact_readonly("test.self_config.read_native_pack_tools", |txn| {
                 let did = did.clone();
                 Box::pin(async move {
-                    let value = crate::config_client::read_desired_state_document_in_txn(
+                    let value = crate::store::config_client::read_desired_state_document_in_txn(
                         txn,
                         crate::Collection::Tools,
                         &did,
@@ -6997,7 +7012,7 @@ async fn native_pack_local_path_installs_mixed_documents_pack_with_fenced_plugin
         refused.to_string().contains("operator authorization"),
         "{refused}"
     );
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     assert!(
         crate::pack::read_installed_pack(&access, &did, "fixture/documents_fixture")
             .await
@@ -7148,7 +7163,7 @@ async fn pack_tool_with_local_read(
 /// default. Binding to `p-default` is allowed; `p-other` selects another
 /// account and must be refused.
 async fn install_chat_account_fences(node: &Arc<EmbeddedNode>, owner: &str) {
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     for (id, auth) in [
         ("chat-original", json!({"kind":"node_oauth"})),
         (
@@ -7162,7 +7177,7 @@ async fn install_chat_account_fences(node: &Arc<EmbeddedNode>, owner: &str) {
             "auth": auth,
         }))
         .unwrap();
-        crate::config_client::write_inference_backend_document(&access, &backend)
+        crate::store::config_client::write_inference_backend_document(&access, &backend)
             .await
             .unwrap();
     }
@@ -7172,7 +7187,7 @@ async fn install_chat_account_fences(node: &Arc<EmbeddedNode>, owner: &str) {
             "model_name": "test-model",
         }))
         .unwrap();
-        crate::config_client::write_inference_profile_document(&access, &profile)
+        crate::store::config_client::write_inference_profile_document(&access, &profile)
             .await
             .unwrap();
     }
@@ -7217,7 +7232,7 @@ async fn pack_documents_install_refuses_non_default_account_inference_bindings()
     let (_home, plugins) = crate::test_support::home_with_fixture_pack("documents_fixture");
     let (node, did, tools) = pack_tool("documents-account-fence", plugins).await;
     install_chat_account_fences(&node, &did).await;
-    let access = crate::config_client::ConfigAccess::local(node.clone());
+    let access = crate::store::config_client::ConfigAccess::local(node.clone());
     let get: Value = serde_json::from_str(
         &config_call(&tools, &["pack", "get", "fixture/documents_fixture"])
             .await

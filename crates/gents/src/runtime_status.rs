@@ -7,9 +7,9 @@ use tokio::sync::{watch, Mutex};
 use tokio::time::MissedTickBehavior;
 
 use crate::agent::ProcessLifecycleState;
-use crate::graphql::escape_graphql_string;
 use crate::node_readiness_publisher::{NodeReadinessPublisherHandle, NodeReadinessPublisherOwner};
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
+use crate::store::graphql::escape_graphql_string;
 
 /// Reconcile-phase transitions are only observable through this event stream:
 /// `NodeRuntime.reconcile_phase` holds only the phase the runtime is in now.
@@ -388,7 +388,7 @@ async fn upsert_runtime_status(
             ) {{ _docID }}
         }}"#,
     );
-    let response = crate::config_client::ConfigAccess::write_local_response(
+    let response = crate::store::config_client::ConfigAccess::write_local_response(
         node,
         "upsert_runtime_status",
         &mutation,

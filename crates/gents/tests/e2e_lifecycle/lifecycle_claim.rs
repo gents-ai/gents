@@ -302,7 +302,7 @@ async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
     let invalid_deadline = "not-a-deadline";
-    let escaped_session_id = gents::graphql::escape_graphql_string(&session_id);
+    let escaped_session_id = gents::store::graphql::escape_graphql_string(&session_id);
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{

@@ -1,4 +1,4 @@
-use gents::config_client::GraphqlEndpoint;
+use gents::store::config_client::GraphqlEndpoint;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
@@ -6,7 +6,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents::{documents::skills::prompt_slash_skill_selection, graphql::escape_graphql_string};
+use gents::{
+    documents::skills::prompt_slash_skill_selection, store::graphql::escape_graphql_string,
+};
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::graphql::GraphqlRequestOptions;
 use gents_protocol::request_admission::AgentRequestCreate;
@@ -606,7 +608,7 @@ async fn read_submitted_receipt(
         (!create.requester_did.is_empty()).then_some(create.requester_did.as_str()),
     );
     let logical = escape_graphql_string(&create.request_id);
-    let response = gents::config_client::query_graphql_with_options(
+    let response = gents::store::config_client::query_graphql_with_options(
         graphql,
         &format!(
             "{{AgentRequest(filter:{{{scope},request_id:{{_eq:\"{logical}\"}}}}){{{}}}}}",
@@ -646,7 +648,7 @@ async fn resolve_request_agent_id(
     node_did: &str,
     requested: Option<&str>,
 ) -> Result<String> {
-    let escaped_node_did = gents::graphql::escape_graphql_string(node_did);
+    let escaped_node_did = gents::store::graphql::escape_graphql_string(node_did);
     let response = post_graphql(
         graphql,
         &format!(
@@ -1197,7 +1199,7 @@ mod tests {
         Json, Router,
     };
     use futures_util::stream;
-    use gents::config_client::GraphqlEndpoint;
+    use gents::store::config_client::GraphqlEndpoint;
     use gents_protocol::row::AgentRequestRow;
     use serde_json::{json, Value};
     use std::collections::BTreeSet;
@@ -1280,7 +1282,7 @@ mod tests {
             }
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let endpoint = gents::config_client::GraphqlEndpoint::anonymous(format!(
+        let endpoint = gents::store::config_client::GraphqlEndpoint::anonymous(format!(
             "http://{}/graphql",
             listener.local_addr()?
         ));
@@ -1421,7 +1423,7 @@ mod tests {
         let (prepared, receipt) = stable_test_prepared_request().await;
         *state.receipt.lock().unwrap() = receipt;
         let submitted = submit_prepared_agent_request_committed(
-            &gents::config_client::GraphqlEndpoint::anonymous(format!("http://{address}/")),
+            &gents::store::config_client::GraphqlEndpoint::anonymous(format!("http://{address}/")),
             &prepared,
         )
         .await
@@ -1457,7 +1459,7 @@ mod tests {
         let (prepared, receipt) = stable_test_prepared_request().await;
         *state.receipt.lock().unwrap() = receipt;
         let submitted = submit_prepared_agent_request_committed(
-            &gents::config_client::GraphqlEndpoint::anonymous(format!("http://{address}/")),
+            &gents::store::config_client::GraphqlEndpoint::anonymous(format!("http://{address}/")),
             &prepared,
         )
         .await
@@ -1486,7 +1488,7 @@ mod tests {
             .insert(prepared.create.request_id.clone());
         *state.receipt.lock().unwrap() = receipt;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = gents::config_client::GraphqlEndpoint::anonymous(format!(
+        let endpoint = gents::store::config_client::GraphqlEndpoint::anonymous(format!(
             "http://{}/",
             listener.local_addr().unwrap()
         ));

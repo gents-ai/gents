@@ -5,11 +5,11 @@ use anyhow::{Context, Result};
 
 use super::documents::inference_binding;
 use super::{refused, CellRequest, CellSource, FrozenCell, RunRequest};
-use crate::config_client::ConfigAccess;
 use crate::documents::PackConfig;
 use crate::eval::runner::executor::Isolation;
 use crate::eval::{CellSpec, SubjectRef};
 use crate::pack::{declared_paths, digest_declared_assets, PackInstallOptions, PackManifest};
+use crate::store::config_client::ConfigAccess;
 use crate::tools::surface::BashMode;
 
 pub(crate) struct LoadedPack {

@@ -75,8 +75,8 @@ pub async fn wait_for_source_blocked(
     node: &str,
     session: &str,
 ) -> Result<Value> {
-    let node = gents::graphql::escape_graphql_string(node);
-    let session = gents::graphql::escape_graphql_string(session);
+    let node = gents::store::graphql::escape_graphql_string(node);
+    let session = gents::store::graphql::escape_graphql_string(session);
     let query = format!(
         r#"{{
             Goal(filter: {{node_did: {{_eq: "{node}"}}, session_id: {{_eq: "{session}"}}}}) {{ {} }}
@@ -152,11 +152,11 @@ pub async fn verify(
 ) -> Result<Value> {
     let query = format!(
         r#"{{ AgentRequest(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, purpose: {{_eq: "normal"}}}}) {{ {} }} Goal(filter: {{node_did: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}}}) {{ {} }} }}"#,
-        gents::graphql::escape_graphql_string(node),
-        gents::graphql::escape_graphql_string(session),
+        gents::store::graphql::escape_graphql_string(node),
+        gents::store::graphql::escape_graphql_string(session),
         gents::SIGNED_REQUEST_FIELDS,
-        gents::graphql::escape_graphql_string(node),
-        gents::graphql::escape_graphql_string(session),
+        gents::store::graphql::escape_graphql_string(node),
+        gents::store::graphql::escape_graphql_string(session),
         gents::goal::GOAL_FIELDS,
     );
     let value = tokio::time::timeout(Duration::from_secs(30), async {

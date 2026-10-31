@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use gents::{
     build_run_timeline, Gents, NodeIdentity, RunTimeline, RunTimelineRows,
     TimelineInferenceCallRow, TimelineRequestRow, ToolCeiling,
@@ -200,7 +200,7 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
             .data
             .as_ref()
             .and_then(|data| data.get("update_AgentRequest"))
-            .is_some_and(gents::graphql::response_has_documents),
+            .is_some_and(gents::store::graphql::response_has_documents),
         "observed execution lease must be expired by the fixture"
     );
 
@@ -781,7 +781,9 @@ async fn upsert_retry_backend(
     endpoint: &str,
     max_concurrent: i64,
 ) {
-    use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use gents::store::config_client::{
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
     gents::ensure_node(node, owner).await.unwrap();
     let value = serde_json::json!({"node_did":owner,"backend_id":RETRY_BACKEND_ID,"name":RETRY_BACKEND_ID,"provider_kind":"OpenAiCompatible","openai_wire_api":"chat_completions","endpoint":endpoint,"auth":{"kind":"unauthenticated"},"max_concurrent":max_concurrent,"max_queue_depth":100});
     let profile_id = format!("{RETRY_AGENT_ID}:inference");
@@ -804,7 +806,9 @@ async fn upsert_retry_backend(
     .unwrap();
     ConfigAccess::transact_local_write(node, None, "test.install_provider_backend", |txn| {
         let plan = &plan;
-        Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
+        Box::pin(
+            async move { gents::store::config_client::apply_desired_state_plan(txn, plan).await },
+        )
     })
     .await
     .unwrap();

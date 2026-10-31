@@ -3,8 +3,8 @@ use crate::agent::p2p_reconcile::file_image_hydration::{
     authorize_inventory_image_read, inventory_image_entry, select_inventory_file_images,
     InventoryImagePageObservation, InventoryImageReadObservation,
 };
-use crate::config_client::ConfigApplyTxn;
 use crate::file_inventory::delivery::load_prepared_in_txn;
+use crate::store::config_client::ConfigApplyTxn;
 use crate::tools::call::lifecycle::load_tool_file_change_observation_in_txn;
 
 struct SelectedInventoryImage {

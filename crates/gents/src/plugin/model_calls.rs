@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use tokio::sync::Semaphore;
 
-use crate::config_client::ConfigAccess;
 use crate::documents::{InferenceBackend, InferenceProfile};
 use crate::openai_wire::OpenAiWireApi;
+use crate::store::config_client::ConfigAccess;
 use crate::Collection;
 
 pub const MAX_REQUESTS_PER_ROUND: usize = 64;
@@ -73,7 +73,7 @@ where
                 .transact_readonly("plugin.model_endpoint", |txn| {
                     Box::pin(async move {
                         let profile: InferenceProfile =
-                            crate::config_client::read_desired_state_record_in_txn(
+                            crate::store::config_client::read_desired_state_record_in_txn(
                                 txn,
                                 Collection::InferenceProfile,
                                 owner,
@@ -86,7 +86,7 @@ where
                                 format!("the inference profile {profile_id:?} no longer exists")
                             })?;
                         let backend: InferenceBackend =
-                            crate::config_client::read_desired_state_record_in_txn(
+                            crate::store::config_client::read_desired_state_record_in_txn(
                                 txn,
                                 Collection::InferenceBackend,
                                 owner,

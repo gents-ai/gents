@@ -7,8 +7,8 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
 
 use crate::agent::loop_stream::TaggedMessage;
-use crate::config_client::ConfigAccess;
-use crate::graphql::{escape_graphql_string, graphql_string_list_literal};
+use crate::store::config_client::ConfigAccess;
+use crate::store::graphql::{escape_graphql_string, graphql_string_list_literal};
 
 fn current_keys(claimed: &[String], acknowledged: &[String]) -> Vec<String> {
     let acknowledged = acknowledged.iter().collect::<BTreeSet<_>>();

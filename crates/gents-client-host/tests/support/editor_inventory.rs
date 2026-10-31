@@ -1,6 +1,6 @@
 use super::{editor_review, fake_llm, Attachment, ChatAction};
 use anyhow::{ensure, Context, Result};
-use gents::{graphql::escape_graphql_string, ConfigAccess};
+use gents::{store::graphql::escape_graphql_string, ConfigAccess};
 use gents_protocol::file_image_hydration::FileImageDemand;
 use gents_protocol::file_inventory::{FileInventoryObservation, FileInventoryReadAction};
 use gents_protocol::request_lifecycle::RequestLifecycleState;

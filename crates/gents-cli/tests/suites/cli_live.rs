@@ -1390,7 +1390,7 @@ async fn live_cli_steering_edits_reorders_and_removes_pending_messages() -> Resu
         "harness: the held request must complete"
     );
 
-    let access = gents::config_client::ConfigAccess::Graphql(
+    let access = gents::store::config_client::ConfigAccess::Graphql(
         crate::support::graphql::served_endpoint(&graphql),
     );
     let captures = captures_for(&active_request_id).await?;

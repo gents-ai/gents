@@ -148,7 +148,7 @@ mod tests {
             gents::ConfigAccess::transact_local_write(&node, None, "catalog.fixture", |txn| {
                 let (did, agent, refs) = (did.clone(), agent.clone(), refs.clone());
                 Box::pin(async move {
-                    use gents::config_client::{
+                    use gents::store::config_client::{
                         apply_desired_state_plan, read_desired_state_record_in_txn as read,
                         DesiredStateApplyDocument, DesiredStateApplyPlan,
                     };

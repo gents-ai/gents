@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use serde::Deserialize;
 
-use crate::graphql::escape_graphql_string;
+use crate::store::graphql::escape_graphql_string;
 
 use super::super::graphql_helpers::graphql_string_list_literal;
 use super::super::templates::{decode_pairing_filters, PairingFilters};

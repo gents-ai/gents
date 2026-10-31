@@ -95,7 +95,8 @@ async fn delegate_streams_updates_live_before_the_response() {
                 assert_eq!(rows.len(), 1, "live request identity must be exact");
                 let request: gents_protocol::row::AgentRequestRow =
                     serde_json::from_value(row.clone()).unwrap();
-                let escaped_request = gents::graphql::escape_graphql_string(&request.request_id);
+                let escaped_request =
+                    gents::store::graphql::escape_graphql_string(&request.request_id);
                 let message_key =
                     gents::session::sequence_message_key(&node_did, "s-live", Some(&node_did), 1);
                 let message_doc_id = seed_canonical_assistant_message(
@@ -123,7 +124,8 @@ async fn delegate_streams_updates_live_before_the_response() {
                         }}"#
                 );
                 let response = node_for_seed.execute(&mutation).await;
-                gents::graphql::ensure_no_errors(&response, "terminalize").expect("terminalize");
+                gents::store::graphql::ensure_no_errors(&response, "terminalize")
+                    .expect("terminalize");
                 return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;

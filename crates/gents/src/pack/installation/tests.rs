@@ -87,16 +87,19 @@ async fn install(
 }
 
 async fn edit_tools(access: &ConfigAccess, id: &str, name: &str) {
-    let edit = crate::config_client::DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
-        collection: Collection::Tools,
-        add: json!({"tools_id": id, "display_name": name, "node_did": OWNER}),
-        update: json!({"tools_id": id, "display_name": name, "node_did": OWNER}),
-    }])
-    .unwrap();
+    let edit =
+        crate::store::config_client::DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: Collection::Tools,
+            add: json!({"tools_id": id, "display_name": name, "node_did": OWNER}),
+            update: json!({"tools_id": id, "display_name": name, "node_did": OWNER}),
+        }])
+        .unwrap();
     access
         .transact_write("test.edit", |txn| {
             let edit = &edit;
-            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, edit).await })
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, edit).await
+            })
         })
         .await
         .unwrap();
@@ -324,7 +327,7 @@ async fn plugin_store_notification_lost_commit_receipt_is_unconfirmed() {
     let (node, access) = dependency_fixture().await;
     let pack = identity("1");
     let (result, fired) =
-        crate::config_client::ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
+        crate::store::config_client::ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
             Some("pack.record_plugin_store"),
             record_plugin_store_change(&access, OWNER, home.path(), &pack.coordinate, Some(&pack)),
         )
@@ -1067,7 +1070,7 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
         add: value.clone(),
         update: value,
     };
-    let seed = crate::config_client::DesiredStateApplyPlan::new(vec![
+    let seed = crate::store::config_client::DesiredStateApplyPlan::new(vec![
         home(
             Collection::InferenceBackend,
             json!({"node_did":OWNER,"backend_id":"backend","name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:8000/v1","auth":{"kind":"unauthenticated"}}),
@@ -1089,7 +1092,9 @@ async fn installing_a_pack_keeps_the_users_default_behavior() {
     access
         .transact_write("test.seed", |txn| {
             let seed = &seed;
-            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, seed).await })
+            Box::pin(async move {
+                crate::store::config_client::apply_desired_state_plan(txn, seed).await
+            })
         })
         .await
         .unwrap();
@@ -3382,7 +3387,7 @@ async fn committed_ack_timeout_retains_staged_plugin_records() {
         .unwrap();
     let reached = Arc::new(tokio::sync::Notify::new());
     let mut write = Box::pin(
-        crate::config_client::ConfigApplyTxn::with_embedded_commit_ack_pause(
+        crate::store::config_client::ConfigApplyTxn::with_embedded_commit_ack_pause(
             reached.clone(),
             access.transact_write_with_finality("test.pack.ack_timeout", |txn| {
                 Box::pin(async move {
@@ -3400,7 +3405,8 @@ async fn committed_ack_timeout_retains_staged_plugin_records() {
         result = &mut write => panic!("commit did not reach acknowledgement pause: {result:?}"),
     }
     tokio::time::pause();
-    tokio::time::advance(crate::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT).await;
+    tokio::time::advance(crate::store::config_client::EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT)
+        .await;
     tokio::time::resume();
     let error = write.await.unwrap_err();
     let cases = tokio::task::spawn_blocking(|| {

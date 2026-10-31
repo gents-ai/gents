@@ -1,7 +1,7 @@
 use super::ops::{read_owned_doc, AgentAnchor, SelfConfigCore, EFFECT_TIMING_NOTE};
-use crate::config_client::patch::SelfConfigTarget;
-use crate::config_client::{config_projection, ConfigAccess, ConfigApplyTxn};
-use crate::graphql::escape_graphql_string;
+use crate::store::config_client::patch::SelfConfigTarget;
+use crate::store::config_client::{config_projection, ConfigAccess, ConfigApplyTxn};
+use crate::store::graphql::escape_graphql_string;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
@@ -165,13 +165,14 @@ impl SelfConfigCore {
         if let Some(ids) = anchor.context.get("skill_ids").and_then(Value::as_array) {
             for id in ids {
                 let id = id.as_str().context("skill ID must be a string")?;
-                if let Some((_, skill)) = crate::config_client::read_desired_state_record_in_txn(
-                    txn,
-                    crate::Collection::Skill,
-                    self.node_did(),
-                    id,
-                )
-                .await?
+                if let Some((_, skill)) =
+                    crate::store::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Skill,
+                        self.node_did(),
+                        id,
+                    )
+                    .await?
                 {
                     skills.push(skill);
                 }

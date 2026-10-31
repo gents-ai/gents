@@ -1,8 +1,8 @@
 use super::contract_tests::{persist_command, receipt};
 use super::*;
 use crate::agent::p2p_reconcile::session_goal_control::process_command_at;
-use crate::config_client::ConfigAccess;
 use crate::goal::operator_resume::support::{execute, Fixture, SESSION};
+use crate::store::config_client::ConfigAccess;
 use gents_protocol::goal_control::{GoalRevision, SESSION_GOAL_CONTROL_VERSION};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -96,7 +96,7 @@ impl Driver {
             .await
             .unwrap()
             .unwrap();
-        let current = crate::graphql::newest_document_composite_commit(
+        let current = crate::store::graphql::newest_document_composite_commit(
             &fixture.node,
             &fixture.goal.doc_id,
             "test.goal_receipt_revision",
@@ -204,7 +204,7 @@ impl Driver {
         if let Some(previous) = previous {
             assert_eq!(result, previous, "recorded receipts are read-only");
         }
-        let current = crate::graphql::newest_document_composite_commit(
+        let current = crate::store::graphql::newest_document_composite_commit(
             &self.fixture.node,
             &self.fixture.goal.doc_id,
             "test.goal_receipt_after",
@@ -250,7 +250,7 @@ impl Driver {
             goal.doc_id, self.fixture.goal.doc_id,
             "{name}: goal identity"
         );
-        let current = crate::graphql::newest_document_composite_commit(
+        let current = crate::store::graphql::newest_document_composite_commit(
             &self.fixture.node,
             &goal.doc_id,
             "test.goal_receipt_observe",

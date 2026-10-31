@@ -7,7 +7,7 @@ use super::super::cli_process::path_arg;
 use super::super::server::spawn_server_with_args_and_env;
 use super::manifest::{PackSeed, ScenarioManifest};
 use super::validate::tool_package_needs_root;
-use gents::graphql::validate_collection_identifier;
+use gents::store::graphql::validate_collection_identifier;
 
 pub(super) struct DependencyInstall<'a> {
     pub(super) bin: &'a Path,
@@ -119,10 +119,10 @@ pub(super) fn resolve_pack_tool_root(
 
 pub(super) fn seed_mutation(seed: &PackSeed, job_id: &str, prompt: &str) -> Result<String> {
     validate_collection_identifier(&seed.collection)?;
-    gents::graphql::validate_graphql_name(&seed.job_id_field)?;
-    gents::graphql::validate_graphql_name(&seed.prompt_field)?;
+    gents::store::graphql::validate_graphql_name(&seed.job_id_field)?;
+    gents::store::graphql::validate_graphql_name(&seed.prompt_field)?;
     for key in seed.fields.keys() {
-        gents::graphql::validate_graphql_name(key)?;
+        gents::store::graphql::validate_graphql_name(key)?;
     }
     let mut fields: serde_json::Map<String, serde_json::Value> = seed
         .fields

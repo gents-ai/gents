@@ -8,13 +8,13 @@ use tokio::sync::watch;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use crate::request::lifecycle::{
     task_goal_session_title, task_session_title,
     write_pending_agent_request_with_lineage_workspace_and_conversation_title, ExecutionOrigin,
     TriggerLineage, WorkspaceLineage,
 };
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ResolvedTask};
+use crate::store::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use crate::triggers::engine::{MaterializerHandle, TriggerKind};
 
 pub(crate) struct ProductionMaterializer {
@@ -484,7 +484,7 @@ impl MaterializerHandle for ProductionMaterializer {
         let trigger_id = trigger_id.to_owned();
         let excluded = excluded_request_id.map(str::to_owned);
         Box::pin(async move {
-            crate::config_client::ConfigAccess::transact_local_write(
+            crate::store::config_client::ConfigAccess::transact_local_write(
                 &node,
                 None,
                 "trigger.supersede_requests",
@@ -511,7 +511,7 @@ impl MaterializerHandle for ProductionMaterializer {
         let identity = identity.clone();
         Box::pin(async move {
             let key = crate::triggers::engine::durable::fire_key(&identity);
-            crate::config_client::ConfigAccess::transact_local_readonly(
+            crate::store::config_client::ConfigAccess::transact_local_readonly(
                 &self.node, Some(self.runtime_actor()?), "trigger.recover_admitted_fire",
                 |txn| { let key = key.clone(); let identity = identity.clone(); Box::pin(async move {
                     let result = txn.execute(&format!(

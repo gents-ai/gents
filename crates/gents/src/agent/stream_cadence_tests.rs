@@ -119,7 +119,7 @@ async fn persisted(
     let result = node
         .execute(&format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
-            crate::graphql::escape_graphql_string(request_doc_id)
+            crate::store::graphql::escape_graphql_string(request_doc_id)
         ))
         .await;
     assert!(!result.has_errors(), "{:?}", result.errors);

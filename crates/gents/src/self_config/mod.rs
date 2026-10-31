@@ -47,9 +47,9 @@ use std::sync::Arc;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 
-use crate::config_client::patch::{SelfConfigPatch, SelfConfigTarget};
-use crate::graphql::escape_graphql_string;
 use crate::inference::llm::tool::{Tool, ToolDefinition, ToolDyn};
+use crate::store::config_client::patch::{SelfConfigPatch, SelfConfigTarget};
+use crate::store::graphql::escape_graphql_string;
 use crate::tools::surface::presets::{builtin_preset_names, preset_fields};
 use crate::tools::surface::SelfConfigToolConfig;
 use crate::NodeIdentity;

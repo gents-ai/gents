@@ -968,7 +968,7 @@ mod tests {
             let mut input = service.clone();
             input[field] = value;
             assert!(
-                gents::config_client::config_projection(
+                gents::store::config_client::config_projection(
                     gents::Collection::ToolServiceRegistry,
                     Some(&input)
                 )
@@ -981,7 +981,7 @@ mod tests {
     #[test]
     fn canonical_service_import_preserves_optional_endpoint_and_exact_values() {
         let input = serde_json::json!({"node_did":"owner","service_id":"mcp","hostname":"host","mcp_path":null});
-        let projected = gents::config_client::config_projection(
+        let projected = gents::store::config_client::config_projection(
             gents::Collection::ToolServiceRegistry,
             Some(&input),
         )
@@ -994,7 +994,7 @@ mod tests {
         assert_eq!(projected["node_did"], "owner");
         let mut missing_owner = input;
         missing_owner.as_object_mut().unwrap().remove("node_did");
-        assert!(gents::config_client::config_projection(
+        assert!(gents::store::config_client::config_projection(
             gents::Collection::ToolServiceRegistry,
             Some(&missing_owner)
         )

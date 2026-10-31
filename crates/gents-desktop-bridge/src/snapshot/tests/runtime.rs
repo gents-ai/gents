@@ -460,7 +460,7 @@ async fn fleet_snapshot_verifies_indexed_starters_once_per_evidence() {
         )
         .await;
     }
-    let access = gents::config_client::ConfigAccess::local(core.node_arc());
+    let access = gents::store::config_client::ConfigAccess::local(core.node_arc());
     let load = |session_id: &'static str| {
         let access = access.clone();
         async move {
@@ -578,11 +578,11 @@ async fn recorded_summary_starters_follow_the_starter_verification_model() {
     use gents::NodeIdentity;
     struct SessionRead(serde_json::Value, std::sync::atomic::AtomicUsize);
     #[async_trait::async_trait]
-    impl gents::config_client::ConfigRead for SessionRead {
+    impl gents::store::config_client::ConfigRead for SessionRead {
         async fn execute_read(
             &self,
             query: &str,
-        ) -> Result<serde_json::Value, gents::config_client::ConfigClientError> {
+        ) -> Result<serde_json::Value, gents::store::config_client::ConfigClientError> {
             assert!(
                 query.contains("AgentSession") && !query.contains("AgentRequest"),
                 "a starter is verified from its session row alone: {query}"

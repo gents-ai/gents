@@ -1,7 +1,7 @@
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gents::graphql::escape_graphql_string;
+use gents::store::graphql::escape_graphql_string;
 use serde_json::{json, Value};
 
 use crate::cli::output_format::OutputFormat;

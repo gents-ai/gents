@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
-use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
+use gents::store::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::tools::native::{load_session_inference_observation, SessionTokenUsage};
 use serde_json::{json, Value};
 
@@ -72,7 +72,7 @@ pub(super) async fn session_info(
     let details = match observation.latest_context.as_ref() {
         Some(snapshot) => {
             gents::tools::native::load_session_context_details(
-                &gents::config_client::ConfigAccess::local(node.clone()),
+                &gents::store::config_client::ConfigAccess::local(node.clone()),
                 node_did,
                 Some(node_did),
                 session,

@@ -30,11 +30,11 @@ use crate::agent::p2p_reconcile::{resolve_template, scope_filter};
 use crate::agent::runtime::StartupBarrier;
 use crate::defra_node::P2PConfig;
 use crate::ensure_runtime_schemas;
-use crate::graphql::escape_graphql_string;
 use crate::inference::backends::provider::BackendProviderKind;
 use crate::inference::llm::tool::ToolDyn;
 use crate::inference::resolved::{ResolvedAgent, SamplingConfig};
 use crate::prompt::LayeredPromptBuilder;
+use crate::store::graphql::escape_graphql_string;
 use crate::store::identity::{KeyIdentity, NodeIdentity, RuntimeNode};
 use crate::tools::call::hook::{
     BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy,

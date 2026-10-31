@@ -73,7 +73,7 @@ impl Reset {
     }
 
     async fn move_to_b(&self, profile: &str) {
-        crate::config_client::switch_profile_account(
+        crate::store::config_client::switch_profile_account(
             &self.accounts.access,
             self.f.identity.did(),
             profile,

@@ -197,7 +197,7 @@ async fn children(h: &JobHarness, row_doc_id: &str) -> Vec<(String, Option<Strin
         h,
         format!(
             r#"{{ AgentRequest(filter: {{ caused_by_parent_tool_call_doc_id: {{ _eq: "{}" }} }}) {{ node_did interrupt_requested_at }} }}"#,
-            gents::graphql::escape_graphql_string(row_doc_id),
+            gents::store::graphql::escape_graphql_string(row_doc_id),
         ),
     )
     .await;
@@ -219,7 +219,7 @@ async fn row_state(h: &JobHarness, row_doc_id: &str) -> String {
         h,
         format!(
             r#"{{ AgentToolCall(docID: "{}") {{ lifecycle_state }} }}"#,
-            gents::graphql::escape_graphql_string(row_doc_id),
+            gents::store::graphql::escape_graphql_string(row_doc_id),
         ),
     )
     .await;
@@ -237,7 +237,7 @@ async fn completion_notifications(h: &JobHarness, tool_call_id: &str) -> usize {
         h,
         format!(
             r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID node_did requester_did }} }}"#,
-            gents::graphql::escape_graphql_string(&h.session_id),
+            gents::store::graphql::escape_graphql_string(&h.session_id),
         ),
     )
     .await;

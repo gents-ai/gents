@@ -969,7 +969,7 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
     for request_doc_id in [&first_request_doc_id, &queued_request_doc_id] {
         let response = node.execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ request_id lifecycle_state terminalized_at terminal_output }} }}"#,
-            crate::graphql::escape_graphql_string(request_doc_id),
+            crate::store::graphql::escape_graphql_string(request_doc_id),
         )).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         let rows = response.data.as_ref().unwrap()["AgentRequest"]
@@ -1113,7 +1113,9 @@ async fn write_runtime_documents(
     node: &Arc<defra_node::EmbeddedNode>,
     documents: Vec<(crate::Collection, Value)>,
 ) {
-    use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use crate::store::config_client::{
+        ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
     let plan = DesiredStateApplyPlan::new(
         documents
             .into_iter()
@@ -1127,7 +1129,9 @@ async fn write_runtime_documents(
     .unwrap();
     ConfigAccess::transact_local_write(node, None, "test.runtime.configure", |txn| {
         let plan = &plan;
-        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+        Box::pin(
+            async move { crate::store::config_client::apply_desired_state_plan(txn, plan).await },
+        )
     })
     .await
     .unwrap();
@@ -1252,7 +1256,7 @@ async fn run_agent_starts_without_an_agent_whose_tools_name_a_missing_plugin() {
     )
     .await;
     wait_for_request_state(node.as_ref(), &request_doc_id, "failed").await;
-    let response = crate::config_client::ConfigAccess::local(node.clone())
+    let response = crate::store::config_client::ConfigAccess::local(node.clone())
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ failure_reason }} }}"#,
             escape_graphql_string(&request_doc_id),

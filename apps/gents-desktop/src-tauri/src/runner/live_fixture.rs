@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
-use gents::config_client::ConfigAccess;
-use gents::graphql::escape_graphql_string;
+use gents::store::config_client::ConfigAccess;
+use gents::store::graphql::escape_graphql_string;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths, PeerRecord};
 use gents_desktop_core::local_runtime::DesktopInitSummary;
 use tokio::sync::Mutex;
@@ -733,7 +733,7 @@ mod tests {
         .await?;
         let session = build_session_snapshot_for_node_with_transcript(
             fixture.desktop_core().as_ref(),
-            &gents::config_client::ConfigAccess::local(fixture.desktop_core().node_arc()),
+            &gents::store::config_client::ConfigAccess::local(fixture.desktop_core().node_arc()),
             Some(&node_did),
             &submitted.session_id,
             Some(&submitted.request_id),
@@ -842,11 +842,11 @@ mod tests {
         agent_id: &str,
         skill_id: &str,
     ) -> Result<()> {
-        use gents::config_client::{
+        use gents::store::collection::Collection;
+        use gents::store::config_client::{
             apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
             DesiredStateApplyPlan,
         };
-        use gents::store::collection::Collection;
         fixture
             .desktop_core()
             .operator_access(node_did)?
