@@ -18,6 +18,7 @@ import { Spinner } from "@gents/ui/components/spinner";
 import { agentName } from "./behavior";
 import { AgentInitials } from "./parts";
 import { Markdown } from "./Markdown";
+import { FiledQuestion, filedQuestion } from "./FiledQuestion";
 import { ToolBody } from "./tool-views";
 import { gatherWorkers, workerStory, type GatheredWorker } from "./worker-gathering";
 import { WorkerStep, isWorkerStep } from "./WorkerStep";
@@ -48,6 +49,7 @@ function Step({
   const p = tool.presentation;
   const tally = p.kind === "fileEdit" ? diffTally(p.diff) : null;
   const status = stepStatus(tool);
+  const asked = filedQuestion(tool);
   const outcome =
     status === "failed" || status === "stopped" ? summary.secondary : null;
   return (
@@ -66,7 +68,13 @@ function Step({
       {open || note ? (
         <>
           {note && <p className="pb-2 text-xs text-muted-foreground">{note}</p>}
-          {open ? <ToolBody tool={tool} /> : null}
+          {open ? (
+            asked ? (
+              <FiledQuestion itemId={asked.itemId} question={asked.question} />
+            ) : (
+              <ToolBody tool={tool} />
+            )
+          ) : null}
         </>
       ) : undefined}
     </ToolStep>
