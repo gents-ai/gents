@@ -273,11 +273,15 @@ where
     type CompletionModel = ClaudeSubscriptionModel<S>;
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClaudeStreamResponse {
     pub usage: Option<Usage>,
     #[serde(default)]
     pub token_usage: gents_protocol::usage::TokenUsage,
+    /// The response's `request-id` header, under the field name the loop reads
+    /// (`gents_loop::rig_compat::RESPONSE_REQUEST_ID_FIELD`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
 }
 
 impl GetTokenUsage for ClaudeStreamResponse {

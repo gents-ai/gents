@@ -149,7 +149,6 @@ pub(crate) async fn for_request(
         session_key: session.main_session_id.clone(),
         prompt_key: request.doc_id.clone(),
         parent_session_id: None,
-        previous_request_id: None,
         agent: origin.subagent().then(|| ClaudeAgentIdentity {
             agent_id: metadata::agent_id(request.session_id.as_bytes()),
             parent_agent_id: session
@@ -180,7 +179,6 @@ pub(crate) fn for_one_shot(agent: &ResolvedAgent) -> Option<ClaudeRequestContext
             session_key: run.clone(),
             prompt_key: run,
             parent_session_id: None,
-            previous_request_id: None,
             agent: None,
         }
     })

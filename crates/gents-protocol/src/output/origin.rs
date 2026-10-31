@@ -53,6 +53,7 @@ pub fn validate_fork_metadata(
         || message.sequence != original.sequence
         || message.role != original.role
         || message.native_id != original.native_id
+        || message.native_request_id != original.native_request_id
         || message.outcome != original.outcome
         || message.blocks != original.blocks
         || message.created_at != original.created_at

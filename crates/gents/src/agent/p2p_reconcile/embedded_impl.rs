@@ -981,8 +981,10 @@ pub(super) mod tests {
             )
             .await;
         let message = Message::Assistant {
+            request_id: None,
             id: Some(format!("remote-provider-{turn}")),
             content: vec![AssistantContent::ToolCall(ToolCall {
+                raw_arguments: None,
                 id: tool_call_id.into(),
                 call_id: Some(tool_call_id.into()),
                 function: ToolFunction::new(

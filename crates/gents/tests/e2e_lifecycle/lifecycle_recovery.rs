@@ -1170,6 +1170,7 @@ async fn seed_completed_canonical_output(
     let segment_doc_id = canonical_created_doc_id(&segment_response, "AgentOutputSegment");
     let close_doc_id = segment_doc_id.clone();
     let message = gents_protocol::output::TranscriptMessage {
+        native_request_id: None,
         message_key: fixture_provider_message_key(request_doc_id, &source),
         node_did: node_did.to_string(),
         session_id: session_id.to_string(),

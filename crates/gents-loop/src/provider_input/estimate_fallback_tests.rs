@@ -21,6 +21,7 @@ fn grok_tool_round_trip(reasoning: Option<Reasoning>) -> Vec<Message> {
         .collect::<Vec<_>>();
     // xAI items carry only `id`; the stored call has no `call_id`.
     assistant.push(AssistantContent::ToolCall(ToolCall {
+        raw_arguments: None,
         id: "fc_1".into(),
         call_id: None,
         function: ToolFunction {
@@ -33,6 +34,7 @@ fn grok_tool_round_trip(reasoning: Option<Reasoning>) -> Vec<Message> {
     vec![
         Message::user("look at main"),
         Message::Assistant {
+            request_id: None,
             id: None,
             content: assistant,
         },

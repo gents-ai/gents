@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::*;
+use crate::claude_messages_body::{PREVIOUS_REQUEST_ID_PARAM, RAW_TOOL_ARGUMENTS_BY_CALL_PARAM};
 
 struct Keys(Vec<String>);
 
@@ -102,7 +103,6 @@ fn context(origin: Origin) -> ClaudeRequestContext {
         session_key: "session-1".to_owned(),
         prompt_key: "request-doc-1".to_owned(),
         parent_session_id: None,
-        previous_request_id: None,
         agent: None,
     }
 }
@@ -114,6 +114,7 @@ fn header(plan: &ClaudeRequestPlan) -> String {
 fn tool_exchange(id: &str) -> [Message; 2] {
     [
         Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![AssistantContent::ToolCall(ToolCall::new(
                 id.into(),
@@ -302,11 +303,13 @@ fn the_previous_message_id_is_the_last_anthropic_assistant_message() {
         let history = vec![
             Message::user("a"),
             Message::Assistant {
+                request_id: None,
                 id: ids[0].map(str::to_owned),
                 content: vec![AssistantContent::text("one")],
             },
             Message::user("b"),
             Message::Assistant {
+                request_id: None,
                 id: ids[1].map(str::to_owned),
                 content: vec![AssistantContent::text("two")],
             },
@@ -552,4 +555,85 @@ fn tools_are_sent_with_their_schema_bytes() {
         body["tools"],
         json!([{"name": "echo", "description": "echo", "input_schema": {"type": "object"}}])
     );
+}
+
+fn turn_context() -> ClaudeRequestContext {
+    context(origin(Cause::Client, true, false, Kind::Turn))
+}
+
+#[test]
+fn the_previous_request_id_param_becomes_cc_prev_req_on_a_turn_only() {
+    let plan_of = |kind: Kind, previous: Option<&str>| {
+        let mut request = with_context(
+            request_of(vec![Message::user("hi")]),
+            &context(origin(Cause::Client, true, false, kind)),
+        );
+        if let Some(previous) = previous {
+            request.additional_params.as_mut().unwrap()[PREVIOUS_REQUEST_ID_PARAM] =
+                json!(previous);
+        }
+        plan_claude_request("claude-opus-5-5", &request, &account()).unwrap()
+    };
+    assert!(header(&plan_of(Kind::Turn, Some("req_abc"))).contains(" cc_prev_req=req_abc;"));
+    assert!(!header(&plan_of(Kind::Turn, None)).contains("cc_prev_req"));
+    // A title request is not stamped, as in Claude Code.
+    assert!(!header(&plan_of(Kind::Title, Some("req_abc"))).contains("cc_prev_req"));
+    // An id Claude Code would not stamp is dropped by the attribution owner.
+    assert!(!header(&plan_of(Kind::Turn, Some("not-a-request-id"))).contains("cc_prev_req"));
+    let plan = plan_of(Kind::Turn, Some("req_abc"));
+    assert!(
+        !String::from_utf8(gents_claude::wire::to_bytes(&plan.body).unwrap())
+            .unwrap()
+            .contains(PREVIOUS_REQUEST_ID_PARAM)
+    );
+}
+
+#[test]
+fn tool_use_input_replays_the_streamed_text_in_insertion_order() {
+    let text = r#"{ "z": 1, "a": {"y": 2.50, "b": 1e2}, "z": 3 }"#;
+    let arguments: Value = serde_json::from_str(text).unwrap();
+    let history = |raw: bool| {
+        let mut call = ToolCall::new(
+            "toolu_1".into(),
+            ToolFunction::new("echo".into(), arguments.clone()),
+        );
+        call.raw_arguments = raw.then(|| text.to_owned());
+        vec![
+            Message::user("go"),
+            Message::Assistant {
+                id: None,
+                request_id: None,
+                content: vec![AssistantContent::ToolCall(call)],
+            },
+            Message::User {
+                content: vec![UserContent::tool_result(
+                    "toolu_1",
+                    vec![ToolResultContent::text("ok")],
+                )],
+            },
+        ]
+    };
+    let body_of = |history: Vec<Message>, raw: Option<Value>| {
+        let mut request = with_context(request_of(history), &turn_context());
+        if let Some(raw) = raw {
+            request.additional_params.as_mut().unwrap()[RAW_TOOL_ARGUMENTS_BY_CALL_PARAM] = raw;
+        }
+        let plan = plan_claude_request("claude-opus-5-5", &request, &account()).unwrap();
+        String::from_utf8(gents_claude::wire::to_bytes(&plan.body).unwrap()).unwrap()
+    };
+    // The Rig round trip drops the text; the request parameter restores it.
+    let with_param = body_of(history(false), Some(json!({"toolu_1": text})));
+    assert!(
+        with_param.contains(r#""input":{"z":3,"a":{"y":2.5,"b":100}}"#),
+        "{with_param}"
+    );
+    // Without the parameter the sorted value is replayed, as before.
+    let without = body_of(history(false), None);
+    assert!(
+        without.contains(r#""input":{"a":{"b":100.0,"y":2.5},"z":3}"#),
+        "{without}"
+    );
+    // Text that is not these arguments is ignored.
+    let wrong = body_of(history(false), Some(json!({"toolu_1": r#"{"q":1}"#})));
+    assert_eq!(wrong, without);
 }

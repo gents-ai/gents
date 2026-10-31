@@ -350,4 +350,17 @@ mod usage_tests {
                 .is_none());
         }
     }
+
+    #[test]
+    fn the_wrapper_keeps_the_raw_request_id_where_the_loop_reads_it() {
+        let raw = serde_json::json!({"usage": null, "request_id": "req_1"});
+        let wrapped = ObservedStreamingResponse::new(raw.clone(), false);
+        assert_eq!(
+            gents_loop::rig_compat::observed_request_id(&wrapped).as_deref(),
+            Some("req_1")
+        );
+        assert_eq!(serde_json::to_value(&wrapped).unwrap(), raw);
+        let bare = ObservedStreamingResponse::new(serde_json::json!({"usage": null}), false);
+        assert_eq!(gents_loop::rig_compat::observed_request_id(&bare), None);
+    }
 }

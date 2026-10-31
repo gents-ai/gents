@@ -1542,8 +1542,10 @@ pub(super) mod tests {
                 };
                 let native = match value.as_u64().unwrap() {
                     2 => crate::llm::message::Message::Assistant {
+                        request_id: None,
                         id: None,
                         content: vec![AssistantContent::ToolCall(ToolCall {
+                            raw_arguments: None,
                             id: "call-1".into(),
                             call_id: Some("call-1".into()),
                             signature: None,

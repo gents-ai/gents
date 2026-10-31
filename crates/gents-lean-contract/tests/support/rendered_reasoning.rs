@@ -122,6 +122,7 @@ pub(crate) fn generated_reasoning_cases() -> Vec<RenderedReasoningCase> {
         selected.push(RenderedReasoningCase {
             name: case.name,
             message: Message::Assistant {
+                request_id: native.native_request_id.clone(),
                 id: native.native_id.clone(),
                 content: vec![AssistantContent::Reasoning(reasoning)],
             },

@@ -578,6 +578,7 @@ mod tests {
         insert_header(
             node,
             &TranscriptMessage {
+                native_request_id: None,
                 message_key: format!("accepted:{request_id}:{tool_call_id}"),
                 session_id: session_id.into(),
                 node_did: node_did.into(),
@@ -643,6 +644,7 @@ mod tests {
         insert_header(
             node,
             &TranscriptMessage {
+                native_request_id: None,
                 message_key: format!("delivery:{request_id}:{tool_call_id}"),
                 session_id: session_id.into(),
                 node_did: node_did.into(),

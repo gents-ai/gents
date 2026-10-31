@@ -606,6 +606,7 @@ mod tests {
                 1,
                 0,
                 &Message::Assistant {
+                    request_id: None,
                     id: Some("final".into()),
                     content: vec![AssistantContent::Text(Text {
                         text: "the answer".into(),

@@ -291,6 +291,7 @@ fn compaction_messages_for_case(case: &lean_vocab_test::LeanCompactionReducerCas
             lean_vocab_test::LeanCompactionInputRow::AssistantToolCalls { role, call_ids } => {
                 assert_eq!(role, "assistant");
                 Message::Assistant {
+                    request_id: None,
                     id: None,
                     content: call_ids
                         .iter()
@@ -340,16 +341,21 @@ fn with_leading_reasoning(messages: &[Message]) -> Vec<Message> {
         .iter()
         .cloned()
         .map(|message| match message {
-            Message::Assistant { id, mut content }
-                if content
-                    .iter()
-                    .any(|item| matches!(item, AssistantContent::Text(_))) =>
+            Message::Assistant {
+                id, mut content, ..
+            } if content
+                .iter()
+                .any(|item| matches!(item, AssistantContent::Text(_))) =>
             {
                 content.insert(
                     0,
                     AssistantContent::Reasoning(gents::llm::message::Reasoning::new("thinking")),
                 );
-                Message::Assistant { id, content }
+                Message::Assistant {
+                    request_id: None,
+                    id,
+                    content,
+                }
             }
             other => other,
         })
@@ -364,6 +370,7 @@ fn compaction_text_message(role: &str, text: &str) -> Message {
             })],
         },
         "assistant" => Message::Assistant {
+            request_id: None,
             id: None,
             content: vec![AssistantContent::Text(Text {
                 text: text.to_string(),
@@ -375,8 +382,10 @@ fn compaction_text_message(role: &str, text: &str) -> Message {
 
 fn compaction_tool_call_message(call_id: &str) -> Message {
     Message::Assistant {
+        request_id: None,
         id: None,
         content: vec![AssistantContent::ToolCall(ToolCall {
+            raw_arguments: None,
             id: call_id.to_string(),
             call_id: Some(call_id.to_string()),
             function: ToolFunction {

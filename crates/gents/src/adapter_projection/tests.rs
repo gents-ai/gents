@@ -24,6 +24,7 @@ fn message_row(
         Message::Assistant { .. } => gents_protocol::output::MessageRole::Assistant,
     };
     let header = gents_protocol::output::TranscriptMessage {
+        native_request_id: None,
         message_key: format!("{session_id}:{sequence}"),
         session_id: session_id.to_string(),
         node_did: "did:test:projection".to_string(),
@@ -348,6 +349,7 @@ fn delegated_coherence_timeline() -> RunTimeline {
                 Some("doc-req-review"),
                 2,
                 Message::Assistant {
+                    request_id: None,
                     id: None,
                     content: vec![
                         gents_protocol::message::AssistantContent::Reasoning(
@@ -363,6 +365,7 @@ fn delegated_coherence_timeline() -> RunTimeline {
                 Some("doc-req-root"),
                 2,
                 Message::Assistant {
+                    request_id: None,
                     id: None,
                     content: vec![
                         gents_protocol::message::AssistantContent::Reasoning(

@@ -2,6 +2,7 @@
 //! types the Claude Code request, the history codec, the image limits and the
 //! reasoning replay selection.
 
+mod history_params;
 mod images;
 mod messages;
 mod plan;
@@ -13,6 +14,8 @@ use serde_json::Value;
 
 use rig::completion::CompletionRequest;
 
+pub(crate) use history_params::stamp_history_params;
+pub use history_params::{PREVIOUS_REQUEST_ID_PARAM, RAW_TOOL_ARGUMENTS_BY_CALL_PARAM};
 pub use messages::{assistant_blocks, encode_assistant_content, AssistantCodecError};
 pub use plan::{
     plan_claude_request, plan_with_ids, ClaudeAccountContext, ClaudeAgentIdentity,

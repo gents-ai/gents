@@ -1173,6 +1173,7 @@ pub(crate) async fn import_history_observation(
         .unwrap()
         .unwrap();
     let header = TranscriptMessage {
+        native_request_id: None,
         message_key: message_key_suffix.into(),
         session_id: session_id.into(),
         node_did: node_did.into(),

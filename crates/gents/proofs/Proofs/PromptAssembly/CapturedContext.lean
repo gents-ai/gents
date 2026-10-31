@@ -51,6 +51,7 @@ def authoredMessage (prose : String) (contexts : List Enrollment.CapturedContext
     ReconstructedMessage :=
   { role := .user
     nativeId := none
+    nativeRequestId := none
     blocks := (prosePrefix prose contexts).map (fun text => .text text.toUTF8.data.toList) ++
       contexts.map (fun context => .media (nativeDocument context)) }
 

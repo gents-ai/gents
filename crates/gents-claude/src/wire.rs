@@ -15,12 +15,24 @@ use serde::ser::{SerializeMap, Serializer};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
+#[path = "js_json.rs"]
+mod js_json;
+pub use js_json::js_restringify;
+
 /// A failure producing the request bytes.
 #[derive(Debug, thiserror::Error)]
 pub enum WireError {
     /// The request could not be serialized to JSON.
     #[error("the Messages request could not be serialized: {0}")]
     Serialize(#[from] serde_json::Error),
+    /// Text meant to be JSON is not.
+    #[error("the JSON text is invalid at byte {offset}: {reason}")]
+    InvalidJson {
+        /// Byte offset of the first problem.
+        offset: usize,
+        /// What was wrong.
+        reason: &'static str,
+    },
 }
 
 /// The main-thread Messages request body, in Claude Code's key order.

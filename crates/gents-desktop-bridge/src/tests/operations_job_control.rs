@@ -159,6 +159,7 @@ pub(super) async fn seed_admission_for_node(
         gents_protocol::graphql::extract_mutation_doc_id(&response, "AgentOutputSegment")
             .expect("segment doc id");
     let message = TranscriptMessage {
+        native_request_id: None,
         message_key: gents::session::sequence_message_key(
             node_did,
             session_id,

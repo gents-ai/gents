@@ -2,14 +2,14 @@
 //! with their image limits, and the assistant codec that replays thinking.
 
 use gents_claude::wire::{
-    ContentBlock, Message as WireMessage, MessageContent, RawObject, Role,
+    js_restringify, ContentBlock, Message as WireMessage, MessageContent, RawObject, Role,
     ToolResultContent as WireToolResult,
 };
 use gents_protocol::message::{
-    AssistantContent, DocumentSourceKind, Image, Message, ReasoningContent, ToolResultContent,
-    UserContent,
+    AssistantContent, DocumentSourceKind, Image, Message, ReasoningContent, ToolCall,
+    ToolResultContent, UserContent,
 };
-use serde_json::value::to_raw_value;
+use serde_json::value::{to_raw_value, RawValue};
 
 use super::images::{image_omissions, media_type};
 use super::MessagesBodyError;
@@ -141,6 +141,21 @@ pub enum AssistantCodecError {
     UnencodableToolInput,
 }
 
+/// The tool call's `input` as Claude Code replays it: the streamed text as
+/// `JSON.stringify(JSON.parse(text))`, else the parsed arguments.
+fn tool_input(call: &ToolCall) -> Result<Box<RawValue>, AssistantCodecError> {
+    call.raw_arguments
+        .as_deref()
+        .and_then(|text| js_restringify(text).ok())
+        .map_or_else(
+            || {
+                to_raw_value(&call.function.arguments)
+                    .map_err(|_| AssistantCodecError::UnencodableToolInput)
+            },
+            Ok,
+        )
+}
+
 /// The typed Messages blocks of one assistant row.
 pub fn assistant_blocks(
     content: &[AssistantContent],
@@ -156,8 +171,7 @@ pub fn assistant_blocks(
             AssistantContent::ToolCall(call) => blocks.push(ContentBlock::ToolUse {
                 id: call.id.clone(),
                 name: call.function.name.clone(),
-                input: to_raw_value(&call.function.arguments)
-                    .map_err(|_| AssistantCodecError::UnencodableToolInput)?,
+                input: tool_input(call)?,
                 cache_control: None,
             }),
             AssistantContent::Reasoning(reasoning) => {

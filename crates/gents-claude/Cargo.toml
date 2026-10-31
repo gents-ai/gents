@@ -55,5 +55,6 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc
 zstd = { version = "0.13", optional = true }
 
 [dev-dependencies]
+proptest = "1"
 gents-lean-contract.workspace = true
 tokio = { workspace = true }

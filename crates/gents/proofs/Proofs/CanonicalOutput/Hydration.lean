@@ -125,7 +125,8 @@ def checkedOrigin (header : Header) : Except Error (Option DocId) :=
 
 def forkMetadataMatches (child origin : MessageEnvelope) : Bool :=
   child.header == forkHeader origin.header child.header.id child.header.session &&
-    child.nativeId == origin.nativeId && child.blocks == origin.blocks &&
+    child.nativeId == origin.nativeId && child.nativeRequestId == origin.nativeRequestId &&
+    child.blocks == origin.blocks &&
     child.createdAt == origin.createdAt && child.sequence == origin.sequence
 
 theorem fork_metadata_preserves_sequence (child origin : MessageEnvelope)

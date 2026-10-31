@@ -40,6 +40,7 @@ fn reasoning_body(index: u64) -> String {
 
 fn tool_call(id: u64) -> ToolCall {
     ToolCall {
+        raw_arguments: None,
         id: call_key(id),
         call_id: Some(call_key(id)),
         function: ToolFunction {
@@ -54,6 +55,7 @@ fn tool_call(id: u64) -> ToolCall {
 fn message_of_row(row: &LeanPromptAssemblyRow) -> Message {
     match (row.role.as_str(), row.kind.as_str()) {
         ("assistant", _) => Message::Assistant {
+            request_id: None,
             id: None,
             content: row.content.iter().map(assistant_item).collect(),
         },
@@ -841,6 +843,7 @@ fn generated_assistant_order_cases_bind_selected_provider_order() {
     for case in cases {
         let profile = profile_of_order(case.order_mode);
         let input = vec![Message::Assistant {
+            request_id: None,
             id: None,
             content: case.input.iter().map(assistant_item).collect(),
         }];
@@ -1071,6 +1074,7 @@ fn native_tagged_message(
 ) -> gents_loop::loop_stream::TaggedMessage {
     gents_loop::loop_stream::TaggedMessage {
         message: Message::Assistant {
+            request_id: None,
             id: None,
             content: native_claude_replay_content(&row.blocks),
         },
@@ -1502,6 +1506,7 @@ fn generated_claude_checkpoint_cases_bind_selected_assistant_projection() {
                     .retained
                     .iter()
                     .map(|row| Message::Assistant {
+                        request_id: None,
                         id: row.id.clone(),
                         content: row.content.clone(),
                     })
@@ -1542,7 +1547,11 @@ fn generated_claude_replay_cases_drive_native_messages_body() {
     assert!(!cases.is_empty(), "Lean emitted no Claude replay cases");
     for case in cases {
         let content = native_claude_replay_content(&case.blocks);
-        let history = [Message::Assistant { id: None, content }];
+        let history = [Message::Assistant {
+            request_id: None,
+            id: None,
+            content,
+        }];
         let result = native_messages_body(&history);
         if case.outcome != "ok" {
             let Err(MessagesBodyError::Codec(error)) = result else {

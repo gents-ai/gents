@@ -283,6 +283,7 @@ async fn recorded_origin_review_retains_metadata_without_a_route_but_does_not_gr
     };
     let close = insert(&node, "AgentOutputSegment", serde_json::to_value(segment)?).await?;
     let header = TranscriptMessage {
+        native_request_id: None,
         message_key: "fixture-header".into(),
         session_id: "original-chat".into(),
         node_did: source.did().into(),

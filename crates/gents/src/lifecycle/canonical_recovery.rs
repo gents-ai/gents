@@ -398,7 +398,7 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     message_key: crate::streaming::canonical::partial_message_key(&request_doc_id, &source)?, session_id: session_id.to_owned(), node_did: agent.to_owned(),
                     requester_did: row.requester_did.clone(), request_doc_id: Some(request_doc_id.clone()),
                     publication: MessagePublication::RequestRecovery { execution_generation: fresh_generation.clone() },
-                    outcome: OutputOutcome::Partial, sequence: *next_sequence, role: MessageRole::Assistant, native_id: None,
+                    outcome: OutputOutcome::Partial, sequence: *next_sequence, role: MessageRole::Assistant, native_id: None, native_request_id: None,
                     blocks, created_at: timestamp.clone(),
                 };
                 *next_sequence = next_sequence.checked_add(1).context("recovery transcript sequence overflow")?;

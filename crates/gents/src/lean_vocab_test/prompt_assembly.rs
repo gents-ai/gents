@@ -701,6 +701,7 @@ pub(crate) fn native_claude_replay_content(
                 let arguments = String::from_utf8(block.arguments.clone().expect("arguments"))
                     .expect("reconstructed UTF-8");
                 content.push(AssistantContent::ToolCall(ToolCall {
+                    raw_arguments: None,
                     id: block.id.clone().expect("provider tool id"),
                     call_id: block.call_id.clone(),
                     function: ToolFunction {

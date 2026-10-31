@@ -120,6 +120,7 @@ async fn build_preserves_each_source_through_summary_prepend_even_with_equal_nat
         },
     };
     let with_native_id = |text: &str| Message::Assistant {
+        request_id: None,
         id: Some("same-provider-id".to_string()),
         content: vec![AssistantContent::Text(Text {
             text: text.to_string(),

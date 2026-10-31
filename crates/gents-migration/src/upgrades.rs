@@ -8,6 +8,10 @@ const NODE_MEMORY_ROOT: &str = "bafyreifcm3bi3qofvhfws7nps45xomrsxb2zslvjkkhb7uw
 const NODE_MEMORY_TEXT_TARGET: &str = "bafyreihb3faohzgyj4zedddsedlnivyjhonk6tkhdovvrzyiaris3rkmtu";
 const NODE_MEMORY_TEXT_PATCH: &str = r#"[{"op":"add","path":"/NodeMemory/Fields/-","value":{"Name":"value_text","Kind":"String","Typ":6}}]"#;
 
+const MESSAGE_ROOT: &str = "bafyreibpbyfmfgfookleozyqvuwse6qtfnjf7ipxjq6ryypovs226ziw6a";
+const MESSAGE_REQUEST_ID_TARGET: &str =
+    "bafyreiawf2s2jdgsajh6rff4plix6e4fawkkqu22dy3ade5pnzaaomqtj4";
+
 const INFERENCE_CALL_ROOT: &str = "bafyreibbbdmb7au32traw5ufp6rqytb3jv63bmjflykfhize2u6bwvqiwe";
 const INFERENCE_CALL_TARGET: &str = "bafyreie6maihybat7mu2hbygehkkcsb7x6h5bcdcvg53ygjhfcoikfdfau";
 const INFERENCE_CALL_USAGE_PATCH: &str = r#"[
@@ -151,6 +155,14 @@ pub(crate) fn include_existing(
             "agent-tool-call-add-background-request",
             TOOL_BACKGROUND_PATCH,
             &["background_requested_at"][..],
+        ),
+        (
+            "AgentMessage",
+            MESSAGE_ROOT,
+            MESSAGE_REQUEST_ID_TARGET,
+            "agent-message-add-native-request-id",
+            r#"[{"op":"add","path":"/AgentMessage/Fields/-","value":{"Name":"native_request_id","Kind":"String","Immutable":true}}]"#,
+            &["native_request_id"][..],
         ),
         (
             "AgentSession",

@@ -341,8 +341,10 @@ async fn accepted_pending_tool_uses_authoritative_lifecycle_state_when_status_is
         )
         .await;
     let message = Message::Assistant {
+        request_id: None,
         id: Some("pending-tool-provider-message".to_owned()),
         content: vec![AssistantContent::ToolCall(ToolCall {
+            raw_arguments: None,
             id: "pending-tool-native-id".to_owned(),
             call_id: Some("pending-tool-runtime-id".to_owned()),
             function: ToolFunction::new(
@@ -483,6 +485,7 @@ async fn accepted_tool_arguments_read_only_the_accepted_message() {
     let requester_did = text("requester_did");
 
     let unresolvable = TranscriptMessage {
+        native_request_id: None,
         message_key: "unrelated-unresolvable".into(),
         session_id: session_id.clone(),
         node_did: node_did.clone(),

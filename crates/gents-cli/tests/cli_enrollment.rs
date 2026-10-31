@@ -759,6 +759,7 @@ fn client_reply_requires_the_runtime_selected_terminal_header() {
         |doc_id: &str, close_doc_id: &str, sequence: u32, role: MessageRole| TranscriptMessageRow {
             doc_id: doc_id.into(),
             message: TranscriptMessage {
+                native_request_id: None,
                 message_key: format!("session:{sequence}"),
                 session_id: "session".into(),
                 node_did: "did:key:agent".into(),

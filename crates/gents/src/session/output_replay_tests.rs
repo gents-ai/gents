@@ -288,6 +288,7 @@ impl ReplayFixture {
                 .unwrap()
                 .to_string();
         let header = TranscriptMessage {
+            native_request_id: None,
             message_key: format!(
                 "provider:{}:{}",
                 self.request_doc_id,
@@ -404,6 +405,7 @@ impl ReplayFixture {
                 .unwrap()
                 .to_string();
         let header = TranscriptMessage {
+            native_request_id: None,
             message_key: super::canonical_rows::authored_message_key(
                 &self.request_doc_id,
                 "assistant-note",
@@ -714,6 +716,7 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
             .unwrap()
             .to_string();
     let header = TranscriptMessage {
+        native_request_id: None,
         message_key: format!(
             "provider:{}:{}",
             request_doc_id,
@@ -834,7 +837,7 @@ async fn signed_capture_restores_exact_authenticated_suffix_and_rejects_rewritte
             attempt: candidate.coordinate.attempt,
         },
     };
-    let Message::Assistant { id, content } = candidate.message.clone() else {
+    let Message::Assistant { id, content, .. } = candidate.message.clone() else {
         panic!("canonical fixture must reconstruct an assistant");
     };
     assert_eq!(content.len(), 4);
@@ -1064,7 +1067,7 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
     let rows = projected
         .iter()
         .map(|row| {
-            let Message::Assistant { id, content } = &row.message else {
+            let Message::Assistant { id, content, .. } = &row.message else {
                 panic!("fixture history is one assistant")
             };
             TaggedAssistantRow {
@@ -1088,6 +1091,7 @@ async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive(
     );
     let projected = [gents_loop::loop_stream::TaggedMessage {
         message: Message::Assistant {
+            request_id: None,
             id: selected[0].id.clone(),
             content: selected[0].content.clone(),
         },
@@ -1175,7 +1179,7 @@ async fn unverifiable_capture_drops_its_reasoning_without_failing_the_request() 
         .await
         .expect("an unverifiable capture must not fail the request");
         assert!(evidence.is_empty());
-        let Message::Assistant { id, content } = candidate.message.clone() else {
+        let Message::Assistant { id, content, .. } = candidate.message.clone() else {
             panic!("canonical fixture must reconstruct an assistant");
         };
         let rows = vec![TaggedAssistantRow {

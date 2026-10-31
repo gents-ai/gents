@@ -780,8 +780,10 @@ fn validate_native_shape(message: &TranscriptMessage) -> Result<(), Reconstructi
     if !message.blocks.iter().all(allowed)
         || matches!(message.role, MessageRole::System)
             && (message.native_id.is_some()
+                || message.native_request_id.is_some()
                 || !matches!(message.blocks.as_slice(), [MessageBlock::Text { .. }]))
-        || matches!(message.role, MessageRole::User) && message.native_id.is_some()
+        || matches!(message.role, MessageRole::User)
+            && (message.native_id.is_some() || message.native_request_id.is_some())
     {
         return Err(ReconstructionError::InvalidStructure {
             detail: "illegal native message role or block shape".to_owned(),
@@ -798,6 +800,7 @@ fn validate_native_shape(message: &TranscriptMessage) -> Result<(), Reconstructi
                 || message.role != MessageRole::Assistant
                 || message.outcome != super::OutputOutcome::Partial
                 || message.native_id.is_some()
+                || message.native_request_id.is_some()
                 || !message.blocks.iter().all(|block| matches!(block, MessageBlock::Text { text } if matches!(text.presentation, PayloadPresentation::Full)))
             {
                 return Err(ReconstructionError::InvalidStructure { detail: "invalid recovery header".to_owned() });
@@ -1094,12 +1097,13 @@ fn reconstruct_message_with(
                     }
                     let argument_reference = arguments.clone();
                     expect_payload(&stream, arguments, &[is_arguments], true, true)?;
-                    let arguments = stream.text;
-                    let arguments = serde_json::from_str(&arguments).map_err(|_| {
+                    let text = stream.text;
+                    let arguments = serde_json::from_str(&text).map_err(|_| {
                         ReconstructionError::InvalidPayload {
                             reference: argument_reference,
                         }
                     })?;
+                    let raw_arguments = ToolCall::raw_arguments_for(&arguments, &text);
                     Ok(AssistantContent::ToolCall(ToolCall {
                         id: id.clone(),
                         call_id: call_id.clone(),
@@ -1109,6 +1113,7 @@ fn reconstruct_message_with(
                         },
                         signature: signature.clone(),
                         additional_params: additional_params.clone(),
+                        raw_arguments,
                     }))
                 }
                 MessageBlock::Media(media) if media.kind == MediaKind::Image => {
@@ -1137,6 +1142,7 @@ fn reconstruct_message_with(
         },
         MessageRole::Assistant => Ok(Message::Assistant {
             id: message.native_id.clone(),
+            request_id: message.native_request_id.clone(),
             content: message
                 .blocks
                 .iter()

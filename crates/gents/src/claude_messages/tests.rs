@@ -270,6 +270,7 @@ fn messages_body_threads_tool_result() {
         vec![
             Message::Assistant {
                 id: None,
+                request_id: None,
                 content: vec![AssistantContent::ToolCall(ToolCall::new(
                     "toolu_1".into(),
                     ToolFunction::new("echo".into(), json!({})),
@@ -306,6 +307,7 @@ fn tool_result_images_reach_the_wire_body() {
             Message::user("draw it"),
             Message::Assistant {
                 id: None,
+                request_id: None,
                 content: vec![AssistantContent::ToolCall(ToolCall::new(
                     "toolu_1".into(),
                     ToolFunction::new("echo".into(), json!({})),
@@ -363,6 +365,7 @@ fn tool_result_images_on_the_wire(images: &[String]) -> Vec<Value> {
         let id = format!("toolu_{index}");
         history.push(Message::Assistant {
             id: None,
+            request_id: None,
             content: vec![AssistantContent::ToolCall(ToolCall::new(
                 id.clone(),
                 ToolFunction::new("echo".into(), json!({})),
@@ -1216,7 +1219,6 @@ fn context_of(
         session_key: "session-wire".into(),
         prompt_key: "request-wire".into(),
         parent_session_id: None,
-        previous_request_id: None,
         agent: Some(gents_loop::claude_messages_body::ClaudeAgentIdentity {
             agent_id: "worker".into(),
             parent_agent_id: Some("lead".into()),
@@ -1442,6 +1444,7 @@ fn unsupported_replay_request() -> CompletionRequest {
         None,
         vec![Message::Assistant {
             id: None,
+            request_id: None,
             content: vec![AssistantContent::Image(Image::default())],
         }],
         vec![],

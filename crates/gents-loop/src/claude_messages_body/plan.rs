@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::{to_raw_value, RawValue};
 use serde_json::Value;
 
+use super::history_params::{attach_raw_arguments, previous_request_id};
 use super::messages::{system_rows, wire_messages};
 use super::{
     CompletionRequest, MessagesBodyError, ADVERTISED_REASONING_EFFORTS_PARAM,
@@ -59,9 +60,6 @@ pub struct ClaudeRequestContext {
     /// The Gents id of the session a forked or teammate session came from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<String>,
-    /// The `request-id` of the previous response, when a caller carries it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub previous_request_id: Option<String>,
     /// The agent identity of a subagent turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<ClaudeAgentIdentity>,
@@ -81,7 +79,6 @@ impl ClaudeRequestContext {
             session_key: session_key.to_owned(),
             prompt_key: String::new(),
             parent_session_id: None,
-            previous_request_id: None,
             agent: None,
         }
     }
@@ -190,11 +187,12 @@ pub fn plan_with_ids(
     context: &ClaudeRequestContext,
     ids: &ClaudeRequestIds,
 ) -> Result<ClaudeRequestPlan, MessagesBodyError> {
-    let history: Vec<Message> = request
+    let mut history: Vec<Message> = request
         .chat_history
         .iter()
         .map(crate::rig_compat::from_rig_message)
         .collect();
+    attach_raw_arguments(&mut history, request.additional_params.as_ref());
     let origin = context.origin;
     let mode = origin.wire_mode();
     let resolved = ResolvedModel::of(model);
@@ -266,7 +264,9 @@ pub fn plan_with_ids(
         first_party_base_url: true,
         workload: mode.workload.map(str::to_owned),
         subagent: mode.subagent,
-        previous_request_id: context.previous_request_id.clone().filter(|_| stamped),
+        previous_request_id: previous_request_id(params)
+            .map(str::to_owned)
+            .filter(|_| stamped),
         prompt_id: Some(ids.prompt.clone()),
         turn_origin: origin.turn_origin().map(str::to_owned),
         prompt_index: position.map(|(prompt, _)| prompt),

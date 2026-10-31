@@ -785,6 +785,7 @@ pub fn session_shape_query(session_id: &str) -> String {
                 sequence
                 role
                 native_id
+                native_request_id
                 blocks
                 created_at
             }}

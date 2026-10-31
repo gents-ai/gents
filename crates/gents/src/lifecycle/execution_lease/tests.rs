@@ -829,6 +829,7 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
         .await;
     let tool = |id: &str| {
         AssistantContent::ToolCall(ToolCall {
+            raw_arguments: None,
             id: id.into(),
             call_id: None,
             function: ToolFunction {
@@ -845,6 +846,7 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
             0,
             0,
             &Message::Assistant {
+                request_id: None,
                 id: None,
                 content: vec![tool("pending-call"), tool("running-call")],
             },
@@ -913,6 +915,7 @@ async fn dead_revocation_accounts_tools_without_reading_corrupt_delivery_payload
             .unwrap()
             .to_owned();
     let delivery = TranscriptMessage {
+        native_request_id: None,
         message_key: "corrupt-running-delivery".into(),
         session_id: lifecycle.request().session_id.clone(),
         node_did: "did:test:execution-lease".into(),
@@ -1127,8 +1130,10 @@ async fn expired_stored_deadline_blocks_old_publication_and_tool_admission_after
     );
 
     let tool_turn = Message::Assistant {
+        request_id: None,
         id: None,
         content: vec![AssistantContent::ToolCall(ToolCall {
+            raw_arguments: None,
             id: "stale-tool".into(),
             call_id: None,
             function: ToolFunction::new("echo".into(), serde_json::json!({"value":"stale"})),
@@ -1475,6 +1480,7 @@ async fn generated_renewal_invalidates_real_publication_point_read_transaction()
     let segment_doc_id =
         crate::graphql::created_doc_id(&segment_result, "AgentOutputSegment").unwrap();
     let message = TranscriptMessage {
+        native_request_id: None,
         message_key: message_key.clone(),
         session_id: lifecycle.request.session_id.clone(),
         node_did: lifecycle.request.node_did.clone(),

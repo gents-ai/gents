@@ -66,6 +66,7 @@ async fn transaction_payload_reads_cross_pages_and_reject_conflicting_segments()
                     close_id = crate::graphql::created_doc_id(&response, "AgentOutputSegment")?;
                 }
                 let header = TranscriptMessage {
+                    native_request_id: None,
                     message_key: "paged-canonical".into(),
                     session_id: segment.session_id.clone(),
                     node_did: segment.node_did.clone(),
