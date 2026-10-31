@@ -211,3 +211,29 @@ test("the dock's + opens a panel that isn't open yet, and stays in view when tab
   await page.getByRole("menuitem", { name: "Changes" }).click();
   await expect(add).toHaveCount(0);
 });
+
+test("the dock's expand button fills the window with the panel and gives the session back", async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== "webkit-desktop", "one engine");
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await gotoHarness(page, "mobile-performance");
+  await page.locator('[data-testid="session-session-large"]').click();
+  await page.getByTestId("transcript-panel").getByText("stream-start").last().waitFor();
+  await page.getByRole("button", { name: "More" }).first().click();
+  await page.getByRole("menuitem", { name: "Started sessions" }).click();
+
+  const dock = page.getByTestId("dock");
+  const narrow = (await dock.boundingBox())!.width;
+  await page.getByRole("button", { name: "Expand panel" }).click();
+  await expect(page.getByTitle("Show the session")).toBeVisible();
+  await expect
+    .poll(async () => (await dock.boundingBox())!.width)
+    .toBeGreaterThan(1500 - 56 - 40);
+
+  await page.getByRole("button", { name: "Restore panel" }).click();
+  await expect(page.getByRole("button", { name: "Expand panel" })).toBeVisible();
+  await expect
+    .poll(async () => Math.round((await dock.boundingBox())!.width))
+    .toBe(Math.round(narrow));
+});

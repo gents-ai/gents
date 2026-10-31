@@ -169,6 +169,8 @@ export function WindowBar({
               sessionId={route.name === "session" ? route.sessionId : null}
               routeName={route.name}
               paneTab={toEnd > 0 ? { onShow: divider.showPane, progress: toEnd } : null}
+              expanded={toEnd > 0.5}
+              onExpand={toEnd > 0.5 ? divider.showPane : divider.hidePane}
             />
           )}
         </div>
