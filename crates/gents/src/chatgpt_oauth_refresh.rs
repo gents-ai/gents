@@ -7,7 +7,18 @@ use gents_protocol::chatgpt_oauth::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::oauth_credential::token_endpoint::{
+    endpoint_url, BadRequest, TokenEndpoint, TransportDetail,
+};
 use crate::oauth_credential::{OAuthAuthProblem, RefreshedTokens};
+
+const TOKEN_ENDPOINT: TokenEndpoint = TokenEndpoint {
+    provider: "ChatGPT",
+    bad_request: BadRequest::InvalidGrant { nested_code: true },
+    forbidden_is_not_entitled: false,
+    reads_error_description: false,
+    transport_detail: TransportDetail::Display,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct IdTokenClaims {
@@ -38,10 +49,9 @@ pub async fn refresh_chatgpt_token(
     refresh_token: &str,
     http: &reqwest::Client,
 ) -> Result<RefreshedTokens, OAuthAuthProblem> {
-    let endpoint = std::env::var(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| token_endpoint(DEFAULT_ISSUER));
+    let endpoint = endpoint_url(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR, || {
+        token_endpoint(DEFAULT_ISSUER)
+    });
     refresh_chatgpt_token_at(&endpoint, refresh_token, http).await
 }
 
@@ -55,38 +65,15 @@ async fn refresh_chatgpt_token_at(
         grant_type: "refresh_token",
         refresh_token,
     };
-    let response = http
-        .post(endpoint)
-        .header("Content-Type", "application/json")
-        .json(&request)
-        .send()
-        .await
-        .map_err(|error| {
-            OAuthAuthProblem::Other(format!("ChatGPT token refresh request failed: {error}"))
-        })?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        if status == reqwest::StatusCode::UNAUTHORIZED
-            || (status == reqwest::StatusCode::BAD_REQUEST
-                && error_code(&body).as_deref() == Some("invalid_grant"))
-        {
-            return Err(OAuthAuthProblem::Expired);
-        }
-        return Err(OAuthAuthProblem::Other(format!(
-            "ChatGPT token refresh failed with HTTP {status}: {}",
-            parse_error_message(&body)
-        )));
-    }
-
-    let refreshed = response.json::<RefreshResponse>().await.map_err(|error| {
-        OAuthAuthProblem::Other(format!("decoding ChatGPT token refresh response: {error}"))
-    })?;
-    let access_token = refreshed.access_token.ok_or_else(|| {
-        OAuthAuthProblem::Other("ChatGPT token refresh response omitted access_token".to_string())
-    })?;
-    let id_claims = refreshed
+    let grant: RefreshResponse = TOKEN_ENDPOINT
+        .exchange(
+            http.post(endpoint)
+                .header("Content-Type", "application/json")
+                .json(&request),
+        )
+        .await?;
+    let access_token = TOKEN_ENDPOINT.access_token(grant.access_token)?;
+    let id_claims = grant
         .id_token
         .as_deref()
         .map(decode_id_token_claims)
@@ -97,10 +84,10 @@ async fn refresh_chatgpt_token_at(
 
     Ok(RefreshedTokens {
         access_token,
-        refresh_token: refreshed
+        refresh_token: grant
             .refresh_token
             .unwrap_or_else(|| refresh_token.to_string()),
-        id_token: refreshed.id_token,
+        id_token: grant.id_token,
         account_id: id_claims.account_id,
         is_fedramp: id_claims.is_fedramp,
         plan_type: id_claims.plan_type,
@@ -229,30 +216,6 @@ pub(crate) fn jwt_payload(jwt: &str) -> Option<Value> {
     serde_json::from_slice(&bytes).ok()
 }
 
-/// Credential rejection comes from the token endpoint's structured code;
-/// human-readable messages do not determine whether sign-in is required.
-fn error_code(body: &str) -> Option<String> {
-    let value = serde_json::from_str::<Value>(body).ok()?;
-    let error = value.get("error")?;
-    error
-        .as_str()
-        .or_else(|| error.get("code").and_then(Value::as_str))
-        .map(str::to_owned)
-}
-
-fn parse_error_message(body: &str) -> String {
-    let Ok(value) = serde_json::from_str::<Value>(body) else {
-        return body.to_string();
-    };
-    value
-        .get("error")
-        .and_then(|error| error.get("message").or(Some(error)))
-        .and_then(Value::as_str)
-        .or_else(|| value.get("message").and_then(Value::as_str))
-        .unwrap_or(body)
-        .to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -270,6 +233,7 @@ mod tests {
                 false,
             ),
             (400, r#"{"error":"invalid_client"}"#, false),
+            (403, r#"{"error":"forbidden"}"#, false),
             (500, r#"{"error":"invalid_grant"}"#, false),
         ] {
             let (url, server) = one_shot_token_server(status, body).await;
@@ -285,6 +249,20 @@ mod tests {
                 assert!(matches!(result, Err(OAuthAuthProblem::Other(_))));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn refresh_ignores_response_fields_it_does_not_read() {
+        let (url, server) = one_shot_token_server(
+            200,
+            r#"{"access_token":"access-NEW","expires_in":"3600","scope":7}"#,
+        )
+        .await;
+        let result = refresh_chatgpt_token_at(&url, "refresh-OLD", &reqwest::Client::new()).await;
+        server.await.unwrap();
+        let refreshed = result.expect("an unread malformed field does not fail the refresh");
+        assert_eq!(refreshed.access_token, "access-NEW");
+        assert_eq!(refreshed.refresh_token, "refresh-OLD");
     }
 
     #[test]
@@ -313,27 +291,6 @@ mod tests {
         assert!(
             jwt_expiration("not-a-jwt").is_none(),
             "malformed token has no expiry"
-        );
-    }
-
-    #[test]
-    fn parse_error_message_prefers_nested_then_falls_back() {
-        assert_eq!(
-            parse_error_message(r#"{"error":{"message":"bad token"}}"#),
-            "bad token"
-        );
-        assert_eq!(
-            parse_error_message(r#"{"error":"flat error"}"#),
-            "flat error"
-        );
-        assert_eq!(
-            parse_error_message(r#"{"message":"top level"}"#),
-            "top level"
-        );
-        assert_eq!(
-            parse_error_message("plain text body"),
-            "plain text body",
-            "non-JSON body is returned verbatim"
         );
     }
 }

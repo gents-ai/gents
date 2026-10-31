@@ -790,7 +790,7 @@ fn dependency_reachability_resolves_renamed_packages() {
     );
 }
 
-const OAUTH_CREDENTIAL_OWNER: &str = "crates/gents/src/oauth_credential.rs";
+const OAUTH_CREDENTIAL_OWNER: &str = "crates/gents/src/oauth_credential";
 
 const REMOVED_OAUTH_PICKERS: &[&str] = &[
     "lookup_oauth_credential",
@@ -925,7 +925,7 @@ fn oauth_credential_picks_go_through_the_resolver() {
     let mut violations = Vec::new();
     let mut actual = BTreeMap::new();
     for (relative, syntax) in parse_production(&root, production_sources(&root)) {
-        if relative == OAUTH_CREDENTIAL_OWNER {
+        if owned_by(&relative, OAUTH_CREDENTIAL_OWNER) {
             continue;
         }
         let (found, reads) = oauth_pick_findings(&syntax);
