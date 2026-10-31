@@ -16,7 +16,6 @@
 
 mod agent_behavior;
 mod application_failure;
-mod backend_rotation;
 mod common;
 mod desired_state;
 mod error;
@@ -59,10 +58,6 @@ pub(crate) fn classified_conflict_for_test() -> ConfigClientError {
 pub mod patch;
 
 pub use agent_behavior::write_agent_document;
-pub use backend_rotation::{
-    backend_pool_members, set_backend_rotation, set_backend_rotation_in_txn, BackendRotation,
-    PoolMember, RotationOutcome,
-};
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
 pub use desired_state::apply_desired_state_plan;
 pub use desired_state::plan::{

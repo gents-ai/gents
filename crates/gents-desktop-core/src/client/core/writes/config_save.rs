@@ -181,8 +181,8 @@ impl ClientCore {
         node_did: &str,
         id: &str,
         expected: Option<&mutations::ConfigEditorRevision>,
-        rotation: gents::store::config_client::BackendRotation,
-    ) -> Result<gents::store::config_client::RotationOutcome> {
+        rotation: gents::inference::backends::rotation::BackendRotation,
+    ) -> Result<gents::inference::backends::rotation::RotationOutcome> {
         let access = self.operator_access(node_did)?;
         match mutations::set_backend_rotation_on(&access, node_did, id, expected, rotation).await {
             Ok(outcome) => {

@@ -1,9 +1,10 @@
 use anyhow::{ensure, Context, Result};
+use gents::inference::backends::rotation::{
+    backend_pool_members, set_backend_rotation_in_txn, BackendRotation, RotationOutcome,
+};
 use gents::store::config_client::{
-    backend_pool_members,
     patch::{SelfConfigPatch, SelfConfigTarget},
-    read_desired_state_record_in_txn, set_backend_rotation_in_txn, BackendRotation, ConfigAccess,
-    ConfigApplyTxn, RotationOutcome,
+    read_desired_state_record_in_txn, ConfigAccess, ConfigApplyTxn,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};

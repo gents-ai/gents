@@ -36,7 +36,7 @@ pub struct BackendRotationSaveRequest {
     pub node_did: String,
     pub backend_id: String,
     pub revision: gents_desktop_core::client::ConfigEditorRevision,
-    pub rotation: gents::store::config_client::BackendRotation,
+    pub rotation: gents::inference::backends::rotation::BackendRotation,
 }
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
@@ -56,8 +56,8 @@ pub struct BackendRotationView {
     pub accounts: Vec<PoolAccountView>,
 }
 
-impl From<&gents::store::config_client::RotationOutcome> for BackendRotationView {
-    fn from(outcome: &gents::store::config_client::RotationOutcome) -> Self {
+impl From<&gents::inference::backends::rotation::RotationOutcome> for BackendRotationView {
+    fn from(outcome: &gents::inference::backends::rotation::RotationOutcome) -> Self {
         Self {
             backend_id: outcome.backend.backend_id.clone(),
             allow_overage: outcome.backend.auth.pool_allow_overage(),
@@ -144,7 +144,7 @@ mod authentication_tests {
 
     #[test]
     fn rotation_requests_decode_the_operator_choice_and_reject_unknown_fields() {
-        use gents::store::config_client::BackendRotation;
+        use gents::inference::backends::rotation::BackendRotation;
         let decode = |rotation: serde_json::Value| {
             serde_json::from_value::<crate::types::BackendRotationSetRequest>(
                 serde_json::json!({"nodeDid":"did:test:backend","backendId":"claude","rotation":rotation}),
@@ -184,11 +184,11 @@ mod authentication_tests {
             }))
             .unwrap()
         };
-        let member = |id: &str| gents::store::config_client::PoolMember {
+        let member = |id: &str| gents::inference::backends::rotation::PoolMember {
             credential_id: id.into(),
             label: format!("label-{id}"),
         };
-        let pool = gents::store::config_client::RotationOutcome {
+        let pool = gents::inference::backends::rotation::RotationOutcome {
             backend: backend(serde_json::json!({"kind":"node_oauth_pool","allow_overage":true})),
             members: vec![member("b"), member("a")],
         };
@@ -196,7 +196,7 @@ mod authentication_tests {
         assert_eq!(view["allowOverage"], true);
         assert_eq!(view["accounts"][0]["credentialId"], "b");
         assert_eq!(view["accounts"][1]["label"], "label-a");
-        let single = gents::store::config_client::RotationOutcome {
+        let single = gents::inference::backends::rotation::RotationOutcome {
             backend: backend(serde_json::json!({"kind":"node_oauth"})),
             members: Vec::new(),
         };

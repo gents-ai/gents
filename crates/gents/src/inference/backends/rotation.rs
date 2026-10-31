@@ -3,11 +3,11 @@
 //! its overage choice (`guard_backend_auth`), so this is the only partial write
 //! that may; it replaces `auth` alone and validates the whole backend.
 
-use super::{
-    load_inference_backend_in_txn, write_inference_backend_in_txn, ConfigAccess, ConfigApplyTxn,
-};
 use crate::documents::BackendAuth;
 use crate::inference::backends::provider::BackendProviderOauthExt;
+use crate::store::config_client::{
+    load_inference_backend_in_txn, write_inference_backend_in_txn, ConfigAccess, ConfigApplyTxn,
+};
 use crate::InferenceBackend;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
